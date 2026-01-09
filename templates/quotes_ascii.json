@@ -1,0 +1,8 @@
+{
+  "name": "JP Quotes -> ASCII",
+  "description": "Normalize JP quotes to \" for TL.",
+  "operations": [
+    { "modus": "Only replace before TL", "in1": "「", "in2": "\""},
+    { "modus": "Only replace before TL", "in1": "」", "in2": "\""}
+  ]
+}

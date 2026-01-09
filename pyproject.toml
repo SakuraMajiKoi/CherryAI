@@ -1,0 +1,184 @@
+# CherryAI - LLM-Powered Translation Tool
+# pyproject.toml - Modern Python packaging configuration
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cherryai"
+version = "1.0.0"
+description = "LLM-powered translation tool for games and software localization"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    {name = "CherryAI Contributors"}
+]
+keywords = [
+    "translation",
+    "localization",
+    "llm",
+    "ai",
+    "game-translation",
+    "openai",
+    "gpt",
+    "batch-translation"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Localization",
+    "Topic :: Text Processing :: Linguistic",
+    "Typing :: Typed",
+]
+
+# Core dependencies - only tiktoken is truly required for token counting
+dependencies = [
+    "tiktoken>=0.5.0",
+]
+
+[project.optional-dependencies]
+# Full functionality
+full = [
+    "openai>=1.0.0",
+    "openpyxl>=3.0.0",
+    "beautifulsoup4>=4.12.0",
+]
+
+# API client support
+api = [
+    "openai>=1.0.0",
+]
+
+# Excel file support
+excel = [
+    "openpyxl>=3.0.0",
+]
+
+# HTML file support
+html = [
+    "beautifulsoup4>=4.12.0",
+]
+
+# Development dependencies
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+    "mypy>=1.0.0",
+    "flake8>=6.0.0",
+    "isort>=5.0.0",
+    "black>=23.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/cherryai/cherryai"
+Documentation = "https://github.com/cherryai/cherryai#readme"
+Repository = "https://github.com/cherryai/cherryai"
+Issues = "https://github.com/cherryai/cherryai/issues"
+
+[project.scripts]
+cherryai = "CherryAI:main"
+
+[project.gui-scripts]
+cherryai-gui = "CherryAI:main"
+
+[tool.setuptools]
+packages = ["functions", "formats", "modi"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+"*" = [
+    "*.txt",
+    "*.ini",
+    "*.md",
+    "config/*.txt",
+    "templates/*.txt",
+    "templates/*.json",
+]
+
+[tool.setuptools.exclude-package-data]
+"*" = [
+    "dev/*",
+    "logs/*",
+    "output/*",
+    "user/*",
+    "manifests/*",
+    "temp/*",
+]
+
+# Tool configurations
+
+[tool.pytest.ini_options]
+testpaths = ["dev"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+ignore_missing_imports = true
+follow_imports = "skip"
+explicit_package_bases = true
+# Limit discovery to source; ignore tests/build artifacts when running at package root
+exclude = [
+    "(^|/)dev/",
+    "(^|/)build/",
+    "dev/WordWrapper\\.py$",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+    | \.mypy_cache
+    | \.pytest_cache
+    | __pycache__
+    | dev
+    | logs
+    | output
+    | user
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
+skip = [".git", "__pycache__", "dev", "logs", "output", "user"]
+known_first_party = ["functions", "formats", "modi"]
+
+[tool.coverage.run]
+source = ["functions", "formats", "modi"]
+omit = [
+    "*/dev/*",
+    "*/__pycache__/*",
+    "*/test_*.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]

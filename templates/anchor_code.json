@@ -1,0 +1,9 @@
+{
+  "name": "Anchor Common Code",
+  "description": "Anchor common code norms using regex.",
+  "operations": [
+    { "modus": "Remove and Restore at Anchor", "in1": "\\{[^}]+\\}" },
+    { "modus": "Remove and Restore at Anchor", "in1": "\\[[^\\]]+\\]" },
+    { "modus": "Remove and Restore at Anchor", "in1": "<[^>]+>" }
+  ]
+}

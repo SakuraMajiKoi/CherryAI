@@ -1,0 +1,12 @@
+{
+  "name": "Normalize Ellipsis",
+  "description": "Collapse any run of ellipsis chars or dots (including spaced dots) to three ASCII dots '...'. Pre-TL only.",
+  "operations": [
+    {
+      "modus": "Only replace before TL",
+      "in1": "[\\u2026\\.](?:\\s*[\\u2026\\.]){2,}",
+      "in2": "...",
+      "is_regex": true
+    }
+  ]
+}

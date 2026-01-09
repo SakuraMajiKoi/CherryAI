@@ -1,0 +1,47 @@
+# Translation Style Guide
+# =============================================================================
+# Edit this file to customize how the AI translates your text.
+# Lines starting with # are comments and will be ignored.
+# Delete [placeholder] text and replace with your own content.
+# =============================================================================
+
+## FORMALITY LEVEL
+# Options: formal, casual, mixed
+# - formal: Polite, professional language (です/ます → proper English)
+# - casual: Relaxed, natural speech (だ/である → conversational English)
+# - mixed: Match the source text's formality dynamically
+Formality: casual
+
+## HONORIFICS HANDLING
+# Options: keep, remove, localize
+# - keep: Preserve Japanese honorifics (-san, -chan, -kun, -sama)
+# - remove: Drop all honorifics
+# - localize: Convert to English equivalents (Mr., Ms., titles)
+Honorifics: keep
+
+## CULTURAL REFERENCES
+# Options: preserve, localize, explain
+# - preserve: Keep original references (お盆, 正月, etc.)
+# - localize: Convert to Western equivalents where possible
+# - explain: Add brief inline explanations [Obon: Festival of the Dead]
+Cultural References: preserve
+
+## DIALOGUE STYLE
+# How should character dialogue be translated?
+# Add specific notes about dialogue translation.
+- Maintain distinct speech patterns for each character
+- Preserve verbal tics and catchphrases
+- Keep stuttering and hesitation (え、えっと → U-um)
+
+## SPECIFIC TRANSLATION RULES
+# Add any specific rules for your project.
+# Examples:
+# - Always translate 勇者 as "Hero" (capital H)
+# - Keep attack names in Japanese with English subtitles
+# - Translate 魔王 as "Demon King" not "Devil King"
+
+## THINGS TO AVOID
+# What should the translator NOT do?
+- Do not over-localize jokes; keep the original humor style
+- Do not add explanatory text unless absolutely necessary
+- Do not change character names from the glossary

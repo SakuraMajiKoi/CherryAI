@@ -1,0 +1,20 @@
+# Output Format Examples
+# These examples show how to format JSON translation output
+
+Input:
+{
+    "lines": ["Defense Member E: ...", "Kurone: あのさ"]
+}
+Output:
+{
+    "translations": ["Defense Member E: ...", "Kurone: Hey."]
+}
+
+Input:
+{
+    "lines": ["ハートが可愛いピンク色のチャーム。"]
+}
+Output:
+{
+    "translations": ["A cute pink heart charm."]
+}

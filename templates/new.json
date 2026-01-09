@@ -1,0 +1,14 @@
+{
+  "name": "New",
+  "description": "New",
+  "operations": [
+    {
+      "modus": "Free",
+      "in1": "…",
+      "in2": "...",
+      "in3": "",
+      "in4": "",
+      "is_regex": false
+    }
+  ]
+}

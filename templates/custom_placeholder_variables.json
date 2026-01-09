@@ -1,0 +1,12 @@
+{
+  "name": "Custom Placeholder: Variables",
+  "description": "Protect {var} or similar placeholders with a custom token before TL; restore after TL.",
+  "operations": [
+    {
+      "modus": "Custom Placeholder",
+      "in1": "\\{[^}]+\\}",
+      "in2": "__VAR__",
+      "is_regex": true
+    }
+  ]
+}

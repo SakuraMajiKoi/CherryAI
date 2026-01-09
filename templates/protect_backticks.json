@@ -1,0 +1,7 @@
+{
+  "name": "Protect backtick code",
+  "description": "Protect `code` spans using regex.",
+  "operations": [
+    { "modus": "Protect Code", "in1": "`[^`]+`" }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "name": "Protect Common Code",
+  "description": "Protect common code norms using regex.",
+  "operations": [
+    { "modus": "Protect Code", "in1": "\\{[^}]+\\}" },
+    { "modus": "Protect Code", "in1": "\\[[^\\]]+\\]" },
+    { "modus": "Protect Code", "in1": "<[^>]+>" }
+  ]
+}

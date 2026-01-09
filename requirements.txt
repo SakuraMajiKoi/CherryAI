@@ -1,0 +1,18 @@
+# CherryAI Requirements
+# Python 3.10+ is required
+# Most functionality uses stdlib only
+# Optional dependencies below for enhanced features
+
+# Optional: Excel file support (.xlsx)
+openpyxl>=3.0.0
+
+# Optional: HTML file support (.html, .htm, .xhtml)
+beautifulsoup4>=4.12.0
+
+# Future optional dependencies can be added here
+# pytest>=7.0  # for testing (dev only)
+# black>=22.0  # for code formatting (dev only)
+# mypy>=0.990  # for type checking (dev only)
+
+# API Client dependencies
+openai>=1.0.0

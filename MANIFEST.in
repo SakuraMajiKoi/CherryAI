@@ -1,0 +1,35 @@
+# MANIFEST.in - Include non-Python files in source distribution
+
+# Include documentation
+include README.md
+include LICENSE
+include CHANGELOG.md
+
+# Include configuration files
+include api_profiles.ini
+include CherryAI.ini
+recursive-include config *.txt
+recursive-include templates *.txt *.json
+
+# Include documentation
+recursive-include doc *.md
+
+# Exclude development and runtime directories
+prune dev
+prune logs
+prune output
+prune user
+prune manifests
+prune temp
+prune __pycache__
+prune .pytest_cache
+prune .mypy_cache
+prune .github
+
+# Exclude compiled files
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude *.pyd
+global-exclude __pycache__
+global-exclude .DS_Store
+global-exclude *.so

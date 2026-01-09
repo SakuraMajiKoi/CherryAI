@@ -1,0 +1,25 @@
+{
+  "name": "Fullwidth → Halfwidth",
+  "description": "Replace common fullwidth punctuation with ASCII forms (pre-TL).",
+  "operations": [
+    { "modus": "Only replace before TL", "in1": "，", "in2": "," },
+    { "modus": "Only replace before TL", "in1": "。", "in2": "." },
+    { "modus": "Only replace before TL", "in1": "！", "in2": "!" },
+    { "modus": "Only replace before TL", "in1": "？", "in2": "?" },
+    { "modus": "Only replace before TL", "in1": "：", "in2": ":" },
+    { "modus": "Only replace before TL", "in1": "；", "in2": ";" },
+    { "modus": "Only replace before TL", "in1": "（", "in2": "(" },
+    { "modus": "Only replace before TL", "in1": "）", "in2": ")" },
+    { "modus": "Only replace before TL", "in1": "０", "in2": "0" },
+    { "modus": "Only replace before TL", "in1": "１", "in2": "1" },
+    { "modus": "Only replace before TL", "in1": "２", "in2": "2" },
+    { "modus": "Only replace before TL", "in1": "３", "in2": "3" },
+    { "modus": "Only replace before TL", "in1": "４", "in2": "4" },
+    { "modus": "Only replace before TL", "in1": "５", "in2": "5" },
+    { "modus": "Only replace before TL", "in1": "６", "in2": "6" },
+    { "modus": "Only replace before TL", "in1": "７", "in2": "7" },
+    { "modus": "Only replace before TL", "in1": "８", "in2": "8" },
+    { "modus": "Only replace before TL", "in1": "９", "in2": "9" },
+    { "modus": "Only replace before TL", "in1": "％", "in2": "%" }
+  ]
+}

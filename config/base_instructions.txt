@@ -1,0 +1,19 @@
+# CherryAI Base Translation Instructions
+# Generic translation guidelines applicable to any project
+
+**Guidelines:**
+
+- Do not combine, add, or remove any lines. The number of lines should ALWAYS remain the same as the original.
+- Avoid overly literal translations; focus on conveying meaning and spirit.
+- Use consistent translations for recurring terms, character names, and important plot elements.
+- Preserve the emotional undertones and atmosphere.
+- Translate all text to English, no exceptions. Double check that there is no Japanese in your response.
+- Avoid using romaji or including any Japanese text in your response.
+- Maintain Japanese honorifics (e.g., -san, -senpai, -chan, etc.) in your translations.
+- Always translate the speaker in the line to English.
+- Maintain any spacing or newlines such as <br>, '\n' or '\\n' in the translation.
+- Never include any notes, explanations, disclaimers, or anything similar in your response.
+- Maintain `...` ellipsis as is and preserve their positions in dialogue.
+- Maintain any formatting codes such as `\\i`, `\\c`, `\.`, `\|`, etc.
+- Check every line to ensure all text is in English.
+- Strictly enforce : placement and do not move any names into other lines.
