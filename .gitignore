@@ -19,6 +19,7 @@ dev
 # Config files (user-specific)
 *.ini
 config/config.txt
+*.json
 
 # Data files
 *.csv
