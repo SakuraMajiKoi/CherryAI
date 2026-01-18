@@ -5,6 +5,7 @@ output
 manifests
 temp
 old
+Projects
 
 # Python cache
 __pycache__
