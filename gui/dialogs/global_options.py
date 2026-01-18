@@ -39,6 +39,7 @@ class OptionSection(Enum):
     SESSION = "session"
     SAFETY = "safety"
     FILE_IO = "file_io"
+    PROMPTS = "prompts"
 
 
 class OptionCategory(Enum):
@@ -307,6 +308,44 @@ class FileIOSettings:
         )
 
 
+# Default prompts for Edit and TLC steps
+DEFAULT_EDIT_PROMPT = (
+    "Review and improve the translation while maintaining accuracy and natural flow. "
+    "Fix any grammar issues, awkward phrasing, or inconsistencies. "
+    "Preserve the original meaning and tone."
+)
+
+DEFAULT_TLC_PROMPT = (
+    "Perform a Translation/Localization Check (TLC) on the translation. "
+    "Verify accuracy against the source text, check for natural {target_lang} expression, "
+    "ensure consistency in terminology and style, and flag any issues or suggest improvements."
+)
+
+
+@dataclass
+class PromptsSettings:
+    """Custom prompts for Edit and TLC steps."""
+
+    edit_prompt: str = DEFAULT_EDIT_PROMPT
+    tlc_prompt: str = DEFAULT_TLC_PROMPT
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "edit_prompt": self.edit_prompt,
+            "tlc_prompt": self.tlc_prompt,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "PromptsSettings":
+        """Create from dictionary."""
+        return cls(
+            edit_prompt=str(data.get("edit_prompt", DEFAULT_EDIT_PROMPT)),
+            tlc_prompt=str(data.get("tlc_prompt", DEFAULT_TLC_PROMPT)),
+        )
+
+
+
 @dataclass
 class GlobalOptions:
     """Container for all global options."""
@@ -318,6 +357,7 @@ class GlobalOptions:
     session: SessionSettings = field(default_factory=SessionSettings)
     safety: SafetySettings = field(default_factory=SafetySettings)
     file_io: FileIOSettings = field(default_factory=FileIOSettings)
+    prompts: PromptsSettings = field(default_factory=PromptsSettings)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -329,6 +369,7 @@ class GlobalOptions:
             "session": self.session.to_dict(),
             "safety": self.safety.to_dict(),
             "file_io": self.file_io.to_dict(),
+            "prompts": self.prompts.to_dict(),
         }
 
     @classmethod
@@ -342,7 +383,9 @@ class GlobalOptions:
             session=SessionSettings.from_dict(data.get("session", {})),
             safety=SafetySettings.from_dict(data.get("safety", {})),
             file_io=FileIOSettings.from_dict(data.get("file_io", {})),
+            prompts=PromptsSettings.from_dict(data.get("prompts", {})),
         )
+
 
 
 # =============================================================================
@@ -358,13 +401,16 @@ SECTION_DESCRIPTIONS: Dict[OptionSection, str] = {
     OptionSection.SESSION: "Configure session autosave and UI preferences.",
     OptionSection.SAFETY: "Configure token banning and content warnings.",
     OptionSection.FILE_IO: "Set default file encoding and format options.",
+    OptionSection.PROMPTS: "Configure custom prompts for Edit and TLC steps.",
 }
+
 
 CATEGORY_ORDER: List[Tuple[OptionCategory, List[OptionSection]]] = [
     (OptionCategory.CONNECTION, [OptionSection.API, OptionSection.REQUEST]),
-    (OptionCategory.PROCESSING, [OptionSection.CACHING, OptionSection.SAFETY]),
+    (OptionCategory.PROCESSING, [OptionSection.CACHING, OptionSection.SAFETY, OptionSection.PROMPTS]),
     (OptionCategory.APPLICATION, [OptionSection.SESSION, OptionSection.LOGGING, OptionSection.FILE_IO]),
 ]
+
 
 CATEGORY_NAMES: Dict[OptionCategory, str] = {
     OptionCategory.CONNECTION: "Connection",
@@ -380,7 +426,9 @@ SECTION_NAMES: Dict[OptionSection, str] = {
     OptionSection.SESSION: "Session",
     OptionSection.SAFETY: "Safety",
     OptionSection.FILE_IO: "File I/O",
+    OptionSection.PROMPTS: "Prompts",
 }
+
 
 # API_PROVIDERS imported from options.py - single source of truth
 from CherryAI.functions.options import API_PROVIDERS
@@ -567,6 +615,10 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.preserve_bom_var = tk.BooleanVar(value=self.options.file_io.preserve_bom)
         self.backup_originals_var = tk.BooleanVar(value=self.options.file_io.backup_originals)
 
+        # Prompts settings
+        self.edit_prompt_var = tk.StringVar(value=self.options.prompts.edit_prompt)
+        self.tlc_prompt_var = tk.StringVar(value=self.options.prompts.tlc_prompt)
+
     def _build_ui(self) -> None:
         """Build the options UI with navigation and content panels."""
         print("DEBUG: _build_ui started")
@@ -605,6 +657,8 @@ class GlobalOptionsDialog(tk.Toplevel):
         self._build_safety_section()
         print("DEBUG: Building File IO section")
         self._build_file_io_section()
+        print("DEBUG: Building Prompts section")
+        self._build_prompts_section()
 
         # Bottom: Buttons
         print("DEBUG: Building buttons")
@@ -1104,6 +1158,93 @@ class GlobalOptionsDialog(tk.Toplevel):
         backup_check = ttk.Checkbutton(panel, text="Create backup of original files before overwriting", variable=self.backup_originals_var)
         backup_check.pack(anchor=tk.W, pady=5)
 
+    def _build_prompts_section(self) -> None:
+        """Build the prompts settings section for Edit and TLC steps."""
+        panel = ttk.Frame(self._content_frame, padding=15)
+        self._section_panels[OptionSection.PROMPTS] = panel
+
+        # Section header
+        header = ttk.Label(panel, text="Custom Prompts", font=("TkDefaultFont", 12, "bold"))
+        header.pack(anchor="w", pady=(0, 5))
+
+        desc = ttk.Label(panel, text=SECTION_DESCRIPTIONS[OptionSection.PROMPTS], foreground="gray")
+        desc.pack(anchor="w", pady=(0, 15))
+
+        # Info about placeholders
+        placeholder_info = ttk.Label(
+            panel,
+            text="Use {source_lang} and {target_lang} as placeholders for the configured languages.",
+            foreground="gray",
+            font=("TkDefaultFont", 9, "italic"),
+        )
+        placeholder_info.pack(anchor="w", pady=(0, 10))
+
+        # Edit prompt frame
+        edit_frame = ttk.LabelFrame(panel, text="Edit Step Prompt", padding=10)
+        edit_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+        edit_desc = ttk.Label(
+            edit_frame,
+            text="This prompt is used for the Edit steps to improve translations.",
+            foreground="gray",
+        )
+        edit_desc.pack(anchor="w", pady=(0, 5))
+
+        # Text widget for edit prompt (multi-line)
+        edit_text_frame = ttk.Frame(edit_frame)
+        edit_text_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        self._edit_prompt_text = tk.Text(edit_text_frame, height=5, width=60, wrap=tk.WORD)
+        self._edit_prompt_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._edit_prompt_text.insert("1.0", self.edit_prompt_var.get())
+
+        edit_scroll = ttk.Scrollbar(edit_text_frame, orient=tk.VERTICAL, command=self._edit_prompt_text.yview)
+        edit_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self._edit_prompt_text.config(yscrollcommand=edit_scroll.set)
+
+        # Reset to default button for edit prompt
+        edit_btn_frame = ttk.Frame(edit_frame)
+        edit_btn_frame.pack(anchor="w", pady=(5, 0))
+        ttk.Button(edit_btn_frame, text="Reset to Default", command=self._reset_edit_prompt).pack(side=tk.LEFT)
+
+        # TLC prompt frame
+        tlc_frame = ttk.LabelFrame(panel, text="TLC Step Prompt", padding=10)
+        tlc_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+        tlc_desc = ttk.Label(
+            tlc_frame,
+            text="This prompt is used for Translation/Localization Check (TLC) steps.",
+            foreground="gray",
+        )
+        tlc_desc.pack(anchor="w", pady=(0, 5))
+
+        # Text widget for TLC prompt (multi-line)
+        tlc_text_frame = ttk.Frame(tlc_frame)
+        tlc_text_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        self._tlc_prompt_text = tk.Text(tlc_text_frame, height=5, width=60, wrap=tk.WORD)
+        self._tlc_prompt_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._tlc_prompt_text.insert("1.0", self.tlc_prompt_var.get())
+
+        tlc_scroll = ttk.Scrollbar(tlc_text_frame, orient=tk.VERTICAL, command=self._tlc_prompt_text.yview)
+        tlc_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self._tlc_prompt_text.config(yscrollcommand=tlc_scroll.set)
+
+        # Reset to default button for TLC prompt
+        tlc_btn_frame = ttk.Frame(tlc_frame)
+        tlc_btn_frame.pack(anchor="w", pady=(5, 0))
+        ttk.Button(tlc_btn_frame, text="Reset to Default", command=self._reset_tlc_prompt).pack(side=tk.LEFT)
+
+    def _reset_edit_prompt(self) -> None:
+        """Reset edit prompt to default value."""
+        self._edit_prompt_text.delete("1.0", tk.END)
+        self._edit_prompt_text.insert("1.0", DEFAULT_EDIT_PROMPT)
+
+    def _reset_tlc_prompt(self) -> None:
+        """Reset TLC prompt to default value."""
+        self._tlc_prompt_text.delete("1.0", tk.END)
+        self._tlc_prompt_text.insert("1.0", DEFAULT_TLC_PROMPT)
+
     def _build_buttons(self, parent: ttk.Frame) -> None:
         """Build the action buttons at the bottom."""
         button_frame = ttk.Frame(parent)
@@ -1115,7 +1256,8 @@ class GlobalOptionsDialog(tk.Toplevel):
         ttk.Button(button_frame, text="OK", command=self._on_ok).pack(side=tk.RIGHT, padx=5)
 
         # Left-aligned buttons
-        ttk.Button(button_frame, text="Reset to Defaults", command=self._on_reset).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Save as Default", command=self._on_save_as_default).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Restore Initial Defaults", command=self._on_restore_initial_defaults).pack(side=tk.LEFT, padx=5)
 
     # -------------------------------------------------------------------------
     # Event Handlers
@@ -1231,14 +1373,253 @@ class GlobalOptionsDialog(tk.Toplevel):
         self._save_options()
         self.destroy()
 
-    def _on_reset(self) -> None:
-        """Handle Reset to Defaults button."""
-        response = messagebox.askyesno("Reset Options", "Reset all options to default values?")
-        if response:
-            self.options = GlobalOptions()
-            self._init_variables()
-            self._update_model_list()
-            messagebox.showinfo("Reset Complete", "Options have been reset to defaults.")
+    def _on_save_as_default(self) -> None:
+        """Handle Save as Default button - save current values as user defaults."""
+        from CherryAI.functions import ini_manager
+
+        response = messagebox.askyesno(
+            "Save as Default",
+            "Save current settings as your personal defaults?\n\n"
+            "These will be used for new projects and when restoring defaults.",
+        )
+        if not response:
+            return
+
+        try:
+            # Collect current values and save as user defaults
+            # API settings
+            api_defaults = {
+                "provider": self.provider_var.get(),
+                "model": self.model_var.get(),
+                "temperature": str(self.temperature_var.get()),
+            }
+            ini_manager.save_as_user_defaults("api", api_defaults)
+
+            # Request settings
+            request_defaults = {
+                "timeout": str(self.timeout_var.get()),
+                "retries": str(self.retries_var.get()),
+                "rate_limit_requests": str(self.rate_limit_var.get()),
+                "chunk_size": str(self.chunk_size_var.get()),
+            }
+            ini_manager.save_as_user_defaults("api", request_defaults)
+
+            # Caching settings
+            caching_defaults = {
+                "enabled": "true" if self.cache_enabled_var.get() else "false",
+                "cache_dir": self.cache_dir_var.get(),
+                "max_age_hours": str(self.cache_max_age_var.get()),
+                "max_size_mb": str(self.cache_max_size_var.get()),
+            }
+            ini_manager.save_as_user_defaults("caching", caching_defaults)
+
+            # Logging settings
+            logging_defaults = {
+                "level": self.log_level_var.get(),
+                "log_file": self.log_file_var.get(),
+                "debug_mode": "true" if self.debug_mode_var.get() else "false",
+                "log_api_calls": "true" if self.log_api_calls_var.get() else "false",
+            }
+            ini_manager.save_as_user_defaults("logging", logging_defaults)
+
+            # Session settings
+            session_defaults = {
+                "autosave_enabled": "true" if self.autosave_enabled_var.get() else "false",
+                "autosave_interval": str(self.autosave_interval_var.get()),
+                "theme": self.theme_var.get(),
+                "restore_on_launch": "true" if self.restore_on_launch_var.get() else "false",
+                "confirm_on_exit": "true" if self.confirm_on_exit_var.get() else "false",
+                "auto_analyze_on_load": "true" if self.auto_analyze_on_load_var.get() else "false",
+                "auto_preprocess_on_load": "true" if self.auto_preprocess_on_load_var.get() else "false",
+            }
+            ini_manager.save_as_user_defaults("session", session_defaults)
+
+            # Safety settings
+            safety_defaults = {
+                "ban_tokens": self.ban_tokens_var.get(),
+                "content_warning_enabled": "true" if self.content_warning_var.get() else "false",
+                "max_output_tokens": str(self.max_output_tokens_var.get()),
+            }
+            ini_manager.save_as_user_defaults("safety", safety_defaults)
+
+            # File I/O settings
+            file_io_defaults = {
+                "default_encoding": self.encoding_var.get(),
+                "line_ending": self.line_ending_var.get(),
+                "preserve_bom": "true" if self.preserve_bom_var.get() else "false",
+                "backup_originals": "true" if self.backup_originals_var.get() else "false",
+            }
+            ini_manager.save_as_user_defaults("file_io", file_io_defaults)
+
+            # Prompts settings
+            prompts_defaults = {
+                "edit_prompt": self._edit_prompt_text.get("1.0", tk.END).strip(),
+                "tlc_prompt": self._tlc_prompt_text.get("1.0", tk.END).strip(),
+            }
+            ini_manager.save_as_user_defaults("prompts", prompts_defaults)
+
+            messagebox.showinfo("Defaults Saved", "Your settings have been saved as defaults.")
+            logger.info("User defaults saved successfully")
+
+        except Exception as e:
+            logger.error("Failed to save user defaults: %s", e)
+            messagebox.showerror("Error", f"Failed to save defaults: {e}")
+
+    def _on_restore_initial_defaults(self) -> None:
+        """Handle Restore Initial Defaults button - restore factory settings."""
+        from CherryAI.functions import ini_manager
+
+        response = messagebox.askyesno(
+            "Restore Initial Defaults",
+            "Restore all settings to factory defaults?\n\n"
+            "This will clear your saved personal defaults and\n"
+            "reset the form to the initial values.",
+        )
+        if not response:
+            return
+
+        try:
+            # Clear all user defaults
+            ini_manager.restore_initial_defaults()
+
+            # Reload defaults cache
+            ini_manager.reload_defaults_cache()
+
+            # Reset form to initial defaults
+            self._load_initial_defaults()
+
+            messagebox.showinfo("Defaults Restored", "Settings have been restored to factory defaults.")
+            logger.info("Initial defaults restored")
+
+        except Exception as e:
+            logger.error("Failed to restore initial defaults: %s", e)
+            messagebox.showerror("Error", f"Failed to restore defaults: {e}")
+
+    def _load_initial_defaults(self) -> None:
+        """Load initial defaults from config/defaults.ini into form fields."""
+        from CherryAI.functions import ini_manager
+
+        # API defaults
+        self.provider_var.set(
+            ini_manager.get_initial_default("api", "provider", "openai", str) or "openai"
+        )
+        self.model_var.set(
+            ini_manager.get_initial_default("api", "model", "gpt-4o-mini", str) or "gpt-4o-mini"
+        )
+        self.temperature_var.set(
+            float(ini_manager.get_initial_default("api", "temperature", 0.3, float) or 0.3)
+        )
+        # Don't reset API key - that's sensitive
+        self.base_url_var.set(
+            ini_manager.get_initial_default("api", "base_url", "", str) or ""
+        )
+
+        # Request defaults
+        self.timeout_var.set(
+            int(ini_manager.get_initial_default("api", "timeout", 60, int) or 60)
+        )
+        self.retries_var.set(
+            int(ini_manager.get_initial_default("api", "retries", 3, int) or 3)
+        )
+        self.rate_limit_var.set(
+            int(ini_manager.get_initial_default("api", "rate_limit_requests", 60, int) or 60)
+        )
+        self.chunk_size_var.set(
+            int(ini_manager.get_initial_default("api", "chunk_size", 50, int) or 50)
+        )
+
+        # Caching defaults
+        self.cache_enabled_var.set(
+            bool(ini_manager.get_initial_default("caching", "enabled", True, bool))
+        )
+        self.cache_dir_var.set(
+            ini_manager.get_initial_default("caching", "cache_dir", "temp/cache", str) or "temp/cache"
+        )
+        self.cache_max_age_var.set(
+            int(ini_manager.get_initial_default("caching", "max_age_hours", 24, int) or 24)
+        )
+        self.cache_max_size_var.set(
+            int(ini_manager.get_initial_default("caching", "max_size_mb", 100, int) or 100)
+        )
+
+        # Logging defaults
+        self.log_level_var.set(
+            ini_manager.get_initial_default("logging", "level", "INFO", str) or "INFO"
+        )
+        self.log_file_var.set(
+            ini_manager.get_initial_default("logging", "log_file", "logs/cherryai.log", str) or "logs/cherryai.log"
+        )
+        self.debug_mode_var.set(
+            bool(ini_manager.get_initial_default("logging", "debug_mode", False, bool))
+        )
+        self.log_api_calls_var.set(
+            bool(ini_manager.get_initial_default("logging", "log_api_calls", False, bool))
+        )
+
+        # Session defaults
+        self.autosave_enabled_var.set(
+            bool(ini_manager.get_initial_default("session", "autosave_enabled", True, bool))
+        )
+        self.autosave_interval_var.set(
+            int(ini_manager.get_initial_default("session", "autosave_interval", 60, int) or 60)
+        )
+        self.theme_var.set(
+            ini_manager.get_initial_default("session", "theme", "light", str) or "light"
+        )
+        self.restore_on_launch_var.set(
+            bool(ini_manager.get_initial_default("session", "restore_on_launch", True, bool))
+        )
+        self.confirm_on_exit_var.set(
+            bool(ini_manager.get_initial_default("session", "confirm_on_exit", True, bool))
+        )
+        self.auto_analyze_on_load_var.set(
+            bool(ini_manager.get_initial_default("session", "auto_analyze_on_load", True, bool))
+        )
+        self.auto_preprocess_on_load_var.set(
+            bool(ini_manager.get_initial_default("session", "auto_preprocess_on_load", True, bool))
+        )
+
+        # Safety defaults
+        self.ban_tokens_var.set(
+            ini_manager.get_initial_default("safety", "ban_tokens", "em_dash, smart_quotes", str) or "em_dash, smart_quotes"
+        )
+        self.content_warning_var.set(
+            bool(ini_manager.get_initial_default("safety", "content_warning_enabled", True, bool))
+        )
+        self.max_output_tokens_var.set(
+            int(ini_manager.get_initial_default("safety", "max_output_tokens", 4096, int) or 4096)
+        )
+
+        # File I/O defaults
+        self.encoding_var.set(
+            ini_manager.get_initial_default("file_io", "default_encoding", "utf-8", str) or "utf-8"
+        )
+        self.line_ending_var.set(
+            ini_manager.get_initial_default("file_io", "line_ending", "auto", str) or "auto"
+        )
+        self.preserve_bom_var.set(
+            bool(ini_manager.get_initial_default("file_io", "preserve_bom", True, bool))
+        )
+        self.backup_originals_var.set(
+            bool(ini_manager.get_initial_default("file_io", "backup_originals", True, bool))
+        )
+
+        # Prompts defaults
+        edit_prompt = (
+            ini_manager.get_initial_default("prompts", "edit_prompt", DEFAULT_EDIT_PROMPT, str)
+            or DEFAULT_EDIT_PROMPT
+        )
+        tlc_prompt = (
+            ini_manager.get_initial_default("prompts", "tlc_prompt", DEFAULT_TLC_PROMPT, str)
+            or DEFAULT_TLC_PROMPT
+        )
+        self._edit_prompt_text.delete("1.0", tk.END)
+        self._edit_prompt_text.insert("1.0", edit_prompt)
+        self._tlc_prompt_text.delete("1.0", tk.END)
+        self._tlc_prompt_text.insert("1.0", tlc_prompt)
+
+        # Update model list for new provider
+        self._update_model_list()
 
     def _save_options(self) -> None:
         """Save the current options."""
@@ -1297,6 +1678,11 @@ class GlobalOptionsDialog(tk.Toplevel):
             line_ending=self.line_ending_var.get(),
             preserve_bom=self.preserve_bom_var.get(),
             backup_originals=self.backup_originals_var.get(),
+        )
+
+        self.options.prompts = PromptsSettings(
+            edit_prompt=self._edit_prompt_text.get("1.0", tk.END).strip(),
+            tlc_prompt=self._tlc_prompt_text.get("1.0", tk.END).strip(),
         )
 
         # Invoke callback

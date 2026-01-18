@@ -23,6 +23,12 @@ from CherryAI.gui.components.table import ColumnDef, SharedTable, TableRow
 from CherryAI.gui.steps.base import BaseStep
 from CherryAI.gui.theme.colors import THEME
 
+# TASK 25.1: Import manifest field helpers for saving/loading analysis results
+from CherryAI.functions.manifest_fields import (
+    save_int_field,
+    load_int_field,
+)
+
 # Import pricing from centralized config (TASK 16.4)
 from CherryAI.functions.config import (
     MODEL_PRICING,
@@ -867,6 +873,53 @@ class EstimationStep(BaseStep):
             "rate_limit_rpm": rate_limit_rpm,
         }
 
+        # TASK 25.1: Save analysis results to manifest
+        self._save_analysis_results_to_manifest(
+            input_lines=len(self._lines_preprocessed),
+            input_tokens=preprocessed.input_tokens,
+            output_tokens=preprocessed.output_tokens,
+        )
+
+    def _save_analysis_results_to_manifest(
+        self,
+        input_lines: int,
+        input_tokens: int,
+        output_tokens: int,
+    ) -> None:
+        """Save analysis results to manifest (TASK 25.1).
+        
+        Args:
+            input_lines: Number of lines to translate.
+            input_tokens: Estimated input tokens.
+            output_tokens: Estimated output tokens.
+        """
+        if self.manifest_manager is None:
+            logger.debug("No manifest manager, skipping save")
+            return
+        
+        save_int_field(self.manifest_manager, "InputLines", input_lines)
+        save_int_field(self.manifest_manager, "InputTokens", input_tokens)
+        save_int_field(self.manifest_manager, "OutputTokens", output_tokens)
+        logger.debug(
+            "Saved analysis results to manifest: lines=%d, input=%d, output=%d",
+            input_lines, input_tokens, output_tokens
+        )
+
+    def _load_analysis_results_from_manifest(self) -> Dict[str, int]:
+        """Load analysis results from manifest (TASK 25.1).
+        
+        Returns:
+            Dict with input_lines, input_tokens, output_tokens.
+        """
+        if self.manifest_manager is None:
+            return {"input_lines": 0, "input_tokens": 0, "output_tokens": 0}
+        
+        return {
+            "input_lines": load_int_field(self.manifest_manager, "InputLines", 0),
+            "input_tokens": load_int_field(self.manifest_manager, "InputTokens", 0),
+            "output_tokens": load_int_field(self.manifest_manager, "OutputTokens", 0),
+        }
+
     def _estimation_complete(self) -> None:
         """Called when estimation completes."""
         self._is_estimating = False
@@ -880,6 +933,15 @@ class EstimationStep(BaseStep):
 
     def on_enter(self) -> None:
         """Called when step becomes active."""
+        # TASK 25.1: Load saved analysis results from manifest
+        saved_results = self._load_analysis_results_from_manifest()
+        if saved_results["input_lines"] > 0 and not self._estimation_result:
+            # Display saved values in UI
+            self._lines_prep_label.configure(text=str(saved_results["input_lines"]))
+            self._input_prep_label.configure(text=f"{saved_results['input_tokens']:,}")
+            self._output_prep_label.configure(text=f"{saved_results['output_tokens']:,}")
+            logger.debug("Loaded saved analysis results from manifest")
+        
         # Refresh lines from previous steps
         self._refresh_lines()
 

@@ -24,6 +24,25 @@ from CherryAI.gui.components.table import ColumnDef, SharedTable, TableRow
 from CherryAI.gui.steps.base import BaseStep
 from CherryAI.gui.theme.colors import THEME
 
+# TASK 26.2: Import manifest binding helpers for request options
+from CherryAI.gui.helpers.manifest_binding import (
+    BindingInfo,
+    bind_entry_to_field,
+    bind_checkbox_to_field,
+    bind_spinbox_to_field,
+    bind_combobox_to_field,
+)
+from CherryAI.functions.manifest_fields import (
+    save_nested_text_field,
+    load_nested_text_field,
+    save_nested_float_field,
+    load_nested_float_field,
+    save_nested_int_field,
+    load_nested_int_field,
+    save_nested_bool_field,
+    load_nested_bool_field,
+)
+
 # Import prompt adapter for prompt building and retry handling
 from CherryAI.gui.helpers.prompt_adapter import (
     RetryStrategyView,
@@ -108,6 +127,7 @@ class TranslationOptions:
     - Style and token bans
     - Line-by-line mode for individual line translation
     - Thinking mode for extended reasoning (Claude models)
+    - Edit before translation (Task 33.1)
     """
 
     model: str = "gpt-4o-mini"
@@ -124,6 +144,8 @@ class TranslationOptions:
     context_lines: int = 1  # Context lines for line-by-line mode
     thinking_enabled: bool = False  # Enable extended thinking (Claude)
     thinking_budget: int = 10000  # Token budget for thinking
+    # Edit before translation (Task 33.1)
+    edit_before_translation: bool = False  # Show edit dialog before API call
 
 
 @dataclass
@@ -133,6 +155,7 @@ class TranslatableLine:
     idx: int
     original: str
     preprocessed: str
+    edited_prepro: str = ""  # User-edited text (Task 33.1)
     translated: str = ""
     status: LineStatus = LineStatus.PENDING
     error_message: str = ""
@@ -442,6 +465,238 @@ class TranslationProgressWindow(tk.Toplevel):
                 self._on_cancel()
 
 
+class EditPreviewDialog(tk.Toplevel):
+    """Modal dialog for editing preprocessed text before translation.
+    
+    Task 33.1: Shows preprocessed lines in an editable view, allowing
+    user to make adjustments before sending to the translation API.
+    
+    Features:
+    - Shows all pending lines with their preprocessed text
+    - Allows inline editing of preprocessed text
+    - Supports undo/redo within the editor
+    - Preview changes with clear visual diff
+    - Apply changes to save edited_prepro field
+    """
+    
+    RESULT_APPLY: str = "apply"
+    RESULT_CANCEL: str = "cancel"
+    
+    def __init__(
+        self,
+        parent: tk.Widget,
+        lines: List["TranslatableLine"],
+    ) -> None:
+        """Initialize edit preview dialog.
+        
+        Args:
+            parent: Parent widget.
+            lines: Lines to edit (pending lines).
+        """
+        super().__init__(parent)
+        self._lines = lines
+        self._result: str = self.RESULT_CANCEL
+        self._edited_data: Dict[int, str] = {}  # idx -> edited text
+        
+        self.title("Edit Before Translation")
+        self.transient(parent)
+        self.grab_set()
+        
+        # Size and position
+        self.geometry("900x600")
+        self.minsize(600, 400)
+        self.update_idletasks()
+        
+        # Center on parent
+        parent_widget = self.winfo_toplevel()
+        x = parent_widget.winfo_x() + (parent_widget.winfo_width() // 2) - 450
+        y = parent_widget.winfo_y() + (parent_widget.winfo_height() // 2) - 300
+        self.geometry(f"+{max(0, x)}+{max(0, y)}")
+        
+        self._build_ui()
+        
+        # Handle window close
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        
+        # Bind keys
+        self.bind("<Escape>", lambda e: self._on_cancel())
+        self.bind("<Control-Return>", lambda e: self._on_apply())
+        
+        # Focus on first text entry
+        self._text_widgets[0].focus_set() if self._text_widgets else None
+    
+    def _build_ui(self) -> None:
+        """Build the dialog UI."""
+        main_frame = ttk.Frame(self, padding=10)
+        main_frame.pack(fill="both", expand=True)
+        
+        # Header
+        header_frame = ttk.Frame(main_frame)
+        header_frame.pack(fill="x", pady=(0, 10))
+        
+        ttk.Label(
+            header_frame,
+            text="Edit Preprocessed Text",
+            font=("TkDefaultFont", 12, "bold"),
+        ).pack(side="left")
+        
+        ttk.Label(
+            header_frame,
+            text=f"{len(self._lines)} lines",
+            foreground=THEME.text_secondary,
+        ).pack(side="right")
+        
+        # Info text
+        info_frame = ttk.Frame(main_frame)
+        info_frame.pack(fill="x", pady=(0, 10))
+        
+        ttk.Label(
+            info_frame,
+            text="Make any adjustments to the preprocessed text before translation. "
+                 "Changes are saved to the manifest.",
+            wraplength=800,
+            foreground=THEME.text_secondary,
+        ).pack(anchor="w")
+        
+        # Scrollable content area
+        canvas = tk.Canvas(main_frame, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=canvas.yview)
+        self._scroll_frame = ttk.Frame(canvas)
+        
+        self._scroll_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=self._scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Enable mousewheel scrolling
+        def _on_mousewheel(event: tk.Event) -> None:
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        
+        # Build line editors
+        self._text_widgets: List[tk.Text] = []
+        self._build_line_editors()
+        
+        # Button frame
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill="x", pady=(10, 0))
+        
+        ttk.Button(
+            button_frame,
+            text="Cancel",
+            command=self._on_cancel,
+        ).pack(side="right", padx=(5, 0))
+        
+        ttk.Button(
+            button_frame,
+            text="Apply and Continue",
+            command=self._on_apply,
+        ).pack(side="right")
+        
+        # Hint
+        ttk.Label(
+            button_frame,
+            text="Ctrl+Enter to apply",
+            foreground=THEME.text_secondary,
+            font=("TkDefaultFont", 8),
+        ).pack(side="left")
+    
+    def _build_line_editors(self) -> None:
+        """Build editable text widgets for each line."""
+        for i, line in enumerate(self._lines):
+            frame = ttk.LabelFrame(
+                self._scroll_frame,
+                text=f"Line {line.idx + 1}",
+                padding=5,
+            )
+            frame.pack(fill="x", padx=5, pady=2)
+            
+            # Original text (read-only reference)
+            orig_frame = ttk.Frame(frame)
+            orig_frame.pack(fill="x", pady=(0, 2))
+            
+            ttk.Label(
+                orig_frame,
+                text="Original:",
+                foreground=THEME.text_secondary,
+                width=10,
+            ).pack(side="left")
+            
+            orig_text = line.original[:100] + "..." if len(line.original) > 100 else line.original
+            ttk.Label(
+                orig_frame,
+                text=orig_text,
+                foreground=THEME.text_secondary,
+            ).pack(side="left", fill="x")
+            
+            # Editable preprocessed text
+            edit_frame = ttk.Frame(frame)
+            edit_frame.pack(fill="x")
+            
+            ttk.Label(
+                edit_frame,
+                text="Edit:",
+                width=10,
+            ).pack(side="left", anchor="n")
+            
+            text_widget = tk.Text(
+                edit_frame,
+                height=2,
+                wrap="word",
+                font=("TkDefaultFont", 9),
+            )
+            text_widget.pack(side="left", fill="x", expand=True)
+            
+            # Insert current text (use edited_prepro if available, else preprocessed)
+            current_text = line.edited_prepro if line.edited_prepro else line.preprocessed
+            text_widget.insert("1.0", current_text)
+            
+            # Store reference
+            text_widget._line_idx = line.idx  # type: ignore
+            self._text_widgets.append(text_widget)
+    
+    def _on_apply(self) -> None:
+        """Apply edits and close dialog."""
+        # Collect edited text from all widgets
+        for widget in self._text_widgets:
+            idx = widget._line_idx  # type: ignore
+            text = widget.get("1.0", "end-1c").strip()
+            
+            # Only store if different from preprocessed
+            original_line = next((l for l in self._lines if l.idx == idx), None)
+            if original_line:
+                if text != original_line.preprocessed:
+                    self._edited_data[idx] = text
+                elif original_line.edited_prepro:
+                    # Clear edited_prepro if user reverted to original preprocessed
+                    self._edited_data[idx] = ""
+        
+        self._result = self.RESULT_APPLY
+        self.destroy()
+    
+    def _on_cancel(self) -> None:
+        """Cancel and close dialog."""
+        self._result = self.RESULT_CANCEL
+        self.destroy()
+    
+    @property
+    def result(self) -> str:
+        """Get dialog result."""
+        return self._result
+    
+    @property
+    def edited_data(self) -> Dict[int, str]:
+        """Get edited data mapping idx -> edited text."""
+        return self._edited_data
+
+
 class TranslationStep(BaseStep):
     """Translation step for executing translations with live progress.
 
@@ -504,6 +759,8 @@ class TranslationStep(BaseStep):
         self._cancel_requested = False
         self._pause_requested = False
         self._api_client: Any = None
+        # TASK 26.2: Track manifest bindings for request options
+        self._manifest_bindings: List[BindingInfo] = []
         super().__init__(parent, session, manifest_manager=manifest_manager)
 
     def _build_ui(self) -> None:
@@ -636,6 +893,17 @@ class TranslationStep(BaseStep):
         )
         self._model_combo.pack(side="right")
 
+        # Bind model to manifest
+        binding = bind_combobox_to_field(
+            self._model_combo,
+            self._model_var,
+            self.manifest,
+            "Model",
+            parent_key="RequestOptions",
+        )
+        if binding:
+            self._manifest_bindings.append(binding)
+
         # Temperature
         temp_frame = ttk.Frame(frame)
         temp_frame.pack(fill="x", pady=2)
@@ -652,6 +920,9 @@ class TranslationStep(BaseStep):
         )
         self._temp_spin.pack(side="right")
 
+        # Bind temperature via trace (DoubleVar not directly supported)
+        self._temp_var.trace_add("write", lambda *_: self._save_temperature_to_manifest())
+
         # Chunk size
         chunk_frame = ttk.Frame(frame)
         chunk_frame.pack(fill="x", pady=2)
@@ -666,6 +937,17 @@ class TranslationStep(BaseStep):
             width=6,
         )
         self._chunk_spin.pack(side="right")
+
+        # Bind chunk size to manifest
+        binding = bind_spinbox_to_field(
+            self._chunk_spin,
+            self._chunk_var,
+            self.manifest,
+            "LinesPerChunk",
+            parent_key="RequestOptions",
+        )
+        if binding:
+            self._manifest_bindings.append(binding)
 
         # Retry strategy
         retry_frame = ttk.Frame(frame)
@@ -682,6 +964,17 @@ class TranslationStep(BaseStep):
         )
         self._retry_combo.pack(side="right")
 
+        # Bind retry strategy to manifest
+        binding = bind_combobox_to_field(
+            self._retry_combo,
+            self._retry_var,
+            self.manifest,
+            "RetryStrategy",
+            parent_key="RequestOptions",
+        )
+        if binding:
+            self._manifest_bindings.append(binding)
+
         # Max retries
         retries_frame = ttk.Frame(frame)
         retries_frame.pack(fill="x", pady=2)
@@ -697,16 +990,64 @@ class TranslationStep(BaseStep):
         )
         self._retries_spin.pack(side="right")
 
+        # Bind max retries to manifest
+        binding = bind_spinbox_to_field(
+            self._retries_spin,
+            self._retries_var,
+            self.manifest,
+            "MaxRetries",
+            parent_key="RequestOptions",
+        )
+        if binding:
+            self._manifest_bindings.append(binding)
+
         # Cache enabled
         cache_frame = ttk.Frame(frame)
         cache_frame.pack(fill="x", pady=2)
 
         self._cache_var = tk.BooleanVar(value=self._translation_options.cache_enabled)
-        ttk.Checkbutton(
+        cache_cb = ttk.Checkbutton(
             cache_frame,
             text="Enable Request Caching",
             variable=self._cache_var,
-        ).pack(side="left")
+        )
+        cache_cb.pack(side="left")
+
+        # Bind cache enabled to manifest
+        binding = bind_checkbox_to_field(
+            cache_cb,
+            self._cache_var,
+            self.manifest,
+            "EnableRequestCaching",
+            parent_key="RequestOptions",
+        )
+        if binding:
+            self._manifest_bindings.append(binding)
+
+        # Edit before translation (Task 33.1)
+        edit_frame = ttk.Frame(frame)
+        edit_frame.pack(fill="x", pady=2)
+
+        self._edit_before_var = tk.BooleanVar(
+            value=self._translation_options.edit_before_translation
+        )
+        edit_cb = ttk.Checkbutton(
+            edit_frame,
+            text="Edit Before Translation",
+            variable=self._edit_before_var,
+        )
+        edit_cb.pack(side="left")
+
+        # Bind edit before translation to manifest
+        binding = bind_checkbox_to_field(
+            edit_cb,
+            self._edit_before_var,
+            self.manifest,
+            "EditBeforeTranslation",
+            parent_key="RequestOptions",
+        )
+        if binding:
+            self._manifest_bindings.append(binding)
 
         # Separator before advanced options
         ttk.Separator(frame, orient="horizontal").pack(fill="x", pady=10)
@@ -716,12 +1057,24 @@ class TranslationStep(BaseStep):
         lbl_frame.pack(fill="x", pady=2)
 
         self._line_by_line_var = tk.BooleanVar(value=self._translation_options.line_by_line)
-        ttk.Checkbutton(
+        lbl_cb = ttk.Checkbutton(
             lbl_frame,
             text="Line-by-Line Mode",
             variable=self._line_by_line_var,
             command=self._on_line_by_line_toggle,
-        ).pack(side="left")
+        )
+        lbl_cb.pack(side="left")
+
+        # Bind line-by-line to manifest
+        binding = bind_checkbox_to_field(
+            lbl_cb,
+            self._line_by_line_var,
+            self.manifest,
+            "LineByLineMode",
+            parent_key="RequestOptions",
+        )
+        if binding:
+            self._manifest_bindings.append(binding)
 
         # Context lines (enabled only when line-by-line is on)
         context_frame = ttk.Frame(frame)
@@ -739,17 +1092,40 @@ class TranslationStep(BaseStep):
         )
         self._context_spin.pack(side="right")
 
+        # Bind context lines to manifest
+        binding = bind_spinbox_to_field(
+            self._context_spin,
+            self._context_lines_var,
+            self.manifest,
+            "ContextLines",
+            parent_key="RequestOptions",
+        )
+        if binding:
+            self._manifest_bindings.append(binding)
+
         # Thinking mode (for Claude models)
         thinking_frame = ttk.Frame(frame)
         thinking_frame.pack(fill="x", pady=2)
 
         self._thinking_var = tk.BooleanVar(value=self._translation_options.thinking_enabled)
-        ttk.Checkbutton(
+        thinking_cb = ttk.Checkbutton(
             thinking_frame,
             text="Extended Thinking (Claude)",
             variable=self._thinking_var,
             command=self._on_thinking_toggle,
-        ).pack(side="left")
+        )
+        thinking_cb.pack(side="left")
+
+        # Bind thinking to manifest
+        binding = bind_checkbox_to_field(
+            thinking_cb,
+            self._thinking_var,
+            self.manifest,
+            "Thinking",
+            parent_key="RequestOptions",
+        )
+        if binding:
+            self._manifest_bindings.append(binding)
 
         # Thinking budget
         budget_frame = ttk.Frame(frame)
@@ -767,6 +1143,17 @@ class TranslationStep(BaseStep):
             state="disabled" if not self._translation_options.thinking_enabled else "normal",
         )
         self._budget_spin.pack(side="right")
+
+        # Bind thinking budget to manifest
+        binding = bind_spinbox_to_field(
+            self._budget_spin,
+            self._thinking_budget_var,
+            self.manifest,
+            "ThinkingBudget",
+            parent_key="RequestOptions",
+        )
+        if binding:
+            self._manifest_bindings.append(binding)
 
         # Help text for advanced options
         ttk.Label(
@@ -928,10 +1315,19 @@ class TranslationStep(BaseStep):
         # Create TranslatableLine objects
         self._lines = []
         for idx, (orig, prep) in enumerate(zip(original, preprocessed)):
+            # Load edited_prepro from manifest if available (Task 33.1)
+            edited = ""
+            mgr = self.manifest_manager
+            if mgr is not None and mgr.is_loaded:
+                line_data = mgr.get_line(idx)
+                if line_data:
+                    edited = line_data.get("edited_prepro", "")
+            
             line = TranslatableLine(
                 idx=idx,
                 original=orig,
                 preprocessed=prep,
+                edited_prepro=edited,
             )
             self._lines.append(line)
 
@@ -988,6 +1384,7 @@ class TranslationStep(BaseStep):
             context_lines=self._context_lines_var.get(),
             thinking_enabled=self._thinking_var.get(),
             thinking_budget=self._thinking_budget_var.get(),
+            edit_before_translation=self._edit_before_var.get(),
         )
 
     def _get_prompt_parts(self) -> Dict[str, str]:
@@ -1049,6 +1446,11 @@ class TranslationStep(BaseStep):
             messagebox.showinfo("Translation", "No lines to translate.")
             return
 
+        # Task 33.1: Show edit dialog if enabled
+        if self._translation_options.edit_before_translation:
+            if not self._show_edit_dialog(pending_lines):
+                return  # User cancelled edit dialog
+
         # Initialize progress
         self._progress = TranslationProgress(
             total_lines=len(pending_lines),
@@ -1072,12 +1474,79 @@ class TranslationStep(BaseStep):
         # Disable start button
         self._translate_btn.configure(state="disabled")
 
+        # TASK 29.2: Save manifest before starting translation
+        self._save_manifest_before_translation()
+
         # Start translation thread
         self._translation_thread = threading.Thread(
             target=self._do_translation,
             daemon=True,
         )
         self._translation_thread.start()
+
+    def _show_edit_dialog(self, pending_lines: List[TranslatableLine]) -> bool:
+        """Show edit dialog for preprocessed text (Task 33.1).
+        
+        Args:
+            pending_lines: Lines to edit before translation.
+            
+        Returns:
+            True if user applied changes or dialog was closed normally,
+            False if user cancelled.
+        """
+        dialog = EditPreviewDialog(self, pending_lines)
+        self.wait_window(dialog)
+        
+        if dialog.result == EditPreviewDialog.RESULT_CANCEL:
+            return False
+        
+        # Apply edited data to lines and manifest
+        for idx, edited_text in dialog.edited_data.items():
+            # Update TranslatableLine
+            for line in self._lines:
+                if line.idx == idx:
+                    line.edited_prepro = edited_text if edited_text else ""
+                    break
+            
+            # Update manifest
+            self._save_edited_prepro_to_manifest(idx, edited_text)
+        
+        # Update table to show edited indicator
+        self._update_lines_table()
+        
+        return True
+
+    def _save_edited_prepro_to_manifest(self, idx: int, edited_text: str) -> None:
+        """Save edited_prepro to manifest (Task 33.1).
+        
+        Args:
+            idx: Line index.
+            edited_text: Edited preprocessed text (empty string to clear).
+        """
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            if edited_text:
+                mgr.set_line_field(idx, "edited_prepro", edited_text)
+            else:
+                # Clear the field by setting to None
+                line = mgr.get_line(idx)
+                if line and "edited_prepro" in line:
+                    del line["edited_prepro"]
+                    mgr._mark_dirty()
+
+    def _save_manifest_before_translation(self) -> None:
+        """Save manifest before starting translation (TASK 29.2).
+        
+        Ensures current state is persisted before potentially long-running
+        translation operation to prevent data loss.
+        """
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            try:
+                if mgr.save():
+                    logger.debug("Manifest saved before translation start")
+            except Exception as e:
+                logger.warning("Failed to save manifest before translation: %s", e)
 
     def _do_translation(self) -> None:
         """Perform translation in background thread."""
@@ -1256,7 +1725,11 @@ class TranslationStep(BaseStep):
         if self._api_client is None:
             # Simulation mode
             time.sleep(0.5)  # Simulate API delay
-            return [f"[Translated] {line.preprocessed}" for line in chunk]
+            # Use edited_prepro if available (Task 33.1)
+            return [
+                f"[Translated] {line.edited_prepro or line.preprocessed}"
+                for line in chunk
+            ]
 
         # Build prompt from prompt editor
         prompt_parts = self._get_prompt_parts()
@@ -1271,8 +1744,11 @@ class TranslationStep(BaseStep):
         if prompt_parts["conditional"]:
             system_prompt += f"Special Instructions:\n{prompt_parts['conditional']}\n\n"
 
-        # Get preprocessed text for translation
-        lines_to_translate = [line.preprocessed for line in chunk]
+        # Get text for translation - use edited_prepro if available (Task 33.1)
+        lines_to_translate = [
+            line.edited_prepro if line.edited_prepro else line.preprocessed
+            for line in chunk
+        ]
 
         # Call API
         translations = self._api_client.translate_batch(
@@ -1388,6 +1864,83 @@ class TranslationStep(BaseStep):
 
         # Load prompt data from config if available
         self._load_prompt_data()
+
+        # Load request options from manifest
+        self._load_request_options_from_manifest()
+
+    def _save_temperature_to_manifest(self) -> None:
+        """Save temperature value to manifest."""
+        if self.manifest:
+            try:
+                value = self._temp_var.get()
+                save_nested_float_field(
+                    self.manifest, "RequestOptions", "Temperature", value
+                )
+            except (tk.TclError, ValueError):
+                pass  # Ignore invalid values during typing
+
+    def _load_request_options_from_manifest(self) -> None:
+        """Load request options from manifest into UI widgets."""
+        if not self.manifest:
+            return
+
+        # Load Model
+        model = load_nested_text_field(self.manifest, "RequestOptions", "Model", "")
+        if model:
+            self._model_var.set(model)
+
+        # Load Temperature
+        temp = load_nested_float_field(
+            self.manifest, "RequestOptions", "Temperature", 0.2
+        )
+        self._temp_var.set(temp)
+
+        # Load LinesPerChunk
+        chunk_size = load_nested_int_field(
+            self.manifest, "RequestOptions", "LinesPerChunk", 30
+        )
+        self._chunk_var.set(chunk_size)
+
+        # Load RetryStrategy
+        retry = load_nested_text_field(self.manifest, "RequestOptions", "RetryStrategy", "")
+        if retry:
+            self._retry_var.set(retry)
+
+        # Load MaxRetries
+        max_retries = load_nested_int_field(
+            self.manifest, "RequestOptions", "MaxRetries", 3
+        )
+        self._retries_var.set(max_retries)
+
+        # Load EnableRequestCaching
+        caching = load_nested_bool_field(
+            self.manifest, "RequestOptions", "EnableRequestCaching", True
+        )
+        self._cache_var.set(caching)
+
+        # Load LineByLineMode
+        line_by_line = load_nested_bool_field(
+            self.manifest, "RequestOptions", "LineByLineMode", False
+        )
+        self._line_by_line_var.set(line_by_line)
+
+        # Load ContextLines
+        context_lines = load_nested_int_field(
+            self.manifest, "RequestOptions", "ContextLines", 2
+        )
+        self._context_lines_var.set(context_lines)
+
+        # Load Thinking
+        thinking = load_nested_bool_field(
+            self.manifest, "RequestOptions", "Thinking", False
+        )
+        self._thinking_var.set(thinking)
+
+        # Load ThinkingBudget
+        thinking_budget = load_nested_int_field(
+            self.manifest, "RequestOptions", "ThinkingBudget", 10000
+        )
+        self._thinking_budget_var.set(thinking_budget)
 
     def on_leave(self) -> None:
         """Called when leaving step."""

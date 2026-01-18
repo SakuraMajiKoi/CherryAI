@@ -2,6 +2,11 @@
 
 Third workflow tab for project metadata and LLM-assisted inference.
 Provides fields for project name, summary, style, and character notes.
+
+TASK 23.1: Basic Metadata Fields bound to manifest.
+TASK 23.2: Style and Tone Fields bound to manifest.
+TASK 23.3: Character Notes and Code Glossary bound to manifest.
+TASK 23.4: Prompt field (renamed from Additional Notes) bound to manifest.
 """
 
 from __future__ import annotations
@@ -19,6 +24,20 @@ from tkinter import ttk, messagebox, scrolledtext
 
 from CherryAI.gui.steps.base import BaseStep
 from CherryAI.gui.theme.colors import THEME
+from CherryAI.gui.helpers.manifest_binding import (
+    BindingInfo,
+    bind_entry_to_field,
+    bind_checkbox_to_field,
+    bind_combobox_to_field,
+    bind_text_to_field,
+    load_all_bindings,
+)
+from CherryAI.functions.manifest_fields import (
+    save_character_notes,
+    load_character_notes,
+    save_code_glossary,
+    load_code_glossary,
+)
 
 if TYPE_CHECKING:
     from CherryAI.gui.state.store import SessionState
@@ -377,6 +396,10 @@ class InformationStep(BaseStep):
     - LLM inference toggle for automatic metadata
     - Editable JSON view of all metadata
     - Persist to manifest
+    
+    TASK 23: Manifest Integration
+    - All fields auto-save to manifest on change
+    - All fields auto-load from manifest on step enter
     """
 
     step_id = 3  # Moved from position 2
@@ -401,6 +424,9 @@ class InformationStep(BaseStep):
         self._inference_result = InferenceResult()
         self._is_inferring = False
         self._json_mode = False
+        
+        # TASK 23: Manifest bindings for auto-save/load
+        self._manifest_bindings: List[BindingInfo] = []
 
         super().__init__(parent, session, manifest_manager=manifest_manager)
 
@@ -440,8 +466,10 @@ class InformationStep(BaseStep):
         """Build the main content area with 2-column layout.
         
         Layout:
-        - Left column: Project Details, Languages, Summary, Style & Tone, Characters
-        - Right column: Additional Notes, LLM Inference Options, JSON View
+        - Left column: Project Details, Languages, Summary, Style & Tone, Prompt, Characters
+        - Right column: Glossary Settings, Code Glossary, JSON View
+        
+        TASK 23.4: Prompt field moved from right column to left column before Characters.
         """
         # Main container with scrolling
         canvas = tk.Canvas(self, highlightthickness=0)
@@ -482,19 +510,24 @@ class InformationStep(BaseStep):
         self._right_column.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
 
         # Build sections in their respective columns
+        # Left column sections:
         self._build_project_section()
         self._build_language_section()
         self._build_summary_section()
         self._build_style_section()
+        self._build_notes_section()  # TASK 23.4: Moved before Characters, renamed to Prompt
         self._build_character_section()
+        # Right column sections:
         self._build_glossary_settings_section()  # TASK 19 Phase 4
         self._build_code_glossary_section()  # TASK 18.5
-        self._build_notes_section()
         self._build_inference_section()  # Variables only, UI removed (deprecated)
         self._build_json_section()
 
     def _build_project_section(self) -> None:
-        """Build project name and title section."""
+        """Build project name and title section.
+        
+        TASK 23.1: Fields bound to manifest for auto-save/load.
+        """
         frame = ttk.LabelFrame(self._left_column, text="Project Details")
         frame.pack(fill="x", padx=5, pady=5)
 
@@ -508,17 +541,39 @@ class InformationStep(BaseStep):
         self._project_name_var = tk.StringVar()
         self._project_name_entry = ttk.Entry(row1, textvariable=self._project_name_var)
         self._project_name_entry.pack(side="left", fill="x", expand=True)
+        
+        # TASK 23.1: Bind to manifest
+        self._manifest_bindings.append(
+            bind_entry_to_field(
+                entry=self._project_name_entry,
+                var=self._project_name_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="ProjectName",
+                default="",
+            )
+        )
 
-        # Game Title
+        # Title (renamed from "Game Title" per TASK 23.1)
         row2 = ttk.Frame(frame)
         row2.pack(fill="x", padx=10, pady=5)
 
-        ttk.Label(row2, text="Game Title:", width=15, anchor="e").pack(
+        ttk.Label(row2, text="Title:", width=15, anchor="e").pack(
             side="left", padx=(0, 5)
         )
         self._game_title_var = tk.StringVar()
         self._game_title_entry = ttk.Entry(row2, textvariable=self._game_title_var)
         self._game_title_entry.pack(side="left", fill="x", expand=True)
+        
+        # TASK 23.1: Bind to manifest
+        self._manifest_bindings.append(
+            bind_entry_to_field(
+                entry=self._game_title_entry,
+                var=self._game_title_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="Title",
+                default="",
+            )
+        )
 
         # Genre
         row3 = ttk.Frame(frame)
@@ -531,6 +586,17 @@ class InformationStep(BaseStep):
         self._genre_entry = ttk.Entry(row3, textvariable=self._genre_var)
         self._genre_entry.pack(side="left", fill="x", expand=True)
         
+        # TASK 23.1: Bind to manifest
+        self._manifest_bindings.append(
+            bind_entry_to_field(
+                entry=self._genre_entry,
+                var=self._genre_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="Genre",
+                default="",
+            )
+        )
+        
         # Button to open multi-select dialog
         self._genre_btn = ttk.Button(
             row3,
@@ -541,7 +607,10 @@ class InformationStep(BaseStep):
         self._genre_btn.pack(side="left", padx=(5, 0))
 
     def _build_language_section(self) -> None:
-        """Build language selection section."""
+        """Build language selection section.
+        
+        TASK 23.1: Language fields bound to manifest for auto-save/load.
+        """
         frame = ttk.LabelFrame(self._left_column, text="Languages")
         frame.pack(fill="x", padx=5, pady=5)
 
@@ -559,6 +628,18 @@ class InformationStep(BaseStep):
             width=20,
         )
         self._source_lang_combo.pack(side="left", padx=(0, 20))
+        
+        # TASK 23.1: Bind to manifest
+        self._manifest_bindings.append(
+            bind_combobox_to_field(
+                combobox=self._source_lang_combo,
+                var=self._source_lang_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="SourceLanguage",
+                options=SOURCE_LANGUAGES,
+                default="Japanese",
+            )
+        )
 
         # Arrow
         ttk.Label(row, text="→").pack(side="left", padx=10)
@@ -574,9 +655,24 @@ class InformationStep(BaseStep):
             width=20,
         )
         self._target_lang_combo.pack(side="left")
+        
+        # TASK 23.1: Bind to manifest
+        self._manifest_bindings.append(
+            bind_combobox_to_field(
+                combobox=self._target_lang_combo,
+                var=self._target_lang_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="TargetLanguage",
+                options=TARGET_LANGUAGES,
+                default="English",
+            )
+        )
 
     def _build_summary_section(self) -> None:
-        """Build summary/description section."""
+        """Build summary/description section.
+        
+        TASK 23.1: Summary field bound to manifest for auto-save/load.
+        """
         frame = ttk.LabelFrame(self._left_column, text="Summary / Description")
         frame.pack(fill="x", padx=5, pady=5)
 
@@ -588,6 +684,16 @@ class InformationStep(BaseStep):
             font=("Consolas", 10),
         )
         self._summary_text.pack(fill="x", padx=10, pady=5)
+        
+        # TASK 23.1: Bind to manifest (auto-saves on focus out)
+        self._manifest_bindings.append(
+            bind_text_to_field(
+                text_widget=self._summary_text,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="Summary",
+                default="",
+            )
+        )
 
         # Hint
         ttk.Label(
@@ -598,7 +704,10 @@ class InformationStep(BaseStep):
         ).pack(anchor="w", padx=10, pady=(0, 5))
 
     def _build_style_section(self) -> None:
-        """Build style and tone section."""
+        """Build style and tone section.
+        
+        TASK 23.2: Style/Tone fields bound to manifest for auto-save/load.
+        """
         frame = ttk.LabelFrame(self._left_column, text="Translation Style & Tone")
         frame.pack(fill="x", padx=5, pady=5)
 
@@ -617,6 +726,18 @@ class InformationStep(BaseStep):
         )
         self._style_preset_combo.pack(side="left", padx=(0, 20))
         self._style_preset_combo.bind("<<ComboboxSelected>>", self._on_style_changed)
+        
+        # TASK 23.2: Bind to manifest
+        self._manifest_bindings.append(
+            bind_combobox_to_field(
+                combobox=self._style_preset_combo,
+                var=self._style_preset_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="StylePreset",
+                options=[s.value for s in StylePreset],
+                default=StylePreset.NATURAL.value,
+            )
+        )
 
         # Style description
         self._style_desc_label = ttk.Label(
@@ -635,6 +756,17 @@ class InformationStep(BaseStep):
         self._style_var = tk.StringVar()
         self._style_entry = ttk.Entry(style_custom_row, textvariable=self._style_var)
         self._style_entry.pack(side="left", fill="x", expand=True)
+        
+        # TASK 23.2: Bind to manifest
+        self._manifest_bindings.append(
+            bind_entry_to_field(
+                entry=self._style_entry,
+                var=self._style_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="CustomStyle",
+                default="",
+            )
+        )
 
         # Separator
         ttk.Separator(frame, orient="horizontal").pack(fill="x", padx=10, pady=5)
@@ -654,6 +786,18 @@ class InformationStep(BaseStep):
         )
         self._tone_preset_combo.pack(side="left", padx=(0, 20))
         self._tone_preset_combo.bind("<<ComboboxSelected>>", self._on_tone_changed)
+        
+        # TASK 23.2: Bind to manifest
+        self._manifest_bindings.append(
+            bind_combobox_to_field(
+                combobox=self._tone_preset_combo,
+                var=self._tone_preset_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="TonePreset",
+                options=[t.value for t in TonePreset],
+                default=TonePreset.NEUTRAL.value,
+            )
+        )
 
         # Tone description
         self._tone_desc_label = ttk.Label(
@@ -672,6 +816,17 @@ class InformationStep(BaseStep):
         self._tone_var = tk.StringVar()
         self._tone_entry = ttk.Entry(tone_custom_row, textvariable=self._tone_var)
         self._tone_entry.pack(side="left", fill="x", expand=True)
+        
+        # TASK 23.2: Bind to manifest
+        self._manifest_bindings.append(
+            bind_entry_to_field(
+                entry=self._tone_entry,
+                var=self._tone_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="CustomTone",
+                default="",
+            )
+        )
 
     def _build_character_section(self) -> None:
         """Build character notes section."""
@@ -881,8 +1036,13 @@ class InformationStep(BaseStep):
         ).pack(anchor="w", padx=10, pady=(0, 5))
 
     def _build_notes_section(self) -> None:
-        """Build custom notes section (right column)."""
-        frame = ttk.LabelFrame(self._right_column, text="Additional Notes")
+        """Build Prompt section (left column, before Characters).
+        
+        TASK 23.4: Renamed from 'Additional Notes' to 'Prompt'.
+        Moved from right column to left column before Character Notes.
+        Bound to manifest for persistence.
+        """
+        frame = ttk.LabelFrame(self._left_column, text="Prompt")
         frame.pack(fill="x", padx=5, pady=5)
 
         self._notes_text = scrolledtext.ScrolledText(
@@ -892,10 +1052,20 @@ class InformationStep(BaseStep):
             font=("Consolas", 10),
         )
         self._notes_text.pack(fill="x", padx=10, pady=5)
+        
+        # TASK 23.4: Bind to manifest
+        self._manifest_bindings.append(
+            bind_text_to_field(
+                text_widget=self._notes_text,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="Prompt",
+                default="",
+            )
+        )
 
         ttk.Label(
             frame,
-            text="Any additional context or notes for the translator.",
+            text="Custom instructions for the LLM during translation.",
             font=("Segoe UI", 8),
             foreground="gray",
         ).pack(anchor="w", padx=10, pady=(0, 5))
@@ -999,6 +1169,7 @@ class InformationStep(BaseStep):
         if dialog.result:
             self._metadata.characters.append(dialog.result)
             self._refresh_character_list()
+            self._save_characters_to_manifest()  # TASK 23.3
 
     def _edit_character(self) -> None:
         """Edit selected character."""
@@ -1014,6 +1185,7 @@ class InformationStep(BaseStep):
             if dialog.result:
                 self._metadata.characters[idx] = dialog.result
                 self._refresh_character_list()
+                self._save_characters_to_manifest()  # TASK 23.3
 
     def _remove_character(self) -> None:
         """Remove selected character."""
@@ -1027,6 +1199,7 @@ class InformationStep(BaseStep):
             if idx < len(self._metadata.characters):
                 del self._metadata.characters[idx]
                 self._refresh_character_list()
+                self._save_characters_to_manifest()  # TASK 23.3
 
     def _infer_character_genders(self) -> None:
         """Infer gender for characters based on their original names.
@@ -1083,6 +1256,10 @@ class InformationStep(BaseStep):
 
         # Refresh display
         self._refresh_character_list()
+        
+        # TASK 23.3: Save to manifest if any were updated
+        if updated_count > 0:
+            self._save_characters_to_manifest()
 
         if updated_count > 0:
             messagebox.showinfo(
@@ -1173,6 +1350,7 @@ class InformationStep(BaseStep):
                 if new_value != str(current_value):
                     setattr(char, field_key, new_value)
                     self._refresh_character_list()
+                    self._save_characters_to_manifest()  # TASK 23.3
 
             def on_cancel(event=None):
                 entry.destroy()
@@ -1214,6 +1392,7 @@ class InformationStep(BaseStep):
             if new_value != current_value:
                 setattr(char, col_key, new_value)
                 self._refresh_character_list()
+                self._save_characters_to_manifest()  # TASK 23.3
 
         def on_cancel(event=None):
             combo.destroy()
@@ -1368,6 +1547,10 @@ class InformationStep(BaseStep):
             
             self._refresh_character_list()
             
+            # TASK 23.3: Save to manifest
+            if imported_count > 0:
+                self._save_characters_to_manifest()
+            
             if imported_count > 0:
                 messagebox.showinfo(
                     "Import Complete",
@@ -1398,6 +1581,7 @@ class InformationStep(BaseStep):
         if dialog.result:
             self._metadata.code_patterns.append(dialog.result)
             self._refresh_code_pattern_list()
+            self._save_code_patterns_to_manifest()  # TASK 23.3
 
     def _edit_code_pattern(self) -> None:
         """Edit selected code pattern."""
@@ -1415,6 +1599,7 @@ class InformationStep(BaseStep):
             if dialog.result:
                 self._metadata.code_patterns[idx] = dialog.result
                 self._refresh_code_pattern_list()
+                self._save_code_patterns_to_manifest()  # TASK 23.3
 
     def _remove_code_pattern(self) -> None:
         """Remove selected code pattern."""
@@ -1430,6 +1615,7 @@ class InformationStep(BaseStep):
             if idx < len(self._metadata.code_patterns):
                 del self._metadata.code_patterns[idx]
                 self._refresh_code_pattern_list()
+                self._save_code_patterns_to_manifest()  # TASK 23.3
 
     def _on_code_double_click(self, event: tk.Event) -> None:
         """Handle double-click on code pattern tree for inline editing."""
@@ -1499,6 +1685,7 @@ class InformationStep(BaseStep):
                 if new_value != str(current_value):
                     setattr(pattern, col_key, new_value)
                     self._refresh_code_pattern_list()
+                    self._save_code_patterns_to_manifest()  # TASK 23.3
 
             def on_cancel(event=None):
                 entry.destroy()
@@ -1540,6 +1727,7 @@ class InformationStep(BaseStep):
             if new_value != current_value:
                 setattr(pattern, col_key, new_value)
                 self._refresh_code_pattern_list()
+                self._save_code_patterns_to_manifest()  # TASK 23.3
 
         def on_cancel(event=None):
             combo.destroy()
@@ -1610,6 +1798,10 @@ class InformationStep(BaseStep):
                 imported_count += 1
 
             self._refresh_code_pattern_list()
+            
+            # TASK 23.3: Save to manifest
+            if imported_count > 0:
+                self._save_code_patterns_to_manifest()
 
             if imported_count > 0:
                 messagebox.showinfo(
@@ -1982,7 +2174,19 @@ class InformationStep(BaseStep):
     # ========================================================================
 
     def on_enter(self) -> None:
-        """Called when step is entered."""
+        """Called when step is entered.
+        
+        TASK 23.1: Load manifest bindings first, then legacy metadata.
+        TASK 23.3: Load characters and code patterns from manifest.
+        """
+        # TASK 23.1: Load all manifest-bound fields
+        self._load_from_manifest_bindings()
+        
+        # TASK 23.3: Load characters and code patterns from manifest
+        self._load_characters_from_manifest()
+        self._load_code_patterns_from_manifest()
+        
+        # Legacy: Load from session state (for backward compatibility)
         self._load_metadata()
         # Task 18.4: Import characters from Analysis step if available
         self._import_analysis_speakers()
@@ -1990,6 +2194,74 @@ class InformationStep(BaseStep):
         self._apply_suggested_project_name()
         # Auto-import code patterns from Analysis if none exist
         self._auto_import_code_patterns()
+    
+    def _load_from_manifest_bindings(self) -> None:
+        """Load all manifest-bound fields from manifest.
+        
+        TASK 23.1: Uses binding system to populate widgets from manifest.
+        """
+        if self.manifest_manager is None or not self.manifest_manager.is_loaded:
+            logger.debug("No manifest loaded, skipping binding load")
+            return
+        
+        load_all_bindings(self._manifest_bindings)
+        logger.debug("Loaded %d manifest bindings", len(self._manifest_bindings))
+    
+    def _save_characters_to_manifest(self) -> None:
+        """Save character notes to manifest.
+        
+        TASK 23.3: Persist characters to manifest for project persistence.
+        """
+        if self.manifest_manager is None or not self.manifest_manager.is_loaded:
+            return
+        
+        characters_data = [c.to_dict() for c in self._metadata.characters]
+        save_character_notes(self.manifest_manager, characters_data)
+        logger.debug("Saved %d characters to manifest", len(characters_data))
+    
+    def _load_characters_from_manifest(self) -> None:
+        """Load character notes from manifest.
+        
+        TASK 23.3: Restore characters from manifest on step enter.
+        """
+        if self.manifest_manager is None or not self.manifest_manager.is_loaded:
+            return
+        
+        characters_data = load_character_notes(self.manifest_manager)
+        if characters_data:
+            self._metadata.characters = [
+                CharacterInfo.from_dict(c) for c in characters_data
+            ]
+            self._refresh_character_list()
+            logger.debug("Loaded %d characters from manifest", len(characters_data))
+    
+    def _save_code_patterns_to_manifest(self) -> None:
+        """Save code glossary patterns to manifest.
+        
+        TASK 23.3: Persist code patterns to manifest for project persistence.
+        """
+        if self.manifest_manager is None or not self.manifest_manager.is_loaded:
+            return
+        
+        patterns_data = [p.to_dict() for p in self._metadata.code_patterns]
+        save_code_glossary(self.manifest_manager, patterns_data)
+        logger.debug("Saved %d code patterns to manifest", len(patterns_data))
+    
+    def _load_code_patterns_from_manifest(self) -> None:
+        """Load code glossary patterns from manifest.
+        
+        TASK 23.3: Restore code patterns from manifest on step enter.
+        """
+        if self.manifest_manager is None or not self.manifest_manager.is_loaded:
+            return
+        
+        patterns_data = load_code_glossary(self.manifest_manager)
+        if patterns_data:
+            self._metadata.code_patterns = [
+                CodePattern.from_dict(p) for p in patterns_data
+            ]
+            self._refresh_code_pattern_list()
+            logger.debug("Loaded %d code patterns from manifest", len(patterns_data))
 
     def _import_analysis_speakers(self) -> None:
         """Import detected speakers from Analysis step into Character Notes.

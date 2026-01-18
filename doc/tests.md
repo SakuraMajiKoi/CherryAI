@@ -55,7 +55,7 @@ Guidelines:
 
 **Location:** `dev/test_*.py`  
 **Runner:** `pytest`  
-**Count:** 3177 tests collected, 3177 passed, 26 skipped (integration tests)
+**Count:** 4130 tests collected, 4130 passed, 26 skipped (integration tests)
 **Configuration:** `conftest.py` - pytest hooks for CherryAI module setup
 
 Script Tests are fast unit tests that validate internal logic without LLM API calls.
@@ -271,6 +271,1295 @@ Core Manifest v2.0 unit tests validating LineEntry and Manifest classes.
 | `test_metadata_fields` | METADATA_FIELDS contains correct fields |
 | `test_output_fields` | OUTPUT_FIELDS contains correct fields |
 | `test_no_overlap_text_metadata` | TEXT_FIELDS and METADATA_FIELDS don't overlap |
+
+---
+
+### dev/test_manifest_state.py (27 tests)
+
+ManifestManager state management tests for Manifest 3.0 unified state.
+
+#### TestManifestManagerCreation (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_create_new_manifest` | Creates new manifest with project info |
+| `test_create_new_sets_path` | create_new sets manifest file path |
+| `test_create_new_marks_dirty` | New manifest starts dirty |
+| `test_create_with_multiple_files` | Handles multiple source files |
+| `test_project_name_required` | Validates project name requirement |
+| `test_source_files_required` | Validates source files requirement |
+
+#### TestManifestManagerLoadSave (7 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_creates_file` | save() creates JSON file on disk |
+| `test_save_clears_dirty` | save() clears dirty flag |
+| `test_load_existing` | load() reads existing manifest |
+| `test_load_sets_path` | load() sets internal path |
+| `test_load_clears_dirty` | Loaded manifest starts clean |
+| `test_save_load_roundtrip` | Data survives save/load cycle |
+| `test_load_nonexistent_raises` | load() raises for missing file |
+
+#### TestManifestManagerStateAccess (8 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_get_project_info` | Returns project_info dict |
+| `test_get_source_files` | Returns source file list |
+| `test_get_status` | Returns current status |
+| `test_set_status` | Updates status and marks dirty |
+| `test_get_manifest_data` | Returns full manifest dict |
+| `test_is_dirty` | Reports dirty state correctly |
+| `test_mark_dirty` | External dirty marking works |
+| `test_get_manifest_path` | Returns file path |
+
+#### TestManifestManagerVersioning (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_new_manifest_has_version` | New manifest has version field |
+| `test_version_format` | Version is valid semver string |
+| `test_loaded_manifest_preserves_version` | Load preserves version |
+| `test_manifest_type_field` | Type field identifies manifest |
+| `test_created_timestamp` | Created timestamp present |
+| `test_modified_timestamp_updates` | Modified timestamp updates on save |
+
+---
+
+### dev/test_ini_manager.py (48 tests)
+
+INI file path resolution and typed access for Manifest 3.0 defaults.
+
+#### TestGetIniPath (14 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_main_ini_path` | Returns main CherryAI.ini path |
+| `test_api_ini_path` | Returns api_profiles.ini path |
+| `test_unknown_ini_raises` | Raises for unknown INI names |
+| `test_ini_files_exist` | Validates INI files accessible |
+| `test_main_ini_content` | Main INI has expected sections |
+| `test_api_ini_content` | API INI has expected format |
+| `test_path_is_absolute` | Returns absolute paths |
+| `test_path_normalization` | Handles path separators |
+| `test_case_insensitive_name` | INI name matching is flexible |
+| `test_returns_path_object` | Returns pathlib.Path |
+| `test_caching_behavior` | Path resolution is efficient |
+| `test_thread_safety` | Safe for concurrent access |
+| `test_ini_encoding` | Handles UTF-8 encoding |
+| `test_missing_ini_handling` | Clear error for missing files |
+
+#### TestGetDefault (10 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_get_string_default` | Returns string values |
+| `test_get_int_default` | Returns typed integer values |
+| `test_get_float_default` | Returns typed float values |
+| `test_get_bool_default` | Returns typed boolean values |
+| `test_get_list_default` | Parses comma-separated lists |
+| `test_missing_key_returns_fallback` | Returns fallback for missing |
+| `test_missing_section_returns_fallback` | Returns fallback for bad section |
+| `test_type_conversion_error` | Handles bad type conversions |
+| `test_empty_value_handling` | Handles empty strings |
+| `test_whitespace_handling` | Trims whitespace correctly |
+
+#### TestSetDefault (8 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_set_string_value` | Writes string to INI |
+| `test_set_int_value` | Writes integer to INI |
+| `test_set_bool_value` | Writes boolean to INI |
+| `test_set_creates_section` | Creates section if needed |
+| `test_set_updates_existing` | Updates existing values |
+| `test_set_preserves_other_keys` | Doesn't clobber other keys |
+| `test_set_writes_to_disk` | Changes persist to file |
+| `test_set_handles_special_chars` | Escapes special characters |
+
+#### TestGetAllManifestDefaults (8 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_returns_dict` | Returns dictionary of defaults |
+| `test_contains_all_sections` | All INI sections represented |
+| `test_type_preservation` | Values have correct types |
+| `test_nested_structure` | Nested dicts for sections |
+| `test_list_parsing` | List values parsed correctly |
+| `test_boolean_normalization` | Bools normalized to True/False |
+| `test_empty_section_handling` | Empty sections return empty dict |
+| `test_performance` | Bulk read is efficient |
+
+#### TestManifestDefaultsMapping (8 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_preprocessing_defaults` | Preprocessing options mapped |
+| `test_request_defaults` | Request options mapped |
+| `test_validation_defaults` | Validation rules mapped |
+| `test_postprocessing_defaults` | Post-processing options mapped |
+| `test_wordwrap_defaults` | Wordwrap settings mapped |
+| `test_output_defaults` | Output options mapped |
+| `test_qa_defaults` | QA options mapped |
+| `test_estimation_defaults` | Estimation fields mapped |
+
+---
+
+### dev/test_manifest_defaults.py (44 tests)
+
+Manifest initialization and backward compatibility tests for Manifest 3.0.
+
+#### TestCreateManifestPopulatesAllDefaults (11 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_has_project_info` | New manifest has project_info dict |
+| `test_has_preprocessing_fields` | All preprocessing fields present |
+| `test_has_request_options` | RequestOptions dict present |
+| `test_has_validation_rules` | ValidationRules dict present |
+| `test_has_qa_options` | QAOptions dict present |
+| `test_has_postprocessing_fields` | PostProcessing dict present |
+| `test_has_wordwrap_settings` | WordwrapSettings dict present |
+| `test_has_output_format` | OutputFormat dict present |
+| `test_has_estimation_fields` | Estimation fields present |
+| `test_has_lines_array` | Lines array initialized |
+| `test_has_version` | ManifestVersion present |
+
+#### TestLoadedManifestHasAllFields (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_load_adds_missing_fields` | Old manifests get new fields |
+| `test_load_preserves_existing` | Existing values not overwritten |
+| `test_load_adds_nested_dicts` | Nested structures created |
+| `test_load_preserves_lines` | Line data preserved |
+| `test_load_updates_version` | Version field updated |
+
+#### TestDefaultValuesMatchINI (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_temperature_from_ini` | Temperature matches INI |
+| `test_lines_per_chunk_from_ini` | LinesPerChunk matches INI |
+| `test_dedup_threshold_from_ini` | DeduplicationThreshold matches |
+| `test_wordwrap_width_from_ini` | WordwrapWidth matches INI |
+| `test_max_retries_from_ini` | MaxRetries matches INI |
+| `test_bool_values_from_ini` | Boolean values match INI |
+
+#### TestBuiltinDefaults (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_builtin_fallback` | Uses builtin when INI missing |
+| `test_builtin_complete` | Builtin has all required fields |
+
+#### TestBackwardCompatibility (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_v21_manifest_loads` | v2.1 manifests load correctly |
+| `test_v21_gets_v30_fields` | v2.1 manifests get v3.0 fields |
+| `test_v10_manifest_loads` | v1.0 manifests load correctly |
+| `test_preserve_custom_values` | User customizations preserved |
+
+#### TestListFieldParsing (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_protect_patterns_parsed` | ProtectCodePatterns as list |
+| `test_custom_placeholders_parsed` | CustomPlaceholders as list |
+| `test_anchor_removal_parsed` | AnchorRemoval as list |
+
+#### TestHelperMethods (7 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_get_manifest_defaults` | _get_manifest_defaults works |
+| `test_get_builtin_defaults` | _get_builtin_defaults works |
+| `test_parse_list_default` | _parse_list_default works |
+| `test_ensure_all_fields_present` | _ensure_all_fields_present works |
+| `test_ensure_nested_fields` | _ensure_nested_fields works |
+| `test_create_project_info_defaults` | _create_project_info_defaults works |
+| `test_empty_manifest_complete` | _create_empty_manifest complete |
+
+#### TestFieldCountVerification (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_total_field_count` | Total fields match expected |
+| `test_preprocessing_field_count` | Preprocessing fields complete |
+| `test_request_field_count` | Request fields complete |
+| `test_validation_field_count` | Validation fields complete |
+| `test_wordwrap_field_count` | Wordwrap fields complete |
+| `test_output_field_count` | Output fields complete |
+
+---
+
+### dev/test_settings_flow.py (87 tests)
+
+Settings helper methods for processing function integration (Task 21.3).
+
+#### TestGetRequestOptions (10 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_returns_dict` | Returns dictionary type |
+| `test_contains_model` | Contains Model key |
+| `test_contains_temperature` | Contains Temperature (float) |
+| `test_contains_lines_per_chunk` | Contains LinesPerChunk (int) |
+| `test_contains_retry_strategy` | Contains RetryStrategy |
+| `test_contains_max_retries` | Contains MaxRetries |
+| `test_contains_caching` | Contains EnableRequestCaching (bool) |
+| `test_contains_line_by_line_mode` | Contains LineByLineMode |
+| `test_contains_thinking` | Contains Thinking keys |
+| `test_returns_deep_copy` | Returns deep copy (mutation safe) |
+
+#### TestSetRequestOptions (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_set_updates_manifest` | Updates manifest data |
+| `test_set_marks_dirty` | Marks manifest as dirty |
+
+#### TestGetPreprocessingOptions (10 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_returns_dict` | Returns dictionary type |
+| `test_contains_deduplication` | Contains Deduplication (bool) |
+| `test_contains_deduplication_threshold` | Contains threshold (int) |
+| `test_contains_ellipsis_compression` | Contains EllipsisCompression |
+| `test_contains_symbol_conversion` | Contains SymbolConversion |
+| `test_contains_speaker_replacement` | Contains SpeakerNameReplacement |
+| `test_contains_code_spacing_rules` | Contains CodeSpacingRules |
+| `test_contains_protect_patterns` | Contains ProtectCodePatterns (list) |
+| `test_contains_custom_placeholders` | Contains CustomPlaceholders (list) |
+| `test_contains_anchor_removal` | Contains AnchorRemoval (list) |
+
+#### TestSetPreprocessingOptions (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_set_updates_manifest` | Updates preprocessing fields |
+| `test_set_ignores_invalid_keys` | Ignores unknown keys |
+
+#### TestGetValidationRules (8 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_returns_dict` | Returns dictionary type |
+| `test_contains_placeholder_preservation` | PlaceholderPreservation (bool) |
+| `test_contains_anchor_preservation` | AnchorPreservation key |
+| `test_contains_japanese_detection` | JapaneseCharacterDetection key |
+| `test_contains_speaker_format` | SpeakerFormat key |
+| `test_contains_quote_balance` | QuoteBalance key |
+| `test_contains_empty_translation` | EmptyTranslation key |
+| `test_returns_deep_copy` | Returns deep copy |
+
+#### TestGetQAOptions (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_returns_dict` | Returns dictionary type |
+| `test_contains_rerun_policy` | RerunPolicy key present |
+| `test_contains_max_japanese_chars` | MaxJapaneseChars (int) |
+| `test_contains_max_line_length` | MaxLineLength (int) |
+
+#### TestGetPostprocessingOptions (10 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_returns_dict` | Returns dictionary type |
+| `test_contains_placeholder_recovery` | PlaceholderRecovery (bool) |
+| `test_contains_bracket_recovery` | BracketBalanceRecovery key |
+| `test_contains_quote_recovery` | QuoteBalanceRecovery key |
+| `test_contains_whitespace_normalization` | WhitespaceNormalization key |
+| `test_contains_restore_code` | RestoreCodeCharacters key |
+| `test_contains_restore_linebreaks` | RestoreLinebreaks key |
+| `test_contains_symbol_conversion` | EnableSymbolConversion key |
+| `test_contains_fullwidth_conversion` | FullwidthToHalfwidth key |
+| `test_contains_failure_handling` | FailureHandling key |
+
+#### TestGetWordwrapOptions (10 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_returns_dict` | Returns dictionary type |
+| `test_contains_mode` | Mode key present |
+| `test_contains_width` | Width (int) present |
+| `test_contains_break_char` | BreakChar key present |
+| `test_contains_max_lines` | MaxLines (int) present |
+| `test_contains_prevent_orphans` | PreventOrphans (bool) |
+| `test_contains_punctuation_breaks` | PreferPunctuationBreaks key |
+| `test_contains_speaker_handling` | SpeakerHandling key |
+| `test_contains_ignore_patterns` | IgnorePatterns (list) |
+| `test_contains_typography` | Typography key present |
+
+#### TestGetOutputOptions (13 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_returns_dict` | Returns dictionary type |
+| `test_contains_preserve_structure` | PreserveFolderStructure (bool) |
+| `test_contains_format` | Format key present |
+| `test_contains_pair_mode` | PairMode key present |
+| `test_contains_encoding` | Encoding key present |
+| `test_contains_file_naming` | FileNaming key present |
+| `test_contains_text_option` | TextOption key present |
+| `test_contains_overwrite` | OverwriteExistingFiles (bool) |
+| `test_contains_backup` | Backup key present |
+| `test_contains_backup_extension` | BackupExtension key present |
+| `test_contains_export_manifest` | ExportManifestFile key |
+| `test_contains_export_logs` | ExportProcessingLogs key |
+| `test_contains_export_glossary` | ExportGlossaryEntries key |
+
+#### TestGetEstimationData (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_returns_dict` | Returns dictionary type |
+| `test_contains_input_lines` | InputLines (int) present |
+| `test_contains_input_tokens` | InputTokens (int) present |
+| `test_contains_output_tokens` | OutputTokens (int) present |
+
+#### TestSetEstimationData (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_set_updates_manifest` | Updates estimation fields |
+| `test_set_partial_update` | Partial updates work |
+
+#### TestGetAllSettings (10 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_returns_dict` | Returns dictionary type |
+| `test_contains_project_info` | project_info key present |
+| `test_contains_preprocessing` | preprocessing key present |
+| `test_contains_request` | request key present |
+| `test_contains_validation` | validation key present |
+| `test_contains_qa` | qa key present |
+| `test_contains_postprocessing` | postprocessing key present |
+| `test_contains_wordwrap` | wordwrap key present |
+| `test_contains_output` | output key present |
+| `test_contains_estimation` | estimation key present |
+
+#### TestSettingsPersistence (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_request_options_persist` | Request options survive save/load |
+| `test_wordwrap_options_persist` | Wordwrap options survive save/load |
+
+---
+
+### dev/test_app_startup.py (23 tests)
+
+Application startup manifest loading tests (Task 21.4).
+
+#### TestGetLastManifest (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_returns_none_when_empty` | Returns None when no last manifest set |
+| `test_returns_path_when_set` | Returns Path when last manifest is set |
+| `test_returns_path_even_if_not_exists` | Returns path even if file doesn't exist |
+
+#### TestSetLastManifest (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_set_stores_absolute_path` | Stores path as absolute |
+| `test_set_none_clears_value` | Setting None clears the last manifest |
+| `test_set_returns_true_on_success` | Returns True when successful |
+
+#### TestGetRecentManifests (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_returns_empty_list_when_empty` | Returns empty list when no history |
+| `test_returns_existing_paths_only` | Only returns paths that exist |
+| `test_respects_max_count` | Limits results to max_count |
+
+#### TestAddToRecentManifests (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_adds_to_front` | Adds new manifest to front of list |
+| `test_moves_existing_to_front` | Moves existing manifest to front when re-added |
+
+#### TestRestoreOnLaunch (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_default_is_true` | Default restore_on_launch is True when set in INI |
+| `test_can_disable` | Can disable restore on launch |
+| `test_can_enable` | Can enable restore on launch |
+| `test_fallback_when_not_set` | Falls back when key not present |
+
+#### TestWelcomeDialogConstants (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_result_constants_defined` | Result constants are properly defined |
+| `test_result_constants_unique` | Result constants are unique strings |
+
+#### TestManifestPathStorage (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_manifest_path_stored_as_absolute` | Manifest path is stored as absolute path |
+| `test_roundtrip_manifest_path` | Manifest path survives set/get roundtrip |
+
+#### TestStartupFlowLogic (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_loads_last_manifest_when_exists` | When last manifest exists, it should be loadable |
+| `test_skips_restore_when_disabled` | When restore disabled, should not auto-load |
+| `test_handles_missing_manifest_file` | When last manifest file is missing, returns path |
+| `test_first_launch_has_no_last_manifest` | On first launch, no last manifest should be set |
+
+---
+
+### dev/test_manifest_fields.py (181 tests)
+
+Manifest field type helpers for Task 22.1 and 22.2. Reusable save/load operations for different field types and complex data structures.
+
+#### TestTextFieldSave (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_simple_text` | Save a simple text value |
+| `test_save_empty_text` | Save an empty string |
+| `test_save_text_with_special_chars` | Save text with special characters |
+| `test_save_converts_none_to_empty` | None is converted to empty string |
+| `test_save_converts_number_to_string` | Numbers are converted to strings |
+| `test_save_long_text` | Save long text value |
+
+#### TestTextFieldLoad (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_load_existing_text` | Load an existing text value |
+| `test_load_missing_uses_default` | Missing field returns default |
+| `test_load_none_uses_default` | None value returns default |
+| `test_load_converts_number_to_string` | Numbers are converted to strings |
+
+#### TestTextFieldRoundtrip (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_roundtrip_simple` | Simple text roundtrip |
+| `test_roundtrip_unicode` | Unicode text roundtrip |
+| `test_roundtrip_multiline` | Multiline text roundtrip |
+
+#### TestNestedTextFields (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_nested_creates_parent` | Save creates parent dict if missing |
+| `test_save_nested_preserves_siblings` | Save preserves other fields in parent |
+| `test_load_nested_existing` | Load existing nested text |
+| `test_load_nested_missing_parent` | Load returns default if parent missing |
+| `test_load_nested_missing_child` | Load returns default if child missing |
+
+#### TestBoolFieldSave (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_true` | Save True value |
+| `test_save_false` | Save False value |
+| `test_save_string_true_variants` | String 'true' variants normalize to True |
+| `test_save_string_false_variants` | String 'false' variants normalize to False |
+| `test_save_int_truthy` | Non-zero ints normalize to True |
+| `test_save_int_falsy` | Zero normalizes to False |
+
+#### TestBoolFieldLoad (9 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_load_true` | Load True value |
+| `test_load_false` | Load False value |
+| `test_load_missing_uses_default_true` | Missing field returns default (True) |
+| `test_load_missing_uses_default_false` | Missing field returns default (False) |
+| `test_load_string_true` | Load string 'true' as True |
+| `test_load_string_false` | Load string 'false' as False |
+| `test_load_int_nonzero` | Load non-zero int as True |
+| `test_load_int_zero` | Load zero as False |
+| `test_load_none_uses_default` | None value returns default |
+
+#### TestBoolFieldRoundtrip (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_roundtrip_true` | True roundtrip |
+| `test_roundtrip_false` | False roundtrip |
+
+#### TestNestedBoolFields (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_nested_bool` | Save nested bool creates parent |
+| `test_load_nested_bool_existing` | Load existing nested bool |
+| `test_load_nested_bool_missing` | Load missing nested bool returns default |
+
+#### TestIntFieldSave (9 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_positive_int` | Save positive integer |
+| `test_save_negative_int` | Save negative integer |
+| `test_save_zero` | Save zero |
+| `test_save_string_int` | Save string '42' as 42 |
+| `test_save_float_truncates` | Save float truncates to int |
+| `test_save_string_float_truncates` | Save string '3.7' truncates to 3 |
+| `test_save_clamps_to_min` | Save clamps to minimum |
+| `test_save_clamps_to_max` | Save clamps to maximum |
+| `test_save_invalid_uses_zero` | Invalid value becomes 0 |
+
+#### TestIntFieldLoad (8 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_load_existing_int` | Load existing int |
+| `test_load_missing_uses_default` | Missing field returns default |
+| `test_load_none_uses_default` | None value returns default |
+| `test_load_string_int` | Load string '42' as 42 |
+| `test_load_float_truncates` | Load float truncates to int |
+| `test_load_clamps_to_min` | Load clamps to minimum |
+| `test_load_clamps_to_max` | Load clamps to maximum |
+| `test_load_invalid_uses_default` | Invalid value returns default |
+
+#### TestIntFieldRoundtrip (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_roundtrip_positive` | Positive int roundtrip |
+| `test_roundtrip_with_bounds` | Int roundtrip with bounds |
+
+#### TestNestedIntFields (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_nested_int` | Save nested int creates parent |
+| `test_load_nested_int_existing` | Load existing nested int |
+| `test_nested_int_with_bounds` | Nested int with bounds clamping |
+
+#### TestFloatFieldSave (7 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_float` | Save float value |
+| `test_save_int_as_float` | Save int as float |
+| `test_save_string_float` | Save string '0.5' as 0.5 |
+| `test_save_clamps_to_min` | Save clamps to minimum |
+| `test_save_clamps_to_max` | Save clamps to maximum |
+| `test_save_with_precision` | Save rounds to precision |
+| `test_save_invalid_uses_zero` | Invalid value becomes 0.0 |
+
+#### TestFloatFieldLoad (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_load_existing_float` | Load existing float |
+| `test_load_missing_uses_default` | Missing field returns default |
+| `test_load_int_as_float` | Load int as float |
+| `test_load_string_float` | Load string '0.5' as 0.5 |
+| `test_load_clamps_to_min` | Load clamps to minimum |
+| `test_load_clamps_to_max` | Load clamps to maximum |
+
+#### TestFloatFieldRoundtrip (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_roundtrip_simple` | Simple float roundtrip |
+| `test_roundtrip_with_bounds` | Float roundtrip with bounds |
+
+#### TestNestedFloatFields (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_nested_float` | Save nested float creates parent |
+| `test_load_nested_float_existing` | Load existing nested float |
+
+#### TestEnumFieldSave (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_valid_option` | Save valid enum option |
+| `test_save_invalid_uses_first` | Invalid option falls back to first |
+| `test_save_none_uses_first` | None value falls back to first option |
+| `test_save_case_sensitive` | Enum comparison is case-sensitive |
+
+#### TestEnumFieldLoad (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_load_valid_option` | Load valid enum option |
+| `test_load_invalid_uses_default` | Invalid stored value returns default |
+| `test_load_missing_uses_default` | Missing field returns default |
+| `test_load_none_uses_default` | None value returns default |
+
+#### TestEnumFieldRoundtrip (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_roundtrip_valid` | Valid enum roundtrip |
+
+#### TestNestedEnumFields (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_nested_enum` | Save nested enum creates parent |
+| `test_load_nested_enum_existing` | Load existing nested enum |
+
+#### TestListFieldSave (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_list` | Save list value |
+| `test_save_empty_list` | Save empty list |
+| `test_save_tuple_converts_to_list` | Tuple is converted to list |
+| `test_save_none_becomes_empty` | None becomes empty list |
+| `test_save_single_value_wraps` | Single non-list value is wrapped |
+
+#### TestListFieldLoad (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_load_existing_list` | Load existing list |
+| `test_load_missing_uses_default_empty` | Missing field returns empty list by default |
+| `test_load_missing_uses_custom_default` | Missing field returns custom default |
+| `test_load_comma_string_parses` | Comma-separated string is parsed to list |
+| `test_load_returns_copy` | Load returns a copy, not original |
+
+#### TestListFieldRoundtrip (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_roundtrip_simple` | Simple list roundtrip |
+| `test_roundtrip_mixed_types` | Mixed type list roundtrip |
+
+#### TestNestedListFields (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_nested_list` | Save nested list creates parent |
+| `test_load_nested_list_existing` | Load existing nested list |
+
+#### TestStringListFields (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_string_list` | Save string list |
+| `test_save_converts_to_strings` | Non-strings are converted to strings |
+| `test_load_string_list` | Load string list |
+| `test_load_converts_to_strings` | Non-strings are converted on load |
+| `test_load_parses_comma_string` | Comma string is parsed |
+
+#### TestDictFieldSave (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_dict` | Save dict value |
+| `test_save_empty_dict` | Save empty dict |
+| `test_save_non_dict_becomes_empty` | Non-dict value becomes empty dict |
+| `test_save_creates_copy` | Save creates a copy of the dict |
+
+#### TestDictFieldLoad (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_load_existing_dict` | Load existing dict |
+| `test_load_missing_uses_default_empty` | Missing field returns empty dict by default |
+| `test_load_missing_uses_custom_default` | Missing field returns custom default |
+| `test_load_returns_copy` | Load returns a copy, not original |
+
+#### TestDictFieldRoundtrip (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_roundtrip_simple` | Simple dict roundtrip |
+| `test_roundtrip_nested` | Nested dict roundtrip |
+
+#### TestDirtyTracking (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_marks_dirty` | All save operations mark dirty |
+| `test_multiple_saves_increment_dirty_count` | Multiple saves increment dirty count |
+| `test_load_does_not_mark_dirty` | Load operations do not mark dirty |
+
+#### TestEdgeCases (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_empty_key` | Empty string key works |
+| `test_unicode_key` | Unicode key works |
+| `test_deeply_nested_parent_not_dict` | Handles case where parent is not a dict |
+
+#### TestTypeValidation (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_int_field_rejects_invalid_string` | Invalid string for int field uses fallback |
+| `test_float_field_rejects_invalid_string` | Invalid string for float field uses fallback |
+| `test_enum_with_empty_options_logs_warning` | Empty options list is handled gracefully |
+
+#### TestCharacterNotesSave (7 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_single_character` | Save a single character |
+| `test_save_multiple_characters` | Save multiple characters |
+| `test_save_character_all_fields` | All character fields are saved |
+| `test_save_empty_list` | Saving empty list clears characters |
+| `test_save_missing_fields_filled_with_empty` | Missing fields are filled with empty strings |
+| `test_save_non_list_becomes_empty` | Non-list input becomes empty list |
+| `test_save_filters_non_dict_items` | Non-dict items in list are filtered out |
+
+#### TestCharacterNotesLoad (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_load_single_character` | Load a single character |
+| `test_load_missing_key_returns_empty` | Missing key returns empty list |
+| `test_load_non_list_returns_empty` | Non-list value returns empty list |
+| `test_load_fills_missing_fields` | Missing fields are filled with empty strings |
+| `test_load_filters_non_dict_items` | Non-dict items are filtered out |
+
+#### TestCharacterNotesRoundtrip (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_roundtrip_preserves_all_fields` | Roundtrip preserves all fields |
+| `test_roundtrip_multiple_characters` | Roundtrip with multiple characters |
+
+#### TestCodeGlossarySave (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_single_pattern` | Save a single code pattern |
+| `test_save_all_fields` | All pattern fields are saved |
+| `test_save_default_action` | Default action is preserve |
+| `test_save_empty_list` | Empty list clears patterns |
+
+#### TestCodeGlossaryLoad (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_load_single_pattern` | Load a single pattern |
+| `test_load_missing_returns_empty` | Missing key returns empty list |
+| `test_load_fills_defaults` | Missing fields filled with defaults |
+
+#### TestCodeGlossaryRoundtrip (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_roundtrip_preserves_data` | Roundtrip preserves all data |
+
+#### TestProtectCodePatternsSave (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_single_pattern` | Save a single protect pattern |
+| `test_save_all_fields` | All fields are saved |
+| `test_save_default_is_regex_false` | Default is_regex is False |
+
+#### TestProtectCodePatternsLoad (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_load_patterns` | Load protect patterns |
+| `test_load_missing_returns_empty` | Missing key returns empty list |
+| `test_load_fills_defaults` | Missing fields filled with defaults |
+
+#### TestProtectCodePatternsRoundtrip (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_roundtrip_preserves_data` | Roundtrip preserves all data |
+
+#### TestCustomPlaceholdersSave (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_single_placeholder` | Save a single placeholder |
+| `test_save_all_fields` | All fields are saved |
+| `test_save_default_restore_after_true` | Default restore_after is True |
+
+#### TestCustomPlaceholdersLoad (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_load_placeholders` | Load custom placeholders |
+| `test_load_missing_returns_empty` | Missing key returns empty list |
+| `test_load_fills_defaults` | Missing fields filled with defaults |
+
+#### TestCustomPlaceholdersRoundtrip (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_roundtrip_preserves_data` | Roundtrip preserves all data |
+
+#### TestAnchorRemovalSave (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_single_anchor` | Save a single anchor pattern |
+| `test_save_all_fields` | All fields are saved |
+| `test_save_default_action_remove` | Default action is remove |
+
+#### TestAnchorRemovalLoad (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_load_anchors` | Load anchor patterns |
+| `test_load_missing_returns_empty` | Missing key returns empty list |
+| `test_load_fills_defaults` | Missing fields filled with defaults |
+
+#### TestAnchorRemovalRoundtrip (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_roundtrip_preserves_data` | Roundtrip preserves all data |
+
+#### TestGlossaryEntriesSave (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_single_entry` | Save a single glossary entry |
+| `test_save_all_fields` | All fields are saved |
+| `test_save_creates_glossary_if_missing` | Creates glossary key if missing |
+| `test_save_empty_list` | Empty list clears entries |
+
+#### TestGlossaryEntriesLoad (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_load_entries` | Load glossary entries |
+| `test_load_missing_glossary_returns_empty` | Missing glossary returns empty list |
+| `test_load_missing_project_entries_returns_empty` | Missing project_entries returns empty list |
+| `test_load_fills_defaults` | Missing fields filled with empty strings |
+
+#### TestGlossaryEntriesRoundtrip (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_roundtrip_preserves_data` | Roundtrip preserves all data |
+| `test_roundtrip_multiple_entries` | Roundtrip with multiple entries |
+
+#### TestSpecialFormatIntegration (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_all_special_formats_coexist` | All special format data can coexist in manifest |
+| `test_dirty_tracking_multiple_formats` | Each save operation marks dirty |
+
+---
+
+### dev/test_manifest_binding.py (37 tests)
+
+GUI widget binding helpers for Task 22.3. Auto-save and auto-load between widgets and manifest fields.
+
+#### TestBindingInfo (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_init` | BindingInfo initializes correctly |
+| `test_record_save` | record_save increments counter and stores value |
+| `test_record_load` | record_load increments counter and stores value |
+
+#### TestBindingRegistry (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_registry_starts_empty` | Registry is empty at start |
+| `test_clear_registry` | clear_binding_registry removes all bindings |
+| `test_get_binding_for_field` | get_binding_for_field finds the right binding |
+
+#### TestEntryBinding (7 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_saves_on_change` | Entry saves to manifest when value changes |
+| `test_loads_from_manifest` | Entry loads value from manifest |
+| `test_loads_default_when_missing` | Entry loads default when field missing |
+| `test_loads_default_when_no_manager` | Entry loads default when manager is None |
+| `test_nested_field_saves` | Nested entry field saves correctly |
+| `test_on_save_callback` | on_save callback is called after save |
+| `test_adds_to_registry` | Binding is added to registry |
+
+#### TestCheckboxBinding (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_saves_on_change` | Checkbox saves to manifest when toggled |
+| `test_loads_true` | Checkbox loads True value |
+| `test_loads_false` | Checkbox loads False value |
+| `test_loads_default_when_missing` | Checkbox loads default when field missing |
+
+#### TestComboboxBinding (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_saves_valid_option` | Combobox saves valid option |
+| `test_loads_valid_option` | Combobox loads valid option from manifest |
+| `test_loads_default_for_invalid` | Combobox loads default for invalid stored value |
+| `test_validates_options` | Combobox validates against options on save |
+
+#### TestSpinboxBinding (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_saves_value` | Spinbox saves integer value |
+| `test_clamps_to_min` | Spinbox clamps to minimum value |
+| `test_clamps_to_max` | Spinbox clamps to maximum value |
+| `test_loads_value` | Spinbox loads value from manifest |
+
+#### TestTextBinding (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_loads_multiline_text` | Text widget loads multiline text |
+| `test_manual_save` | Text widget can save manually |
+| `test_loads_default_when_missing` | Text widget loads default when field missing |
+
+#### TestRadioBinding (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_saves_on_selection` | Radio buttons save when selection changes |
+| `test_loads_selection` | Radio buttons load selection from manifest |
+
+#### TestFloatSpinboxBinding (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_saves_float_value` | Float spinbox saves float value |
+| `test_clamps_float_to_range` | Float spinbox clamps to range |
+| `test_loads_float_value` | Float spinbox loads value from manifest |
+
+#### TestLoadAllBindings (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_loads_multiple_bindings` | load_all_bindings loads all bound widgets |
+| `test_handles_missing_load_method` | load_all_bindings handles bindings without load method |
+
+#### TestBindingIntegration (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_multiple_bindings_same_manifest` | Multiple bindings can share the same manifest |
+| `test_roundtrip_save_load` | Values roundtrip through save and load |
+
+---
+
+### dev/test_information_manifest.py (74 tests)
+
+Phase 23 tests for InformationStep manifest integration. Tests all fields bound to manifest.
+
+#### TestProjectNameField (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_project_name_binding_created` | ProjectName binding exists |
+| `test_project_name_saves_to_manifest` | ProjectName saves when changed |
+| `test_project_name_loads_from_manifest` | ProjectName loads from manifest |
+| `test_project_name_loads_default_when_missing` | ProjectName defaults to empty |
+
+#### TestTitleField (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_title_binding_created` | Title binding exists |
+| `test_title_saves_to_manifest` | Title saves when changed |
+| `test_title_loads_from_manifest` | Title loads from manifest |
+
+#### TestGenreField (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_genre_binding_created` | Genre binding exists |
+| `test_genre_saves_to_manifest` | Genre saves when changed |
+| `test_genre_loads_from_manifest` | Genre loads from manifest |
+
+#### TestSourceLanguageField (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_source_language_binding_created` | SourceLanguage binding exists |
+| `test_source_language_saves_to_manifest` | SourceLanguage saves when changed |
+| `test_source_language_loads_from_manifest` | SourceLanguage loads from manifest |
+| `test_source_language_default_is_japanese` | SourceLanguage defaults to Japanese |
+
+#### TestTargetLanguageField (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_target_language_binding_created` | TargetLanguage binding exists |
+| `test_target_language_saves_to_manifest` | TargetLanguage saves when changed |
+| `test_target_language_loads_from_manifest` | TargetLanguage loads from manifest |
+| `test_target_language_default_is_english` | TargetLanguage defaults to English |
+
+#### TestSummaryField (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_summary_binding_created` | Summary binding exists |
+| `test_summary_loads_from_manifest` | Summary loads from manifest |
+| `test_summary_loads_multiline_text` | Summary supports multiline |
+| `test_summary_default_is_empty` | Summary defaults to empty |
+
+#### TestLanguageFieldsPersist (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_language_roundtrip` | Languages persist across step recreation |
+
+#### TestBasicMetadataIntegration (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_all_basic_fields_coexist` | All basic fields save together |
+| `test_dirty_tracking_for_all_fields` | Field changes mark manifest dirty |
+| `test_binding_count` | Expected binding count after Task 23.1 |
+| `test_all_bindings_have_load_method` | All bindings support loading |
+
+#### TestManifestNotLoaded (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_no_crash_when_manifest_none` | Step works without manifest |
+| `test_load_uses_defaults_when_no_manager` | Fields use defaults without manager |
+| `test_load_skipped_when_not_loaded` | Load skipped gracefully |
+
+#### TestStylePresetField (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_style_preset_binding_created` | StylePreset binding exists |
+| `test_style_preset_saves_to_manifest` | StylePreset saves when changed |
+| `test_style_preset_loads_from_manifest` | StylePreset loads from manifest |
+| `test_style_preset_default_is_natural` | StylePreset defaults to Natural |
+
+#### TestCustomStyleField (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_custom_style_binding_created` | CustomStyle binding exists |
+| `test_custom_style_saves_to_manifest` | CustomStyle saves when changed |
+| `test_custom_style_loads_from_manifest` | CustomStyle loads from manifest |
+
+#### TestTonePresetField (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_tone_preset_binding_created` | TonePreset binding exists |
+| `test_tone_preset_saves_to_manifest` | TonePreset saves when changed |
+| `test_tone_preset_loads_from_manifest` | TonePreset loads from manifest |
+| `test_tone_preset_default_is_neutral` | TonePreset defaults to Neutral |
+
+#### TestCustomToneField (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_custom_tone_binding_created` | CustomTone binding exists |
+| `test_custom_tone_saves_to_manifest` | CustomTone saves when changed |
+| `test_custom_tone_loads_from_manifest` | CustomTone loads from manifest |
+
+#### TestStyleToneRoundtrip (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_style_preset_roundtrip` | StylePreset persists across recreation |
+| `test_tone_preset_roundtrip` | TonePreset persists across recreation |
+| `test_custom_style_with_custom_preset` | Custom preset with custom style |
+| `test_all_style_tone_fields_coexist` | All style/tone fields save together |
+
+#### TestTask232BindingCount (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_binding_count_after_task_232` | 10 bindings after Tasks 23.1+23.2 |
+
+#### TestCharacterNotesManifest (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_add_character_saves_to_manifest` | Adding character saves |
+| `test_load_characters_from_manifest` | Characters load from manifest |
+| `test_empty_characters_default` | Empty default character list |
+| `test_multiple_characters_roundtrip` | Multiple characters persist |
+| `test_character_edit_saves_to_manifest` | Editing character saves |
+| `test_character_remove_saves_to_manifest` | Removing character saves |
+
+#### TestCodeGlossaryManifest (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_add_code_pattern_saves_to_manifest` | Adding pattern saves |
+| `test_load_code_patterns_from_manifest` | Patterns load from manifest |
+| `test_multiple_patterns_roundtrip` | Multiple patterns persist |
+| `test_pattern_edit_saves_to_manifest` | Editing pattern saves |
+| `test_pattern_remove_saves_to_manifest` | Removing pattern saves |
+
+#### TestTask233Integration (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_characters_and_patterns_coexist` | Characters and patterns save together |
+| `test_dirty_tracking_for_characters` | Character changes mark dirty |
+| `test_dirty_tracking_for_patterns` | Pattern changes mark dirty |
+| `test_no_save_when_no_manager` | Save handles missing manager |
+
+#### TestPromptField (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_prompt_binding_created` | Prompt binding exists |
+| `test_prompt_saves_to_manifest` | Prompt saves via FocusOut |
+| `test_prompt_loads_from_manifest` | Prompt loads from manifest |
+| `test_prompt_default_is_empty` | Prompt defaults to empty |
+| `test_prompt_multiline_text` | Prompt supports multiline |
+
+#### TestPromptFieldRoundtrip (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_prompt_roundtrip_persistence` | Prompt persists across recreation |
+| `test_prompt_with_special_characters` | Prompt handles special chars |
+
+#### TestTask234Integration (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_prompt_coexists_with_other_fields` | Prompt saves with other fields |
+| `test_binding_count_after_task_234` | 11 bindings after Task 23.4 |
+| `test_prompt_dirty_tracking` | Prompt changes mark dirty |
+
+---
+
+### dev/test_preprocess_manifest.py (49 tests)
+
+Phase 24 tests for PreprocessingStep manifest integration. Tests all preprocessing options bound to manifest.
+
+#### TestDeduplicationField (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_deduplication_binding_created` | Deduplication binding exists |
+| `test_deduplication_saves_to_manifest` | Deduplication saves when changed |
+| `test_deduplication_loads_from_manifest` | Deduplication loads from manifest |
+| `test_deduplication_default_is_true` | Deduplication defaults to True |
+
+#### TestDeduplicationThresholdField (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_threshold_binding_created` | Threshold binding exists |
+| `test_threshold_saves_to_manifest` | Threshold saves when changed |
+| `test_threshold_loads_from_manifest` | Threshold loads from manifest |
+| `test_threshold_default_is_one` | Threshold defaults to 1 |
+
+#### TestEllipsisCompressionField (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_ellipsis_binding_created` | Ellipsis binding exists |
+| `test_ellipsis_saves_to_manifest` | Ellipsis saves when changed |
+| `test_ellipsis_loads_from_manifest` | Ellipsis loads from manifest |
+
+#### TestSymbolConversionField (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_symbol_binding_created` | Symbol binding exists |
+| `test_symbol_saves_to_manifest` | Symbol saves when changed |
+| `test_symbol_default_is_true` | Symbol defaults to True |
+
+#### TestProtCompressionField (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_prot_binding_created` | PROT binding exists |
+| `test_prot_saves_to_manifest` | PROT saves when changed |
+
+#### TestSpeakerReplacementField (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_speaker_binding_created` | Speaker binding exists |
+| `test_speaker_saves_to_manifest` | Speaker saves when changed |
+| `test_speaker_default_is_false` | Speaker defaults to False |
+
+#### TestCodeSpacingField (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_spacing_binding_created` | Spacing binding exists |
+| `test_spacing_saves_to_manifest` | Spacing saves when changed |
+| `test_spacing_default_is_false` | Spacing defaults to False |
+
+#### TestTask241Integration (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_all_standard_toggles_coexist` | All toggles save together |
+| `test_binding_count_after_task_241` | 7 bindings for standard toggles |
+| `test_dirty_tracking_for_toggles` | Toggle changes mark dirty |
+| `test_no_crash_when_manifest_not_loaded` | Handles unloaded manifest |
+| `test_roundtrip_persistence` | Toggles persist across recreation |
+
+#### TestProtectCodePatternsField (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_method_exists` | Save method exists |
+| `test_load_method_exists` | Load method exists |
+| `test_patterns_save_to_manifest` | Patterns save to manifest |
+| `test_patterns_load_from_manifest` | Patterns load from manifest |
+| `test_listbox_updated_on_load` | Listbox updates on load |
+| `test_manifest_format_conversion` | Format conversion works |
+
+#### TestTask242Integration (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_patterns_roundtrip` | Patterns persist through cycle |
+| `test_empty_patterns_handled` | Empty list handled |
+| `test_no_crash_when_manifest_empty` | Handles empty manifest |
+
+#### TestCustomPlaceholdersField (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_method_exists` | Save method exists |
+| `test_load_method_exists` | Load method exists |
+| `test_placeholders_save_to_manifest` | Placeholders save to manifest |
+| `test_placeholders_load_from_manifest` | Placeholders load from manifest |
+| `test_manifest_format_conversion` | Format conversion works |
+
+#### TestAnchorRemovalField (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_method_exists` | Save method exists |
+| `test_load_method_exists` | Load method exists |
+| `test_anchor_saves_to_manifest` | Anchor settings save |
+| `test_anchor_loads_from_manifest` | Anchor settings load |
+| `test_disabled_anchor_saves_empty_list` | Disabled saves empty |
+
+#### TestTask243Integration (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_placeholders_roundtrip` | Placeholders persist |
+| `test_anchor_roundtrip` | Anchors persist |
+| `test_all_task_243_features_coexist` | All features work together |
 
 ---
 
@@ -815,6 +2104,20 @@ Thank you.
 | test_gui_progress.py | 24 | GUI progress indicators (TASK 15.12) |
 | test_gui_v2.py | 595 | GUI v2 framework (TASK 15.8-15.14: core + theme/CLI/deprecated) |
 | test_session_persistence.py | 40 | Session auto-save/load, step persistence, file restoration (Release Stabilization) |
+| test_estimate_manifest.py | 33 | Estimation/Analysis manifest integration (TASK 25.1, 25.2) |
+| test_qa_manifest.py | 17 | QA step manifest integration (TASK 26.1) |
+| test_translate_manifest.py | 47 | Translation step manifest integration (TASK 26.2) |
+| test_postprocess_manifest.py | 35 | Postprocessing step manifest integration (TASK 27.1) |
+| test_wordwrap_manifest.py | 40 | Wordwrap step manifest integration (TASK 28.1) |
+| test_output_manifest.py | 45 | Output step manifest integration (TASK 28.2) |
+| test_autosave.py | 24 | ManifestManager autosave system (TASK 29.1) |
+| test_save_triggers.py | 17 | Save trigger functionality (TASK 29.2) |
+| test_preset_manager.py | 42 | Preset save/load/delete (TASK 30.1) |
+| test_preset_gui.py | 21 | GUI preset integration (TASK 30.2) |
+| test_defaults.py | 45 | User defaults configuration (TASK 31.2) |
+| test_paths.py | 18 | Path handling and storage (TASK 32.1) |
+| test_edit_before_translate.py | 36 | Edit before translation feature (TASK 33.1) |
+| test_prompts_config.py | 40 | Configurable Edit/TLC prompts (TASK 33.2) |
 | test_html.py | 64 | HTML file format handling |
 | test_languages.py | 87 | Language module consolidation (TASK 16.1) |
 | test_api_providers.py | 60 | API providers consolidation (TASK 16.2) |
@@ -855,7 +2158,7 @@ Thank you.
 | test_subtask_tracking.py | 14 | Subtask progress tracking (TASK 18.3) |
 | test_code_glossary_display.py | 12 | Code glossary widget (TASK 18.5) |
 | smoke_test/*.py | 5+ | Smoke tests |
-| **Total Script Tests** | **2803** | (+89 from Phase 18) |
+| **Total Script Tests** | **2900** | (+97 manifest integration from Phase 25-26) |
 | One_Click_Test.py | 7 stages | API integration |
 
 ### TASK 11: Integration Test - 200 Lines (Completed)
@@ -1109,6 +2412,200 @@ Configuration management tests validating load, save, and merge operations.
 |------|---------|
 | `test_reset_restores_defaults` | Reset clears user customizations |
 | `test_reset_preserves_api_key` | API key not lost on reset |
+
+---
+
+### dev/test_ini_manager.py (48 tests) - TASK 21.1
+
+INI configuration manager tests validating path resolution, typed access, and manifest defaults.
+
+#### TestINIPathResolution (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_ini_path_relative_to_module` | INI path resolved relative to main module |
+| `test_ini_path_is_absolute` | Path is always absolute |
+| `test_ini_path_cached` | Path caching works correctly |
+| `test_app_dir_returns_parent_of_ini` | App dir is INI parent |
+
+#### TestManifestDirectory (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_manifest_dir_default_location` | Manifest dir at {app_dir}/manifests |
+| `test_manifest_dir_is_absolute` | Path is absolute |
+| `test_manifest_dir_created_if_not_exists` | Directory created when missing |
+
+#### TestGetDefault (9 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_get_default_with_fallback` | Returns fallback for missing keys |
+| `test_get_default_existing_key` | Returns actual value for existing keys |
+| `test_get_default_missing_section` | Returns fallback for missing sections |
+| `test_get_default_type_conversion_int` | Converts to int type |
+| `test_get_default_type_conversion_float` | Converts to float type |
+| `test_get_default_type_conversion_bool_true` | Converts 'true' to True |
+| `test_get_default_type_conversion_bool_yes` | Converts 'yes' to True |
+| `test_get_default_type_conversion_bool_false` | Converts 'false' to False |
+
+#### TestTypedGetters (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_get_str` | Returns string value |
+| `test_get_int` | Returns integer value |
+| `test_get_float` | Returns float value |
+| `test_get_bool` | Returns boolean value |
+| `test_get_list_empty` | Returns empty list for missing |
+| `test_get_list_fallback` | Returns fallback for missing |
+
+#### TestSetDefault (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_set_default_creates_section` | Creates section if missing |
+| `test_set_default_string_value` | Saves string values |
+| `test_set_default_bool_true` | Saves True as 'true' |
+| `test_set_default_bool_false` | Saves False as 'false' |
+| `test_set_default_int_value` | Saves integer values |
+| `test_set_default_none_value` | Saves None as empty string |
+
+#### TestSectionOperations (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_get_section_existing` | Returns all key-value pairs |
+| `test_get_section_missing` | Returns empty dict for missing |
+| `test_has_section_true` | Returns True for existing sections |
+| `test_has_section_false` | Returns False for missing sections |
+| `test_has_option_true` | Returns True for existing options |
+| `test_has_option_false` | Returns False for missing options |
+
+#### TestManifestDefaults (7 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_get_manifest_default_string` | Returns string manifest default |
+| `test_get_manifest_default_bool` | Infers bool type from fallback |
+| `test_get_manifest_default_int` | Infers int type from fallback |
+| `test_get_manifest_default_float` | Infers float type from fallback |
+| `test_get_all_manifest_defaults` | Returns typed dict of all defaults |
+| `test_builtin_manifest_defaults` | Builtin defaults are complete |
+| `test_get_all_manifest_defaults_missing_ini` | Returns builtins if INI missing |
+
+#### TestCaching (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_reload_ini_clears_cache` | Reload refreshes data from file |
+| `test_clear_cache` | Cache clearing works |
+
+#### TestErrorHandling (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_get_default_invalid_int` | Returns fallback for invalid int |
+| `test_get_default_invalid_float` | Returns fallback for invalid float |
+| `test_missing_ini_file` | Graceful handling of missing INI |
+
+#### TestIntegration (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_real_ini_exists` | CherryAI.ini exists |
+| `test_real_ini_has_manifest_defaults` | Has [manifest_defaults] section |
+| `test_real_manifest_defaults_types` | Manifest defaults have correct types |
+
+---
+
+### dev/test_manifest_defaults.py (44 tests) - TASK 21.2
+
+Manifest initialization and defaults tests validating v3.0 field population from INI.
+
+#### TestCreateManifestPopulatesAllDefaults (11 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_manifest_has_version` | New manifest has correct v3.0 version |
+| `test_manifest_has_project_info` | project_info has all required fields |
+| `test_manifest_has_preprocessing_fields` | All preprocessing options present |
+| `test_manifest_has_estimation_fields` | Estimation fields initialized |
+| `test_manifest_has_validation_rules` | ValidationRules nested object complete |
+| `test_manifest_has_qa_options` | QAOptions nested object complete |
+| `test_manifest_has_request_options` | RequestOptions with all API settings |
+| `test_manifest_has_postprocessing` | PostProcessing options complete |
+| `test_manifest_has_wordwrap_settings` | WordwrapSettings complete |
+| `test_manifest_has_output_format` | OutputFormat options complete |
+| `test_manifest_has_glossary_config` | Glossary configuration present |
+
+#### TestLoadedManifestHasAllFields (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_v2_manifest_gets_preprocessing_fields` | V2.1 manifest upgraded with preprocessing |
+| `test_v2_manifest_gets_validation_rules` | V2.1 manifest gets ValidationRules |
+| `test_v2_manifest_gets_request_options` | V2.1 manifest gets RequestOptions |
+| `test_partial_nested_object_gets_filled` | Partial nested objects completed |
+| `test_existing_values_not_overwritten` | Custom values preserved on load |
+
+#### TestDefaultValuesMatchINI (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_deduplication_default_from_ini` | Deduplication matches INI setting |
+| `test_temperature_default_from_ini` | Temperature matches INI setting |
+| `test_lines_per_chunk_default_from_ini` | LinesPerChunk matches INI |
+| `test_wordwrap_width_default_from_ini` | WordwrapWidth matches INI |
+| `test_source_language_default_from_ini` | SourceLanguage from INI |
+| `test_target_language_default_from_ini` | TargetLanguage from INI |
+
+#### TestBuiltinDefaults (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_get_builtin_defaults_returns_dict` | Builtin defaults available |
+| `test_builtin_defaults_have_correct_types` | Builtin types are correct |
+
+#### TestBackwardCompatibility (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_lines_array_preserved` | Lines data preserved on load |
+| `test_step_state_preserved` | Step state preserved on load |
+| `test_metadata_preserved` | Metadata fields preserved |
+| `test_save_load_roundtrip` | Save/load preserves all data |
+
+#### TestListFieldParsing (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_code_spacing_rules_is_bool` | CodeSpacingRules is boolean |
+| `test_custom_placeholders_is_list` | CustomPlaceholders parsed as list |
+| `test_ignore_patterns_is_list` | IgnorePatterns parsed as list |
+
+#### TestHelperMethods (7 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_parse_list_default_empty_string` | Empty string becomes [] |
+| `test_parse_list_default_single_item` | Single item becomes [item] |
+| `test_parse_list_default_multiple_items` | Multiple items parsed |
+| `test_parse_list_default_strips_whitespace` | Whitespace stripped |
+| `test_ensure_nested_fields_creates_missing_parent` | Creates parent dict |
+| `test_ensure_nested_fields_fills_missing_children` | Fills missing children |
+| `test_get_manifest_defaults_returns_dict` | Returns defaults dict |
+
+#### TestFieldCountVerification (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_total_top_level_fields` | All v3.0 top-level fields present |
+| `test_validation_rules_field_count` | ValidationRules has 6 fields |
+| `test_request_options_field_count` | RequestOptions has 9 fields |
+| `test_postprocessing_field_count` | PostProcessing has 9 fields |
+| `test_wordwrap_settings_field_count` | WordwrapSettings has 9 fields |
+| `test_output_format_field_count` | OutputFormat has 12 fields |
 
 ---
 
@@ -5169,5 +6666,1235 @@ Tests for session loading and state restoration fixes.
 |------|---------|
 | `test_empty_session_step_data` | Empty step data handling |
 | `test_missing_metadata_fields` | Missing optional fields |
+
+---
+
+### dev/test_estimate_manifest.py (33 tests)
+
+Estimation and Analysis step manifest integration for Phase 25.
+
+#### TestInputLinesField (3 tests) - TASK 25.1
+
+| Test | Purpose |
+|------|---------|
+| `test_save_input_lines_to_manifest` | Saves InputLines to manifest |
+| `test_load_input_lines_from_manifest` | Loads InputLines from manifest |
+| `test_input_lines_default_value` | Default value is 0 |
+
+#### TestInputTokensField (3 tests) - TASK 25.1
+
+| Test | Purpose |
+|------|---------|
+| `test_save_input_tokens_to_manifest` | Saves InputTokens to manifest |
+| `test_load_input_tokens_from_manifest` | Loads InputTokens from manifest |
+| `test_input_tokens_default_value` | Default value is 0 |
+
+#### TestOutputTokensField (3 tests) - TASK 25.1
+
+| Test | Purpose |
+|------|---------|
+| `test_save_output_tokens_to_manifest` | Saves OutputTokens to manifest |
+| `test_load_output_tokens_from_manifest` | Loads OutputTokens from manifest |
+| `test_output_tokens_default_value` | Default value is 0 |
+
+#### TestAnalysisResultsRoundtrip (2 tests) - TASK 25.1
+
+| Test | Purpose |
+|------|---------|
+| `test_all_fields_roundtrip` | Save/load all analysis fields |
+| `test_large_token_values` | Handles large token values |
+
+#### TestTask251Integration (3 tests) - TASK 25.1
+
+| Test | Purpose |
+|------|---------|
+| `test_estimation_step_has_manifest_fields` | EstimationStep has save methods |
+| `test_analysis_step_has_manifest_fields` | AnalysisStep has save methods |
+| `test_manifest_data_structure` | Verifies manifest structure |
+
+#### TestValidationRulesPlaceholderPreservation (3 tests) - TASK 25.2
+
+| Test | Purpose |
+|------|---------|
+| `test_save_placeholder_preservation` | Saves to ValidationRules |
+| `test_load_placeholder_preservation` | Loads from ValidationRules |
+| `test_placeholder_preservation_default_true` | Default is true |
+
+#### TestValidationRulesAnchorPreservation (2 tests) - TASK 25.2
+
+| Test | Purpose |
+|------|---------|
+| `test_save_anchor_preservation` | Saves to ValidationRules |
+| `test_anchor_preservation_default_true` | Default is true |
+
+#### TestValidationRulesJapaneseCharDetection (2 tests) - TASK 25.2
+
+| Test | Purpose |
+|------|---------|
+| `test_save_japanese_char_detection` | Saves to ValidationRules |
+| `test_japanese_char_detection_default_true` | Default is true |
+
+#### TestValidationRulesSpeakerFormat (2 tests) - TASK 25.2
+
+| Test | Purpose |
+|------|---------|
+| `test_save_speaker_format` | Saves to ValidationRules |
+| `test_speaker_format_default_true` | Default is true |
+
+#### TestValidationRulesQuoteBalance (2 tests) - TASK 25.2
+
+| Test | Purpose |
+|------|---------|
+| `test_save_quote_balance` | Saves to ValidationRules |
+| `test_quote_balance_default_true` | Default is true |
+
+#### TestValidationRulesEmptyTranslation (2 tests) - TASK 25.2
+
+| Test | Purpose |
+|------|---------|
+| `test_save_empty_translation` | Saves to ValidationRules |
+| `test_empty_translation_default_true` | Default is true |
+
+#### TestValidationRulesAllDefaults (2 tests) - TASK 25.2
+
+| Test | Purpose |
+|------|---------|
+| `test_all_validation_rules_default_true` | All rules default to true |
+| `test_validation_rules_persist` | Rules persist after save/load |
+
+#### TestTask252Integration (1 test) - TASK 25.2
+
+| Test | Purpose |
+|------|---------|
+| `test_validation_rules_nested_structure` | ValidationRules nested structure |
+
+#### TestEdgeCases (3 tests) - TASK 25.1
+
+| Test | Purpose |
+|------|---------|
+| `test_zero_lines` | Handles zero lines |
+| `test_negative_values_clamped` | Negative values clamped to 0 |
+| `test_string_conversion` | String values converted to int |
+
+---
+
+### dev/test_qa_manifest.py (17 tests)
+
+QA step manifest integration for Phase 26 Task 26.1.
+
+#### TestQAOptionsRerunPolicy (5 tests) - TASK 26.1
+
+| Test | Purpose |
+|------|---------|
+| `test_save_rerun_policy_failed_only` | Saves FailedOnly policy |
+| `test_save_rerun_policy_all` | Saves All policy |
+| `test_save_rerun_policy_none` | Saves None policy |
+| `test_load_rerun_policy` | Loads RerunPolicy |
+| `test_rerun_policy_default_failed_only` | Default is FailedOnly |
+
+#### TestQAOptionsMaxJapaneseChars (4 tests) - TASK 26.1
+
+| Test | Purpose |
+|------|---------|
+| `test_save_max_japanese_chars` | Saves to manifest |
+| `test_load_max_japanese_chars` | Loads from manifest |
+| `test_max_japanese_chars_default_4` | Default is 4 |
+| `test_max_japanese_chars_clamped` | Values clamped to min 0 |
+
+#### TestQAOptionsMaxLineLength (4 tests) - TASK 26.1
+
+| Test | Purpose |
+|------|---------|
+| `test_save_max_line_length` | Saves to manifest |
+| `test_load_max_line_length` | Loads from manifest |
+| `test_max_line_length_default_0` | Default is 0 (disabled) |
+| `test_max_line_length_zero_disables` | Zero disables check |
+
+#### TestQAOptionsAllFields (2 tests) - TASK 26.1
+
+| Test | Purpose |
+|------|---------|
+| `test_all_qa_options_roundtrip` | All fields save/load |
+| `test_qa_options_nested_structure` | QAOptions nested under manifest |
+
+#### TestTask261Integration (2 tests) - TASK 26.1
+
+| Test | Purpose |
+|------|---------|
+| `test_qa_step_has_imports` | QAStep has binding imports |
+| `test_qa_options_coexist_with_validation_rules` | Both sections coexist |
+
+---
+
+### dev/test_translate_manifest.py (47 tests)
+
+Translation step manifest integration for Phase 26 Task 26.2.
+
+#### TestRequestOptionsModel (3 tests) - TASK 26.2
+
+| Test | Purpose |
+|------|---------|
+| `test_model_field_save_to_manifest` | Saves Model to manifest |
+| `test_model_field_load_from_manifest` | Loads Model from manifest |
+| `test_model_field_default_when_missing` | Default is empty string |
+
+#### TestRequestOptionsTemperature (4 tests) - TASK 26.2
+
+| Test | Purpose |
+|------|---------|
+| `test_temperature_field_save_to_manifest` | Saves Temperature (float) |
+| `test_temperature_field_load_from_manifest` | Loads Temperature |
+| `test_temperature_field_default_when_missing` | Default is 0.2 |
+| `test_temperature_field_zero_value` | Handles zero value |
+
+#### TestRequestOptionsLinesPerChunk (3 tests) - TASK 26.2
+
+| Test | Purpose |
+|------|---------|
+| `test_lines_per_chunk_save_to_manifest` | Saves LinesPerChunk |
+| `test_lines_per_chunk_load_from_manifest` | Loads LinesPerChunk |
+| `test_lines_per_chunk_default_when_missing` | Default is 30 |
+
+#### TestRequestOptionsRetryStrategy (3 tests) - TASK 26.2
+
+| Test | Purpose |
+|------|---------|
+| `test_retry_strategy_save_to_manifest` | Saves RetryStrategy |
+| `test_retry_strategy_load_batch` | Loads Batch strategy |
+| `test_retry_strategy_load_line` | Loads Line strategy |
+
+#### TestRequestOptionsMaxRetries (3 tests) - TASK 26.2
+
+| Test | Purpose |
+|------|---------|
+| `test_max_retries_save_to_manifest` | Saves MaxRetries |
+| `test_max_retries_load_from_manifest` | Loads MaxRetries |
+| `test_max_retries_default_when_missing` | Default is 3 |
+
+#### TestRequestOptionsEnableRequestCaching (4 tests) - TASK 26.2
+
+| Test | Purpose |
+|------|---------|
+| `test_caching_enabled_save_to_manifest` | Saves true value |
+| `test_caching_disabled_save_to_manifest` | Saves false value |
+| `test_caching_load_from_manifest` | Loads value |
+| `test_caching_default_when_missing` | Default is true |
+
+#### TestRequestOptionsLineByLineMode (4 tests) - TASK 26.2
+
+| Test | Purpose |
+|------|---------|
+| `test_line_by_line_enabled_save_to_manifest` | Saves true value |
+| `test_line_by_line_disabled_save_to_manifest` | Saves false value |
+| `test_line_by_line_load_from_manifest` | Loads value |
+| `test_line_by_line_default_when_missing` | Default is false |
+
+#### TestRequestOptionsContextLines (4 tests) - TASK 26.2
+
+| Test | Purpose |
+|------|---------|
+| `test_context_lines_save_to_manifest` | Saves ContextLines |
+| `test_context_lines_load_from_manifest` | Loads ContextLines |
+| `test_context_lines_default_when_missing` | Default is 2 |
+| `test_context_lines_zero_value` | Handles zero value |
+
+#### TestRequestOptionsThinking (4 tests) - TASK 26.2
+
+| Test | Purpose |
+|------|---------|
+| `test_thinking_enabled_save_to_manifest` | Saves true value |
+| `test_thinking_disabled_save_to_manifest` | Saves false value |
+| `test_thinking_load_from_manifest` | Loads value |
+| `test_thinking_default_when_missing` | Default is false |
+
+#### TestRequestOptionsThinkingBudget (4 tests) - TASK 26.2
+
+| Test | Purpose |
+|------|---------|
+| `test_thinking_budget_save_to_manifest` | Saves ThinkingBudget |
+| `test_thinking_budget_load_from_manifest` | Loads ThinkingBudget |
+| `test_thinking_budget_default_when_missing` | Default is 10000 |
+| `test_thinking_budget_minimum_value` | Handles minimum value (1000) |
+
+#### TestRequestOptionsAllFields (2 tests) - TASK 26.2
+
+| Test | Purpose |
+|------|---------|
+| `test_all_fields_roundtrip` | All 10 fields save/load |
+| `test_all_fields_defaults` | All defaults correct |
+
+#### TestTask262Integration (4 tests) - TASK 26.2
+
+| Test | Purpose |
+|------|---------|
+| `test_translate_step_has_manifest_bindings_list` | TranslationStep has _manifest_bindings |
+| `test_translate_step_has_load_request_options_method` | Has _load_request_options_from_manifest |
+| `test_translate_step_has_save_temperature_method` | Has _save_temperature_to_manifest |
+| `test_translate_step_on_enter_calls_load_request_options` | on_enter calls load method |
+
+#### TestRequestOptionsEdgeCases (5 tests) - TASK 26.2
+
+| Test | Purpose |
+|------|---------|
+| `test_temperature_high_value` | Max temperature 2.0 |
+| `test_lines_per_chunk_minimum_value` | Min chunk size 5 |
+| `test_lines_per_chunk_maximum_value` | Max chunk size 100 |
+| `test_max_retries_maximum_value` | Max retries 10 |
+| `test_thinking_budget_maximum_value` | Max budget 100000 |
 | `test_code_pattern_with_missing_fields` | CodePattern defaults |
 | `test_character_with_missing_fields` | CharacterInfo defaults |
+
+---
+
+### dev/test_postprocess_manifest.py (35 tests)
+
+Postprocessing step manifest integration tests. Verifies all 9 PostProcessing
+fields (8 boolean toggles + 1 failure handling enum) are properly bound.
+
+**Files Tested:** `gui/steps/postprocess.py`
+
+#### TestPostProcessingPlaceholderRecovery (3 tests) - TASK 27.1
+
+| Test | Purpose |
+|------|---------|
+| `test_placeholder_recovery_save_to_manifest` | Saves PlaceholderRecovery |
+| `test_placeholder_recovery_load_from_manifest` | Loads PlaceholderRecovery |
+| `test_placeholder_recovery_default_true` | Default is True |
+
+#### TestPostProcessingBracketBalanceRecovery (2 tests) - TASK 27.1
+
+| Test | Purpose |
+|------|---------|
+| `test_bracket_balance_save_to_manifest` | Saves BracketBalanceRecovery |
+| `test_bracket_balance_load_from_manifest` | Loads BracketBalanceRecovery |
+
+#### TestPostProcessingQuoteBalanceRecovery (2 tests) - TASK 27.1
+
+| Test | Purpose |
+|------|---------|
+| `test_quote_balance_save_to_manifest` | Saves QuoteBalanceRecovery |
+| `test_quote_balance_load_from_manifest` | Loads QuoteBalanceRecovery |
+
+#### TestPostProcessingWhitespaceNormalization (2 tests) - TASK 27.1
+
+| Test | Purpose |
+|------|---------|
+| `test_whitespace_save_to_manifest` | Saves WhitespaceNormalization |
+| `test_whitespace_load_from_manifest` | Loads WhitespaceNormalization |
+
+#### TestPostProcessingRestoreCodeCharacters (2 tests) - TASK 27.1
+
+| Test | Purpose |
+|------|---------|
+| `test_restore_code_save_to_manifest` | Saves RestoreCodeCharacters |
+| `test_restore_code_load_from_manifest` | Loads RestoreCodeCharacters |
+
+#### TestPostProcessingRestoreLinebreaks (2 tests) - TASK 27.1
+
+| Test | Purpose |
+|------|---------|
+| `test_restore_linebreaks_save_to_manifest` | Saves RestoreLinebreaks |
+| `test_restore_linebreaks_load_from_manifest` | Loads RestoreLinebreaks |
+
+#### TestPostProcessingEnableSymbolConversion (3 tests) - TASK 27.1
+
+| Test | Purpose |
+|------|---------|
+| `test_symbol_conversion_save_to_manifest` | Saves EnableSymbolConversion |
+| `test_symbol_conversion_load_from_manifest` | Loads EnableSymbolConversion |
+| `test_symbol_conversion_default_true` | Default is True |
+
+#### TestPostProcessingFullwidthToHalfwidth (3 tests) - TASK 27.1
+
+| Test | Purpose |
+|------|---------|
+| `test_fullwidth_save_to_manifest` | Saves FullwidthToHalfwidth |
+| `test_fullwidth_load_from_manifest` | Loads FullwidthToHalfwidth |
+| `test_fullwidth_default_true` | Default is True |
+
+#### TestPostProcessingFailureHandling (5 tests) - TASK 27.1
+
+| Test | Purpose |
+|------|---------|
+| `test_failure_handling_save_skip` | Saves FailureHandling=skip |
+| `test_failure_handling_save_flag` | Saves FailureHandling=flag |
+| `test_failure_handling_save_retry` | Saves FailureHandling=retry |
+| `test_failure_handling_load_from_manifest` | Loads FailureHandling |
+| `test_failure_handling_default_skip` | Default is "skip" |
+
+#### TestPostProcessingAllFields (2 tests) - TASK 27.1
+
+| Test | Purpose |
+|------|---------|
+| `test_all_fields_save_and_load` | All 9 fields roundtrip |
+| `test_postprocessing_field_count` | Verifies 9 fields stored |
+
+#### TestTask271Integration (4 tests) - TASK 27.1
+
+| Test | Purpose |
+|------|---------|
+| `test_postprocessing_step_has_manifest_bindings_list` | PostprocessingStep has _manifest_bindings |
+| `test_postprocessing_step_has_load_method` | Has _load_postprocessing_options_from_manifest |
+| `test_postprocessing_step_has_save_failure_policy_method` | Has _save_failure_policy_to_manifest |
+| `test_postprocessing_step_imports_binding_functions` | Imports binding functions |
+
+#### TestPostProcessingEdgeCases (5 tests) - TASK 27.1
+
+| Test | Purpose |
+|------|---------|
+| `test_toggle_state_roundtrip` | Toggle states survive roundtrip |
+| `test_failure_policy_roundtrip` | All 3 policies roundtrip |
+| `test_mixed_boolean_states` | Mixed True/False states |
+| `test_none_manifest_manager_no_error` | None manager handled |
+| `test_empty_section_creates_structure` | Creates nested structure |
+
+---
+
+### dev/test_wordwrap_manifest.py (40 tests)
+
+Wordwrap step manifest integration tests. Verifies all 8 WordwrapSettings
+fields are properly bound for session persistence.
+
+**Files Tested:** `gui/steps/wordwrap_overwrite.py`
+
+#### TestWordwrapSettingsMode (5 tests) - TASK 28.1
+
+| Test | Purpose |
+|------|---------|
+| `test_mode_save_manual` | Saves Mode=manual |
+| `test_mode_save_rpgmaker` | Saves Mode=rpgmaker |
+| `test_mode_save_disabled` | Saves Mode=disabled |
+| `test_mode_load_from_manifest` | Loads Mode |
+| `test_mode_default_manual` | Default is "manual" |
+
+#### TestWordwrapSettingsWidth (4 tests) - TASK 28.1
+
+| Test | Purpose |
+|------|---------|
+| `test_width_save_default` | Saves Width=48 |
+| `test_width_save_custom` | Saves custom width |
+| `test_width_load_from_manifest` | Loads Width |
+| `test_width_default_48` | Default is 48 |
+
+#### TestWordwrapSettingsBreakChar (3 tests) - TASK 28.1
+
+| Test | Purpose |
+|------|---------|
+| `test_break_char_save_newline` | Saves BreakChar=\\n |
+| `test_break_char_save_br` | Saves BreakChar=<br> |
+| `test_break_char_load_from_manifest` | Loads BreakChar |
+
+#### TestWordwrapSettingsMaxLines (3 tests) - TASK 28.1
+
+| Test | Purpose |
+|------|---------|
+| `test_max_lines_save_default` | Saves MaxLines=4 |
+| `test_max_lines_save_unlimited` | Saves MaxLines=0 |
+| `test_max_lines_load_from_manifest` | Loads MaxLines |
+
+#### TestWordwrapSettingsPreventOrphans (4 tests) - TASK 28.1
+
+| Test | Purpose |
+|------|---------|
+| `test_prevent_orphans_save_true` | Saves PreventOrphans=True |
+| `test_prevent_orphans_save_false` | Saves PreventOrphans=False |
+| `test_prevent_orphans_load_from_manifest` | Loads PreventOrphans |
+| `test_prevent_orphans_default_true` | Default is True |
+
+#### TestWordwrapSettingsPreferPunctuationBreaks (3 tests) - TASK 28.1
+
+| Test | Purpose |
+|------|---------|
+| `test_punct_breaks_save_true` | Saves PreferPunctuationBreaks=True |
+| `test_punct_breaks_save_false` | Saves PreferPunctuationBreaks=False |
+| `test_punct_breaks_default_true` | Default is True |
+
+#### TestWordwrapSettingsSpeakerHandling (3 tests) - TASK 28.1
+
+| Test | Purpose |
+|------|---------|
+| `test_speaker_handling_save_sameline` | Saves SpeakerHandling=sameline |
+| `test_speaker_handling_save_newline` | Saves SpeakerHandling=newline |
+| `test_speaker_handling_load_from_manifest` | Loads SpeakerHandling |
+
+#### TestWordwrapSettingsTypography (3 tests) - TASK 28.1
+
+| Test | Purpose |
+|------|---------|
+| `test_typography_save_western` | Saves Typography=western |
+| `test_typography_save_japanese` | Saves Typography=japanese |
+| `test_typography_load_from_manifest` | Loads Typography |
+
+#### TestWordwrapSettingsAllFields (2 tests) - TASK 28.1
+
+| Test | Purpose |
+|------|---------|
+| `test_all_fields_roundtrip` | All 8 fields save/load |
+| `test_wordwrap_settings_field_count` | Verifies 8 fields stored |
+
+#### TestTask281Integration (5 tests) - TASK 28.1
+
+| Test | Purpose |
+|------|---------|
+| `test_wordwrap_step_has_manifest_bindings_list` | Has _manifest_bindings |
+| `test_wordwrap_step_has_load_method` | Has load method |
+| `test_wordwrap_step_has_save_mode_method` | Has save mode method |
+| `test_wordwrap_step_has_save_speaker_method` | Has save speaker method |
+| `test_wordwrap_step_imports_binding_functions` | Imports binding functions |
+
+#### TestWordwrapSettingsEdgeCases (5 tests) - TASK 28.1
+
+| Test | Purpose |
+|------|---------|
+| `test_width_min_boundary` | Width minimum 20 |
+| `test_width_max_boundary` | Width maximum 200 |
+| `test_max_lines_zero_unlimited` | MaxLines=0 unlimited |
+| `test_settings_roundtrip` | Settings survive roundtrip |
+| `test_empty_section_creates_structure` | Creates nested structure |
+
+---
+
+### test_output_manifest.py (45 tests) - TASK 28.2
+
+Output step manifest integration tests. Verifies that OutputInjectStep binds all output format settings to ManifestManager for unified state persistence.
+
+**Bindings Tested:**
+- OutputFormat.PreserveFolderStructure (checkbox, default true)
+- OutputFormat.Format (combobox, default "txt")
+- OutputFormat.PairMode (combobox, default "translated_only")
+- OutputFormat.Encoding (combobox, default "utf-8")
+- OutputFormat.FileNaming (radio buttons via trace)
+- OutputFormat.TextOption (entry, default "_translated")
+- OutputFormat.OverwriteExistingFiles (checkbox, default false)
+- OutputFormat.Backup (combobox, default "timestamp")
+- OutputFormat.BackupExtension (entry, default ".bak")
+- OutputFormat.ExportManifestFile (checkbox, default false)
+- OutputFormat.ExportProcessingLogs (checkbox, default false)
+- OutputFormat.ExportGlossaryEntries (checkbox, default false)
+
+#### TestOutputManifestBindings (27 tests) - TASK 28.2
+
+| Test | Purpose |
+|------|---------|
+| `test_output_step_has_manifest_bindings_list` | Has _manifest_bindings |
+| `test_preserve_folder_structure_default_true` | Default true |
+| `test_preserve_folder_structure_binding_saves_to_manifest` | Saves to manifest |
+| `test_format_default_txt` | Default "txt" |
+| `test_format_binding_saves_to_manifest` | Saves to manifest |
+| `test_pair_mode_default_translated_only` | Default "translated_only" |
+| `test_pair_mode_binding_saves_to_manifest` | Saves to manifest |
+| `test_encoding_default_utf8` | Default "utf-8" |
+| `test_encoding_binding_saves_to_manifest` | Saves to manifest |
+| `test_file_naming_default_suffix` | Default "suffix" |
+| `test_file_naming_binding_saves_to_manifest` | Saves to manifest |
+| `test_file_naming_subfolder_saves_to_manifest` | Subfolder saves |
+| `test_text_option_default_translated` | Default "_translated" |
+| `test_text_option_binding_saves_to_manifest` | Saves to manifest |
+| `test_overwrite_existing_files_default_false` | Default false |
+| `test_overwrite_existing_files_binding_saves_to_manifest` | Saves to manifest |
+| `test_backup_default_timestamp` | Default "timestamp" |
+| `test_backup_binding_saves_to_manifest` | Saves to manifest |
+| `test_backup_extension_default_bak` | Default ".bak" |
+| `test_backup_extension_binding_saves_to_manifest` | Saves to manifest |
+| `test_export_manifest_file_default_false` | Default false |
+| `test_export_manifest_file_binding_saves_to_manifest` | Saves to manifest |
+| `test_export_processing_logs_default_false` | Default false |
+| `test_export_processing_logs_binding_saves_to_manifest` | Saves to manifest |
+| `test_export_glossary_entries_default_false` | Default false |
+| `test_export_glossary_entries_binding_saves_to_manifest` | Saves to manifest |
+| `test_export_options_all_default_false` | All export options default false |
+
+#### TestOutputManifestLoad (14 tests) - TASK 28.2
+
+| Test | Purpose |
+|------|---------|
+| `test_load_preserve_folder_structure_from_manifest` | Loads PreserveFolderStructure |
+| `test_load_format_from_manifest` | Loads Format |
+| `test_load_pair_mode_from_manifest` | Loads PairMode |
+| `test_load_encoding_from_manifest` | Loads Encoding |
+| `test_load_file_naming_from_manifest` | Loads FileNaming |
+| `test_load_text_option_from_manifest` | Loads TextOption |
+| `test_load_overwrite_from_manifest` | Loads OverwriteExistingFiles |
+| `test_load_backup_from_manifest` | Loads Backup |
+| `test_load_backup_extension_from_manifest` | Loads BackupExtension |
+| `test_load_export_manifest_from_manifest` | Loads ExportManifestFile |
+| `test_load_export_logs_from_manifest` | Loads ExportProcessingLogs |
+| `test_load_export_glossary_from_manifest` | Loads ExportGlossaryEntries |
+| `test_load_all_settings_from_manifest` | Loads all settings |
+| `test_load_default_when_field_missing` | Uses defaults for missing |
+
+#### TestOutputManifestRoundtrip (1 test) - TASK 28.2
+
+| Test | Purpose |
+|------|---------|
+| `test_roundtrip_all_settings` | Settings survive save/load roundtrip |
+
+#### TestOutputManifestNoManager (3 tests) - TASK 28.2
+
+| Test | Purpose |
+|------|---------|
+| `test_step_works_without_manifest_manager` | No crash without manager |
+| `test_load_from_manifest_no_manager_does_not_raise` | Load method safe without manager |
+| `test_file_naming_trace_without_manager` | Trace safe without manager |
+
+#### TestOutputManifestBindingCount (1 test) - TASK 28.2
+
+| Test | Purpose |
+|------|---------|
+| `test_correct_number_of_bindings` | Has 10 bindings (excludes radio trace) |
+
+---
+
+### test_autosave.py (24 tests) - TASK 29.1
+
+ManifestManager autosave system tests. Verifies that autosave:
+- Reads settings from INI file correctly
+- Runs in background thread at specified interval
+- Only saves when dirty flag is set
+- Can be disabled via configuration
+- Does not affect mainhelper manifest operations
+
+#### TestAutosaveSettings (6 tests) - TASK 29.1
+
+| Test | Purpose |
+|------|---------|
+| `test_autosave_enabled_default_true` | Default enabled |
+| `test_autosave_interval_default_15` | Default 15 seconds |
+| `test_save_on_close_default_true` | Default save on close |
+| `test_autosave_enabled_from_ini` | Reads from INI |
+| `test_autosave_interval_clamped_min` | Min 5 seconds |
+| `test_autosave_interval_clamped_max` | Max 300 seconds |
+
+#### TestAutosaveThread (5 tests) - TASK 29.1
+
+| Test | Purpose |
+|------|---------|
+| `test_start_autosave_creates_thread` | Creates background thread |
+| `test_stop_autosave_stops_thread` | Stops thread |
+| `test_start_autosave_idempotent` | No duplicate threads |
+| `test_stop_autosave_idempotent` | Safe multiple stops |
+| `test_autosave_disabled_no_thread` | No thread when disabled |
+
+#### TestAutosaveSaveOnDirty (2 tests) - TASK 29.1
+
+| Test | Purpose |
+|------|---------|
+| `test_autosave_saves_when_dirty` | Saves when dirty |
+| `test_autosave_does_not_save_when_clean` | No save when clean |
+
+#### TestAutosaveDisabled (2 tests) - TASK 29.1
+
+| Test | Purpose |
+|------|---------|
+| `test_disable_autosave_via_property` | Disable stops thread |
+| `test_enable_autosave_via_property` | Enable starts thread |
+
+#### TestAutosaveSaveOnClose (2 tests) - TASK 29.1
+
+| Test | Purpose |
+|------|---------|
+| `test_close_saves_when_dirty_and_enabled` | Saves on close |
+| `test_close_does_not_save_when_disabled` | No save when disabled |
+
+#### TestAutosaveProjectLifecycle (3 tests) - TASK 29.1
+
+| Test | Purpose |
+|------|---------|
+| `test_create_new_starts_autosave` | Start on create_new |
+| `test_load_starts_autosave` | Start on load |
+| `test_close_stops_autosave` | Stop on close |
+
+#### TestAutosaveMainhelperIndependence (2 tests) - TASK 29.1
+
+| Test | Purpose |
+|------|---------|
+| `test_mainhelper_manifest_unaffected` | mainhelper.Manifest unchanged |
+| `test_manifest_manager_autosave_isolated` | Isolated from mainhelper |
+
+#### TestAutosaveThreadSafety (2 tests) - TASK 29.1
+
+| Test | Purpose |
+|------|---------|
+| `test_concurrent_mark_dirty` | Thread-safe mark_dirty |
+| `test_autosave_daemon_thread` | Thread is daemon |
+
+### test_save_triggers.py (17 tests) - TASK 29.2
+
+Save trigger functionality tests. Verifies that ManifestManager.save() is called
+at critical points in the application lifecycle.
+
+#### TestSaveOnClose (2 tests) - TASK 29.2
+
+| Test | Purpose |
+|------|---------|
+| `test_app_on_close_saves_manifest` | Close saves manifest |
+| `test_close_stops_autosave_thread` | Close stops thread |
+
+#### TestSaveAfterFileLoad (3 tests) - TASK 29.2
+
+| Test | Purpose |
+|------|---------|
+| `test_input_extract_step_has_save_method` | Method exists |
+| `test_save_method_calls_manifest_save` | Correct signature |
+| `test_on_load_files_calls_save_method` | Called in _on_load_files |
+
+#### TestSaveBeforeTranslation (3 tests) - TASK 29.2
+
+| Test | Purpose |
+|------|---------|
+| `test_translate_step_has_save_method` | Method exists |
+| `test_save_method_calls_manifest_save` | Correct signature |
+| `test_start_translation_calls_save_method` | Called in _start_translation |
+
+#### TestSaveTriggerIntegration (3 tests) - TASK 29.2
+
+| Test | Purpose |
+|------|---------|
+| `test_save_triggers_docstrings` | Docstrings mention TASK 29.2 |
+| `test_save_methods_check_manifest_loaded` | Checks is_loaded |
+| `test_save_methods_handle_exceptions` | Has try/except blocks |
+
+#### TestSaveTriggerOrder (2 tests) - TASK 29.2
+
+| Test | Purpose |
+|------|---------|
+| `test_file_load_save_after_project_creation` | Save after ensure_project_created |
+| `test_translation_save_before_thread_start` | Save before Thread() |
+
+#### TestSaveTriggerLogging (4 tests) - TASK 29.2
+
+| Test | Purpose |
+|------|---------|
+| `test_file_load_save_logs_success` | Logs debug on success |
+| `test_translation_save_logs_success` | Logs debug on success |
+| `test_file_load_save_logs_failure` | Logs warning on failure |
+| `test_translation_save_logs_failure` | Logs warning on failure |
+
+### test_preset_manager.py (42 tests) - TASK 30.1
+
+Preset manager tests. Verifies that presets can be saved, loaded, deleted,
+and handles edge cases like quotes, unicode, and corrupted files.
+
+#### TestPreset (4 tests) - TASK 30.1
+
+| Test | Purpose |
+|------|---------|
+| `test_preset_creation` | Create preset dataclass |
+| `test_preset_to_dict` | Convert to dictionary |
+| `test_preset_from_dict` | Create from dictionary |
+| `test_preset_from_dict_missing_fields` | Handle missing fields |
+
+#### TestPresetFile (10 tests) - TASK 30.1
+
+| Test | Purpose |
+|------|---------|
+| `test_preset_file_creation` | Create empty preset file |
+| `test_preset_file_add_preset_new` | Add new preset |
+| `test_preset_file_add_preset_update` | Update existing preset |
+| `test_preset_file_get_preset` | Get preset by name |
+| `test_preset_file_get_preset_not_found` | Get missing preset |
+| `test_preset_file_delete_preset` | Delete preset |
+| `test_preset_file_delete_preset_not_found` | Delete missing preset |
+| `test_preset_file_get_names` | Get all names |
+| `test_preset_file_to_dict` | Convert to dictionary |
+| `test_preset_file_from_dict` | Create from dictionary |
+
+#### TestPresetManagerBasics (3 tests) - TASK 30.1
+
+| Test | Purpose |
+|------|---------|
+| `test_singleton_instance` | Singleton pattern |
+| `test_preset_types` | Supported types |
+| `test_invalid_preset_type_raises` | Invalid type error |
+
+#### TestSaveNewPreset (4 tests) - TASK 30.1
+
+| Test | Purpose |
+|------|---------|
+| `test_save_new_preset` | Save new preset |
+| `test_save_multiple_presets` | Save multiple |
+| `test_save_preset_empty_name_fails` | Empty name fails |
+| `test_save_preset_whitespace_name_fails` | Whitespace name fails |
+
+#### TestUpdateExistingPreset (2 tests) - TASK 30.1
+
+| Test | Purpose |
+|------|---------|
+| `test_update_existing_preset` | Update content |
+| `test_update_preserves_other_presets` | Preserve others |
+
+#### TestLoadPreset (3 tests) - TASK 30.1
+
+| Test | Purpose |
+|------|---------|
+| `test_load_preset_populates_field` | Load returns content |
+| `test_load_preset_not_found` | Load missing returns None |
+| `test_load_preset_from_fresh_manager` | File persistence |
+
+#### TestDeletePreset (3 tests) - TASK 30.1
+
+| Test | Purpose |
+|------|---------|
+| `test_delete_preset` | Delete preset |
+| `test_delete_preset_not_found` | Delete missing |
+| `test_delete_preserves_other_presets` | Preserve others |
+
+#### TestEscapeQuotes (4 tests) - TASK 30.1
+
+| Test | Purpose |
+|------|---------|
+| `test_escape_quotes_in_content` | Handle quotes |
+| `test_content_with_newlines` | Handle newlines |
+| `test_content_with_special_characters` | Handle special chars |
+| `test_content_with_unicode` | Handle unicode |
+
+#### TestDefaultPresets (3 tests) - TASK 30.1
+
+| Test | Purpose |
+|------|---------|
+| `test_style_has_default_presets` | Style defaults |
+| `test_tone_has_default_presets` | Tone defaults |
+| `test_prompt_has_default_presets` | Prompt defaults |
+
+#### TestPresetExists (2 tests) - TASK 30.1
+
+| Test | Purpose |
+|------|---------|
+| `test_preset_exists_true` | Exists returns True |
+| `test_preset_exists_false` | Missing returns False |
+
+#### TestGetPresets (2 tests) - TASK 30.1
+
+| Test | Purpose |
+|------|---------|
+| `test_get_presets_returns_list` | Returns Preset list |
+| `test_get_presets_includes_custom` | Includes custom |
+
+#### TestFilePersistence (2 tests) - TASK 30.1
+
+| Test | Purpose |
+|------|---------|
+| `test_presets_persist_across_manager_instances` | Persist across sessions |
+| `test_corrupted_file_handled_gracefully` | Recover from corruption |
+
+### test_preset_gui.py (21 tests) - TASK 30.2
+
+GUI preset integration tests. Verifies that PresetManager is accessible
+from GUI components and provides correct data for UI elements.
+
+#### TestPresetUIExists (4 tests) - TASK 30.2
+
+| Test | Purpose |
+|------|---------|
+| `test_information_step_has_preset_manager` | Manager accessible |
+| `test_preset_manager_has_style_type` | Style type supported |
+| `test_preset_manager_has_tone_type` | Tone type supported |
+| `test_preset_manager_has_prompt_type` | Prompt type supported |
+
+#### TestPresetDropdown (3 tests) - TASK 30.2
+
+| Test | Purpose |
+|------|---------|
+| `test_preset_dropdown_shows_all_presets` | Style presets shown |
+| `test_tone_dropdown_shows_all_presets` | Tone presets shown |
+| `test_prompt_dropdown_shows_all_presets` | Prompt presets shown |
+
+#### TestSaveButtonCreatesPreset (3 tests) - TASK 30.2
+
+| Test | Purpose |
+|------|---------|
+| `test_save_button_creates_preset` | Save creates preset |
+| `test_save_preset_with_content` | Content saved correctly |
+| `test_save_preset_updates_dropdown` | Dropdown updated |
+
+#### TestDeletePresetUI (3 tests) - TASK 30.2
+
+| Test | Purpose |
+|------|---------|
+| `test_delete_removes_from_dropdown` | Delete removes |
+| `test_delete_default_preset_not_recommended` | Defaults deletable |
+| `test_delete_preserves_other_presets` | Others preserved |
+
+#### TestPresetIntegration (2 tests) - TASK 30.2
+
+| Test | Purpose |
+|------|---------|
+| `test_preset_workflow_save_load_delete` | Full workflow |
+| `test_preset_persistence` | Persistence across resets |
+
+#### TestPresetHelperMethods (3 tests) - TASK 30.2
+
+| Test | Purpose |
+|------|---------|
+| `test_get_preset_names_returns_strings` | Returns strings |
+| `test_preset_exists_for_validation` | Validation works |
+| `test_get_presets_returns_preset_objects` | Returns Preset |
+
+#### TestPresetNamingDialog (3 tests) - TASK 30.2
+
+| Test | Purpose |
+|------|---------|
+| `test_empty_name_rejected` | Empty rejected |
+| `test_whitespace_name_rejected` | Whitespace rejected |
+| `test_duplicate_name_updates` | Duplicate updates |
+
+---
+
+### test_defaults.py (45 tests) - TASK 31.2
+
+Tests for user defaults configuration system.
+
+#### TestInitialDefaults (7 tests) - TASK 31.2
+
+| Test | Purpose |
+|------|---------|
+| `test_get_initial_default_string` | String initial default |
+| `test_get_initial_default_bool` | Boolean initial default |
+| `test_get_initial_default_int` | Integer initial default |
+| `test_get_initial_default_float` | Float initial default |
+| `test_get_initial_default_missing_key` | Missing key fallback |
+| `test_get_initial_default_missing_section` | Missing section fallback |
+| `test_get_all_initial_defaults` | Get all for section |
+
+#### TestUserDefaults (6 tests) - TASK 31.2
+
+| Test | Purpose |
+|------|---------|
+| `test_set_user_default` | Setting user default |
+| `test_get_user_default_not_set` | Fallback when not set |
+| `test_has_user_default_true` | Check exists (true) |
+| `test_has_user_default_false` | Check exists (false) |
+| `test_save_as_user_defaults_multiple` | Save multiple at once |
+| `test_get_all_user_defaults` | Get all for section |
+
+#### TestEffectiveDefaults (4 tests) - TASK 31.2
+
+| Test | Purpose |
+|------|---------|
+| `test_effective_uses_user_default_when_set` | User overrides initial |
+| `test_effective_uses_initial_when_no_user_default` | Initial when no user |
+| `test_effective_uses_fallback_when_no_defaults` | Fallback when no defaults |
+| `test_user_defaults_override_initial` | Complete override test |
+
+#### TestClearRestoreDefaults (4 tests) - TASK 31.2
+
+| Test | Purpose |
+|------|---------|
+| `test_clear_user_defaults_specific_section` | Clear specific section |
+| `test_clear_user_defaults_all` | Clear all sections |
+| `test_restore_initial_defaults` | Restore all to initial |
+| `test_restore_initial_defaults_section` | Restore specific section |
+
+#### TestDefaultsPath (2 tests) - TASK 31.2
+
+| Test | Purpose |
+|------|---------|
+| `test_get_defaults_path` | Path resolution |
+| `test_defaults_path_exists` | File existence check |
+
+#### TestDefaultsCache (2 tests) - TASK 31.2
+
+| Test | Purpose |
+|------|---------|
+| `test_reload_defaults_cache` | Cache reload |
+| `test_clear_cache_clears_defaults` | Clear clears defaults |
+
+#### TestMissingDefaultsFile (1 test) - TASK 31.2
+
+| Test | Purpose |
+|------|---------|
+| `test_missing_defaults_file_returns_fallback` | Graceful fallback |
+
+#### TestBooleanConversion (15 tests) - TASK 31.2
+
+| Test | Purpose |
+|------|---------|
+| `test_boolean_conversion_variations[true-True]` | "true" → True |
+| `test_boolean_conversion_variations[True-True]` | "True" → True |
+| `test_boolean_conversion_variations[TRUE-True]` | "TRUE" → True |
+| `test_boolean_conversion_variations[yes-True]` | "yes" → True |
+| `test_boolean_conversion_variations[Yes-True]` | "Yes" → True |
+| `test_boolean_conversion_variations[1-True]` | "1" → True |
+| `test_boolean_conversion_variations[on-True]` | "on" → True |
+| `test_boolean_conversion_variations[On-True]` | "On" → True |
+| `test_boolean_conversion_variations[false-False]` | "false" → False |
+| `test_boolean_conversion_variations[False-False]` | "False" → False |
+| `test_boolean_conversion_variations[no-False]` | "no" → False |
+| `test_boolean_conversion_variations[0-False]` | "0" → False |
+| `test_boolean_conversion_variations[off-False]` | "off" → False |
+| `test_boolean_conversion_variations[-False]` | "" → False |
+| `test_boolean_conversion_variations[anything_else-False]` | Unknown → False |
+
+#### TestTypeConversionErrors (2 tests) - TASK 31.2
+
+| Test | Purpose |
+|------|---------|
+| `test_invalid_int_returns_fallback` | Invalid int handling |
+| `test_invalid_float_returns_fallback` | Invalid float handling |
+
+#### TestDefaultsIntegration (2 tests) - TASK 31.2
+
+| Test | Purpose |
+|------|---------|
+| `test_full_workflow_save_and_restore` | Complete workflow |
+| `test_mixed_sections_user_defaults` | Cross-section defaults |
+---
+
+### test_paths.py (18 tests) - TASK 32.1
+
+Tests for path handling and absolute path storage.
+
+#### TestManifestAbsolutePaths (3 tests) - TASK 32.1
+
+| Test | Purpose |
+|------|---------|
+| `test_source_files_stored_as_absolute_on_create` | Create stores absolute |
+| `test_source_files_resolved_on_set` | set_source_files resolves |
+| `test_paths_remain_absolute_after_save_load` | Persist through save/load |
+
+#### TestINIAbsolutePaths (2 tests) - TASK 32.1
+
+| Test | Purpose |
+|------|---------|
+| `test_last_manifest_stored_as_absolute` | last_manifest absolute |
+| `test_recent_manifests_stored_as_absolute` | Recent list absolute |
+
+#### TestSourceFileStatus (3 tests) - TASK 32.1
+
+| Test | Purpose |
+|------|---------|
+| `test_found_status_for_existing_file` | Existing = found |
+| `test_recoverable_status_for_missing_with_lines` | Missing with lines = recoverable |
+| `test_missing_status_for_complex_format` | Complex missing = missing |
+
+#### TestPathDisplay (2 tests) - TASK 32.1
+
+| Test | Purpose |
+|------|---------|
+| `test_absolute_path_can_be_displayed_relative` | Relative display |
+| `test_filename_extraction_from_absolute` | Extract filename |
+
+#### TestPathResolution (3 tests) - TASK 32.1
+
+| Test | Purpose |
+|------|---------|
+| `test_resolve_handles_relative_path` | Resolve relative |
+| `test_resolve_preserves_absolute_path` | Preserve absolute |
+| `test_resolve_normalizes_path` | Normalize .. paths |
+
+#### TestManifestPathStorage (1 test) - TASK 32.1
+
+| Test | Purpose |
+|------|---------|
+| `test_manifest_json_contains_absolute_paths` | JSON has absolute |
+
+#### TestPathEdgeCases (4 tests) - TASK 32.1
+
+| Test | Purpose |
+|------|---------|
+| `test_empty_source_files_handled` | Empty list handled |
+| `test_paths_with_spaces_handled` | Spaces in paths |
+| `test_paths_with_unicode_handled` | Unicode in paths |
+| `test_nonexistent_source_file_path_preserved` | Nonexistent path saved |
+
+---
+
+### test_edit_before_translate.py (36 tests) - TASK 33.1
+
+Edit Before Translation feature tests.
+
+#### TestLineEntryEditedPrepro (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_line_entry_has_edited_prepro_field` | Field exists on LineEntry |
+| `test_line_entry_edited_prepro_default_none` | Default is None |
+| `test_line_entry_edited_prepro_settable` | Can set value at construction |
+| `test_line_entry_edited_prepro_mutable` | Can modify after construction |
+
+#### TestInputForTranslationResolution (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_returns_orig_when_no_prepro_no_edited` | Fallback to original |
+| `test_returns_prepro_when_available_no_edited` | Use prepro when available |
+| `test_returns_edited_prepro_when_available` | Prefer edited_prepro |
+| `test_edited_prepro_takes_precedence_over_prepro` | edited > prepro |
+| `test_edited_prepro_takes_precedence_over_orig` | edited > orig |
+
+#### TestLineEntrySerialization (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_to_dict_includes_edited_prepro_when_set` | Serialize when set |
+| `test_to_dict_excludes_edited_prepro_when_none` | Skip when None |
+| `test_from_dict_restores_edited_prepro` | Deserialize properly |
+| `test_from_dict_handles_missing_edited_prepro` | Handle missing field |
+| `test_round_trip_preserves_edited_prepro` | Full roundtrip |
+
+#### TestTranslationOptionsEditFlag (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_translation_options_has_edit_flag` | Flag exists |
+| `test_edit_before_translation_defaults_false` | Defaults to False |
+| `test_edit_before_translation_settable` | Can be set |
+
+#### TestTranslatableLineEditedPrepro (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_translatable_line_has_edited_prepro` | Field exists |
+| `test_edited_prepro_defaults_empty_string` | Defaults to empty |
+| `test_edited_prepro_settable` | Can be set |
+
+#### TestEditPreviewDialogStructure (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_edit_preview_dialog_class_exists` | Class exists |
+| `test_has_result_constants` | Has RESULT_APPLY and RESULT_CANCEL |
+
+#### TestEditPreviewDialogUI (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_dialog_creation` | Dialog can be created |
+| `test_dialog_result_property` | Result property works |
+| `test_dialog_edited_data_property` | edited_data property works |
+
+#### TestManifestEditedPreproStorage (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_manifest_manager_set_line_field` | Can set edited_prepro |
+| `test_manifest_manager_get_line_edited_prepro` | Can retrieve edited_prepro |
+| `test_manifest_save_load_preserves_edited_prepro` | Persistence works |
+
+#### TestFieldProgressionOrder (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_progression_order_documented` | Docstring has progression |
+| `test_field_order_in_dataclass` | Fields in correct order |
+
+#### TestTranslationFlowIntegration (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_translate_chunk_uses_edited_prepro` | Translation uses edited text |
+
+#### TestEditedPreproEdgeCases (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_empty_string_edited_prepro` | Empty string handling |
+| `test_whitespace_only_edited_prepro` | Whitespace preserved |
+| `test_multiline_edited_prepro` | Multiline preserved |
+| `test_unicode_edited_prepro` | Unicode preserved |
+| `test_special_characters_edited_prepro` | Special chars preserved |
+
+#### TestBackwardCompatibility (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_old_manifest_without_edited_prepro` | Old manifests work |
+| `test_migration_adds_edited_prepro` | Migration adds field |
+
+---
+
+### test_prompts_config.py (40 tests) - TASK 33.2
+
+Configurable Edit/TLC Prompts feature tests.
+
+#### TestPromptsSettingsDataclass (7 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_default_values` | PromptsSettings has correct defaults |
+| `test_custom_values` | Custom values work |
+| `test_to_dict` | Serialization works |
+| `test_from_dict_with_all_fields` | Deserialization with all fields |
+| `test_from_dict_with_missing_fields` | Defaults for missing fields |
+| `test_from_dict_with_partial_fields` | Partial field handling |
+| `test_roundtrip_serialization` | to_dict -> from_dict preserves |
+
+#### TestDefaultPromptConstants (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_default_edit_prompt_not_empty` | Edit prompt is meaningful |
+| `test_default_tlc_prompt_not_empty` | TLC prompt is meaningful |
+| `test_default_tlc_prompt_has_placeholder` | TLC has {target_lang} |
+| `test_default_prompts_are_distinct` | Edit != TLC |
+
+#### TestGlobalOptionsWithPrompts (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_global_options_has_prompts_field` | Field exists |
+| `test_global_options_prompts_defaults` | Correct defaults |
+| `test_global_options_to_dict_includes_prompts` | Serialization includes prompts |
+| `test_global_options_from_dict_with_prompts` | Deserialization restores prompts |
+| `test_global_options_from_dict_without_prompts` | Missing prompts use defaults |
+
+#### TestOptionSectionEnum (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_prompts_section_exists` | PROMPTS enum exists |
+| `test_prompts_section_in_descriptions` | Has description |
+| `test_prompts_section_in_names` | Has display name |
+| `test_prompts_section_in_category_order` | In navigation |
+
+#### TestPromptsINIConfiguration (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_defaults_ini_has_prompts_section` | [prompts] in defaults.ini |
+| `test_defaults_ini_has_edit_prompt` | edit_prompt key exists |
+| `test_defaults_ini_has_tlc_prompt` | tlc_prompt key exists |
+| `test_defaults_ini_tlc_prompt_has_placeholder` | {target_lang} in TLC |
+
+#### TestPromptPlaceholders (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_substitute_target_lang` | {target_lang} substitution |
+| `test_substitute_source_lang` | {source_lang} substitution |
+| `test_substitute_multiple_placeholders` | Both placeholders |
+| `test_default_tlc_prompt_substitutes_correctly` | Default TLC substitutes |
+
+#### TestPromptsEdgeCases (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_empty_edit_prompt` | Empty prompt handling |
+| `test_empty_tlc_prompt` | Empty TLC handling |
+| `test_multiline_edit_prompt` | Multiline preserved |
+| `test_special_characters_in_prompt` | Special chars preserved |
+| `test_unicode_in_prompt` | Unicode preserved |
+| `test_very_long_prompt` | Very long prompts work |
+
+#### TestPromptsSettingsTypeCoercion (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_from_dict_coerces_non_string` | Type coercion works |
+| `test_from_dict_handles_list_value` | List converted to string |
+
+#### TestPromptsBackwardsCompatibility (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_old_global_options_dict_without_prompts` | Old data uses defaults |
+| `test_migration_preserves_other_settings` | Other settings preserved |
+
+#### TestPromptsDialogWidgetsMocked (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_dialog_creates_prompts_panel` | Panel configured properly |
+| `test_prompts_section_description_meaningful` | Description is useful |
+
+| `test_migration_adds_edited_prepro` | Migration adds field |

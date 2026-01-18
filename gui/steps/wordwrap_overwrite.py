@@ -17,6 +17,20 @@ from tkinter import ttk, messagebox
 from CherryAI.gui.components.table import ColumnDef, SharedTable, TableRow
 from CherryAI.gui.steps.base import BaseStep
 from CherryAI.gui.theme.colors import THEME
+from CherryAI.gui.helpers.manifest_binding import (
+    BindingInfo,
+    bind_checkbox_to_field,
+    bind_spinbox_to_field,
+    bind_combobox_to_field,
+)
+from CherryAI.functions.manifest_fields import (
+    save_nested_text_field,
+    load_nested_text_field,
+    save_nested_int_field,
+    load_nested_int_field,
+    save_nested_bool_field,
+    load_nested_bool_field,
+)
 try:
     # Explicit import of shared wordwrap logic per architecture rules
     from CherryAI.functions.wordwrap import WordwrapConfig, apply_wordwrap
@@ -279,6 +293,8 @@ class WordwrapOverwriteStep(BaseStep):
         self._process_thread: Optional[threading.Thread] = None
         self._selected_line_idx: int = -1
         self._format_configs = dict(DEFAULT_FORMAT_CONFIGS)
+        # TASK 28.1: Manifest bindings for wordwrap settings
+        self._manifest_bindings: List[BindingInfo] = []
         super().__init__(parent, session, manifest_manager=manifest_manager)
 
     def _build_ui(self) -> None:
@@ -468,7 +484,7 @@ class WordwrapOverwriteStep(BaseStep):
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
     def _build_wrap_options_panel(self, parent: ttk.Frame) -> None:
-        """Build the wordwrap options panel."""
+        """Build the wordwrap options panel with manifest bindings (TASK 28.1)."""
         frame = ttk.LabelFrame(parent, text="Wordwrap Settings")
         frame.pack(fill="x", padx=5, pady=5)
 
@@ -479,6 +495,10 @@ class WordwrapOverwriteStep(BaseStep):
         ttk.Label(mode_frame, text="Mode:").pack(side="left")
 
         self._mode_var = tk.StringVar(value=WrapMode.MANUAL.value)
+        
+        # TASK 28.1: Trace mode changes to manifest
+        self._mode_var.trace_add("write", self._save_wordwrap_mode_to_manifest)
+        
         for mode in WrapMode:
             ttk.Radiobutton(
                 mode_frame,
@@ -504,6 +524,20 @@ class WordwrapOverwriteStep(BaseStep):
         )
         width_spin.pack(side="left", padx=5)
         ttk.Label(width_frame, text="characters").pack(side="left")
+        
+        # TASK 28.1: Bind width spinbox to manifest
+        self._manifest_bindings.append(
+            bind_spinbox_to_field(
+                spinbox=width_spin,
+                var=self._width_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="Width",
+                min_val=20,
+                max_val=200,
+                default=48,
+                parent_key="WordwrapSettings",
+            )
+        )
 
         # Break character
         break_frame = ttk.Frame(frame)
@@ -518,6 +552,19 @@ class WordwrapOverwriteStep(BaseStep):
             width=10,
         )
         break_combo.pack(side="left", padx=5)
+        
+        # TASK 28.1: Bind break char combobox to manifest
+        self._manifest_bindings.append(
+            bind_combobox_to_field(
+                combobox=break_combo,
+                var=self._break_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="BreakChar",
+                options=["\\n", "\n", "<br>", "[r]", "\\r\\n"],
+                default="\\n",
+                parent_key="WordwrapSettings",
+            )
+        )
 
         # Max lines
         max_lines_frame = ttk.Frame(frame)
@@ -534,31 +581,74 @@ class WordwrapOverwriteStep(BaseStep):
         )
         max_lines_spin.pack(side="left", padx=5)
         ttk.Label(max_lines_frame, text="(0 = unlimited)").pack(side="left")
+        
+        # TASK 28.1: Bind max lines spinbox to manifest
+        self._manifest_bindings.append(
+            bind_spinbox_to_field(
+                spinbox=max_lines_spin,
+                var=self._max_lines_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="MaxLines",
+                min_val=0,
+                max_val=20,
+                default=4,
+                parent_key="WordwrapSettings",
+            )
+        )
 
         # Options
         opts_frame = ttk.Frame(frame)
         opts_frame.pack(fill="x", padx=5, pady=5)
 
         self._orphan_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
+        orphan_cb = ttk.Checkbutton(
             opts_frame,
             text="Prevent orphans",
             variable=self._orphan_var,
-        ).pack(anchor="w")
+        )
+        orphan_cb.pack(anchor="w")
+        
+        # TASK 28.1: Bind orphan checkbox to manifest
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=orphan_cb,
+                var=self._orphan_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="PreventOrphans",
+                default=True,
+                parent_key="WordwrapSettings",
+            )
+        )
 
         self._punct_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
+        punct_cb = ttk.Checkbutton(
             opts_frame,
             text="Prefer punctuation breaks",
             variable=self._punct_var,
-        ).pack(anchor="w")
+        )
+        punct_cb.pack(anchor="w")
+        
+        # TASK 28.1: Bind punctuation checkbox to manifest
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=punct_cb,
+                var=self._punct_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="PreferPunctuationBreaks",
+                default=True,
+                parent_key="WordwrapSettings",
+            )
+        )
 
     def _build_speaker_panel(self, parent: ttk.Frame) -> None:
-        """Build the speaker handling options panel."""
+        """Build the speaker handling options panel with manifest binding (TASK 28.1)."""
         frame = ttk.LabelFrame(parent, text="Speaker Handling")
         frame.pack(fill="x", padx=5, pady=5)
 
         self._speaker_var = tk.StringVar(value=SpeakerMode.SAMELINE.value)
+        
+        # TASK 28.1: Trace speaker mode changes to manifest
+        self._speaker_var.trace_add("write", self._save_speaker_handling_to_manifest)
 
         for mode in SpeakerMode:
             rb_frame = ttk.Frame(frame)
@@ -606,7 +696,7 @@ class WordwrapOverwriteStep(BaseStep):
             ).pack(side="left", padx=5)
 
     def _build_typography_panel(self, parent: ttk.Frame) -> None:
-        """Build the typography options panel."""
+        """Build the typography options panel with manifest binding (TASK 28.1)."""
         frame = ttk.LabelFrame(parent, text="Typography")
         frame.pack(fill="x", padx=5, pady=5)
 
@@ -625,6 +715,20 @@ class WordwrapOverwriteStep(BaseStep):
             width=12,
         )
         typo_combo.pack(side="left", padx=5)
+        
+        # TASK 28.1: Bind typography combobox to manifest
+        typo_options = [s.value for s in TypographyStyle]
+        self._manifest_bindings.append(
+            bind_combobox_to_field(
+                combobox=typo_combo,
+                var=self._typo_style_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="Typography",
+                options=typo_options,
+                default=TypographyStyle.WESTERN.value,
+                parent_key="WordwrapSettings",
+            )
+        )
 
         # Options
         opts_frame = ttk.Frame(frame)
@@ -1090,8 +1194,66 @@ class WordwrapOverwriteStep(BaseStep):
     # BaseStep Implementation
     # =========================================================================
 
+    def _save_wordwrap_mode_to_manifest(self, *args: Any) -> None:
+        """Save wordwrap mode to manifest when changed (TASK 28.1).
+        
+        Args:
+            *args: Trace callback arguments (ignored).
+        """
+        if self.manifest_manager is None:
+            return
+        value = self._mode_var.get()
+        save_nested_text_field(
+            self.manifest_manager, "WordwrapSettings", "Mode", value
+        )
+        logger.debug("Wordwrap mode saved to manifest: %s", value)
+
+    def _save_speaker_handling_to_manifest(self, *args: Any) -> None:
+        """Save speaker handling mode to manifest when changed (TASK 28.1).
+        
+        Args:
+            *args: Trace callback arguments (ignored).
+        """
+        if self.manifest_manager is None:
+            return
+        value = self._speaker_var.get()
+        save_nested_text_field(
+            self.manifest_manager, "WordwrapSettings", "SpeakerHandling", value
+        )
+        logger.debug("Speaker handling saved to manifest: %s", value)
+
+    def _load_wordwrap_settings_from_manifest(self) -> None:
+        """Load wordwrap settings from manifest (TASK 28.1).
+        
+        Loads all wordwrap options from manifest into UI widgets.
+        """
+        if self.manifest_manager is None:
+            return
+        
+        # Load all checkbox/spinbox/combobox bindings
+        for binding in self._manifest_bindings:
+            if hasattr(binding, "load_from_manifest"):
+                binding.load_from_manifest()
+        
+        # Load mode
+        mode_value = load_nested_text_field(
+            self.manifest_manager, "WordwrapSettings", "Mode", WrapMode.MANUAL.value
+        )
+        self._mode_var.set(mode_value)
+        
+        # Load speaker handling
+        speaker_value = load_nested_text_field(
+            self.manifest_manager, "WordwrapSettings", "SpeakerHandling", SpeakerMode.SAMELINE.value
+        )
+        self._speaker_var.set(speaker_value)
+        
+        logger.debug("Wordwrap settings loaded from manifest")
+
     def on_enter(self) -> None:
         """Called when entering this tab."""
+        # TASK 28.1: Load wordwrap settings from manifest
+        self._load_wordwrap_settings_from_manifest()
+        
         self._load_lines_from_session()
         self._refresh_table()
         self._update_summary()

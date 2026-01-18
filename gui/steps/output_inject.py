@@ -21,6 +21,15 @@ from tkinter import ttk, messagebox, filedialog
 from CherryAI.gui.components.table import ColumnDef, SharedTable, TableRow
 from CherryAI.gui.steps.base import BaseStep
 from CherryAI.gui.theme.colors import THEME
+from CherryAI.gui.helpers.manifest_binding import (
+    BindingInfo,
+    bind_checkbox_to_field,
+    bind_combobox_to_field,
+    bind_entry_to_field,
+)
+from CherryAI.functions.manifest_fields import (
+    save_nested_text_field,
+)
 
 if TYPE_CHECKING:
     from CherryAI.gui.state.store import SessionState
@@ -268,6 +277,8 @@ class OutputInjectStep(BaseStep):
         self._export_thread: Optional[threading.Thread] = None
         self._cancel_requested = False
         self._selected_file_idx: int = -1
+        # TASK 28.2: Manifest binding tracking
+        self._manifest_bindings: List[BindingInfo] = []
         super().__init__(parent, session, manifest_manager=manifest_manager)
 
     def _build_ui(self) -> None:
@@ -487,11 +498,25 @@ class OutputInjectStep(BaseStep):
 
         # Preserve structure checkbox
         self._preserve_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
+        preserve_cb = ttk.Checkbutton(
             frame,
             text="Preserve folder structure",
             variable=self._preserve_var,
-        ).pack(anchor="w", padx=5, pady=3)
+        )
+        preserve_cb.pack(anchor="w", padx=5, pady=3)
+
+        # TASK 28.2: Bind to manifest
+        if self._manifest_manager:
+            self._manifest_bindings.append(
+                bind_checkbox_to_field(
+                    checkbox=preserve_cb,
+                    var=self._preserve_var,
+                    manager_getter=lambda: self.manifest_manager,
+                    field_key="PreserveFolderStructure",
+                    default=True,
+                    parent_key="OutputFormat",
+                )
+            )
 
     def _build_format_panel(self, parent: ttk.Frame) -> None:
         """Build the output format panel."""
@@ -504,16 +529,31 @@ class OutputInjectStep(BaseStep):
 
         ttk.Label(format_frame, text="Format:").pack(side="left")
 
+        format_options = [f.value for f in OutputFormat]
         self._format_var = tk.StringVar(value=OutputFormat.TXT.value)
         format_combo = ttk.Combobox(
             format_frame,
             textvariable=self._format_var,
-            values=[f.value.upper() for f in OutputFormat],
+            values=[f.upper() for f in format_options],
             state="readonly",
             width=10,
         )
         format_combo.pack(side="left", padx=5)
         format_combo.bind("<<ComboboxSelected>>", self._on_format_changed)
+
+        # TASK 28.2: Bind Format to manifest
+        if self._manifest_manager:
+            self._manifest_bindings.append(
+                bind_combobox_to_field(
+                    combobox=format_combo,
+                    var=self._format_var,
+                    manager_getter=lambda: self.manifest_manager,
+                    field_key="Format",
+                    options=format_options,
+                    default="txt",
+                    parent_key="OutputFormat",
+                )
+            )
 
         # Format description
         self._format_desc = ttk.Label(
@@ -529,6 +569,7 @@ class OutputInjectStep(BaseStep):
 
         ttk.Label(pair_frame, text="Pair Mode:").pack(side="left")
 
+        pair_options = [p.value for p in PairMode]
         self._pair_var = tk.StringVar(value=PairMode.TRANSLATED_ONLY.value)
         pair_combo = ttk.Combobox(
             pair_frame,
@@ -539,20 +580,49 @@ class OutputInjectStep(BaseStep):
         )
         pair_combo.pack(side="left", padx=5)
 
+        # TASK 28.2: Bind PairMode to manifest
+        if self._manifest_manager:
+            self._manifest_bindings.append(
+                bind_combobox_to_field(
+                    combobox=pair_combo,
+                    var=self._pair_var,
+                    manager_getter=lambda: self.manifest_manager,
+                    field_key="PairMode",
+                    options=pair_options,
+                    default="translated_only",
+                    parent_key="OutputFormat",
+                )
+            )
+
         # Encoding
         enc_frame = ttk.Frame(frame)
         enc_frame.pack(fill="x", padx=5, pady=3)
 
         ttk.Label(enc_frame, text="Encoding:").pack(side="left")
 
+        encoding_options = ["utf-8", "utf-8-sig", "utf-16", "shift_jis", "cp932"]
         self._encoding_var = tk.StringVar(value="utf-8")
         enc_combo = ttk.Combobox(
             enc_frame,
             textvariable=self._encoding_var,
-            values=["utf-8", "utf-8-sig", "utf-16", "shift_jis", "cp932"],
+            values=encoding_options,
             width=12,
         )
         enc_combo.pack(side="left", padx=5)
+
+        # TASK 28.2: Bind Encoding to manifest
+        if self._manifest_manager:
+            self._manifest_bindings.append(
+                bind_combobox_to_field(
+                    combobox=enc_combo,
+                    var=self._encoding_var,
+                    manager_getter=lambda: self.manifest_manager,
+                    field_key="Encoding",
+                    options=encoding_options,
+                    default="utf-8",
+                    parent_key="OutputFormat",
+                )
+            )
 
     def _build_naming_panel(self, parent: ttk.Frame) -> None:
         """Build the file naming options panel."""
@@ -588,11 +658,15 @@ class OutputInjectStep(BaseStep):
                 font=("TkDefaultFont", 8),
             ).pack(side="left", padx=5)
 
-        # Suffix/prefix entry
+        # TASK 28.2: Bind FileNaming radio buttons to manifest via trace
+        if self._manifest_manager:
+            self._naming_var.trace_add("write", self._save_file_naming_to_manifest)
+
+        # Suffix/prefix entry (renamed to "Text Option" per todo.md)
         value_frame = ttk.Frame(frame)
         value_frame.pack(fill="x", padx=5, pady=5)
 
-        ttk.Label(value_frame, text="Value:").pack(side="left")
+        ttk.Label(value_frame, text="Text Option:").pack(side="left")
 
         self._naming_value_var = tk.StringVar(value="_translated")
         self._naming_entry = ttk.Entry(
@@ -602,6 +676,19 @@ class OutputInjectStep(BaseStep):
         )
         self._naming_entry.pack(side="left", padx=5)
 
+        # TASK 28.2: Bind TextOption entry to manifest
+        if self._manifest_manager:
+            self._manifest_bindings.append(
+                bind_entry_to_field(
+                    entry=self._naming_entry,
+                    var=self._naming_value_var,
+                    manager_getter=lambda: self.manifest_manager,
+                    field_key="TextOption",
+                    default="_translated",
+                    parent_key="OutputFormat",
+                )
+            )
+
     def _build_backup_panel(self, parent: ttk.Frame) -> None:
         """Build the backup options panel."""
         frame = ttk.LabelFrame(parent, text="Backup & Overwrite")
@@ -609,12 +696,26 @@ class OutputInjectStep(BaseStep):
 
         # Overwrite checkbox
         self._overwrite_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
+        overwrite_cb = ttk.Checkbutton(
             frame,
             text="Overwrite existing files",
             variable=self._overwrite_var,
             command=self._on_overwrite_changed,
-        ).pack(anchor="w", padx=5, pady=3)
+        )
+        overwrite_cb.pack(anchor="w", padx=5, pady=3)
+
+        # TASK 28.2: Bind OverwriteExistingFiles to manifest
+        if self._manifest_manager:
+            self._manifest_bindings.append(
+                bind_checkbox_to_field(
+                    checkbox=overwrite_cb,
+                    var=self._overwrite_var,
+                    manager_getter=lambda: self.manifest_manager,
+                    field_key="OverwriteExistingFiles",
+                    default=False,
+                    parent_key="OutputFormat",
+                )
+            )
 
         # Backup strategy
         backup_frame = ttk.Frame(frame)
@@ -622,15 +723,30 @@ class OutputInjectStep(BaseStep):
 
         ttk.Label(backup_frame, text="Backup:").pack(side="left")
 
+        backup_options = ["none", "timestamp", "numbered", "extension"]
         self._backup_var = tk.StringVar(value=BackupStrategy.TIMESTAMP.value)
         backup_combo = ttk.Combobox(
             backup_frame,
             textvariable=self._backup_var,
-            values=["none", "timestamp", "numbered", "extension"],
+            values=backup_options,
             state="readonly",
             width=12,
         )
         backup_combo.pack(side="left", padx=5)
+
+        # TASK 28.2: Bind Backup to manifest
+        if self._manifest_manager:
+            self._manifest_bindings.append(
+                bind_combobox_to_field(
+                    combobox=backup_combo,
+                    var=self._backup_var,
+                    manager_getter=lambda: self.manifest_manager,
+                    field_key="Backup",
+                    options=backup_options,
+                    default="timestamp",
+                    parent_key="OutputFormat",
+                )
+            )
 
         # Backup extension
         ext_frame = ttk.Frame(frame)
@@ -639,11 +755,25 @@ class OutputInjectStep(BaseStep):
         ttk.Label(ext_frame, text="Backup ext:").pack(side="left")
 
         self._backup_ext_var = tk.StringVar(value=".bak")
-        ttk.Entry(
+        backup_ext_entry = ttk.Entry(
             ext_frame,
             textvariable=self._backup_ext_var,
             width=10,
-        ).pack(side="left", padx=5)
+        )
+        backup_ext_entry.pack(side="left", padx=5)
+
+        # TASK 28.2: Bind BackupExtension to manifest
+        if self._manifest_manager:
+            self._manifest_bindings.append(
+                bind_entry_to_field(
+                    entry=backup_ext_entry,
+                    var=self._backup_ext_var,
+                    manager_getter=lambda: self.manifest_manager,
+                    field_key="BackupExtension",
+                    default=".bak",
+                    parent_key="OutputFormat",
+                )
+            )
 
     def _build_export_panel(self, parent: ttk.Frame) -> None:
         """Build the export options panel."""
@@ -651,28 +781,70 @@ class OutputInjectStep(BaseStep):
         frame.pack(fill="x", padx=5, pady=5)
 
         # Export manifest
-        self._export_manifest_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
+        self._export_manifest_var = tk.BooleanVar(value=False)
+        export_manifest_cb = ttk.Checkbutton(
             frame,
             text="Export manifest file",
             variable=self._export_manifest_var,
-        ).pack(anchor="w", padx=5, pady=3)
+        )
+        export_manifest_cb.pack(anchor="w", padx=5, pady=3)
+
+        # TASK 28.2: Bind ExportManifestFile to manifest
+        if self._manifest_manager:
+            self._manifest_bindings.append(
+                bind_checkbox_to_field(
+                    checkbox=export_manifest_cb,
+                    var=self._export_manifest_var,
+                    manager_getter=lambda: self.manifest_manager,
+                    field_key="ExportManifestFile",
+                    default=False,
+                    parent_key="OutputFormat",
+                )
+            )
 
         # Export logs
-        self._export_logs_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
+        self._export_logs_var = tk.BooleanVar(value=False)
+        export_logs_cb = ttk.Checkbutton(
             frame,
             text="Export processing logs",
             variable=self._export_logs_var,
-        ).pack(anchor="w", padx=5, pady=3)
+        )
+        export_logs_cb.pack(anchor="w", padx=5, pady=3)
+
+        # TASK 28.2: Bind ExportProcessingLogs to manifest
+        if self._manifest_manager:
+            self._manifest_bindings.append(
+                bind_checkbox_to_field(
+                    checkbox=export_logs_cb,
+                    var=self._export_logs_var,
+                    manager_getter=lambda: self.manifest_manager,
+                    field_key="ExportProcessingLogs",
+                    default=False,
+                    parent_key="OutputFormat",
+                )
+            )
 
         # Export glossary
         self._export_glossary_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
+        export_glossary_cb = ttk.Checkbutton(
             frame,
             text="Export glossary entries",
             variable=self._export_glossary_var,
-        ).pack(anchor="w", padx=5, pady=3)
+        )
+        export_glossary_cb.pack(anchor="w", padx=5, pady=3)
+
+        # TASK 28.2: Bind ExportGlossaryEntries to manifest
+        if self._manifest_manager:
+            self._manifest_bindings.append(
+                bind_checkbox_to_field(
+                    checkbox=export_glossary_cb,
+                    var=self._export_glossary_var,
+                    manager_getter=lambda: self.manifest_manager,
+                    field_key="ExportGlossaryEntries",
+                    default=False,
+                    parent_key="OutputFormat",
+                )
+            )
 
     def _build_summary_panel(self) -> None:
         """Build the summary statistics panel."""
@@ -1224,11 +1396,88 @@ class OutputInjectStep(BaseStep):
         self._stats_labels["time"].configure(text=f"{self._stats.duration:.1f}s")
 
     # =========================================================================
+    # Manifest Integration Methods (TASK 28.2)
+    # =========================================================================
+
+    def _save_file_naming_to_manifest(self, *args: Any) -> None:
+        """Save FileNaming radio button value to manifest."""
+        if self._manifest_manager:
+            value = self._naming_var.get()
+            save_nested_text_field(
+                self._manifest_manager,
+                "OutputFormat",
+                "FileNaming",
+                value,
+            )
+
+    def _load_output_settings_from_manifest(self) -> None:
+        """Load output format settings from manifest on tab entry."""
+        if not self._manifest_manager:
+            return
+
+        try:
+            output_format = self._manifest_manager.get_section("OutputFormat") or {}
+
+            # Load PreserveFolderStructure
+            if "PreserveFolderStructure" in output_format:
+                self._preserve_var.set(output_format["PreserveFolderStructure"])
+
+            # Load Format
+            if "Format" in output_format:
+                self._format_var.set(output_format["Format"])
+
+            # Load PairMode
+            if "PairMode" in output_format:
+                self._pair_var.set(output_format["PairMode"])
+
+            # Load Encoding
+            if "Encoding" in output_format:
+                self._encoding_var.set(output_format["Encoding"])
+
+            # Load FileNaming
+            if "FileNaming" in output_format:
+                self._naming_var.set(output_format["FileNaming"])
+
+            # Load TextOption
+            if "TextOption" in output_format:
+                self._naming_value_var.set(output_format["TextOption"])
+
+            # Load OverwriteExistingFiles
+            if "OverwriteExistingFiles" in output_format:
+                self._overwrite_var.set(output_format["OverwriteExistingFiles"])
+
+            # Load Backup
+            if "Backup" in output_format:
+                self._backup_var.set(output_format["Backup"])
+
+            # Load BackupExtension
+            if "BackupExtension" in output_format:
+                self._backup_ext_var.set(output_format["BackupExtension"])
+
+            # Load ExportManifestFile
+            if "ExportManifestFile" in output_format:
+                self._export_manifest_var.set(output_format["ExportManifestFile"])
+
+            # Load ExportProcessingLogs
+            if "ExportProcessingLogs" in output_format:
+                self._export_logs_var.set(output_format["ExportProcessingLogs"])
+
+            # Load ExportGlossaryEntries
+            if "ExportGlossaryEntries" in output_format:
+                self._export_glossary_var.set(output_format["ExportGlossaryEntries"])
+
+            logger.debug("Loaded output format settings from manifest")
+        except Exception as e:
+            logger.warning(f"Failed to load output settings from manifest: {e}")
+
+    # =========================================================================
     # BaseStep Implementation
     # =========================================================================
 
     def on_enter(self) -> None:
         """Called when entering this tab."""
+        # TASK 28.2: Load output settings from manifest
+        self._load_output_settings_from_manifest()
         self._load_from_session()
         self._refresh_preview()
         self._update_summary()

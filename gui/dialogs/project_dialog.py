@@ -2,6 +2,7 @@
 
 Dialog for entering a new project name when loading files without a manifest.
 TASK 19: Part of the unified manifest state system.
+TASK 21.4: Added WelcomeDialog for application startup.
 """
 
 from __future__ import annotations
@@ -9,12 +10,179 @@ from __future__ import annotations
 import logging
 import tkinter as tk
 from tkinter import ttk
-from typing import Callable, Optional
+from typing import Callable, Optional, Literal
 from pathlib import Path
 
 from CherryAI.gui.theme.colors import THEME, apply_theme
 
 logger = logging.getLogger(__name__)
+
+
+class WelcomeDialog(tk.Toplevel):
+    """Welcome dialog shown on first launch or when no recent manifest found.
+
+    Allows user to:
+    - Create a new project
+    - Load an existing project
+    - Skip and start with empty session
+
+    TASK 21.4: Part of Application Startup Manifest Loading.
+    """
+
+    # Result types
+    RESULT_NEW: str = "new"
+    RESULT_LOAD: str = "load"
+    RESULT_SKIP: str = "skip"
+    RESULT_CANCEL: str = "cancel"
+
+    def __init__(
+        self,
+        parent: tk.Tk,
+        show_skip: bool = True,
+        last_manifest_name: Optional[str] = None,
+    ) -> None:
+        """Initialize the welcome dialog.
+
+        Args:
+            parent: Parent window.
+            show_skip: Whether to show "Start Fresh" option.
+            last_manifest_name: Name of last manifest (shows "Resume" option if set).
+        """
+        super().__init__(parent)
+        self._show_skip = show_skip
+        self._last_manifest_name = last_manifest_name
+        self._result: str = self.RESULT_CANCEL
+
+        self.title("Welcome to CherryAI")
+        self.transient(parent)
+        self.grab_set()
+        self.resizable(False, False)
+
+        # Size and position
+        self.geometry("500x320")
+        self.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() // 2) - 250
+        y = parent.winfo_y() + (parent.winfo_height() // 2) - 160
+        self.geometry(f"+{x}+{y}")
+
+        # Apply theme
+        apply_theme(self)
+        self.configure(bg=THEME.bg_main)
+
+        self._build_ui()
+
+        # Handle window close
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+        # Bind keys
+        self.bind("<Escape>", lambda e: self._on_cancel())
+
+    def _build_ui(self) -> None:
+        """Build the dialog UI."""
+        # Main frame
+        main_frame = ttk.Frame(self, padding=30)
+        main_frame.pack(fill="both", expand=True)
+
+        # Logo/Title area
+        title_frame = ttk.Frame(main_frame)
+        title_frame.pack(fill="x", pady=(0, 20))
+
+        title_label = ttk.Label(
+            title_frame,
+            text="🍒 CherryAI",
+            font=("Segoe UI", 24, "bold"),
+        )
+        title_label.pack()
+
+        subtitle_label = ttk.Label(
+            title_frame,
+            text="Professional Translation Toolkit",
+            font=("Segoe UI", 11),
+            foreground=THEME.text_secondary,
+        )
+        subtitle_label.pack()
+
+        # Options frame
+        options_frame = ttk.Frame(main_frame)
+        options_frame.pack(fill="x", pady=20)
+
+        # Resume last project (if available)
+        if self._last_manifest_name:
+            resume_btn = ttk.Button(
+                options_frame,
+                text=f"📂 Resume: {self._last_manifest_name}",
+                command=self._on_resume,
+                style="Accent.TButton",
+            )
+            resume_btn.pack(fill="x", pady=5, ipady=8)
+
+        # New project button
+        new_btn = ttk.Button(
+            options_frame,
+            text="✨ Create New Project",
+            command=self._on_new,
+        )
+        new_btn.pack(fill="x", pady=5, ipady=8)
+
+        # Load existing project button
+        load_btn = ttk.Button(
+            options_frame,
+            text="📁 Load Existing Project",
+            command=self._on_load,
+        )
+        load_btn.pack(fill="x", pady=5, ipady=8)
+
+        # Start fresh (skip) option
+        if self._show_skip:
+            skip_btn = ttk.Button(
+                options_frame,
+                text="⏭️ Start Fresh (No Project)",
+                command=self._on_skip,
+            )
+            skip_btn.pack(fill="x", pady=5, ipady=8)
+
+        # Footer
+        footer_label = ttk.Label(
+            main_frame,
+            text="Select an option to get started",
+            foreground=THEME.text_secondary,
+            font=("Segoe UI", 9),
+        )
+        footer_label.pack(side="bottom")
+
+    def _on_resume(self) -> None:
+        """Handle Resume button click."""
+        self._result = "resume"
+        self.destroy()
+
+    def _on_new(self) -> None:
+        """Handle New Project button click."""
+        self._result = self.RESULT_NEW
+        self.destroy()
+
+    def _on_load(self) -> None:
+        """Handle Load Project button click."""
+        self._result = self.RESULT_LOAD
+        self.destroy()
+
+    def _on_skip(self) -> None:
+        """Handle Start Fresh button click."""
+        self._result = self.RESULT_SKIP
+        self.destroy()
+
+    def _on_cancel(self) -> None:
+        """Handle Cancel/Close."""
+        self._result = self.RESULT_CANCEL
+        self.destroy()
+
+    @property
+    def result(self) -> str:
+        """Get the user's choice.
+
+        Returns:
+            One of: RESULT_NEW, RESULT_LOAD, RESULT_SKIP, RESULT_CANCEL, or "resume"
+        """
+        return self._result
 
 
 class ProjectNameDialog(tk.Toplevel):

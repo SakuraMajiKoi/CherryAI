@@ -21,7 +21,11 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from pathlib import Path
 
 from CherryAI.gui.dialogs.global_options import GlobalOptionsDialog, GlobalOptions
-from CherryAI.gui.dialogs.project_dialog import ProjectNameDialog, LoadManifestDialog
+from CherryAI.gui.dialogs.project_dialog import (
+    ProjectNameDialog,
+    LoadManifestDialog,
+    WelcomeDialog,
+)
 from CherryAI.gui.theme.colors import THEME, apply_theme
 from CherryAI.gui.state.store import (
     SessionState,
@@ -49,6 +53,7 @@ from CherryAI.functions.manifest_manager import (
     MANIFEST_DIR,
     MANIFEST_EXT,
 )
+from CherryAI.functions import ini_manager
 
 if TYPE_CHECKING:
     from CherryAI.gui.steps.base import BaseStep
@@ -96,24 +101,37 @@ class App(tk.Tk):
         self._session_path: Optional[Path] = None
         self.session = get_session()
         
-        # Try to restore manifest from last session
-        restored = load_session_from_autosave()
-        if restored is not None and restored.manifest_path:
-            # Check if restore_on_launch is enabled (default True)
-            restore_enabled = True
-            if restored.global_options is not None:
+        # TASK 21.4: Flag to track if startup dialog should be shown
+        self._show_startup_dialog = True
+        
+        # Try to restore manifest from INI (TASK 21.4)
+        if ini_manager.get_restore_on_launch():
+            last_manifest = ini_manager.get_last_manifest()
+            if last_manifest and last_manifest.exists():
                 try:
-                    restore_enabled = restored.global_options.session.restore_on_launch
-                except AttributeError:
-                    pass  # Use default True
-
-            if restore_enabled:
-                self.session = restored
-                logger.info("Restored session from autosave")
-                # Load the manifest (primary state)
-                self._load_manifest_on_restore()
-            else:
-                logger.info("Session restore disabled, starting fresh")
+                    if self._manifest_manager.load(last_manifest):
+                        self.session.manifest_path = last_manifest
+                        ini_manager.add_to_recent_manifests(last_manifest)
+                        logger.info("Restored last manifest: %s", last_manifest)
+                        self._show_startup_dialog = False
+                except Exception as e:
+                    logger.warning("Failed to restore last manifest: %s", e)
+        
+        # Fallback: Try legacy autosave restore
+        if self._show_startup_dialog:
+            restored = load_session_from_autosave()
+            if restored is not None and restored.manifest_path:
+                restore_enabled = True
+                if restored.global_options is not None:
+                    try:
+                        restore_enabled = restored.global_options.session.restore_on_launch
+                    except AttributeError:
+                        pass
+                if restore_enabled and restored.manifest_path.exists():
+                    self.session = restored
+                    self._load_manifest_on_restore()
+                    self._show_startup_dialog = False
+                    logger.info("Restored session from legacy autosave")
         
         # TASK 19 Phase 3: No autosave thread - manifest auto-saves on step change/close
 
@@ -137,6 +155,10 @@ class App(tk.Tk):
 
         # Restore session state in UI after build
         self._restore_session_ui()
+        
+        # TASK 21.4: Show startup dialog after main window is ready
+        if self._show_startup_dialog:
+            self.after(100, self._show_welcome_dialog)
 
         logger.info("CherryAI GUI v2 initialized")
 
@@ -436,6 +458,89 @@ class App(tk.Tk):
         """
         self._notebook.select(step_id)
 
+    def _show_welcome_dialog(self) -> None:
+        """Show welcome dialog on startup when no manifest is loaded.
+
+        TASK 21.4: Handles first launch and cases where last manifest not found.
+        """
+        # Get last manifest name for resume option
+        last_manifest = ini_manager.get_last_manifest()
+        last_name = None
+        if last_manifest and last_manifest.exists():
+            # Manifest exists, so just load it (shouldn't reach here normally)
+            last_name = last_manifest.stem
+        
+        # Show welcome dialog
+        dialog = WelcomeDialog(
+            self,
+            show_skip=True,
+            last_manifest_name=last_name,
+        )
+        
+        # Wait for dialog
+        self.wait_window(dialog)
+        
+        result = dialog.result
+        logger.debug("Welcome dialog result: %s", result)
+        
+        if result == "resume" and last_manifest and last_manifest.exists():
+            # Resume last project
+            self._load_manifest_from_path(last_manifest)
+            self._set_status(f"Resumed project: {last_manifest.stem}")
+        elif result == WelcomeDialog.RESULT_NEW:
+            # User wants to create new project - go to input step
+            self._notebook.select(0)
+            self._set_status("Create new project - load files to begin")
+        elif result == WelcomeDialog.RESULT_LOAD:
+            # Show load manifest dialog
+            self._on_load_manifest()
+        elif result == WelcomeDialog.RESULT_SKIP:
+            # Start fresh
+            self._set_status("Ready - load files or open a project")
+        else:
+            # Cancelled or closed
+            self._set_status("Ready")
+
+    def _load_manifest_from_path(self, manifest_path: Path) -> bool:
+        """Load a manifest from a file path.
+
+        Args:
+            manifest_path: Path to manifest file.
+
+        Returns:
+            True if loaded successfully.
+        """
+        if not self._manifest_manager.load(manifest_path):
+            logger.error("Failed to load manifest: %s", manifest_path)
+            messagebox.showerror(
+                "Load Error",
+                f"Failed to load project:\n{manifest_path}",
+            )
+            return False
+
+        # Update session with manifest path for legacy compatibility
+        self.session.manifest_path = manifest_path
+
+        # Update all steps with manifest manager
+        for tab in self._step_tabs:
+            tab._manifest_manager = self._manifest_manager
+
+        # Navigate to saved step position
+        saved_step = self._manifest_manager.current_step
+        if 0 <= saved_step < len(self._step_tabs):
+            self._notebook.select(saved_step)
+
+        # Add to recent manifests
+        ini_manager.add_to_recent_manifests(manifest_path)
+        
+        # Refresh UI
+        self._progress_tracker.refresh()
+        
+        project_name = self._manifest_manager.project_name or manifest_path.stem
+        logger.info("Loaded project: %s from %s", project_name, manifest_path)
+        
+        return True
+
     def _on_new_session(self) -> None:
         """Handle New Project menu item.
         
@@ -726,6 +831,8 @@ For more information, see the documentation.
         """Handle window close.
         
         TASK 19 Phase 3: Automatically saves manifest without prompting.
+        TASK 21.4: Saves last manifest path to INI for startup restore.
+        TASK 29.1: Properly closes ManifestManager (stops autosave thread).
         Manifest is always preserved to enable seamless resume.
         Calls on_leave() on current step to capture any pending form changes.
         """
@@ -737,13 +844,31 @@ For more information, see the documentation.
             except Exception as e:
                 logger.warning("Failed to call on_leave for step %d: %s", self._current_tab_index, e)
         
+        # Save manifest path before closing for INI storage
+        manifest_path = self._manifest_manager.manifest_path
+        
         # Save manifest if loaded (TASK 19 - primary state persistence)
+        # TASK 29.1: close() will save if dirty and save_on_close is True, then stop autosave
         if self._manifest_manager.is_loaded:
             try:
+                # Save first to capture latest state
                 self._manifest_manager.save()
-                logger.info("Manifest saved on close: %s", self._manifest_manager.manifest_path)
+                logger.info("Manifest saved on close: %s", manifest_path)
+                
+                # TASK 21.4: Save last manifest path to INI for next launch
+                if manifest_path:
+                    ini_manager.set_last_manifest(manifest_path)
+                    ini_manager.add_to_recent_manifests(manifest_path)
+                    logger.debug("Saved last manifest to INI: %s", manifest_path)
             except Exception as e:
                 logger.warning("Failed to save manifest on close: %s", e)
+            
+            # TASK 29.1: Properly close ManifestManager (stops autosave thread)
+            try:
+                self._manifest_manager.close()
+                logger.debug("ManifestManager closed (autosave stopped)")
+            except Exception as e:
+                logger.warning("Failed to close ManifestManager: %s", e)
         
         # Save minimal session state for next launch (manifest path reference only)
         try:
@@ -751,8 +876,8 @@ For more information, see the documentation.
             autosave_path = AUTOSAVE_DIR / AUTOSAVE_FILENAME
             autosave_path.parent.mkdir(parents=True, exist_ok=True)
             # Store manifest path so we can restore on next launch
-            if self._manifest_manager.is_loaded:
-                self.session.manifest_path = self._manifest_manager.manifest_path
+            if manifest_path:
+                self.session.manifest_path = manifest_path
             self.session.save_to_file(autosave_path)
             logger.debug("Session reference saved to autosave on close")
         except Exception as e:

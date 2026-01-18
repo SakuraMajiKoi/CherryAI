@@ -20,6 +20,23 @@ from CherryAI.gui.components.table import ColumnDef, SharedTable, TableRow
 from CherryAI.gui.steps.base import BaseStep
 from CherryAI.gui.theme.colors import THEME
 
+# TASK 25.2: Import manifest binding helpers for validation rules
+# TASK 26.1: Import additional binding helpers for QA options
+from CherryAI.gui.helpers.manifest_binding import (
+    BindingInfo,
+    bind_checkbox_to_field,
+    bind_spinbox_to_field,
+    bind_combobox_to_field,
+)
+from CherryAI.functions.manifest_fields import (
+    save_nested_bool_field,
+    load_nested_bool_field,
+    save_nested_int_field,
+    load_nested_int_field,
+    save_nested_text_field,
+    load_nested_text_field,
+)
+
 if TYPE_CHECKING:
     from CherryAI.gui.state.store import SessionState
     from CherryAI.functions.manifest_manager import ManifestManager
@@ -224,6 +241,8 @@ class QAStep(BaseStep):
         ]
         self._check_thread: Optional[threading.Thread] = None
         self._selected_line_idx: int = -1
+        # TASK 25.2: Track manifest bindings for validation rules
+        self._manifest_bindings: List[BindingInfo] = []
         super().__init__(parent, session, manifest_manager=manifest_manager)
 
     def _build_ui(self) -> None:
@@ -407,6 +426,17 @@ class QAStep(BaseStep):
         frame.pack(fill="x", padx=5, pady=5)
 
         self._rule_vars: Dict[str, tk.BooleanVar] = {}
+        
+        # TASK 25.2: Map rule names to manifest field keys
+        # These match the field names in todo.md MANIFEST 3.0 spec
+        rule_to_manifest_key = {
+            "Placeholder Preservation": "PlaceholderPreservation",
+            "Anchor Preservation": "AnchorPreservation",
+            "Japanese Character Detection": "JapaneseCharacterDetection",
+            "Speaker Format": "SpeakerFormat",
+            "Quote Balance": "QuoteBalance",
+            "Empty Translation": "EmptyTranslation",
+        }
 
         for rule in self._rules:
             var = tk.BooleanVar(value=rule.enabled)
@@ -415,12 +445,26 @@ class QAStep(BaseStep):
             rule_frame = ttk.Frame(frame)
             rule_frame.pack(fill="x", pady=2)
 
-            ttk.Checkbutton(
+            checkbox = ttk.Checkbutton(
                 rule_frame,
                 text=rule.name,
                 variable=var,
                 command=lambda r=rule, v=var: self._on_rule_toggled(r, v),  # type: ignore[misc]
-            ).pack(side="left")
+            )
+            checkbox.pack(side="left")
+            
+            # TASK 25.2: Bind checkbox to manifest field
+            manifest_key = rule_to_manifest_key.get(rule.name)
+            if manifest_key:
+                binding = bind_checkbox_to_field(
+                    checkbox=checkbox,
+                    var=var,
+                    manager_getter=lambda: self.manifest_manager,
+                    field_key=manifest_key,
+                    default=True,  # All validation rules default to True
+                    parent_key="ValidationRules",
+                )
+                self._manifest_bindings.append(binding)
 
             # Severity indicator
             severity_color = {
@@ -513,13 +557,27 @@ class QAStep(BaseStep):
 
         ttk.Label(jp_frame, text="Max Japanese chars:").pack(side="left")
         self._max_jp_var = tk.IntVar(value=self._qa_options.max_japanese_chars)
-        ttk.Spinbox(
+        max_jp_spinbox = ttk.Spinbox(
             jp_frame,
             from_=0,
             to=20,
             textvariable=self._max_jp_var,
             width=5,
-        ).pack(side="right")
+        )
+        max_jp_spinbox.pack(side="right")
+        
+        # TASK 26.1: Bind max Japanese chars to manifest
+        binding = bind_spinbox_to_field(
+            spinbox=max_jp_spinbox,
+            var=self._max_jp_var,
+            manager_getter=lambda: self.manifest_manager,
+            field_key="MaxJapaneseChars",
+            min_val=0,
+            max_val=20,
+            default=4,
+            parent_key="QAOptions",
+        )
+        self._manifest_bindings.append(binding)
 
         # Max line length
         len_frame = ttk.Frame(frame)
@@ -527,13 +585,27 @@ class QAStep(BaseStep):
 
         ttk.Label(len_frame, text="Max line length (0=off):").pack(side="left")
         self._max_len_var = tk.IntVar(value=self._qa_options.max_line_length)
-        ttk.Spinbox(
+        max_len_spinbox = ttk.Spinbox(
             len_frame,
             from_=0,
             to=1000,
             textvariable=self._max_len_var,
             width=5,
-        ).pack(side="right")
+        )
+        max_len_spinbox.pack(side="right")
+        
+        # TASK 26.1: Bind max line length to manifest
+        binding = bind_spinbox_to_field(
+            spinbox=max_len_spinbox,
+            var=self._max_len_var,
+            manager_getter=lambda: self.manifest_manager,
+            field_key="MaxLineLength",
+            min_val=0,
+            max_val=1000,
+            default=0,
+            parent_key="QAOptions",
+        )
+        self._manifest_bindings.append(binding)
 
         # Re-run policy
         policy_frame = ttk.Frame(frame)
@@ -542,9 +614,9 @@ class QAStep(BaseStep):
         ttk.Label(policy_frame, text="Re-run policy:").pack(anchor="w")
         self._rerun_var = tk.StringVar(value=self._qa_options.rerun_policy)
         policies = [
-            ("Failed only", "failed_only"),
-            ("All lines", "all"),
-            ("None (skip checked)", "none"),
+            ("Failed only", "FailedOnly"),
+            ("All lines", "All"),
+            ("None (skip checked)", "None"),
         ]
         for text, value in policies:
             ttk.Radiobutton(
@@ -553,6 +625,16 @@ class QAStep(BaseStep):
                 variable=self._rerun_var,
                 value=value,
             ).pack(anchor="w", padx=10)
+        
+        # TASK 26.1: Bind rerun policy to manifest via trace
+        def on_rerun_policy_changed(*args: Any) -> None:
+            """Save rerun policy to manifest when changed."""
+            if self.manifest_manager is None:
+                return
+            value = self._rerun_var.get()
+            save_nested_text_field(self.manifest_manager, "QAOptions", "RerunPolicy", value)
+        
+        self._rerun_var.trace_add("write", on_rerun_policy_changed)
 
     def _build_summary_panel(self) -> None:
         """Build the summary panel at the bottom."""
@@ -1291,8 +1373,56 @@ class QAStep(BaseStep):
 
         return "\n".join(lines)
 
+    def _load_validation_rules_from_manifest(self) -> None:
+        """Load validation rule states from manifest (TASK 25.2).
+        
+        Loads each validation rule's enabled state from the manifest
+        using the ValidationRules nested structure.
+        """
+        for binding in self._manifest_bindings:
+            if hasattr(binding, 'load_from_manifest'):
+                binding.load_from_manifest()  # type: ignore[attr-defined]
+        
+        # Sync the loaded values to the rule objects
+        rule_to_manifest_key = {
+            "Placeholder Preservation": "PlaceholderPreservation",
+            "Anchor Preservation": "AnchorPreservation",
+            "Japanese Character Detection": "JapaneseCharacterDetection",
+            "Speaker Format": "SpeakerFormat",
+            "Quote Balance": "QuoteBalance",
+            "Empty Translation": "EmptyTranslation",
+        }
+        
+        for rule in self._rules:
+            if rule.name in self._rule_vars:
+                rule.enabled = self._rule_vars[rule.name].get()
+        
+        logger.debug("Loaded %d validation rule states from manifest", len(self._manifest_bindings))
+    
+    def _load_qa_options_from_manifest(self) -> None:
+        """Load QA options from manifest (TASK 26.1).
+        
+        Loads RerunPolicy, MaxJapaneseChars, MaxLineLength from QAOptions.
+        """
+        if self.manifest_manager is None:
+            return
+        
+        # Load rerun policy (string field)
+        rerun_policy = load_nested_text_field(
+            self.manifest_manager, "QAOptions", "RerunPolicy", "FailedOnly"
+        )
+        self._rerun_var.set(rerun_policy)
+        
+        logger.debug("Loaded QA options from manifest")
+
     def on_enter(self) -> None:
         """Called when step becomes active."""
+        # TASK 25.2: Load validation rules from manifest
+        self._load_validation_rules_from_manifest()
+        
+        # TASK 26.1: Load QA options from manifest
+        self._load_qa_options_from_manifest()
+        
         if not self._lines:
             self._refresh_lines()
 

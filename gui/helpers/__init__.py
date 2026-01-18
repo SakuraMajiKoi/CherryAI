@@ -28,6 +28,25 @@ from CherryAI.gui.helpers.analysis_adapter import (
     analyze_lines,
 )
 
+from CherryAI.gui.helpers.manifest_binding import (
+    # Classes
+    BindingInfo,
+    # Registry functions (for testing)
+    clear_binding_registry,
+    get_binding_registry,
+    get_binding_for_field,
+    # Binding functions
+    bind_entry_to_field,
+    bind_checkbox_to_field,
+    bind_combobox_to_field,
+    bind_spinbox_to_field,
+    bind_text_to_field,
+    bind_radio_group_to_field,
+    bind_float_spinbox_to_field,
+    # Utility functions
+    load_all_bindings,
+)
+
 from CherryAI.gui.helpers.chunker_adapter import (
     # Constants
     DEFAULT_CHUNK_MODE,
@@ -275,4 +294,20 @@ __all__ = [
     "create_prompt_builder",
     "get_rolling_context_config",
     "format_rolling_context_section",
+    # Manifest binding - Classes
+    "BindingInfo",
+    # Manifest binding - Registry functions (testing)
+    "clear_binding_registry",
+    "get_binding_registry",
+    "get_binding_for_field",
+    # Manifest binding - Binding functions
+    "bind_entry_to_field",
+    "bind_checkbox_to_field",
+    "bind_combobox_to_field",
+    "bind_spinbox_to_field",
+    "bind_text_to_field",
+    "bind_radio_group_to_field",
+    "bind_float_spinbox_to_field",
+    # Manifest binding - Utility functions
+    "load_all_bindings",
 ]

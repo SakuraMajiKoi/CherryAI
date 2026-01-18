@@ -19,7 +19,7 @@ GUI CODE RULES:
 - Formats handlers manage all file I/O operations
 
 MODULE AWARENESS (Always check these when implementing features):
-- functions/    : 35 modules - core shared functionality (5 integrated with GUI)
+- functions/    : 37 modules - core shared functionality (5 integrated with GUI)
 - modi/         : 12 processing modes - pre/post-processing plugins (0 integrated!)
 - formats/      : 5 format handlers - file I/O for CSV, TXT, JSON, etc. (3 integrated)
 - gui/steps/    : 10 workflow tabs - display and user interaction only
@@ -57,7 +57,7 @@ TABLE OF CONTENTS
    2.3 prepro_ops Field - Pre-processing operation tracking
    2.4 Processor Class - Core text processing engine
 
-3. FUNCTIONS/ MODULES (35 files - Core Shared Logic)
+3. FUNCTIONS/ MODULES (36 files - Core Shared Logic)
    ✅ = Verified exists | ⚠️ = Needs documentation | 🔗 = GUI integrated
    
    3.1  analysis.py ✅ - File analysis, metrics, glossary extraction
@@ -91,9 +91,13 @@ TABLE OF CONTENTS
    3.29 retry_handler.py ✅ - Retry logic for API calls
    3.30 style_presets.py ✅ - Translation style presets
    3.31 validation.py ✅🔗 - Translation validation (Step 6)
-   3.34 wordwrap.py ✅🔗 - Word wrapping (Step 8)
+   3.32 wordwrap.py ✅🔗 - Word wrapping (Step 8)
+   3.33 ini_manager.py ✅ - INI path resolution and typed access (TASK 21.1)
+   3.34 manifest_manager.py ✅🔗 - Unified manifest state management (TASK 19)
+   3.35 manifest_fields.py ✅ - Manifest field type helpers (TASK 22.1) + special format helpers (TASK 22.2)
+   3.36 preset_manager.py ✅ - Preset save/load/delete operations (TASK 30.1)
    
-   3.35 glossaries/ (subfolder - 5 files)
+   3.37 glossaries/ (subfolder - 5 files)
         - __init__.py - Package exports
         - code_glossary_constants.py - Code pattern definitions
         - code_glossary_functions.py - Code detection/classification
@@ -151,7 +155,17 @@ TABLE OF CONTENTS
    
    6.6 gui/dialogs/ (2 files)
        - __init__.py - Dialog exports
-       - global_options.py - GlobalOptionsDialog
+       - global_options.py - GlobalOptionsDialog with section panels:
+         - OptionSection enum: API, REQUEST, CACHING, LOGGING, SESSION, SAFETY, FILE_IO, PROMPTS
+         - Settings dataclasses: APISettings, RequestSettings, CachingSettings, LoggingSettings,
+           SessionSettings, SafetySettings, FileIOSettings, PromptsSettings
+         - GlobalOptions container aggregates all settings
+         - Sections organized in CATEGORY_ORDER: Connection, Processing, Application
+         - TASK 33.2: PromptsSettings for Edit/TLC custom prompts
+           - edit_prompt: str - Custom prompt for Edit steps
+           - tlc_prompt: str - Custom prompt for TLC steps  
+           - Supports {source_lang} and {target_lang} placeholders
+           - Stored in [prompts] section of config/defaults.ini
    
    6.7 gui/helpers/ (4 files)
        - __init__.py - Helper exports
@@ -168,8 +182,31 @@ TABLE OF CONTENTS
        - Singleton pattern for global access
        - Dataclasses: ProjectInfo, StepStateData, ManifestState
        - Loads/saves extended manifest v3.0 format
+       - TASK 21.2: Creates manifests with ALL v3.0 fields from INI defaults
+       - _ensure_all_fields_present() upgrades v2.x manifests on load
+       - TASK 21.3: Settings helper methods for processing functions
+       - TASK 32.1: Absolute path storage:
+         - create_new() stores source_files with resolve() for absolute paths
+         - set_source_files() stores with resolve() for absolute paths
+
+   6.10 functions/ini_manager.py - INI Configuration (v3.0)
+       - Central INI path resolution relative to main module
+       - Typed access: get_str(), get_int(), get_float(), get_bool(), get_list()
+       - Manifest defaults: get_all_manifest_defaults(), get_manifest_default()
+       - TASK 21.4: Recent/Session management:
+         - get_last_manifest() / set_last_manifest() - Last used manifest path
+         - get_recent_manifests() / add_to_recent_manifests() - Recent list
+         - get_restore_on_launch() / set_restore_on_launch() - Auto-restore toggle
+       - TASK 31.2: User defaults management:
+         - get_initial_default() - Load from config/defaults.ini
+         - get_user_default() / set_user_default() / has_user_default() - User defaults in [user_defaults]
+         - get_effective_default() - Resolves user > initial > fallback chain
+         - save_as_user_defaults() - Save multiple values for a section
+         - get_all_user_defaults() / get_all_initial_defaults() - Get all for section
+         - clear_user_defaults() / restore_initial_defaults() - Reset to factory
+         - reload_defaults_cache() - Clear defaults.ini cache
    
-   6.10 gui/theme/ (3 files)
+   6.11 gui/theme/ (3 files)
        - __init__.py - Theme exports
        - colors.py - THEME, ColorPalette, ThemeMode
        - icons.py - Icons, STEP_ICONS
@@ -184,6 +221,65 @@ TABLE OF CONTENTS
        *Tab:* `tab_active`, `tab_inactive`, `tab_hover`
        *Button:* `btn_primary_bg`, `btn_primary_fg`, `btn_secondary_bg`, `btn_secondary_fg`, `btn_disabled_bg`, `btn_disabled_fg`
 
+   6.12 gui/helpers/manifest_binding.py - Widget-to-Manifest Binding (Phase 22-26)
+       - Automatic save/load binding between tkinter widgets and manifest fields
+       - **Binding Types:**
+         - bind_entry_to_field() - Text entries with StringVar
+         - bind_checkbox_to_field() - Boolean checkboxes with BooleanVar
+         - bind_combobox_to_field() - Dropdown selection with StringVar
+         - bind_spinbox_to_field() - Integer values with IntVar
+         - bind_text_to_field() - Multiline Text widgets (FocusOut save)
+         - bind_radio_group_to_field() - Radio button groups
+         - bind_float_spinbox_to_field() - Float values with DoubleVar
+       - **BindingInfo class:** Tracks save/load operations for testing
+       - **load_all_bindings():** Batch load all registered bindings
+       - **Phase 23 Integration:** InformationStep uses 11 bindings:
+         - ProjectName, Title, Genre (text entries)
+         - SourceLanguage, TargetLanguage (language comboboxes)
+         - Summary (multiline text)
+         - StylePreset, TonePreset (preset comboboxes)
+         - CustomStyle, CustomTone (custom text entries)
+         - Prompt (multiline text, renamed from Additional Notes)
+       - **Phase 24 Integration:** PreprocessingStep uses 7 bindings + special format helpers:
+         - Standard toggles: Deduplication, DeduplicationThreshold, EllipsisCompression,
+           SymbolConversion, ProtCompression, SpeakerNameReplacement, CodeSpacingRules
+         - Special formats: ProtectCodePatterns, CustomPlaceholders, AnchorRemoval
+       - **Phase 25 Integration:** EstimationStep and QAStep manifest bindings:
+         - Analysis results: InputLines, InputTokens, OutputTokens (int fields)
+         - ValidationRules nested: PlaceholderPreservation, AnchorPreservation,
+           JapaneseCharacterDetection, SpeakerFormat, QuoteBalance, EmptyTranslation
+       - **Phase 26 Integration:** QAStep and TranslationStep manifest bindings:
+         - QAOptions nested: RerunPolicy (text), MaxJapaneseChars (int), MaxLineLength (int)
+         - RequestOptions nested: Model (text), Temperature (float), LinesPerChunk (int),
+           RetryStrategy (text), MaxRetries (int), EnableRequestCaching (bool),
+           LineByLineMode (bool), ContextLines (int), Thinking (bool), ThinkingBudget (int)
+       - **Phase 27 Integration:** PostprocessingStep manifest bindings:
+         - PostProcessing nested (8 booleans): PlaceholderRecovery, BracketBalanceRecovery,
+           QuoteBalanceRecovery, WhitespaceNormalization, RestoreCodeCharacters,
+           RestoreLinebreaks, EnableSymbolConversion, FullwidthToHalfwidth
+         - PostProcessing.FailureHandling (text enum: "skip", "flag", "retry")
+       - **Phase 28 Integration:** WordwrapOverwriteStep manifest bindings:
+         - WordwrapSettings nested: Mode (text), Width (int), BreakChar (text),
+           MaxLines (int), PreventOrphans (bool), PreferPunctuationBreaks (bool),
+           SpeakerHandling (text), Typography (text)
+       - **Phase 28 Integration:** OutputInjectStep manifest bindings:
+         - OutputFormat nested: PreserveFolderStructure (bool), Format (text),
+           PairMode (text), Encoding (text), FileNaming (text: suffix/prefix/subfolder),
+           TextOption (text), OverwriteExistingFiles (bool), Backup (text),
+           BackupExtension (text), ExportManifestFile (bool), ExportProcessingLogs (bool),
+           ExportGlossaryEntries (bool)
+       - **Phase 29 Integration:** ManifestManager autosave system (TASK 29.1):
+         - Background thread with configurable interval (default 15s, clamped 5-300s)
+         - Only saves when `_dirty` flag is set
+         - Settings from INI: enabled, interval_seconds, save_on_close
+         - Auto-starts on create_new() and load(), stops on close()
+         - Properties: autosave_enabled, autosave_interval, save_on_close
+         - Methods: start_autosave(), stop_autosave()
+       - **Phase 29 Integration:** Save triggers (TASK 29.2):
+         - On close: App._on_close() calls ManifestManager.close()
+         - After file load: InputExtractionStep._save_manifest_after_file_load()
+         - Before translation: TranslationStep._save_manifest_before_translation()
+         - All save methods check is_loaded, have try/except, log success/failure
 
 7. CLI ARCHITECTURE
    7.1 Command Line Interface Structure (CLI.py)
@@ -320,7 +416,7 @@ CherryAI/
 │   │   └── table.py        SharedTable, ColumnDef, TableRow
 │   ├── dialogs/            Modal dialogs
 │   │   ├── __init__.py     Dialog exports
-│   │   └── global_options.py GlobalOptionsDialog, settings dataclasses
+│   │   └── global_options.py GlobalOptionsDialog, settings dataclasses (incl. PromptsSettings)
 │   ├── state/              Session state management
 │   │   ├── __init__.py
 │   │   └── store.py        SessionState, StepState, presets, undo/redo
@@ -450,11 +546,11 @@ MANIFEST v3.0 FORMAT (Implemented)
 Version 3.0 extends v2.0 with GUI state management for unified project persistence.
 All v2.0 per-line entry features are preserved.
 
-**Status:** IMPLEMENTED (3177 tests passing)
+**Status:** IMPLEMENTED (3269 tests passing)
 **Locations:** 
 - `functions/mainhelper.py` - LineEntry, Manifest (core)
 - `functions/manifest_manager.py` - ManifestManager, ProjectInfo, StepStateData (GUI)
-**Tests:** `dev/test_manifest_v2.py`, `dev/test_manifest_manager.py`
+**Tests:** `dev/test_manifest_v2.py`, `dev/test_manifest_state.py`, `dev/test_manifest_defaults.py`
 
 DESIGN DOCUMENT: See doc/MANIFEST_UPDATE_DESIGN.md for full specification.
 
@@ -528,6 +624,59 @@ class ManifestManager:
     
     def set_step_completed(self, step_name: str, completed: bool) -> None:
         """Mark step as completed/not completed."""
+    
+    # === Settings Access Methods (Task 21.3) ===
+    
+    def get_request_options(self) -> Dict[str, Any]:
+        """Get request settings for API client (Model, Temperature, etc.)."""
+    
+    def set_request_options(self, options: Dict[str, Any]) -> None:
+        """Update request options in manifest."""
+    
+    def get_preprocessing_options(self) -> Dict[str, Any]:
+        """Get preprocessing settings (Deduplication, EllipsisCompression, etc.)."""
+    
+    def set_preprocessing_options(self, options: Dict[str, Any]) -> None:
+        """Update preprocessing options in manifest."""
+    
+    def get_validation_rules(self) -> Dict[str, Any]:
+        """Get validation rules (PlaceholderPreservation, QuoteBalance, etc.)."""
+    
+    def set_validation_rules(self, rules: Dict[str, Any]) -> None:
+        """Update validation rules in manifest."""
+    
+    def get_qa_options(self) -> Dict[str, Any]:
+        """Get QA options (RerunPolicy, MaxJapaneseChars, etc.)."""
+    
+    def set_qa_options(self, options: Dict[str, Any]) -> None:
+        """Update QA options in manifest."""
+    
+    def get_postprocessing_options(self) -> Dict[str, Any]:
+        """Get postprocessing options (PlaceholderRecovery, FailureHandling, etc.)."""
+    
+    def set_postprocessing_options(self, options: Dict[str, Any]) -> None:
+        """Update postprocessing options in manifest."""
+    
+    def get_wordwrap_options(self) -> Dict[str, Any]:
+        """Get wordwrap settings (Mode, Width, BreakChar, etc.)."""
+    
+    def set_wordwrap_options(self, options: Dict[str, Any]) -> None:
+        """Update wordwrap options in manifest."""
+    
+    def get_output_options(self) -> Dict[str, Any]:
+        """Get output format options (Format, Encoding, FileNaming, etc.)."""
+    
+    def set_output_options(self, options: Dict[str, Any]) -> None:
+        """Update output options in manifest."""
+    
+    def get_estimation_data(self) -> Dict[str, Any]:
+        """Get estimation data (InputLines, InputTokens, OutputTokens)."""
+    
+    def set_estimation_data(self, data: Dict[str, Any]) -> None:
+        """Update estimation data in manifest."""
+    
+    def get_all_settings(self) -> Dict[str, Dict[str, Any]]:
+        """Get all settings grouped by category."""
 ```
 
 LINEENTRY DATACLASS (v2.0 Core)
@@ -543,6 +692,7 @@ class LineEntry:
     # Preprocessing (optional)
     prepro: Optional[str] = None      # Pre-processed text
     prepro_ops: Optional[List[Dict]] = None  # Operation metadata (NOT text)
+    edited_prepro: Optional[str] = None  # User-edited preprocessed (Task 33.1)
     
     # Translation chain (optional, sparse)
     tl: Optional[str] = None          # Translation result
@@ -631,8 +781,15 @@ class LineEntry:
     def get_input_for_translation(self) -> str:
         """Input for Translation API call.
         
-        Returns: prepro if exists, else orig
+        Returns: edited_prepro if exists, else prepro if exists, else orig
+        
+        Resolution order (Task 33.1):
+        1. edited_prepro (user-edited before translation)
+        2. prepro (automated preprocessing result)
+        3. orig (original text)
         """
+        if self.edited_prepro is not None:
+            return self.edited_prepro
         return self.prepro if self.prepro is not None else self.orig
     
     def get_input_for_tlc(self, pass_num: int) -> str:

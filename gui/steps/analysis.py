@@ -28,6 +28,12 @@ from CherryAI.gui.helpers.analysis_adapter import (
 from CherryAI.gui.steps.base import BaseStep
 from CherryAI.gui.theme.colors import THEME
 
+# TASK 25.1: Import manifest field helpers for saving analysis counts
+from CherryAI.functions.manifest_fields import (
+    save_int_field,
+    load_int_field,
+)
+
 if TYPE_CHECKING:
     from CherryAI.gui.state.store import SessionState
     from CherryAI.functions.manifest_manager import ManifestManager
@@ -426,6 +432,9 @@ class AnalysisStep(BaseStep):
 
         results = self._analysis_results
 
+        # TASK 25.1: Save line counts to manifest for use in estimation
+        self._save_line_counts_to_manifest(results)
+
         # Display summary stats
         stats = [
             ("Files Analyzed", results.get("file_count", 0)),
@@ -565,6 +574,34 @@ class AnalysisStep(BaseStep):
             True if results are available.
         """
         return bool(self._analysis_results)
+
+    def _save_line_counts_to_manifest(self, results: Dict[str, Any]) -> None:
+        """Save line count data to manifest (TASK 25.1).
+        
+        This saves the total_lines and unique_lines counts which are used
+        by the Estimation step for initial token estimation.
+        
+        Args:
+            results: Analysis results dictionary.
+        """
+        if self.manifest_manager is None:
+            logger.debug("No manifest manager, skipping line count save")
+            return
+        
+        total_lines = results.get("total_lines", 0)
+        unique_lines = results.get("unique_lines", 0)
+        empty_lines = results.get("empty_lines", 0)
+        duplicate_count = results.get("duplicate_count", 0)
+        
+        # Save to manifest - InputLines will store effective line count
+        # (total - empty, since empty lines are skipped in translation)
+        effective_lines = total_lines - empty_lines
+        save_int_field(self.manifest_manager, "InputLines", effective_lines)
+        
+        logger.debug(
+            "Saved line counts to manifest: total=%d, unique=%d, empty=%d, effective=%d",
+            total_lines, unique_lines, empty_lines, effective_lines
+        )
 
     def _deserialize_findings(self, findings: List[Any]) -> List[TableRow]:
         """Deserialize findings from session storage back to TableRow objects.

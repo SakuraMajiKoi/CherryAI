@@ -5,6 +5,9 @@ Provides toggles for deduplication, symbol conversion, ellipsis handling,
 placeholders, and speaker formatting with live preview and diff view.
 
 Updated: TASK 16.5 - Now uses modi/ modules via mode_adapter for preprocessing.
+TASK 24.1: Standard Mode Toggles bound to manifest.
+TASK 24.2: Protect Code Patterns bound to manifest.
+TASK 24.3: Custom Placeholders and Anchor Removal bound to manifest.
 """
 
 from __future__ import annotations
@@ -29,6 +32,23 @@ from CherryAI.gui.helpers.mode_adapter import (
     apply_custom_placeholder,
     apply_preprocessing,
     get_common_patterns,
+)
+
+# TASK 24.1: Import manifest binding helpers
+from CherryAI.gui.helpers.manifest_binding import (
+    BindingInfo,
+    bind_checkbox_to_field,
+    bind_spinbox_to_field,
+)
+
+# TASK 24.2/24.3: Import special format helpers for pattern lists
+from CherryAI.functions.manifest_fields import (
+    save_protect_code_patterns,
+    load_protect_code_patterns,
+    save_custom_placeholders,
+    load_custom_placeholders,
+    save_anchor_removal,
+    load_anchor_removal,
 )
 
 if TYPE_CHECKING:
@@ -134,6 +154,9 @@ class PreprocessingStep(BaseStep):
         self._config: Dict[str, Any] = dict(DEFAULT_PREPROCESS_CONFIG)
         self._preview_lines: List[Tuple[str, str, str]] = []  # (original, processed, diff)
         self._is_processing = False
+        
+        # TASK 24.1: Manifest bindings for standard rules
+        self._manifest_bindings: List[BindingInfo] = []
 
         # UI variables (created in _build_ui)
         self._dedup_var: Optional[tk.BooleanVar] = None
@@ -243,6 +266,8 @@ class PreprocessingStep(BaseStep):
 
     def _build_standard_rules(self, parent: ttk.Frame) -> None:
         """Build standard preprocessing rules section.
+        
+        TASK 24.1: All toggles bound to manifest for auto-save/load.
 
         Args:
             parent: Parent frame.
@@ -263,6 +288,18 @@ class PreprocessingStep(BaseStep):
         )
         dedup_cb.pack(side="left")
         self._add_tooltip(dedup_cb, RULE_TOOLTIPS["dedup"])
+        
+        # TASK 24.1: Bind to manifest
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=dedup_cb,
+                var=self._dedup_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="Deduplication",
+                default=True,
+                parent_key="Preprocessing",
+            )
+        )
 
         ttk.Label(dedup_frame, text="Threshold:").pack(side="left", padx=(20, 5))
         self._dedup_threshold_var = tk.IntVar(value=self._config["dedup_threshold"])
@@ -275,6 +312,20 @@ class PreprocessingStep(BaseStep):
             command=self._on_config_changed,
         )
         threshold_spin.pack(side="left")
+        
+        # TASK 24.1: Bind threshold to manifest
+        self._manifest_bindings.append(
+            bind_spinbox_to_field(
+                spinbox=threshold_spin,
+                var=self._dedup_threshold_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="DeduplicationThreshold",
+                default=1,
+                min_val=0,
+                max_val=10,
+                parent_key="Preprocessing",
+            )
+        )
 
         # Ellipsis
         ellipsis_frame = ttk.Frame(section)
@@ -289,6 +340,18 @@ class PreprocessingStep(BaseStep):
         )
         ellipsis_cb.pack(side="left")
         self._add_tooltip(ellipsis_cb, RULE_TOOLTIPS["ellipsis"])
+        
+        # TASK 24.1: Bind to manifest
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=ellipsis_cb,
+                var=self._ellipsis_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="EllipsisCompression",
+                default=True,
+                parent_key="Preprocessing",
+            )
+        )
 
         # Symbol Conversion
         symbol_frame = ttk.Frame(section)
@@ -303,6 +366,18 @@ class PreprocessingStep(BaseStep):
         )
         symbol_cb.pack(side="left")
         self._add_tooltip(symbol_cb, RULE_TOOLTIPS["symbol_conversion"])
+        
+        # TASK 24.1: Bind to manifest
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=symbol_cb,
+                var=self._symbol_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="SymbolConversion",
+                default=True,
+                parent_key="Preprocessing",
+            )
+        )
 
         # PROT Compression
         prot_frame = ttk.Frame(section)
@@ -317,6 +392,18 @@ class PreprocessingStep(BaseStep):
         )
         prot_cb.pack(side="left")
         self._add_tooltip(prot_cb, RULE_TOOLTIPS["prot_compression"])
+        
+        # TASK 24.1: Bind to manifest
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=prot_cb,
+                var=self._prot_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="ProtCompression",
+                default=True,
+                parent_key="Preprocessing",
+            )
+        )
 
         # Speaker Replacement
         speaker_frame = ttk.Frame(section)
@@ -331,6 +418,18 @@ class PreprocessingStep(BaseStep):
         )
         speaker_cb.pack(side="left")
         self._add_tooltip(speaker_cb, RULE_TOOLTIPS["speaker_replacement"])
+        
+        # TASK 24.1: Bind to manifest
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=speaker_cb,
+                var=self._speaker_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="SpeakerNameReplacement",
+                default=False,
+                parent_key="Preprocessing",
+            )
+        )
 
         # Code Spacing
         spacing_frame = ttk.Frame(section)
@@ -345,6 +444,18 @@ class PreprocessingStep(BaseStep):
         )
         spacing_cb.pack(side="left")
         self._add_tooltip(spacing_cb, RULE_TOOLTIPS["code_spacing"])
+        
+        # TASK 24.1: Bind to manifest
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=spacing_cb,
+                var=self._code_spacing_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="CodeSpacingRules",
+                default=False,
+                parent_key="Preprocessing",
+            )
+        )
 
     def _build_placeholder_section(self, parent: ttk.Frame) -> None:
         """Build custom placeholder rules section.
@@ -624,7 +735,10 @@ class PreprocessingStep(BaseStep):
         widget.bind("<Leave>", hide_tooltip)
 
     def _on_config_changed(self) -> None:
-        """Handle configuration change from UI controls."""
+        """Handle configuration change from UI controls.
+        
+        TASK 24.3: Also saves anchor removal to manifest.
+        """
         self._config["dedup_enabled"] = self._dedup_var.get() if self._dedup_var else True
         self._config["dedup_threshold"] = (
             self._dedup_threshold_var.get() if self._dedup_threshold_var else 1
@@ -648,6 +762,9 @@ class PreprocessingStep(BaseStep):
             self._config["anchor_content_pattern"] = self._anchor_pattern_var.get()
         if hasattr(self, "_anchor_spec_var"):
             self._config["anchor_spec"] = self._anchor_spec_var.get()
+
+        # TASK 24.3: Save anchor removal to manifest
+        self._save_anchor_removal_to_manifest()
 
         # Mark session as dirty
         self.session.set_dirty(True)
@@ -995,7 +1112,10 @@ class PreprocessingStep(BaseStep):
             )
 
     def _add_placeholder_rule(self) -> None:
-        """Add a new custom placeholder rule."""
+        """Add a new custom placeholder rule.
+        
+        TASK 24.3: Also saves to manifest.
+        """
         dialog = _RuleDialog(self, "Add Placeholder Rule", ["Pattern:", "Token:"])
         if dialog.result:
             pattern, token = dialog.result
@@ -1003,20 +1123,28 @@ class PreprocessingStep(BaseStep):
                 rule_str = f"{pattern} → {token or '__CUST__'}"
                 self._placeholder_listbox.insert(tk.END, rule_str)
                 self._config["placeholder_rules"].append({"pattern": pattern, "token": token})
+                self._save_custom_placeholders_to_manifest()
                 self.session.set_dirty(True)
 
     def _remove_placeholder_rule(self) -> None:
-        """Remove selected placeholder rule."""
+        """Remove selected placeholder rule.
+        
+        TASK 24.3: Also saves to manifest.
+        """
         selection = self._placeholder_listbox.curselection()
         if selection:
             idx = selection[0]
             self._placeholder_listbox.delete(idx)
             if idx < len(self._config["placeholder_rules"]):
                 del self._config["placeholder_rules"][idx]
+            self._save_custom_placeholders_to_manifest()
             self.session.set_dirty(True)
 
     def _edit_placeholder_rule(self) -> None:
-        """Edit selected placeholder rule."""
+        """Edit selected placeholder rule.
+        
+        TASK 24.3: Also saves to manifest.
+        """
         selection = self._placeholder_listbox.curselection()
         if not selection:
             return
@@ -1039,30 +1167,42 @@ class PreprocessingStep(BaseStep):
                 self._placeholder_listbox.delete(idx)
                 self._placeholder_listbox.insert(idx, rule_str)
                 self._config["placeholder_rules"][idx] = {"pattern": pattern, "token": token}
+                self._save_custom_placeholders_to_manifest()
                 self.session.set_dirty(True)
 
     def _add_protect_pattern(self) -> None:
-        """Add a new protect code pattern."""
+        """Add a new protect code pattern.
+        
+        TASK 24.2: Also saves to manifest.
+        """
         dialog = _RuleDialog(self, "Add Protect Pattern", ["Regex Pattern:"])
         if dialog.result:
             pattern = dialog.result[0]
             if pattern:
                 self._protect_listbox.insert(tk.END, pattern)
                 self._config["protect_code_patterns"].append(pattern)
+                self._save_protect_patterns_to_manifest()
                 self.session.set_dirty(True)
 
     def _remove_protect_pattern(self) -> None:
-        """Remove selected protect pattern."""
+        """Remove selected protect pattern.
+        
+        TASK 24.2: Also saves to manifest.
+        """
         selection = self._protect_listbox.curselection()
         if selection:
             idx = selection[0]
             self._protect_listbox.delete(idx)
             if idx < len(self._config["protect_code_patterns"]):
                 del self._config["protect_code_patterns"][idx]
+            self._save_protect_patterns_to_manifest()
             self.session.set_dirty(True)
 
     def _edit_protect_pattern(self) -> None:
-        """Edit selected protect pattern."""
+        """Edit selected protect pattern.
+        
+        TASK 24.2: Also saves to manifest.
+        """
         selection = self._protect_listbox.curselection()
         if not selection:
             return
@@ -1079,6 +1219,7 @@ class PreprocessingStep(BaseStep):
                 self._protect_listbox.delete(idx)
                 self._protect_listbox.insert(idx, new_pattern)
                 self._config["protect_code_patterns"][idx] = new_pattern
+                self._save_protect_patterns_to_manifest()
                 self.session.set_dirty(True)
 
     def _show_common_patterns(self) -> None:
@@ -1101,9 +1242,21 @@ class PreprocessingStep(BaseStep):
         """Called when entering this step.
         
         TASK 18.4: Ensures Input step files are restored before accessing them.
+        TASK 24.1: Loads manifest bindings for standard rules.
+        TASK 24.2: Loads protect code patterns from manifest.
         """
         # Ensure Input step has restored its files from session
         self._ensure_input_files_restored()
+        
+        # TASK 24.1: Load from manifest bindings
+        self._load_from_manifest_bindings()
+        
+        # TASK 24.2: Load protect patterns from manifest
+        self._load_protect_patterns_from_manifest()
+        
+        # TASK 24.3: Load custom placeholders and anchor removal from manifest
+        self._load_custom_placeholders_from_manifest()
+        self._load_anchor_removal_from_manifest()
         
         # Reload config from step data if available
         step_data = self.get_step_data()
@@ -1122,6 +1275,199 @@ class PreprocessingStep(BaseStep):
             self._protect_listbox.delete(0, tk.END)
             for pattern in self._config.get("protect_code_patterns", []):
                 self._protect_listbox.insert(tk.END, pattern)
+    
+    def _load_from_manifest_bindings(self) -> None:
+        """Load values from manifest into bound widgets.
+        
+        TASK 24.1: Loads standard rule toggles from manifest.
+        """
+        if not self.manifest_manager:
+            return
+        
+        if not self.manifest_manager.is_loaded():
+            return
+        
+        for binding in self._manifest_bindings:
+            if hasattr(binding, "load_from_manifest"):
+                binding.load_from_manifest()
+
+    def _save_protect_patterns_to_manifest(self) -> None:
+        """Save protect code patterns to manifest.
+        
+        TASK 24.2: Converts the simple string list to manifest format.
+        """
+        if not self.manifest_manager:
+            return
+        
+        # Convert simple strings to manifest format
+        patterns = self._config.get("protect_code_patterns", [])
+        manifest_patterns = [
+            {
+                "pattern": p,
+                "replacement": "__PROT__",
+                "is_regex": True,
+                "description": "",
+            }
+            for p in patterns
+        ]
+        
+        save_protect_code_patterns(self.manifest_manager, manifest_patterns)
+
+    def _load_protect_patterns_from_manifest(self) -> None:
+        """Load protect code patterns from manifest.
+        
+        TASK 24.2: Loads patterns from manifest format to config list.
+        """
+        if not self.manifest_manager:
+            return
+        
+        if not self.manifest_manager.is_loaded():
+            return
+        
+        # Load from manifest
+        manifest_patterns = load_protect_code_patterns(self.manifest_manager)
+        
+        # Convert to simple string list
+        patterns = [p.get("pattern", "") for p in manifest_patterns if p.get("pattern")]
+        
+        # Update config
+        self._config["protect_code_patterns"] = patterns
+        
+        # Update listbox
+        self._protect_listbox.delete(0, tk.END)
+        for pattern in patterns:
+            self._protect_listbox.insert(tk.END, pattern)
+
+    def _save_custom_placeholders_to_manifest(self) -> None:
+        """Save custom placeholder rules to manifest.
+        
+        TASK 24.3: Converts config format to manifest format.
+        """
+        if not self.manifest_manager:
+            return
+        
+        # Convert from config format {pattern, token} to manifest format
+        rules = self._config.get("placeholder_rules", [])
+        manifest_placeholders = [
+            {
+                "pattern": r.get("pattern", ""),
+                "placeholder": r.get("token", "__CUST__"),
+                "is_regex": False,  # Config format uses literal matches
+                "restore_after": True,
+            }
+            for r in rules
+        ]
+        
+        save_custom_placeholders(self.manifest_manager, manifest_placeholders)
+
+    def _load_custom_placeholders_from_manifest(self) -> None:
+        """Load custom placeholder rules from manifest.
+        
+        TASK 24.3: Loads placeholders from manifest format to config list.
+        """
+        if not self.manifest_manager:
+            return
+        
+        if not self.manifest_manager.is_loaded():
+            return
+        
+        # Load from manifest
+        manifest_placeholders = load_custom_placeholders(self.manifest_manager)
+        
+        # Convert to config format
+        rules = [
+            {"pattern": p.get("pattern", ""), "token": p.get("placeholder", "__CUST__")}
+            for p in manifest_placeholders
+            if p.get("pattern")
+        ]
+        
+        # Update config
+        self._config["placeholder_rules"] = rules
+        
+        # Update listbox
+        self._placeholder_listbox.delete(0, tk.END)
+        for rule in rules:
+            pattern = rule.get("pattern", "")
+            token = rule.get("token", "__CUST__")
+            self._placeholder_listbox.insert(tk.END, f"{pattern} → {token}")
+
+    def _save_anchor_removal_to_manifest(self) -> None:
+        """Save anchor removal settings to manifest.
+        
+        TASK 24.3: Saves anchor settings as a single-item list.
+        The spec is stored in the 'replacement' field since we're not using it.
+        """
+        if not self.manifest_manager:
+            return
+        
+        # Check if enabled
+        enabled = getattr(self, "_anchor_enabled_var", None)
+        if not enabled or not enabled.get():
+            # Save empty list if disabled
+            save_anchor_removal(self.manifest_manager, [])
+            return
+        
+        # Get current values
+        pattern = getattr(self, "_anchor_pattern_var", None)
+        spec = getattr(self, "_anchor_spec_var", None)
+        
+        pattern_val = pattern.get() if pattern else ""
+        spec_val = spec.get() if spec else ""
+        
+        # Only save if there's a pattern
+        if not pattern_val:
+            save_anchor_removal(self.manifest_manager, [])
+            return
+        
+        # Convert to manifest format
+        # Store spec in 'replacement' field since we're not using it for this purpose
+        manifest_anchors = [
+            {
+                "pattern": pattern_val,
+                "action": "remove",
+                "replacement": spec_val,  # Store spec here
+                "is_regex": True,
+            }
+        ]
+        
+        save_anchor_removal(self.manifest_manager, manifest_anchors)
+
+    def _load_anchor_removal_from_manifest(self) -> None:
+        """Load anchor removal settings from manifest.
+        
+        TASK 24.3: Loads anchor settings from manifest.
+        The spec is loaded from the 'replacement' field.
+        """
+        if not self.manifest_manager:
+            return
+        
+        if not self.manifest_manager.is_loaded():
+            return
+        
+        # Load from manifest
+        manifest_anchors = load_anchor_removal(self.manifest_manager)
+        
+        # Check if we have any anchors
+        if not manifest_anchors:
+            # Disable anchor removal
+            if hasattr(self, "_anchor_enabled_var"):
+                self._anchor_enabled_var.set(False)
+            return
+        
+        # Take the first anchor entry
+        anchor = manifest_anchors[0]
+        
+        # Update UI
+        if hasattr(self, "_anchor_enabled_var"):
+            self._anchor_enabled_var.set(True)
+        
+        if hasattr(self, "_anchor_pattern_var"):
+            self._anchor_pattern_var.set(anchor.get("pattern", ""))
+        
+        if hasattr(self, "_anchor_spec_var"):
+            # Spec is stored in 'replacement' field
+            spec = anchor.get("replacement", "line_start;line_end")
+            self._anchor_spec_var.set(spec)
 
     def _ensure_input_files_restored(self) -> None:
         """Ensure Input step has its files restored from session.

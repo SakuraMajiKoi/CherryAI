@@ -46,7 +46,7 @@ class LineEntry:
     only fields that are populated are serialized.
 
     Field Progression Order:
-        orig → prepro → tl → tlc1 → edit1 → tlc2 → edit2 → ... → postpro → wordwr → overwrite
+        orig → prepro → edited_prepro → tl → tlc1 → edit1 → tlc2 → edit2 → ... → postpro → wordwr → overwrite
 
     Special Fields (NEVER used as text input):
         - log: Error/warning messages for this line
@@ -62,6 +62,7 @@ class LineEntry:
     # Preprocessing (optional, sparse)
     prepro: Optional[str] = None  # Pre-processed text
     prepro_ops: Optional[List[Dict[str, Any]]] = None  # Operation metadata (NOT text)
+    edited_prepro: Optional[str] = None  # User-edited preprocessed text (Task 33.1)
 
     # Translation chain (optional, sparse)
     tl: Optional[str] = None  # Translation result
@@ -109,8 +110,15 @@ class LineEntry:
     def get_input_for_translation(self) -> str:
         """Input for Translation API call.
 
-        Returns: prepro if exists, else orig
+        Returns: edited_prepro if exists, else prepro if exists, else orig.
+        
+        Resolution order:
+        1. edited_prepro (user manually edited before translation)
+        2. prepro (automated preprocessing result)
+        3. orig (original text)
         """
+        if self.edited_prepro is not None:
+            return self.edited_prepro
         return self.prepro if self.prepro is not None else self.orig
 
     def get_input_for_tlc(self, pass_num: int) -> str:
@@ -317,6 +325,8 @@ class LineEntry:
             result["prepro"] = self.prepro
         if self.prepro_ops is not None:
             result["prepro_ops"] = self.prepro_ops
+        if self.edited_prepro is not None:
+            result["edited_prepro"] = self.edited_prepro
         if self.tl is not None:
             result["tl"] = self.tl
         if self.postpro is not None:
@@ -378,6 +388,7 @@ class LineEntry:
             orig=data.get("orig", ""),
             prepro=data.get("prepro"),
             prepro_ops=data.get("prepro_ops"),
+            edited_prepro=data.get("edited_prepro"),
             tl=data.get("tl"),
             postpro=data.get("postpro"),
             wordwr=data.get("wordwr"),

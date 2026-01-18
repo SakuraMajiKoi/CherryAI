@@ -654,6 +654,77 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - characters: Speaker database with gender and context
     - code_patterns: Protected code and custom placeholders
     - lines: Source and translated line content
+  - **Settings Flow to Processing Functions (Task 21.3):**
+    - Grouped settings access via ManifestManager helper methods
+    - `get_request_options()` - API settings (Model, Temperature, LinesPerChunk)
+    - `get_preprocessing_options()` - Deduplication, SymbolConversion, etc.
+    - `get_validation_rules()` - PlaceholderPreservation, QuoteBalance, etc.
+    - `get_qa_options()` - RerunPolicy, MaxJapaneseChars, MaxLineLength
+    - `get_postprocessing_options()` - Recovery and restoration settings
+    - `get_wordwrap_options()` - Width, BreakChar, Typography, etc.
+    - `get_output_options()` - Format, Encoding, FileNaming, etc.
+    - `get_estimation_data()` - InputLines, InputTokens, OutputTokens
+    - `get_all_settings()` - Returns all settings grouped by category
+    - All getters return deep copies (mutation-safe)
+    - All setters mark manifest dirty for auto-save
+  - **Manifest Field Type Helpers (Task 22.1):**
+    - Reusable save/load functions in `functions/manifest_fields.py`
+    - Text fields: `save_text_field()`, `load_text_field()` + nested variants
+    - Boolean fields: Handles "true"/"false"/"1"/"0" string normalization
+    - Integer fields: Bounds clamping (min/max), truncation from float
+    - Float fields: Bounds, precision rounding, validation
+    - Enum fields: Validates against option list, falls back to default
+    - List fields: Parses comma-separated strings, handles empty defaults
+    - Dict fields: Deep copy semantics for mutation safety
+    - All helpers mark manifest dirty on save, return defaults on missing
+  - **Special Format Helpers (Task 22.2):**
+    - Complex data structure helpers in `functions/manifest_fields.py`
+    - Character Notes: `save_character_notes()` / `load_character_notes()`
+      - Fields: name, original_name, gender, role, notes, speaking_style
+      - Supports CharacterInfo dataclass or plain dicts
+    - Code Glossary: `save_code_glossary()` / `load_code_glossary()`
+      - Fields: pattern, category, action (preserve/translate/remove), example, notes
+      - Supports CodePattern dataclass or plain dicts
+    - Protect Code Patterns: `save_protect_code_patterns()` / `load_protect_code_patterns()`
+      - Fields: pattern, replacement, is_regex, description
+    - Custom Placeholders: `save_custom_placeholders()` / `load_custom_placeholders()`
+      - Fields: pattern, placeholder, is_regex, restore_after
+    - Anchor Removal: `save_anchor_removal()` / `load_anchor_removal()`
+      - Fields: pattern, action (remove/preserve/replace), replacement, is_regex
+    - Glossary Entries: `save_glossary_entries()` / `load_glossary_entries()`
+      - Fields: source, target, category, context, notes
+      - Stored under glossary.project_entries in manifest
+  - **Widget-to-Manifest Binding (Phase 22-23):**
+    - Automatic two-way binding between GUI widgets and manifest fields
+    - `gui/helpers/manifest_binding.py` provides binding functions:
+      - `bind_entry_to_field()` - Text entries (auto-save on change via trace)
+      - `bind_checkbox_to_field()` - Boolean checkboxes
+      - `bind_combobox_to_field()` - Dropdown selections with validation
+      - `bind_spinbox_to_field()` - Integer values with min/max clamping
+      - `bind_text_to_field()` - Multiline Text widgets (saves on FocusOut)
+      - `bind_radio_group_to_field()` - Radio button groups
+      - `bind_float_spinbox_to_field()` - Float values with precision
+    - Each binding returns `BindingInfo` for tracking/testing
+    - `load_all_bindings()` for batch loading from manifest
+  - **Information Tab Manifest Integration (Phase 23):**
+    - All Information tab fields bound to manifest for persistence:
+      - **Basic Metadata (Task 23.1):** ProjectName, Title, Genre, SourceLanguage, TargetLanguage, Summary
+      - **Style and Tone (Task 23.2):** StylePreset, CustomStyle, TonePreset, CustomTone
+      - **Character Notes (Task 23.3):** Save/load via special format helpers
+      - **Code Glossary (Task 23.3):** Save/load via special format helpers
+      - **Prompt (Task 23.4):** Renamed from "Additional Notes", moved to left column
+    - Changes auto-save to manifest on widget interaction
+    - Values auto-load on step entry via `_load_from_manifest_bindings()`
+  - **Application Startup (Task 21.4):**
+    - On launch, reads last manifest path from INI [recent] section
+    - Auto-loads last project if restore_on_launch enabled (default)
+    - Shows WelcomeDialog if no last manifest or file missing:
+      - Resume: Load last project
+      - New Project: Start fresh with file loading
+      - Load Existing: Open project browser
+      - Start Fresh: Begin without loading project
+    - Saves last manifest path on app close for next launch
+    - Recent manifests list maintained (up to 10)
   - **Global vs Project Glossary**: Toggle in Information step to use global glossary.json or project-specific glossary stored in manifest
 - **Theme System (Phase 14):**
   - **Pastel Blue Theme (default):**
@@ -704,6 +775,12 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - Apply Rules button with threaded background processing
   - Auto-Suggest button leveraging analysis results
   - Tooltips explaining each rule's behavior
+  - **Manifest Integration (Phase 24):**
+    - All toggles persist to manifest: Deduplication, DeduplicationThreshold, EllipsisCompression,
+      SymbolConversion, ProtCompression, SpeakerNameReplacement, CodeSpacingRules
+    - Protect Code Patterns saved/loaded from manifest in ProtectCodePatterns format
+    - Custom Placeholders saved/loaded from manifest in CustomPlaceholders format
+    - Anchor Removal settings saved/loaded from manifest in AnchorRemoval format
 - **Estimation Tab (Phase 6):**
   - Token counting with tiktoken (cl100k_base) or heuristic fallback
   - Model selection dropdown with 9 supported models:
@@ -716,6 +793,10 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - Rate-limit time estimation (requests per minute calculation)
   - Chunk size input for request count calculation
   - Auto-refresh when switching from preprocessing step
+  - Output token estimation using 1.2x multiplier (JP→EN typical ratio)
+  - **Manifest Integration (Phase 25):**
+    - Analysis results saved: InputLines, InputTokens, OutputTokens
+    - Results loaded on step enter for session restoration
   - Output token estimation using 1.2x multiplier (JP→EN typical ratio)
 - **Translation Tab (Phase 7):**
   - TranslationStep class (step_id=5) with ~900 lines
@@ -735,6 +816,20 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Retry strategy: batch, contextual, isolated, skip
     - Max retries (1-10, default 3)
     - Request caching toggle
+    - **Edit Before Translation (Task 33.1):**
+      - Toggle to enable pre-translation editing
+      - Shows EditPreviewDialog modal when enabled
+      - Allows editing of preprocessed text before API call
+      - Stores edits in manifest `lines[].edited_prepro`
+      - Uses edited text in translation if available
+  - **Configurable Edit/TLC Prompts (Task 33.2):**
+    - Custom prompts accessible via Global Options dialog
+    - **Edit Step Prompt:** Configurable instructions for Edit passes
+    - **TLC Step Prompt:** Configurable instructions for TLC passes
+    - Placeholder support: {source_lang}, {target_lang}
+    - Reset to Default buttons for each prompt
+    - Stored in [prompts] section of config/defaults.ini (user preference)
+    - Default prompts provided out of the box
   - **Translation Progress Window (Modal):**
     - Progress bar with percentage display
     - ETA calculation based on translation rate
@@ -752,6 +847,12 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Automatic line refresh from preprocessing step
     - Session state persistence
     - Simulation mode when API unavailable
+  - **Manifest Integration (Phase 26):**
+    - RequestOptions nested structure with all request settings:
+      - Model, Temperature, LinesPerChunk, RetryStrategy
+      - MaxRetries, EnableRequestCaching, LineByLineMode
+      - ContextLines, Thinking, ThinkingBudget
+    - All options persist to manifest and load on step enter
 - **Quality Assurance Tab (Phase 8):**
   - QAStep class (step_id=6) with ~1100 lines
   - Lines table with QA status tracking:
@@ -767,6 +868,11 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
       5. Quote Balance (WARNING) - Check quote pairs balanced
       6. Empty Translation (ERROR) - Flag empty translations
     - Severity indicators: [ERROR], [WARNING], [INFO]
+  - **Manifest Integration (Phase 25-26):**
+    - ValidationRules nested: PlaceholderPreservation, AnchorPreservation,
+      JapaneseCharacterDetection, SpeakerFormat, QuoteBalance, EmptyTranslation
+    - QAOptions nested: RerunPolicy, MaxJapaneseChars, MaxLineLength
+    - All toggles persist to manifest and load on step enter
   - **Issue Types (IssueType enum):**
     - PLACEHOLDER_MISSING, PLACEHOLDER_EXTRA, PLACEHOLDER_MANGLED
     - ANCHOR_MISSING, ANCHOR_EXTRA
@@ -873,6 +979,14 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - PostprocessLine: idx, original, translated, postprocessed, issues
     - PostprocessOptions: all recovery toggles and failure policy
     - RecoveryStats: lines processed, issues recovered, recovery rate
+  - **Manifest Integration (Phase 27):**
+    - PostProcessing nested structure with all recovery settings:
+      - 8 boolean toggles: PlaceholderRecovery, BracketBalanceRecovery,
+        QuoteBalanceRecovery, WhitespaceNormalization, RestoreCodeCharacters,
+        RestoreLinebreaks, EnableSymbolConversion, FullwidthToHalfwidth
+      - FailureHandling enum: "skip", "flag", "retry"
+    - All options persist to manifest and load on step enter
+    - 35 tests in dev/test_postprocess_manifest.py
 - **Wordwrap & Overwrite Tab (Phase 10):**
   - WordwrapOverwriteStep class (step_id=8, ~950 lines)
   - Preview table with line length indicators:
@@ -946,6 +1060,13 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - OverwriteOptions: strategy, merge_method, backup_suffix
     - TypographyOptions: style, fullwidth/ideographic/quote settings
     - WrapStats: total_lines, lines_wrapped, lines_exceeding, avg_line_length
+  - **Manifest Integration (Phase 28):**
+    - WordwrapSettings nested structure with all wrap settings:
+      - Mode, Width, BreakChar, MaxLines
+      - PreventOrphans, PreferPunctuationBreaks
+      - SpeakerHandling, Typography
+    - All options persist to manifest and load on step enter
+    - 40 tests in dev/test_wordwrap_manifest.py
 - **Output & Injection Tab (Phase 11):**
   - OutputInjectStep class (step_id=9, ~1324 lines)
   - Preview table showing source→destination mapping:
@@ -1002,7 +1123,118 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - FORMAT_EXTENSIONS: File extension mapping (.txt, .csv, etc.)
     - PAIR_MODE_DESCRIPTIONS: Explanations for each pair mode
     - NAMING_EXAMPLES: Visual examples (input.txt → output.txt)
-- **Information Tab (Phase 12):**
+  - **Manifest Integration (Phase 28):**
+    - OutputFormat nested structure with all output settings:
+      - PreserveFolderStructure (bool), Format (text), PairMode (text)
+      - Encoding (text), FileNaming (text), TextOption (text)
+      - OverwriteExistingFiles (bool), Backup (text), BackupExtension (text)
+      - ExportManifestFile (bool), ExportProcessingLogs (bool), ExportGlossaryEntries (bool)
+    - All 12 options persist to manifest and load on step enter
+    - 45 tests in dev/test_output_manifest.py
+- **Autosave System (Phase 29, Task 29.1):**
+  - ManifestManager autosave with configurable interval
+  - **Configuration (from INI [autosave] section):**
+    - `enabled` (bool, default true) - Enable/disable autosave
+    - `interval_seconds` (int, default 15) - Autosave interval (clamped 5-300s)
+    - `save_on_close` (bool, default true) - Save when closing manifest
+  - **Autosave Thread:**
+    - Background daemon thread monitors dirty flag
+    - Only saves when manifest has unsaved changes
+    - Auto-starts on create_new() and load()
+    - Auto-stops on close()
+  - **Properties:**
+    - `autosave_enabled` - Enable/disable via property
+    - `autosave_interval` - Interval in seconds
+    - `save_on_close` - Save on close behavior
+  - **Methods:**
+    - `start_autosave()` - Start background thread
+    - `stop_autosave()` - Stop background thread
+  - 24 tests in dev/test_autosave.py
+- **Save Triggers (Phase 29, Task 29.2):**
+  - Ensure manifest saved at critical points
+  - **Save Trigger Locations:**
+    - **On close:** App._on_close() calls ManifestManager.close()
+    - **After file load:** InputExtractionStep._save_manifest_after_file_load()
+    - **Before translation:** TranslationStep._save_manifest_before_translation()
+  - **Implementation Details:**
+    - All save methods check is_loaded before saving
+    - All save methods have try/except for error handling
+    - Logs debug on success, warning on failure
+    - Docstrings reference TASK 29.2 for traceability
+  - 17 tests in dev/test_save_triggers.py
+- **Preset System (Phase 30, Task 30.1):**
+  - Save/load/delete operations for named presets
+  - **Supported Preset Types:**
+    - `style` - Translation style presets (Natural, Literal, etc.)
+    - `tone` - Writing tone presets (Neutral, Casual, Formal, etc.)
+    - `prompt` - System prompt presets
+  - **Storage:**
+    - Presets stored in `user/presets/` folder as JSON files
+    - `style_presets.json`, `tone_presets.json`, `prompt_presets.json`
+  - **PresetManager Class:**
+    - Singleton pattern with `get_instance()`
+    - `save_preset(type, name, content)` - Add/update preset
+    - `load_preset(type, name)` - Get preset content
+    - `delete_preset(type, name)` - Remove preset
+    - `get_presets(type)` - Get all presets
+    - `get_preset_names(type)` - Get preset names
+    - `preset_exists(type, name)` - Check existence
+  - **Features:**
+    - Default presets provided for each type
+    - Unicode and special character support
+    - Corrupted file recovery (returns defaults)
+    - File caching for performance
+  - 42 tests in dev/test_preset_manager.py
+- **GUI Preset Integration (Phase 30, Task 30.2):**
+  - PresetManager accessible from GUI components
+  - Preset types available: style, tone, prompt
+  - **GUI Methods:**
+    - `get_preset_names(type)` - Strings for Combobox values
+    - `load_preset(type, name)` - Populate text field content
+    - `save_preset(type, name, content)` - Save field content
+    - `delete_preset(type, name)` - Remove from list
+  - **Integration Points:**
+    - PresetManager singleton accessible from any step
+    - Default presets auto-loaded on first access
+    - Custom presets persisted to user/presets/ folder
+  - 21 tests in dev/test_preset_gui.py
+- **User Defaults Configuration (Phase 31, Task 31.2):**
+  - Allow users to customize defaults and reset to initial values
+  - **Storage:**
+    - Initial defaults: `config/defaults.ini` (factory, read-only reference)
+    - User defaults: `[user_defaults]` section in CherryAI.ini
+  - **ini_manager.py Functions:**
+    - `get_initial_default()` - Load from config/defaults.ini
+    - `get_user_default()` / `set_user_default()` / `has_user_default()` - User defaults
+    - `get_effective_default()` - Resolves user > initial > fallback chain
+    - `save_as_user_defaults()` - Save multiple values for a section
+    - `get_all_user_defaults()` / `get_all_initial_defaults()` - Get all for section
+    - `clear_user_defaults()` / `restore_initial_defaults()` - Reset to factory
+    - `reload_defaults_cache()` - Clear defaults.ini cache
+  - **Global Options Dialog Buttons:**
+    - "Save as Default" - Saves current settings as user defaults
+    - "Restore Initial Defaults" - Clears user defaults, reverts to factory
+  - **Override Chain:** User defaults > Initial defaults > Fallback value
+  - 45 tests in dev/test_defaults.py
+- **Path Handling (Phase 32, Task 32.1):**
+  - All file paths stored as absolute paths
+  - **Manifest Storage:**
+    - `create_new()` uses `resolve()` for source_files
+    - `set_source_files()` uses `resolve()` for absolute storage
+    - Paths remain absolute through save/load cycle
+  - **INI Storage:**
+    - `set_last_manifest()` uses `resolve()` for absolute path
+    - `add_to_recent_manifests()` stores absolute paths
+  - **Missing File Handling:**
+    - Files status: found, recoverable, missing
+    - File relocation dialog for missing files
+    - User can browse and select new location
+    - Relocated files tracked and used for loading
+  - **Display:**
+    - Paths stored absolute but displayed relative when appropriate
+    - Filename extraction for UI display
+  - 18 tests in dev/test_paths.py
+- **Information Tab (Phase 12):****
   - InformationStep class (step_id=2, ~1150 lines)
   - Project metadata management with LLM inference support
   - **Enums:**
@@ -1059,7 +1291,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - Centralized options accessible from Tools → Options menu
   - Modal dialog with navigation tree on left, content panels on right
   - **Enums:**
-    - OptionSection: API, REQUEST, CACHING, LOGGING, SESSION, SAFETY, FILE_IO (7 sections)
+    - OptionSection: API, REQUEST, CACHING, LOGGING, SESSION, SAFETY, FILE_IO, PROMPTS (8 sections)
     - OptionCategory: CONNECTION, PROCESSING, APPLICATION (3 categories)
     - LogLevel: DEBUG, INFO, WARNING, ERROR, CRITICAL
     - ThemeMode: LIGHT, DARK, SYSTEM
@@ -1073,6 +1305,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - SessionSettings: autosave_enabled, autosave_interval, theme, restore_on_launch, confirm_on_exit
     - SafetySettings: ban_tokens, content_warning_enabled, max_output_tokens
     - FileIOSettings: default_encoding, line_ending, preserve_bom, backup_originals
+    - PromptsSettings: edit_prompt, tlc_prompt (Task 33.2)
     - GlobalOptions: Container for all settings sections
   - **Helper Constants:**
     - SECTION_DESCRIPTIONS: User-friendly descriptions for each section
@@ -1120,6 +1353,16 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Line ending style dropdown
     - Preserve BOM toggle
     - Backup originals toggle
+  - **Prompts Section (Task 33.2):**
+    - OptionSection.PROMPTS in Processing category
+    - PromptsSettings dataclass with edit_prompt and tlc_prompt
+    - Edit Step Prompt: Multi-line text area for Edit pass instructions
+    - TLC Step Prompt: Multi-line text area for TLC pass instructions
+    - Placeholder support: {source_lang}, {target_lang} for language substitution
+    - Reset to Default button for each prompt
+    - Prompts stored in [prompts] section of config/defaults.ini
+    - User customizations saved via Save as Default
+    - Factory defaults restorable via Restore Initial Defaults
   - **Dialog Features:**
     - Navigation tree with expandable categories
     - OK/Apply/Cancel buttons

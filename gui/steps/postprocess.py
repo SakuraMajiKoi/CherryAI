@@ -18,6 +18,14 @@ from tkinter import ttk, messagebox, scrolledtext
 from CherryAI.gui.components.table import ColumnDef, SharedTable, TableRow
 from CherryAI.gui.steps.base import BaseStep
 from CherryAI.gui.theme.colors import THEME
+from CherryAI.gui.helpers.manifest_binding import (
+    BindingInfo,
+    bind_checkbox_to_field,
+)
+from CherryAI.functions.manifest_fields import (
+    save_nested_text_field,
+    load_nested_text_field,
+)
 try:
     # Explicit import of shared processing logic per architecture rules
     from CherryAI.functions.postprocess import (
@@ -250,6 +258,8 @@ class PostprocessingStep(BaseStep):
         self._stats = RecoveryStats()
         self._process_thread: Optional[threading.Thread] = None
         self._selected_line_idx: int = -1
+        # TASK 27.1: Manifest bindings for postprocessing options
+        self._manifest_bindings: List[BindingInfo] = []
         super().__init__(parent, session, manifest_manager=manifest_manager)
 
     def _build_ui(self) -> None:
@@ -420,7 +430,7 @@ class PostprocessingStep(BaseStep):
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
     def _build_options_panel(self, parent: ttk.Frame) -> None:
-        """Build recovery options panel."""
+        """Build recovery options panel with manifest bindings (TASK 27.1)."""
         frame = ttk.LabelFrame(parent, text="Recovery Options", padding=10)
         frame.pack(fill="x", padx=5, pady=5)
 
@@ -428,56 +438,129 @@ class PostprocessingStep(BaseStep):
         self._placeholder_var = tk.BooleanVar(
             value=self._pp_options.enable_placeholder_recovery
         )
-        ttk.Checkbutton(
+        placeholder_cb = ttk.Checkbutton(
             frame,
             text="Placeholder Recovery",
             variable=self._placeholder_var,
-        ).pack(anchor="w", pady=2)
+        )
+        placeholder_cb.pack(anchor="w", pady=2)
+        
+        # TASK 27.1: Bind to manifest
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=placeholder_cb,
+                var=self._placeholder_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="PlaceholderRecovery",
+                default=True,
+                parent_key="PostProcessing",
+            )
+        )
 
         self._bracket_var = tk.BooleanVar(
             value=self._pp_options.enable_bracket_recovery
         )
-        ttk.Checkbutton(
+        bracket_cb = ttk.Checkbutton(
             frame,
             text="Bracket Balance Recovery",
             variable=self._bracket_var,
-        ).pack(anchor="w", pady=2)
+        )
+        bracket_cb.pack(anchor="w", pady=2)
+        
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=bracket_cb,
+                var=self._bracket_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="BracketBalanceRecovery",
+                default=True,
+                parent_key="PostProcessing",
+            )
+        )
 
         self._quote_var = tk.BooleanVar(
             value=self._pp_options.enable_quote_recovery
         )
-        ttk.Checkbutton(
+        quote_cb = ttk.Checkbutton(
             frame,
             text="Quote Balance Recovery",
             variable=self._quote_var,
-        ).pack(anchor="w", pady=2)
+        )
+        quote_cb.pack(anchor="w", pady=2)
+        
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=quote_cb,
+                var=self._quote_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="QuoteBalanceRecovery",
+                default=True,
+                parent_key="PostProcessing",
+            )
+        )
 
         self._whitespace_var = tk.BooleanVar(
             value=self._pp_options.enable_whitespace_normalization
         )
-        ttk.Checkbutton(
+        whitespace_cb = ttk.Checkbutton(
             frame,
             text="Whitespace Normalization",
             variable=self._whitespace_var,
-        ).pack(anchor="w", pady=2)
+        )
+        whitespace_cb.pack(anchor="w", pady=2)
+        
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=whitespace_cb,
+                var=self._whitespace_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="WhitespaceNormalization",
+                default=True,
+                parent_key="PostProcessing",
+            )
+        )
 
         self._code_var = tk.BooleanVar(
             value=self._pp_options.restore_code_characters
         )
-        ttk.Checkbutton(
+        code_cb = ttk.Checkbutton(
             frame,
             text="Restore Code Characters",
             variable=self._code_var,
-        ).pack(anchor="w", pady=2)
+        )
+        code_cb.pack(anchor="w", pady=2)
+        
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=code_cb,
+                var=self._code_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="RestoreCodeCharacters",
+                default=True,
+                parent_key="PostProcessing",
+            )
+        )
 
         self._br_var = tk.BooleanVar(
             value=self._pp_options.restore_br_tags
         )
-        ttk.Checkbutton(
+        br_cb = ttk.Checkbutton(
             frame,
             text="Restore <br> Tags",
             variable=self._br_var,
-        ).pack(anchor="w", pady=2)
+        )
+        br_cb.pack(anchor="w", pady=2)
+        
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=br_cb,
+                var=self._br_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="RestoreLinebreaks",
+                default=True,
+                parent_key="PostProcessing",
+            )
+        )
 
         # Symbol conversion options
         ttk.Separator(frame, orient="horizontal").pack(fill="x", pady=5)
@@ -487,20 +570,44 @@ class PostprocessingStep(BaseStep):
         self._symbol_var = tk.BooleanVar(
             value=self._pp_options.enable_symbol_conversion
         )
-        ttk.Checkbutton(
+        symbol_cb = ttk.Checkbutton(
             frame,
             text="Enable Symbol Conversion",
             variable=self._symbol_var,
-        ).pack(anchor="w", pady=2, padx=10)
+        )
+        symbol_cb.pack(anchor="w", pady=2, padx=10)
+        
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=symbol_cb,
+                var=self._symbol_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="EnableSymbolConversion",
+                default=True,
+                parent_key="PostProcessing",
+            )
+        )
 
         self._fullwidth_var = tk.BooleanVar(
             value=self._pp_options.convert_fullwidth_to_halfwidth
         )
-        ttk.Checkbutton(
+        fullwidth_cb = ttk.Checkbutton(
             frame,
             text="Fullwidth → Halfwidth",
             variable=self._fullwidth_var,
-        ).pack(anchor="w", pady=2, padx=10)
+        )
+        fullwidth_cb.pack(anchor="w", pady=2, padx=10)
+        
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=fullwidth_cb,
+                var=self._fullwidth_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="FullwidthToHalfwidth",
+                default=True,
+                parent_key="PostProcessing",
+            )
+        )
 
         # Failure handling
         ttk.Separator(frame, orient="horizontal").pack(fill="x", pady=5)
@@ -508,6 +615,10 @@ class PostprocessingStep(BaseStep):
         ttk.Label(frame, text="Failure Handling:").pack(anchor="w")
 
         self._failure_var = tk.StringVar(value=self._pp_options.failure_policy.value)
+        
+        # TASK 27.1: Trace failure handling changes to manifest
+        self._failure_var.trace_add("write", self._save_failure_policy_to_manifest)
+        
         policies = [
             ("Skip (keep original)", "skip"),
             ("Flag for review", "flag"),
@@ -520,6 +631,40 @@ class PostprocessingStep(BaseStep):
                 variable=self._failure_var,
                 value=value,
             ).pack(anchor="w", padx=10)
+
+    def _save_failure_policy_to_manifest(self, *args: Any) -> None:
+        """Save failure policy to manifest when changed (TASK 27.1).
+        
+        Args:
+            *args: Trace callback arguments (ignored).
+        """
+        if self.manifest_manager is None:
+            return
+        value = self._failure_var.get()
+        save_nested_text_field(
+            self.manifest_manager, "PostProcessing", "FailureHandling", value
+        )
+        logger.debug("Failure policy saved to manifest: %s", value)
+
+    def _load_postprocessing_options_from_manifest(self) -> None:
+        """Load postprocessing options from manifest (TASK 27.1).
+        
+        Loads all checkbox states and failure handling policy from manifest.
+        """
+        if self.manifest_manager is None:
+            return
+        
+        # Load all checkbox bindings
+        for binding in self._manifest_bindings:
+            if hasattr(binding, "load_from_manifest"):
+                binding.load_from_manifest()
+        
+        # Load failure handling policy
+        value = load_nested_text_field(
+            self.manifest_manager, "PostProcessing", "FailureHandling", "skip"
+        )
+        self._failure_var.set(value)
+        logger.debug("Postprocessing options loaded from manifest")
 
     def _build_diff_panel(self, parent: ttk.Frame) -> None:
         """Build diff view panel."""
@@ -1154,6 +1299,9 @@ class PostprocessingStep(BaseStep):
 
     def on_enter(self) -> None:
         """Called when step becomes active."""
+        # TASK 27.1: Load postprocessing options from manifest
+        self._load_postprocessing_options_from_manifest()
+        
         if not self._lines:
             self._refresh_lines()
 

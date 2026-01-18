@@ -15,6 +15,7 @@ Save Triggers (automatic):
 - On step change (tab switch)
 - Before translation start
 - During translation (after each batch)
+- Autosave interval (TASK 29.1)
 
 No manual save buttons required.
 """
@@ -23,6 +24,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -209,11 +212,18 @@ class ManifestManager:
     This class replaces SessionState from gui/state/store.py.
     All state is stored in a single manifest file per project.
     
+    TASK 29.1: Added autosave functionality with configurable interval.
+    Autosave runs in a background thread and only saves when dirty flag is set.
+    
     Usage:
         manager = ManifestManager()
         manager.create_new("My Project", [Path("file.txt")])
         manager.set_step_data(3, {"metadata": {...}})
         manager.save()  # Called automatically on close/step change
+        
+        # Autosave (started automatically, can be disabled via INI)
+        manager.start_autosave()  # Manual start if needed
+        manager.stop_autosave()   # Manual stop if needed
     """
     
     def __init__(self) -> None:
@@ -224,8 +234,149 @@ class ManifestManager:
         self._change_listeners: List[Callable[[], None]] = []
         self._current_step: int = 0
         
+        # TASK 29.1: Autosave configuration
+        self._autosave_enabled: bool = True
+        self._autosave_interval: int = 15  # seconds
+        self._save_on_close: bool = True
+        self._autosave_thread: Optional[threading.Thread] = None
+        self._autosave_stop_event: threading.Event = threading.Event()
+        self._autosave_lock: threading.Lock = threading.Lock()
+        
+        # Load autosave settings from INI
+        self._load_autosave_settings()
+        
         # Ensure manifests directory exists
         MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
+    
+    def _load_autosave_settings(self) -> None:
+        """Load autosave settings from INI file."""
+        try:
+            from .ini_manager import get_default
+            
+            self._autosave_enabled = bool(
+                get_default("autosave", "enabled", True, bool)
+            )
+            self._autosave_interval = int(
+                get_default("autosave", "interval_seconds", 15, int) or 15
+            )
+            self._save_on_close = bool(
+                get_default("autosave", "save_on_close", True, bool)
+            )
+            
+            # Clamp interval to reasonable bounds (5-300 seconds)
+            self._autosave_interval = max(5, min(300, self._autosave_interval))
+            
+            logger.debug(
+                "Autosave settings: enabled=%s, interval=%ds, save_on_close=%s",
+                self._autosave_enabled,
+                self._autosave_interval,
+                self._save_on_close,
+            )
+        except Exception as e:
+            logger.warning("Failed to load autosave settings: %s", e)
+    
+    @property
+    def autosave_enabled(self) -> bool:
+        """Check if autosave is enabled."""
+        return self._autosave_enabled
+    
+    @autosave_enabled.setter
+    def autosave_enabled(self, value: bool) -> None:
+        """Enable or disable autosave."""
+        self._autosave_enabled = value
+        if value and self._autosave_thread is None:
+            self.start_autosave()
+        elif not value:
+            self.stop_autosave()
+    
+    @property
+    def autosave_interval(self) -> int:
+        """Get the autosave interval in seconds."""
+        return self._autosave_interval
+    
+    @autosave_interval.setter
+    def autosave_interval(self, value: int) -> None:
+        """Set the autosave interval in seconds."""
+        self._autosave_interval = max(5, min(300, value))
+    
+    @property
+    def save_on_close(self) -> bool:
+        """Check if save on close is enabled."""
+        return self._save_on_close
+    
+    @save_on_close.setter
+    def save_on_close(self, value: bool) -> None:
+        """Enable or disable save on close."""
+        self._save_on_close = value
+    
+    def start_autosave(self) -> None:
+        """Start the autosave background thread.
+        
+        The thread will periodically check the dirty flag and save if needed.
+        Safe to call multiple times - will not start duplicate threads.
+        """
+        if not self._autosave_enabled:
+            logger.debug("Autosave disabled, not starting thread")
+            return
+        
+        with self._autosave_lock:
+            if self._autosave_thread is not None and self._autosave_thread.is_alive():
+                logger.debug("Autosave thread already running")
+                return
+            
+            self._autosave_stop_event.clear()
+            self._autosave_thread = threading.Thread(
+                target=self._autosave_loop,
+                name="ManifestAutosave",
+                daemon=True,  # Thread dies when main thread exits
+            )
+            self._autosave_thread.start()
+            logger.info(
+                "Started autosave thread (interval=%ds)", self._autosave_interval
+            )
+    
+    def stop_autosave(self) -> None:
+        """Stop the autosave background thread.
+        
+        Signals the thread to stop and waits for it to finish.
+        Safe to call multiple times.
+        """
+        with self._autosave_lock:
+            if self._autosave_thread is None:
+                return
+            
+            self._autosave_stop_event.set()
+            
+            # Wait for thread to finish (with timeout)
+            if self._autosave_thread.is_alive():
+                self._autosave_thread.join(timeout=2.0)
+            
+            self._autosave_thread = None
+            logger.info("Stopped autosave thread")
+    
+    def _autosave_loop(self) -> None:
+        """Background thread loop for autosave.
+        
+        Runs until stop event is set. Checks dirty flag every interval
+        and saves if manifest has unsaved changes.
+        """
+        logger.debug("Autosave loop started")
+        
+        while not self._autosave_stop_event.is_set():
+            # Wait for interval or stop event
+            if self._autosave_stop_event.wait(timeout=self._autosave_interval):
+                # Stop event was set
+                break
+            
+            # Check if we have unsaved changes
+            if self._dirty and self._manifest_path is not None:
+                logger.debug("Autosave triggered (dirty=%s)", self._dirty)
+                try:
+                    self.save()
+                except Exception as e:
+                    logger.error("Autosave failed: %s", e)
+        
+        logger.debug("Autosave loop ended")
     
     @property
     def is_loaded(self) -> bool:
@@ -261,24 +412,290 @@ class ManifestManager:
         return self._dirty
     
     def _create_empty_manifest(self) -> Dict[str, Any]:
-        """Create an empty manifest structure."""
+        """Create an empty manifest structure with all v3.0 fields.
+        
+        TASK 21.2: Extended to include ALL fields needed by GUI and processing.
+        Uses defaults from INI file via ini_manager.
+        """
         now = datetime.utcnow().isoformat() + "Z"
+        defaults = self._get_manifest_defaults()
+        
         return {
+            # === Core Metadata ===
             "version": MANIFEST_VERSION,
-            "project_name": "",
             "created_at": now,
             "updated_at": now,
+            
+            # === Project Identity ===
+            "project_name": defaults.get("project_name", "Project1"),
             "source_files": [],
             "current_step": 0,
-            "project_info": ProjectInfo().to_dict(),
+            
+            # === v2.1 Processing Data (unchanged format) ===
+            "lines": [],
+            "operations": [],
+            "mappings": {},
+            "summary": "",
+            "metadata": {},
+            
+            # === v3.0 Project Settings ===
+            "project_info": self._create_project_info_defaults(defaults),
             "characters": [],
             "code_patterns": [],
             "step_state": {name: StepState(name=name).to_dict() for name in STEP_NAMES},
             "glossary": GlossaryConfig().to_dict(),
-            "lines": [],
-            "operations": [],
-            "mappings": {},
+            
+            # === v3.0 Preprocessing Options ===
+            "Deduplication": defaults.get("deduplication", True),
+            "DeduplicationThreshold": defaults.get("deduplication_threshold", 1),
+            "EllipsisCompression": defaults.get("ellipsis_compression", True),
+            "SymbolConversion": defaults.get("symbol_conversion", True),
+            "SpeakerNameReplacement": defaults.get("speaker_name_replacement", False),
+            "CodeSpacingRules": defaults.get("code_spacing_rules", True),
+            "ProtectCodePatterns": [],
+            "CustomPlaceholders": [],
+            "AnchorRemoval": [],
+            
+            # === v3.0 Estimation Data ===
+            "InputLines": 0,
+            "InputTokens": 0,
+            "OutputTokens": 0,
+            
+            # === v3.0 Validation Rules ===
+            "ValidationRules": {
+                "PlaceholderPreservation": defaults.get("validation_placeholder_preservation", True),
+                "AnchorPreservation": defaults.get("validation_anchor_preservation", True),
+                "JapaneseCharacterDetection": defaults.get("validation_japanese_character_detection", True),
+                "SpeakerFormat": defaults.get("validation_speaker_format", True),
+                "QuoteBalance": defaults.get("validation_quote_balance", True),
+                "EmptyTranslation": defaults.get("validation_empty_translation", True),
+            },
+            
+            # === v3.0 QA Options ===
+            "QAOptions": {
+                "RerunPolicy": defaults.get("qa_rerun_policy", "FailedOnly"),
+                "MaxJapaneseChars": defaults.get("qa_max_japanese_chars", 4),
+                "MaxLineLength": defaults.get("qa_max_line_length", 0),
+            },
+            
+            # === v3.0 Request Options (passed to API client) ===
+            "RequestOptions": {
+                "Model": "",  # Uses global API model by default
+                "Temperature": defaults.get("request_temperature", 0.2),
+                "LinesPerChunk": defaults.get("request_lines_per_chunk", 30),
+                "RetryStrategy": defaults.get("request_retry_strategy", "Batch"),
+                "MaxRetries": defaults.get("request_max_retries", 3),
+                "EnableRequestCaching": defaults.get("request_enable_caching", True),
+                "LineByLineMode": defaults.get("request_line_by_line_mode", False),
+                "Thinking": defaults.get("request_thinking", False),
+                "ThinkingBudget": defaults.get("request_thinking_budget", 1000),
+            },
+            
+            # === v3.0 Post Processing Options ===
+            "PostProcessing": {
+                "PlaceholderRecovery": defaults.get("post_placeholder_recovery", True),
+                "BracketBalanceRecovery": defaults.get("post_bracket_balance_recovery", True),
+                "QuoteBalanceRecovery": defaults.get("post_quote_balance_recovery", True),
+                "WhitespaceNormalization": defaults.get("post_whitespace_normalization", True),
+                "RestoreCodeCharacters": defaults.get("post_restore_code_characters", True),
+                "RestoreLinebreaks": defaults.get("post_restore_linebreaks", True),
+                "EnableSymbolConversion": defaults.get("post_enable_symbol_conversion", True),
+                "FullwidthToHalfwidth": defaults.get("post_fullwidth_to_halfwidth", True),
+                "FailureHandling": defaults.get("post_failure_handling", "FlagForReview"),
+            },
+            
+            # === v3.0 Wordwrap Settings ===
+            "WordwrapSettings": {
+                "Mode": defaults.get("wordwrap_mode", "Manual"),
+                "Width": defaults.get("wordwrap_width", 48),
+                "BreakChar": defaults.get("wordwrap_break_char", ""),
+                "MaxLines": defaults.get("wordwrap_max_lines", 4),
+                "PreventOrphans": defaults.get("wordwrap_prevent_orphans", True),
+                "PreferPunctuationBreaks": defaults.get("wordwrap_prefer_punctuation_breaks", True),
+                "SpeakerHandling": defaults.get("wordwrap_speaker_handling", "Sameline"),
+                "IgnorePatterns": self._parse_list_default(
+                    defaults.get("wordwrap_ignore_patterns", "Angle,Square,Curly,En")
+                ),
+                "Typography": defaults.get("wordwrap_typography", "Western"),
+            },
+            
+            # === v3.0 Output Format ===
+            "OutputFormat": {
+                "PreserveFolderStructure": defaults.get("output_preserve_folder_structure", True),
+                "Format": "",  # Auto-detect from input
+                "PairMode": defaults.get("output_pair_mode", "translated_only"),
+                "Encoding": "",  # Auto-detect
+                "FileNaming": defaults.get("output_file_naming", "PutInSubfolder"),
+                "TextOption": defaults.get("output_text_option", "translated"),
+                "OverwriteExistingFiles": defaults.get("output_overwrite_existing_files", False),
+                "Backup": defaults.get("output_backup", "Timestamp"),
+                "BackupExtension": defaults.get("output_backup_extension", ".bk"),
+                "ExportManifestFile": defaults.get("output_export_manifest_file", False),
+                "ExportProcessingLogs": defaults.get("output_export_processing_logs", False),
+                "ExportGlossaryEntries": defaults.get("output_export_glossary_entries", False),
+            },
         }
+    
+    def _get_manifest_defaults(self) -> Dict[str, Any]:
+        """Get manifest defaults from INI file.
+        
+        Returns:
+            Dictionary of default values for manifest fields.
+        """
+        try:
+            from . import ini_manager
+            return ini_manager.get_all_manifest_defaults()
+        except ImportError:
+            logger.warning("ini_manager not available, using builtin defaults")
+            return self._get_builtin_defaults()
+    
+    def _get_builtin_defaults(self) -> Dict[str, Any]:
+        """Get hardcoded defaults as fallback.
+        
+        Used when ini_manager is not available.
+        """
+        return {
+            "project_name": "Project1",
+            "title": "Title1",
+            "genre": "fictional, nonfictional",
+            "source_language": "Japanese",
+            "target_language": "English",
+            "summary": "[Summary of the Content]",
+            "style_preset": "neutral",
+            "tone_preset": "natural",
+            "deduplication": True,
+            "deduplication_threshold": 1,
+            "ellipsis_compression": True,
+            "symbol_conversion": True,
+            "speaker_name_replacement": False,
+            "code_spacing_rules": True,
+            "validation_placeholder_preservation": True,
+            "validation_anchor_preservation": True,
+            "validation_japanese_character_detection": True,
+            "validation_speaker_format": True,
+            "validation_quote_balance": True,
+            "validation_empty_translation": True,
+            "qa_rerun_policy": "FailedOnly",
+            "qa_max_japanese_chars": 4,
+            "qa_max_line_length": 0,
+            "request_temperature": 0.2,
+            "request_lines_per_chunk": 30,
+            "request_retry_strategy": "Batch",
+            "request_max_retries": 3,
+            "request_enable_caching": True,
+            "request_line_by_line_mode": False,
+            "request_thinking": False,
+            "request_thinking_budget": 1000,
+            "post_placeholder_recovery": True,
+            "post_bracket_balance_recovery": True,
+            "post_quote_balance_recovery": True,
+            "post_whitespace_normalization": True,
+            "post_restore_code_characters": True,
+            "post_restore_linebreaks": True,
+            "post_enable_symbol_conversion": True,
+            "post_fullwidth_to_halfwidth": True,
+            "post_failure_handling": "FlagForReview",
+            "wordwrap_mode": "Manual",
+            "wordwrap_width": 48,
+            "wordwrap_break_char": "",
+            "wordwrap_max_lines": 4,
+            "wordwrap_prevent_orphans": True,
+            "wordwrap_prefer_punctuation_breaks": True,
+            "wordwrap_speaker_handling": "Sameline",
+            "wordwrap_ignore_patterns": "Angle,Square,Curly,En",
+            "wordwrap_typography": "Western",
+            "output_preserve_folder_structure": True,
+            "output_pair_mode": "translated_only",
+            "output_file_naming": "PutInSubfolder",
+            "output_text_option": "translated",
+            "output_overwrite_existing_files": False,
+            "output_backup": "Timestamp",
+            "output_backup_extension": ".bk",
+            "output_export_manifest_file": False,
+            "output_export_processing_logs": False,
+            "output_export_glossary_entries": False,
+        }
+    
+    def _create_project_info_defaults(self, defaults: Dict[str, Any]) -> Dict[str, Any]:
+        """Create project_info dict with defaults.
+        
+        Args:
+            defaults: Dictionary of default values from INI.
+            
+        Returns:
+            project_info dictionary with all fields.
+        """
+        return {
+            "project_name": defaults.get("project_name", "Project1"),
+            "game_title": defaults.get("title", "Title1"),
+            "source_language": defaults.get("source_language", "Japanese"),
+            "target_language": defaults.get("target_language", "English"),
+            "genre": defaults.get("genre", "fictional, nonfictional"),
+            "summary": defaults.get("summary", "[Summary of the Content]"),
+            "style_preset": defaults.get("style_preset", "neutral"),
+            "custom_style": "",
+            "tone_preset": defaults.get("tone_preset", "natural"),
+            "custom_tone": "",
+            "custom_notes": "",
+        }
+    
+    def _parse_list_default(self, value: Any) -> list:
+        """Parse a comma-separated string into a list.
+        
+        Args:
+            value: String like "A,B,C" or already a list.
+            
+        Returns:
+            List of strings.
+        """
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str) and value:
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return []
+    
+    def _ensure_all_fields_present(self) -> None:
+        """Ensure all v3.0 fields are present in loaded manifest.
+        
+        TASK 21.2: Called after load() to add missing fields with defaults.
+        This ensures old manifests get upgraded to v3.0 field set.
+        """
+        defaults = self._get_manifest_defaults()
+        empty = self._create_empty_manifest()
+        
+        # Add missing top-level fields
+        for key, default_value in empty.items():
+            if key not in self._manifest_data:
+                self._manifest_data[key] = default_value
+                logger.debug("Added missing field: %s", key)
+        
+        # Ensure nested objects have all fields
+        self._ensure_nested_fields("ValidationRules", empty.get("ValidationRules", {}))
+        self._ensure_nested_fields("QAOptions", empty.get("QAOptions", {}))
+        self._ensure_nested_fields("RequestOptions", empty.get("RequestOptions", {}))
+        self._ensure_nested_fields("PostProcessing", empty.get("PostProcessing", {}))
+        self._ensure_nested_fields("WordwrapSettings", empty.get("WordwrapSettings", {}))
+        self._ensure_nested_fields("OutputFormat", empty.get("OutputFormat", {}))
+    
+    def _ensure_nested_fields(self, parent_key: str, defaults: Dict[str, Any]) -> None:
+        """Ensure nested dict has all required fields.
+        
+        Args:
+            parent_key: Key of the nested dict in manifest.
+            defaults: Default values for the nested dict.
+        """
+        if parent_key not in self._manifest_data:
+            self._manifest_data[parent_key] = defaults
+            return
+        
+        if not isinstance(self._manifest_data[parent_key], dict):
+            self._manifest_data[parent_key] = defaults
+            return
+        
+        for key, value in defaults.items():
+            if key not in self._manifest_data[parent_key]:
+                self._manifest_data[parent_key][key] = value
+                logger.debug("Added missing nested field: %s.%s", parent_key, key)
     
     def _mark_dirty(self) -> None:
         """Mark the manifest as having unsaved changes."""
@@ -314,6 +731,8 @@ class ManifestManager:
             
         Returns:
             Path to the created manifest file
+            
+        TASK 29.1: Starts autosave thread after creation.
         """
         # Sanitize project name for filename
         safe_name = "".join(c for c in project_name if c.isalnum() or c in " -_").strip()
@@ -332,7 +751,8 @@ class ManifestManager:
         # Initialize manifest data
         self._manifest_data = self._create_empty_manifest()
         self._manifest_data["project_name"] = project_name
-        self._manifest_data["source_files"] = [str(p) for p in source_files]
+        # Store source files as absolute paths (TASK 32.1)
+        self._manifest_data["source_files"] = [str(p.resolve()) for p in source_files]
         
         # Initialize lines from source files
         self._initialize_lines_from_files(source_files)
@@ -340,6 +760,9 @@ class ManifestManager:
         self._dirty = True
         self._current_step = 0
         self.save()
+        
+        # Start autosave thread
+        self.start_autosave()
         
         logger.info("Created new manifest: %s", self._manifest_path)
         return self._manifest_path
@@ -372,6 +795,8 @@ class ManifestManager:
             
         Returns:
             True if loaded successfully
+            
+        TASK 29.1: Starts autosave thread after loading.
         """
         try:
             with open(manifest_path, "r", encoding="utf-8") as f:
@@ -382,8 +807,15 @@ class ManifestManager:
             
             self._manifest_path = manifest_path
             self._manifest_data = data
+            
+            # Ensure all v3.0 fields are present (backward compatibility)
+            self._ensure_all_fields_present()
+            
             self._current_step = data.get("current_step", 0)
             self._dirty = False
+            
+            # Start autosave thread
+            self.start_autosave()
             
             logger.info("Loaded manifest: %s (v%s)", manifest_path, data.get("version", "?"))
             return True
@@ -522,9 +954,17 @@ class ManifestManager:
             return False
     
     def close(self) -> None:
-        """Close the current manifest (saves if dirty)."""
-        if self._dirty:
+        """Close the current manifest.
+        
+        TASK 29.1: Respects save_on_close setting and stops autosave thread.
+        """
+        # Stop autosave thread first
+        self.stop_autosave()
+        
+        # Save if dirty and save_on_close is enabled
+        if self._dirty and self._save_on_close:
             self.save()
+        
         self._manifest_path = None
         self._manifest_data = self._create_empty_manifest()
         self._dirty = False
@@ -765,8 +1205,12 @@ class ManifestManager:
         return [Path(p) for p in self._manifest_data.get("source_files", [])]
     
     def set_source_files(self, files: List[Path]) -> None:
-        """Set source file paths."""
-        self._manifest_data["source_files"] = [str(p) for p in files]
+        """Set source file paths.
+        
+        Stores as absolute paths (TASK 32.1).
+        """
+        # Store as absolute paths
+        self._manifest_data["source_files"] = [str(p.resolve()) for p in files]
         self._mark_dirty()
     
     # ========================== Integration with mainhelper Manifest ========================== #
@@ -851,6 +1295,262 @@ class ManifestManager:
             manifest.origin_file = source_files[0]
         
         return manifest
+    
+    # ========================== Settings Access (TASK 21.3) ========================== #
+    
+    def get_request_options(self) -> Dict[str, Any]:
+        """Get request options for API client.
+        
+        Returns settings in format expected by api_client functions:
+        - Model: Model name/identifier
+        - Temperature: Sampling temperature
+        - LinesPerChunk: Lines per translation chunk
+        - RetryStrategy: How to handle failures
+        - MaxRetries: Maximum retry attempts
+        - EnableRequestCaching: Cache responses
+        - LineByLineMode: Translate line by line
+        - Thinking: Enable thinking mode
+        - ThinkingBudget: Token budget for thinking
+        """
+        return deepcopy(self._manifest_data.get("RequestOptions", {
+            "Model": "",
+            "Temperature": 0.2,
+            "LinesPerChunk": 30,
+            "RetryStrategy": "Batch",
+            "MaxRetries": 3,
+            "EnableRequestCaching": True,
+            "LineByLineMode": False,
+            "Thinking": False,
+            "ThinkingBudget": 1000,
+        }))
+    
+    def set_request_options(self, options: Dict[str, Any]) -> None:
+        """Set request options."""
+        self._manifest_data["RequestOptions"] = options
+        self._mark_dirty()
+    
+    def get_preprocessing_options(self) -> Dict[str, Any]:
+        """Get preprocessing options for preprocess step.
+        
+        Returns flat dict of preprocessing settings:
+        - Deduplication: Enable deduplication
+        - DeduplicationThreshold: Similarity threshold
+        - EllipsisCompression: Compress ellipsis
+        - SymbolConversion: Convert symbols
+        - SpeakerNameReplacement: Replace speaker names
+        - CodeSpacingRules: Apply code spacing
+        - ProtectCodePatterns: Patterns to protect
+        - CustomPlaceholders: Custom placeholder patterns
+        - AnchorRemoval: Anchors to remove
+        """
+        return {
+            "Deduplication": self._manifest_data.get("Deduplication", True),
+            "DeduplicationThreshold": self._manifest_data.get("DeduplicationThreshold", 1),
+            "EllipsisCompression": self._manifest_data.get("EllipsisCompression", True),
+            "SymbolConversion": self._manifest_data.get("SymbolConversion", True),
+            "SpeakerNameReplacement": self._manifest_data.get("SpeakerNameReplacement", False),
+            "CodeSpacingRules": self._manifest_data.get("CodeSpacingRules", True),
+            "ProtectCodePatterns": self._manifest_data.get("ProtectCodePatterns", []),
+            "CustomPlaceholders": self._manifest_data.get("CustomPlaceholders", []),
+            "AnchorRemoval": self._manifest_data.get("AnchorRemoval", []),
+        }
+    
+    def set_preprocessing_options(self, options: Dict[str, Any]) -> None:
+        """Set preprocessing options."""
+        for key, value in options.items():
+            if key in ("Deduplication", "DeduplicationThreshold", "EllipsisCompression",
+                      "SymbolConversion", "SpeakerNameReplacement", "CodeSpacingRules",
+                      "ProtectCodePatterns", "CustomPlaceholders", "AnchorRemoval"):
+                self._manifest_data[key] = value
+        self._mark_dirty()
+    
+    def get_validation_rules(self) -> Dict[str, Any]:
+        """Get validation rules for QA step.
+        
+        Returns settings for translation validation:
+        - PlaceholderPreservation: Check placeholder preservation
+        - AnchorPreservation: Check anchor preservation
+        - JapaneseCharacterDetection: Detect remaining Japanese
+        - SpeakerFormat: Validate speaker format
+        - QuoteBalance: Check quote balance
+        - EmptyTranslation: Flag empty translations
+        """
+        return deepcopy(self._manifest_data.get("ValidationRules", {
+            "PlaceholderPreservation": True,
+            "AnchorPreservation": True,
+            "JapaneseCharacterDetection": True,
+            "SpeakerFormat": True,
+            "QuoteBalance": True,
+            "EmptyTranslation": True,
+        }))
+    
+    def set_validation_rules(self, rules: Dict[str, Any]) -> None:
+        """Set validation rules."""
+        self._manifest_data["ValidationRules"] = rules
+        self._mark_dirty()
+    
+    def get_qa_options(self) -> Dict[str, Any]:
+        """Get QA options for quality assurance step.
+        
+        Returns QA configuration:
+        - RerunPolicy: Which lines to rerun
+        - MaxJapaneseChars: Max allowed Japanese characters
+        - MaxLineLength: Max line length (0 = unlimited)
+        """
+        return deepcopy(self._manifest_data.get("QAOptions", {
+            "RerunPolicy": "FailedOnly",
+            "MaxJapaneseChars": 4,
+            "MaxLineLength": 0,
+        }))
+    
+    def set_qa_options(self, options: Dict[str, Any]) -> None:
+        """Set QA options."""
+        self._manifest_data["QAOptions"] = options
+        self._mark_dirty()
+    
+    def get_postprocessing_options(self) -> Dict[str, Any]:
+        """Get post-processing options.
+        
+        Returns settings for translation cleanup:
+        - PlaceholderRecovery: Recover lost placeholders
+        - BracketBalanceRecovery: Fix bracket balance
+        - QuoteBalanceRecovery: Fix quote balance
+        - WhitespaceNormalization: Normalize whitespace
+        - RestoreCodeCharacters: Restore code characters
+        - RestoreLinebreaks: Restore linebreaks
+        - EnableSymbolConversion: Convert symbols back
+        - FullwidthToHalfwidth: Convert fullwidth to halfwidth
+        - FailureHandling: How to handle failures
+        """
+        return deepcopy(self._manifest_data.get("PostProcessing", {
+            "PlaceholderRecovery": True,
+            "BracketBalanceRecovery": True,
+            "QuoteBalanceRecovery": True,
+            "WhitespaceNormalization": True,
+            "RestoreCodeCharacters": True,
+            "RestoreLinebreaks": True,
+            "EnableSymbolConversion": True,
+            "FullwidthToHalfwidth": True,
+            "FailureHandling": "FlagForReview",
+        }))
+    
+    def set_postprocessing_options(self, options: Dict[str, Any]) -> None:
+        """Set post-processing options."""
+        self._manifest_data["PostProcessing"] = options
+        self._mark_dirty()
+    
+    def get_wordwrap_options(self) -> Dict[str, Any]:
+        """Get wordwrap settings for wordwrap step.
+        
+        Returns wordwrap configuration:
+        - Mode: Wrap mode (Manual, Auto, Off)
+        - Width: Line width in characters
+        - BreakChar: Character to use for line breaks
+        - MaxLines: Maximum lines per text block
+        - PreventOrphans: Prevent orphan words
+        - PreferPunctuationBreaks: Break at punctuation
+        - SpeakerHandling: How to handle speaker names
+        - IgnorePatterns: Patterns to skip wrapping
+        - Typography: Typography style (Western, Japanese)
+        """
+        return deepcopy(self._manifest_data.get("WordwrapSettings", {
+            "Mode": "Manual",
+            "Width": 48,
+            "BreakChar": "",
+            "MaxLines": 4,
+            "PreventOrphans": True,
+            "PreferPunctuationBreaks": True,
+            "SpeakerHandling": "Sameline",
+            "IgnorePatterns": [],
+            "Typography": "Western",
+        }))
+    
+    def set_wordwrap_options(self, options: Dict[str, Any]) -> None:
+        """Set wordwrap options."""
+        self._manifest_data["WordwrapSettings"] = options
+        self._mark_dirty()
+    
+    def get_output_options(self) -> Dict[str, Any]:
+        """Get output format options.
+        
+        Returns output configuration:
+        - PreserveFolderStructure: Keep folder structure
+        - Format: Output format (auto-detect if empty)
+        - PairMode: How to output pairs
+        - Encoding: Output encoding (auto-detect if empty)
+        - FileNaming: File naming convention
+        - TextOption: Text output option
+        - OverwriteExistingFiles: Overwrite existing
+        - Backup: Backup strategy
+        - BackupExtension: Backup file extension
+        - ExportManifestFile: Export manifest
+        - ExportProcessingLogs: Export logs
+        - ExportGlossaryEntries: Export glossary
+        """
+        return deepcopy(self._manifest_data.get("OutputFormat", {
+            "PreserveFolderStructure": True,
+            "Format": "",
+            "PairMode": "translated_only",
+            "Encoding": "",
+            "FileNaming": "PutInSubfolder",
+            "TextOption": "translated",
+            "OverwriteExistingFiles": False,
+            "Backup": "Timestamp",
+            "BackupExtension": ".bk",
+            "ExportManifestFile": False,
+            "ExportProcessingLogs": False,
+            "ExportGlossaryEntries": False,
+        }))
+    
+    def set_output_options(self, options: Dict[str, Any]) -> None:
+        """Set output options."""
+        self._manifest_data["OutputFormat"] = options
+        self._mark_dirty()
+    
+    def get_estimation_data(self) -> Dict[str, int]:
+        """Get estimation data.
+        
+        Returns token/line estimates:
+        - InputLines: Number of input lines
+        - InputTokens: Estimated input tokens
+        - OutputTokens: Estimated output tokens
+        """
+        return {
+            "InputLines": self._manifest_data.get("InputLines", 0),
+            "InputTokens": self._manifest_data.get("InputTokens", 0),
+            "OutputTokens": self._manifest_data.get("OutputTokens", 0),
+        }
+    
+    def set_estimation_data(self, data: Dict[str, int]) -> None:
+        """Set estimation data."""
+        if "InputLines" in data:
+            self._manifest_data["InputLines"] = data["InputLines"]
+        if "InputTokens" in data:
+            self._manifest_data["InputTokens"] = data["InputTokens"]
+        if "OutputTokens" in data:
+            self._manifest_data["OutputTokens"] = data["OutputTokens"]
+        self._mark_dirty()
+    
+    def get_all_settings(self) -> Dict[str, Any]:
+        """Get all v3.0 settings as a single dict.
+        
+        This is useful for passing complete settings to functions
+        or for displaying all settings in a UI.
+        
+        Returns:
+            Dict containing all processing settings grouped by category.
+        """
+        return {
+            "project_info": deepcopy(self._manifest_data.get("project_info", {})),
+            "preprocessing": self.get_preprocessing_options(),
+            "request": self.get_request_options(),
+            "validation": self.get_validation_rules(),
+            "qa": self.get_qa_options(),
+            "postprocessing": self.get_postprocessing_options(),
+            "wordwrap": self.get_wordwrap_options(),
+            "output": self.get_output_options(),
+            "estimation": self.get_estimation_data(),
+        }
     
     # ========================== Raw Access ========================== #
     

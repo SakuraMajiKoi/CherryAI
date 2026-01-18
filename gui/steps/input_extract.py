@@ -377,11 +377,28 @@ class InputExtractionStep(BaseStep):
             # TASK 19 Phase 5: Create project if no manifest loaded
             self._ensure_project_created()
             
+            # TASK 29.2: Save manifest after file load
+            self._save_manifest_after_file_load()
+            
             # Trigger auto-analysis if enabled
             self._trigger_auto_analysis()
             
             # Trigger auto-preprocessing if enabled (runs after analysis)
             self._trigger_auto_preprocessing()
+
+    def _save_manifest_after_file_load(self) -> None:
+        """Save manifest after files are loaded (TASK 29.2).
+        
+        Ensures the manifest is saved to disk after file load operations
+        to prevent data loss if the application crashes.
+        """
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            try:
+                if mgr.save():
+                    logger.debug("Manifest saved after file load")
+            except Exception as e:
+                logger.warning("Failed to save manifest after file load: %s", e)
 
     def _ensure_project_created(self) -> None:
         """Ensure a project is created for loaded files (TASK 19 Phase 5).
@@ -853,14 +870,36 @@ class InputExtractionStep(BaseStep):
             )
         
         if missing_files:
+            # TASK 32.1: Offer option to relocate missing files
             file_list = "\n".join(Path(f).name for f in missing_files[:5])
             if len(missing_files) > 5:
                 file_list += f"\n...and {len(missing_files) - 5} more"
-            messagebox.showerror(
+            
+            response = messagebox.askyesno(
                 "Source Files Missing",
                 f"Original source files not found and cannot be recovered:\n\n{file_list}\n\n"
-                "These files have complex formats that require the original file.",
+                "These files have complex formats that require the original file.\n\n"
+                "Would you like to browse and relocate them?",
             )
+            
+            if response:
+                # Offer to relocate each missing file
+                for missing_file in missing_files:
+                    original_name = Path(missing_file).name
+                    relocated = filedialog.askopenfilename(
+                        title=f"Locate: {original_name}",
+                        initialfile=original_name,
+                        filetypes=[
+                            ("All Supported", "*.txt *.csv *.tsv *.json *.xlsx"),
+                            ("All Files", "*.*"),
+                        ],
+                    )
+                    if relocated:
+                        # Update the status and manifest data
+                        status[missing_file] = "relocated"
+                        # Store the new path for later use
+                        self._relocated_files = getattr(self, "_relocated_files", {})
+                        self._relocated_files[missing_file] = relocated
         
         return status
 
@@ -869,6 +908,8 @@ class InputExtractionStep(BaseStep):
         
         Args:
             data: Manifest data dictionary.
+        
+        TASK 32.1: Uses relocated files if available.
         """
         # Clear existing loaded files
         self._loaded_files.clear()
@@ -883,6 +924,9 @@ class InputExtractionStep(BaseStep):
         file_format = data.get("format", "txt")
         lines_data = data.get("lines", [])
         
+        # Get relocated files (TASK 32.1)
+        relocated = getattr(self, "_relocated_files", {})
+        
         # Group lines by source file
         lines_by_file: Dict[str, List[str]] = {}
         for line in lines_data:
@@ -893,22 +937,25 @@ class InputExtractionStep(BaseStep):
         
         # Create LoadedFile entries
         for source_file in source_files:
+            # Check if file was relocated (TASK 32.1)
+            actual_path = Path(relocated.get(source_file, source_file))
             path = Path(source_file)
             lines = lines_by_file.get(source_file, [])
             
             # If we have no lines from manifest but file exists, try loading it
-            if not lines and path.exists():
+            # Use actual_path which may be relocated (TASK 32.1)
+            if not lines and actual_path.exists():
                 try:
                     encoding = self._encoding_var.get() if self._encoding_var else "utf-8"
                     format_override = self._format_var.get() if self._format_var else "auto"
-                    self._load_file(path, encoding, format_override)
+                    self._load_file(actual_path, encoding, format_override)
                     continue
                 except Exception as e:
-                    logger.warning("Could not load source file %s: %s", path, e)
+                    logger.warning("Could not load source file %s: %s", actual_path, e)
             
-            # Create LoadedFile from manifest data
+            # Create LoadedFile from manifest data (use actual_path for relocated files)
             loaded = LoadedFile(
-                path=path,
+                path=actual_path if actual_path.exists() else path,
                 format_id=file_format,
                 lines=lines,
                 manifest_path=self.session.manifest_path,
