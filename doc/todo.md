@@ -2595,6 +2595,235 @@ Goal: Add tooltips with translation support for all GUI fields.
 
 ---
 
+## PHASE 35: MANIFEST 3.1 INPUT/OUTPUT DECOUPLING (Project File Staging)
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 8-14 hours
+
+Goal: Decouple projects from the original input file locations as soon as contents are parsed, while preserving the existing per-line `idx` model and minimizing changes outside Step 0 (Input) and Step 9 (Output).
+
+**Design Constraints:**
+- `idx` MUST remain stable (no re-indexing)
+- GUI contains NO processing logic (only display + user interaction)
+- Manifest remains the single source of truth for loaded text and project state
+
+### TASK 35.1: Add `filedir` (File Directory Map) to Manifest
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3-4 hours
+
+Goal: Store a compact mapping from global line index ranges to source files, without adding a filepath to every line.
+
+**Proposed Manifest Field:**
+- `filedir`: list of entries, each describing:
+  - `first_idx` / `last_idx` (inclusive, global line indices)
+  - `format` (e.g., `txt`, `tsv`, `json`, `xlsx`, `rpgm`)
+  - `rel_path` (path relative to the project root, preserving folder structure if loaded from a directory)
+  - Optional: `source_hint` (original absolute path for user reference only)
+
+**Acceptance Criteria:**
+- Loading a single and multiple files produces a `filedir` list covering all manifest lines exactly once
+- Output step can reconstruct per-file slices using `filedir` without consulting the original input paths
+- No need to be backward compatible.
+
+**Likely Files:**
+- `functions/manifest_manager.py` (schema + migration + defaults)
+- `gui/steps/input_extract.py` (populate `filedir` when importing files)
+
+**Tests:**
+- Add `dev/test_manifest_filedir.py` (range coverage, multi-file ordering, backward-compat migration)
+
+---
+
+### TASK 35.2: Copy Original Files into Project (`Original/`) on Load
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2-3 hours
+
+Goal: Ensure complex formats (and future reconstruction logic) have a stable local reference even if the user moves/deletes the original inputs.
+
+**Behavior:**
+- On new project creation (or first successful load), copy each source file into:
+  - `Projects/{project_name}/Original/{rel_path}`
+- Use the `filedir` entry. Original and Patch are supposed to match exactly. No need to add and have another entry.
+
+**Acceptance Criteria:**
+- A project can be reopened and processed even if original source files are missing
+- For non-reconstructable formats, Output step uses the copied originals as its authoritative source
+
+**Likely Files:**
+- `functions/manifest_manager.py` (project directory helpers)
+- `gui/steps/input_extract.py` (copy action + user prompts on failure)
+- `formats/*` (only if needed for reconstruction)
+
+**Tests:**
+- Extend `dev/test_paths.py` or add new tests to verify copy destinations and manifest linkage
+
+---
+
+### TASK 35.3: Default Output to `Patch/` Using `filedir`
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3-5 hours
+
+Goal: Write outputs into a stable patch folder by default:
+- `Projects/{project_name}/Patch/{rel_path}`
+
+**Acceptance Criteria:**
+- Output step uses `filedir` to write per-file outputs with preserved folder structure
+- Simple formats write directly from manifest line slices
+- Complex formats may reconstruct using `Original/` copies when required
+
+**Likely Files:**
+- `gui/steps/output_inject.py` (path selection defaults + UX)
+- `formats/__init__.py`, `formats/simple.py` (inject APIs as needed)
+
+**Tests:**
+- Add/extend `dev/test_output_inject.py` (path layout + multi-file patch writing)
+
+---
+
+## PHASE 36: CHARACTER/WORD VALIDATION (Whitelist/Blacklist + Autofix)
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 10-16 hours
+
+Goal: Add efficient post-translation validation for forbidden/allowed characters and forbidden words, with optional autofix suggestions and application.
+
+### TASK 36.1: Manifest Fields + Defaults for Validation Lists
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2-3 hours
+
+**New Manifest Entries (Draft):**
+- `CharacterWhitelist`: string (allowed chars)
+- `CharacterBlacklist`: string (forbidden chars)
+- `WordBlacklist`: list of strings (forbidden words/phrases)
+- `AutofixMap`: dict (offending_char -> replacement_char)
+
+**Notes:**
+- Whitelist and blacklist may both be active
+- Keep fields in manifest + defaults.ini (not in GUI-only state)
+- Characters and Words are distinct in how they are found. Both are case insensitive while Words must 'Match Whole World'
+
+**Likely Files:**
+- `functions/manifest_manager.py` (defaults + getters)
+- `config/defaults.ini` (new defaults)
+
+---
+
+### TASK 36.2: High-Performance Scanner + Report Model (No GUI Logic)
+**Priority:** CRITICAL | **Status:** 🔲 NOT STARTED | **Effort:** 4-6 hours
+
+Goal: Scan up to ~1,000,000 lines efficiently.
+
+**Algorithm Requirements (Draft):**
+- Two searches: Whole Word and Character
+- If whitelist AND blacklist AND word blacklist empty: fast exit (neither search)
+- If both whitelist AND blacklist empty BUT word blacklist is filled, search for whole words.
+- If word blacklist empty BUT white OR blacklist is filed, search for characters.
+- If word blacklist AND white OR blacklist is filed, search characters and words.
+-(OR is not exclusive)
+- First pass: build distinct character set from output (or from selected fields)
+- Compare distinct set against whitelist/blacklist to identify offending characters
+- Second pass: only scan lines for offending characters and forbidden words
+- Severity:
+  - Yellow = autofix available AND replacement is itself valid under whitelist/blacklist
+  - Red = no autofix available
+
+**Output:**
+- Structured findings list containing: `idx`, `field` (tl/post/wordwr/final), offending token, suggestion (optional), severity
+
+**Likely Files:**
+- `functions/postanalysis.py` or `functions/validation.py` (shared logic)
+- `functions/common_errors.py` (standardized messages, if needed)
+
+**Tests:**
+- Add `dev/test_blacklist_whitelist.py` (fast exit, severity classification, autofix validity, performance-friendly behavior)
+
+---
+
+### TASK 36.3: GUI Surfacing in Postprocessing + Output Steps
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2-4 hours
+
+Goal: Display results in GUI without embedding scanning logic.
+
+**Behavior:**
+- Postprocessing and Output steps show:
+  - Summary counts (warnings/errors)
+  - Table of affected lines with offending character/word
+  - Optional action: apply autofix (calls shared function; GUI just triggers)
+
+**Likely Files:**
+- `gui/steps/postprocess.py`
+- `gui/steps/output_inject.py`
+
+---
+
+### TASK 36.4: Optional Logit-Bias Integration for Blacklisted Characters
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2-3 hours
+
+Goal: When the selected provider/model supports it, bias the model away from blacklisted characters/tokens.
+
+**Likely Files:**
+- `functions/logit_bias.py` (token mapping)
+- `functions/api_client.py` (request assembly)
+- `functions/options.py` (capability flags per provider)
+
+**Tests:**
+- Add focused unit tests around “provider supports logit bias” gating
+
+---
+
+## PHASE 37: EDIT/TLC PROMPT COMPONENTS (Configurable Input Sources)
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 6-10 hours
+
+Goal: Expand Task 33.2 (custom prompts) with configurable *components* and source selection:
+- Edit pass can pick between `orig` and/or latest TLC
+- TLC pass can pick `orig` and/or latest Edit
+
+### TASK 37.1: Add Component Toggles to Global Options (Stored in .ini, not manifest!)
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2-3 hours
+
+**Examples:**
+- `EditComponents`: list/flags (e.g., include glossary, include game summary, include character notes, include code glossary)
+- `TLCComponents`: list/flags
+- `EditInputPolicy` / `TLCInputPolicy`: enums controlling which fields feed the prompt
+
+**Likely Files:**
+- `gui/dialogs/global_options.py` (UI only)
+
+---
+
+### TASK 37.2: Prompt Builder Support for Component Toggles
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2-4 hours
+
+**Likely Files:**
+- `functions/prompt_builder.py` (assemble prompts by enabled components)
+- `functions/mainhelper.py` / translation pipeline (ensure correct field selection)
+
+---
+
+### TASK 37.3: Tests for Edit/TLC Component Selection
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2-3 hours
+
+**Tests:**
+- Add `dev/test_edit_tlc_components.py` (policy combinations + prompt assembly)
+
+---
+=============================================================================
+
+FUTURE IDEAS (No Phase Commitment)
+**Priority:** LOW | **Status:** 🔲 PARKED | **Effort:** N/A
+
+Benchmark Mode, requires a small but significant synthesized text which will get at least three passes:
+	-1: Normal Settings
+	-2: Modified Settings (All Normal Settings and it is recommended to just change one setting, be it temperature, prompt, length, model or anything)
+	-3: Check (sends Original and Results of 1 and 2)
+	ToS/EULA for some legal protection, 
+	-kept very concise 
+	-and features a multiple choice test that serves as agreement 
+		(all choices must be made to be correct)
+	-Important points
+		Do nothing illegal
+		Violating copyright is not condoned
+		Estimates are not binding
+		No liability for any financial losses incutred, even if it is due to software bugs and problems
+		Do not use the software to create nuclear fissile material (half-joke to see whether the agreement was read)
+	-simple .ini entry that turns readToS from false to true to skip
+	Agent AI
+	Context Menu
+	System Tray
+	Image to Text Translation through taking a screenshot of a selected area (OCR capable model required)
+
 =============================================================================
 
 ## MANIFEST 3.0 COMPLETE FIELD REFERENCE
