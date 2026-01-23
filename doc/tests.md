@@ -51,6 +51,53 @@ Guidelines:
 
 ---
 
+## Static Analysis (Pylance/Pyright)
+
+Pylance (VS Code) and Pyright (CLI) provide real-time type checking and import resolution.
+
+### Configuration Files
+
+**pyrightconfig.json** - Pyright/Pylance settings:
+```json
+{
+    "include": [".", "functions", "modi", "formats", "gui"],
+    "exclude": ["**/__pycache__", "**/.mypy_cache", "output", "cache", "temp"],
+    "extraPaths": [".", ".."],
+    "pythonVersion": "3.10",
+    "typeCheckingMode": "basic"
+}
+```
+
+**.vscode/settings.json** - VS Code Python analysis:
+```json
+{
+    "python.analysis.extraPaths": [".", "${workspaceFolder}/.."],
+    "python.analysis.diagnosticMode": "workspace"
+}
+```
+
+### Import Resolution
+
+CherryAI uses a parent directory import pattern (`from CherryAI.functions import ...`).
+Static analyzers can't see the runtime `conftest.py` namespace setup, so `extraPaths`
+must include `..` to resolve `CherryAI.*` imports.
+
+### Common Type Narrowing Patterns
+
+For `Optional` types, use explicit None checks:
+```python
+# Good: Pylance understands the narrowing
+if self.session is not None:
+    self.session.loaded_files.append(path)
+
+# Also good: Use getattr with None default
+global_opts = getattr(self.session, "global_options", None)
+if global_opts is not None:
+    auto_analyze = getattr(global_opts.session, "auto_analyze_on_load", True)
+```
+
+---
+
 ## Script Test (pytest)
 
 **Location:** `dev/test_*.py`  

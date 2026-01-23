@@ -2610,6 +2610,37 @@ During baseline testing, found and fixed 6 failing tests:
 2. Layout test for notes_section (moved to left column per TASK 23.4)
 3. TranslationStep manifest binding (used old API, fixed to use lambda: self.manifest_manager)
 
+### TASK 34.6: Pylance/Pyright Static Analysis Configuration [DONE]
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 1 hour
+
+Problem: Pylance showed import resolution errors for CherryAI.* modules because
+the static analyzer couldn't see the runtime conftest.py namespace setup.
+Additionally, several files had unused imports and type narrowing issues.
+
+Solution:
+1. Created `pyrightconfig.json` with extraPaths for import resolution
+2. Created `.vscode/settings.json` with python.analysis.extraPaths
+3. Fixed type annotations in multiple files:
+   - `functions/prompt_builder.py`: Renamed loop variable to avoid shadowing
+   - `gui/steps/input_extract.py`: Added type narrowing for Optional session
+   - `dev/test_phase34_comprehensive.py`: Fixed Generator return type annotation
+4. Cleaned up unused imports in test files:
+   - `dev/test_edit_tlc_components.py`
+   - `dev/test_blacklist_whitelist.py`
+   - `dev/test_manifest_filedir.py`
+
+Files Created:
+- `pyrightconfig.json` - Pyright/Pylance configuration
+- `.vscode/settings.json` - VS Code Python analysis settings
+
+Files Modified:
+- `functions/prompt_builder.py` - Fixed variable shadowing (`char` → `char_note`)
+- `gui/steps/input_extract.py` - Added None checks for Optional[SessionState]
+- `dev/test_phase34_comprehensive.py` - Fixed Generator return type
+- `dev/test_edit_tlc_components.py` - Removed unused imports
+- `dev/test_blacklist_whitelist.py` - Removed unused imports
+- `dev/test_manifest_filedir.py` - Removed unused imports/variables
+
 ---
 ## PHASE 35: MANIFEST 3.1 INPUT/OUTPUT DECOUPLING (Project File Staging)
 **Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 8-14 hours

@@ -794,11 +794,11 @@ class PromptBuilder:
         # 4. Character notes from manifest (conditional)
         if components.get("character_notes", True) and character_notes:
             char_notes_block = "# Character Notes\n"
-            for char in character_notes:
-                name = char.get("name") or char.get("original_name", "Unknown")
-                notes = char.get("notes", "")
-                style = char.get("speaking_style", "")
-                gender = char.get("gender", "")
+            for char_note in character_notes:
+                name = char_note.get("name") or char_note.get("original_name", "Unknown")
+                notes = char_note.get("notes", "")
+                style = char_note.get("speaking_style", "")
+                gender = char_note.get("gender", "")
                 if notes or style:
                     char_notes_block += f"- {name}"
                     if gender:

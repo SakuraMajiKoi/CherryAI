@@ -426,8 +426,9 @@ class InputExtractionStep(BaseStep):
             # Call App.create_new_project via toplevel
             try:
                 app = self.winfo_toplevel()
-                if hasattr(app, "create_new_project"):
-                    manifest_path = app.create_new_project(source_files, suggested_name)
+                create_project_method = getattr(app, "create_new_project", None)
+                if create_project_method is not None:
+                    manifest_path = create_project_method(source_files, suggested_name)
                     if manifest_path:
                         logger.info("Project created: %s", manifest_path)
                         # Update manifest with lines from loaded files
@@ -453,7 +454,7 @@ class InputExtractionStep(BaseStep):
         idx = 0
         
         for loaded_file in self._loaded_files:
-            file_start_idx = idx
+            _file_start_idx = idx  # Track start for potential future filedir use
             for line_text in loaded_file.lines:
                 lines.append({
                     "idx": idx,
@@ -475,7 +476,6 @@ class InputExtractionStep(BaseStep):
         mgr.set_source_files([f.path for f in self._loaded_files])
         
         # TASK 35.1: Build and set filedir
-        from CherryAI.functions.manifest_manager import FileDirEntry
         filedir_entries = mgr.build_filedir_from_files(file_infos)
         mgr.set_filedir(filedir_entries)
         
@@ -550,7 +550,8 @@ class InputExtractionStep(BaseStep):
             self._update_summary()
             self.set_status("not-started")
             # Clear session state
-            self.session.loaded_files.clear()
+            if self.session is not None:
+                self.session.loaded_files.clear()
             self.set_step_data({})
             logger.info("Cleared all loaded files")
 
@@ -582,7 +583,7 @@ class InputExtractionStep(BaseStep):
             del self._loaded_files[index]
             
             # Update session state
-            if index < len(self.session.loaded_files):
+            if self.session is not None and index < len(self.session.loaded_files):
                 del self.session.loaded_files[index]
             
             # Update current index
@@ -659,11 +660,12 @@ class InputExtractionStep(BaseStep):
             self._loaded_files.append(loaded)
 
             # Update session state
-            self.session.loaded_files.append(path)
+            if self.session is not None:
+                self.session.loaded_files.append(path)
             self._update_step_data()
 
             # Store last loaded manifest path for auto-restore
-            if manifest_path:
+            if manifest_path and self.session is not None:
                 self.session.manifest_path = manifest_path
 
             logger.info("Loaded file: %s (%d lines)", path.name, len(lines))
@@ -837,7 +839,8 @@ class InputExtractionStep(BaseStep):
                 data = mgr.get_raw_data()
 
             # Store manifest path in session
-            self.session.manifest_path = path
+            if self.session is not None:
+                self.session.manifest_path = path
 
             # Check source file status and show appropriate warnings
             source_files_status = self._check_source_files_status(data)
@@ -874,7 +877,8 @@ class InputExtractionStep(BaseStep):
         # Recoverable formats - have lines stored in manifest or can rebuild
         RECOVERABLE_FORMATS = {"txt", "csv", "tsv", "json"}
         # Non-recoverable formats - complex structure that can't be rebuilt
-        NON_RECOVERABLE_FORMATS = {"rpgm", "xlsx", "epub", "pdf"}
+        # Note: Used implicitly - anything not in RECOVERABLE_FORMATS is non-recoverable
+        _NON_RECOVERABLE_FORMATS = {"rpgm", "xlsx", "epub", "pdf"}  # noqa: F841
         
         source_files = data.get("source_files", [])
         if not source_files:
@@ -998,7 +1002,7 @@ class InputExtractionStep(BaseStep):
                 path=actual_path if actual_path.exists() else path,
                 format_id=file_format,
                 lines=lines,
-                manifest_path=self.session.manifest_path,
+                manifest_path=self.session.manifest_path if self.session else None,
             )
             self._loaded_files.append(loaded)
         
@@ -1216,7 +1220,7 @@ class InputExtractionStep(BaseStep):
             self._loaded_files.append(loaded)
             
             # Update session manifest path if we found one
-            if manifest_path and not self.session.manifest_path:
+            if manifest_path and self.session is not None and not self.session.manifest_path:
                 self.session.manifest_path = manifest_path
         
         logger.info("Restored %d files from session", len(self._loaded_files))
@@ -1254,10 +1258,10 @@ class InputExtractionStep(BaseStep):
         """
         # Check if auto-analysis is enabled (default: True)
         auto_analyze = True
-        if hasattr(self.session, "global_options") and self.session.global_options:
-            # GlobalOptions has session: SessionSettings which has auto_analyze_on_load
-            if hasattr(self.session.global_options, "session"):
-                auto_analyze = getattr(self.session.global_options.session, "auto_analyze_on_load", True)
+        if self.session is not None and hasattr(self.session, "global_options"):
+            global_opts = getattr(self.session, "global_options", None)
+            if global_opts is not None and hasattr(global_opts, "session"):
+                auto_analyze = getattr(global_opts.session, "auto_analyze_on_load", True)
         
         if not auto_analyze:
             return
@@ -1265,8 +1269,9 @@ class InputExtractionStep(BaseStep):
         # Access the analysis step through the app
         try:
             app = self.winfo_toplevel()
-            if hasattr(app, "_step_tabs") and len(app._step_tabs) > 1:
-                analysis_step = app._step_tabs[1]  # Step 1 is Analysis
+            step_tabs = getattr(app, "_step_tabs", None)
+            if step_tabs is not None and len(step_tabs) > 1:
+                analysis_step = step_tabs[1]  # Step 1 is Analysis
                 if hasattr(analysis_step, "_run_analysis"):
                     # Run analysis in background
                     logger.info("Auto-triggering analysis after file load")
@@ -1282,9 +1287,10 @@ class InputExtractionStep(BaseStep):
         """
         # Check if auto-preprocessing is enabled (default: True)
         auto_preprocess = True
-        if hasattr(self.session, "global_options") and self.session.global_options:
-            if hasattr(self.session.global_options, "session"):
-                auto_preprocess = getattr(self.session.global_options.session, "auto_preprocess_on_load", True)
+        if self.session is not None and hasattr(self.session, "global_options"):
+            global_opts = getattr(self.session, "global_options", None)
+            if global_opts is not None and hasattr(global_opts, "session"):
+                auto_preprocess = getattr(global_opts.session, "auto_preprocess_on_load", True)
         
         if not auto_preprocess:
             return
@@ -1292,8 +1298,9 @@ class InputExtractionStep(BaseStep):
         # Access the preprocessing step through the app
         try:
             app = self.winfo_toplevel()
-            if hasattr(app, "_step_tabs") and len(app._step_tabs) > 4:
-                preprocess_step = app._step_tabs[4]  # Step 4 is Preprocessing
+            step_tabs = getattr(app, "_step_tabs", None)
+            if step_tabs is not None and len(step_tabs) > 4:
+                preprocess_step = step_tabs[4]  # Step 4 is Preprocessing
                 if hasattr(preprocess_step, "_apply_rules"):
                     # Run preprocessing in background
                     logger.info("Auto-triggering preprocessing after file load")
