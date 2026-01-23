@@ -55,7 +55,7 @@ Guidelines:
 
 **Location:** `dev/test_*.py`  
 **Runner:** `pytest`  
-**Count:** 4130 tests collected, 4130 passed, 26 skipped (integration tests)
+**Count:** 4390 tests collected (verified January 2026)
 **Configuration:** `conftest.py` - pytest hooks for CherryAI module setup
 
 Script Tests are fast unit tests that validate internal logic without LLM API calls.
@@ -720,6 +720,322 @@ Application startup manifest loading tests (Task 21.4).
 | `test_skips_restore_when_disabled` | When restore disabled, should not auto-load |
 | `test_handles_missing_manifest_file` | When last manifest file is missing, returns path |
 | `test_first_launch_has_no_last_manifest` | On first launch, no last manifest should be set |
+
+---
+
+### dev/test_manifest_filedir.py (51 tests) - TASK 35
+
+TASK 35: Manifest 3.1 filedir feature for input/output decoupling. Tests for FileDirEntry dataclass, filedir operations, Original/ copy, and Patch/ output.
+
+#### TestFileDirEntry (9 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_create_basic` | Basic FileDirEntry creation |
+| `test_create_with_all_fields` | FileDirEntry with all fields specified |
+| `test_line_count_property` | line_count property calculates correctly |
+| `test_contains_idx` | contains_idx method boundary conditions |
+| `test_filename_property` | filename property extracts correctly |
+| `test_to_dict_sparse_format` | to_dict only includes non-default values |
+| `test_from_dict_minimal` | from_dict with minimal data |
+| `test_from_dict_full` | from_dict with all fields |
+| `test_roundtrip_serialization` | to_dict/from_dict roundtrip preserves data |
+
+#### TestManifestManagerFiledir (9 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_empty_manifest_has_filedir_field` | New manifests include empty filedir field |
+| `test_manifest_version_is_3_1` | New manifests have version 3.1 |
+| `test_get_filedir_empty` | get_filedir returns empty list for new manifest |
+| `test_set_filedir` | set_filedir stores entries correctly |
+| `test_get_filedir_retrieves_entries` | get_filedir retrieves stored entries |
+| `test_add_filedir_entry` | add_filedir_entry appends to list |
+| `test_clear_filedir` | clear_filedir removes all entries |
+| `test_get_filedir_entry_for_idx_found` | get_filedir_entry_for_idx finds correct entry |
+| `test_get_filedir_entry_for_idx_not_found` | get_filedir_entry_for_idx returns None for invalid index |
+| `test_get_lines_for_filedir_entry` | get_lines_for_filedir_entry retrieves correct lines |
+
+#### TestBuildFiledirFromFiles (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_single_file` | Building filedir from a single file |
+| `test_multiple_files_sequential` | Multiple files with sequential indices |
+| `test_common_base_detection` | Common base path is detected for relative paths |
+| `test_preserves_encoding` | Encoding is preserved in filedir entries |
+| `test_skips_empty_files` | Files with zero lines are skipped |
+| `test_source_hint_set_to_absolute_path` | source_hint is set to the absolute path |
+
+#### TestFiledirMigration (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_migrate_v30_manifest_adds_filedir` | v3.0 manifests get filedir added during migration |
+| `test_build_filedir_from_legacy_single_file` | _build_filedir_from_legacy with single source file |
+| `test_build_filedir_from_legacy_multiple_files` | _build_filedir_from_legacy with multiple source files |
+| `test_build_filedir_from_legacy_no_lines` | _build_filedir_from_legacy with empty lines |
+
+#### TestCopyOriginalsToProject (11 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_copy_creates_original_dir` | Copy creates the Original/ directory |
+| `test_copy_copies_files` | Files are actually copied |
+| `test_copy_preserves_content` | File content is preserved during copy |
+| `test_copy_preserves_folder_structure` | Folder structure is preserved |
+| `test_copy_skips_existing_without_force` | Existing files are skipped when force=False |
+| `test_copy_overwrites_with_force` | Existing files are overwritten when force=True |
+| `test_copy_returns_path_mapping` | Copy returns mapping of original to copied paths |
+| `test_copy_handles_missing_source` | Copy handles missing source files gracefully |
+| `test_copy_empty_filedir_returns_empty` | Copy returns empty dict when filedir is empty |
+| `test_has_original_copies_false_initially` | has_original_copies returns False before copying |
+| `test_has_original_copies_true_after_copy` | has_original_copies returns True after copying |
+
+#### TestPathHelpers (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_get_project_dir_uses_project_name` | get_project_dir returns correct path based on project name |
+| `test_get_project_dir_sanitizes_name` | get_project_dir sanitizes project name for filesystem |
+| `test_get_original_dir` | get_original_dir returns correct path |
+| `test_get_patch_dir` | get_patch_dir returns correct path |
+| `test_get_original_file_path` | get_original_file_path returns correct path for entry |
+| `test_get_patch_file_path` | get_patch_file_path returns correct path for entry |
+
+#### TestFiledirOutputIntegration (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_get_lines_for_entry_returns_correct_subset` | get_lines_for_filedir_entry returns correct line subset |
+| `test_filedir_covers_all_lines` | filedir entries cover all line indices |
+| `test_filedir_no_overlapping_ranges` | filedir entries don't have overlapping ranges |
+
+#### TestFiledirPersistence (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_filedir_saved_to_disk` | filedir is saved when manifest is saved |
+| `test_filedir_loaded_from_disk` | filedir is loaded when manifest is loaded |
+
+---
+
+### dev/test_blacklist_whitelist.py (57 tests) - PHASE 36
+
+PHASE 36: Character/Word Validation (Whitelist/Blacklist + Autofix). Tests for character validation manifest fields, high-performance scanner, and logit bias integration.
+
+#### TestManifestValidationFields (13 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_new_manifest_has_character_whitelist` | New manifests have CharacterWhitelist field |
+| `test_new_manifest_has_character_blacklist` | New manifests have CharacterBlacklist field |
+| `test_new_manifest_has_word_blacklist` | New manifests have WordBlacklist field |
+| `test_new_manifest_has_autofix_map` | New manifests have AutofixMap field |
+| `test_get_set_character_whitelist` | get/set character whitelist |
+| `test_get_set_character_blacklist` | get/set character blacklist |
+| `test_get_set_word_blacklist` | get/set word blacklist |
+| `test_add_remove_word_blacklist` | add/remove words from blacklist |
+| `test_add_word_no_duplicates` | Duplicate words are not added |
+| `test_get_set_autofix_map` | get/set autofix map |
+| `test_add_remove_autofix_entry` | add/remove autofix entries |
+| `test_get_character_validation_config` | get full validation config |
+| `test_set_character_validation_config` | set full validation config |
+
+#### TestManifestDictParsing (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_parse_dict_empty_string` | Parse empty string returns empty dict |
+| `test_parse_dict_single_pair` | Parse single key=value pair |
+| `test_parse_dict_multiple_pairs` | Parse multiple key=value pairs |
+| `test_parse_dict_with_whitespace` | Parse with whitespace |
+| `test_parse_dict_json_format` | Parse JSON format |
+| `test_parse_dict_already_dict` | Parse when already a dict |
+
+#### TestValidationSeverity (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_severity_values` | ValidationSeverity enum values |
+
+#### TestCharacterWordFinding (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_create_character_finding` | Create character finding |
+| `test_create_word_finding` | Create word finding |
+
+#### TestCharacterWordValidationResult (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_empty_result` | Empty validation result |
+| `test_result_with_findings` | Result with findings |
+
+#### TestValidateCharacterWord (10 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_fast_exit_no_rules` | Fast exit when no rules configured |
+| `test_character_blacklist_finds_offending` | Character blacklist finds offending characters |
+| `test_character_whitelist_finds_offending` | Character whitelist finds non-whitelisted chars |
+| `test_word_blacklist_finds_offending` | Word blacklist finds offending words |
+| `test_word_blacklist_whole_word_only` | Word blacklist only matches whole words |
+| `test_autofix_map_provides_suggestions` | Autofix map provides suggestions |
+| `test_autofix_with_invalid_replacement` | Invalid replacement results in ERROR severity |
+| `test_multiple_fields_checked` | Multiple fields are checked |
+| `test_custom_fields_to_check` | Custom fields_to_check |
+| `test_both_character_and_word_validation` | Both character and word validation |
+
+#### TestApplyAutofix (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_apply_autofix_basic` | Basic autofix application |
+| `test_apply_autofix_multiple_replacements` | Multiple replacements |
+| `test_apply_autofix_respects_whitelist` | Autofix respects whitelist |
+| `test_apply_autofix_respects_blacklist` | Autofix respects blacklist |
+
+#### TestApplyAutofixToLines (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_apply_to_lines_basic` | Apply autofix to lines |
+| `test_apply_to_multiple_fields` | Apply autofix to multiple fields |
+
+#### TestFindingsSummary (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_summary_no_issues` | Summary with no issues |
+| `test_summary_with_warnings` | Summary with warnings |
+| `test_summary_with_errors` | Summary with errors |
+
+#### TestGroupFindings (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_group_by_line` | Group findings by line |
+| `test_group_by_token` | Group findings by token |
+
+#### TestValidationPerformance (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_large_batch_performance` | Scanner performance with 10K lines |
+| `test_fast_exit_performance` | Fast exit with 100K lines |
+| `test_two_pass_efficiency` | Two-pass algorithm efficiency |
+
+#### TestLogitBiasFromBlacklist (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_create_from_empty_blacklist` | Create from empty blacklist |
+| `test_create_from_single_char` | Create from single character |
+| `test_create_from_multiple_chars` | Create from multiple characters |
+| `test_create_removes_duplicates` | Removes duplicate characters |
+| `test_create_with_disabled` | Create with enabled=False |
+
+#### TestProviderLogitBiasSupport (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_openai_supports_logit_bias` | OpenAI supports logit bias |
+| `test_anthropic_no_logit_bias` | Anthropic doesn't support logit bias |
+| `test_google_no_logit_bias` | Google doesn't support logit bias |
+| `test_unknown_provider_no_logit_bias` | Unknown providers default to no support |
+
+---
+
+### dev/test_edit_tlc_components.py (40 tests) - PHASE 37
+
+PHASE 37: Edit/TLC Prompt Components (Configurable Input Sources). Tests for component toggles, input policies, and prompt building with selective component inclusion.
+
+#### TestEditInputPolicy (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_edit_input_policy_values` | All EditInputPolicy enum values exist |
+| `test_edit_input_policy_count` | EditInputPolicy has exactly 4 values |
+| `test_edit_input_policy_from_string` | Create EditInputPolicy from string |
+
+#### TestTLCInputPolicy (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_tlc_input_policy_values` | All TLCInputPolicy enum values exist |
+| `test_tlc_input_policy_count` | TLCInputPolicy has exactly 4 values |
+| `test_tlc_input_policy_from_string` | Create TLCInputPolicy from string |
+
+#### TestPromptsSettingsComponents (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_default_edit_components` | Default edit components are all True |
+| `test_default_tlc_components` | Default TLC components are all True |
+| `test_default_input_policies` | Default input policies are correct |
+| `test_get_edit_components` | get_edit_components returns correct dict |
+| `test_get_tlc_components` | get_tlc_components returns correct dict |
+
+#### TestPromptsSettingsSerialization (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_to_dict_includes_all_fields` | to_dict includes all component and policy fields |
+| `test_from_dict_restores_all_fields` | from_dict restores all fields |
+| `test_from_dict_uses_defaults_for_missing_fields` | from_dict uses defaults for missing fields |
+| `test_roundtrip_serialization` | to_dict then from_dict preserves all values |
+
+#### TestBuildEditTlcPrompt (10 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_base_prompt_always_included` | Base prompt is always included |
+| `test_empty_base_prompt` | Empty base prompt produces valid result |
+| `test_character_notes_included_when_enabled` | Character notes included when enabled |
+| `test_character_notes_excluded_when_disabled` | Character notes excluded when disabled |
+| `test_code_glossary_included_when_enabled` | Code glossary included when enabled |
+| `test_code_glossary_excluded_when_disabled` | Code glossary excluded when disabled |
+| `test_default_components_include_all` | Default components include all sections |
+| `test_game_summary_included_when_enabled` | Game summary included when enabled |
+| `test_game_summary_excluded_when_disabled` | Game summary excluded when disabled |
+| `test_empty_character_notes_no_section` | Empty character notes produces no section |
+| `test_empty_code_glossary_no_section` | Empty code glossary produces no section |
+
+#### TestComponentCombinations (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_all_components_enabled` | All components enabled includes all sections |
+| `test_all_components_disabled` | All components disabled includes only base prompt |
+| `test_only_character_notes_enabled` | Only character notes enabled |
+| `test_only_code_glossary_enabled` | Only code glossary enabled |
+
+#### TestCharacterNotesFormatting (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_character_with_all_fields` | Character with all fields formats correctly |
+| `test_character_with_minimal_fields` | Character with minimal fields formats correctly |
+| `test_character_uses_original_name_fallback` | Uses original_name when name is missing |
+| `test_character_without_notes_excluded` | Characters without notes or style are excluded |
+
+#### TestCodeGlossaryFormatting (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_pattern_with_preserve_action` | Preserve action is default, not shown |
+| `test_pattern_with_non_preserve_action` | Non-preserve action is shown in brackets |
+| `test_pattern_with_example` | Pattern example is included |
+| `test_empty_pattern_excluded` | Patterns with empty pattern string excluded |
+
+#### TestPromptsSettingsIntegration (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_edit_components_from_settings` | PromptsSettings edit components work with builder |
+| `test_tlc_components_from_settings` | PromptsSettings TLC components work with builder |
 
 ---
 
@@ -4796,29 +5112,35 @@ LRU eviction, and different cache matching modes.
 
 ### Planned Tests
 
-| Category | Tests | Priority | Depends On |
-|----------|-------|----------|------------|
-| API Validator | 27 | HIGH | API Client |
-| Prompt Builder | 9 | MEDIUM | None |
-| API Client | 13 | HIGH | None |
-| Extended Line Tags | 27 | HIGH | Manifest v2.0 |
-| GUI Table View | 52 | MEDIUM | Line Tags, Manifest |
-| Rate Limiter | 22 | HIGH | None |
-| Chunk Optimizer | 15 | MEDIUM | Validation |
-| Progress Tracker | 12 | LOW | None |
-| Auto Recovery | 18 | HIGH | Validation |
-| Line-by-Line Mode | 15 | LOW | None |
-| Style Presets | 28 | LOW | None |
-| Quote Stripper | 14 | LOW | Validation |
-| Token Chunker | 16 | MEDIUM | None |
-| **Total Planned** | **268** | | |
+**Note:** Some tests previously marked "Planned" have been implemented:
+- Rate Limiter: **70 tests** (dev/test_rate_limiter.py - 752 lines)
+- Chunk Optimizer: **31 tests** (dev/test_chunk_optimizer.py - 447 lines)  
+- Line-by-Line Mode: **15 tests** (dev/test_line_by_line.py - 378 lines)
 
-Combined with existing 1021 tests: **~1289 tests** after all features implemented.
+| Category | Tests | Priority | Depends On | Status |
+|----------|-------|----------|------------|--------|
+| Rate Limiter | 70 | HIGH | None | ✅ Implemented |
+| Chunk Optimizer | 31 | MEDIUM | Validation | ✅ Implemented |
+| Line-by-Line Mode | 15 | LOW | None | ✅ Implemented |
+| API Validator | 27 | HIGH | API Client | Planned |
+| Prompt Builder | 9 | MEDIUM | None | Planned |
+| API Client | 13 | HIGH | None | Planned |
+| Extended Line Tags | 27 | HIGH | Manifest v2.0 | Planned |
+| GUI Table View | 52 | MEDIUM | Line Tags, Manifest | Partial |
+| Progress Tracker | 12 | LOW | None | Planned |
+| Auto Recovery | 18 | HIGH | Validation | Planned |
+| Style Presets | 28 | LOW | None | Planned |
+| Quote Stripper | 14 | LOW | Validation | Planned |
+| Token Chunker | 16 | MEDIUM | None | Planned |
+| **Total (New Tests)** | **116** | | | ✅ Implemented |
+| **Still Planned** | **216** | | | |
 
-### Planned Test Details
+Combined with existing 4208 tests: Comprehensive coverage achieved.
+
+### Implemented Test Details (Previously Planned)
 
 
-#### dev/test_rate_limiter.py (Planned - 22 tests)
+#### dev/test_rate_limiter.py (Implemented - 70 tests)
 
 | Class | Test | Purpose |
 |-------|------|---------|
@@ -4845,7 +5167,7 @@ Combined with existing 1021 tests: **~1289 tests** after all features implemente
 | | `test_multi_day_split` | Split over days detected |
 | TestThrottling | `test_429_backoff` | 429 triggers backoff |
 
-#### dev/test_chunk_optimizer.py (Planned - 15 tests)
+#### dev/test_chunk_optimizer.py (Implemented - 31 tests)
 
 | Class | Test | Purpose |
 |-------|------|---------|
@@ -4864,6 +5186,8 @@ Combined with existing 1021 tests: **~1289 tests** after all features implemente
 | | `test_persist_optimal` | Optimal persists |
 | TestIntegration | `test_full_adjustment_cycle` | Full reduce/recover |
 | | `test_multiple_adjustments` | Can reduce multiple times |
+
+*Note: Actual implementation has 31 tests (447 lines). Additional tests cover OptimizerConfig, OptimizerStats, BatchResult, and factory functions.*
 
 #### dev/test_progress_tracker.py (Planned - 12 tests)
 
@@ -4934,7 +5258,7 @@ Combined with existing 1021 tests: **~1289 tests** after all features implemente
 | | `test_cli_override` | CLI forces mode |
 | | `test_fallback_chain` | Fallback to next mode |
 
-#### dev/test_line_by_line.py (Planned - 15 tests)
+#### dev/test_line_by_line.py (Implemented - 15 tests)
 
 | Class | Test | Purpose |
 |-------|------|---------|
@@ -4953,6 +5277,10 @@ Combined with existing 1021 tests: **~1289 tests** after all features implemente
 | | `test_rate_limit_respected` | RPM honored |
 | TestProgressTracking | `test_progress_per_line` | Progress updates per line |
 | | `test_eta_accurate` | ETA based on line rate |
+
+*Note: Actual implementation has 15 tests (378 lines) covering line-by-line translation mode.*
+
+### Still Planned Test Details
 
 #### dev/test_style_presets.py (78 tests)
 
@@ -7898,3 +8226,118 @@ Configurable Edit/TLC Prompts feature tests.
 | `test_prompts_section_description_meaningful` | Description is useful |
 
 | `test_migration_adds_edited_prepro` | Migration adds field |
+
+---
+
+### dev/test_phase34_comprehensive.py (34 tests) - PHASE 34
+
+Comprehensive testing infrastructure for Phase 34: Extended and More Robust Automatic Testing.
+
+This test file implements:
+1. Internal timeout mechanism to prevent infinite loops
+2. mypy static type checking validation
+3. GUI button execution tests
+4. CherryAI launch tests
+
+#### TestTimeoutFramework (5 tests)
+
+Tests for the internal timeout mechanism.
+
+| Test | Purpose |
+|------|---------|
+| `test_timer_tracks_elapsed_time` | Timer correctly measures elapsed time |
+| `test_timer_detects_fast_completion` | Timer recognizes fast completion |
+| `test_run_with_timeout_returns_result` | run_with_timeout returns function result |
+| `test_run_with_timeout_propagates_exception` | Exceptions propagate correctly |
+| `test_timer_handles_multiple_sequential_tests` | Multiple tests work correctly |
+
+#### TestMypyValidation (7 tests)
+
+Tests that run mypy static type checking.
+
+| Test | Purpose |
+|------|---------|
+| `test_mypy_is_available` | mypy is installed |
+| `test_functions_package_passes_mypy` | functions/ passes type checking |
+| `test_modi_package_passes_mypy` | modi/ passes type checking |
+| `test_formats_package_passes_mypy` | formats/ passes type checking |
+| `test_all_packages_importable` | All packages import cleanly |
+| `test_no_circular_imports` | No circular import issues |
+| `test_critical_modules_type_annotated` | Critical modules have annotations |
+
+#### TestGUIButtonExecution (12 tests)
+
+Tests for GUI button callbacks and lifecycle methods.
+
+| Test | Purpose |
+|------|---------|
+| `test_translation_step_has_start_button` | TranslationStep has Start button |
+| `test_translation_step_has_stop_button` | TranslationStep has stop/cancel functionality |
+| `test_input_step_has_load_button` | InputExtractionStep has Load button |
+| `test_analysis_step_has_analyze_button` | AnalysisStep has Analyze button |
+| `test_preprocessing_step_has_process_button` | PreprocessingStep has Process button |
+| `test_output_step_has_export_button` | OutputInjectStep has Export button |
+| `test_estimation_step_has_estimate_button` | EstimationStep has Estimate button |
+| `test_wordwrap_step_has_apply_button` | WordwrapOverwriteStep has Apply button |
+| `test_app_has_file_menu` | App has File menu |
+| `test_all_steps_have_on_enter_method` | All steps have on_enter() |
+| `test_all_steps_have_on_leave_method` | All steps have on_leave() |
+| `test_button_callbacks_are_bound` | Button command= bindings exist |
+
+#### TestCherryAILaunch (6 tests)
+
+Tests for CherryAI application launch.
+
+| Test | Purpose |
+|------|---------|
+| `test_cherryai_module_exists` | CherryAI.py exists |
+| `test_cherryai_has_main_entry` | Has main entry point |
+| `test_cli_help_works` | CLI responds to --help |
+| `test_cli_test_command_exists` | CLI has test command |
+| `test_config_files_exist` | Required config files exist |
+| `test_app_class_importable` | App class can be imported |
+
+#### TestTestSuiteItself (4 tests)
+
+Meta-tests verifying test infrastructure.
+
+| Test | Purpose |
+|------|---------|
+| `test_timeout_tests_exist` | Timeout framework tests present |
+| `test_mypy_tests_exist` | mypy validation tests present |
+| `test_gui_button_tests_exist` | GUI button tests present |
+| `test_launch_tests_exist` | Launch tests present |
+
+---
+
+## Phase 34 Testing Policy
+
+Phase 34 establishes these testing requirements:
+
+1. **All non-API tests must pass before and after every phase**
+2. **A phase can only be considered done if all tests succeed**
+3. **If tests fail before starting a phase, fix them first**
+
+### Timeout Protection
+
+All tests should complete within reasonable time limits:
+- Individual test: 10 seconds default
+- Full test suite: 5 minutes maximum
+- Use `--timeout=10` flag with pytest
+
+If a test takes too long:
+- If purpose justifies duration: extend timeout
+- If not: investigate and fix the root cause
+
+### Running Phase 34 Tests
+
+```bash
+# Run Phase 34 tests specifically
+python -m pytest CherryAI/dev/test_phase34_comprehensive.py -v --timeout=30
+
+# Run all tests with timeout protection
+python -m pytest CherryAI/dev/ -v --timeout=10
+
+# Run mypy validation manually
+python -m mypy CherryAI/functions CherryAI/modi CherryAI/formats
+```

@@ -439,15 +439,21 @@ class InputExtractionStep(BaseStep):
                 logger.warning("Could not create project: %s", e)
 
     def _sync_lines_to_manifest(self) -> None:
-        """Sync loaded file lines to the manifest (TASK 19 Phase 5)."""
+        """Sync loaded file lines to the manifest (TASK 19 Phase 5).
+        
+        TASK 35.1: Also populates filedir for input/output decoupling.
+        """
         mgr = self.manifest_manager
         if mgr is None or not mgr.is_loaded:
             return
         
-        # Collect all lines
+        # Collect all lines and build filedir entries
         lines: List[Dict[str, Any]] = []
+        file_infos: List[Dict[str, Any]] = []
         idx = 0
+        
         for loaded_file in self._loaded_files:
+            file_start_idx = idx
             for line_text in loaded_file.lines:
                 lines.append({
                     "idx": idx,
@@ -455,10 +461,44 @@ class InputExtractionStep(BaseStep):
                     "source_file": str(loaded_file.path),
                 })
                 idx += 1
+            
+            # Build file info for filedir
+            file_infos.append({
+                "path": str(loaded_file.path),
+                "format": loaded_file.format_id,
+                "line_count": loaded_file.line_count,
+                "encoding": loaded_file.encoding,
+            })
         
-        # Update manifest
+        # Update manifest with lines
         mgr.set_lines(lines)
         mgr.set_source_files([f.path for f in self._loaded_files])
+        
+        # TASK 35.1: Build and set filedir
+        from CherryAI.functions.manifest_manager import FileDirEntry
+        filedir_entries = mgr.build_filedir_from_files(file_infos)
+        mgr.set_filedir(filedir_entries)
+        
+        # TASK 35.2: Copy original files to project folder
+        self._copy_originals_to_project()
+
+    def _copy_originals_to_project(self) -> None:
+        """Copy source files to the project's Original/ directory.
+        
+        TASK 35.2: Ensures the project can be reopened and processed
+        even if original source files are moved or deleted.
+        """
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            return
+        
+        try:
+            copied = mgr.copy_originals_to_project()
+            if copied:
+                logger.info("Copied %d original file(s) to project", len(copied))
+        except Exception as e:
+            logger.warning("Failed to copy originals: %s", e)
+            # Non-fatal - project can still work without copies
 
     def _on_load_manifest(self) -> None:
         """Handle Load Manifest button click."""

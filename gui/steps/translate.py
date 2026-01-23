@@ -894,15 +894,17 @@ class TranslationStep(BaseStep):
         self._model_combo.pack(side="right")
 
         # Bind model to manifest
-        binding = bind_combobox_to_field(
-            self._model_combo,
-            self._model_var,
-            self.manifest,
-            "Model",
-            parent_key="RequestOptions",
+        self._manifest_bindings.append(
+            bind_combobox_to_field(
+                combobox=self._model_combo,
+                var=self._model_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="Model",
+                options=self.MODEL_OPTIONS,
+                default="gpt-4o-mini",
+                parent_key="RequestOptions",
+            )
         )
-        if binding:
-            self._manifest_bindings.append(binding)
 
         # Temperature
         temp_frame = ttk.Frame(frame)
@@ -939,15 +941,18 @@ class TranslationStep(BaseStep):
         self._chunk_spin.pack(side="right")
 
         # Bind chunk size to manifest
-        binding = bind_spinbox_to_field(
-            self._chunk_spin,
-            self._chunk_var,
-            self.manifest,
-            "LinesPerChunk",
-            parent_key="RequestOptions",
+        self._manifest_bindings.append(
+            bind_spinbox_to_field(
+                spinbox=self._chunk_spin,
+                var=self._chunk_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="LinesPerChunk",
+                min_val=5,
+                max_val=100,
+                default=30,
+                parent_key="RequestOptions",
+            )
         )
-        if binding:
-            self._manifest_bindings.append(binding)
 
         # Retry strategy
         retry_frame = ttk.Frame(frame)
@@ -965,15 +970,17 @@ class TranslationStep(BaseStep):
         self._retry_combo.pack(side="right")
 
         # Bind retry strategy to manifest
-        binding = bind_combobox_to_field(
-            self._retry_combo,
-            self._retry_var,
-            self.manifest,
-            "RetryStrategy",
-            parent_key="RequestOptions",
+        self._manifest_bindings.append(
+            bind_combobox_to_field(
+                combobox=self._retry_combo,
+                var=self._retry_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="RetryStrategy",
+                options=[name for name, _ in self.RETRY_STRATEGIES],
+                default="batch",
+                parent_key="RequestOptions",
+            )
         )
-        if binding:
-            self._manifest_bindings.append(binding)
 
         # Max retries
         retries_frame = ttk.Frame(frame)
@@ -991,15 +998,18 @@ class TranslationStep(BaseStep):
         self._retries_spin.pack(side="right")
 
         # Bind max retries to manifest
-        binding = bind_spinbox_to_field(
-            self._retries_spin,
-            self._retries_var,
-            self.manifest,
-            "MaxRetries",
-            parent_key="RequestOptions",
+        self._manifest_bindings.append(
+            bind_spinbox_to_field(
+                spinbox=self._retries_spin,
+                var=self._retries_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="MaxRetries",
+                min_val=1,
+                max_val=10,
+                default=3,
+                parent_key="RequestOptions",
+            )
         )
-        if binding:
-            self._manifest_bindings.append(binding)
 
         # Cache enabled
         cache_frame = ttk.Frame(frame)
@@ -1014,15 +1024,16 @@ class TranslationStep(BaseStep):
         cache_cb.pack(side="left")
 
         # Bind cache enabled to manifest
-        binding = bind_checkbox_to_field(
-            cache_cb,
-            self._cache_var,
-            self.manifest,
-            "EnableRequestCaching",
-            parent_key="RequestOptions",
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=cache_cb,
+                var=self._cache_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="EnableRequestCaching",
+                default=False,
+                parent_key="RequestOptions",
+            )
         )
-        if binding:
-            self._manifest_bindings.append(binding)
 
         # Edit before translation (Task 33.1)
         edit_frame = ttk.Frame(frame)
@@ -1039,15 +1050,16 @@ class TranslationStep(BaseStep):
         edit_cb.pack(side="left")
 
         # Bind edit before translation to manifest
-        binding = bind_checkbox_to_field(
-            edit_cb,
-            self._edit_before_var,
-            self.manifest,
-            "EditBeforeTranslation",
-            parent_key="RequestOptions",
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=edit_cb,
+                var=self._edit_before_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="EditBeforeTranslation",
+                default=False,
+                parent_key="RequestOptions",
+            )
         )
-        if binding:
-            self._manifest_bindings.append(binding)
 
         # Separator before advanced options
         ttk.Separator(frame, orient="horizontal").pack(fill="x", pady=10)
@@ -1066,15 +1078,16 @@ class TranslationStep(BaseStep):
         lbl_cb.pack(side="left")
 
         # Bind line-by-line to manifest
-        binding = bind_checkbox_to_field(
-            lbl_cb,
-            self._line_by_line_var,
-            self.manifest,
-            "LineByLineMode",
-            parent_key="RequestOptions",
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=lbl_cb,
+                var=self._line_by_line_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="LineByLineMode",
+                default=False,
+                parent_key="RequestOptions",
+            )
         )
-        if binding:
-            self._manifest_bindings.append(binding)
 
         # Context lines (enabled only when line-by-line is on)
         context_frame = ttk.Frame(frame)
@@ -1093,15 +1106,18 @@ class TranslationStep(BaseStep):
         self._context_spin.pack(side="right")
 
         # Bind context lines to manifest
-        binding = bind_spinbox_to_field(
-            self._context_spin,
-            self._context_lines_var,
-            self.manifest,
-            "ContextLines",
-            parent_key="RequestOptions",
+        self._manifest_bindings.append(
+            bind_spinbox_to_field(
+                spinbox=self._context_spin,
+                var=self._context_lines_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="ContextLines",
+                min_val=0,
+                max_val=5,
+                default=1,
+                parent_key="RequestOptions",
+            )
         )
-        if binding:
-            self._manifest_bindings.append(binding)
 
         # Thinking mode (for Claude models)
         thinking_frame = ttk.Frame(frame)
@@ -1117,15 +1133,16 @@ class TranslationStep(BaseStep):
         thinking_cb.pack(side="left")
 
         # Bind thinking to manifest
-        binding = bind_checkbox_to_field(
-            thinking_cb,
-            self._thinking_var,
-            self.manifest,
-            "Thinking",
-            parent_key="RequestOptions",
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=thinking_cb,
+                var=self._thinking_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="Thinking",
+                default=False,
+                parent_key="RequestOptions",
+            )
         )
-        if binding:
-            self._manifest_bindings.append(binding)
 
         # Thinking budget
         budget_frame = ttk.Frame(frame)
@@ -1145,15 +1162,18 @@ class TranslationStep(BaseStep):
         self._budget_spin.pack(side="right")
 
         # Bind thinking budget to manifest
-        binding = bind_spinbox_to_field(
-            self._budget_spin,
-            self._thinking_budget_var,
-            self.manifest,
-            "ThinkingBudget",
-            parent_key="RequestOptions",
+        self._manifest_bindings.append(
+            bind_spinbox_to_field(
+                spinbox=self._budget_spin,
+                var=self._thinking_budget_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="ThinkingBudget",
+                min_val=1000,
+                max_val=100000,
+                default=10000,
+                parent_key="RequestOptions",
+            )
         )
-        if binding:
-            self._manifest_bindings.append(binding)
 
         # Help text for advanced options
         ttk.Label(

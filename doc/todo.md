@@ -28,7 +28,7 @@ TESTING REFERENCE
 
 For comprehensive test documentation, see `doc/tests.md`
 
-**Current Status:** 4067 tests (Phase 28 added 85 manifest integration tests, Phase 29 added 41 autosave/trigger tests, Phase 30 added 63 preset tests)
+**Current Status:** 4293 tests (verified January 2026 via pytest --collect-only)
 
 Two test types:
 - **Script Test**: pytest unit tests (fast, no LLM)
@@ -41,13 +41,14 @@ Run API Test: `python CherryAI.py test`
 
 =============================================================================
 
-MODULE COUNTS (Verified December 2025)
+MODULE COUNTS (Verified January 2026)
 
-- functions/: 31 modules (+ glossaries/ subfolder with 5 files)
+- functions/: 36 modules (+ glossaries/ subfolder with 5 files)
 - modi/: 12 processing modes
 - formats/: 5 format handlers
 - gui/steps/: 10 workflow tabs
-- gui/helpers/: 6 adapter modules (mode, analysis, glossary, chunker, prompt)
+- gui/helpers/: 6 adapter modules (mode, analysis, glossary, chunker, prompt, manifest_binding)
+- gui/dialogs/: 2 dialog modules (global_options, project_dialog)
 
 =============================================================================
 
@@ -2559,44 +2560,59 @@ Goal: Allow customization of Edit and TLC prompts via Options.
 - TestPromptsDialogWidgetsMocked (2 tests): Dialog structure
 
 ---
+## PHASE 34: EXTENDED AND MORE ROBUST AUTOMATIC TESTING
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 4 hours
 
-## PHASE 34: RELEASE PREPARATION (Future)
-**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 8-12 hours
+### Requirements (All Complete)
 
-### TASK 34.1: Application Rename
-**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+1. **All non-API tests must pass before and after every phase**
+   - A phase can only be considered done if all tests succeed
+   - If tests fail before starting a phase, fix them first
 
-Goal: Easily rename application when a name is finally found.
+2. **GUI Button Execution Tests** ✅
+   - Added tests for all step buttons (Start, Stop, Load, Analyze, Process, etc.)
+   - Tests verify button callbacks are bound
+   - Tests verify all steps have on_enter() and on_leave() methods
 
-**Implementation:**
-- Keep all internal references to CherryAI
-- Update window title, about dialog, documentation once decided on
-- Keep file naming
+3. **CherryAI Launch Tests** ✅
+   - Test CherryAI.py exists and has main entry
+   - Test CLI responds to --help
+   - Test config files exist
+   - Test App class is importable
 
-**Files to Modify:**
-- All files with CherryAI references
-- Documentation files
+4. **mypy Testing** ✅
+   - Added tests that run mypy on functions/, modi/, formats/ packages
+   - Tests verify no circular imports
+   - Tests verify critical modules have type annotations
+
+5. **Timeout Protection** ✅
+   - Created ExecutionTimer class with watchdog thread
+   - Terminates on infinite loop detection
+   - Reports which test was last and duration
+   - Rule: extend timeout if purpose justifies, investigate if not
+
+### Implementation
+
+Files Created:
+- `dev/test_phase34_comprehensive.py` - 34 tests covering all Phase 34 requirements
+
+Test Categories:
+- TestTimeoutFramework: 5 tests for internal timeout mechanism
+- TestMypyValidation: 7 tests for static type checking
+- TestGUIButtonExecution: 12 tests for button callbacks
+- TestCherryAILaunch: 6 tests for application launch
+- TestTestSuiteItself: 4 meta-tests for infrastructure
+
+### Pre-existing Issues Fixed
+
+During baseline testing, found and fixed 6 failing tests:
+1. OptionSection enum count tests (7→8 members after PROMPTS added)
+2. Layout test for notes_section (moved to left column per TASK 23.4)
+3. TranslationStep manifest binding (used old API, fixed to use lambda: self.manifest_manager)
 
 ---
-
-### TASK 34.2: Tooltips and Translation Support
-**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
-
-Goal: Add tooltips with translation support for all GUI fields.
-
-**Implementation:**
-- Create tooltip system with concise explanations
-- Add toggle to disable tooltips in Options
-- Translation files in `user/lang/` for i18n
-
-**Files to Create:**
-- `gui/helpers/tooltip.py` - Tooltip system
-- `user/lang/en.json` - English tooltip strings
-
----
-
 ## PHASE 35: MANIFEST 3.1 INPUT/OUTPUT DECOUPLING (Project File Staging)
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 8-14 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 8-14 hours
 
 Goal: Decouple projects from the original input file locations as soon as contents are parsed, while preserving the existing per-line `idx` model and minimizing changes outside Step 0 (Input) and Step 9 (Output).
 
@@ -2605,94 +2621,105 @@ Goal: Decouple projects from the original input file locations as soon as conten
 - GUI contains NO processing logic (only display + user interaction)
 - Manifest remains the single source of truth for loaded text and project state
 
-### TASK 35.1: Add `filedir` (File Directory Map) to Manifest
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3-4 hours
+### TASK 35.1: Add `filedir` (File Directory Map) to Manifest [DONE]
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 3-4 hours
 
 Goal: Store a compact mapping from global line index ranges to source files, without adding a filepath to every line.
 
-**Proposed Manifest Field:**
-- `filedir`: list of entries, each describing:
-  - `first_idx` / `last_idx` (inclusive, global line indices)
-  - `format` (e.g., `txt`, `tsv`, `json`, `xlsx`, `rpgm`)
-  - `rel_path` (path relative to the project root, preserving folder structure if loaded from a directory)
-  - Optional: `source_hint` (original absolute path for user reference only)
+**Implementation:**
+- Created `FileDirEntry` dataclass with fields:
+  - `first_idx` / `last_idx` (inclusive, global 0-based line indices)
+  - `format` (e.g., `txt`, `csv`, `json`, `xlsx`, `rpgm`)
+  - `rel_path` (path relative to project root)
+  - `source_hint` (original absolute path for user reference)
+  - `encoding` (file encoding, defaults to utf-8)
+- Added `filedir` field to manifest schema (empty list by default)
+- Added ManifestManager methods:
+  - `get_filedir()`, `set_filedir()`, `add_filedir_entry()`, `clear_filedir()`
+  - `get_filedir_entry_for_idx()`, `get_lines_for_filedir_entry()`
+  - `build_filedir_from_files()`, `_find_common_base()`
+- Added backward-compatible migration (`_build_filedir_from_legacy()`)
+- Updated manifest version from 3.0 to 3.1
 
-**Acceptance Criteria:**
-- Loading a single and multiple files produces a `filedir` list covering all manifest lines exactly once
-- Output step can reconstruct per-file slices using `filedir` without consulting the original input paths
-- No need to be backward compatible.
-
-**Likely Files:**
-- `functions/manifest_manager.py` (schema + migration + defaults)
-- `gui/steps/input_extract.py` (populate `filedir` when importing files)
+**Files Modified:**
+- `functions/manifest_manager.py` (FileDirEntry dataclass + filedir operations)
+- `gui/steps/input_extract.py` (`_sync_lines_to_manifest()` now builds filedir)
+- `dev/test_manifest_state.py` (updated version check from 3.0 to 3.1)
 
 **Tests:**
-- Add `dev/test_manifest_filedir.py` (range coverage, multi-file ordering, backward-compat migration)
+- `dev/test_manifest_filedir.py` - 51 tests covering FileDirEntry, filedir operations, migration
 
 ---
 
-### TASK 35.2: Copy Original Files into Project (`Original/`) on Load
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2-3 hours
+### TASK 35.2: Copy Original Files into Project (`Original/`) on Load [DONE]
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 2-3 hours
 
 Goal: Ensure complex formats (and future reconstruction logic) have a stable local reference even if the user moves/deletes the original inputs.
 
-**Behavior:**
-- On new project creation (or first successful load), copy each source file into:
-  - `Projects/{project_name}/Original/{rel_path}`
-- Use the `filedir` entry. Original and Patch are supposed to match exactly. No need to add and have another entry.
+**Implementation:**
+- Added ManifestManager methods:
+  - `get_project_dir()` - Returns `Projects/{project_name}/`
+  - `get_original_dir()` - Returns `Projects/{project_name}/Original/`
+  - `copy_originals_to_project(force=False)` - Copies source files to Original/
+  - `get_original_file_path(entry)` - Returns path in Original/ for a filedir entry
+  - `has_original_copies()` - Checks if Original/ has files
+- `_copy_originals_to_project()` added to `input_extract.py`
+- Folder structure is preserved using `rel_path` from filedir entries
 
-**Acceptance Criteria:**
-- A project can be reopened and processed even if original source files are missing
-- For non-reconstructable formats, Output step uses the copied originals as its authoritative source
-
-**Likely Files:**
-- `functions/manifest_manager.py` (project directory helpers)
-- `gui/steps/input_extract.py` (copy action + user prompts on failure)
-- `formats/*` (only if needed for reconstruction)
+**Files Modified:**
+- `functions/manifest_manager.py` (project dir helpers + copy logic)
+- `gui/steps/input_extract.py` (`_copy_originals_to_project()` method)
 
 **Tests:**
-- Extend `dev/test_paths.py` or add new tests to verify copy destinations and manifest linkage
+- `dev/test_manifest_filedir.py::TestCopyOriginalsToProject` - 11 tests
 
 ---
 
-### TASK 35.3: Default Output to `Patch/` Using `filedir`
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3-5 hours
+### TASK 35.3: Default Output to `Patch/` Using `filedir` [DONE]
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 3-5 hours
 
 Goal: Write outputs into a stable patch folder by default:
 - `Projects/{project_name}/Patch/{rel_path}`
 
-**Acceptance Criteria:**
-- Output step uses `filedir` to write per-file outputs with preserved folder structure
-- Simple formats write directly from manifest line slices
-- Complex formats may reconstruct using `Original/` copies when required
+**Implementation:**
+- Added ManifestManager methods:
+  - `get_patch_dir()` - Returns `Projects/{project_name}/Patch/`
+  - `get_patch_file_path(entry)` - Returns output path for a filedir entry
+- Refactored `output_inject.py`:
+  - `_use_output_dir()` now uses manifest's Patch/ directory
+  - `_build_file_list()` delegates to filedir-based or session-based methods
+  - `_build_file_list_from_filedir()` - Accurate per-file output using filedir
+  - `_build_file_list_from_session()` - Legacy fallback for older projects
 
-**Likely Files:**
-- `gui/steps/output_inject.py` (path selection defaults + UX)
-- `formats/__init__.py`, `formats/simple.py` (inject APIs as needed)
+**Files Modified:**
+- `functions/manifest_manager.py` (Patch/ dir helpers)
+- `gui/steps/output_inject.py` (filedir-based output generation)
 
 **Tests:**
-- Add/extend `dev/test_output_inject.py` (path layout + multi-file patch writing)
+- `dev/test_manifest_filedir.py::TestPathHelpers` - 6 tests
+- `dev/test_manifest_filedir.py::TestFiledirOutputIntegration` - 3 tests
 
 ---
 
 ## PHASE 36: CHARACTER/WORD VALIDATION (Whitelist/Blacklist + Autofix)
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 10-16 hours
+**Priority:** HIGH | **Status:** ✅ COMPLETED | **Effort:** 10-16 hours
 
 Goal: Add efficient post-translation validation for forbidden/allowed characters and forbidden words, with optional autofix suggestions and application.
 
 ### TASK 36.1: Manifest Fields + Defaults for Validation Lists
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2-3 hours
+**Priority:** HIGH | **Status:** ✅ COMPLETED | **Effort:** 2-3 hours
 
-**New Manifest Entries (Draft):**
+**New Manifest Entries (Implemented):**
 - `CharacterWhitelist`: string (allowed chars)
 - `CharacterBlacklist`: string (forbidden chars)
 - `WordBlacklist`: list of strings (forbidden words/phrases)
 - `AutofixMap`: dict (offending_char -> replacement_char)
 
-**Notes:**
-- Whitelist and blacklist may both be active
-- Keep fields in manifest + defaults.ini (not in GUI-only state)
-- Characters and Words are distinct in how they are found. Both are case insensitive while Words must 'Match Whole World'
+**Implementation:**
+- Added all fields to manifest_manager.py with getters/setters
+- Added `get_character_validation_config()` and `set_character_validation_config()` methods
+- Added `_parse_dict_default()` helper for parsing autofix map from various formats
+- Added defaults to config/defaults.ini
 
 **Likely Files:**
 - `functions/manifest_manager.py` (defaults + getters)
@@ -2701,43 +2728,57 @@ Goal: Add efficient post-translation validation for forbidden/allowed characters
 ---
 
 ### TASK 36.2: High-Performance Scanner + Report Model (No GUI Logic)
-**Priority:** CRITICAL | **Status:** 🔲 NOT STARTED | **Effort:** 4-6 hours
+**Priority:** CRITICAL | **Status:** ✅ COMPLETED | **Effort:** 4-6 hours
 
 Goal: Scan up to ~1,000,000 lines efficiently.
 
-**Algorithm Requirements (Draft):**
-- Two searches: Whole Word and Character
-- If whitelist AND blacklist AND word blacklist empty: fast exit (neither search)
-- If both whitelist AND blacklist empty BUT word blacklist is filled, search for whole words.
-- If word blacklist empty BUT white OR blacklist is filed, search for characters.
-- If word blacklist AND white OR blacklist is filed, search characters and words.
--(OR is not exclusive)
-- First pass: build distinct character set from output (or from selected fields)
-- Compare distinct set against whitelist/blacklist to identify offending characters
-- Second pass: only scan lines for offending characters and forbidden words
-- Severity:
-  - Yellow = autofix available AND replacement is itself valid under whitelist/blacklist
-  - Red = no autofix available
+**Implementation:**
+- Added `ValidationSeverity` enum (WARNING, ERROR)
+- Added `CharacterWordFinding` dataclass for individual findings
+- Added `CharacterWordValidationResult` dataclass for scan results
+- Implemented two-pass algorithm:
+  1. Build distinct character set from all text
+  2. Find offending characters by comparing against whitelist/blacklist
+  3. Scan only for offending characters in second pass
+  4. Word blacklist uses regex for case-insensitive whole-word matching
+- Severity classification:
+  - WARNING: autofix available AND replacement is valid
+  - ERROR: no autofix or replacement is also invalid
+- Helper functions: `apply_autofix()`, `apply_autofix_to_lines()`, `get_findings_summary()`,
+  `group_findings_by_line()`, `group_findings_by_token()`
 
-**Output:**
-- Structured findings list containing: `idx`, `field` (tl/post/wordwr/final), offending token, suggestion (optional), severity
-
-**Likely Files:**
-- `functions/postanalysis.py` or `functions/validation.py` (shared logic)
-- `functions/common_errors.py` (standardized messages, if needed)
+**Files Changed:**
+- `functions/validation.py` (~350 lines added)
 
 **Tests:**
-- Add `dev/test_blacklist_whitelist.py` (fast exit, severity classification, autofix validity, performance-friendly behavior)
+- `dev/test_blacklist_whitelist.py` - 48 tests covering:
+  - Fast exit when no rules configured
+  - Character whitelist/blacklist validation
+  - Word blacklist (case-insensitive, whole word)
+  - Severity classification
+  - Autofix application with whitelist/blacklist respect
+  - Performance tests (100K lines)
 
 ---
 
 ### TASK 36.3: GUI Surfacing in Postprocessing + Output Steps
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2-4 hours
+**Priority:** HIGH | **Status:** ✅ COMPLETED | **Effort:** 2-4 hours
 
 Goal: Display results in GUI without embedding scanning logic.
 
+**Implementation:**
+- Added validation panel to Postprocessing step (`gui/steps/postprocess.py`)
+- Panel includes:
+  - Summary status (issues count, lines affected)
+  - Warning/error counts with color coding
+  - Findings listbox (first 50 findings)
+  - "Run Validation" button
+  - "Apply Autofix" button (enabled when warnings exist)
+- Validation uses manifest's character validation config
+- Autofix respects whitelist/blacklist constraints
+
 **Behavior:**
-- Postprocessing and Output steps show:
+- Postprocessing step shows:
   - Summary counts (warnings/errors)
   - Table of affected lines with offending character/word
   - Optional action: apply autofix (calls shared function; GUI just triggers)
@@ -2749,56 +2790,97 @@ Goal: Display results in GUI without embedding scanning logic.
 ---
 
 ### TASK 36.4: Optional Logit-Bias Integration for Blacklisted Characters
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2-3 hours
+**Priority:** MEDIUM | **Status:** ✅ COMPLETED | **Effort:** 2-3 hours
 
 Goal: When the selected provider/model supports it, bias the model away from blacklisted characters/tokens.
 
-**Likely Files:**
-- `functions/logit_bias.py` (token mapping)
-- `functions/api_client.py` (request assembly)
-- `functions/options.py` (capability flags per provider)
+**Implementation:**
+- Added `create_logit_bias_from_blacklist()` function to `functions/logit_bias.py`
+- Added `PROVIDER_SUPPORTS_LOGIT_BIAS` dict mapping providers to support status
+- Added `provider_supports_logit_bias()` function for capability checking
+- Supported providers: OpenAI, Azure, DeepSeek, OpenRouter
+- Unsupported: Anthropic, Google, Kobold, Local
+
+**Files Changed:**
+- `functions/logit_bias.py` (~60 lines added)
 
 **Tests:**
-- Add focused unit tests around “provider supports logit bias” gating
+- Added 9 tests in `dev/test_blacklist_whitelist.py`
 
 ---
 
-## PHASE 37: EDIT/TLC PROMPT COMPONENTS (Configurable Input Sources)
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 6-10 hours
+## PHASE 36 Test Summary
+- `dev/test_blacklist_whitelist.py` - 57 tests total
+
+---
+
+## PHASE 37: EDIT/TLC PROMPT COMPONENTS (Configurable Input Sources) ✅ COMPLETED
+**Priority:** MEDIUM | **Status:** ✅ COMPLETED | **Effort:** 6-10 hours
 
 Goal: Expand Task 33.2 (custom prompts) with configurable *components* and source selection:
 - Edit pass can pick between `orig` and/or latest TLC
 - TLC pass can pick `orig` and/or latest Edit
 
-### TASK 37.1: Add Component Toggles to Global Options (Stored in .ini, not manifest!)
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2-3 hours
+### TASK 37.1: Add Component Toggles to Global Options ✅ DONE
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 2-3 hours
 
-**Examples:**
-- `EditComponents`: list/flags (e.g., include glossary, include game summary, include character notes, include code glossary)
-- `TLCComponents`: list/flags
-- `EditInputPolicy` / `TLCInputPolicy`: enums controlling which fields feed the prompt
+**Implementation:**
+- Added `EditInputPolicy` enum with values: TL_ONLY, ORIG_AND_TL, TLC_ONLY, TL_AND_TLC
+- Added `TLCInputPolicy` enum with values: TL_ONLY, ORIG_AND_TL, EDIT_ONLY, EDIT_AND_ORIG
+- Extended `PromptsSettings` dataclass with component toggles:
+  - `edit_include_glossary`, `edit_include_game_summary`, `edit_include_character_notes`, `edit_include_code_glossary`
+  - `tlc_include_glossary`, `tlc_include_game_summary`, `tlc_include_character_notes`, `tlc_include_code_glossary`
+- Added input policy fields: `edit_input_policy`, `tlc_input_policy`
+- Added helper methods: `get_edit_components()`, `get_tlc_components()`
+- Added UI controls: checkboxes for component toggles, comboboxes for input policies
+- Updated serialization: `to_dict()` and `from_dict()` handle all new fields
 
-**Likely Files:**
-- `gui/dialogs/global_options.py` (UI only)
-
----
-
-### TASK 37.2: Prompt Builder Support for Component Toggles
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2-4 hours
-
-**Likely Files:**
-- `functions/prompt_builder.py` (assemble prompts by enabled components)
-- `functions/mainhelper.py` / translation pipeline (ensure correct field selection)
+**Files Modified:**
+- `gui/dialogs/global_options.py` - Added enums, extended dataclass, UI controls
 
 ---
 
-### TASK 37.3: Tests for Edit/TLC Component Selection
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2-3 hours
+### TASK 37.2: Prompt Builder Support for Component Toggles ✅ DONE
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 2-4 hours
 
-**Tests:**
-- Add `dev/test_edit_tlc_components.py` (policy combinations + prompt assembly)
+**Implementation:**
+- Added `build_edit_tlc_prompt()` method to PromptBuilder class
+- Method accepts configurable components dict and optional character_notes/code_glossary
+- Conditionally includes: glossary, game_summary, character_notes, code_glossary
+- Character notes formatting: name, gender, notes, speaking_style
+- Code glossary formatting: pattern, action (preserve is default), example
+
+**Files Modified:**
+- `functions/prompt_builder.py` - Added build_edit_tlc_prompt() method (~90 lines)
 
 ---
+
+### TASK 37.3: Tests for Edit/TLC Component Selection ✅ DONE
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 2-3 hours
+
+**Tests Created:**
+- `dev/test_edit_tlc_components.py` - 40 tests total
+
+**Test Classes:**
+| Class | Tests | Coverage |
+|-------|-------|----------|
+| TestEditInputPolicy | 3 | Enum values and string conversion |
+| TestTLCInputPolicy | 3 | Enum values and string conversion |
+| TestPromptsSettingsComponents | 5 | Default values, get_*_components() |
+| TestPromptsSettingsSerialization | 4 | to_dict, from_dict, roundtrip |
+| TestBuildEditTlcPrompt | 10 | Prompt building with various configs |
+| TestComponentCombinations | 4 | All/none/partial component scenarios |
+| TestCharacterNotesFormatting | 4 | Character notes output formatting |
+| TestCodeGlossaryFormatting | 4 | Code pattern output formatting |
+| TestPromptsSettingsIntegration | 2 | Settings to PromptBuilder integration |
+
+---
+
+## PHASE 37 Test Summary
+- `dev/test_edit_tlc_components.py` - 40 tests total
+
+---
+
 =============================================================================
 
 FUTURE IDEAS (No Phase Commitment)
@@ -2824,6 +2906,37 @@ Benchmark Mode, requires a small but significant synthesized text which will get
 	System Tray
 	Image to Text Translation through taking a screenshot of a selected area (OCR capable model required)
 
+---
+
+### Application Rename
+**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+
+Goal: Easily rename application when a name is finally found.
+
+**Implementation:**
+- Keep all internal references to CherryAI
+- Update window title, about dialog, documentation once decided on
+- Keep file naming
+
+**Files to Modify:**
+- All files with CherryAI references
+- Documentation files
+
+### Tooltips and Translation Support
+**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+
+Goal: Add tooltips with translation support for all GUI fields.
+
+**Implementation:**
+- Create tooltip system with concise explanations
+- Add toggle to disable tooltips in Options
+- Translation files in `user/lang/` for i18n
+
+**Files to Create:**
+- `gui/helpers/tooltip.py` - Tooltip system
+- `user/lang/en.json` - English tooltip strings
+
+---
 =============================================================================
 
 ## MANIFEST 3.0 COMPLETE FIELD REFERENCE

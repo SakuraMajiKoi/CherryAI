@@ -33,7 +33,7 @@ from CherryAI.functions.manifest_fields import (
 
 if TYPE_CHECKING:
     from CherryAI.gui.state.store import SessionState
-    from CherryAI.functions.manifest_manager import ManifestManager
+    from CherryAI.functions.manifest_manager import ManifestManager, FileDirEntry
 
 logger = logging.getLogger(__name__)
 
@@ -959,7 +959,21 @@ class OutputInjectStep(BaseStep):
                 self._refresh_preview()
 
     def _use_output_dir(self) -> None:
-        """Set destination to default output directory."""
+        """Set destination to project's Patch directory (TASK 35.3).
+        
+        Uses Projects/{project_name}/Patch/ as the default output location.
+        Falls back to output/ folder if no manifest is loaded.
+        """
+        # TASK 35.3: Use project's Patch directory as default
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            patch_dir = mgr.get_patch_dir()
+            patch_dir.mkdir(parents=True, exist_ok=True)
+            self._dest_var.set(str(patch_dir))
+            self._refresh_preview()
+            return
+        
+        # Fallback to output/ folder
         output_dir = Path(__file__).parent.parent.parent / "output"
         output_dir.mkdir(exist_ok=True)
         self._dest_var.set(str(output_dir))
@@ -1278,7 +1292,84 @@ class OutputInjectStep(BaseStep):
         self._refresh_table()
 
     def _build_file_list(self) -> None:
-        """Build the list of output files from session data."""
+        """Build the list of output files from session data or manifest filedir.
+        
+        TASK 35.3: Uses filedir entries when available for accurate per-file
+        output generation with preserved folder structure.
+        """
+        # Try to use filedir from manifest first (TASK 35.3)
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            filedir = mgr.get_filedir()
+            if filedir:
+                self._build_file_list_from_filedir(filedir)
+                return
+        
+        # Fallback to session data (legacy behavior)
+        self._build_file_list_from_session()
+    
+    def _build_file_list_from_filedir(
+        self,
+        filedir: List["FileDirEntry"],
+    ) -> None:
+        """Build output file list from filedir entries.
+        
+        TASK 35.3: Uses filedir for per-file output with accurate line counts
+        and preserved folder structure.
+        """
+        from CherryAI.functions.manifest_manager import FileDirEntry
+        
+        # Get output options
+        strategy = NamingStrategy(self._naming_var.get())
+        value = self._naming_value_var.get()
+        dest_base = self._dest_var.get() or ""
+        format_ext = FORMAT_EXTENSIONS.get(
+            OutputFormat(self._format_var.get().lower()),
+            ".txt"
+        )
+        
+        # If no destination set, use Patch/ directory
+        mgr = self.manifest_manager
+        if not dest_base and mgr is not None and mgr.is_loaded:
+            dest_base = str(mgr.get_patch_dir())
+        
+        self._files = []
+        
+        for i, entry in enumerate(filedir):
+            # Preserve folder structure from rel_path
+            rel_path = Path(entry.rel_path)
+            stem = rel_path.stem
+            parent = rel_path.parent
+            
+            # Generate output name
+            output_name = self._generate_output_name(rel_path, strategy, value, format_ext)
+            
+            # Build full output path preserving structure
+            if self._preserve_var.get() and parent != Path("."):
+                if strategy == NamingStrategy.SUBFOLDER and dest_base:
+                    output_path = Path(dest_base) / value / parent / output_name
+                elif dest_base:
+                    output_path = Path(dest_base) / parent / output_name
+                else:
+                    output_path = parent / output_name
+            else:
+                if strategy == NamingStrategy.SUBFOLDER and dest_base:
+                    output_path = Path(dest_base) / value / output_name
+                elif dest_base:
+                    output_path = Path(dest_base) / output_name
+                else:
+                    output_path = Path(output_name)
+            
+            self._files.append(OutputFile(
+                idx=i,
+                source_path=entry.source_hint,
+                output_path=str(output_path),
+                format=OutputFormat(self._format_var.get().lower()),
+                line_count=entry.line_count,
+            ))
+    
+    def _build_file_list_from_session(self) -> None:
+        """Build output file list from session data (legacy method)."""
         step_data = self.get_step_data()
         source_files = step_data.get("source_files", [])
         lines = step_data.get("lines", [])

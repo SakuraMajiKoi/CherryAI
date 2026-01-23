@@ -716,6 +716,120 @@ class PromptBuilder:
 
 
         return "\n\n".join(prompt_parts)
+
+    def build_edit_tlc_prompt(
+        self,
+        base_prompt: str,
+        lines: List[str],
+        components: Optional[Dict[str, bool]] = None,
+        character_notes: Optional[List[Dict[str, Any]]] = None,
+        code_glossary: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
+        """Build a system prompt for Edit or TLC passes with configurable components.
+
+        Args:
+            base_prompt: The custom Edit or TLC prompt (from PromptsSettings).
+            lines: The lines being processed (for glossary term matching).
+            components: Dict of component toggles:
+                - glossary: Include glossary terms (default True)
+                - game_summary: Include game summary (default True)
+                - character_notes: Include character notes (default True)
+                - code_glossary: Include code glossary (default True)
+            character_notes: List of character note dicts from manifest.
+            code_glossary: List of code pattern dicts from manifest.
+
+        Returns:
+            Assembled system prompt string.
+
+        PHASE 37 (TASK 37.2): Allows Edit/TLC prompts to selectively include
+        context components like glossary, game summary, character notes, etc.
+        """
+        # Default components if not specified
+        if components is None:
+            components = {
+                "glossary": True,
+                "game_summary": True,
+                "character_notes": True,
+                "code_glossary": True,
+            }
+
+        prompt_parts: List[str] = []
+
+        # 1. Base Edit/TLC prompt (always included)
+        if base_prompt and base_prompt.strip():
+            prompt_parts.append(base_prompt.strip())
+
+        # 2. Game summary (conditional)
+        if components.get("game_summary", True):
+            if self.game_summary and not self._is_game_summary_empty():
+                prompt_parts.append(self.game_summary)
+
+        # 3. Glossary terms (conditional)
+        if components.get("glossary", True):
+            batch_text = "\n".join(lines)
+            relevant_entries = []
+
+            for original, entry in self.glossary.items():
+                if original in batch_text:
+                    relevant_entries.append(entry)
+
+            # Format Glossary Block (only if terms found with translations)
+            entries_with_translation = [e for e in relevant_entries if e.translation]
+            if entries_with_translation:
+                glossary_block = "# Glossary\nUse these terms strictly:\n"
+                for entry in entries_with_translation:
+                    notes = f" ({entry.notes})" if entry.notes else ""
+                    glossary_block += f"- {entry.original}: {entry.translation}{notes}\n"
+                prompt_parts.append(glossary_block)
+
+            # Add Character List from glossary (if glossary enabled)
+            characters = [e for e in relevant_entries if e.entry_type == TYPE_NAME and e.translation]
+            if characters:
+                char_block = "# Game Characters\n"
+                for char in characters:
+                    gender = char.gender if char.gender else "Unknown"
+                    char_block += f"- {char.original}: {char.translation} (Gender: {gender})\n"
+                prompt_parts.append(char_block)
+
+        # 4. Character notes from manifest (conditional)
+        if components.get("character_notes", True) and character_notes:
+            char_notes_block = "# Character Notes\n"
+            for char in character_notes:
+                name = char.get("name") or char.get("original_name", "Unknown")
+                notes = char.get("notes", "")
+                style = char.get("speaking_style", "")
+                gender = char.get("gender", "")
+                if notes or style:
+                    char_notes_block += f"- {name}"
+                    if gender:
+                        char_notes_block += f" ({gender})"
+                    char_notes_block += ":"
+                    if notes:
+                        char_notes_block += f" {notes}"
+                    if style:
+                        char_notes_block += f" [Style: {style}]"
+                    char_notes_block += "\n"
+            if char_notes_block != "# Character Notes\n":
+                prompt_parts.append(char_notes_block)
+
+        # 5. Code glossary from manifest (conditional)
+        if components.get("code_glossary", True) and code_glossary:
+            code_block = "# Code Patterns\nPreserve these code patterns exactly:\n"
+            for pattern in code_glossary:
+                pat = pattern.get("pattern", "")
+                action = pattern.get("action", "preserve")
+                example = pattern.get("example", "")
+                if pat:
+                    code_block += f"- {pat}"
+                    if action != "preserve":
+                        code_block += f" [{action}]"
+                    if example:
+                        code_block += f" (e.g., {example})"
+                    code_block += "\n"
+            if code_block != "# Code Patterns\nPreserve these code patterns exactly:\n":
+                prompt_parts.append(code_block)
+
+        return "\n\n".join(prompt_parts)
     
     def update_batch_context(
         self, 

@@ -8,17 +8,19 @@ AI AGENT INSTRUCTIONS
 ---------------------
 This document describes CherryAI's USER-FACING FEATURES and CAPABILITIES.
 When implementing or modifying features:
-- ALL processing logic belongs in `functions/` (33 modules) or `modi/` (12 modes)
+- ALL processing logic belongs in `functions/` (36 modules) or `modi/` (12 modes)
 - GUI code (gui/) should ONLY handle display and user interaction
 - CLI code shares the same `functions/` modules as GUI
 - Check the TABLE OF CONTENTS below to find relevant feature documentation
 - Cross-reference with `technical.md` for implementation details
 
-VERIFIED MODULE COUNTS (Phase 15 Audit):
-- functions/: 33 modules (+ glossaries/ subfolder with 5 files)
-- modi/: 12 processing modes (0 integrated with GUI!)
-- formats/: 5 format handlers (2 integrated with GUI)
+VERIFIED MODULE COUNTS (January 2026):
+- functions/: 36 modules (+ glossaries/ subfolder with 5 files)
+- modi/: 12 processing modes
+- formats/: 5 format handlers
 - gui/steps/: 10 workflow tabs
+- gui/helpers/: 6 adapter modules
+- gui/dialogs/: 2 dialog modules
 
 For module-level documentation, see: doc/technical.md
 For test documentation, see: doc/tests.md
@@ -79,12 +81,13 @@ TABLE OF CONTENTS
    - Line-by-Line Translation Mode
    - Translation Style Presets
 
-5. MANIFEST v3.0 - PROFESSIONAL TRANSLATION WORKFLOW
+5. MANIFEST v3.1 - PROFESSIONAL TRANSLATION WORKFLOW
    - How It Works
    - PREPRO_OPS: Per-Line Operation Metadata
    - The Workflow Stages
    - Quality Check Cycles
-   - GUI Project Integration (v3.0)
+   - GUI Project Integration (v3.1)
+   - Project File Staging (v3.1)
 
 6. UPDATING TRANSLATIONS FOR PATCHED GAMES
 
@@ -406,6 +409,14 @@ MANIFESTS
 - When translating the same file later, load the manifest to use the same rules
 - Tracks what was protected in each file
 - Helps with consistency
+
+PROJECT FILE STAGING (v3.1)
+- Input/output decoupling via `filedir` field maps line index ranges to files
+- Source files are copied to `Projects/{project_name}/Original/` on load
+- Translated files are written to `Projects/{project_name}/Patch/`
+- Projects remain functional even if original source files are moved/deleted
+- Folder structure is preserved for multi-file projects
+- Supports per-file encoding (utf-8, shift_jis, etc.)
 
 DRY RUN / TEST MODE
 - Try your rules without actually translating
@@ -1395,35 +1406,34 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - gui/steps/postprocess.py - Postprocessing tab
   - gui/steps/wordwrap_overwrite.py - Wordwrap & Overwrite tab
   - gui/steps/output_inject.py - Output & Injection tab
-  - gui/components/table.py - Shared table component
+  - gui/components/table.py - Shared table component (708 lines)
   - gui/components/ - Reusable UI components
 - Legacy GUI preserved at functions/gui_legacy.py
 
-GUI TABLE VIEW & EDITOR (Planned)
-- Professional spreadsheet-like interface for manifest editing
-- **Standard Table Features:**
+GUI TABLE VIEW & EDITOR (Implemented)
+- Professional spreadsheet-like interface for manifest editing (gui/components/table.py)
+- **Standard Table Features (Implemented):**
   - Sortable columns (click header to sort)
-  - Column resizing and reordering
-  - Filter by any field
+  - Column visibility toggle (Columns menu)
+  - Filter by any field (search bar)
   - Search within table
-- **Editing:**
+  - Virtualized scrolling for large files (10k+ lines)
+- **Editing (Implemented):**
   - In-place cell editing (double-click to edit)
-  - Multi-cell selection (Shift+Click, Ctrl+Click)
+  - Multi-select with checkboxes (optional)
+  - CSV export functionality
+- **Tag Management (Implemented):**
+  - Add/remove tags from rows via API
+  - Tag-based row styling (error, success, warning)
+  - Color-coded rows based on tag severity
+- **Advanced Features (Planned):**
+  - Undo/Redo stack (Ctrl+Z, Ctrl+Y)
   - Bulk operations on selected rows
   - Search and Replace across fields
-- **Tag Management:**
-  - Add/remove tags from selected lines
-  - Filter view by tags
-  - Color-coded rows based on tag severity
-- **Actions:**
-  - Translate selected lines (send subset to API)
-  - Clear field values (reset to previous stage)
-  - Delete lines from manifest
-  - Undo/Redo stack (Ctrl+Z, Ctrl+Y)
-- **Export:**
-  - Export visible/filtered rows
-  - Export only lines with specific tags
-  - Copy selection to clipboard
+  - Translate selected lines only
+- **Export (Implemented):**
+  - Export visible/filtered rows to CSV
+  - Copy selection via system clipboard
 
 REQUEST CACHING SYSTEM (Implemented)
 - Cache API responses to avoid resending identical requests

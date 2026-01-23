@@ -1357,3 +1357,425 @@ def validate_batch_comprehensive(
         lines_to_retry=lines_to_retry,
     )
 
+
+# ============================================================================
+# Character/Word Validation (TASK 36.2)
+# ============================================================================
+
+
+class ValidationSeverity(Enum):
+    """Severity of a validation finding.
+    
+    TASK 36.2: Yellow = autofix available and valid, Red = no autofix.
+    """
+    
+    WARNING = "warning"  # Yellow - autofix available
+    ERROR = "error"      # Red - no autofix available
+
+
+@dataclass
+class CharacterWordFinding:
+    """A single character/word validation finding.
+    
+    TASK 36.2: Structured finding for character/word validation.
+    """
+    
+    idx: int                    # Line index
+    field: str                  # Which field (tl, post, wordwr, final)
+    offending_token: str        # The offending character or word
+    token_type: str             # "character" or "word"
+    position: int               # Position in the text (character offset)
+    suggestion: Optional[str]   # Suggested replacement (from autofix map)
+    severity: ValidationSeverity  # WARNING (autofix available) or ERROR
+
+
+@dataclass
+class CharacterWordValidationResult:
+    """Result of character/word validation for a batch of lines.
+    
+    TASK 36.2: Batch validation result with findings and counts.
+    """
+    
+    findings: List[CharacterWordFinding] = field(default_factory=list)
+    total_lines_scanned: int = 0
+    lines_with_issues: int = 0
+    warning_count: int = 0
+    error_count: int = 0
+    
+    @property
+    def has_issues(self) -> bool:
+        """Check if any issues were found."""
+        return len(self.findings) > 0
+    
+    @property
+    def total_issues(self) -> int:
+        """Get total number of issues."""
+        return len(self.findings)
+
+
+def _build_distinct_char_set(texts: List[str]) -> Set[str]:
+    """Build a set of distinct characters from all texts.
+    
+    TASK 36.2: First pass of the two-pass algorithm.
+    
+    Args:
+        texts: List of text strings to analyze.
+        
+    Returns:
+        Set of distinct characters found.
+    """
+    char_set: Set[str] = set()
+    for text in texts:
+        char_set.update(text)
+    return char_set
+
+
+def _find_offending_characters(
+    distinct_chars: Set[str],
+    whitelist: str,
+    blacklist: str,
+) -> Set[str]:
+    """Find characters that violate whitelist/blacklist rules.
+    
+    TASK 36.2: Identify offending characters from the distinct set.
+    
+    Logic:
+    - If whitelist is non-empty: character must be in whitelist
+    - If blacklist is non-empty: character must NOT be in blacklist
+    - Both can be active simultaneously
+    
+    Args:
+        distinct_chars: Set of distinct characters from texts.
+        whitelist: Allowed characters (empty = all allowed).
+        blacklist: Forbidden characters.
+        
+    Returns:
+        Set of offending characters.
+    """
+    offending: Set[str] = set()
+    
+    whitelist_set = set(whitelist) if whitelist else None
+    blacklist_set = set(blacklist) if blacklist else set()
+    
+    for char in distinct_chars:
+        # Check whitelist (if non-empty, char must be in it)
+        if whitelist_set is not None and char not in whitelist_set:
+            offending.add(char)
+            continue
+        
+        # Check blacklist (char must NOT be in it)
+        if char in blacklist_set:
+            offending.add(char)
+    
+    return offending
+
+
+def _compile_word_patterns(word_blacklist: List[str]) -> List[re.Pattern]:
+    """Compile regex patterns for word blacklist matching.
+    
+    TASK 36.2: Case-insensitive, whole word matching.
+    
+    Args:
+        word_blacklist: List of forbidden words/phrases.
+        
+    Returns:
+        List of compiled regex patterns.
+    """
+    patterns: List[re.Pattern] = []
+    for word in word_blacklist:
+        if not word:
+            continue
+        # Escape special regex characters and create whole-word pattern
+        escaped = re.escape(word)
+        # Use word boundaries for whole word matching
+        pattern = re.compile(rf"\b{escaped}\b", re.IGNORECASE)
+        patterns.append(pattern)
+    return patterns
+
+
+def validate_character_word(
+    lines: List[Dict[str, Any]],
+    whitelist: str = "",
+    blacklist: str = "",
+    word_blacklist: Optional[List[str]] = None,
+    autofix_map: Optional[Dict[str, str]] = None,
+    fields_to_check: Optional[List[str]] = None,
+) -> CharacterWordValidationResult:
+    """Validate lines for forbidden characters and words.
+    
+    TASK 36.2: High-performance scanner using two-pass algorithm:
+    1. First pass: build distinct character set from all texts
+    2. Compare distinct set against whitelist/blacklist
+    3. Second pass: scan only for offending characters and forbidden words
+    
+    Args:
+        lines: List of line dictionaries with fields like 'tl', 'post', 'wordwr', 'final'.
+        whitelist: Allowed characters (empty = all allowed).
+        blacklist: Forbidden characters.
+        word_blacklist: List of forbidden words/phrases (case-insensitive, whole word).
+        autofix_map: Dict mapping offending chars to replacement chars.
+        fields_to_check: Which fields to check (default: ['tl', 'post', 'wordwr', 'final']).
+        
+    Returns:
+        CharacterWordValidationResult with all findings.
+    """
+    if word_blacklist is None:
+        word_blacklist = []
+    if autofix_map is None:
+        autofix_map = {}
+    if fields_to_check is None:
+        fields_to_check = ["tl", "post", "wordwr", "final"]
+    
+    # Fast exit: nothing to check
+    if not whitelist and not blacklist and not word_blacklist:
+        return CharacterWordValidationResult(total_lines_scanned=len(lines))
+    
+    # Determine what types of checks we need
+    check_chars = bool(whitelist or blacklist)
+    check_words = bool(word_blacklist)
+    
+    # Collect all texts to scan
+    texts_by_location: List[Tuple[int, str, str]] = []  # (idx, field, text)
+    for line in lines:
+        idx = line.get("idx", 0)
+        for field_name in fields_to_check:
+            text = line.get(field_name)
+            if text:
+                texts_by_location.append((idx, field_name, text))
+    
+    if not texts_by_location:
+        return CharacterWordValidationResult(total_lines_scanned=len(lines))
+    
+    findings: List[CharacterWordFinding] = []
+    lines_with_issues: Set[int] = set()
+    
+    # Character validation (two-pass algorithm)
+    if check_chars:
+        # First pass: build distinct character set
+        all_texts = [text for _, _, text in texts_by_location]
+        distinct_chars = _build_distinct_char_set(all_texts)
+        
+        # Find offending characters
+        offending_chars = _find_offending_characters(distinct_chars, whitelist, blacklist)
+        
+        if offending_chars:
+            # Second pass: scan for offending characters
+            for idx, field_name, text in texts_by_location:
+                for pos, char in enumerate(text):
+                    if char in offending_chars:
+                        suggestion = autofix_map.get(char)
+                        
+                        # Determine severity
+                        if suggestion:
+                            # Check if the replacement is valid
+                            whitelist_set = set(whitelist) if whitelist else None
+                            blacklist_set = set(blacklist) if blacklist else set()
+                            
+                            replacement_valid = True
+                            if whitelist_set and suggestion not in whitelist_set:
+                                replacement_valid = False
+                            if suggestion in blacklist_set:
+                                replacement_valid = False
+                            
+                            severity = (ValidationSeverity.WARNING if replacement_valid 
+                                       else ValidationSeverity.ERROR)
+                        else:
+                            severity = ValidationSeverity.ERROR
+                        
+                        findings.append(CharacterWordFinding(
+                            idx=idx,
+                            field=field_name,
+                            offending_token=char,
+                            token_type="character",
+                            position=pos,
+                            suggestion=suggestion,
+                            severity=severity,
+                        ))
+                        lines_with_issues.add(idx)
+    
+    # Word validation
+    if check_words:
+        word_patterns = _compile_word_patterns(word_blacklist)
+        
+        for idx, field_name, text in texts_by_location:
+            for pattern in word_patterns:
+                for match in pattern.finditer(text):
+                    offending_word = match.group()
+                    
+                    # Words don't have autofix
+                    findings.append(CharacterWordFinding(
+                        idx=idx,
+                        field=field_name,
+                        offending_token=offending_word,
+                        token_type="word",
+                        position=match.start(),
+                        suggestion=None,
+                        severity=ValidationSeverity.ERROR,
+                    ))
+                    lines_with_issues.add(idx)
+    
+    # Calculate counts
+    warning_count = sum(1 for f in findings if f.severity == ValidationSeverity.WARNING)
+    error_count = sum(1 for f in findings if f.severity == ValidationSeverity.ERROR)
+    
+    return CharacterWordValidationResult(
+        findings=findings,
+        total_lines_scanned=len(lines),
+        lines_with_issues=len(lines_with_issues),
+        warning_count=warning_count,
+        error_count=error_count,
+    )
+
+
+def apply_autofix(
+    text: str,
+    autofix_map: Dict[str, str],
+    whitelist: str = "",
+    blacklist: str = "",
+) -> Tuple[str, int]:
+    """Apply autofix replacements to text.
+    
+    TASK 36.2: Apply character replacements from autofix map.
+    Only applies fixes where the replacement is valid under whitelist/blacklist rules.
+    
+    Args:
+        text: Text to fix.
+        autofix_map: Dict mapping offending chars to replacement chars.
+        whitelist: Allowed characters (for validating replacements).
+        blacklist: Forbidden characters (for validating replacements).
+        
+    Returns:
+        Tuple of (fixed_text, number_of_replacements_made).
+    """
+    if not autofix_map:
+        return text, 0
+    
+    whitelist_set = set(whitelist) if whitelist else None
+    blacklist_set = set(blacklist) if blacklist else set()
+    
+    result_chars: List[str] = []
+    replacements_made = 0
+    
+    for char in text:
+        if char in autofix_map:
+            replacement = autofix_map[char]
+            
+            # Check if replacement is valid
+            replacement_valid = True
+            if whitelist_set and replacement not in whitelist_set:
+                replacement_valid = False
+            if replacement in blacklist_set:
+                replacement_valid = False
+            
+            if replacement_valid:
+                result_chars.append(replacement)
+                replacements_made += 1
+            else:
+                result_chars.append(char)  # Keep original if replacement invalid
+        else:
+            result_chars.append(char)
+    
+    return "".join(result_chars), replacements_made
+
+
+def apply_autofix_to_lines(
+    lines: List[Dict[str, Any]],
+    autofix_map: Dict[str, str],
+    whitelist: str = "",
+    blacklist: str = "",
+    fields_to_fix: Optional[List[str]] = None,
+) -> Tuple[List[Dict[str, Any]], int]:
+    """Apply autofix to multiple lines.
+    
+    TASK 36.2: Apply character replacements to line dictionaries.
+    
+    Args:
+        lines: List of line dictionaries.
+        autofix_map: Dict mapping offending chars to replacement chars.
+        whitelist: Allowed characters.
+        blacklist: Forbidden characters.
+        fields_to_fix: Which fields to fix (default: ['tl', 'post', 'wordwr', 'final']).
+        
+    Returns:
+        Tuple of (fixed_lines, total_replacements_made).
+    """
+    if fields_to_fix is None:
+        fields_to_fix = ["tl", "post", "wordwr", "final"]
+    
+    total_replacements = 0
+    
+    for line in lines:
+        for field_name in fields_to_fix:
+            text = line.get(field_name)
+            if text:
+                fixed_text, count = apply_autofix(
+                    text, autofix_map, whitelist, blacklist
+                )
+                if count > 0:
+                    line[field_name] = fixed_text
+                    total_replacements += count
+    
+    return lines, total_replacements
+
+
+def get_findings_summary(result: CharacterWordValidationResult) -> str:
+    """Get a human-readable summary of validation findings.
+    
+    TASK 36.2: Format findings for display.
+    
+    Args:
+        result: Validation result.
+        
+    Returns:
+        Summary string.
+    """
+    if not result.has_issues:
+        return f"✓ No issues found in {result.total_lines_scanned} lines"
+    
+    parts = []
+    parts.append(f"Found {result.total_issues} issue(s) in {result.lines_with_issues} line(s)")
+    
+    if result.warning_count > 0:
+        parts.append(f"  ⚠ {result.warning_count} warning(s) (autofix available)")
+    if result.error_count > 0:
+        parts.append(f"  ✗ {result.error_count} error(s) (no autofix)")
+    
+    return "\n".join(parts)
+
+
+def group_findings_by_line(
+    findings: List[CharacterWordFinding],
+) -> Dict[int, List[CharacterWordFinding]]:
+    """Group findings by line index.
+    
+    Args:
+        findings: List of findings.
+        
+    Returns:
+        Dict mapping line index to list of findings.
+    """
+    grouped: Dict[int, List[CharacterWordFinding]] = {}
+    for finding in findings:
+        if finding.idx not in grouped:
+            grouped[finding.idx] = []
+        grouped[finding.idx].append(finding)
+    return grouped
+
+
+def group_findings_by_token(
+    findings: List[CharacterWordFinding],
+) -> Dict[str, List[CharacterWordFinding]]:
+    """Group findings by offending token.
+    
+    Args:
+        findings: List of findings.
+        
+    Returns:
+        Dict mapping offending token to list of findings.
+    """
+    grouped: Dict[str, List[CharacterWordFinding]] = {}
+    for finding in findings:
+        if finding.offending_token not in grouped:
+            grouped[finding.offending_token] = []
+        grouped[finding.offending_token].append(finding)
+    return grouped

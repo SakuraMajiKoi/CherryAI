@@ -322,18 +322,59 @@ DEFAULT_TLC_PROMPT = (
 )
 
 
+# PHASE 37: Edit/TLC prompt component toggles
+class EditInputPolicy(Enum):
+    """Input source policy for Edit pass (TASK 37.1)."""
+
+    TL_ONLY = "tl_only"           # Use TL field only (default)
+    ORIG_AND_TL = "orig_and_tl"   # Include original for reference
+    TLC_ONLY = "tlc_only"         # Use latest TLC output only
+    TL_AND_TLC = "tl_and_tlc"     # Use both TL and TLC
+
+
+class TLCInputPolicy(Enum):
+    """Input source policy for TLC pass (TASK 37.1)."""
+
+    TL_ONLY = "tl_only"           # Use TL field only
+    ORIG_AND_TL = "orig_and_tl"   # Include original for reference (default)
+    EDIT_ONLY = "edit_only"       # Use latest Edit output only
+    EDIT_AND_ORIG = "edit_and_orig"  # Use Edit output with original
+
+
 @dataclass
 class PromptsSettings:
-    """Custom prompts for Edit and TLC steps."""
+    """Custom prompts for Edit and TLC steps (TASK 37.1)."""
 
     edit_prompt: str = DEFAULT_EDIT_PROMPT
     tlc_prompt: str = DEFAULT_TLC_PROMPT
+    # PHASE 37: Component toggles
+    edit_include_glossary: bool = True
+    edit_include_game_summary: bool = True
+    edit_include_character_notes: bool = True
+    edit_include_code_glossary: bool = True
+    tlc_include_glossary: bool = True
+    tlc_include_game_summary: bool = True
+    tlc_include_character_notes: bool = True
+    tlc_include_code_glossary: bool = True
+    # PHASE 37: Input policies
+    edit_input_policy: str = "tl_only"
+    tlc_input_policy: str = "orig_and_tl"
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
             "edit_prompt": self.edit_prompt,
             "tlc_prompt": self.tlc_prompt,
+            "edit_include_glossary": self.edit_include_glossary,
+            "edit_include_game_summary": self.edit_include_game_summary,
+            "edit_include_character_notes": self.edit_include_character_notes,
+            "edit_include_code_glossary": self.edit_include_code_glossary,
+            "tlc_include_glossary": self.tlc_include_glossary,
+            "tlc_include_game_summary": self.tlc_include_game_summary,
+            "tlc_include_character_notes": self.tlc_include_character_notes,
+            "tlc_include_code_glossary": self.tlc_include_code_glossary,
+            "edit_input_policy": self.edit_input_policy,
+            "tlc_input_policy": self.tlc_input_policy,
         }
 
     @classmethod
@@ -342,8 +383,35 @@ class PromptsSettings:
         return cls(
             edit_prompt=str(data.get("edit_prompt", DEFAULT_EDIT_PROMPT)),
             tlc_prompt=str(data.get("tlc_prompt", DEFAULT_TLC_PROMPT)),
+            edit_include_glossary=bool(data.get("edit_include_glossary", True)),
+            edit_include_game_summary=bool(data.get("edit_include_game_summary", True)),
+            edit_include_character_notes=bool(data.get("edit_include_character_notes", True)),
+            edit_include_code_glossary=bool(data.get("edit_include_code_glossary", True)),
+            tlc_include_glossary=bool(data.get("tlc_include_glossary", True)),
+            tlc_include_game_summary=bool(data.get("tlc_include_game_summary", True)),
+            tlc_include_character_notes=bool(data.get("tlc_include_character_notes", True)),
+            tlc_include_code_glossary=bool(data.get("tlc_include_code_glossary", True)),
+            edit_input_policy=str(data.get("edit_input_policy", "tl_only")),
+            tlc_input_policy=str(data.get("tlc_input_policy", "orig_and_tl")),
         )
 
+    def get_edit_components(self) -> Dict[str, bool]:
+        """Get edit component toggles as dict (TASK 37.1)."""
+        return {
+            "glossary": self.edit_include_glossary,
+            "game_summary": self.edit_include_game_summary,
+            "character_notes": self.edit_include_character_notes,
+            "code_glossary": self.edit_include_code_glossary,
+        }
+
+    def get_tlc_components(self) -> Dict[str, bool]:
+        """Get TLC component toggles as dict (TASK 37.1)."""
+        return {
+            "glossary": self.tlc_include_glossary,
+            "game_summary": self.tlc_include_game_summary,
+            "character_notes": self.tlc_include_character_notes,
+            "code_glossary": self.tlc_include_code_glossary,
+        }
 
 
 @dataclass
@@ -618,6 +686,18 @@ class GlobalOptionsDialog(tk.Toplevel):
         # Prompts settings
         self.edit_prompt_var = tk.StringVar(value=self.options.prompts.edit_prompt)
         self.tlc_prompt_var = tk.StringVar(value=self.options.prompts.tlc_prompt)
+        # PHASE 37: Component toggles
+        self.edit_include_glossary_var = tk.BooleanVar(value=self.options.prompts.edit_include_glossary)
+        self.edit_include_game_summary_var = tk.BooleanVar(value=self.options.prompts.edit_include_game_summary)
+        self.edit_include_character_notes_var = tk.BooleanVar(value=self.options.prompts.edit_include_character_notes)
+        self.edit_include_code_glossary_var = tk.BooleanVar(value=self.options.prompts.edit_include_code_glossary)
+        self.tlc_include_glossary_var = tk.BooleanVar(value=self.options.prompts.tlc_include_glossary)
+        self.tlc_include_game_summary_var = tk.BooleanVar(value=self.options.prompts.tlc_include_game_summary)
+        self.tlc_include_character_notes_var = tk.BooleanVar(value=self.options.prompts.tlc_include_character_notes)
+        self.tlc_include_code_glossary_var = tk.BooleanVar(value=self.options.prompts.tlc_include_code_glossary)
+        # PHASE 37: Input policies
+        self.edit_input_policy_var = tk.StringVar(value=self.options.prompts.edit_input_policy)
+        self.tlc_input_policy_var = tk.StringVar(value=self.options.prompts.tlc_input_policy)
 
     def _build_ui(self) -> None:
         """Build the options UI with navigation and content panels."""
@@ -1207,6 +1287,31 @@ class GlobalOptionsDialog(tk.Toplevel):
         edit_btn_frame.pack(anchor="w", pady=(5, 0))
         ttk.Button(edit_btn_frame, text="Reset to Default", command=self._reset_edit_prompt).pack(side=tk.LEFT)
 
+        # PHASE 37: Edit component toggles
+        edit_components_frame = ttk.LabelFrame(edit_frame, text="Include in Edit Prompt", padding=5)
+        edit_components_frame.pack(fill=tk.X, pady=(10, 0))
+
+        edit_comp_row1 = ttk.Frame(edit_components_frame)
+        edit_comp_row1.pack(fill=tk.X, pady=2)
+        ttk.Checkbutton(edit_comp_row1, text="Glossary", variable=self.edit_include_glossary_var).pack(side=tk.LEFT, padx=10)
+        ttk.Checkbutton(edit_comp_row1, text="Game Summary", variable=self.edit_include_game_summary_var).pack(side=tk.LEFT, padx=10)
+        ttk.Checkbutton(edit_comp_row1, text="Character Notes", variable=self.edit_include_character_notes_var).pack(side=tk.LEFT, padx=10)
+        ttk.Checkbutton(edit_comp_row1, text="Code Glossary", variable=self.edit_include_code_glossary_var).pack(side=tk.LEFT, padx=10)
+
+        # PHASE 37: Edit input policy
+        edit_policy_row = ttk.Frame(edit_frame)
+        edit_policy_row.pack(fill=tk.X, pady=(10, 0))
+        ttk.Label(edit_policy_row, text="Input Source:").pack(side=tk.LEFT)
+        edit_policy_combo = ttk.Combobox(
+            edit_policy_row,
+            textvariable=self.edit_input_policy_var,
+            values=[e.value for e in EditInputPolicy],
+            state="readonly",
+            width=18,
+        )
+        edit_policy_combo.pack(side=tk.LEFT, padx=5)
+        ttk.Label(edit_policy_row, text="(What text fields feed the Edit prompt)", foreground="gray").pack(side=tk.LEFT, padx=5)
+
         # TLC prompt frame
         tlc_frame = ttk.LabelFrame(panel, text="TLC Step Prompt", padding=10)
         tlc_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
@@ -1234,6 +1339,31 @@ class GlobalOptionsDialog(tk.Toplevel):
         tlc_btn_frame = ttk.Frame(tlc_frame)
         tlc_btn_frame.pack(anchor="w", pady=(5, 0))
         ttk.Button(tlc_btn_frame, text="Reset to Default", command=self._reset_tlc_prompt).pack(side=tk.LEFT)
+
+        # PHASE 37: TLC component toggles
+        tlc_components_frame = ttk.LabelFrame(tlc_frame, text="Include in TLC Prompt", padding=5)
+        tlc_components_frame.pack(fill=tk.X, pady=(10, 0))
+
+        tlc_comp_row1 = ttk.Frame(tlc_components_frame)
+        tlc_comp_row1.pack(fill=tk.X, pady=2)
+        ttk.Checkbutton(tlc_comp_row1, text="Glossary", variable=self.tlc_include_glossary_var).pack(side=tk.LEFT, padx=10)
+        ttk.Checkbutton(tlc_comp_row1, text="Game Summary", variable=self.tlc_include_game_summary_var).pack(side=tk.LEFT, padx=10)
+        ttk.Checkbutton(tlc_comp_row1, text="Character Notes", variable=self.tlc_include_character_notes_var).pack(side=tk.LEFT, padx=10)
+        ttk.Checkbutton(tlc_comp_row1, text="Code Glossary", variable=self.tlc_include_code_glossary_var).pack(side=tk.LEFT, padx=10)
+
+        # PHASE 37: TLC input policy
+        tlc_policy_row = ttk.Frame(tlc_frame)
+        tlc_policy_row.pack(fill=tk.X, pady=(10, 0))
+        ttk.Label(tlc_policy_row, text="Input Source:").pack(side=tk.LEFT)
+        tlc_policy_combo = ttk.Combobox(
+            tlc_policy_row,
+            textvariable=self.tlc_input_policy_var,
+            values=[e.value for e in TLCInputPolicy],
+            state="readonly",
+            width=18,
+        )
+        tlc_policy_combo.pack(side=tk.LEFT, padx=5)
+        ttk.Label(tlc_policy_row, text="(What text fields feed the TLC prompt)", foreground="gray").pack(side=tk.LEFT, padx=5)
 
     def _reset_edit_prompt(self) -> None:
         """Reset edit prompt to default value."""
@@ -1683,6 +1813,18 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.options.prompts = PromptsSettings(
             edit_prompt=self._edit_prompt_text.get("1.0", tk.END).strip(),
             tlc_prompt=self._tlc_prompt_text.get("1.0", tk.END).strip(),
+            # PHASE 37: Component toggles
+            edit_include_glossary=self.edit_include_glossary_var.get(),
+            edit_include_game_summary=self.edit_include_game_summary_var.get(),
+            edit_include_character_notes=self.edit_include_character_notes_var.get(),
+            edit_include_code_glossary=self.edit_include_code_glossary_var.get(),
+            tlc_include_glossary=self.tlc_include_glossary_var.get(),
+            tlc_include_game_summary=self.tlc_include_game_summary_var.get(),
+            tlc_include_character_notes=self.tlc_include_character_notes_var.get(),
+            tlc_include_code_glossary=self.tlc_include_code_glossary_var.get(),
+            # PHASE 37: Input policies
+            edit_input_policy=self.edit_input_policy_var.get(),
+            tlc_input_policy=self.tlc_input_policy_var.get(),
         )
 
         # Invoke callback

@@ -390,3 +390,71 @@ def parse_ban_tokens_arg(arg: str) -> List[str]:
             result.append(part)
     
     return result
+
+def create_logit_bias_from_blacklist(
+    character_blacklist: str,
+    model: str = "gpt-4o",
+    enabled: bool = True,
+) -> LogitBiasManager:
+    """Create LogitBiasManager from manifest's character blacklist (TASK 36.4).
+    
+    Converts a character blacklist string (e.g., "'—") into a logit bias
+    configuration that can be used with the API.
+    
+    Args:
+        character_blacklist: String of characters to ban (from manifest).
+        model: Model name for encoding selection.
+        enabled: Whether logit bias is enabled.
+        
+    Returns:
+        Configured LogitBiasManager instance.
+        
+    Example:
+        # In api_client.py or similar:
+        blacklist = manifest_manager.get_character_blacklist()
+        manager = create_logit_bias_from_blacklist(blacklist, model="gpt-4o")
+        if manager.is_available():
+            bias = manager.get_logit_bias()
+            # Use with API call
+    """
+    # Convert string of characters to list
+    banned_chars = list(character_blacklist) if character_blacklist else []
+    
+    # Remove duplicates while preserving order
+    seen: Set[str] = set()
+    unique_chars: List[str] = []
+    for char in banned_chars:
+        if char not in seen:
+            seen.add(char)
+            unique_chars.append(char)
+    
+    return create_logit_bias_manager(
+        enabled=enabled and len(unique_chars) > 0,
+        banned_chars=unique_chars,
+        model=model,
+    )
+
+
+# Provider capability flags for TASK 36.4
+PROVIDER_SUPPORTS_LOGIT_BIAS: Dict[str, bool] = {
+    "openai": True,
+    "azure": True,
+    "anthropic": False,  # Claude uses different mechanism
+    "google": False,     # Gemini doesn't support logit_bias
+    "deepseek": True,    # DeepSeek supports OpenAI-compatible logit_bias
+    "openrouter": True,  # Depends on underlying model
+    "kobold": False,
+    "local": False,
+}
+
+
+def provider_supports_logit_bias(provider: str) -> bool:
+    """Check if a provider supports logit_bias parameter (TASK 36.4).
+    
+    Args:
+        provider: Provider name (lowercase).
+        
+    Returns:
+        True if provider supports logit_bias.
+    """
+    return PROVIDER_SUPPORTS_LOGIT_BIAS.get(provider.lower(), False)

@@ -19,14 +19,14 @@ GUI CODE RULES:
 - Formats handlers manage all file I/O operations
 
 MODULE AWARENESS (Always check these when implementing features):
-- functions/    : 37 modules - core shared functionality (5 integrated with GUI)
-- modi/         : 12 processing modes - pre/post-processing plugins (0 integrated!)
-- formats/      : 5 format handlers - file I/O for CSV, TXT, JSON, etc. (3 integrated)
+- functions/    : 36 modules - core shared functionality (+ glossaries/ subfolder with 5 files)
+- modi/         : 12 processing modes - pre/post-processing plugins
+- formats/      : 5 format handlers - file I/O for CSV, TXT, JSON, etc.
 - gui/steps/    : 10 workflow tabs - display and user interaction only
-- gui/components/: Reusable UI widgets
-- gui/dialogs/  : Modal dialogs and forms
-- gui/helpers/  : Adapter modules bridging GUI config to processing modules (modi/, functions/)
-- gui/state/    : Application state management
+- gui/components/: Reusable UI widgets (1 module: table.py)
+- gui/dialogs/  : Modal dialogs and forms (2 modules: global_options.py, project_dialog.py)
+- gui/helpers/  : 6 adapter modules bridging GUI config to processing (mode, analysis, glossary, chunker, prompt, manifest_binding)
+- gui/state/    : Application state management (1 module: store.py)
 
 BEFORE MAKING CHANGES:
 1. Check if functionality exists in functions/ or modi/
@@ -153,7 +153,7 @@ TABLE OF CONTENTS
        - __init__.py - Component exports
        - table.py - SharedTable, ColumnDef, TableRow
    
-   6.6 gui/dialogs/ (2 files)
+   6.6 gui/dialogs/ (3 files - 2 dialog modules)
        - __init__.py - Dialog exports
        - global_options.py - GlobalOptionsDialog with section panels:
          - OptionSection enum: API, REQUEST, CACHING, LOGGING, SESSION, SAFETY, FILE_IO, PROMPTS
@@ -166,18 +166,25 @@ TABLE OF CONTENTS
            - tlc_prompt: str - Custom prompt for TLC steps  
            - Supports {source_lang} and {target_lang} placeholders
            - Stored in [prompts] section of config/defaults.ini
+       - project_dialog.py - Project management dialogs (TASK 19, TASK 21.4):
+         - ProjectNameDialog: Prompt for project name on new project creation
+         - LoadManifestDialog: File browser for loading existing manifests
+         - WelcomeDialog: First launch dialog with Resume/New/Load/Fresh options
    
-   6.7 gui/helpers/ (4 files)
+   6.7 gui/helpers/ (7 files - 6 adapter modules)
        - __init__.py - Helper exports
        - mode_adapter.py - Bridge between GUI config and modi/ modules (TASK 16.5)
        - analysis_adapter.py - Bridge between GUI and functions/analysis.py (TASK 16.6)
        - glossary_adapter.py - Bridge between GUI and glossary/config/style modules (TASK 16.7)
+       - chunker_adapter.py - Bridge between GUI and functions/chunker.py
+       - prompt_adapter.py - Bridge between GUI and functions/prompt_builder.py
+       - manifest_binding.py - Widget-to-Manifest binding system (TASK 22.3)
    
    6.8 gui/state/ (2 files)
        - __init__.py - State exports
        - store.py - SessionState, StepState (legacy, autosave disabled)
    
-   6.9 functions/manifest_manager.py - ManifestManager (v3.0)
+   6.9 functions/manifest_manager.py - ManifestManager (v3.1)
        - Primary state management for GUI projects
        - Singleton pattern for global access
        - Dataclasses: ProjectInfo, StepStateData, ManifestState
@@ -541,26 +548,30 @@ Example (v1.0 Legacy):
 
 =============================================================================
 
-MANIFEST v3.0 FORMAT (Implemented)
+MANIFEST v3.1 FORMAT (Implemented)
 
-Version 3.0 extends v2.0 with GUI state management for unified project persistence.
-All v2.0 per-line entry features are preserved.
+Version 3.1 extends v3.0 with filedir for input/output decoupling (TASK 35).
+All v2.0 per-line entry features and v3.0 GUI state management are preserved.
 
-**Status:** IMPLEMENTED (3269 tests passing)
+**Status:** IMPLEMENTED (4293 tests passing)
 **Locations:** 
 - `functions/mainhelper.py` - LineEntry, Manifest (core)
-- `functions/manifest_manager.py` - ManifestManager, ProjectInfo, StepStateData (GUI)
-**Tests:** `dev/test_manifest_v2.py`, `dev/test_manifest_state.py`, `dev/test_manifest_defaults.py`
+- `functions/manifest_manager.py` - ManifestManager, ProjectInfo, StepStateData, FileDirEntry (GUI)
+**Tests:** `dev/test_manifest_v2.py`, `dev/test_manifest_state.py`, `dev/test_manifest_defaults.py`, `dev/test_manifest_filedir.py`
 
 DESIGN DOCUMENT: See doc/MANIFEST_UPDATE_DESIGN.md for full specification.
 
-VERSION 3.0 EXTENSIONS
+VERSION 3.1 EXTENSIONS
 
-v3.0 adds these top-level manifest sections:
+v3.1 adds the `filedir` field for input/output decoupling:
 
 ```json
 {
-    "version": "3.0",
+    "version": "3.1",
+    "filedir": [
+        {"first_idx": 0, "last_idx": 99, "format": "txt", "rel_path": "chapter1.txt", "source_hint": "C:/Game/chapter1.txt"},
+        {"first_idx": 100, "last_idx": 249, "format": "csv", "rel_path": "data/items.csv", "source_hint": "C:/Game/data/items.csv", "encoding": "shift_jis"}
+    ],
     "step_state": {
         "InputExtractionStep": {"completed": true, "skipped": false, "metadata": {}},
         "AnalysisStep": {"completed": true, "skipped": false, "metadata": {}},
@@ -584,6 +595,20 @@ v3.0 adds these top-level manifest sections:
 }
 ```
 
+**Project Directory Structure (TASK 35.2/35.3):**
+```
+Projects/
+  {project_name}/
+    {project_name}.CherryAI.json   # Manifest file
+    Original/                       # Copied source files
+      chapter1.txt
+      data/items.csv
+    Patch/                          # Output files
+      chapter1.txt
+      data/items.csv
+```
+```
+
 MANIFESTMANAGER CLASS
 
 ```python
@@ -601,6 +626,29 @@ class StepStateData:
     completed: bool = False
     skipped: bool = False
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+@dataclass
+class FileDirEntry:
+    """File directory entry for input/output decoupling (TASK 35.1).
+    
+    Maps global line index ranges to source files, enabling the Output step
+    to reconstruct per-file outputs without consulting original input paths.
+    """
+    first_idx: int        # First line index (inclusive, global 0-based)
+    last_idx: int         # Last line index (inclusive, global 0-based)
+    format: str           # File format (txt, csv, json, xlsx, rpgm, etc.)
+    rel_path: str         # Path relative to project root
+    source_hint: str = "" # Original absolute path for user reference
+    encoding: str = "utf-8"  # File encoding
+    
+    @property
+    def line_count(self) -> int:
+        """Get number of lines in this file."""
+        return self.last_idx - self.first_idx + 1
+    
+    def contains_idx(self, idx: int) -> bool:
+        """Check if this entry contains the given line index."""
+        return self.first_idx <= idx <= self.last_idx
 
 class ManifestManager:
     # Singleton instance
@@ -677,6 +725,52 @@ class ManifestManager:
     
     def get_all_settings(self) -> Dict[str, Dict[str, Any]]:
         """Get all settings grouped by category."""
+    
+    # === File Directory Operations (TASK 35.1) ===
+    
+    def get_filedir(self) -> List[FileDirEntry]:
+        """Get file directory entries mapping line ranges to files."""
+    
+    def set_filedir(self, entries: List[FileDirEntry]) -> None:
+        """Set file directory entries."""
+    
+    def add_filedir_entry(self, entry: FileDirEntry) -> None:
+        """Add a file directory entry."""
+    
+    def clear_filedir(self) -> None:
+        """Clear all file directory entries."""
+    
+    def get_filedir_entry_for_idx(self, idx: int) -> Optional[FileDirEntry]:
+        """Get the FileDirEntry that contains the given line index."""
+    
+    def get_lines_for_filedir_entry(self, entry: FileDirEntry) -> List[Dict[str, Any]]:
+        """Get all lines belonging to a FileDirEntry."""
+    
+    def build_filedir_from_files(self, file_infos: List[Dict[str, Any]]) -> List[FileDirEntry]:
+        """Build filedir entries from a list of file information."""
+    
+    # === Project Directory Operations (TASK 35.2/35.3) ===
+    
+    def get_project_dir(self) -> Path:
+        """Get the project directory path: Projects/{project_name}/"""
+    
+    def get_original_dir(self) -> Path:
+        """Get the Original/ directory for copied source files."""
+    
+    def get_patch_dir(self) -> Path:
+        """Get the Patch/ directory for output files."""
+    
+    def copy_originals_to_project(self, force: bool = False) -> Dict[str, str]:
+        """Copy source files into the project's Original/ directory."""
+    
+    def get_original_file_path(self, entry: FileDirEntry) -> Path:
+        """Get the path to the copied original file for a filedir entry."""
+    
+    def get_patch_file_path(self, entry: FileDirEntry) -> Path:
+        """Get the output path in Patch/ directory for a filedir entry."""
+    
+    def has_original_copies(self) -> bool:
+        """Check if original files have been copied to the project."""
 ```
 
 LINEENTRY DATACLASS (v2.0 Core)

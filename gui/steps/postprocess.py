@@ -2,6 +2,7 @@
 
 Eighth workflow tab for restoring placeholders/anchors with diff view.
 Provides recovery operations, symbol conversion, and failure handling.
+Also includes character/word validation per TASK 36.3.
 """
 
 from __future__ import annotations
@@ -37,6 +38,19 @@ try:
     _HAS_POSTPROCESS = True
 except ImportError:  # pragma: no cover
     _HAS_POSTPROCESS = False
+
+# TASK 36.3: Import character/word validation functions
+try:
+    from CherryAI.functions.validation import (
+        validate_character_word,
+        apply_autofix_to_lines,
+        get_findings_summary,
+        CharacterWordValidationResult,
+        ValidationSeverity,
+    )
+    _HAS_CHAR_VALIDATION = True
+except ImportError:  # pragma: no cover
+    _HAS_CHAR_VALIDATION = False
 
 # Test expectation: include direct import form for functions package resolution
 try:  # pragma: no cover
@@ -260,6 +274,9 @@ class PostprocessingStep(BaseStep):
         self._selected_line_idx: int = -1
         # TASK 27.1: Manifest bindings for postprocessing options
         self._manifest_bindings: List[BindingInfo] = []
+        # TASK 36.3: Character/word validation state
+        self._validation_result: Optional[Any] = None  # CharacterWordValidationResult
+        self._validation_run: bool = False
         super().__init__(parent, session, manifest_manager=manifest_manager)
 
     def _build_ui(self) -> None:
@@ -422,6 +439,9 @@ class PostprocessingStep(BaseStep):
 
         # Issues panel
         self._build_issues_panel(scrollable_frame)
+
+        # TASK 36.3: Character/word validation panel
+        self._build_validation_panel(scrollable_frame)
 
         # Enable mousewheel scrolling
         def _on_mousewheel(event: tk.Event) -> None:
@@ -716,6 +736,247 @@ class PostprocessingStep(BaseStep):
             font=("TkDefaultFont", 9),
         )
         self._issues_listbox.pack(fill="x", pady=2)
+
+    def _build_validation_panel(self, parent: ttk.Frame) -> None:
+        """Build character/word validation panel (TASK 36.3).
+        
+        Shows validation results and provides autofix action.
+        """
+        frame = ttk.LabelFrame(parent, text="Character/Word Validation", padding=10)
+        frame.pack(fill="x", padx=5, pady=5)
+
+        # Summary labels
+        summary_frame = ttk.Frame(frame)
+        summary_frame.pack(fill="x", pady=2)
+
+        ttk.Label(summary_frame, text="Status:").pack(side="left")
+        self._validation_status_label = ttk.Label(
+            summary_frame,
+            text="Not scanned",
+            foreground=THEME.text_secondary,
+        )
+        self._validation_status_label.pack(side="left", padx=(5, 0))
+
+        # Counts frame
+        counts_frame = ttk.Frame(frame)
+        counts_frame.pack(fill="x", pady=2)
+
+        ttk.Label(counts_frame, text="Warnings:").pack(side="left")
+        self._validation_warnings_label = ttk.Label(
+            counts_frame,
+            text="0",
+            foreground=THEME.accent_warning,
+        )
+        self._validation_warnings_label.pack(side="left", padx=(5, 15))
+
+        ttk.Label(counts_frame, text="Errors:").pack(side="left")
+        self._validation_errors_label = ttk.Label(
+            counts_frame,
+            text="0",
+            foreground=THEME.accent_error if hasattr(THEME, 'accent_error') else "#ef4444",
+        )
+        self._validation_errors_label.pack(side="left", padx=(5, 0))
+
+        # Findings listbox
+        self._validation_listbox = tk.Listbox(
+            frame,
+            height=4,
+            font=("TkDefaultFont", 9),
+        )
+        self._validation_listbox.pack(fill="x", pady=2)
+
+        # Buttons
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill="x", pady=5)
+
+        self._validate_btn = ttk.Button(
+            btn_frame,
+            text="🔍 Run Validation",
+            command=self._run_character_validation,
+        )
+        self._validate_btn.pack(side="left", padx=2)
+
+        self._autofix_btn = ttk.Button(
+            btn_frame,
+            text="🔧 Apply Autofix",
+            command=self._apply_character_autofix,
+            state="disabled",
+        )
+        self._autofix_btn.pack(side="left", padx=2)
+
+    def _run_character_validation(self) -> None:
+        """Run character/word validation on postprocessed lines (TASK 36.3)."""
+        if not _HAS_CHAR_VALIDATION:
+            messagebox.showwarning(
+                "Validation Unavailable",
+                "Character validation module not available.",
+            )
+            return
+
+        if not self._lines:
+            self._refresh_lines()
+
+        if not self._lines:
+            messagebox.showwarning(
+                "No Data",
+                "Please complete translation first.",
+            )
+            return
+
+        # Get validation config from manifest
+        whitelist = ""
+        blacklist = ""
+        word_blacklist: List[str] = []
+        autofix_map: Dict[str, str] = {}
+
+        if self.manifest_manager:
+            config = self.manifest_manager.get_character_validation_config()
+            whitelist = config.get("CharacterWhitelist", "")
+            blacklist = config.get("CharacterBlacklist", "")
+            word_blacklist = config.get("WordBlacklist", [])
+            autofix_map = config.get("AutofixMap", {})
+
+        # Build lines data for validation
+        lines_data = []
+        for line in self._lines:
+            lines_data.append({
+                "idx": line.idx,
+                "tl": line.translated,
+                "post": line.postprocessed,
+            })
+
+        # Run validation
+        self._validation_result = validate_character_word(
+            lines=lines_data,
+            whitelist=whitelist,
+            blacklist=blacklist,
+            word_blacklist=word_blacklist,
+            autofix_map=autofix_map,
+            fields_to_check=["post"],  # Check postprocessed field
+        )
+        self._validation_run = True
+
+        # Update UI
+        self._update_validation_display()
+
+    def _update_validation_display(self) -> None:
+        """Update validation panel with current results (TASK 36.3)."""
+        if not self._validation_result:
+            self._validation_status_label.configure(text="Not scanned")
+            self._validation_warnings_label.configure(text="0")
+            self._validation_errors_label.configure(text="0")
+            self._validation_listbox.delete(0, "end")
+            self._autofix_btn.configure(state="disabled")
+            return
+
+        result = self._validation_result
+
+        # Update status
+        if result.has_issues:
+            self._validation_status_label.configure(
+                text=f"{result.total_issues} issues in {result.lines_with_issues} lines",
+                foreground=THEME.accent_warning if result.warning_count > result.error_count else (
+                    THEME.accent_error if hasattr(THEME, 'accent_error') else "#ef4444"
+                ),
+            )
+        else:
+            self._validation_status_label.configure(
+                text="✓ No issues found",
+                foreground=THEME.accent_success,
+            )
+
+        # Update counts
+        self._validation_warnings_label.configure(text=str(result.warning_count))
+        self._validation_errors_label.configure(text=str(result.error_count))
+
+        # Update findings listbox
+        self._validation_listbox.delete(0, "end")
+
+        if not result.findings:
+            self._validation_listbox.insert("end", "No issues found")
+        else:
+            # Show first 50 findings
+            for finding in result.findings[:50]:
+                severity_icon = "⚠" if finding.severity.value == "warning" else "✗"
+                suggestion_text = f" → '{finding.suggestion}'" if finding.suggestion else ""
+                self._validation_listbox.insert(
+                    "end",
+                    f"{severity_icon} Line {finding.idx + 1}: '{finding.offending_token}'{suggestion_text}",
+                )
+
+            if len(result.findings) > 50:
+                self._validation_listbox.insert(
+                    "end",
+                    f"... and {len(result.findings) - 50} more",
+                )
+
+        # Enable autofix if there are warnings (fixable issues)
+        if result.warning_count > 0:
+            self._autofix_btn.configure(state="normal")
+        else:
+            self._autofix_btn.configure(state="disabled")
+
+    def _apply_character_autofix(self) -> None:
+        """Apply autofix to postprocessed lines (TASK 36.3)."""
+        if not _HAS_CHAR_VALIDATION:
+            return
+
+        if not self._lines:
+            return
+
+        # Get autofix map from manifest
+        autofix_map: Dict[str, str] = {}
+        whitelist = ""
+        blacklist = ""
+
+        if self.manifest_manager:
+            config = self.manifest_manager.get_character_validation_config()
+            autofix_map = config.get("AutofixMap", {})
+            whitelist = config.get("CharacterWhitelist", "")
+            blacklist = config.get("CharacterBlacklist", "")
+
+        if not autofix_map:
+            messagebox.showinfo(
+                "No Autofix Map",
+                "No autofix mappings configured. Configure autofix map in project settings.",
+            )
+            return
+
+        # Build lines data
+        lines_data = []
+        for line in self._lines:
+            lines_data.append({
+                "idx": line.idx,
+                "post": line.postprocessed,
+            })
+
+        # Apply autofix
+        fixed_lines, fix_count = apply_autofix_to_lines(
+            lines=lines_data,
+            autofix_map=autofix_map,
+            whitelist=whitelist,
+            blacklist=blacklist,
+            fields_to_fix=["post"],
+        )
+
+        # Update lines
+        for fixed_line in fixed_lines:
+            idx = fixed_line["idx"]
+            if 0 <= idx < len(self._lines):
+                old_text = self._lines[idx].postprocessed
+                new_text = fixed_line.get("post", old_text)
+                if old_text != new_text:
+                    self._lines[idx].postprocessed = new_text
+                    self._lines[idx].has_changes = True
+
+        # Update table and re-run validation
+        self._update_lines_table()
+        self._run_character_validation()
+
+        messagebox.showinfo(
+            "Autofix Applied",
+            f"Applied {fix_count} character replacement(s).",
+        )
 
     def _build_summary_panel(self) -> None:
         """Build the summary panel at the bottom."""

@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # Constants
 MANIFEST_DIR = Path("Projects")
 MANIFEST_EXT = ".CherryAI.json"
-MANIFEST_VERSION = "3.0"
+MANIFEST_VERSION = "3.1"  # Updated for filedir feature (TASK 35.1)
 
 # Step definitions matching GUI step order
 STEP_NAMES = [
@@ -204,6 +204,71 @@ class GlossaryConfig:
             use_global=d.get("use_global", True),
             project_entries=d.get("project_entries", []),
         )
+
+
+@dataclass
+class FileDirEntry:
+    """File directory entry mapping line index ranges to source files.
+    
+    TASK 35.1: Maps global line indices to source files for input/output decoupling.
+    This allows the Output step to reconstruct per-file outputs using filedir
+    without consulting original input file paths.
+    
+    Attributes:
+        first_idx: First line index (inclusive, global 0-based).
+        last_idx: Last line index (inclusive, global 0-based).
+        format: File format (txt, csv, tsv, json, xlsx, rpgm, etc.).
+        rel_path: Path relative to project root (preserves folder structure).
+        source_hint: Original absolute path for user reference only (optional).
+        encoding: File encoding (utf-8, shift_jis, etc.).
+    """
+    
+    first_idx: int
+    last_idx: int
+    format: str
+    rel_path: str
+    source_hint: str = ""
+    encoding: str = "utf-8"
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dictionary (sparse format)."""
+        result: Dict[str, Any] = {
+            "first_idx": self.first_idx,
+            "last_idx": self.last_idx,
+            "format": self.format,
+            "rel_path": self.rel_path,
+        }
+        if self.source_hint:
+            result["source_hint"] = self.source_hint
+        if self.encoding != "utf-8":
+            result["encoding"] = self.encoding
+        return result
+    
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "FileDirEntry":
+        """Deserialize from dictionary."""
+        return cls(
+            first_idx=d.get("first_idx", 0),
+            last_idx=d.get("last_idx", 0),
+            format=d.get("format", "txt"),
+            rel_path=d.get("rel_path", ""),
+            source_hint=d.get("source_hint", ""),
+            encoding=d.get("encoding", "utf-8"),
+        )
+    
+    @property
+    def line_count(self) -> int:
+        """Get number of lines in this file."""
+        return self.last_idx - self.first_idx + 1
+    
+    def contains_idx(self, idx: int) -> bool:
+        """Check if this entry contains the given line index."""
+        return self.first_idx <= idx <= self.last_idx
+    
+    @property
+    def filename(self) -> str:
+        """Get just the filename from rel_path."""
+        return Path(self.rel_path).name
 
 
 class ManifestManager:
@@ -412,9 +477,10 @@ class ManifestManager:
         return self._dirty
     
     def _create_empty_manifest(self) -> Dict[str, Any]:
-        """Create an empty manifest structure with all v3.0 fields.
+        """Create an empty manifest structure with all v3.1 fields.
         
         TASK 21.2: Extended to include ALL fields needed by GUI and processing.
+        TASK 35.1: Added filedir for input/output decoupling.
         Uses defaults from INI file via ini_manager.
         """
         now = datetime.utcnow().isoformat() + "Z"
@@ -430,6 +496,10 @@ class ManifestManager:
             "project_name": defaults.get("project_name", "Project1"),
             "source_files": [],
             "current_step": 0,
+            
+            # === v3.1 File Directory (TASK 35.1) ===
+            # Maps line index ranges to source files for input/output decoupling
+            "filedir": [],
             
             # === v2.1 Processing Data (unchanged format) ===
             "lines": [],
@@ -470,6 +540,20 @@ class ManifestManager:
                 "QuoteBalance": defaults.get("validation_quote_balance", True),
                 "EmptyTranslation": defaults.get("validation_empty_translation", True),
             },
+            
+            # === v3.1 Character/Word Validation (TASK 36.1) ===
+            # Whitelist: allowed characters (empty = all allowed)
+            # Blacklist: forbidden characters (checked after whitelist)
+            # WordBlacklist: forbidden words/phrases (case-insensitive, whole word match)
+            # AutofixMap: character replacements for auto-correction
+            "CharacterWhitelist": defaults.get("character_whitelist", ""),
+            "CharacterBlacklist": defaults.get("character_blacklist", ""),
+            "WordBlacklist": self._parse_list_default(
+                defaults.get("word_blacklist", "")
+            ),
+            "AutofixMap": self._parse_dict_default(
+                defaults.get("autofix_map", "")
+            ),
             
             # === v3.0 QA Options ===
             "QAOptions": {
@@ -654,11 +738,51 @@ class ManifestManager:
             return [item.strip() for item in value.split(",") if item.strip()]
         return []
     
+    def _parse_dict_default(self, value: Any) -> Dict[str, str]:
+        """Parse a string into a dictionary for autofix mappings.
+        
+        TASK 36.1: Supports two formats:
+        - Comma-separated pairs: "a=b,c=d" -> {"a": "b", "c": "d"}
+        - JSON dict: '{"a": "b"}' -> {"a": "b"}
+        
+        Args:
+            value: String like "a=b,c=d" or JSON dict, or already a dict.
+            
+        Returns:
+            Dictionary mapping offending chars to replacements.
+        """
+        if isinstance(value, dict):
+            return value
+        if not isinstance(value, str) or not value:
+            return {}
+        
+        # Try JSON format first
+        value = value.strip()
+        if value.startswith("{"):
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, dict):
+                    return {str(k): str(v) for k, v in parsed.items()}
+            except json.JSONDecodeError:
+                pass
+        
+        # Parse comma-separated key=value pairs
+        result: Dict[str, str] = {}
+        for pair in value.split(","):
+            if "=" in pair:
+                key, val = pair.split("=", 1)
+                key = key.strip()
+                val = val.strip()
+                if key:
+                    result[key] = val
+        return result
+    
     def _ensure_all_fields_present(self) -> None:
-        """Ensure all v3.0 fields are present in loaded manifest.
+        """Ensure all v3.1 fields are present in loaded manifest.
         
         TASK 21.2: Called after load() to add missing fields with defaults.
-        This ensures old manifests get upgraded to v3.0 field set.
+        TASK 35.1: Added filedir field support.
+        This ensures old manifests get upgraded to v3.1 field set.
         """
         defaults = self._get_manifest_defaults()
         empty = self._create_empty_manifest()
@@ -676,6 +800,10 @@ class ManifestManager:
         self._ensure_nested_fields("PostProcessing", empty.get("PostProcessing", {}))
         self._ensure_nested_fields("WordwrapSettings", empty.get("WordwrapSettings", {}))
         self._ensure_nested_fields("OutputFormat", empty.get("OutputFormat", {}))
+        
+        # TASK 35.1: Ensure filedir exists
+        if "filedir" not in self._manifest_data:
+            self._manifest_data["filedir"] = []
     
     def _ensure_nested_fields(self, parent_key: str, defaults: Dict[str, Any]) -> None:
         """Ensure nested dict has all required fields.
@@ -825,14 +953,14 @@ class ManifestManager:
             return False
     
     def _migrate_manifest(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Migrate older manifest versions to v3.0.
+        """Migrate older manifest versions to v3.1.
         
-        Handles migration from v1.x and v2.x manifests, preserving all line
-        data, operations, and settings.
+        Handles migration from v1.x, v2.x, and v3.0 manifests, preserving all line
+        data, operations, and settings. TASK 35.1: Adds filedir migration.
         """
         version = data.get("version", "1.0")
         
-        if version.startswith("1.") or version.startswith("2."):
+        if version.startswith("1.") or version.startswith("2.") or version == "3.0":
             logger.info("Migrating manifest from v%s to v%s", version, MANIFEST_VERSION)
             
             # Ensure all v3.0 fields exist
@@ -925,9 +1053,70 @@ class ManifestManager:
             if "updated_at" not in data:
                 data["updated_at"] = datetime.utcnow().isoformat() + "Z"
             
+            # TASK 35.1: Migrate filedir
+            # Build filedir from lines if not present (backward compatibility)
+            if "filedir" not in data:
+                data["filedir"] = self._build_filedir_from_legacy(data)
+            
             data["version"] = MANIFEST_VERSION
         
         return data
+    
+    def _build_filedir_from_legacy(self, data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Build filedir entries from legacy manifest data.
+        
+        TASK 35.1: For backward compatibility when loading older manifests
+        that don't have filedir.
+        
+        Args:
+            data: Legacy manifest data.
+            
+        Returns:
+            List of filedir entry dictionaries.
+        """
+        lines = data.get("lines", [])
+        source_files = data.get("source_files", [])
+        file_format = data.get("format", "txt")
+        
+        if not lines:
+            return []
+        
+        if not source_files:
+            # No source file info - create single entry for all lines
+            source_file = data.get("source_file") or data.get("origin_file") or "unknown.txt"
+            return [{
+                "first_idx": 0,
+                "last_idx": len(lines) - 1,
+                "format": file_format,
+                "rel_path": Path(source_file).name,
+                "source_hint": source_file,
+            }]
+        
+        # Group lines by source_file
+        files_with_lines: Dict[str, List[int]] = {}
+        for line in lines:
+            source = line.get("source_file", source_files[0])
+            idx = line.get("idx", 0)
+            if source not in files_with_lines:
+                files_with_lines[source] = []
+            files_with_lines[source].append(idx)
+        
+        # Build filedir entries
+        filedir: List[Dict[str, Any]] = []
+        for source_file in source_files:
+            indices = files_with_lines.get(source_file, [])
+            if not indices:
+                continue
+            
+            filedir.append({
+                "first_idx": min(indices),
+                "last_idx": max(indices),
+                "format": file_format,
+                "rel_path": Path(source_file).name,
+                "source_hint": source_file,
+            })
+        
+        return filedir
     
     def save(self) -> bool:
         """Save the manifest to disk.
@@ -1213,6 +1402,268 @@ class ManifestManager:
         self._manifest_data["source_files"] = [str(p.resolve()) for p in files]
         self._mark_dirty()
     
+    # ========================== File Directory (TASK 35.1) ========================== #
+    
+    def get_filedir(self) -> List[FileDirEntry]:
+        """Get file directory entries.
+        
+        Returns list of FileDirEntry objects mapping line index ranges to files.
+        """
+        entries = self._manifest_data.get("filedir", [])
+        return [FileDirEntry.from_dict(e) for e in entries]
+    
+    def set_filedir(self, entries: List[FileDirEntry]) -> None:
+        """Set file directory entries.
+        
+        Args:
+            entries: List of FileDirEntry objects.
+        """
+        self._manifest_data["filedir"] = [e.to_dict() for e in entries]
+        self._mark_dirty()
+    
+    def add_filedir_entry(self, entry: FileDirEntry) -> None:
+        """Add a file directory entry.
+        
+        Args:
+            entry: FileDirEntry to add.
+        """
+        if "filedir" not in self._manifest_data:
+            self._manifest_data["filedir"] = []
+        self._manifest_data["filedir"].append(entry.to_dict())
+        self._mark_dirty()
+    
+    def clear_filedir(self) -> None:
+        """Clear all file directory entries."""
+        self._manifest_data["filedir"] = []
+        self._mark_dirty()
+    
+    def get_filedir_entry_for_idx(self, idx: int) -> Optional[FileDirEntry]:
+        """Get the FileDirEntry that contains the given line index.
+        
+        Args:
+            idx: Line index to look up.
+            
+        Returns:
+            FileDirEntry containing idx, or None if not found.
+        """
+        for entry_dict in self._manifest_data.get("filedir", []):
+            entry = FileDirEntry.from_dict(entry_dict)
+            if entry.contains_idx(idx):
+                return entry
+        return None
+    
+    def get_lines_for_filedir_entry(self, entry: FileDirEntry) -> List[Dict[str, Any]]:
+        """Get all lines belonging to a FileDirEntry.
+        
+        Args:
+            entry: FileDirEntry to get lines for.
+            
+        Returns:
+            List of line dictionaries in the entry's index range.
+        """
+        lines = []
+        for line in self._manifest_data.get("lines", []):
+            idx = line.get("idx", -1)
+            if entry.first_idx <= idx <= entry.last_idx:
+                lines.append(line)
+        return lines
+    
+    def get_project_dir(self) -> Path:
+        """Get the project directory path.
+        
+        Returns path like Projects/{project_name}/ for storing Original/ and Patch/.
+        """
+        project_name = self._manifest_data.get("project_name", "Project1")
+        safe_name = "".join(c for c in project_name if c.isalnum() or c in " -_").strip()
+        if not safe_name:
+            safe_name = "Untitled"
+        return MANIFEST_DIR / safe_name
+    
+    def get_original_dir(self) -> Path:
+        """Get the Original/ directory path for copied source files.
+        
+        TASK 35.2: Returns Projects/{project_name}/Original/
+        """
+        return self.get_project_dir() / "Original"
+    
+    def get_patch_dir(self) -> Path:
+        """Get the Patch/ directory path for output files.
+        
+        TASK 35.3: Returns Projects/{project_name}/Patch/
+        """
+        return self.get_project_dir() / "Patch"
+    
+    def copy_originals_to_project(self, force: bool = False) -> Dict[str, str]:
+        """Copy source files into the project's Original/ directory.
+        
+        TASK 35.2: Ensures complex formats have a stable local reference even
+        if the user moves/deletes the original inputs. Updates filedir entries
+        to point to the copied files.
+        
+        Args:
+            force: If True, overwrite existing copies. If False, skip existing.
+            
+        Returns:
+            Dict mapping original paths to copied paths. Empty dict if failed.
+        """
+        import shutil
+        
+        filedir = self.get_filedir()
+        if not filedir:
+            logger.warning("No filedir entries to copy")
+            return {}
+        
+        original_dir = self.get_original_dir()
+        original_dir.mkdir(parents=True, exist_ok=True)
+        
+        copied_files: Dict[str, str] = {}
+        
+        for entry in filedir:
+            source_path = Path(entry.source_hint) if entry.source_hint else None
+            
+            if not source_path or not source_path.exists():
+                logger.warning("Source file not found: %s", entry.source_hint)
+                continue
+            
+            # Destination path preserves relative folder structure
+            dest_path = original_dir / entry.rel_path
+            
+            # Create parent directories
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Skip if already exists and not forcing
+            if dest_path.exists() and not force:
+                logger.debug("Original already exists: %s", dest_path)
+                copied_files[str(source_path)] = str(dest_path)
+                continue
+            
+            try:
+                shutil.copy2(source_path, dest_path)
+                copied_files[str(source_path)] = str(dest_path)
+                logger.info("Copied original: %s -> %s", source_path.name, dest_path)
+            except Exception as e:
+                logger.error("Failed to copy %s: %s", source_path, e)
+        
+        return copied_files
+    
+    def get_original_file_path(self, entry: FileDirEntry) -> Path:
+        """Get the path to the copied original file for a filedir entry.
+        
+        TASK 35.2: Returns the path in Original/ directory.
+        
+        Args:
+            entry: FileDirEntry to get original path for.
+            
+        Returns:
+            Path to the original file in Original/ directory.
+        """
+        return self.get_original_dir() / entry.rel_path
+    
+    def get_patch_file_path(self, entry: FileDirEntry) -> Path:
+        """Get the output path in Patch/ directory for a filedir entry.
+        
+        TASK 35.3: Returns the path where the translated file should be written.
+        
+        Args:
+            entry: FileDirEntry to get patch path for.
+            
+        Returns:
+            Path to the output file in Patch/ directory.
+        """
+        return self.get_patch_dir() / entry.rel_path
+    
+    def has_original_copies(self) -> bool:
+        """Check if original files have been copied to the project.
+        
+        Returns:
+            True if Original/ directory exists and has files.
+        """
+        original_dir = self.get_original_dir()
+        if not original_dir.exists():
+            return False
+        return any(original_dir.iterdir())
+    
+    def build_filedir_from_files(
+        self,
+        file_infos: List[Dict[str, Any]],
+    ) -> List[FileDirEntry]:
+        """Build filedir entries from a list of file information.
+        
+        Args:
+            file_infos: List of dicts with keys:
+                - path: Path to file (absolute)
+                - format: File format (txt, csv, etc.)
+                - line_count: Number of lines
+                - encoding: File encoding (optional, defaults to utf-8)
+                
+        Returns:
+            List of FileDirEntry objects covering all files.
+        """
+        entries: List[FileDirEntry] = []
+        current_idx = 0
+        
+        # Determine common base path for relative paths
+        paths = [Path(f["path"]) for f in file_infos]
+        base_path = self._find_common_base(paths) if paths else Path.cwd()
+        
+        for file_info in file_infos:
+            file_path = Path(file_info["path"])
+            line_count = file_info.get("line_count", 0)
+            
+            if line_count == 0:
+                continue
+                
+            # Calculate relative path from common base
+            try:
+                rel_path = file_path.relative_to(base_path)
+            except ValueError:
+                # If can't make relative, use just filename
+                rel_path = Path(file_path.name)
+            
+            entry = FileDirEntry(
+                first_idx=current_idx,
+                last_idx=current_idx + line_count - 1,
+                format=file_info.get("format", "txt"),
+                rel_path=str(rel_path),
+                source_hint=str(file_path.resolve()),
+                encoding=file_info.get("encoding", "utf-8"),
+            )
+            entries.append(entry)
+            current_idx += line_count
+        
+        return entries
+    
+    def _find_common_base(self, paths: List[Path]) -> Path:
+        """Find the common base directory for a list of paths.
+        
+        Args:
+            paths: List of file paths.
+            
+        Returns:
+            Common parent directory.
+        """
+        if not paths:
+            return Path.cwd()
+        
+        if len(paths) == 1:
+            return paths[0].parent
+        
+        # Get all parts for each path
+        parts_list = [list(p.resolve().parts) for p in paths]
+        
+        # Find common prefix
+        common_parts: List[str] = []
+        for parts in zip(*parts_list):
+            if len(set(parts)) == 1:
+                common_parts.append(parts[0])
+            else:
+                break
+        
+        if not common_parts:
+            return Path.cwd()
+        
+        return Path(*common_parts)
+    
     # ========================== Integration with mainhelper Manifest ========================== #
     
     def import_from_mainhelper_manifest(self, manifest: "Manifest") -> None:
@@ -1389,6 +1840,183 @@ class ManifestManager:
         self._manifest_data["ValidationRules"] = rules
         self._mark_dirty()
     
+    # ========================== Character/Word Validation (TASK 36.1) ========================== #
+    
+    def get_character_whitelist(self) -> str:
+        """Get the character whitelist string.
+        
+        TASK 36.1: Returns allowed characters. Empty string means all allowed.
+        
+        Returns:
+            String of allowed characters.
+        """
+        return self._manifest_data.get("CharacterWhitelist", "")
+    
+    def set_character_whitelist(self, whitelist: str) -> None:
+        """Set the character whitelist string.
+        
+        TASK 36.1: Set allowed characters for validation.
+        
+        Args:
+            whitelist: String of allowed characters. Empty = all allowed.
+        """
+        self._manifest_data["CharacterWhitelist"] = whitelist
+        self._mark_dirty()
+    
+    def get_character_blacklist(self) -> str:
+        """Get the character blacklist string.
+        
+        TASK 36.1: Returns forbidden characters.
+        
+        Returns:
+            String of forbidden characters.
+        """
+        return self._manifest_data.get("CharacterBlacklist", "")
+    
+    def set_character_blacklist(self, blacklist: str) -> None:
+        """Set the character blacklist string.
+        
+        TASK 36.1: Set forbidden characters for validation.
+        
+        Args:
+            blacklist: String of forbidden characters.
+        """
+        self._manifest_data["CharacterBlacklist"] = blacklist
+        self._mark_dirty()
+    
+    def get_word_blacklist(self) -> List[str]:
+        """Get the word blacklist.
+        
+        TASK 36.1: Returns forbidden words/phrases.
+        Case-insensitive, whole word matching.
+        
+        Returns:
+            List of forbidden words/phrases.
+        """
+        return deepcopy(self._manifest_data.get("WordBlacklist", []))
+    
+    def set_word_blacklist(self, blacklist: List[str]) -> None:
+        """Set the word blacklist.
+        
+        TASK 36.1: Set forbidden words/phrases for validation.
+        
+        Args:
+            blacklist: List of forbidden words/phrases.
+        """
+        self._manifest_data["WordBlacklist"] = blacklist
+        self._mark_dirty()
+    
+    def add_word_to_blacklist(self, word: str) -> None:
+        """Add a word to the blacklist.
+        
+        TASK 36.1: Add a single word to the forbidden list.
+        
+        Args:
+            word: Word to blacklist.
+        """
+        if "WordBlacklist" not in self._manifest_data:
+            self._manifest_data["WordBlacklist"] = []
+        if word and word not in self._manifest_data["WordBlacklist"]:
+            self._manifest_data["WordBlacklist"].append(word)
+            self._mark_dirty()
+    
+    def remove_word_from_blacklist(self, word: str) -> None:
+        """Remove a word from the blacklist.
+        
+        TASK 36.1: Remove a single word from the forbidden list.
+        
+        Args:
+            word: Word to remove.
+        """
+        if "WordBlacklist" in self._manifest_data:
+            try:
+                self._manifest_data["WordBlacklist"].remove(word)
+                self._mark_dirty()
+            except ValueError:
+                pass  # Word not in list
+    
+    def get_autofix_map(self) -> Dict[str, str]:
+        """Get the autofix mapping.
+        
+        TASK 36.1: Returns mapping from offending characters to replacements.
+        
+        Returns:
+            Dict mapping offending chars to replacement chars.
+        """
+        return deepcopy(self._manifest_data.get("AutofixMap", {}))
+    
+    def set_autofix_map(self, autofix_map: Dict[str, str]) -> None:
+        """Set the autofix mapping.
+        
+        TASK 36.1: Set character replacement mappings for auto-correction.
+        
+        Args:
+            autofix_map: Dict mapping offending chars to replacement chars.
+        """
+        self._manifest_data["AutofixMap"] = autofix_map
+        self._mark_dirty()
+    
+    def add_autofix_entry(self, offending: str, replacement: str) -> None:
+        """Add an autofix mapping entry.
+        
+        TASK 36.1: Add a single character replacement mapping.
+        
+        Args:
+            offending: Offending character to replace.
+            replacement: Replacement character.
+        """
+        if "AutofixMap" not in self._manifest_data:
+            self._manifest_data["AutofixMap"] = {}
+        if offending:
+            self._manifest_data["AutofixMap"][offending] = replacement
+            self._mark_dirty()
+    
+    def remove_autofix_entry(self, offending: str) -> None:
+        """Remove an autofix mapping entry.
+        
+        TASK 36.1: Remove a single character replacement mapping.
+        
+        Args:
+            offending: Offending character to remove from map.
+        """
+        if "AutofixMap" in self._manifest_data:
+            if offending in self._manifest_data["AutofixMap"]:
+                del self._manifest_data["AutofixMap"][offending]
+                self._mark_dirty()
+    
+    def get_character_validation_config(self) -> Dict[str, Any]:
+        """Get full character/word validation configuration.
+        
+        TASK 36.1: Returns all validation lists and mappings in one call.
+        
+        Returns:
+            Dict with CharacterWhitelist, CharacterBlacklist, WordBlacklist, AutofixMap.
+        """
+        return {
+            "CharacterWhitelist": self.get_character_whitelist(),
+            "CharacterBlacklist": self.get_character_blacklist(),
+            "WordBlacklist": self.get_word_blacklist(),
+            "AutofixMap": self.get_autofix_map(),
+        }
+    
+    def set_character_validation_config(self, config: Dict[str, Any]) -> None:
+        """Set full character/word validation configuration.
+        
+        TASK 36.1: Set all validation lists and mappings in one call.
+        
+        Args:
+            config: Dict with CharacterWhitelist, CharacterBlacklist, WordBlacklist, AutofixMap.
+        """
+        if "CharacterWhitelist" in config:
+            self._manifest_data["CharacterWhitelist"] = config["CharacterWhitelist"]
+        if "CharacterBlacklist" in config:
+            self._manifest_data["CharacterBlacklist"] = config["CharacterBlacklist"]
+        if "WordBlacklist" in config:
+            self._manifest_data["WordBlacklist"] = config["WordBlacklist"]
+        if "AutofixMap" in config:
+            self._manifest_data["AutofixMap"] = config["AutofixMap"]
+        self._mark_dirty()
+
     def get_qa_options(self) -> Dict[str, Any]:
         """Get QA options for quality assurance step.
         
