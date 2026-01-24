@@ -158,7 +158,6 @@ Known skips in offline/dev environments:
 - Standalone integration demos (temporary replacement, unique placeholders)
 
 **Troubleshooting:**
-- If you see `ModuleNotFoundError`, ensure you are running from `c:\Users\patri\TLUtility\utility`.
 - Do not run `pytest` directly if `CherryAI` is not in your PYTHONPATH. Use `python -m pytest`.
 - Always use `-s` flag if you need to see stdout/print debugging.
 

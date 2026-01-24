@@ -35,6 +35,7 @@ This is needed because the manager may not exist when widgets are created.
 from __future__ import annotations
 
 import logging
+from tkinter import scrolledtext
 from typing import TYPE_CHECKING, Any, Callable, List, Optional, Union
 import tkinter as tk
 from tkinter import ttk
