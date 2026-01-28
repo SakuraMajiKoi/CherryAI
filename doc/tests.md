@@ -2090,7 +2090,7 @@ Comprehensive tests for all modi modules verifying attributes, functions, and op
 
 ---
 
-### dev/test_formats.py (52 tests) - NEW (TASK 15.7)
+### dev/test_formats.py (57 tests) - NEW (TASK 15.7)
 
 Comprehensive tests for all formats/ modules verifying handlers, registry, and operations.
 
@@ -2143,7 +2143,7 @@ Comprehensive tests for all formats/ modules verifying handlers, registry, and o
 | `test_tsv_extract` | extract() reads first column |
 | `test_tsv_inject_with_pairs` | inject() writes tab-separated pairs |
 
-#### TestJsonHandler (7 tests)
+#### TestJsonHandler (13 tests)
 
 | Test | Purpose |
 |------|---------|
@@ -2154,6 +2154,11 @@ Comprehensive tests for all formats/ modules verifying handlers, registry, and o
 | `test_json_inject_simple` | Writes array of strings |
 | `test_json_inject_with_pairs` | Writes objects when original provided |
 | `test_json_get_metadata` | get_metadata() returns structure info |
+| `test_json_extract_dictionary_format` | extract() handles dict format (keys=source) |
+| `test_json_extract_with_translations_dictionary` | extract_with_translations() returns pairs |
+| `test_json_get_metadata_dictionary` | get_metadata() detects "dictionary" structure |
+| `test_json_inject_dict_format` | inject_dict() writes dictionary format |
+| `test_json_preserve_dict_format_on_inject` | inject(preserve_format=True) keeps dict format |
 
 #### TestXlsxHandler (4 tests)
 
@@ -2454,7 +2459,7 @@ Thank you.
 | test_config.py | 23 | Config management |
 | test_dedup.py | 26 | Deduplication |
 | test_dependencies.py | 17 | Dependency checking (TASK 15.1) |
-| test_formats.py | 52 | Formats module handlers (TASK 15.7) |
+| test_formats.py | 57 | Formats module handlers (TASK 15.7) |
 | test_functions_v2.py | 15 | Functions integration |
 | test_game_summary.py | 22 | Game summary & project config |
 | test_gender_inference.py | 21 | Gender inference |
@@ -2466,6 +2471,7 @@ Thank you.
 | test_gui_progress.py | 24 | GUI progress indicators (TASK 15.12) |
 | test_gui_v2.py | 595 | GUI v2 framework (TASK 15.8-15.14: core + theme/CLI/deprecated) |
 | test_session_persistence.py | 40 | Session auto-save/load, step persistence, file restoration (Release Stabilization) |
+| test_folder_loading.py | 23 | Folder loading in InputExtractionStep |
 | test_estimate_manifest.py | 33 | Estimation/Analysis manifest integration (TASK 25.1, 25.2) |
 | test_qa_manifest.py | 17 | QA step manifest integration (TASK 26.1) |
 | test_translate_manifest.py | 47 | Translation step manifest integration (TASK 26.2) |
@@ -4293,19 +4299,23 @@ python CherryAI.py help io
 
 ---
 
-### File Format Handler Tests (Planned)
+### File Format Handler Tests (Implemented - 57 tests)
 
-Future tests for formats/ module:
+Tests for formats/ module in dev/test_formats.py:
 
 ```python
-# Planned test classes:
+# Implemented test classes:
 # TestTxtHandler - txt file read/write
 # TestCsvHandler - csv with pair support
 # TestTsvHandler - tsv with pair support
-# TestJsonHandler - json structures (strings, pairs, objects)
+# TestJsonHandler - json structures (strings, pairs, objects, dictionary format)
 # TestXlsxHandler - xlsx with openpyxl
+# TestHtmlHandler - HTML parsing with BS4
 # TestFormatRegistry - handler registration and lookup
 # TestIOConfig - configuration serialization
+# TestDocumentPlaceholders - PDF/EPUB placeholders
+# TestRpgMakerPlaceholders - RPG Maker placeholders
+# TestFormatIntegration - cross-format workflows
 ```
 
 ---
@@ -6834,10 +6844,12 @@ Tests for automatic manifest creation and persistence.
 
 | Test | Purpose |
 |------|---------|
-| `test_create_manifest_function_exists` | _create_manifest method exists |
+| `test_manifest_has_required_fields` | Required manifest fields present |
 | `test_manifest_filename_pattern` | Uses .manifest.json extension |
 | `test_manifest_includes_source_path` | Source path is recorded |
 | `test_manifest_includes_timestamp` | Creation timestamp is recorded |
+
+**Note**: Unified manifest creation is now handled by `ManifestManager.create_new()` called from `App.create_new_project()`. Individual per-file manifests are no longer created.
 
 #### TestManifestPersistence (4 tests)
 
@@ -7040,6 +7052,71 @@ Tests for session loading and state restoration fixes.
 |------|---------|
 | `test_empty_session_step_data` | Empty step data handling |
 | `test_missing_metadata_fields` | Missing optional fields |
+
+---
+
+### dev/test_folder_loading.py (23 tests) - Folder Loading Feature
+
+Tests for folder loading functionality in InputExtractionStep. Covers recursive file 
+collection, relative path display, and cleanup verification.
+
+#### TestCollectFilesFromFolder (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_collects_all_supported_files` | Recursively finds all supported file types |
+| `test_collects_txt_files_only` | Single extension filtering |
+| `test_handles_empty_folder` | Empty folder returns empty list |
+| `test_handles_permission_error` | Permission errors handled gracefully |
+
+#### TestGetDisplayName (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_returns_relative_path_when_folder_root_set` | Relative path display |
+| `test_returns_deeply_nested_relative_path` | Deeply nested path display |
+| `test_returns_filename_when_not_relative` | Fallback to filename |
+| `test_returns_filename_when_folder_root_none` | No folder root behavior |
+| `test_root_file_shows_just_filename` | Root-level file display |
+
+#### TestFileCreationAndCleanup (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_temp_folder_is_created` | Temp fixture works |
+| `test_populated_folder_has_expected_structure` | Populated fixture structure |
+
+#### TestCleanupVerification (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_cleanup_removes_temp_folder` | Cleanup mechanism works |
+| `test_no_leftover_test_folders` | No test folders left behind |
+
+#### TestInputExtractionStepFolderLoading (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_folder_root_initially_none` | Initial state is None |
+| `test_folder_root_set_after_folder_load` | Folder root set correctly |
+| `test_file_loading_respects_format_filter` | Only supported formats loaded |
+| `test_sorted_file_order` | Files sorted by path |
+
+#### TestEdgeCases (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_folder_with_only_unsupported_files` | Empty result for unsupported |
+| `test_folder_with_mixed_case_extensions` | Case-insensitive matching |
+| `test_folder_with_spaces_in_path` | Spaces in paths handled |
+| `test_folder_with_unicode_names` | Unicode filenames handled |
+| `test_relative_path_with_unicode` | Unicode in relative paths |
+
+#### TestFinalCleanup (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_zz_no_test_files_left_behind` | Ensures no test files persist |
 
 ---
 

@@ -145,9 +145,11 @@ THE BASIC WORKFLOW (Batch Processing)
 
 CherryAI is built on **batch processing**: you can load one or multiple files and apply the same rules to all of them at once.
 
-1. Load Files (Single or Multiple)
-   - Click "Load Translation File"
+1. Load Files (Single, Multiple, or Folder)
+   - Click "Load Files..." to select individual files
+   - Click "Load Folder..." to recursively load all supported files from a directory
    - Select one or more files: .txt, .csv, .tsv, .json, or .xlsx
+   - Folder loading shows relative paths (e.g., "subdir/file.txt") in the file list
    - Shows "N files selected" if you picked multiple files
    - Single file is treated as a batch of 1
 
@@ -301,7 +303,11 @@ FILE FORMAT SYSTEM ✓ (New)
   - `txt` - Plain text (one line per line)
   - `csv` - Comma-separated values
   - `tsv` - Tab-separated values
-  - `json` - JSON (array of strings or objects with original/translated)
+  - `json` - JSON with multiple structure support:
+    - Array of strings: `["line1", "line2", ...]`
+    - Array of pairs: `[["original", "translated"], ...]`
+    - Array of objects: `[{"original": "...", "translated": "..."}, ...]`
+    - **Dictionary format**: `{"original_text": "translation", ...}` (keys=source, values=translation)
   - `xlsx` - Excel spreadsheets
 - **Pair Support**: CSV, TSV, JSON, XLSX can store original + translated pairs
 - **IO Configuration via CLI**: `python CherryAI.py io`
@@ -608,6 +614,9 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   10. **Output** - Export formats, save results
 - **Input and Extraction Tab (Phase 1):**
   - File browser with multi-select support
+  - **Folder loading:** Recursively load all supported files from a directory
+    - Shows relative paths for files in subfolders (e.g., "subdir/file.txt")
+    - Supported formats: txt, csv, tsv, json, xlsx
   - Format auto-detection (txt/csv/tsv/json/xlsx)
   - Preview table with line numbers and content
   - Manifest detection and loading from "Projects/" folder

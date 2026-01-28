@@ -228,6 +228,12 @@ TABLE OF CONTENTS
        *Tab:* `tab_active`, `tab_inactive`, `tab_hover`
        *Button:* `btn_primary_bg`, `btn_primary_fg`, `btn_secondary_bg`, `btn_secondary_fg`, `btn_disabled_bg`, `btn_disabled_fg`
 
+       **TTK Button Styles (gui/theme/colors.py):**
+       - `TButton` - Default secondary button style (grey background)
+       - `Primary.TButton` - Primary action button (blue background)
+       - `Accent.TButton` - Accent/success action button (green background, black text)
+         Used for positive actions like "Create Project" in dialogs.
+
    6.12 gui/helpers/manifest_binding.py - Widget-to-Manifest Binding (Phase 22-26)
        - Automatic save/load binding between tkinter widgets and manifest fields
        - **Binding Types:**
@@ -1385,7 +1391,7 @@ Step Overview (Updated December 2025 - Estimation moved to Step 2):
 
 | Step | Tab Name | File | Primary Purpose |
 |------|----------|------|-----------------|
-| 0 | Input/Extract | input_extract.py | Load files, extract text via format handlers |
+| 0 | Input/Extract | input_extract.py | Load files/folders, extract text via format handlers |
 | 1 | Analysis | analysis.py | Static analysis: line counts, duplicates, speakers |
 | 2 | Estimate | estimate.py | Token/cost estimation for translation |
 | 3 | Information | information.py | Project info, glossary, game summary |
@@ -1395,6 +1401,14 @@ Step Overview (Updated December 2025 - Estimation moved to Step 2):
 | 7 | Postprocess | postprocess.py | Reverse preprocessing operations |
 | 8 | Wordwrap | wordwrap_overwrite.py | Word wrapping and final adjustments |
 | 9 | Output/Inject | output_inject.py | Export to target format |
+
+**Input/Extract Step Features:**
+- **Load Files:** Select individual files via file dialog
+- **Load Folder:** Recursively load all supported files from a directory
+  - Files from subfolders display relative paths (e.g., "subdir/file.txt")
+  - Supported formats: txt, csv, tsv, json, xlsx
+- Format auto-detection and encoding options
+- Manifest detection and auto-creation
 
 Shared Module Integration Status:
 
@@ -1652,13 +1666,23 @@ Simple Format Handlers (formats/simple.py):
 | TxtHandler | txt | .txt | No | Plain text (one line per line) |
 | CsvHandler | csv | .csv | Yes | Comma-separated (col A = text, col B = original) |
 | TsvHandler | tsv | .tsv | Yes | Tab-separated (col A = text, col B = original) |
-| JsonHandler | json | .json | Yes | JSON array of strings or objects |
+| JsonHandler | json | .json | Yes | JSON - array or dictionary formats |
 | XlsxHandler | xlsx | .xlsx | Yes | Excel (col A = text, col B = original) |
 
 JSON Handler Structures:
-- Extract: Reads array of strings, [orig, trans] pairs, or {original, translated} objects
-- Inject without originals: Writes simple array of strings
-- Inject with originals: Writes [{"original": ..., "translated": ...}, ...]
+- **Extract**: Reads multiple JSON structures:
+  - Array of strings: `["line1", "line2", ...]`
+  - Array of pairs: `[["original", "translated"], ...]`
+  - Array of objects: `[{"original": "...", "translated": "..."}, ...]`
+  - Dictionary format: `{"original_text": "translation", ...}` (keys=source, values=translation)
+- **Inject without originals**: Writes simple array of strings
+- **Inject with originals**: Writes [{"original": ..., "translated": ...}, ...]
+- **Inject with preserve_format=True**: Preserves original dict format if source was dict
+- **inject_dict()**: Writes dictionary format directly
+
+Additional JsonHandler Methods:
+- `extract_with_translations(path)` → List[Tuple[str, str]]: Extract (original, translation) pairs from dict format
+- `get_metadata(path)` → Dict: Returns structure type ("array_of_strings", "array_of_pairs", "array_of_objects", "dictionary"), line_count, and translated_count for dicts
 
 Usage Example:
 ```python

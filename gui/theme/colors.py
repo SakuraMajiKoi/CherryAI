@@ -215,6 +215,7 @@ def get_ttk_style_map(theme: ColorPalette | None = None) -> Dict[str, Dict[str, 
                 "background": theme.btn_secondary_bg,
                 "foreground": theme.btn_secondary_fg,
                 "padding": [10, 5],
+                "font": ("Segoe UI", 10),
             },
             "map": {
                 "background": [
@@ -231,6 +232,33 @@ def get_ttk_style_map(theme: ColorPalette | None = None) -> Dict[str, Dict[str, 
                 "background": theme.btn_primary_bg,
                 "foreground": theme.btn_primary_fg,
                 "padding": [10, 5],
+                "font": ("Segoe UI", 10),
+            },
+            "map": {
+                "background": [
+                    ("active", theme.bg_hover),
+                    ("disabled", theme.btn_disabled_bg),
+                ],
+                "foreground": [
+                    ("disabled", theme.btn_disabled_fg),
+                ],
+            },
+        },
+        "Accent.TButton": {
+            "configure": {
+                "background": theme.accent_success,
+                "foreground": theme.text_inverse,
+                "padding": [12, 6],
+                "font": ("Segoe UI", 10, "bold"),
+            },
+            "map": {
+                "background": [
+                    ("active", theme.accent_info),
+                    ("disabled", theme.btn_disabled_bg),
+                ],
+                "foreground": [
+                    ("disabled", theme.btn_disabled_fg),
+                ],
             },
         },
         "TEntry": {

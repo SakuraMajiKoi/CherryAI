@@ -196,6 +196,8 @@ class JsonHandler(FormatHandler):
     - Array of strings: ["line1", "line2", ...]
     - Array of pairs: [["original1", "translated1"], ...]
     - Array of objects: [{"original": "...", "translated": "..."}, ...]
+    - Dictionary: {"original1": "translated1", "original2": "translated2", ...}
+      Keys are original text, values are translations
     
     When injecting with original_lines, outputs array of objects with
     both original and translated fields.
@@ -203,7 +205,7 @@ class JsonHandler(FormatHandler):
     
     format_id = "json"
     extensions = (".json",)
-    description = "JSON files (array of strings or original/translated pairs)"
+    description = "JSON files (array of strings, pairs, or key-value dictionary)"
     supports_pairs = True
     
     def extract(self, path: Path, encoding: str = "utf-8") -> List[str]:
@@ -213,6 +215,7 @@ class JsonHandler(FormatHandler):
         - Array of strings
         - Array of [original, translated] pairs (extracts original)
         - Array of {"original": ..., "translated": ...} objects
+        - Dictionary where keys are original text, values are translations
         
         Args:
             path: Path to the JSON file.
@@ -246,20 +249,69 @@ class JsonHandler(FormatHandler):
                                 break
                         else:
                             lines.append("")
+        elif isinstance(data, dict):
+            # Dictionary format: {"original_text": "translated_text", ...}
+            # Keys are original text, values are translations (may be empty)
+            for key in data.keys():
+                if isinstance(key, str):
+                    lines.append(key)
         
         return lines
+    
+    def extract_with_translations(
+        self,
+        path: Path,
+        encoding: str = "utf-8"
+    ) -> List[Tuple[str, str]]:
+        """Extract text with existing translations from a JSON file.
+        
+        For dictionary format where keys are original and values are translations.
+        
+        Args:
+            path: Path to the JSON file.
+            encoding: Text encoding.
+            
+        Returns:
+            List of (original, translated) tuples.
+        """
+        content = path.read_text(encoding=encoding)
+        data = json.loads(content)
+        
+        pairs: List[Tuple[str, str]] = []
+        if isinstance(data, dict):
+            # Dictionary format: {"original": "translated", ...}
+            for key, value in data.items():
+                if isinstance(key, str):
+                    translated = str(value) if value else ""
+                    pairs.append((key, translated))
+        elif isinstance(data, list):
+            for item in data:
+                if isinstance(item, list) and len(item) >= 2:
+                    pairs.append((str(item[0]), str(item[1])))
+                elif isinstance(item, dict):
+                    orig = item.get("original", item.get("text", ""))
+                    trans = item.get("translated", item.get("translation", ""))
+                    pairs.append((str(orig), str(trans)))
+                elif isinstance(item, str):
+                    pairs.append((item, ""))
+        
+        return pairs
     
     def inject(
         self,
         path: Path,
         lines: List[str],
         original_lines: Optional[List[str]] = None,
-        encoding: str = "utf-8"
+        encoding: str = "utf-8",
+        preserve_format: bool = False
     ) -> None:
         """Write text to a JSON file.
         
-        If original_lines is provided, writes array of objects:
-        [{"original": "...", "translated": "..."}, ...]
+        If preserve_format is True and original file was a dictionary,
+        writes back as dictionary format.
+        
+        If original_lines is provided (without preserve_format), writes 
+        array of objects: [{"original": "...", "translated": "..."}, ...]
         
         Otherwise writes simple array of strings.
         
@@ -268,8 +320,27 @@ class JsonHandler(FormatHandler):
             lines: Translated lines.
             original_lines: Optional original lines.
             encoding: Text encoding.
+            preserve_format: If True, try to preserve original file format.
         """
         data: Any
+        
+        # Check if we should preserve dictionary format
+        if preserve_format and original_lines and path.exists():
+            try:
+                existing = json.loads(path.read_text(encoding=encoding))
+                if isinstance(existing, dict):
+                    # Preserve dictionary format: {"original": "translated"}
+                    result: Dict[str, str] = {}
+                    for i, orig in enumerate(original_lines):
+                        trans = lines[i] if i < len(lines) else ""
+                        result[orig] = trans
+                    data = result
+                    content = json.dumps(data, ensure_ascii=False, indent=2)
+                    path.write_text(content, encoding=encoding)
+                    return
+            except Exception:
+                pass  # Fall through to default handling
+        
         if original_lines:
             # Write as array of objects with both original and translated
             entries: List[Dict[str, str]] = []
@@ -286,6 +357,22 @@ class JsonHandler(FormatHandler):
         content = json.dumps(data, ensure_ascii=False, indent=2)
         path.write_text(content, encoding=encoding)
     
+    def inject_dict(
+        self,
+        path: Path,
+        translations: Dict[str, str],
+        encoding: str = "utf-8"
+    ) -> None:
+        """Write translations to a JSON file in dictionary format.
+        
+        Args:
+            path: Path to write the file.
+            translations: Dictionary mapping original text to translations.
+            encoding: Text encoding.
+        """
+        content = json.dumps(translations, ensure_ascii=False, indent=2)
+        path.write_text(content, encoding=encoding)
+    
     def get_metadata(self, path: Path) -> Dict[str, Any]:
         """Get JSON file metadata including structure type."""
         metadata = super().get_metadata(path)
@@ -295,7 +382,14 @@ class JsonHandler(FormatHandler):
                 content = path.read_text(encoding="utf-8")
                 data = json.loads(content)
                 
-                if isinstance(data, list) and data:
+                if isinstance(data, dict):
+                    # Dictionary format: {"original": "translated", ...}
+                    metadata["structure"] = "dictionary"
+                    metadata["line_count"] = len(data)
+                    # Check if it has any translations filled in
+                    filled = sum(1 for v in data.values() if v)
+                    metadata["translated_count"] = filled
+                elif isinstance(data, list) and data:
                     first = data[0]
                     if isinstance(first, str):
                         metadata["structure"] = "array_of_strings"

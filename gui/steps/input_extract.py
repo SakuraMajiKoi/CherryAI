@@ -130,6 +130,9 @@ class InputExtractionStep(BaseStep):
         self._loaded_files: List[LoadedFile] = []
         self._current_file_index: int = -1
 
+        # Folder root for relative path display (set when loading folder)
+        self._folder_root: Optional[Path] = None
+
         # UI variables
         self._encoding_var: Optional[tk.StringVar] = None
         self._format_var: Optional[tk.StringVar] = None
@@ -162,6 +165,14 @@ class InputExtractionStep(BaseStep):
             command=self._on_load_files,
         )
         load_btn.pack(side="left", padx=2)
+
+        # Load Folder button
+        folder_btn = ttk.Button(
+            toolbar,
+            text="📂 Load Folder...",
+            command=self._on_load_folder,
+        )
+        folder_btn.pack(side="left", padx=2)
 
         # Load Manifest button
         manifest_btn = ttk.Button(
@@ -385,6 +396,100 @@ class InputExtractionStep(BaseStep):
             
             # Trigger auto-preprocessing if enabled (runs after analysis)
             self._trigger_auto_preprocessing()
+
+    def _on_load_folder(self) -> None:
+        """Handle Load Folder button click.
+        
+        Allows selecting a directory to recursively load all supported files.
+        Files from subfolders are displayed with their relative path.
+        """
+        folder_path = filedialog.askdirectory(
+            title="Select Folder to Load",
+        )
+
+        if not folder_path:
+            return
+
+        root_folder = Path(folder_path)
+        if not root_folder.is_dir():
+            return
+
+        # Store the root folder for relative path display
+        self._folder_root = root_folder
+
+        encoding = self._encoding_var.get() if self._encoding_var else "utf-8"
+        format_override = self._format_var.get() if self._format_var else "auto"
+
+        # Collect all supported files recursively
+        supported_suffixes = {".txt", ".csv", ".tsv", ".json", ".xlsx"}
+        file_paths = self._collect_files_from_folder(root_folder, supported_suffixes)
+
+        if not file_paths:
+            messagebox.showinfo(
+                "No Files Found",
+                f"No supported files found in folder:\n{root_folder}\n\n"
+                f"Supported formats: {', '.join(sorted(supported_suffixes))}",
+            )
+            return
+
+        # Sort files by path for consistent ordering
+        file_paths.sort()
+
+        loaded_count = 0
+        for filepath in file_paths:
+            if self._load_file(filepath, encoding, format_override):
+                loaded_count += 1
+
+        if loaded_count > 0:
+            self._update_summary()
+            self._update_file_list()
+            # Select first file if none selected
+            if self._current_file_index < 0 and self._loaded_files:
+                self._current_file_index = 0
+                self._file_listbox.selection_set(0)
+                self._update_preview()
+            self.set_status("in-progress")
+            logger.info("Loaded %d file(s) from folder %s", loaded_count, root_folder)
+            
+            # Populate project info suggestion from folder name
+            self._populate_project_info_from_files()
+            
+            # TASK 19 Phase 5: Create project if no manifest loaded
+            self._ensure_project_created()
+            
+            # TASK 29.2: Save manifest after file load
+            self._save_manifest_after_file_load()
+            
+            # Trigger auto-analysis if enabled
+            self._trigger_auto_analysis()
+            
+            # Trigger auto-preprocessing if enabled (runs after analysis)
+            self._trigger_auto_preprocessing()
+
+    def _collect_files_from_folder(
+        self,
+        folder: Path,
+        suffixes: set,
+    ) -> List[Path]:
+        """Recursively collect files from a folder.
+
+        Args:
+            folder: Root folder to search.
+            suffixes: Set of allowed file suffixes (e.g., {".txt", ".csv"}).
+
+        Returns:
+            List of Path objects for all matching files.
+        """
+        files: List[Path] = []
+        try:
+            for item in folder.rglob("*"):
+                if item.is_file() and item.suffix.lower() in suffixes:
+                    files.append(item)
+        except PermissionError as e:
+            logger.warning("Permission denied accessing folder: %s", e)
+        except Exception as e:
+            logger.error("Error scanning folder %s: %s", folder, e)
+        return files
 
     def _save_manifest_after_file_load(self) -> None:
         """Save manifest after files are loaded (TASK 29.2).
@@ -642,11 +747,9 @@ class InputExtractionStep(BaseStep):
             # Extract lines using format handler
             lines = self._extract_lines(path, format_id, encoding)
 
-            # Check for existing manifest, or auto-create one
+            # Check for existing manifest (don't auto-create individual manifests)
+            # The unified manifest is created by _ensure_project_created() after all files load
             manifest_path = self._find_manifest(path)
-            if manifest_path is None:
-                # Auto-create manifest (TASK 18.8: Automated Manifest Management)
-                manifest_path = self._create_manifest(path, lines, format_id)
 
             # Create LoadedFile
             loaded = LoadedFile(
@@ -720,6 +823,9 @@ class InputExtractionStep(BaseStep):
                 data = json.load(f)
             if isinstance(data, list):
                 return [str(item) if not isinstance(item, str) else item for item in data]
+            elif isinstance(data, dict):
+                # Dictionary format: keys are original text
+                return [str(key) for key in data.keys()]
             return []
         elif format_id == "xlsx":
             try:
@@ -770,52 +876,6 @@ class InputExtractionStep(BaseStep):
             pass
 
         return None
-
-    def _create_manifest(
-        self,
-        path: Path,
-        lines: List[str],
-        format_id: str,
-    ) -> Path:
-        """Create a new manifest for a file.
-        
-        Args:
-            path: Source file path.
-            lines: Extracted text lines.
-            format_id: Detected format.
-            
-        Returns:
-            Path to the created manifest.
-        """
-        from datetime import datetime
-        
-        # Create manifest in the project's Projects folder
-        manifest_dir = Path(__file__).parent.parent.parent / "Projects"
-        manifest_dir.mkdir(parents=True, exist_ok=True)
-        
-        manifest_name = f"{path.stem}.CherryAI.json"
-        manifest_path = manifest_dir / manifest_name
-        
-        # Build manifest data following Manifest v2 spec
-        manifest_data = {
-            "version": "2.0",
-            "summary": str(path),
-            "source_file": str(path),
-            "format": format_id,
-            "line_count": len(lines),
-            "operations": [],
-            "metadata": {
-                "created_utc": datetime.utcnow().isoformat() + "Z",
-                "auto_created": True,
-            },
-        }
-        
-        # Write manifest
-        with open(manifest_path, "w", encoding="utf-8") as f:
-            json.dump(manifest_data, f, ensure_ascii=False, indent=2)
-        
-        logger.info("Auto-created manifest: %s", manifest_path)
-        return manifest_path
 
     def _load_manifest_file(self, path: Path) -> bool:
         """Load a manifest file.
@@ -1021,7 +1081,11 @@ class InputExtractionStep(BaseStep):
     # ----------------------------- UI Updates ----------------------------- #
 
     def _update_file_list(self) -> None:
-        """Update the file listbox."""
+        """Update the file listbox.
+        
+        If files were loaded from a folder, shows relative paths with subfolder.
+        Otherwise shows just the filename.
+        """
         self._file_listbox.delete(0, tk.END)
 
         # Get source file status from step data
@@ -1029,7 +1093,9 @@ class InputExtractionStep(BaseStep):
         source_status = step_data.get("source_files_status", {})
 
         for i, file in enumerate(self._loaded_files):
-            display = f"{file.filename} ({file.line_count} lines)"
+            # Build display name with relative path if loaded from folder
+            display_name = self._get_display_name(file.path)
+            display = f"{display_name} ({file.line_count} lines)"
             self._file_listbox.insert(tk.END, display)
             
             # Determine color based on file status
@@ -1046,6 +1112,25 @@ class InputExtractionStep(BaseStep):
             else:
                 # File missing and not recoverable - red error
                 self._file_listbox.itemconfig(i, fg=THEME.accent_error)
+
+    def _get_display_name(self, file_path: Path) -> str:
+        """Get display name for a file, showing relative path if from folder.
+
+        Args:
+            file_path: The full path to the file.
+
+        Returns:
+            Display name showing subfolder prefix if applicable.
+        """
+        if self._folder_root is not None:
+            try:
+                relative = file_path.relative_to(self._folder_root)
+                # Return with forward slashes for consistency
+                return str(relative).replace("\\", "/")
+            except ValueError:
+                # Not relative to folder root, use filename
+                pass
+        return file_path.name
 
     def _update_preview(self) -> None:
         """Update the preview table for current file."""
