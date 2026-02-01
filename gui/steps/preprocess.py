@@ -1284,7 +1284,7 @@ class PreprocessingStep(BaseStep):
         if not self.manifest_manager:
             return
         
-        if not self.manifest_manager.is_loaded():
+        if not self.manifest_manager.is_loaded:
             return
         
         for binding in self._manifest_bindings:
@@ -1321,7 +1321,7 @@ class PreprocessingStep(BaseStep):
         if not self.manifest_manager:
             return
         
-        if not self.manifest_manager.is_loaded():
+        if not self.manifest_manager.is_loaded:
             return
         
         # Load from manifest
@@ -1368,7 +1368,7 @@ class PreprocessingStep(BaseStep):
         if not self.manifest_manager:
             return
         
-        if not self.manifest_manager.is_loaded():
+        if not self.manifest_manager.is_loaded:
             return
         
         # Load from manifest
@@ -1441,7 +1441,7 @@ class PreprocessingStep(BaseStep):
         if not self.manifest_manager:
             return
         
-        if not self.manifest_manager.is_loaded():
+        if not self.manifest_manager.is_loaded:
             return
         
         # Load from manifest

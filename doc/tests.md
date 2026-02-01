@@ -771,7 +771,8 @@ Application startup manifest loading tests (Task 21.4).
 
 ### dev/test_manifest_filedir.py (51 tests) - TASK 35
 
-TASK 35: Manifest 3.1 filedir feature for input/output decoupling. Tests for FileDirEntry dataclass, filedir operations, Original/ copy, and Patch/ output.
+TASK 35: Manifest filedir feature for input/output decoupling (updated for v3.2).
+Tests for FileDirEntry dataclass, filedir operations, Original/ copy, and Patch/ output.
 
 #### TestFileDirEntry (9 tests)
 
@@ -792,7 +793,7 @@ TASK 35: Manifest 3.1 filedir feature for input/output decoupling. Tests for Fil
 | Test | Purpose |
 |------|---------|
 | `test_empty_manifest_has_filedir_field` | New manifests include empty filedir field |
-| `test_manifest_version_is_3_1` | New manifests have version 3.1 |
+| `test_manifest_version_is_3_2` | New manifests have version 3.2 (TASK 38) |
 | `test_get_filedir_empty` | get_filedir returns empty list for new manifest |
 | `test_set_filedir` | set_filedir stores entries correctly |
 | `test_get_filedir_retrieves_entries` | get_filedir retrieves stored entries |
@@ -811,13 +812,13 @@ TASK 35: Manifest 3.1 filedir feature for input/output decoupling. Tests for Fil
 | `test_common_base_detection` | Common base path is detected for relative paths |
 | `test_preserves_encoding` | Encoding is preserved in filedir entries |
 | `test_skips_empty_files` | Files with zero lines are skipped |
-| `test_source_hint_set_to_absolute_path` | source_hint is set to the absolute path |
+| `test_source_root_computed_for_common_path` | source_root computed correctly (TASK 38) |
 
 #### TestFiledirMigration (4 tests)
 
 | Test | Purpose |
 |------|---------|
-| `test_migrate_v30_manifest_adds_filedir` | v3.0 manifests get filedir added during migration |
+| `test_migrate_v30_manifest_adds_filedir` | v3.0 manifests get filedir added during migration (to v3.2) |
 | `test_build_filedir_from_legacy_single_file` | _build_filedir_from_legacy with single source file |
 | `test_build_filedir_from_legacy_multiple_files` | _build_filedir_from_legacy with multiple source files |
 | `test_build_filedir_from_legacy_no_lines` | _build_filedir_from_legacy with empty lines |
@@ -863,6 +864,118 @@ TASK 35: Manifest 3.1 filedir feature for input/output decoupling. Tests for Fil
 |------|---------|
 | `test_filedir_saved_to_disk` | filedir is saved when manifest is saved |
 | `test_filedir_loaded_from_disk` | filedir is loaded when manifest is loaded |
+
+---
+
+### dev/test_manifest_v32.py (35 tests) - TASK 38
+
+TASK 38: Manifest v3.2 optimization with source_root and compact line format.
+Tests for source_root computation, path resolution, and migration from v3.1.
+
+#### TestManifestVersionIs32 (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_manifest_version_is_32` | MANIFEST_VERSION is '3.2' |
+
+#### TestFileDirEntryNoSourceHint (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_filedir_entry_has_no_source_hint_attribute` | FileDirEntry has no source_hint attribute |
+| `test_filedir_entry_to_dict_no_source_hint` | to_dict() doesn't include source_hint |
+| `test_filedir_entry_from_dict_without_source_hint` | from_dict() works without source_hint |
+| `test_filedir_entry_sparse_encoding` | to_dict() omits default encoding |
+
+#### TestSourceRootComputation (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_compute_source_root_single_file` | Single file returns parent directory |
+| `test_compute_source_root_same_directory` | Files in same dir returns that dir |
+| `test_compute_source_root_nested_directories` | Nested dirs returns common parent |
+| `test_compute_source_root_deep_common_path` | Finds deepest common path |
+| `test_compute_source_root_empty_list` | Empty list returns empty string |
+
+#### TestSourcePathResolution (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_resolve_file_path_with_source_root` | resolve_file_path combines source_root + rel_path |
+| `test_resolve_file_path_no_source_root` | Returns rel_path as Path when no source_root |
+| `test_make_relative_path` | Creates path relative to source_root |
+
+#### TestGetFileForLineIdx (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_get_file_for_line_idx_found` | Returns entry containing the index |
+| `test_get_file_for_line_idx_not_found` | Returns None for invalid index |
+| `test_get_source_file_for_line_resolved` | Returns resolved absolute path |
+
+#### TestCompactLineFormat (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_line_entry_no_source_file` | Lines don't have source_file in v3.2 |
+| `test_source_root_stored_in_manifest` | Manifest has source_root field |
+
+#### TestMigrationV31ToV32 (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_migration_removes_source_file_from_lines` | Migration removes source_file from lines |
+| `test_migration_removes_source_hint_from_filedir` | Migration removes source_hint from filedir |
+| `test_migration_sets_source_root` | Migration computes and sets source_root |
+| `test_migration_updates_version` | Migration updates version to 3.2 |
+| `test_migration_preserves_line_data` | Migration preserves idx and orig |
+
+#### TestFileDirEntryContainsIdx (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_contains_idx_in_range` | Returns True for indices in range |
+| `test_contains_idx_out_of_range` | Returns False for indices outside range |
+
+#### TestFileDirEntryLineCount (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_line_count_single_line` | line_count is 1 for single-line entry |
+| `test_line_count_multiple_lines` | line_count is correct for multi-line entry |
+
+#### TestFileDirEntryFilename (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_filename_simple` | Returns just the file name |
+| `test_filename_nested_path` | Extracts name from nested path |
+
+#### TestSourceRootProperty (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_source_root_property_returns_value` | Returns stored value |
+| `test_source_root_property_empty_when_not_set` | Returns empty string when not set |
+
+#### TestMigrationFromOlderVersions (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_migration_from_v1_to_v32` | Migration from v1.x to v3.2 |
+| `test_migration_from_v2_to_v32` | Migration from v2.x to v3.2 |
+
+#### TestEmptyManifestTemplate (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_empty_manifest_has_source_root` | Empty manifest has source_root field |
+
+#### TestSizeReduction (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_no_source_file_in_lines_reduces_size` | Compact format reduces manifest size |
 
 ---
 

@@ -28,7 +28,7 @@ TESTING REFERENCE
 
 For comprehensive test documentation, see `doc/tests.md`
 
-**Current Status:** 4293 tests (verified January 2026 via pytest --collect-only)
+**Current Status:** 4428 tests (verified June 2025 via pytest --collect-only)
 
 Two test types:
 - **Script Test**: pytest unit tests (fast, no LLM)
@@ -2914,8 +2914,682 @@ Goal: Expand Task 33.2 (custom prompts) with configurable *components* and sourc
 
 =============================================================================
 
+## PHASE 38: MANIFEST OPTIMIZATION (source_root) ✅ DONE
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 4 hours
+
+Goal: Reduce manifest file size by removing redundant path data.
+
+### Problem
+Large manifest files (e.g., 24 MB for 48,000 lines) contained excessive redundancy:
+- Full source path repeated for each line entry in `source_file` field
+- Full source path repeated in filedir `source_hint` field
+- Example: `"D:\Translations\Unison Chord\ver1.00\Data\parlight\WIP"` (61 chars) 
+  repeated 48,000+ times = ~4 MB of redundant path data
+
+### Solution: Manifest v3.2 Optimization
+
+**TASK 38.1: Add `source_root` Field ✅ DONE**
+- Stores common path prefix once at manifest level
+- `FileDirEntry.rel_path` is now relative to `source_root`
+- Helper methods: `compute_source_root()`, `resolve_file_path()`, `make_relative_path()`
+
+**TASK 38.2: Remove Redundant Fields ✅ DONE**
+- Removed `source_file` from each line entry (lookup via filedir index)
+- Removed `source_hint` from FileDirEntry (use `source_root + rel_path`)
+- Updated `FileDirEntry` dataclass: now only `first_idx`, `last_idx`, `format`, `rel_path`, `encoding`
+
+**TASK 38.3: Migration Function ✅ DONE**
+- `_migrate_manifest()` handles v3.1 → v3.2 migration
+- Computes `source_root` from existing `source_files` list
+- Strips `source_file` from all line entries
+- Strips `source_hint` from all filedir entries
+
+**TASK 38.4: Tests ✅ DONE**
+- `dev/test_manifest_v32.py` - 35 tests for v3.2 format
+- Updated `dev/test_manifest_filedir.py` - Updated for v3.2 compatibility
+- Updated `dev/test_manifest_state.py` - Updated migration tests
+
+**Files Modified:**
+- `functions/manifest_manager.py` - FileDirEntry, ManifestManager methods
+- `gui/steps/output_inject.py` - Updated to use `resolve_file_path()`
+- `doc/technical.md` - Updated documentation
+
+**Size Reduction Example:**
+- Path: 60 chars, Lines: 50,000 → Savings: ~4 MB per manifest
+- JSON overhead included → actual savings ~80% of theoretical maximum
+
+---
+
+=============================================================================
+
+## PHASE 39: INPUT STEP IMPROVEMENTS
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 12-18 hours
+
+Goal: Modernize and polish the Input step (Step 0) per specs.md v2.0 requirements.
+
+**Reference:** See `doc/specs.md` Section 5 → Step 0: Input for detailed specification.
+
+### Overview
+
+The Input step is the entry point for all translation projects. This phase brings the
+implementation up to spec with improved UX, better file handling, and proper automation
+triggers. The changes are primarily UI/UX improvements with minimal processing logic changes.
+
+### TASK 39.1: Unified File/Folder Selector
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+
+Goal: Replace separate "Load Files" and "Load Folder" buttons with unified "Select File(s)".
+
+**Current State:**
+- `_on_load_files()` - Opens file dialog for multi-file selection
+- `_on_load_folder()` - Opens folder dialog for folder selection
+- Two separate buttons in toolbar
+
+**Changes Required:**
+- Combine into single `_on_select_files()` method
+- Use dialog that supports both file and folder selection
+- Windows: May need custom dialog or fallback to showing both buttons in dropdown
+- Rename button to "Select File(s)" with icon
+- Remove "Load Folder" button from toolbar
+- Keep single/multi file (Ctrl+Click) and folder selection working
+
+**Files to Modify:**
+- `gui/steps/input_extract.py` - Toolbar and handler methods
+
+**Tests to Update:**
+- `dev/test_folder_loading.py` - Update for new unified selector
+- `dev/test_gui_v2.py` - Update Input step tests
+
+---
+
+### TASK 39.2: Remove Load Manifest and Clear All Buttons
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 1 hour
+
+Goal: Remove redundant toolbar buttons per spec.
+
+**Current State:**
+- "Load Manifest" button exists (duplicate of File → Open Project)
+- "Clear All" button exists (should use File → New Project instead)
+
+**Changes Required:**
+- Remove `_on_load_manifest` button from toolbar (keep method for menu use)
+- Remove `_on_clear_all` button from toolbar
+- Update toolbar layout for cleaner appearance
+- Ensure File menu commands work correctly:
+  - File → Open Project... → Loads manifest
+  - File → New Project → Clears current and starts fresh
+
+**Files to Modify:**
+- `gui/steps/input_extract.py` - `_build_toolbar()` method
+
+**Tests to Update:**
+- `dev/test_gui_layout.py` - Update toolbar expectations
+
+---
+
+### TASK 39.3: Encoding and Format Dropdown Enhancements
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+Goal: Add "auto" option to dropdowns and implement format filtering.
+
+**Current State:**
+- Encoding dropdown: Fixed values, no "auto" option
+- Format dropdown: Has "auto" but no enforcement/filtering
+
+**Changes Required:**
+- Add "auto" as first option in Encoding dropdown (default)
+- Implement auto-encoding detection in `_extract_lines()` method
+- Add format filtering: When format is NOT "auto", refuse to load non-matching files
+- Show warning message when files are skipped due to format filter
+- Add "rpgmaker" and "image" to Format dropdown values
+- Update `SUPPORTED_EXTENSIONS` constant
+
+**Files to Modify:**
+- `gui/steps/input_extract.py` - Dropdowns and `_load_file()` method
+- `formats/__init__.py` - May need format detection helper
+
+**Tests to Add:**
+- `dev/test_format_filtering.py` - Test format enforcement
+- Test auto-encoding detection
+
+---
+
+### TASK 39.4: Collapsible Folder Hierarchy in Loaded Files
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+
+Goal: Replace flat Listbox with Treeview showing collapsible folder hierarchy.
+
+**Current State:**
+- `_file_listbox` is a flat `tk.Listbox`
+- Files shown as simple list without folder structure
+- Single-select only
+
+**Changes Required:**
+- Replace `tk.Listbox` with `ttk.Treeview`
+- Build folder hierarchy when loading from folders
+- Parent nodes are folders (collapsible)
+- Leaf nodes are files with icon, line count
+- Enable multi-select (`selectmode="extended"`)
+- Right-click context menu:
+  - Remove Selected (works on multi-selection)
+  - Select All in Folder (selects all files in clicked folder)
+- Delete key removes all selected items
+- Update `_update_file_list()` to build tree structure
+- Store mapping from tree item IDs to LoadedFile objects
+
+**Files to Modify:**
+- `gui/steps/input_extract.py` - Replace Listbox with Treeview
+
+**Tests to Add:**
+- `dev/test_input_file_tree.py`:
+  - Test folder hierarchy display
+  - Test multi-select deletion
+  - Test collapse/expand
+  - Test context menu actions
+
+---
+
+### TASK 39.5: Multi-Line Preview Support
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+Goal: Fix Preview panel to properly display multi-line content.
+
+**Current State:**
+- Preview uses `ttk.Treeview` with fixed row height
+- Newlines in content are not visible (truncated after first line)
+- Only first line of multi-line entries is shown
+
+**Changes Required:**
+- Option A: Use Text widget instead of Treeview for preview
+- Option B: Expand Treeview rows to fit content (custom row height)
+- Option C: Replace embedded newlines with visible markers (e.g., "↵")
+- Show line number column and content column
+- Ensure scrolling works with variable row heights
+
+**Recommended:** Option C (markers) for consistency with Treeview
+
+**Files to Modify:**
+- `gui/steps/input_extract.py` - `_update_preview()` method
+
+**Tests to Add:**
+- `dev/test_input_preview.py`:
+  - Test multi-line content display
+  - Test newline marker visibility
+
+---
+
+### TASK 39.6: Remove Manifest Status Label
+**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 30 minutes
+
+Goal: Remove the manifest label at the bottom of Preview panel per spec.
+
+**Current State:**
+- `_manifest_frame` with `_manifest_label` and `_load_manifest_btn`
+- Shows "No manifest detected" or manifest path
+
+**Changes Required:**
+- Remove `_manifest_frame` and its contents from `_build_content()`
+- Manifest status should be shown in window title bar instead (already done by App)
+- Remove `_on_load_detected_manifest()` method if no longer needed
+
+**Files to Modify:**
+- `gui/steps/input_extract.py` - `_build_content()` method
+
+**Tests to Update:**
+- Any tests referencing manifest label widget
+
+---
+
+### TASK 39.7: Progress Window for File Loading
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+
+Goal: Show progress window during file loading operations.
+
+**Current State:**
+- Files load synchronously with no progress feedback
+- Large folder loads can appear to freeze the UI
+
+**Changes Required:**
+- Create `LoadingProgressDialog` class (modal Toplevel)
+  - Progress bar (determinate mode)
+  - Current file label
+  - Files loaded / total files label
+  - Cancel button
+- Run file loading in background thread
+- Update progress after each file
+- Handle cancellation gracefully
+- Close dialog when complete
+
+**Files to Create:**
+- `gui/dialogs/loading_progress.py` - Progress dialog class
+
+**Files to Modify:**
+- `gui/steps/input_extract.py` - Use progress dialog in load methods
+
+**Tests to Add:**
+- `dev/test_loading_progress.py`:
+  - Test progress updates
+  - Test cancellation
+  - Test completion callback
+
+---
+
+### TASK 39.8: Update specs.md with Implementation Status
+**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 30 minutes
+
+Goal: Update specs.md Step 0 section to mark implemented features.
+
+**Changes Required:**
+- After each task above is complete, update specs.md
+- Remove "Known Issues" and "Missing Features" sections once resolved
+- Update "Current State" notes to reflect actual implementation
+
+**Files to Modify:**
+- `doc/specs.md` - Step 0 section
+
+---
+
+### TASK 39.9: Update Tests and Documentation
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+Goal: Ensure all Input step tests pass after changes.
+
+**Changes Required:**
+- Run existing tests: `pytest dev/test_folder_loading.py dev/test_gui_v2.py -v`
+- Fix any broken tests due to UI changes
+- Add new tests for new functionality (per tasks above)
+- Update `doc/features.md` Input section to match new behavior
+
+**Files to Modify:**
+- `dev/test_folder_loading.py` - Update for new selector
+- `dev/test_gui_v2.py` - Update for UI changes
+- `doc/features.md` - Update Input section
+
+---
+
+### Phase 39 Summary
+
+| Task | Description | Effort | Dependencies |
+|------|-------------|--------|--------------|
+| 39.1 | Unified file/folder selector | 3h | None |
+| 39.2 | Remove Load Manifest/Clear All buttons | 1h | None |
+| 39.3 | Encoding/Format dropdown enhancements | 2h | None |
+| 39.4 | Collapsible folder hierarchy | 4h | None |
+| 39.5 | Multi-line preview support | 2h | None |
+| 39.6 | Remove manifest status label | 0.5h | None |
+| 39.7 | Progress window for loading | 3h | None |
+| 39.8 | Update specs.md | 0.5h | 39.1-39.7 |
+| 39.9 | Update tests and docs | 2h | 39.1-39.7 |
+
+**Total Estimated Effort:** 18 hours
+
+**Implementation Order:**
+1. Tasks 39.2, 39.6 (quick removals)
+2. Task 39.3 (dropdown enhancements)
+3. Task 39.4 (file tree - most complex)
+4. Task 39.5 (preview fix)
+5. Task 39.1 (unified selector)
+6. Task 39.7 (progress window)
+7. Tasks 39.8, 39.9 (documentation and tests)
+
+---
+
+=============================================================================
+
+PHASE 40: COSTS STEP IMPROVEMENTS
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** ~22 hours
+**Dependencies:** None (can be done in parallel with Phase 39)
+**Cross-Reference:** See `doc/specs.md` Step 2: Costs for full specification
+
+This phase implements the comprehensive Costs step (formerly Estimation) as specified
+in specs.md v2.1. The step provides pre-translation cost estimates and will eventually
+track actual costs post-translation.
+
+---
+
+### TASK 40.1: Rename Estimation to Costs
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 1 hour
+
+Goal: Rename the step from "Estimation" to "Costs" throughout the codebase.
+
+**Changes Required:**
+- Rename `gui/steps/estimate.py` to `gui/steps/costs.py`
+- Rename class `EstimationStep` to `CostsStep`
+- Update `step_name = "Costs"`
+- Update all imports referencing EstimationStep
+- Update `gui/app.py` step registration
+- Update test files referencing estimation
+
+**Files to Modify:**
+- `gui/steps/estimate.py` → `gui/steps/costs.py`
+- `gui/app.py` - Update import and registration
+- `dev/test_estimation_*.py` - Update class references
+- `doc/features.md` - Update step name references
+
+**Tests to Add:**
+- Verify step displays as "Costs" in tab
+- Verify step_id remains 2
+
+---
+
+### TASK 40.2: Tokens/Request Limit Implementation
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+
+Goal: Add Tokens/Request spinbox as alternative maximum alongside Lines/Request.
+
+**Changes Required:**
+- Add `_tokens_var: tk.IntVar` with default 4000
+- Add `_tokens_spin: ttk.Spinbox` (range 500-32000)
+- Update header layout to include new spinbox
+- Modify chunk calculation to respect both limits:
+  - When building chunks, stop at EITHER lines OR tokens limit
+  - Whichever limit is reached first triggers chunk boundary
+- Pass both limits to `chunk_lines()` function
+
+**Files to Modify:**
+- `gui/steps/costs.py` - Add UI widget and binding
+- `gui/helpers/chunker_adapter.py` - Update `chunk_lines()` signature
+- `functions/chunker.py` - Update chunking logic
+
+**Tests to Add:**
+- `dev/test_costs_tokens_limit.py`:
+  - Test chunk splits when tokens exceeded before lines
+  - Test chunk splits when lines exceeded before tokens
+  - Test both limits respected together
+
+---
+
+### TASK 40.3: Prompt Overhead Calculation
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+
+Goal: Calculate accurate prompt tokens including all prompt components.
+
+**Current Issue:**
+- Token count only includes line content
+- System prompt, summary, tone, style, glossary prompts not counted
+- Results in significant underestimation
+
+**Changes Required:**
+- Import `build_prompt_preview` from `gui/helpers/prompt_adapter.py`
+- Calculate base system prompt tokens
+- Calculate conditional prompt tokens:
+  - Summary prompt (if summary provided in Step 3)
+  - Tone preset prompt (if selected)
+  - Style preset prompt (if selected)
+  - Code glossary prompt (if patterns defined)
+  - Rolling context prompt (if enabled)
+- Add prompt overhead per request to total calculation
+- Display prompt overhead in Token Counts panel
+
+**Files to Modify:**
+- `gui/steps/costs.py` - `_run_estimation()` method
+- `gui/helpers/prompt_adapter.py` - Ensure `build_prompt_preview()` returns token count
+- `gui/helpers/chunker_adapter.py` - `count_tokens()` for prompt text
+
+**Tests to Add:**
+- `dev/test_prompt_overhead.py`:
+  - Test base prompt token count
+  - Test with summary added
+  - Test with tone/style presets
+  - Test with code glossary patterns
+  - Test total includes prompt overhead per chunk
+
+---
+
+### TASK 40.4: Dual Estimation Workflow
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+
+Goal: Implement two-state estimation (Original and Preprocessed) with separate triggers.
+
+**Current Issue:**
+- Single estimation state
+- No automatic re-estimation after preprocessing
+- Progress tracker shows single tick
+
+**Changes Required:**
+- Add `_estimation_state: Dict` tracking:
+  - `original_complete: bool`
+  - `preprocessed_complete: bool`
+  - `original_result: ComparisonResult`
+  - `preprocessed_result: ComparisonResult`
+- Implement Auto-Estimation (Original):
+  - Trigger: `on_enter()` when files loaded and no estimation done
+  - Uses `all_lines[]` from Input step
+  - Sets `original_complete = True`
+- Implement Auto-Estimation (Preprocessed):
+  - Trigger: When Step 4 completes preprocessing
+  - Uses `prepro[]` from Preprocessing step
+  - Sets `preprocessed_complete = True`
+- Reset logic:
+  - Reset both when files change
+  - Reset preprocessed only when preprocessing settings change
+  - Reset both when prompt settings change
+- Update UI to show both states clearly
+
+**Files to Modify:**
+- `gui/steps/costs.py` - State management and triggers
+- `gui/steps/preprocess.py` - Notify Costs step on completion
+- `gui/app.py` - Wire up step communication
+
+**Tests to Add:**
+- `dev/test_dual_estimation.py`:
+  - Test auto-estimation on file load
+  - Test auto-estimation after preprocessing
+  - Test reset on file change
+  - Test reset on setting change
+
+---
+
+### TASK 40.5: Progress Tracker Dual Ticks
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+Goal: Update progress tracker to show two checkmarks for Costs step.
+
+**Changes Required:**
+- Modify progress tracker component to support multi-tick steps
+- Costs step reports two sub-states:
+  - Tick 1: Original estimation complete
+  - Tick 2: Preprocessed estimation complete
+- Visual display: `☐ ☐` → `☑ ☐` → `☑ ☑`
+- Ticks reset appropriately per TASK 40.4
+
+**Files to Modify:**
+- `gui/components/progress_tracker.py` - Support multiple ticks per step
+- `gui/steps/costs.py` - Report sub-state to tracker
+
+**Tests to Add:**
+- `dev/test_progress_tracker.py`:
+  - Test dual tick display
+  - Test individual tick updates
+  - Test tick reset
+
+---
+
+### TASK 40.6: Model Comparison Expanded Columns
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+
+Goal: Add Price Original, Price Preprocessed, and Savings columns to Model Comparison.
+
+**Current Columns:**
+- Model Name, Input Price, Output Price, Concurrent Requests
+
+**Required Columns:**
+- Price Original: Cost calculated from original lines
+- Price Preprocessed: Cost calculated from preprocessed lines
+- Savings: Percentage saved by preprocessing
+
+**Changes Required:**
+- Add column definitions to `_build_comparison_table()`
+- Calculate per-model costs in `_update_comparison_table()`
+- Format as currency with 4 decimal places
+- Calculate savings as percentage
+- Update table on each estimation run
+
+**Files to Modify:**
+- `gui/steps/costs.py` - Table columns and update logic
+
+**Tests to Add:**
+- `dev/test_model_comparison.py`:
+  - Test column presence
+  - Test cost calculation accuracy
+  - Test savings percentage calculation
+
+---
+
+### TASK 40.7: Time Estimate with Concurrent Requests
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+Goal: Update time estimation to account for concurrent requests and token speed.
+
+**Current Issue:**
+- Only uses requests per minute rate limit
+- Does not factor in concurrent request capability
+- No consideration of token generation speed
+
+**Required Calculation:**
+```python
+time = max(
+    total_requests / concurrent_requests × time_per_request,
+    total_tokens / token_speed,
+    total_requests / rate_limit_rpm × 60
+)
+```
+
+**Changes Required:**
+- Get `concurrent_requests` from model config
+- Get `token_speed` from model config (default: 50 tokens/sec)
+- Update `estimate_rate_limit_time()` to use new calculation
+- Display breakdown in Time Estimate panel
+
+**Files to Modify:**
+- `gui/steps/costs.py` - Time calculation update
+- `functions/config.py` - Add concurrent_requests and token_speed to MODEL_PRICING
+- `gui/helpers/chunker_adapter.py` - Update time estimation function
+
+**Tests to Add:**
+- `dev/test_time_estimate.py`:
+  - Test with different concurrent request values
+  - Test rate limit dominates when slow
+  - Test token speed dominates when fast concurrent
+
+---
+
+### TASK 40.8: Refresh Button Model Data Fetch
+**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+
+Goal: Implement Refresh button to fetch latest model data from providers.
+
+**Current Issue:**
+- Refresh button does nothing
+- Model data is static from config.py
+
+**Changes Required:**
+- Create `functions/model_data.py` module
+- Implement API calls to fetch model info:
+  - OpenAI: `/v1/models` endpoint
+  - Gemini: Models API
+  - Claude: Models API
+  - Mistral: Models API
+  - Grok: Models API
+  - DeepSeek: Models API
+- Store fetched data in `models.db` (SQLite)
+- Load from database on startup, fallback to config.py
+- Refresh button triggers async fetch
+- Update Model Comparison table with new data
+
+**Files to Create:**
+- `functions/model_data.py` - Model data fetching and storage
+
+**Files to Modify:**
+- `gui/steps/costs.py` - Wire Refresh button to fetch
+- `functions/config.py` - Add database fallback
+
+**Tests to Add:**
+- `dev/test_model_data.py`:
+  - Test API fetch (mocked)
+  - Test database storage
+  - Test fallback to static config
+
+---
+
+### TASK 40.9: Use Preprocessed Lines After Step 4
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 1 hour
+
+Goal: Ensure estimation uses preprocessed lines when available.
+
+**Current Issue:**
+- Estimation always uses original lines
+- Does not check for preprocessed lines from Step 4
+- Manual refresh required
+
+**Changes Required:**
+- In `_refresh_lines()`, check manifest for `prepro[]`
+- If preprocessing complete, use `prepro[]` for Preprocessed estimation
+- Display both Original and Preprocessed results side by side
+- Update comparison to show actual savings
+
+**Files to Modify:**
+- `gui/steps/costs.py` - `_refresh_lines()` method
+
+**Tests to Add:**
+- `dev/test_prepro_estimation.py`:
+  - Test uses original when no preprocessing
+  - Test uses prepro after Step 4 complete
+  - Test savings calculation correct
+
+---
+
+### Phase 40 Summary
+
+| Task | Description | Priority | Effort | Dependencies |
+|------|-------------|----------|--------|--------------|
+| 40.1 | Rename Estimation to Costs | HIGH | 1h | None |
+| 40.2 | Tokens/Request limit | HIGH | 3h | None |
+| 40.3 | Prompt overhead calculation | HIGH | 4h | None |
+| 40.4 | Dual estimation workflow | HIGH | 4h | 40.1 |
+| 40.5 | Progress tracker dual ticks | MEDIUM | 2h | 40.4 |
+| 40.6 | Model comparison expanded | HIGH | 3h | 40.4 |
+| 40.7 | Time estimate concurrent | MEDIUM | 2h | None |
+| 40.8 | Refresh button model fetch | LOW | 3h | None |
+| 40.9 | Use preprocessed lines | HIGH | 1h | 40.4 |
+
+**Total Estimated Effort:** 23 hours
+
+**Implementation Order:**
+1. Task 40.1 (rename - sets up correct naming)
+2. Tasks 40.2, 40.3 (core calculation improvements)
+3. Task 40.4, 40.9 (dual workflow - main feature)
+4. Task 40.5, 40.6 (UI improvements depending on 40.4)
+5. Task 40.7 (time estimate improvement)
+6. Task 40.8 (low priority, can be deferred)
+
+**Priority Tasks for Next Release:**
+- 40.1, 40.2, 40.3, 40.4, 40.6, 40.9 (14 hours)
+
+---
+
+=============================================================================
+
 FUTURE IDEAS (No Phase Commitment)
 **Priority:** LOW | **Status:** 🔲 PARKED | **Effort:** N/A
+
+### Costs Step Future Enhancements
+- **Final Cost Recording**: Track actual tokens and cost after translation completes
+- **Cost Comparison**: Display estimated vs actual difference post-translation
+- **Additional Cost Types**: Track costs for Editing, TLC, Summary generation, Glossary inference, Tone/Style inference
+- **Cost History**: Track and display costs across multiple translation sessions
+- **Budget Warnings**: Alert when estimated cost exceeds configured budget threshold
+- **Request Merging**: Combine small trailing chunks into previous request when no rolling context needed
+- **Token Speed Tracking**: Calculate actual tokens/sec from previous translations for accurate time estimates
+- **Batch Mode Pricing**: Show batch API pricing (with discount %) for supported models
+- **Image Cost Estimation**: Include image processing costs when image files loaded
+
+### Analysis Step Future Enhancements
+- **Auto-populate Glossary**: Use detected speakers and code patterns to pre-fill glossary entries
+- **Pattern Suggestions**: Recommend protection rules based on detected code patterns
+- **Export Formats**: Support additional export formats (JSON, XLSX) for findings
+- **Visual Charts**: Charts/graphs for language distribution and pattern frequency
+- **Diff Analysis**: Compare against previous analysis when files change
 
 Benchmark Mode, requires a small but significant synthesized text which will get at least three passes:
 	-1: Normal Settings

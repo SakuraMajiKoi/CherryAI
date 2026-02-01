@@ -554,29 +554,37 @@ Example (v1.0 Legacy):
 
 =============================================================================
 
-MANIFEST v3.1 FORMAT (Implemented)
+MANIFEST v3.2 FORMAT (Implemented)
 
-Version 3.1 extends v3.0 with filedir for input/output decoupling (TASK 35).
+Version 3.2 extends v3.1 with source_root optimization (TASK 38).
+Removes redundant source_file from lines and source_hint from filedir.
 All v2.0 per-line entry features and v3.0 GUI state management are preserved.
 
-**Status:** IMPLEMENTED (4293 tests passing)
+**Status:** IMPLEMENTED (4428 tests passing)
 **Locations:** 
 - `functions/mainhelper.py` - LineEntry, Manifest (core)
 - `functions/manifest_manager.py` - ManifestManager, ProjectInfo, StepStateData, FileDirEntry (GUI)
-**Tests:** `dev/test_manifest_v2.py`, `dev/test_manifest_state.py`, `dev/test_manifest_defaults.py`, `dev/test_manifest_filedir.py`
+**Tests:** `dev/test_manifest_v2.py`, `dev/test_manifest_state.py`, `dev/test_manifest_defaults.py`, `dev/test_manifest_filedir.py`, `dev/test_manifest_v32.py`
 
 DESIGN DOCUMENT: See doc/MANIFEST_UPDATE_DESIGN.md for full specification.
 
-VERSION 3.1 EXTENSIONS
+VERSION 3.2 OPTIMIZATIONS (TASK 38)
 
-v3.1 adds the `filedir` field for input/output decoupling:
+v3.2 optimizes manifest size by:
+1. Storing `source_root` - the common path prefix for all source files
+2. Removing redundant `source_file` from each line entry
+3. Removing `source_hint` from filedir entries (use `source_root + rel_path` instead)
+
+**Size Reduction:** For a project with 50,000 lines and a 60-character path prefix,
+this saves ~4MB (60 chars × 50,000 lines + JSON overhead).
 
 ```json
 {
-    "version": "3.1",
+    "version": "3.2",
+    "source_root": "D:/Translations/MyGame/Data",
     "filedir": [
-        {"first_idx": 0, "last_idx": 99, "format": "txt", "rel_path": "chapter1.txt", "source_hint": "C:/Game/chapter1.txt"},
-        {"first_idx": 100, "last_idx": 249, "format": "csv", "rel_path": "data/items.csv", "source_hint": "C:/Game/data/items.csv", "encoding": "shift_jis"}
+        {"first_idx": 0, "last_idx": 99, "format": "txt", "rel_path": "chapter1.txt"},
+        {"first_idx": 100, "last_idx": 249, "format": "csv", "rel_path": "data/items.csv", "encoding": "shift_jis"}
     ],
     "step_state": {
         "InputExtractionStep": {"completed": true, "skipped": false, "metadata": {}},
@@ -596,9 +604,21 @@ v3.1 adds the `filedir` field for input/output decoupling:
     ],
     "characters": [...],
     "code_patterns": [...],
-    "lines": [...],
+    "lines": [
+        {"idx": 0, "orig": "こんにちは"},
+        {"idx": 1, "orig": "さようなら"}
+    ],
     "metadata": {...}
 }
+```
+
+**Path Resolution:** To get the full path for a file:
+```python
+# v3.2: source_root + rel_path
+full_path = Path(manifest["source_root"]) / entry["rel_path"]
+
+# Example: "D:/Translations/MyGame/Data" + "chapter1.txt"
+#       -> "D:/Translations/MyGame/Data/chapter1.txt"
 ```
 
 **Project Directory Structure (TASK 35.2/35.3):**
@@ -635,16 +655,17 @@ class StepStateData:
 
 @dataclass
 class FileDirEntry:
-    """File directory entry for input/output decoupling (TASK 35.1).
+    """File directory entry for input/output decoupling (TASK 35.1, TASK 38).
     
     Maps global line index ranges to source files, enabling the Output step
     to reconstruct per-file outputs without consulting original input paths.
+    
+    TASK 38: source_hint removed - use source_root + rel_path for full path.
     """
     first_idx: int        # First line index (inclusive, global 0-based)
     last_idx: int         # Last line index (inclusive, global 0-based)
     format: str           # File format (txt, csv, json, xlsx, rpgm, etc.)
-    rel_path: str         # Path relative to project root
-    source_hint: str = "" # Original absolute path for user reference
+    rel_path: str         # Path relative to source_root
     encoding: str = "utf-8"  # File encoding
     
     @property

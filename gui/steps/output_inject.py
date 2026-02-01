@@ -1362,7 +1362,7 @@ class OutputInjectStep(BaseStep):
             
             self._files.append(OutputFile(
                 idx=i,
-                source_path=entry.source_hint,
+                source_path=str(mgr.resolve_file_path(entry.rel_path)) if mgr else entry.rel_path,
                 output_path=str(output_path),
                 format=OutputFormat(self._format_var.get().lower()),
                 line_count=entry.line_count,

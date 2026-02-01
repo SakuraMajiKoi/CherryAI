@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # Constants
 MANIFEST_DIR = Path("Projects")
 MANIFEST_EXT = ".CherryAI.json"
-MANIFEST_VERSION = "3.1"  # Updated for filedir feature (TASK 35.1)
+MANIFEST_VERSION = "3.2"  # TASK 38: Optimized format - removed redundant per-line fields
 
 # Step definitions matching GUI step order
 STEP_NAMES = [
@@ -211,15 +211,13 @@ class FileDirEntry:
     """File directory entry mapping line index ranges to source files.
     
     TASK 35.1: Maps global line indices to source files for input/output decoupling.
-    This allows the Output step to reconstruct per-file outputs using filedir
-    without consulting original input file paths.
+    TASK 38: Optimized - source_hint removed (use source_root + rel_path).
     
     Attributes:
         first_idx: First line index (inclusive, global 0-based).
         last_idx: Last line index (inclusive, global 0-based).
         format: File format (txt, csv, tsv, json, xlsx, rpgm, etc.).
-        rel_path: Path relative to project root (preserves folder structure).
-        source_hint: Original absolute path for user reference only (optional).
+        rel_path: Path relative to source_root (preserves folder structure).
         encoding: File encoding (utf-8, shift_jis, etc.).
     """
     
@@ -227,7 +225,6 @@ class FileDirEntry:
     last_idx: int
     format: str
     rel_path: str
-    source_hint: str = ""
     encoding: str = "utf-8"
     
     def to_dict(self) -> Dict[str, Any]:
@@ -238,8 +235,6 @@ class FileDirEntry:
             "format": self.format,
             "rel_path": self.rel_path,
         }
-        if self.source_hint:
-            result["source_hint"] = self.source_hint
         if self.encoding != "utf-8":
             result["encoding"] = self.encoding
         return result
@@ -252,7 +247,6 @@ class FileDirEntry:
             last_idx=d.get("last_idx", 0),
             format=d.get("format", "txt"),
             rel_path=d.get("rel_path", ""),
-            source_hint=d.get("source_hint", ""),
             encoding=d.get("encoding", "utf-8"),
         )
     
@@ -494,14 +488,21 @@ class ManifestManager:
             
             # === Project Identity ===
             "project_name": defaults.get("project_name", "Project1"),
-            "source_files": [],
             "current_step": 0,
+            
+            # === v3.2 Source Path Management (TASK 38) ===
+            # source_root: Common prefix for all source files (e.g., "D:\Games\WIP")
+            # source_files: DEPRECATED - use filedir with source_root instead
+            # Each file's absolute path = source_root + filedir[n].rel_path
+            "source_root": "",
+            "source_files": [],  # Kept for backward compat, but redundant with filedir
             
             # === v3.1 File Directory (TASK 35.1) ===
             # Maps line index ranges to source files for input/output decoupling
+            # TASK 38: rel_path is now relative to source_root, source_hint removed
             "filedir": [],
             
-            # === v2.1 Processing Data (unchanged format) ===
+            # === v2.1 Processing Data (TASK 38: lines no longer need source_file) ===
             "lines": [],
             "operations": [],
             "mappings": {},
@@ -848,6 +849,111 @@ class ManifestManager:
         if listener in self._change_listeners:
             self._change_listeners.remove(listener)
     
+    # ========================== Source Path Helpers (TASK 38) ========================== #
+    
+    @property
+    def source_root(self) -> str:
+        """Get the source root path (common prefix for all source files)."""
+        return self._manifest_data.get("source_root", "")
+    
+    @source_root.setter
+    def source_root(self, value: str) -> None:
+        """Set the source root path."""
+        self._manifest_data["source_root"] = value
+        self._mark_dirty()
+    
+    def resolve_file_path(self, rel_path: str) -> Path:
+        """Resolve a relative path to an absolute path using source_root.
+        
+        Args:
+            rel_path: Path relative to source_root (e.g., "battle_on.json" or 
+                     "event/arena/arena_01.json")
+                     
+        Returns:
+            Absolute Path object.
+        """
+        root = self._manifest_data.get("source_root", "")
+        if root:
+            return Path(root) / rel_path
+        return Path(rel_path)
+    
+    def make_relative_path(self, abs_path: Path) -> str:
+        """Convert an absolute path to a path relative to source_root.
+        
+        Args:
+            abs_path: Absolute file path.
+            
+        Returns:
+            Relative path string, or absolute path if no source_root.
+        """
+        root = self._manifest_data.get("source_root", "")
+        if root:
+            try:
+                return str(abs_path.relative_to(root))
+            except ValueError:
+                # Path is not under source_root
+                return str(abs_path)
+        return str(abs_path)
+    
+    def get_file_for_line_idx(self, idx: int) -> Optional[Dict[str, Any]]:
+        """Get the filedir entry for a given line index.
+        
+        Args:
+            idx: Global line index (0-based).
+            
+        Returns:
+            Filedir entry dict or None if not found.
+        """
+        for entry in self._manifest_data.get("filedir", []):
+            first = entry.get("first_idx", 0)
+            last = entry.get("last_idx", 0)
+            if first <= idx <= last:
+                return entry
+        return None
+    
+    def get_source_file_for_line(self, idx: int) -> Optional[Path]:
+        """Get the absolute source file path for a given line index.
+        
+        Args:
+            idx: Global line index (0-based).
+            
+        Returns:
+            Absolute Path to source file, or None if not found.
+        """
+        entry = self.get_file_for_line_idx(idx)
+        if entry:
+            return self.resolve_file_path(entry.get("rel_path", ""))
+        return None
+    
+    @staticmethod
+    def compute_source_root(source_files: List[Any]) -> str:
+        """Compute the common root path from a list of source files.
+        
+        Args:
+            source_files: List of source file paths (str or Path).
+            
+        Returns:
+            Common prefix path as string, or empty string if no files.
+        """
+        if not source_files:
+            return ""
+        
+        # Convert to Path objects
+        paths = [Path(f) if isinstance(f, str) else f for f in source_files]
+        
+        if len(paths) == 1:
+            # Single file - use parent directory as root
+            return str(paths[0].parent)
+        
+        # Find common path prefix
+        import os
+        try:
+            common = os.path.commonpath([str(p) for p in paths])
+            return common
+        except ValueError:
+            # No common path (e.g., different drives on Windows)
+            return ""
+    
     # ========================== Project Operations ========================== #
     
     def create_new(self, project_name: str, source_files: List[Path]) -> Path:
@@ -861,6 +967,7 @@ class ManifestManager:
             Path to the created manifest file
             
         TASK 29.1: Starts autosave thread after creation.
+        TASK 38: Uses optimized format with source_root and compact lines.
         """
         # Sanitize project name for filename
         safe_name = "".join(c for c in project_name if c.isalnum() or c in " -_").strip()
@@ -879,10 +986,16 @@ class ManifestManager:
         # Initialize manifest data
         self._manifest_data = self._create_empty_manifest()
         self._manifest_data["project_name"] = project_name
-        # Store source files as absolute paths (TASK 32.1)
+        
+        # TASK 38: Compute and store source_root (common path prefix)
+        source_root = self.compute_source_root(source_files)
+        self._manifest_data["source_root"] = source_root
+        
+        # Keep source_files for backward compatibility (but empty if using source_root)
+        # This allows older versions to still know what files are in the project
         self._manifest_data["source_files"] = [str(p.resolve()) for p in source_files]
         
-        # Initialize lines from source files
+        # Initialize lines and filedir from source files
         self._initialize_lines_from_files(source_files)
         
         self._dirty = True
@@ -896,24 +1009,58 @@ class ManifestManager:
         return self._manifest_path
     
     def _initialize_lines_from_files(self, source_files: List[Path]) -> None:
-        """Initialize lines array from source files."""
+        """Initialize lines array and filedir from source files.
+        
+        TASK 38: Lines no longer store source_file - use filedir for lookup.
+        """
         lines: List[Dict[str, Any]] = []
+        filedir: List[Dict[str, Any]] = []
+        source_root = self._manifest_data.get("source_root", "")
         idx = 0
         
         for file_path in source_files:
             try:
+                first_idx = idx
                 content = file_path.read_text(encoding="utf-8")
-                for line_text in content.split("\n"):
+                file_lines = content.split("\n")
+                
+                for line_text in file_lines:
+                    # TASK 38: Compact line format - only idx and orig
                     lines.append({
                         "idx": idx,
                         "orig": line_text,
-                        "source_file": str(file_path),
                     })
                     idx += 1
+                
+                # Build filedir entry
+                if source_root:
+                    try:
+                        rel_path = str(file_path.relative_to(source_root))
+                    except ValueError:
+                        rel_path = file_path.name
+                else:
+                    rel_path = file_path.name
+                
+                # Detect format from extension
+                ext = file_path.suffix.lower()
+                format_map = {
+                    ".txt": "txt", ".csv": "csv", ".tsv": "tsv",
+                    ".json": "json", ".xlsx": "xlsx", ".html": "html",
+                }
+                file_format = format_map.get(ext, "txt")
+                
+                filedir.append({
+                    "first_idx": first_idx,
+                    "last_idx": idx - 1,
+                    "format": file_format,
+                    "rel_path": rel_path,
+                })
+                
             except Exception as e:
                 logger.warning("Failed to read source file %s: %s", file_path, e)
         
         self._manifest_data["lines"] = lines
+        self._manifest_data["filedir"] = filedir
     
     def load(self, manifest_path: Path) -> bool:
         """Load an existing manifest.
@@ -953,13 +1100,17 @@ class ManifestManager:
             return False
     
     def _migrate_manifest(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Migrate older manifest versions to v3.1.
+        """Migrate older manifest versions to v3.2.
         
-        Handles migration from v1.x, v2.x, and v3.0 manifests, preserving all line
-        data, operations, and settings. TASK 35.1: Adds filedir migration.
+        Handles migration from v1.x, v2.x, v3.0, and v3.1 manifests, preserving all 
+        line data, operations, and settings.
+        
+        TASK 35.1: Adds filedir migration.
+        TASK 38: v3.2 optimization - remove redundant fields, add source_root.
         """
         version = data.get("version", "1.0")
         
+        # Handle v1.x, v2.x, v3.0 migrations
         if version.startswith("1.") or version.startswith("2.") or version == "3.0":
             logger.info("Migrating manifest from v%s to v%s", version, MANIFEST_VERSION)
             
@@ -1058,6 +1209,47 @@ class ManifestManager:
             if "filedir" not in data:
                 data["filedir"] = self._build_filedir_from_legacy(data)
             
+            # Also run v3.1→v3.2 optimization
+            version = "3.1"
+        
+        # TASK 38: v3.1 → v3.2 optimization
+        # Remove redundant source_file from lines, add source_root
+        if version == "3.1":
+            logger.info("Optimizing manifest from v3.1 to v3.2")
+            
+            # Compute source_root from source_files
+            source_files = data.get("source_files", [])
+            if source_files:
+                data["source_root"] = self.compute_source_root(source_files)
+            else:
+                data["source_root"] = ""
+            
+            # Update filedir entries - remove source_hint, make rel_path relative to source_root
+            source_root = data.get("source_root", "")
+            filedir = data.get("filedir", [])
+            for entry in filedir:
+                # Remove source_hint if present
+                if "source_hint" in entry:
+                    del entry["source_hint"]
+                # Ensure rel_path is relative to source_root
+                rel_path = entry.get("rel_path", "")
+                if source_root and rel_path:
+                    # If rel_path is absolute, make it relative to source_root
+                    try:
+                        rel_path_obj = Path(rel_path)
+                        if rel_path_obj.is_absolute():
+                            rel_path = str(rel_path_obj.relative_to(source_root))
+                            entry["rel_path"] = rel_path
+                    except ValueError:
+                        # Can't make relative - keep as is
+                        pass
+            
+            # Remove source_file from all line entries (compact format)
+            lines = data.get("lines", [])
+            for line in lines:
+                if "source_file" in line:
+                    del line["source_file"]
+            
             data["version"] = MANIFEST_VERSION
         
         return data
@@ -1067,6 +1259,7 @@ class ManifestManager:
         
         TASK 35.1: For backward compatibility when loading older manifests
         that don't have filedir.
+        TASK 38: v3.2 format - no source_hint, rel_path relative to source_root.
         
         Args:
             data: Legacy manifest data.
@@ -1076,6 +1269,7 @@ class ManifestManager:
         """
         lines = data.get("lines", [])
         source_files = data.get("source_files", [])
+        source_root = data.get("source_root", "")
         file_format = data.get("format", "txt")
         
         if not lines:
@@ -1084,12 +1278,17 @@ class ManifestManager:
         if not source_files:
             # No source file info - create single entry for all lines
             source_file = data.get("source_file") or data.get("origin_file") or "unknown.txt"
+            rel_path = Path(source_file).name
+            if source_root:
+                try:
+                    rel_path = str(Path(source_file).relative_to(source_root))
+                except ValueError:
+                    pass
             return [{
                 "first_idx": 0,
                 "last_idx": len(lines) - 1,
                 "format": file_format,
-                "rel_path": Path(source_file).name,
-                "source_hint": source_file,
+                "rel_path": rel_path,
             }]
         
         # Group lines by source_file
@@ -1108,12 +1307,19 @@ class ManifestManager:
             if not indices:
                 continue
             
+            # Make rel_path relative to source_root
+            rel_path = Path(source_file).name
+            if source_root:
+                try:
+                    rel_path = str(Path(source_file).relative_to(source_root))
+                except ValueError:
+                    pass
+            
             filedir.append({
                 "first_idx": min(indices),
                 "last_idx": max(indices),
                 "format": file_format,
-                "rel_path": Path(source_file).name,
-                "source_hint": source_file,
+                "rel_path": rel_path,
             })
         
         return filedir
@@ -1519,10 +1725,11 @@ class ManifestManager:
         copied_files: Dict[str, str] = {}
         
         for entry in filedir:
-            source_path = Path(entry.source_hint) if entry.source_hint else None
+            # TASK 38: Use source_root + rel_path to resolve full path
+            source_path = self.resolve_file_path(entry.rel_path)
             
             if not source_path or not source_path.exists():
-                logger.warning("Source file not found: %s", entry.source_hint)
+                logger.warning("Source file not found: %s", entry.rel_path)
                 continue
             
             # Destination path preserves relative folder structure
@@ -1620,12 +1827,12 @@ class ManifestManager:
                 # If can't make relative, use just filename
                 rel_path = Path(file_path.name)
             
+            # TASK 38: v3.2 - no source_hint, rel_path is relative to source_root
             entry = FileDirEntry(
                 first_idx=current_idx,
                 last_idx=current_idx + line_count - 1,
                 format=file_info.get("format", "txt"),
                 rel_path=str(rel_path),
-                source_hint=str(file_path.resolve()),
                 encoding=file_info.get("encoding", "utf-8"),
             )
             entries.append(entry)
