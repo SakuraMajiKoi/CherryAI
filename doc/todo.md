@@ -3568,6 +3568,667 @@ Goal: Ensure estimation uses preprocessed lines when available.
 
 ---
 
+### Phase 41: Information Step UI Enhancements
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 28 hours
+**File:** `gui/steps/information.py`
+**Spec Reference:** specs.md Step 3: Information
+
+**Context:**
+Complete UI overhaul for Step 3 (Information) per specs.md v2.2. Includes widget renames, behavior fixes, and a new Global Glossary/Database widget. All changes documented in specs.md with prompt formats and manifest keys.
+
+---
+
+#### Task 41.1: Widget Renames
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 1 hour
+
+**Goal:** Update widget titles per spec naming conventions.
+
+**Changes:**
+| Current Name | New Name |
+|--------------|----------|
+| Summary / Description | Summary |
+| Prompt | System Instructions |
+| Code Glossary | Code Database |
+
+**Implementation:**
+- Update LabelFrame titles in respective `_build_*_section()` methods
+- Update any references in tooltips or help text
+
+---
+
+#### Task 41.2: Genre Dialog ADD Behavior
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+**Goal:** Genre `...` button should ADD to existing text, not overwrite.
+
+**Current Behavior:** Selecting genre replaces entire field content.
+
+**Required Behavior:**
+- If field empty: Set selected genre
+- If field has content: Append `, [selected genre]`
+- Support multi-select in dialog if possible
+
+**Implementation:**
+- Modify genre dialog callback in `_build_project_section()`
+- Check current field content before setting
+- Use comma-separated append logic
+
+---
+
+#### Task 41.3: "Other" Language Custom Input
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+**Goal:** When "Other" selected in Source/Target Language, prompt for custom input.
+
+**Current Behavior:** "Other" option exists but does nothing special.
+
+**Required Behavior:**
+- Detect "Other" selection in combobox callback
+- Show simpledialog.askstring() prompt
+- If user provides input: Set combobox value to custom text
+- If user cancels: Revert to previous selection
+
+**Implementation:**
+- Add `_on_language_change()` callback for both dropdowns
+- Store previous selection for revert logic
+- Use tkinter.simpledialog for input prompt
+
+---
+
+#### Task 41.4: Style/Tone Dropdown Graying
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+**Goal:** Visual feedback for dropdown vs custom override state.
+
+**Required Behavior:**
+- When Custom Style/Tone field has content: Gray out corresponding dropdown
+- When Custom field cleared: Activate dropdown
+- Use `state='disabled'` for grayed appearance
+
+**Implementation:**
+- Add trace callbacks on custom text variables
+- Toggle dropdown state based on custom field content
+- Ensure disabled dropdown shows current selection (not blank)
+
+---
+
+#### Task 41.5: Glossary Table Inline Editing
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+
+**Goal:** Editable 3-column table for Glossary Settings.
+
+**Columns:**
+| Column | Purpose | Editable |
+|--------|---------|----------|
+| Original | Source text to match | Yes |
+| Translation | Replacement text | Yes |
+| Notes | Context for LLM | Yes |
+
+**Implementation:**
+- Convert current glossary display to ttk.Treeview with editing
+- Double-click cell to edit in place
+- Add/Remove row buttons
+- Auto-save changes to manifest via `GlossaryEntries` key
+
+---
+
+#### Task 41.6: Import from Analysis (Code Patterns)
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+
+**Goal:** Make "Import from Analysis" button functional for Code Database.
+
+**Required Behavior:**
+- Fetch detected code patterns from Analysis step (Step 1)
+- Convert to CodePattern entries with defaults:
+  - Category: "Detected"
+  - Action: "Preserve"
+  - Notes: empty
+- Merge with existing entries (no duplicates)
+
+**Implementation:**
+- Access Analysis step results via step communication
+- Map detected patterns to CodePattern data class
+- Add merge logic to avoid duplicate patterns
+
+---
+
+#### Task 41.7: Import from Analysis (Glossary)
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+
+**Goal:** Make "Import from Analysis" button functional for Glossary Settings.
+
+**Required Behavior:**
+- Fetch detected speakers from Analysis step
+- Convert to glossary entries with defaults:
+  - Original: detected name
+  - Translation: empty (user fills in)
+  - Notes: "Speaker" or similar tag
+- Merge with existing entries
+
+**Implementation:**
+- Access Analysis step detected_speakers data
+- Convert to glossary entry format
+- Add to GlossaryEntries manifest field
+
+---
+
+#### Task 41.8: Code Database Actions
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+
+**Goal:** Implement three action types for Code Database entries.
+
+**Actions:**
+| Action | Prompt Behavior | Post-Processing |
+|--------|-----------------|-----------------|
+| Preserve | "Do not translate [Code]: [Pattern]" | Auto-recover if mangled |
+| Translate | "Translate [Code] as [Notes context]" | None |
+| Remove | Not sent to prompt | Strip from output |
+
+**Implementation:**
+- Add Action dropdown column to Code Database table
+- Modify prompt builder to handle action types
+- Add post-processing recovery logic for Preserve action
+
+---
+
+#### Task 41.9: NEW Global Glossary and Database Widget
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 6 hours
+
+**Goal:** New widget for managing global (cross-project) glossary and code patterns.
+
+**Features:**
+- Mode switch: "Global Glossary" / "Global Code Database"
+- Searchable table with filter input
+- Import/Export buttons (JSON/CSV)
+- Same fields as project-level equivalents
+- Stored in `user/global_glossary.json` and `user/global_codes.json`
+
+**UI Layout:**
+```
+┌─ Global Glossary and Database ─────────────────────┐
+│ Mode: [Glossary ▼]  Search: [________]  [Import] [Export] │
+│ ┌─────────────────────────────────────────────────┐│
+│ │ Original │ Translation │ Notes                ││
+│ │----------|-------------|----------------------││
+│ │ ...      │ ...         │ ...                  ││
+│ └─────────────────────────────────────────────────┘│
+│ [Add Entry] [Remove Selected] [Clear All]          │
+└────────────────────────────────────────────────────┘
+```
+
+**Implementation:**
+- Create new `_build_global_database_section()` method
+- Create GlobalGlossaryManager class for file I/O
+- Add search/filter functionality
+- Implement import/export dialogs
+
+---
+
+#### Task 41.10: Selective Glossary Feature
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+**Goal:** Allow users to select which glossary entries apply to current project.
+
+**Required Behavior:**
+- Checkbox column in glossary table for "Active"
+- Only active entries included in prompt
+- Global glossary entries can be imported selectively
+
+**Implementation:**
+- Add "Active" boolean column to glossary table
+- Filter entries by active status when building prompt
+- Store active state in manifest
+
+---
+
+### Phase 41 Summary
+
+| Task | Description | Priority | Effort | Dependencies |
+|------|-------------|----------|--------|--------------|
+| 41.1 | Widget renames (Summary, System Instructions, Code Database) | HIGH | 1h | None |
+| 41.2 | Genre Dialog ADD behavior | HIGH | 2h | None |
+| 41.3 | "Other" Language custom input | HIGH | 2h | None |
+| 41.4 | Style/Tone dropdown graying | MEDIUM | 2h | None |
+| 41.5 | Glossary table inline editing | HIGH | 4h | None |
+| 41.6 | Import from Analysis (Code) | HIGH | 3h | Step 1 Analysis |
+| 41.7 | Import from Analysis (Glossary) | HIGH | 3h | Step 1 Analysis |
+| 41.8 | Code Database actions (Preserve/Translate/Remove) | HIGH | 3h | 41.1 |
+| 41.9 | NEW Global Glossary and Database widget | HIGH | 6h | 41.5 |
+| 41.10 | Selective glossary feature | MEDIUM | 2h | 41.5 |
+
+**Total Estimated Effort:** 28 hours
+
+**Implementation Order:**
+1. Task 41.1 (renames - quick win, establishes naming)
+2. Tasks 41.2, 41.3, 41.4 (behavior fixes - independent)
+3. Task 41.5 (glossary table - foundation for 41.9, 41.10)
+4. Tasks 41.6, 41.7 (import functionality - depends on Analysis)
+5. Task 41.8 (code actions - depends on 41.1 rename)
+6. Task 41.9 (global database - major feature, depends on 41.5)
+7. Task 41.10 (selective glossary - enhancement to 41.5)
+
+**Priority Tasks for Next Release:**
+- 41.1, 41.2, 41.3, 41.5, 41.8 (13 hours - core functionality)
+
+---
+
+=============================================================================
+
+## PHASE 42: PREPROCESSING & POSTPROCESSING COMPLETE IMPLEMENTATION
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 40-50 hours
+**Dependencies:** None (can be done in parallel with other phases)
+**Cross-Reference:** See `doc/specs.md` Step 4: Preprocessing for full specification
+
+This phase implements comprehensive Preprocessing and Postprocessing functionality as specified
+in specs.md v2.3. Both steps must exactly mirror each other - many Preprocessing transformations
+have a corresponding Postprocessing restoration. Each process has a priority integer determining
+execution order.
+
+---
+
+### TASK 42.1: Anchoring Widget Redesign (Rename from Anchor Removal)
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+
+Goal: Redesign the Anchor Removal widget as "Anchoring" with proper table-based management.
+
+**Current Issues:**
+- Widget has wrong UI (single writable field, preset selection buttons)
+- No RegEx toggle option
+- Name "Anchor Removal" is confusing
+
+**Required Changes:**
+- Rename widget from "Anchor Removal" to "Anchoring"
+- Replace current UI with table-based view (Pattern, Action, Anchor Spec, RegEx, Description)
+- Add popup dialog for Add/Edit with same fields as other pattern widgets
+- Add RegEx tickbox in dialog (default: enabled)
+- Remove preset selection buttons (all patterns checked by default)
+- Implement proper table management (Add, Edit, Remove buttons)
+
+**Files to Modify:**
+- `gui/steps/preprocess.py` - Complete widget redesign
+
+**Tests to Add:**
+- `dev/test_anchoring_widget.py`:
+  - Test table population
+  - Test Add/Edit/Remove operations
+  - Test RegEx toggle
+  - Test data persistence to manifest
+
+---
+
+### TASK 42.2: Custom Placeholders RegEx Support
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+Goal: Add RegEx toggle to Custom Placeholders widget.
+
+**Current State:**
+- Custom Placeholders only supports literal string matching
+- No RegEx option in UI
+
+**Required Changes:**
+- Add RegEx tickbox in Add/Edit dialog (default: disabled)
+- Update table to show RegEx column
+- Modify processing to interpret pattern as regex when enabled
+- Update manifest schema to include `is_regex` field
+
+**Files to Modify:**
+- `gui/steps/preprocess.py` - Add RegEx toggle to Custom Placeholders
+- `modi/custom_placeholder.py` - Support regex patterns
+
+**Tests to Add:**
+- `dev/test_custom_placeholders.py`:
+  - Test literal string matching
+  - Test regex pattern matching
+  - Test toggle persistence
+
+---
+
+### TASK 42.3: Protect Code Patterns Default Toggle
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 1 hour
+
+Goal: Ensure Protect Code Patterns defaults to RegEx enabled.
+
+**Current State:**
+- May not have consistent RegEx default behavior
+
+**Required Changes:**
+- Verify RegEx tickbox exists and defaults to enabled
+- Add visible RegEx column to table
+- Ensure dialog shows RegEx option clearly
+- Update default value in dialog to True
+
+**Files to Modify:**
+- `gui/steps/preprocess.py` - Verify/fix RegEx defaults
+
+**Tests to Add:**
+- `dev/test_protect_code_patterns.py`:
+  - Test default RegEx = True
+  - Test toggle persistence
+  - Test pattern interpretation
+
+---
+
+### TASK 42.4: Aggressive Deduplication - Number Normalization
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+
+Goal: Implement aggressive deduplication that treats all numbers as equivalent 'X'.
+
+**Description:**
+Lines like "Increases Damage by 10" and "Increases Damage by 864" should be treated as duplicates
+with the latter deduplicated. The translation of the unique line is used, with the original number
+restored.
+
+**Implementation:**
+- Add `aggressive_number_dedup` option to Deduplication settings (tickbox in UI)
+- Before duplicate detection, normalize numbers to 'X' for comparison
+- Store original numbers in dedup_map for restoration
+- During Postprocessing, restore original numbers
+
+**Example:**
+```
+Original: "Increases Damage by 10", "Increases Damage by 864"
+Normalized for comparison: "Increases Damage by X", "Increases Damage by X"
+Result: First line translated, second line gets same translation with "864" restored
+```
+
+**Files to Modify:**
+- `functions/dedup.py` - Add number normalization option
+- `gui/steps/preprocess.py` - Add UI toggle
+- `functions/manifest_manager.py` - Add setting
+
+**Tests to Add:**
+- `dev/test_dedup_aggressive_numbers.py`:
+  - Test number normalization
+  - Test number restoration
+  - Test mixed content handling
+  - Test boundary cases (negative numbers, decimals)
+
+---
+
+### TASK 42.5: Ellipsis Compression Testing & Verification
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+Goal: Verify Ellipsis Compression is feature-complete and add comprehensive tests.
+
+**Current State:**
+- Feature reportedly implemented but needs verification
+- May lack edge case handling
+
+**Required Verification:**
+- Japanese ellipsis `……` (multiple pairs) compresses correctly
+- Western ellipsis `....` (4+ dots) compresses correctly
+- Mixed ellipsis in same line handled
+- Original length recorded for restoration
+- Postprocessing restores exact original length
+
+**Files to Verify/Modify:**
+- `modi/standard_mode.py` - Ellipsis compression
+- `functions/postprocess.py` - Ellipsis restoration
+
+**Tests to Add:**
+- `dev/test_preprocessing_ellipsis.py`:
+  - Test Japanese ellipsis compression
+  - Test Western ellipsis compression
+  - Test roundtrip accuracy
+  - Test edge cases (mixed types, very long sequences)
+
+---
+
+### TASK 42.6: PROT Token Compression Testing & Verification
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+Goal: Verify PROT Token Compression works correctly with adjacency requirement.
+
+**Current State:**
+- Feature reportedly implemented but needs verification
+- Must only compress adjacent tokens (no whitespace or any other character between)
+
+**Required Verification:**
+- `__PROT____PROT__` → `__PROT_2__` (adjacent)
+- `__PROT__ __PROT__` → unchanged (space between)
+- Decompression restores correct count
+- Decompression runs BEFORE PROT restoration
+
+**Files to Verify/Modify:**
+- `modi/standard_mode.py` - PROT compression
+- `functions/postprocess.py` - PROT decompression
+
+**Tests to Add:**
+- `dev/test_preprocessing_prot.py`:
+  - Test adjacent compression
+  - Test non-adjacent preservation
+  - Test decompression accuracy
+  - Test execution order (decompress before restore)
+
+---
+
+### TASK 42.7: Code Database Integration with Code Spacing Rules
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 5 hours
+
+Goal: Integrate Code Spacing Rules with Code Database entries.
+
+**Current State:**
+- Code Spacing Rules exist but limited integration
+- Code Database (Step 3) stores patterns but not spacing rules
+
+**Required Changes:**
+- Extend Code Database entries with spacing tags:
+  - `visible`: Boolean - Does the code render visibly?
+  - `spacing`: Enum - "none", "preserve", "normalize"
+- Code Spacing Rules reads these tags from Code Database
+- Apply appropriate spacing based on tag values
+- Invisible codes (colors) should have no spaces added
+- Variable codes should preserve existing spacing
+
+**Files to Modify:**
+- `gui/steps/information.py` - Add spacing fields to Code Database entries
+- `modi/code_spacing.py` - Read spacing rules from Code Database
+- `functions/manifest_manager.py` - Extend code_patterns schema
+
+**Tests to Add:**
+- `dev/test_code_spacing_integration.py`:
+  - Test invisible code handling
+  - Test variable code handling
+  - Test spacing preservation
+  - Test Code Database tag reading
+
+---
+
+### TASK 42.8: Preview Widget Filtering
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+
+Goal: Implement filtering options for the Preview Table.
+
+**Required Filters:**
+| Filter | Shows |
+|--------|-------|
+| All | All lines |
+| Changed | Only lines with any modification |
+| Custom | Only lines with custom placeholder |
+| Deduplicated | Only lines that were deduplicated and their originals |
+| Protected | Only lines with `__PROT__` tokens |
+| Anchored | Only lines with anchor removals |
+| Errors | Only lines with processing errors |
+
+**Implementation:**
+- Add filter dropdown or radio buttons above Preview Table
+- Filter updates table display without re-running preprocessing
+- Show count of matching lines
+- Persist filter selection in session (not manifest)
+
+**Files to Modify:**
+- `gui/steps/preprocess.py` - Add filter UI and logic
+
+**Tests to Add:**
+- `dev/test_preview_filtering.py`:
+  - Test each filter type
+  - Test filter persistence
+  - Test count display
+
+---
+
+### TASK 42.9: Preprocessing/Postprocessing Roundtrip Tests
+**Priority:** CRITICAL | **Status:** 🔲 NOT STARTED | **Effort:** 6 hours
+
+Goal: Comprehensive roundtrip tests ensuring Preprocessing and Postprocessing exactly mirror.
+
+**Test Scenarios:**
+1. Single process roundtrips (each process individually)
+2. All processes enabled roundtrip
+3. Specific combination roundtrips
+4. Large file roundtrip (100K+ lines)
+5. Edge case content (only code, only text, mixed)
+6. Overlapping patterns
+7. Nested code constructs
+8. Recovery scenarios (mangled tokens, missing anchors)
+
+**Test Approach:**
+- For each scenario: Original → Preprocess → Mock Translation → Postprocess → Compare
+- Mock translation applies known transformations
+- Final result must match expected output exactly
+
+**Files to Create:**
+- `dev/test_preprocessing_postprocessing_roundtrip.py`:
+  - TestSingleProcessRoundtrip (one test per process)
+  - TestAllProcessesRoundtrip
+  - TestCombinationRoundtrips
+  - TestLargeFileRoundtrip
+  - TestEdgeCaseContent
+  - TestOverlappingPatterns
+  - TestNestedCode
+  - TestRecoveryScenarios
+
+---
+
+### TASK 42.10: Validation Enhancement - Pattern/Anchor Recovery
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+
+Goal: Enhance QA Step validation with comprehensive recovery checks.
+
+**Current State:**
+- QA Step checks if recovery is possible
+- Does not save results beyond flags
+- Limited recovery strategies
+
+**Required Changes:**
+- Implement all recovery strategies:
+  1. Exact Match - Token at expected position
+  2. Case Recovery - `__prot__` → `__PROT__`
+  3. Mangled Recovery - `__PRO T__` pattern matching
+  4. Position Shift - Token present but moved
+  5. Missing Token - Flag for manual review
+  6. Extra Token - Flag potential duplicate
+- Save recovery analysis results to manifest
+- Show recovery feasibility in QA UI
+- Provide "Apply Recovery" action that attempts automatic fixes
+
+**Files to Modify:**
+- `gui/steps/qa.py` - Enhanced validation display
+- `functions/validation.py` - Recovery analysis logic
+- `functions/postprocess.py` - Recovery application
+
+**Tests to Add:**
+- `dev/test_validation_recovery.py`:
+  - Test each recovery type detection
+  - Test recovery application
+  - Test result persistence
+
+---
+
+### TASK 42.11: Process Priority Documentation and Enforcement
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+Goal: Document and enforce process execution priority in modi/ modules.
+
+**Required Changes:**
+- Check `PRIORITY` or equivalent constant in each modi/ module
+- Create `functions/process_order.py` with priority definitions
+- Ensure `mode_adapter.py` sorts processes by priority before execution
+- Add verification that Postprocessing uses reverse priority order
+
+**Priority Values (from specs.md, must be changed, see any '<-Pointers):**
+| Priority | Preprocessing Process, Lower means first for Preproccessing |
+|----------|----------------------|
+| 10 | Deduplication |
+| 20 | Ellipsis Compression |
+| 30 | Symbol Conversion | <-WRONG! Before Ellipsis
+| 40 | Speaker Name Replacement |
+| 50 | Code Spacing Rules | <-WARNING! Postprocess only!
+| 60 | PROT Token Compression | <-WRONG! Must be After Protect Code Patterns (90)
+| 70 | Custom Placeholders |
+| 75 | Anchoring |
+| 80 | Protect Code Patterns |
+
+**Files to Modify/Create:**
+- `functions/process_order.py` - Priority definitions
+- `modi/*.py` - Add PRIORITY constants
+- `gui/helpers/mode_adapter.py` - Enforce ordering
+
+**Tests to Add:**
+- `dev/test_process_order.py`:
+  - Test priority constant presence
+  - Test execution order
+  - Test reverse order for Postprocessing
+
+---
+
+### TASK 42.12: Test Suite Completion
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 6 hours
+
+Goal: Create comprehensive test coverage for all Preprocessing/Postprocessing functionality.
+
+**Test Files to Create:**
+- `dev/test_preprocessing_dedup.py` - Deduplication tests
+- `dev/test_preprocessing_symbols.py` - Symbol Conversion tests
+- `dev/test_preprocessing_placeholders.py` - Custom Placeholders tests
+- `dev/test_preprocessing_anchoring.py` - Anchoring tests
+- `dev/test_preprocessing_integration.py` - Integration tests
+- `dev/test_postprocessing_restoration.py` - All restoration tests
+
+**Coverage Requirements:**
+- Each process individually (unit tests)
+- Process combinations (integration tests)
+- Boundary cases (empty, very long, special characters)
+- Performance (timing for 100K+ lines)
+- Error handling (invalid patterns, missing data)
+
+---
+
+### Phase 42 Summary
+
+| Task | Description | Priority | Effort | Dependencies |
+|------|-------------|----------|--------|--------------|
+| 42.1 | Anchoring Widget Redesign | HIGH | 4h | None |
+| 42.2 | Custom Placeholders RegEx Support | HIGH | 2h | None |
+| 42.3 | Protect Code Patterns Default Toggle | MEDIUM | 1h | None |
+| 42.4 | Aggressive Deduplication - Numbers | HIGH | 4h | None |
+| 42.5 | Ellipsis Compression Testing | MEDIUM | 2h | None |
+| 42.6 | PROT Token Compression Testing | MEDIUM | 2h | None |
+| 42.7 | Code Database Integration | HIGH | 5h | Step 3 Code Database |
+| 42.8 | Preview Widget Filtering | MEDIUM | 3h | None |
+| 42.9 | Roundtrip Tests (CRITICAL) | CRITICAL | 6h | 42.1-42.8 |
+| 42.10 | Validation Enhancement - Recovery | HIGH | 4h | None |
+| 42.11 | Process Priority Documentation | MEDIUM | 2h | None |
+| 42.12 | Test Suite Completion | HIGH | 6h | 42.1-42.11 |
+
+**Total Estimated Effort:** 41 hours
+
+**Implementation Order:**
+1. Tasks 42.1, 42.2, 42.3 (Widget fixes - independent, quick wins)
+2. Task 42.4 (Aggressive deduplication - important feature)
+3. Tasks 42.5, 42.6 (Verification tasks - can run in parallel)
+4. Task 42.7 (Code Database integration - depends on Step 3)
+5. Task 42.8 (Preview filtering - UI enhancement)
+6. Task 42.10 (Validation - needed for testing)
+7. Task 42.11 (Priority documentation)
+8. Task 42.9 (Roundtrip tests - depends on all fixes)
+9. Task 42.12 (Test suite completion - final)
+
+**Priority Tasks for Next Release:**
+- 42.1, 42.2, 42.4, 42.9, 42.10 (20 hours - core functionality and critical tests)
+
+---
+
 =============================================================================
 
 FUTURE IDEAS (No Phase Commitment)
@@ -3583,6 +4244,7 @@ FUTURE IDEAS (No Phase Commitment)
 - **Token Speed Tracking**: Calculate actual tokens/sec from previous translations for accurate time estimates
 - **Batch Mode Pricing**: Show batch API pricing (with discount %) for supported models
 - **Image Cost Estimation**: Include image processing costs when image files loaded
+- **Expanded Deduplication (also part of Pre- and Post-Processing Steps)**: Current Deduplication may just take the original string before any processing. More aggressive Deduplication can be able to applies its own rules after all preprocessing and before all postprocessing. It can use one {CODE} for all code and X for all numbers. 
 
 ### Analysis Step Future Enhancements
 - **Auto-populate Glossary**: Use detected speakers and code patterns to pre-fill glossary entries
@@ -3590,6 +4252,28 @@ FUTURE IDEAS (No Phase Commitment)
 - **Export Formats**: Support additional export formats (JSON, XLSX) for findings
 - **Visual Charts**: Charts/graphs for language distribution and pattern frequency
 - **Diff Analysis**: Compare against previous analysis when files change
+
+### Information Step Future Enhancements
+- **Summary Generation via API**: Button to auto-generate summary using LLM analysis of loaded content
+- **Save/Load System Instructions**: Buttons to save current System Instructions to file and load from templates
+- **Expanded Genre List**: Add more genre options, potentially with subcategories
+- **Glossary Inference via API**: Use LLM to suggest glossary entries based on content analysis
+- **Style/Tone Inference**: Auto-detect appropriate style/tone from sample text
+- **Character Database**: Extended character info with relationships, traits, speaking patterns
+- **Glossary Categories**: Group glossary entries by category (names, places, terms, etc.)
+- **Glossary Import from File**: Direct import from external glossary files (CSV, JSON, TMX)
+- **Code Pattern Templates**: Pre-built code pattern sets for common game engines (RPG Maker, Unity, etc.)
+- **Project Templates**: Save/load entire Information step configurations as reusable templates
+
+### Preprocessing/Postprocessing Future Enhancements
+- **Speaker Name Replacement Rework**: Handle edge cases (speakers with colons in name, multiple dialogue formats, speaker extraction from non-standard patterns)
+- **Code Spacing Rules Expansion**: Deeper integration with Code Database, expanded rule definitions, per-pattern spacing tags (visible/invisible, variable handling)
+- **Advanced Deduplication Rules**: Pattern-based deduplication using Increase/Decrease equivalence, RPG stat names (Strength/Willpower/Dexterity) as equivalent, database of auto-translations for common patterns
+- **Pattern Replacement Mode**: Replace patterns permanently before translation (not restored after)
+- **Pattern Removal Mode**: Remove patterns permanently before translation (not restored after)
+- **Functions Not Visible in GUI**: Restore additional processing functions that exist in code but lack GUI exposure
+- **Context-Aware Deduplication**: Use semantic similarity rather than exact match for deduplication
+- **Deduplication Variants Database**: Create database of pattern variants that should be treated as duplicates
 
 Benchmark Mode, requires a small but significant synthesized text which will get at least three passes:
 	-1: Normal Settings

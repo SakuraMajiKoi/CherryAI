@@ -4,9 +4,36 @@ Version 2.0 | February 2026
 
 This document provides a complete functional specification of CherryAI, an LLM-based translation application designed to achieve high-quality translations using Large Language Models. The application requires substantial input and processing which can optimally be performed automatically once an input is selected.
 
-CherryAI describes every component, data flow, user interaction, and file dependency in detail suitable for both human users and AI assistants.
+These specs describe every component, data flow, user interaction, and file dependency in detail suitable for both human users and AI assistants.
 
 ---
+
+## Terminology
+
+CherryAI features terms that may not be clear at first glance or slightly differ from normal definitions:
+- Steps: Tabs in the GUI which guide through the translation pipeline and have their own interface 
+- Widgets: Elements that make up the Steps / Tabs and are filled with buttons, tables, dropdowns &c. 
+- Manifest: Refers to the file that is created and update for each project. It functions as save file that contains all information and processes. See 7. for what it all entails.
+- API: The API is between the user and the LLM. CherryAI -> API -> LLM -> API CherryAI.
+- LLM: Large Language Model, a predictive software that calculates output based on input, settings and its own knowledge base. Excellent at natural language but costs more time and resources than previous technology.
+- Model: Countless LLM are developed, refined and literally cut. Performance between them vastly differs.
+- Cloud / Local LLM: LLM require a lot of RAM, specifically VRAM, to work and they can be run on one's own device for pretty much free. Cloud Providers offer their hardware and resource for a price that usually depends on Input and Output Tokens.
+- Tokens: Not characters or words but the metric and data LLM work with. Simply out, tokens are categorized based on their meaning. The application also features tokens that temporarily replace code during translation for protection and context
+- Request: The entirity sent to the API: Metainformation, Prompt and Input Lines.
+- Metainformation: The part of the Request that is not counted and instead has the API apply various settings.
+- Prompt: The part of the Request that contains context that manipulates the weights and probability for a better translation.
+- System Instructions: Part of the Prompt, always present.
+- Conditional: Certain criteria must be met for that part of the prompt to appear.
+- Selectively: When a condition is met, selected parts are provided in the prompt. Usually the part that triggers the condition.
+- Rolling Context: Lines that directly preceed those that will be translated. Conditional. 
+- Glossary: Conditionally and selectively used to achieve consistent translations for terms and provides further information primarily for characters and location. Part of the Prompt
+- Code Database: Conditionally and selectively used to deal with code.
+- Editing: Optional process that is done to ensure that a translation has no problems.
+- TLC: Translation Check. Optional process that specifically ensures that a translation is accurate.
+- Deduplication: Deals with lines that occur more than once and prevents them from being translated entirely. Various settings allow for more or less aggressive techniques.
+- Placeholders: A system designed to deal with code by having it replaced with placeholders and recovered before Injection.
+- Anchoring: Similar purpose as Placeholders except that the code can be entirely removed and readded safely where it should be. Requires Anchor characters like punctuation or line start/end.
+- Parsing / Extraction & Input / Injection & Output: Parsing entails both processes that deal with what is first loaded into CherryAI and what is finally produced. 
 
 ## Table of Contents
 
@@ -718,146 +745,750 @@ The Costs step has **two distinct estimation states** tracked separately:
 
 ### Step 3: Information
 
-**Purpose**: Configure project metadata and translation context.
+**Purpose**: Configure project metadata and translation context. All fields contribute to building the final translation prompt. Every entry is saved in the manifest for persistence.
 
-#### Widgets
+#### Design Goals
 
-| Widget | Type | Function |
-|--------|------|----------|
-| Project Name Entry | Entry | Project identifier |
-| Game Title Entry | Entry | Source game/work title |
-| Source Language Dropdown | Combobox | Source language (Japanese, etc.) |
-| Target Language Dropdown | Combobox | Target language (English, etc.) |
-| Genre Dropdown | Combobox | Content genre (RPG, Visual Novel, etc.) |
-| Summary Text | ScrolledText | Content summary for context |
-| Style Preset Dropdown | Combobox | Translation style (literal, natural, etc.) |
-| Custom Style Text | ScrolledText | Custom style instructions |
-| Tone Preset Dropdown | Combobox | Translation tone (neutral, dramatic, etc.) |
-| Custom Tone Text | ScrolledText | Custom tone instructions |
-| Character Notes Table | Table | Character name, gender, notes |
-| Code Glossary Table | Table | Code patterns to preserve |
-| Prompt Text | ScrolledText | Additional translation instructions |
-| JSON View Button | Button | Toggle raw JSON view |
-| Save Button | Button | Force save to manifest |
+1. **Prompt Construction**: Every relevant field feeds into the translation prompt sent to the LLM
+2. **Project Persistence**: All data saved to manifest for session recovery
+3. **Glossary Integration**: Project-specific and global glossaries support selective prompt inclusion
+4. **Code Pattern Management**: Detected patterns from Analysis can be managed with preservation rules
+
+---
+
+#### Widget: Project Details
+
+**Purpose**: Core project identification fields.
+
+| Field | Type | Behavior | Prompt Format |
+|-------|------|----------|---------------|
+| Project Name | Entry | Auto-populated from first file load; user-editable | Not included in prompt |
+| Title | Entry | Full name of the work (game, novel, etc.) | `Title: [value]` |
+| Genre | Entry + Dialog | Comma-separated genres; `...` button opens multi-select | `Genre: [value]` |
+
+**Genre Dialog Behavior**:
+- Opens selection window with genre checkboxes
+- Each selection separated by `, ` (comma + space)
+- **Required Fix**: Dialog should ADD to existing content, not overwrite
+- Expanded genre list: Visual Novel, RPG, Action, Adventure, Simulation, Puzzle, Horror, Romance, Fantasy, Sci-Fi, Historical, Slice of Life, Mystery, Comedy, Drama, Isekai, Martial Arts, Supernatural, Thriller, Mecha
+
+**Manifest Keys**: `ProjectName`, `Title`, `Genre`
+
+---
+
+#### Widget: Languages
+
+**Purpose**: Set source and target languages for translation.
+
+| Field | Type | Options | Prompt Format |
+|-------|------|---------|---------------|
+| Source | Combobox | Japanese, Chinese (Simplified), Chinese (Traditional), Korean, English, Other | `Translate {Source} into {Target}` |
+| Target | Combobox | English, Japanese, Chinese (Simplified), Chinese (Traditional), Korean, Spanish, French, German, Portuguese, Russian, Other | (combined with Source) |
+
+**"Other" Behavior**:
+- When "Other" selected, prompt user for custom language input
+- Accept any valid text input
+- Store custom value in manifest
+
+**Manifest Keys**: `SourceLanguage`, `TargetLanguage`
+
+---
+
+#### Widget: Summary (rename from Summary / Description)
+
+**Purpose**: Provide plot summary for translation context.
+
+| Component | Type | Behavior |
+|-----------|------|----------|
+| Summary Text | ScrolledText | Multi-line input, 5 rows default height |
+| Description | Label | "Provide a brief summary for translation context" |
+
+**Prompt Format**: `Summary: [contents]`
+
+**Required Behavior**:
+- Widget title rename: "Summary / Description" → "Summary"
+- Contents included in system prompt when non-empty
+
+**Manifest Key**: `Summary`
+
+**Future Enhancement**: Button to generate summary via iterative API inference (costly operation). For fictional text, summary must include protagonist name and point of view.
+
+---
+
+#### Widget: Translation Style and Tone
+
+**Purpose**: Control translation style and emotional tone.
+
+**Style Dropdown**:
+| Preset | Full Display Text |
+|--------|-------------------|
+| literal | Literal - Word-for-word translation preserving original structure |
+| natural | Natural - Fluent translation adapted to target language |
+| creative | Creative - Liberal adaptation with interpretation |
+| formal | Formal - Professional language register |
+| casual | Casual - Informal, conversational language |
+| technical | Technical - Precise terminology |
+| literary | Literary - Artistic prose style |
+| custom | Custom - User-defined style |
+
+**Tone Dropdown**:
+| Preset | Full Display Text |
+|--------|-------------------|
+| neutral | Neutral - Balanced, no strong emotion |
+| serious | Serious - Grave, solemn atmosphere |
+| humorous | Humorous - Expect jokes and jests |
+| dramatic | Dramatic - Intense, theatrical |
+| lighthearted | Lighthearted - Cheerful, upbeat mood |
+| dark | Dark - Grim, ominous atmosphere |
+| romantic | Romantic - Warm, emotional context |
+| action | Action - Fast-paced, energetic sequences |
+| custom | Custom - User-defined tone |
+
+**Custom Override Behavior**:
+- Each preset has a Custom Text entry below it
+- If Custom Text is filled: Dropdown becomes visually grayed (disabled appearance), only Custom used in prompt
+- If Custom Text is empty/deleted: Dropdown becomes active, preset used in prompt
+
+**Prompt Format**:
+- Style: `Style: [Full Display Text or Custom Value]`
+- Tone: `Tone: [Full Display Text or Custom Value]`
+
+**Manifest Keys**: `StylePreset`, `CustomStyle`, `TonePreset`, `CustomTone`
+
+---
+
+#### Widget: System Instructions (rename from Prompt)
+
+**Purpose**: User-defined additional instructions for the LLM.
+
+| Component | Type | Behavior |
+|-----------|------|----------|
+| Instructions Text | ScrolledText | Multi-line input, 6 rows default |
+| Description | Label | "Additional instructions for the translation AI" |
+
+**Required Rename**: "Prompt" → "System Instructions"
+
+**Prompt Format**: `System Instructions: [contents]`
+
+**Manifest Key**: `SystemInstructions` (rename from `Prompt`)
+
+**Future Enhancement**: Save/Load buttons for instruction templates
+
+---
+
+#### Widget: Glossary Settings (Selective Glossary)
+
+**Purpose**: Manage translation glossary with selective prompt inclusion.
+
+| Component | Type | Function |
+|-----------|------|----------|
+| Glossary Table | Treeview | 3 columns: Original, Translation, Notes |
+| Import from Analysis | Button | Import detected terms from Analysis step |
+| Add Entry | Button | Add new glossary entry |
+| Edit Entry | Button | Edit selected entry |
+| Remove Entry | Button | Remove selected entry(s) |
+
+**Table Behavior**:
+- Inline editing: Double-click any cell to edit directly (no separate dialog)
+- Multi-select support for bulk delete
+- Columns: Original (source term), Translation (target term), Notes (context/usage)
+
+**Selective Prompt Inclusion**:
+- Glossary entries only included in prompt when their Original term appears in the current chunk
+- Reduces token usage by excluding irrelevant entries
+- Format in prompt: `Glossary:\n- [Original]: [Translation] ([Notes])`
+
+**Project vs Global Glossary**:
+- Project glossary: Stored in manifest, project-specific
+- Global glossary: Stored in `user/glossary.csv`, shared across projects
+- Analysis creates project-specific glossary entries
+
+**Manifest Key**: `Glossary.project_entries[]`
+
+---
+
+#### Widget: Code Database (rename from Code Glossary)
+
+**Purpose**: Manage code patterns for preservation, translation, or removal.
+
+| Component | Type | Function |
+|-----------|------|----------|
+| Pattern Table | Treeview | Columns: Pattern, Category, Action, Code Examples |
+| Add Pattern | Button | Open pattern editor dialog |
+| Edit | Button | Edit selected pattern |
+| Remove | Button | Remove selected pattern(s) |
+| Import from Analysis | Button | Import detected patterns (currently not working - needs fix) |
+
+**Pattern Editor Dialog Fields**:
+| Field | Type | Description |
+|-------|------|-------------|
+| Pattern | Entry | RegEx pattern or literal string (RegEx support required) |
+| Category | Combobox + Entry | Dropdown with custom input. Categories: RPG Maker Variable, Ruby Code, HTML Tag, Control Code, Placeholder, Custom |
+| Action | Combobox | Preserve, Translate, Remove |
+| Code | Entry | Actual code examples in JSON array format: `["\\V[1]", "\\V[2]"]` (escape quotes with `\`) |
+| Notes | Entry | Usage notes (displayed in prompt for Translate action) |
+
+**Action Behaviors**:
+
+| Action | During Translation | During Postprocessing |
+|--------|-------------------|----------------------|
+| Preserve | Add to prompt: "Preserve code patterns: [examples]" | Auto-recover or flag for QA if not recoverable |
+| Translate | Add to prompt: "[Code] - [Notes]" for contextual translation | No special handling |
+| Remove | Not mentioned in prompt | Strip from translation output if found |
+
+**Code Field Format**:
+- JSON array format: `["code1", "code2"]`
+- Escape literal quotes: `["\"quoted\""]`
+- Used to validate pattern matches and generate examples for prompt
+- Analysis fills this field automatically
+
+**Pattern Validation**:
+- If Pattern is RegEx: Code examples validated against pattern
+- If new Code found matching pattern: Auto-add to Code field
+
+**Category Management**:
+- Users can type custom categories (instant add to dropdown)
+- Categories enable selective import/export from Global Database
+
+**Manifest Key**: `CodeGlossary[]` (array of CodePattern objects)
+
+---
+
+#### Widget: Global Glossary and Database (NEW)
+
+**Purpose**: Manage global resources shared across all projects.
+
+**Mode Switch**: Toggle between Glossary Mode and Code Mode
+
+**Glossary Mode**:
+| Component | Type | Function |
+|-----------|------|----------|
+| Use Global Glossary | Checkbox | Include global glossary during translation |
+| Export to Global | Button | Export selected project entries (or all if none selected) to global |
+| Display Global | Button | Open window with interactive global glossary table |
+
+**Code Mode**:
+| Component | Type | Function |
+|-----------|------|----------|
+| Category Filter | Combobox | Filter by category for selective import |
+| Import from Global | Button | Import filtered patterns to project |
+| Export to Global | Button | Export project patterns to global database |
+| Display Global | Button | Open searchable global code database window |
+
+**Uniqueness Rules**:
+- Project Code Database: Same Code+Pattern can only exist once
+- Global Code Database: Same Code+Pattern can exist multiple times under different Categories
+- Global Database is searchable by pattern, code, category, notes
+
+**File Locations**:
+- Global Glossary: `user/glossary.csv`
+- Global Code Database: `user/code_patterns.db` (SQLite) or `user/code_patterns.json`
+
+---
+
+#### Character Notes Widget
+
+**Purpose**: Track characters for consistent translation.
+
+| Component | Type | Function |
+|-----------|------|----------|
+| Character Table | Treeview | Columns: Original, Translation, Gender, Role |
+| Add Character | Button | Add new character entry |
+| Edit | Button | Edit selected character |
+| Remove | Button | Remove selected character(s) |
+| Infer Gender | Button | LLM-based gender inference |
+| Import from Analysis | Button | Import detected speakers |
+
+**Prompt Format**: Character entries included as context:
+```
+Characters:
+- [Original] ([Translation]): [Gender], [Role]
+```
+
+**Manifest Key**: `CharacterNotes[]`
+
+---
 
 #### Data Flow
 
 **Inputs**:
 - User: Manual entry of all fields
-- From Step 1: Detected speakers (can populate characters)
-- From Step 1: Detected code patterns (can populate glossary)
+- From Step 1: Detected speakers (populate Characters), detected code patterns (populate Code Database)
+- From Global: `user/glossary.csv`, `user/code_patterns.db`
 
 **Processing**:
-1. Validate field formats
-2. Build ProjectMetadata dataclass
-3. Build CharacterInfo list from table
-4. Build CodePattern list from table
-5. Serialize to manifest on change
+1. Validate field formats on change
+2. Build prompt components from each field
+3. Auto-save to manifest on field change (via manifest binding)
+4. Selective glossary: Filter entries based on chunk content
 
-**Outputs**:
-- `project_name: str`
-- `game_title: str`
-- `source_language: str`
-- `target_language: str`
-- `genre: str`
-- `summary: str`
-- `style_preset: str` + `custom_style: str`
-- `tone_preset: str` + `custom_tone: str`
-- `characters: List[CharacterInfo]`
-- `code_patterns: List[CodePattern]`
-- `custom_notes: str` (prompt)
-
-**Used By**:
-- Step 5 (Translation): Prompt construction uses summary, style, tone, characters
-- Step 7 (Postprocessing): Code glossary patterns for restoration
+**Outputs** (to Step 5 Translation):
+- `prompt_components{}` - All prompt fragments by category
+- `selective_glossary[]` - Glossary entries matching current chunk
+- `code_patterns[]` - Patterns with their actions
 
 **Stored In**:
-- Manifest: `project_info{}`, `glossary.project_entries[]`
-- Auto-saved on field change via manifest binding
+- Manifest: `project_info{}`, `Glossary{}`, `CodeGlossary[]`, `CharacterNotes[]`
+- Step data: `Information.{fields...}`
 
-#### Style Presets
+---
 
-| Preset | Description |
-|--------|-------------|
-| literal | Word-for-word, preserving structure |
-| natural | Fluent, adapted to target language |
-| creative | Liberal adaptation with interpretation |
-| formal | Professional language register |
-| casual | Informal, conversational |
-| technical | Precise technical terminology |
-| literary | Artistic prose style |
+#### User Actions
 
-#### Tone Presets
+| Action | Effect |
+|--------|--------|
+| Edit any field | Auto-saves to manifest, rebuilds prompt component |
+| Click Genre `...` | Opens multi-select genre dialog |
+| Select "Other" language | Prompts for custom language input |
+| Fill Custom Style/Tone | Grays out preset dropdown, uses custom in prompt |
+| Clear Custom Style/Tone | Activates preset dropdown |
+| Double-click table cell | Enables inline editing |
+| Import from Analysis | Populates Characters or Code Database from Analysis findings |
+| Toggle Use Global Glossary | Includes/excludes global entries during translation |
 
-| Preset | Description |
-|--------|-------------|
-| neutral | Balanced, no strong emotion |
-| serious | Grave, solemn atmosphere |
-| humorous | Light-hearted, comedic |
-| dramatic | Intense, theatrical |
-| dark | Grim, ominous |
-| romantic | Warm, emotional |
+---
+
+#### Known Issues to Fix
+
+1. **Genre Dialog Overwrites**: Currently replaces field content instead of appending
+2. **Import from Analysis (Code)**: Button not functional - needs implementation
+3. **Import from Analysis (Glossary)**: Button not functional - needs implementation
+4. **"Other" Language**: Does not prompt for custom input
+5. **Custom Style/Tone Graying**: Visual feedback not implemented
 
 ---
 
 ### Step 4: Preprocessing
 
-**Purpose**: Apply text transformations before translation.
+**Purpose**: Process text before translation with transformations that will be exactly mirrored and restored in Step 7: Postprocessing. Each process has a priority integer determining execution order. Preprocessing reduces tokens, protects code, and normalizes text while ensuring perfect reversibility.
 
-#### Widgets
+**Design Goals**:
+1. **Mirror Symmetry**: Every Preprocessing transformation has a corresponding Postprocessing restoration
+2. **Priority Ordering**: Processes execute in defined order; each `modi/` module has a priority integer
+3. **Perfect Reversibility**: All changes must be recoverable to produce accurate final output
+4. **Token Efficiency**: Reduce tokens sent to LLM to minimize costs
+5. **Code Protection**: Ensure code and placeholders survive translation unchanged
 
-| Widget | Type | Function |
-|--------|------|----------|
-| Apply Rules Button | Button | Execute preprocessing |
-| Reset Button | Button | Clear preprocessing results |
-| Auto-Suggest Button | Button | Suggest rules from analysis |
-| Deduplication Checkbox | Checkbox | Enable duplicate removal |
-| Dedup Threshold Spinbox | Spinbox | Minimum occurrences (0-10) |
-| Ellipsis Checkbox | Checkbox | Compress ellipsis sequences |
-| Symbol Conversion Checkbox | Checkbox | Convert JP→EN punctuation |
-| PROT Compression Checkbox | Checkbox | Compress adjacent __PROT__ |
-| Speaker Replacement Checkbox | Checkbox | Replace speaker names |
-| Code Spacing Checkbox | Checkbox | Apply code spacing rules |
-| Placeholder Rules List | Listbox | Custom pattern→token rules |
-| Protect Code List | Listbox | Patterns to protect with __PROT__ |
-| Anchor Removal List | Listbox | Anchors to remove/restore |
-| Preview Table | SharedTable | Original vs Processed comparison |
+---
+
+#### Widgets Overview
+
+The Preprocessing tab is organized into three sections:
+
+1. **Standard Rules Panel** - Toggleable checkboxes for common transformations
+2. **Pattern Configuration Widgets** - Custom Placeholders, Protect Code Patterns, Anchoring
+3. **Preview Widget** - Table view of all lines showing processes applied
+
+---
+
+#### Widget: Standard Rules Panel
+
+**Purpose**: Toggle common preprocessing transformations. All standard rules have Postprocessing counterparts.
+
+| Widget | Type | Default | Function |
+|--------|------|---------|----------|
+| Deduplication | Checkbox + Spinbox | ✓, Threshold=1 | Replace duplicate lines with tokens |
+| Ellipsis Compression | Checkbox | ✓ | Compress ellipsis sequences to save tokens |
+| Symbol Conversion | Checkbox | ✓ | Convert JP→EN punctuation before translation |
+| PROT Token Compression | Checkbox | ✓ | Compress adjacent `__PROT__` tokens |
+| Speaker Name Replacement | Checkbox | ✗ | Replace speaker names with glossary translations |
+| Code Spacing Rules | Checkbox | ✓ | Apply code-aware spacing normalization |
+
+**Buttons**:
+| Button | Function |
+|--------|----------|
+| Apply Rules | Execute all enabled preprocessing rules |
+| Reset | Clear all preprocessing results and restore original |
+| Auto-Suggest | Analyze content and suggest optimal rule settings |
+
+---
+
+#### Process: Deduplication
+
+**Priority**: 10 (First - runs before all other processes; restored last in Postprocessing)
+
+**Purpose**: Temporarily replace duplicate lines to avoid translating the same content multiple times. Restores duplicates to the translation of the unique remaining line.
+
+**Current Behavior**:
+- Exact string matching for duplicate detection
+- Applies before any other preprocessing
+- Configurable threshold: Minimum X occurrences for a line to be deduplicated
+- Successive mode: Require X or more identical consecutive lines
+
+**Deduplication Settings**:
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| Enabled | Boolean | true | Enable deduplication |
+| Threshold | Integer (1-10) | 1 | Minimum occurrences to deduplicate |
+| Mode | Enum | "Global" | "Global" (anywhere) or "Successive" (consecutive only) |
+
+**Token Format**: `__DEDUP_{idx}__` where `idx` is the index of the first occurrence
+
+**Postprocessing**: All deduplicated lines receive the translation of their unique original
+
+**Manifest Keys**: `Deduplication`, `DeduplicationThreshold`, `DeduplicationMode`
+
+---
+
+#### Process: Ellipsis Compression
+
+**Priority**: 20
+
+**Purpose**: Compress multiple ellipsis characters to a standard form to save tokens and prevent LLM from altering ellipsis length.
+
+**Behavior**:
+- Japanese ellipsis `……` (or longer): Compress to `……`
+- Western ellipsis `....` (4+ dots): Compress to `...`
+- Single ellipsis character `…`: Preserved as-is
+- Records original length for restoration
+
+**Postprocessing**: Expand back to original length
+
+**Manifest Key**: `EllipsisCompression`
+
+---
+
+#### Process: Symbol Conversion
+
+**Priority**: 30
+
+**Purpose**: Convert Japanese punctuation to Western equivalents before translation, allowing the LLM to work with familiar characters.
+
+**Conversion Table**:
+| Japanese | Western |
+|----------|---------|
+| `。` | `.` |
+| `、` | `,` |
+| `！` | `!` |
+| `？` | `?` |
+| `：` | `:` |
+| `；` | `;` |
+| `（）` | `()` |
+| `「」` | `""` |
+| `『』` | `""` |
+| Fullwidth `０-９Ａ-Ｚａ-ｚ` | Halfwidth `0-9A-Za-z` |
+
+**Postprocessing**: May optionally convert back based on target language settings
+
+**Manifest Key**: `SymbolConversion`
+
+---
+
+#### Process: PROT Token Compression
+
+**Priority**: 60 (Runs AFTER Protect Code Patterns creates `__PROT__` tokens)
+
+**Purpose**: Compress adjacent `__PROT__` tokens into a single numbered token to reduce token count.
+
+**Behavior**:
+- `__PROT____PROT__` → `__PROT_2__`
+- `__PROT____PROT____PROT__` → `__PROT_3__`
+- Only compresses tokens that are directly adjacent (no whitespace between)
+- Records compression mapping for restoration
+
+**Postprocessing**: Decompress `__PROT_N__` back to N individual `__PROT__` tokens BEFORE replacing with originals
+
+**Manifest Key**: `ProtCompression`
+
+---
+
+#### Process: Speaker Name Replacement
+
+**Priority**: 40
+
+**Purpose**: Replace original speaker names in `Speaker: "Dialogue"` format with their translated equivalents from the Glossary.
+
+**Behavior**:
+- Matches speaker names against Glossary entries
+- If match found, replaces Original with Translation
+- Only affects the speaker portion, not the dialogue
+- Example: `太郎: "こんにちは"` → `Taro: "こんにちは"` (if glossary has 太郎→Taro)
+
+**Future Improvement**: This feature needs rework to handle edge cases (speakers with colons in name, multiple formats, etc.)
+
+**Manifest Key**: `SpeakerNameReplacement`
+
+---
+
+#### Process: Code Spacing Rules
+
+**Priority**: 50
+
+**Purpose**: Apply intelligent spacing around code elements to prevent spacing issues after translation.
+
+**Behavior**:
+- Reads spacing rules from Code Database
+- Each code pattern can specify:
+  - `visible`: Whether the code renders visibly (affects spacing decisions)
+  - `spacing`: How to handle spaces around code (`none`, `preserve`, `normalize`)
+- Invisible codes (like color codes) should have no surrounding spaces added
+- Variable codes (like `\V[1]`) should preserve existing spacing
+
+**Code Database Integration**: Spacing rules are defined per-pattern in the Code Database (Step 3)
+
+**Future Improvement**: Needs deeper integration with Code Database and expanded rule definitions
+
+**Manifest Key**: `CodeSpacingRules`
+
+---
+
+#### Widget: Custom Placeholders
+
+**Purpose**: Define custom pattern-to-placeholder mappings for specific strings, primarily for name variables or recurring terms.
+
+**UI Components**:
+| Component | Type | Function |
+|-----------|------|----------|
+| Pattern Table | Treeview | Columns: Pattern, Placeholder, RegEx, Description |
+| Add Button | Button | Opens Add dialog |
+| Edit Button | Button | Opens Edit dialog for selected row |
+| Remove Button | Button | Removes selected rows |
+| RegEx Tickbox (in dialog) | Checkbox | Toggle regex interpretation (default: disabled) |
+
+**Priority**: 70 (After standard rules, before Protect Code Patterns)
+
+**Behavior**:
+- Replaces Pattern with a unique `__CUSTOM_{idx}__` token
+- If RegEx enabled: Pattern interpreted as regular expression
+- If RegEx disabled: Pattern is literal string match
+- Stores original text for restoration
+
+**Postprocessing Priority**: 30 (Restored AFTER Anchoring, BEFORE standard restoration)
+
+**Use Cases**:
+- Name variables: `{PLAYER_NAME}` → `__CUSTOM_1__`
+- Recurring terms that should not be translated
+- Company/product names that need consistent handling
+
+**Manifest Key**: `CustomPlaceholders` (list of `{pattern, placeholder, is_regex, description}`)
+
+---
+
+#### Widget: Protect Code Patterns
+
+**Purpose**: Define patterns that should be protected with standard `__PROT__` tokens.
+
+**UI Components**:
+| Component | Type | Function |
+|-----------|------|----------|
+| Pattern Table | Treeview | Columns: Pattern, Replacement, RegEx, Description |
+| Add Button | Button | Opens Add dialog |
+| Edit Button | Button | Opens Edit dialog for selected row |
+| Remove Button | Button | Removes selected rows |
+| RegEx Tickbox (in dialog) | Checkbox | Toggle regex interpretation (default: enabled) |
+
+**Priority**: 80 (After Custom Placeholders)
+
+**Behavior**:
+- Replaces matched patterns with `__PROT__` token
+- Default: RegEx enabled (patterns are regular expressions)
+- If RegEx disabled: Pattern is literal string match
+- Each match gets same `__PROT__` token (compression handles duplicates)
+- Original text stored in `prepro_ops[]` for restoration
+
+**Postprocessing Priority**: 20 (Restored after PROT decompression)
+
+**Validation (QA Step)**:
+- Checks that all `__PROT__` tokens exist in translation
+- Flags missing/extra tokens for manual review
+- Attempts recovery if tokens are mangled
+
+**Manifest Key**: `ProtectCodePatterns` (list of `{pattern, replacement, is_regex, description}`)
+
+---
+
+#### Widget: Anchoring (rename from Anchor Removal)
+
+**Purpose**: Remove patterns from translation entirely and restore them at exact positions afterward using anchor points.
+
+**UI Components**:
+| Component | Type | Function |
+|-----------|------|----------|
+| Pattern Table | Treeview | Columns: Pattern, Action, Anchor Spec, RegEx, Description |
+| Add Button | Button | Opens Add dialog |
+| Edit Button | Button | Opens Edit dialog for selected row |
+| Remove Button | Button | Removes selected rows |
+| RegEx Tickbox (in dialog) | Checkbox | Toggle regex interpretation (default: enabled) |
+
+**Note**: Widget renamed from "Anchor Removal" to "Anchoring" for clarity. No single writable field or preset selection buttons - full table-based management with Add/Edit/Remove dialogs.
+
+**Priority**: 75 (After Custom Placeholders, Before Protect Code Patterns)
+
+**Behavior**:
+- Removes matched pattern completely from the line
+- Stores removal position relative to anchors (start, end, punctuation, brackets)
+- Does NOT leave any placeholder token in text
+- Anchor characters: Line start `^`, Line end `$`, Punctuation `.!?`, Brackets `[]<>{}`
+
+**Postprocessing Priority**: 10 (Restored FIRST, before other restorations)
+
+**Anchor Types**:
+| Anchor | Description |
+|--------|-------------|
+| `^` | Start of line |
+| `$` | End of line |
+| `.!?` | After punctuation |
+| `[...]` | Before/after square brackets |
+| `<...>` | Before/after angle brackets |
+| `{...}` | Before/after curly brackets |
+
+**Validation (QA Step)**:
+- Verifies anchor points still exist in translation
+- Flags lines where anchors are missing
+- Attempts recovery using fuzzy matching
+- Does NOT apply restoration in QA - only flags for review
+
+**Manifest Key**: `AnchorRemoval` (list of `{pattern, action, anchor_spec, is_regex, description}`)
+
+---
+
+#### Widget: Preview Table
+
+**Purpose**: Display all lines with preprocessing changes applied, allowing filtering and review.
+
+**Columns**:
+| Column | Content |
+|--------|---------|
+| # | Line index |
+| Original | Original text before preprocessing |
+| Preprocessed | Text after all preprocessing applied |
+| Changes | Comma-separated list of processes applied to this line |
+| Status | Processing status (unchanged, modified, deduplicated, error) |
+
+**Filters**:
+| Filter | Shows |
+|--------|-------|
+| All | All lines |
+| Changed | Only lines with modifications |
+| Deduplicated | Only lines that were deduplicated |
+| Protected | Only lines with `__PROT__` tokens |
+| Anchored | Only lines with anchor removals |
+| Errors | Only lines with processing errors |
+
+**Behavior**:
+- Updates in real-time as rules are toggled
+- Selecting a line shows detailed breakdown of changes
+- Double-click opens line editor for manual override
+
+---
+
+#### Process Execution Order
+
+**Preprocessing** (lowest priority runs first):
+| Priority | Process | Description |
+|----------|---------|-------------|
+| 10 | Deduplication | Remove duplicates before any changes |
+| 20 | Ellipsis Compression | Normalize ellipsis |
+| 30 | Symbol Conversion | Convert JP→EN symbols |
+| 40 | Speaker Name Replacement | Replace speaker names |
+| 50 | Code Spacing Rules | Normalize code spacing |
+| 60 | PROT Token Compression | Compress adjacent PROTs (runs after patterns create them) |
+| 70 | Custom Placeholders | Apply user-defined patterns |
+| 75 | Anchoring | Remove anchored content |
+| 80 | Protect Code Patterns | Protect remaining code |
+
+**Postprocessing** (reverse order - highest priority runs first):
+| Priority | Process | Description |
+|----------|---------|-------------|
+| 10 | Anchoring | Restore anchored content FIRST |
+| 20 | Protect Code Patterns | Restore `__PROT__` tokens |
+| 30 | Custom Placeholders | Restore custom tokens |
+| 40 | PROT Token Decompression | Decompress `__PROT_N__` |
+| 50 | Code Spacing Rules | Restore code spacing |
+| 60 | Speaker Name Replacement | (No restoration needed) |
+| 70 | Symbol Conversion | Optionally restore JP symbols |
+| 80 | Ellipsis Expansion | Restore ellipsis length |
+| 90 | Deduplication | Apply translation to all duplicates LAST |
+
+---
 
 #### Data Flow
 
 **Inputs**:
-- From Step 0: `all_lines[]`
-- From Step 3: `code_patterns[]` for protect rules
-- Config: Standard rule toggles
+- From Step 0: `all_lines[]` - Original lines from loaded files
+- From Step 3: `code_patterns[]` - Code patterns for protection rules
+- From Step 3: `glossary[]` - For Speaker Name Replacement
+- From Manifest: Standard rule toggles, pattern lists
 
 **Processing** (via `gui/helpers/mode_adapter.py` → `modi/` modules):
-1. **Deduplication**: Replace repeated lines with `__DEDUP_N__` tokens
-2. **Ellipsis**: Compress `……` / `...` sequences
-3. **Symbol Conversion**: `。→.` `、→,` `！→!` etc.
-4. **PROT Compression**: `__PROT____PROT__` → `__PROT_2__`
-5. **Custom Placeholders**: Pattern → `__TOKEN__`
-6. **Protect Code**: Pattern → `__PROT__` with stored original
-7. **Anchor Removal**: Remove and store for later restoration
+1. Each `modi/` module has a `priority` attribute
+2. Modules sorted by priority (ascending for preprocessing)
+3. Each module processes all lines and returns modifications
+4. Modifications stored in `prepro_ops[]` per line
+5. Final preprocessed text stored in `prepro[]`
 
 **Outputs**:
-- `prepro: List[str]` - Preprocessed lines
-- `prepro_ops: List[Dict]` - Restoration metadata per line
-- `dedup_map: Dict[str, List[int]]` - Original indices for deduped lines
-- `change_count: int` - Lines modified
-- `protected_count: int` - Code patterns protected
+- `prepro: List[str]` - Preprocessed lines ready for translation
+- `prepro_ops: List[List[Dict]]` - Restoration metadata per line, per process
+- `dedup_map: Dict[str, List[int]]` - Line text → list of duplicate indices
+- `change_count: int` - Total lines modified
+- `protected_count: int` - Lines with `__PROT__` tokens
+- `anchored_count: int` - Lines with anchor removals
 
 **Stored In**:
 - Manifest: `lines[].prepro`, `lines[].prepro_ops`
-- Manifest step data: `Preprocessing.{Deduplication, EllipsisCompression, ...}`
+- Manifest step data: All toggle states and pattern lists
 
-#### Preprocessing Rules Detail
+---
 
-| Rule | Pattern | Result |
-|------|---------|--------|
-| Ellipsis | `……+` or `\.{4,}` | `……` or `...` |
-| Symbol JP→EN | `。、！？` | `.,!?` |
-| Fullwidth | `０-９Ａ-Ｚ` | `0-9A-Z` |
-| PROT Compress | `__PROT____PROT__` | `__PROT_2__` |
+#### User Actions
+
+| Action | Effect |
+|--------|--------|
+| Toggle Standard Rule | Updates Preview immediately (if auto-refresh enabled) |
+| Click Apply Rules | Executes all enabled preprocessing |
+| Click Reset | Clears preprocessing, reverts to original |
+| Click Auto-Suggest | Analyzes content and recommends rule settings |
+| Add/Edit/Remove Pattern | Updates pattern list, requires re-processing |
+| Filter Preview Table | Shows subset of lines matching filter |
+| Double-click Preview Row | Opens manual line editor |
+
+---
+
+#### Validation and Recovery
+
+**QA Step Checks** (Step 6):
+- All `__PROT__` tokens present in translation
+- All `__CUSTOM__` tokens present in translation
+- Anchor points exist for restoration
+- No extra/duplicate tokens introduced
+- Speaker format preserved
+
+**Recovery Strategies** (applied in Postprocessing):
+1. **Exact Match**: Token found at expected position
+2. **Case Recovery**: `__prot__` → `__PROT__` (fix and proceed)
+3. **Mangled Recovery**: `__PRO T__` or `__PROT _` (pattern match and fix)
+4. **Position Shift**: Token present but at different position (adjust and restore)
+5. **Missing Token**: Token not found (flag for manual review, attempt fuzzy match)
+6. **Extra Token**: More tokens than expected (flag, may indicate duplicate insertion)
+
+**Retry Strategies** (if recovery fails):
+1. **Skip**: Leave line unprocessed, flag for manual fix
+2. **Retry Translation**: Re-translate the specific line with different prompt
+3. **Isolated Retry**: Re-translate line individually with strict instructions
+
+---
+
+#### Testing Requirements
+
+**Required Test Coverage**:
+- Each preprocessing process individually
+- Process combinations (all enabled, specific combos)
+- Boundary cases (empty lines, lines with only code, etc.)
+- Large file handling (100K+ lines performance)
+- Roundtrip accuracy (prepro → translate → postpro must match expected)
+- Pattern edge cases (overlapping patterns, nested code, etc.)
+- Recovery mechanisms (each recovery type)
+
+**Test Files** (to be created/extended):
+- `dev/test_preprocessing_dedup.py`
+- `dev/test_preprocessing_ellipsis.py`
+- `dev/test_preprocessing_symbols.py`
+- `dev/test_preprocessing_prot.py`
+- `dev/test_preprocessing_placeholders.py`
+- `dev/test_preprocessing_anchoring.py`
+- `dev/test_preprocessing_integration.py`
+- `dev/test_preprocessing_postprocessing_roundtrip.py`
 
 ---
 
@@ -1381,6 +2012,8 @@ Resolution methods:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.3 | 2026-02-03 | Comprehensive update to Step 4 (Preprocessing): Complete widget specifications for Standard Rules Panel, Custom Placeholders, Protect Code Patterns, and Anchoring (renamed from Anchor Removal). Added detailed process specifications with priority ordering, execution order documentation, Preprocessing↔Postprocessing mirror symmetry, validation and recovery strategies, RegEx toggle support for all pattern widgets, Preview Table with filtering, and comprehensive testing requirements. |
+| 2.2 | 2026-02-01 | Updated Step 3 (Information) with comprehensive widget specifications: Project Details (Name, Title, Genre with ADD behavior), Languages (Source/Target with "Other" custom input), Summary (renamed), Translation Style and Tone (dropdown graying with custom override), System Instructions (renamed from Prompt), Glossary Settings (3-column editable table, selective glossary), Code Database (renamed from Code Glossary, Preserve/Translate/Remove actions), and NEW Global Glossary and Database widget. Added prompt formats and manifest keys for all widgets. |
 | 2.1 | 2026-02-01 | Updated Step 1 (Analysis) with QoL future improvements. Renamed Step 2 from Estimation to Costs with comprehensive spec including: dual estimation workflow (Original + Preprocessed), Tokens/Request limit, prompt overhead calculation, model comparison expanded fields, time estimation with concurrent requests. Updated data flow and automation triggers. |
 | 2.0 | 2026-02-01 | Major revision: Updated Step 0 (Input) spec with unified file selector, collapsible folder tree, format filtering, progress window, removed redundant buttons. Updated step names (Wordwrap, Output). Added automation triggers and pipeline overview. |
 | 1.0 | 2026-01-31 | Initial comprehensive specification |
