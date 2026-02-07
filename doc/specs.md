@@ -1494,80 +1494,290 @@ The Preprocessing tab is organized into three sections:
 
 ### Step 5: Translation
 
-**Purpose**: Execute LLM translation of preprocessed text.
+**Purpose**: Execute LLM translation of preprocessed text. The Translation step is the core of the pipeline — it sends text to a configured LLM (or a Mock Translation fallback) and collects translated output line-by-line. Performance, caching, and retry resilience are critical.
 
-#### Widgets
+**Performance Requirement**: The tab MUST load in under 1 second for 100K lines. Current implementation freezes the application for tens of seconds with several tens of thousands of lines. All tabs must implement a cache strategy: if no changes to project settings or lines have occurred since the last visit, the cached state loads instantly without reprocessing. This cache invalidates when lines, preprocessing results, or relevant settings change.
 
-| Widget | Type | Function |
-|--------|------|----------|
-| Start Translation Button | Button | Begin translation process |
-| Pause/Resume Button | Button | Control translation flow |
-| Cancel Button | Button | Abort translation |
-| Model Override Entry | Entry | Override model from options |
-| Temperature Spinbox | Spinbox | Override temperature (0.0-2.0) |
-| Chunk Size Spinbox | Spinbox | Lines per request |
-| Retry Strategy Dropdown | Combobox | batch/contextual/isolated/skip |
-| Max Retries Spinbox | Spinbox | Retry attempts (1-10) |
-| Cache Enabled Checkbox | Checkbox | Enable request caching |
-| Line-by-Line Checkbox | Checkbox | Translate lines individually |
-| Edit Before Translation Checkbox | Checkbox | Show edit dialog before API |
-| Prompt Preview Pane | Text | Shows constructed prompt |
-| Lines Table | SharedTable | Source and translated lines |
-| Progress Window | Toplevel | Modal progress display |
+---
+
+#### Widgets Overview
+
+The Translation tab contains four widget sections:
+
+1. **Translatable Lines Widget** - Table showing all lines with status and translation
+2. **Request Options Widget** - Model, temperature, chunking, retry settings
+3. **Prompt Editor Widget** - Preview button for constructed prompt; Ban Tokens separated
+4. **API Usage Widget** - Live token usage, cost estimate, rate limit display
+
+---
+
+#### Widget: Translatable Lines
+
+**Purpose**: Display all lines with their translation status and content.
+
+**Columns**:
+| Column | Content |
+|--------|---------|
+| # | Line index (1-based) |
+| Status | Translation status icon + text |
+| To be Translated | Merged column: shows Preprocessed text if available, otherwise Original |
+| Translated | LLM-produced translation |
+
+**Change from Current**: The "Original" and "Preprocessed" columns are **merged** into a single "To be Translated" column. Priority: Preprocessed → Original. This reduces clutter and shows exactly what the LLM will receive.
+
+**Features**:
+- Filter dropdown with column-specific filtering (status, content search)
+- Buttons: Clear filter, column visibility dropdown to hide/show columns
+- **Newline support**: Multi-line content renders with visible line breaks (same approach as Step 0 Input)
+- Status icons: ○ Pending, ◐ Translating, ✓ Done, ✗ Failed, ⊘ Skipped
+- Double-click a row to view full line content in a popup
+
+**Performance**:
+- Table uses virtual/lazy rendering — only visible rows are populated
+- Initial load must complete in < 1 second for 100K lines
+- Scrolling must remain smooth at all data sizes
+- Data is loaded from manifest line entries, not recomputed
+
+**Manifest Key**: Lines read from `lines[].prepro` (preferred) or `lines[].orig`; translations written to `lines[].tl`
+
+---
+
+#### Widget: Request Options
+
+**Purpose**: Configure per-project translation request parameters.
+
+| Widget | Type | Default | Function |
+|--------|------|---------|----------|
+| Model | Dropdown | Mock Translation | Select LLM model from configured providers |
+| Temperature | Spinbox | 0.2 | Set generation temperature (0.0-2.0) when model supports it |
+| Lines/Chunk | Spinbox | 30 | Lines per API request (5-200). Must sync with Estimation step |
+| Retry Strategy | Dropdown | Batch | How failures are retried (Batch, Contextual) |
+| Max Retries | Spinbox | 3 | Round trips of retries (0 = none) |
+| Skip Non-Source Language | Checkbox | ✗ | Skip lines not detected as source language |
+
+**Model Selection**:
+- Models are **not** a hardcoded list. They come from Global Options where the user configures API Providers (Name, URL, Key, Model).
+- Without any configured providers, the only available option is **"Mock Translation"**.
+- Mock Translation: Initially produces nonsense output (using a script to replace words with others from a limited list randomly, languages like Japanese have custom settings). Future improvement: use NMT (Neural Machine Translation) engine for basic translation.
+- The dropdown displays the provider Name field from Global Options.
+
+**Lines/Chunk Sync with Estimation**:
+- Lines/Chunk must have parity with the Estimation step (Step 2: Costs).
+- Changing Lines/Chunk in Translation updates the value in Estimation and vice versa.
+- When Lines/Chunk changes, the user is prompted: "Chunk size changed. Re-run estimation?" with Yes/No.
+- Both steps read/write the same manifest key: `RequestOptions.LinesPerChunk`.
+
+**Retry Strategy Details**:
+
+| Strategy | Behavior | Prompt Modification | Rolling Context |
+|----------|----------|---------------------|-----------------|
+| Batch | Retry failed lines together | Adds instruction: "These lines are unrelated; translate each independently" | Disabled (no rolling context) |
+| Contextual | Retry failed lines with surrounding context | Uses different rolling context: lines before AND after the failed segment | Enabled (before + after context) |
+
+**Note**: "Isolated" and "Skip" strategies exist in code but are **hidden** from the UI for now. They will be exposed once further refined. Retries are done after the first round of translation.
+
+**Skip Non-Source Language**:
+- NEW option. Uses language detection (`functions/analysis.py`) to identify lines not in the configured source language.
+- Lines detected as already in the target language or a third language are marked as Skipped.
+- Reduces unnecessary API calls and costs.
+
+**Moved to Global Options**:
+- **Enable Request Caching**: Moved from Translation to Global Options. Becomes a dropdown with cache modes. Default mode: "Line" — every individual line with its translation is cached. Cache is applied both during translation (skip already-cached lines) and after (populate cache from results). Other modes (strict, model_only, any) to be implemented later.
+- **Extended Thinking**: Moved from Translation to Global Options. Renamed from "Extended Thinking (Claude)" to "Thinking Mode" — it is NOT Claude-exclusive. Implementation must support toggling thinking on/off for any model that supports it (OpenAI reasoning models, Claude, etc.). Default: off. Includes Thinking Budget spinbox (1000-100000 tokens).
+- **Rolling Context (Context Lines)**: Moved to Global Options. Determines how many preceding lines are included as context in each request. Range: 0-10. Default: 3. Used by both normal translation and Contextual retry strategy.
+
+**Hidden (Future Improvement)**:
+- **Edit Before Translation**: Currently a checkbox; must become a Button that opens a dialog window. The dialog runs a modified system where the LLM is prompted to only fix specific mistakes in the original text (not translate). Hidden from UI until further design.
+- **Line-by-Line Mode**: Translates each line individually instead of in chunks. Hidden for now. When exposed, Context Lines (Rolling Context) will control its context window.
+
+**Buttons**:
+| Button | Function |
+|--------|----------|
+| ▶ Start Translation | Begin translation of all pending lines |
+| ⏸ Pause / ▶ Resume | Toggle pause during translation |
+| ⏹ Cancel | Abort translation (preserves completed work) |
+| ↻ Refresh Lines | Reload lines from previous steps |
+
+---
+
+#### Widget: Prompt Editor
+
+**Purpose**: Preview the constructed translation prompt. The Prompt Editor does NOT build its own prompt — it reads all relevant data from the manifest (Summary, Style, Tone, System Instructions, Glossary, Code Database, Conditional Prompts) and constructs a preview.
+
+**Change from Current**: The Prompt Editor is reduced to a **single Preview button** and Renamed to **Prompt Preview** plus a separated Ban Tokens field. It must NOT contain its own Summary, Style, or Glossary inputs — those are managed in Step 3: Information and stored in the manifest. The Prompt Editor reads from the manifest to show the complete prompt but formatted for readability (##NAMEINCAPS shows Source but are not sent in the request).
+
+**UI Components**:
+| Component | Type | Function |
+|-----------|------|----------|
+| Preview Prompt Button | Button | Opens a read-only dialog showing the full constructed prompt |
+| Ban Tokens Entry | Entry | Comma-separated token ban list (em_dash, smart_quotes, etc.) |
+| Ban Tokens Preset Dropdown | Combobox | Quick-select common ban presets |
+
+**Preview Dialog** (opened by button):
+- Shows the complete system prompt as it would be sent to the LLM
+- Read-only text area with syntax highlighting for different prompt sections
+- Token count estimate for the prompt (header showing total tokens and breakdown)
+- Sections: System Instructions, Game Summary, Translation Style, Glossary (selective), Code Database (selective), Conditional Prompts (if triggered), Rolling Context sample
+
+**Ban Tokens**:
+- Separated from the Prompt Editor into its own clearly labeled section
+- Entry field for comma-separated token names
+- Dropdown with presets: "None", "Clean English" (em_dash, smart_quotes), "Strict" (em_dash, smart_quotes, ellipsis_variants)
+- Applied via logit bias in the API request
+- Manifest Key: `RequestOptions.BanTokens`, `RequestOptions.BanTokenPreset`
+
+---
+
+#### Widget: API Usage
+
+**Purpose**: Display real-time translation metrics.
+
+| Display | Content |
+|---------|---------|
+| Tokens Used | Running total of input + output tokens |
+| Est. Cost | Running cost estimate based on model pricing |
+| Rate Limit | Current request rate vs. configured RPM limit |
+| Lines Progress | Translated / Total lines with percentage |
+| ETA | Estimated time remaining based on current throughput |
+
+**Progress Window** (modal, opens during translation):
+- Progress bar with percentage
+- ETA and token speed (tok/s)
+- Lines translated / remaining / failed counts
+- Chunk progress (current chunk / total chunks)
+- Pause/Resume/Cancel controls
+- Inline scrollable log pane showing per-chunk status messages
+
+---
+
+#### Mock Translation
+
+**Purpose**: Default translation mode when no API providers are configured. Allows full pipeline testing without API costs.
+
+**Behavior**:
+- Available as the only Model option when no providers exist in Global Options
+- Produces deterministic nonsense output (word reversal, character substitution, or lorem ipsum insertion)
+- Preserves all `__PROT__`, `__DEDUP__`, `__CUSTOM__` tokens in output
+- Simulates realistic timing (configurable delay per chunk / total time)
+- Tracks mock token counts for cost estimation testing
+- Does NOT require API key or network connectivity
+
+**Future Improvement**: Replace nonsense output with NMT (Neural Machine Translation) engine for basic but meaningful translation.
+
+**Manifest Key**: `RequestOptions.Model` = "mock" when Mock Translation is selected
+
+---
 
 #### Data Flow
 
 **Inputs**:
-- From Step 4: `prepro[]` (or `orig[]` if no preprocessing)
-- From Step 3: Summary, style, tone, characters (for prompt)
-- From Global Options: API config, model, temperature
+- From Step 4: `prepro[]` (preprocessed lines) — preferred
+- From Step 0: `orig[]` (original lines) — fallback if no preprocessing
+- From Step 3 (via manifest): Summary, Style, Tone, System Instructions, Glossary, Code Database
+- From Global Options: API Provider config (URL, Key, Model), Caching mode, Rolling Context, Thinking Mode
 
-**Processing** (via `functions/api_client.py`):
-1. Build translation prompt from templates and metadata
-2. Chunk lines by configured size
-3. For each chunk:
-   a. Check cache for existing translation
-   b. Apply rate limiting
-   c. Send to LLM API with JSON response format
-   d. Parse response, map to source lines
-   e. Handle failures per retry strategy
-   f. Update progress display
-   g. Save to manifest after each chunk
-4. Track token usage and costs
+**Processing** (via `functions/api_client.py` or Mock Translation):
+1. Build translation prompt from manifest data via `functions/prompt_builder.py`
+2. Determine input: use `get_input_for_translation()` per line (edited_prepro → prepro → orig)
+3. Optionally skip lines not in source language (language detection)
+4. Chunk lines by configured Lines/Chunk size
+5. For each chunk:
+   a. Check line cache for existing translations (if caching enabled)
+   b. Apply rate limiting (from Global Options RPM setting)
+   c. Build chunk-specific prompt (include rolling context if enabled)
+   d. Send to LLM API with JSON response format (or Mock Translation)
+   e. Parse response, map translated lines back to source indices
+   f. Handle failures per retry strategy (Batch or Contextual)
+   g. Update progress display and API Usage widget
+   h. Save translations to manifest after each chunk (crash resilience)
+   i. Populate line cache with new translations
+6. Track token usage and costs
+7. On completion: update manifest step data with totals
 
 **Outputs**:
 - `tl: List[str]` - Translated lines
-- `tokens_used: int` - Actual tokens consumed
-- `cost_actual: float` - Actual cost incurred
-- `failed_lines: List[int]` - Indices that failed
-- `skipped_lines: int` - Deduped/empty lines skipped
+- `tokens_used: int` - Actual tokens consumed (input + output)
+- `cost_actual: float` - Actual cost incurred based on model pricing
+- `failed_lines: List[int]` - Indices that failed all retry attempts
+- `skipped_lines: List[int]` - Deduped/empty/wrong-language lines skipped
 
 **Stored In**:
-- Manifest: `lines[].tl`, `lines[].tlc{N}`, `lines[].edit{N}`
-- Manifest step data: `Translation.tokens_used`, `Translation.cost`
+- Manifest: `lines[].tl` (translation result per line)
+- Manifest: `lines[].tlc{N}`, `lines[].edit{N}` (TLC and Edit rounds)
+- Manifest step data: `Translation.tokens_used`, `Translation.cost_actual`, `Translation.model_used`
+- Manifest step data: `Translation.completed_count`, `Translation.failed_count`, `Translation.skipped_count`
 
-#### Retry Strategies
+---
 
-| Strategy | Behavior |
-|----------|----------|
-| batch | Retry entire chunk on failure |
-| contextual | Retry failed lines with surrounding context |
-| isolated | Retry each failed line individually |
-| skip | Skip failed lines, continue processing |
+#### Retry Strategies (Detailed)
+
+| Strategy | When Used | Prompt Modification | Rolling Context | Behavior |
+|----------|-----------|---------------------|-----------------|----------|
+| Batch | Default | Adds: "These lines are not related to each other. Translate each line independently." | Disabled | Re-sends the entire failed chunk as a single request. Simple and fast but doesn't help with context-dependent failures. |
+| Contextual | Context-dependent failures | Uses surrounding lines (before + after failed segment) as additional context | Enabled (bidirectional) | Re-sends only failed lines but includes lines before AND after as rolling context. Better for failures caused by missing context. |
+| Isolated | Hidden | Sends one line at a time with strict instructions | Configurable | Retries each failed line individually. Slowest but most reliable for stubborn failures. Hidden until further refinement. |
+| Skip | Hidden | N/A | N/A | Marks failed lines as Skipped and moves on. Hidden until further refinement. |
+
+**Max Retries**: Determines how many round trips of retries are made for each strategy. 0 means no retries — failures are immediately marked as Failed. Default: 3.
+
+---
 
 #### API Request Format
 
 ```json
 {
-  "model": "gpt-4o-mini",
+  "model": "gemini-2.0-flash",
   "messages": [
-    {"role": "system", "content": "[Translation instructions]"},
-    {"role": "user", "content": "[Lines to translate]"}
+    {"role": "system", "content": "[Full system prompt from prompt_builder]"},
+    {"role": "user", "content": "[Lines to translate as numbered JSON]"}
   ],
   "response_format": {"type": "json_object"},
-  "temperature": 0.3
+  "temperature": 0.2
 }
 ```
+
+---
+
+#### Tab Loading Performance
+
+**Problem**: Current implementation freezes the UI for tens of seconds when loading tens of thousands of lines. This is unacceptable.
+
+**Requirements**:
+1. Tab switch (`on_enter`) must complete in < 100ms for any data size
+2. Table population must be lazy/virtual — only render visible rows
+3. Line data reads from manifest, NOT recomputed from previous steps
+4. Cache strategy: if no changes detected (manifest hash or dirty flag), reuse last table state
+5. Background thread for any heavy computation; UI thread only handles display updates
+6. SharedTable must support virtual scrolling for 100K+ rows
+
+**Cache Invalidation**: The tab caches its last displayed state. Cache is invalidated when:
+- Preprocessing results change (manifest `lines[].prepro` modified)
+- Lines are added/removed (file load in Step 0)
+- Translation results are updated (after a translation run)
+- User explicitly clicks "Refresh Lines"
+
+---
+
+#### Testing Requirements
+
+**Required Test Coverage**:
+- Tab load performance (must load 100K lines in < 1s)
+- Mock Translation produces valid output preserving tokens
+- Retry strategies (Batch, Contextual) behave correctly
+- Lines/Chunk sync with Estimation step
+- Language detection skip works correctly
+- Cache invalidation triggers properly
+- Progress window updates correctly
+- Manifest persistence after each chunk
+- Ban Tokens applied to API request
+- Prompt Preview shows correct constructed prompt from manifest
+
+**Test Files** (to be created/extended):
+- `dev/test_translation_performance.py`
+- `dev/test_mock_translation.py`
+- `dev/test_translation_retry.py`
+- `dev/test_translation_cache.py`
+- `dev/test_translation_prompt.py`
 
 ---
 
@@ -2012,6 +2222,7 @@ Resolution methods:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.4 | 2026-02-07 | Comprehensive update to Step 5 (Translation): Complete widget specifications for Translatable Lines (merged Original/Preprocessed into "To be Translated"), Request Options (Model from Global Options providers, Mock Translation default, Lines/Chunk sync with Estimation, Retry Strategy details for Batch/Contextual, Skip Non-Source Language), Prompt Editor (preview-only button, Ban Tokens separated), API Usage (live metrics). Added performance requirements (< 1s load for 100K lines, virtual scrolling, tab caching). Moved Request Caching, Extended Thinking, and Rolling Context to Global Options. Hidden Edit Before Translation and Line-by-Line Mode as Future Improvements. Added Mock Translation specification. |
 | 2.3 | 2026-02-03 | Comprehensive update to Step 4 (Preprocessing): Complete widget specifications for Standard Rules Panel, Custom Placeholders, Protect Code Patterns, and Anchoring (renamed from Anchor Removal). Added detailed process specifications with priority ordering, execution order documentation, Preprocessing↔Postprocessing mirror symmetry, validation and recovery strategies, RegEx toggle support for all pattern widgets, Preview Table with filtering, and comprehensive testing requirements. |
 | 2.2 | 2026-02-01 | Updated Step 3 (Information) with comprehensive widget specifications: Project Details (Name, Title, Genre with ADD behavior), Languages (Source/Target with "Other" custom input), Summary (renamed), Translation Style and Tone (dropdown graying with custom override), System Instructions (renamed from Prompt), Glossary Settings (3-column editable table, selective glossary), Code Database (renamed from Code Glossary, Preserve/Translate/Remove actions), and NEW Global Glossary and Database widget. Added prompt formats and manifest keys for all widgets. |
 | 2.1 | 2026-02-01 | Updated Step 1 (Analysis) with QoL future improvements. Renamed Step 2 from Estimation to Costs with comprehensive spec including: dual estimation workflow (Original + Preprocessed), Tokens/Request limit, prompt overhead calculation, model comparison expanded fields, time estimation with concurrent requests. Updated data flow and automation triggers. |

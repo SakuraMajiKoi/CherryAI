@@ -4231,6 +4231,522 @@ Goal: Create comprehensive test coverage for all Preprocessing/Postprocessing fu
 
 =============================================================================
 
+## PHASE 43: TRANSLATION TAB OVERHAUL
+**Priority:** CRITICAL | **Status:** 🔲 NOT STARTED | **Effort:** 50-60 hours
+**Dependencies:** Phase 42 (Preprocessing must be stable for translation input)
+**Cross-Reference:** See `doc/specs.md` Step 5: Translation for full specification
+
+This phase addresses critical performance issues, the manifest attribute bug, and comprehensive
+UI/UX improvements to the Translation step. Includes Mock Translation, model management via
+Global Options, retry strategy refinement, prompt editor redesign, and caching relocation.
+
+**Known Bug (CRITICAL)**: `AttributeError: 'TranslationStep' object has no attribute 'manifest'`
+in `translate.py` line 1904. The code uses `self.manifest` but BaseStep only provides
+`self.manifest_manager`. Must be fixed immediately.
+
+---
+
+### TASK 43.1: Fix Manifest Attribute Bug (CRITICAL)
+**Priority:** CRITICAL | **Status:** ✅ FIXED | **Effort:** 30 minutes
+
+Goal: Fix the `AttributeError: 'TranslationStep' object has no attribute 'manifest'` crash.
+
+**Root Cause:**
+- `_load_request_options_from_manifest()` at line 1904 uses `self.manifest`
+- `BaseStep` class only provides `self.manifest_manager` property
+- The code was likely written before the BaseStep API was standardized
+
+**Fix:**
+- Replace `self.manifest` with `self.manifest_manager` in `_load_request_options_from_manifest()`
+- Replace `self.manifest` with `self.manifest_manager` in `_save_temperature_to_manifest()`
+- Audit all other uses of `self.manifest` in translate.py
+- Add null check: `if self.manifest_manager is None or not self.manifest_manager.is_loaded: return`
+
+**Files to Modify:**
+- `gui/steps/translate.py` - Replace all `self.manifest` references
+
+**Tests to Add:**
+- `dev/test_translation_manifest.py`:
+  - Test `on_enter()` without manifest (no crash)
+  - Test `on_enter()` with manifest (loads options)
+  - Test `_save_temperature_to_manifest()` persists value
+
+---
+
+### TASK 43.2: Translation Tab Performance Fix (CRITICAL)
+**Priority:** CRITICAL | **Status:** 🔲 NOT STARTED | **Effort:** 8 hours
+
+Goal: Make the Translation tab load in under 1 second for 100K lines.
+
+**Current Problem:**
+- Loading tens of thousands of lines freezes the UI for tens of seconds
+- `_refresh_lines()` creates TranslatableLine objects and populates table synchronously
+- `_update_lines_table()` creates TableRow objects for ALL lines at once
+- SharedTable renders all rows immediately
+
+**Required Changes:**
+1. **Virtual Scrolling**: SharedTable must only render visible rows
+   - Implement `VirtualTreeview` or use Tkinter's built-in lazy rendering
+   - Only create TableRow objects for visible viewport + buffer
+   - Recalculate on scroll events
+2. **Lazy Loading**: `_refresh_lines()` must NOT create all TranslatableLine objects upfront
+   - Read line data from manifest on-demand
+   - Use index-based access: `manifest_manager.get_line(idx)` for visible rows
+3. **Tab Cache**: Store last displayed state hash
+   - On `on_enter()`, compare current manifest state hash to cached hash
+   - If unchanged, skip all refresh work
+   - Cache invalidation: prepro changes, line add/remove, translation results, explicit refresh
+4. **Background Loading**: Any heavy computation runs in a background thread
+   - UI thread only handles display updates via `after()` callbacks
+   - Show "Loading..." indicator if background work takes > 100ms
+
+**Files to Modify:**
+- `gui/steps/translate.py` - Performance optimizations
+- `gui/components/table.py` - Virtual scrolling support for SharedTable
+
+**Tests to Add:**
+- `dev/test_translation_performance.py`:
+  - Test 100K line load time (< 1s assertion)
+  - Test scroll performance with 100K lines
+  - Test cache hit/miss behavior
+  - Test background loading completion
+
+---
+
+### TASK 43.3: Merge Original/Preprocessed into "To be Translated" Column
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+Goal: Replace the separate "Original" and "Preprocessed" columns with a single "To be Translated" column.
+
+**Current State:**
+- Table has both Original and Preprocessed columns
+- Wastes horizontal space and confuses users
+
+**Required Changes:**
+- Remove "Original" and "Preprocessed" column definitions
+- Add "To be Translated" column that shows: `prepro` if available, else `orig`
+- Use `get_input_for_translation()` resolution: `edited_prepro → prepro → orig`
+- Update `_update_lines_table()` to populate merged column
+- Update `_refresh_lines()` to use merged data
+
+**Files to Modify:**
+- `gui/steps/translate.py` - Column definitions and table population
+
+**Tests to Add:**
+- `dev/test_translation_columns.py`:
+  - Test merged column shows preprocessed when available
+  - Test merged column falls back to original
+  - Test edited_prepro takes priority
+
+---
+
+### TASK 43.4: Newline Support in Translatable Lines Table
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+Goal: Render multi-line content with visible line breaks in the table, matching Step 0 Input behavior.
+
+**Current State:**
+- Multi-line content is truncated or displayed on single line
+- No visual indication of line breaks
+
+**Required Changes:**
+- Implement newline rendering in SharedTable cells (consistent with Step 0 approach)
+- Show `↵` or `⏎` symbol at line break positions
+- Row height adjusts to content (or fixed with tooltip for overflow)
+
+**Files to Modify:**
+- `gui/steps/translate.py` - Table cell formatting
+- `gui/components/table.py` - Newline rendering support (if not already present)
+
+**Tests to Add:**
+- `dev/test_translation_newlines.py`:
+  - Test multi-line content rendering
+  - Test newline symbol display
+
+---
+
+### TASK 43.5: Mock Translation Implementation
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+
+Goal: Implement Mock Translation as the default model when no API providers are configured.
+
+**Current State:**
+- Simulation mode exists but is only triggered by ImportError
+- Not selectable as a model option
+- Output is simple prefix: `[Translated] {text}`
+
+**Required Changes:**
+- Create `functions/mock_translator.py` module
+- Mock Translation produces deterministic output:
+  - Word reversal within each line
+  - Preserves all `__PROT__`, `__DEDUP__`, `__CUSTOM__` tokens in place
+  - Maintains line structure and token positions
+- Configurable simulated delay per chunk (default: 100ms)
+- Track mock token counts (estimate based on text length)
+- Available as "Mock Translation" in Model dropdown when no providers configured
+- Always available as option regardless of providers (useful for testing)
+- Manifest Key: `RequestOptions.Model` = "mock"
+
+**Files to Create:**
+- `functions/mock_translator.py` - Mock translation engine
+
+**Files to Modify:**
+- `gui/steps/translate.py` - Add Mock Translation to model options
+- `functions/api_client.py` - Route to mock translator when model = "mock"
+
+**Tests to Add:**
+- `dev/test_mock_translation.py`:
+  - Test output preserves all PROT tokens
+  - Test output preserves DEDUP tokens
+  - Test deterministic output (same input → same output)
+  - Test simulated delay
+  - Test mock token counting
+
+---
+
+### TASK 43.6: API Provider Management in Global Options
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 6 hours
+
+Goal: Move model configuration to Global Options with proper provider management.
+
+**Current State:**
+- Model is a hardcoded list in TranslationStep.MODEL_OPTIONS
+- No connection to actual API configuration
+- Users must know model names
+
+**Required Changes:**
+- Add "API Providers" section to Global Options dialog
+- Each provider entry: Name (for dropdown), URL, API Key, Model name
+- Table-based management: Add, Edit, Remove providers
+- Provider presets: OpenAI, Gemini, Anthropic, Local LLM
+- Translation tab reads available models from Global Options
+- Model dropdown populated dynamically from configured providers + Mock Translation
+- Validate provider connectivity on Add/Edit (optional "Test Connection" button)
+
+**Files to Modify:**
+- `gui/dialogs/global_options.py` - Add API Providers section
+- `gui/steps/translate.py` - Read model list from Global Options instead of hardcoded list
+- `functions/config.py` - Store provider configurations
+
+**Tests to Add:**
+- `dev/test_global_options_providers.py`:
+  - Test provider CRUD operations
+  - Test model list population
+  - Test Mock Translation always present
+  - Test provider preset loading
+
+---
+
+### TASK 43.7: Move Request Caching to Global Options
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+Goal: Relocate Request Caching from Translation step to Global Options.
+
+**Current State:**
+- Checkbox "Enable Request Caching" in Translation Request Options
+- Simple boolean toggle
+
+**Required Changes:**
+- Remove cache checkbox from Translation step
+- Add "Request Caching" section to Global Options
+- Dropdown with modes: "Disabled", "Line" (default), "Strict", "Model Only", "Any"
+- Default mode: "Line" — every individual line with its translation gets cached
+- Cache applied during translation (skip cached lines) and after (populate cache)
+- Store in `CherryAI.ini` under `[Cache]` section
+- Translation step reads cache mode from Global Options
+
+**Files to Modify:**
+- `gui/dialogs/global_options.py` - Add cache section
+- `gui/steps/translate.py` - Remove cache checkbox, read from Global Options
+- `functions/config.py` - Add cache configuration
+- `functions/request_cache.py` - Support cache mode parameter
+
+**Tests to Add:**
+- `dev/test_cache_global_options.py`:
+  - Test cache mode persistence
+  - Test Translation step reads correct mode
+
+---
+
+### TASK 43.8: Move Thinking Mode to Global Options
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+Goal: Relocate Thinking Mode from Translation step to Global Options and make it model-agnostic.
+
+**Current State:**
+- "Extended Thinking (Claude)" checkbox + budget spinbox in Translation step
+- Warning shown for non-Claude models
+- Claude-specific naming
+
+**Required Changes:**
+- Remove thinking checkbox and budget from Translation step
+- Add "Thinking Mode" section to Global Options
+- Rename from "Extended Thinking (Claude)" to "Thinking Mode"
+- Checkbox: Enable/Disable (default: disabled)
+- Budget spinbox: 1000-100000 tokens (default: 10000)
+- Support thinking for: Claude (extended thinking), OpenAI reasoning models (reasoning_effort)
+- Model-agnostic: when enabled, adapter checks if model supports thinking and applies accordingly
+- Store in `CherryAI.ini` under `[Thinking]` section
+
+**Files to Modify:**
+- `gui/dialogs/global_options.py` - Add thinking section
+- `gui/steps/translate.py` - Remove thinking widgets, read from Global Options
+- `functions/api_client.py` - Apply thinking parameters based on model capability
+
+**Tests to Add:**
+- `dev/test_thinking_global_options.py`:
+  - Test thinking mode persistence
+  - Test model capability detection
+  - Test API parameter injection
+
+---
+
+### TASK 43.9: Move Rolling Context to Global Options
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+Goal: Relocate Context Lines (Rolling Context) from Translation step to Global Options.
+
+**Current State:**
+- "Context Lines" spinbox tied to Line-by-Line mode in Translation step
+- Only enabled when Line-by-Line is active
+
+**Required Changes:**
+- Remove context lines spinbox from Translation step
+- Add "Rolling Context" section to Global Options
+- Spinbox: 0-10 preceding lines (default: 3)
+- Always active: rolling context applies to all translation modes (not just line-by-line)
+- Used by: Normal translation, Contextual retry strategy
+- Store in `CherryAI.ini` under `[Translation]` section
+
+**Files to Modify:**
+- `gui/dialogs/global_options.py` - Add rolling context section
+- `gui/steps/translate.py` - Remove context lines widget, read from Global Options
+- `functions/api_client.py` - Apply rolling context from config
+
+**Tests to Add:**
+- `dev/test_rolling_context.py`:
+  - Test context lines persistence
+  - Test context applied in normal translation
+  - Test context applied in Contextual retry
+
+---
+
+### TASK 43.10: Retry Strategy Refinement
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+
+Goal: Implement detailed Batch and Contextual retry behaviors as specified.
+
+**Current State:**
+- Retry strategies exist but all four are exposed
+- Batch and Contextual don't modify the prompt or rolling context differently
+- Isolated and Skip are visible but unrefined
+
+**Required Changes:**
+- **Batch Strategy**:
+  - Re-sends entire failed chunk as single request
+  - Adds prompt modification: "These lines are not related. Translate each independently."
+  - Disables rolling context for retry requests
+- **Contextual Strategy**:
+  - Re-sends only failed lines
+  - Uses bidirectional rolling context (lines before AND after failed segment)
+  - Different from normal rolling context which is only preceding lines
+- **Hide Isolated and Skip**: Remove from UI dropdown but keep in code
+  - Only show "Batch" and "Contextual" in dropdown
+  - Code still supports all four for CLI compatibility
+
+**Files to Modify:**
+- `gui/steps/translate.py` - Hide Isolated/Skip from dropdown
+- `gui/helpers/prompt_adapter.py` - Implement prompt modifications per strategy
+- `functions/api_client.py` - Apply rolling context changes per strategy
+
+**Tests to Add:**
+- `dev/test_retry_strategies.py`:
+  - Test Batch prompt modification
+  - Test Batch disables rolling context
+  - Test Contextual bidirectional context
+  - Test Isolated/Skip hidden from dropdown
+  - Test Max Retries = 0 means no retries
+
+---
+
+### TASK 43.11: Prompt Editor Redesign
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+
+Goal: Redesign Prompt Editor to be preview-only with separated Ban Tokens.
+
+**Current State:**
+- Prompt Editor has Style Preset entry, Game Summary text area, Ban Tokens entry
+- Reads from config files directly (game_summary.txt, translation_style.txt)
+- Contains its own data inputs instead of reading from manifest
+
+**Required Changes:**
+- Remove Style Preset entry (managed in Step 3: Information)
+- Remove Game Summary text area (managed in Step 3: Information)
+- Replace with single "Preview Prompt" button
+- Preview dialog shows complete constructed prompt from manifest:
+  - System Instructions, Game Summary, Translation Style, Glossary (selective), 
+    Code Database (selective), Conditional Prompts, Rolling Context sample
+  - Read-only, with token count breakdown
+- Separate Ban Tokens into its own clearly labeled section:
+  - Entry field for comma-separated tokens
+  - Dropdown for presets: "None", "Clean English", "Strict"
+  - Manifest Key: `RequestOptions.BanTokens`, `RequestOptions.BanTokenPreset`
+
+**Files to Modify:**
+- `gui/steps/translate.py` - Remove old prompt editor, add preview button + ban tokens section
+- `gui/helpers/prompt_adapter.py` - Build preview from manifest data
+
+**Tests to Add:**
+- `dev/test_prompt_preview.py`:
+  - Test preview builds from manifest
+  - Test preview includes all sections
+  - Test token count calculation
+  - Test ban tokens persistence
+
+---
+
+### TASK 43.12: Lines/Chunk Sync with Estimation
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+Goal: Synchronize Lines/Chunk between Translation and Estimation steps.
+
+**Current State:**
+- Translation has its own Lines/Chunk spinbox
+- Estimation has its own chunk size setting
+- No synchronization between them
+
+**Required Changes:**
+- Both steps read/write the same manifest key: `RequestOptions.LinesPerChunk`
+- When either step changes Lines/Chunk:
+  - Update manifest immediately
+  - If changed in Translation: prompt "Chunk size changed. Re-run estimation?" (Yes/No)
+  - If changed in Estimation: Translation reads updated value on next `on_enter()`
+- Ensure both spinboxes use same min/max range (5-200)
+
+**Files to Modify:**
+- `gui/steps/translate.py` - Add sync callback on chunk size change
+- `gui/steps/estimate.py` - Read/write shared manifest key
+- `functions/manifest_manager.py` - Ensure atomic updates
+
+**Tests to Add:**
+- `dev/test_chunk_sync.py`:
+  - Test both steps read same manifest key
+  - Test change in Translation updates manifest
+  - Test change in Estimation visible in Translation
+  - Test re-estimation prompt on change
+
+---
+
+### TASK 43.13: Skip Non-Source Language Option
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+
+Goal: Add option to skip lines not detected as being in the source language.
+
+**Current State:**
+- No language detection per line
+- All lines sent to LLM regardless of content
+
+**Required Changes:**
+- Add "Skip Non-Source Language" checkbox to Request Options (default: off)
+- When enabled, before translation:
+  - Run language detection on each line via `functions/analysis.py`
+  - Lines detected as target language or third language marked as Skipped
+  - Skipped lines get status ⊘ Skipped with reason "Not source language"
+- Saves API costs by not translating already-translated or non-translatable content
+- Manifest Key: `RequestOptions.SkipNonSourceLanguage`
+
+**Files to Modify:**
+- `gui/steps/translate.py` - Add checkbox and skip logic
+- `functions/analysis.py` - Expose per-line language detection function
+
+**Tests to Add:**
+- `dev/test_language_skip.py`:
+  - Test English lines skipped when source = Japanese
+  - Test mixed-language content handling
+  - Test short lines (< 3 chars) not skipped
+  - Test setting persistence
+
+---
+
+### TASK 43.14: Tab Caching Strategy (All Tabs)
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 6 hours
+
+Goal: Implement tab caching across all step tabs for instant loading when no changes occurred.
+
+**Current State:**
+- Each tab recomputes its state on every `on_enter()` call
+- No caching mechanism exists
+
+**Required Changes:**
+- Add `_cache_hash` property to BaseStep
+- On `on_enter()`: compute hash of relevant manifest data for this step
+- If hash matches cached hash, skip refresh (instant load)
+- If hash differs, perform full refresh and update cache
+- Cache invalidation events:
+  - Step 0: File add/remove
+  - Step 1: Analysis re-run
+  - Step 2: Estimation parameters changed
+  - Step 3: Information fields changed
+  - Step 4: Preprocessing run
+  - Step 5: Lines/Chunk change, translation results
+  - Step 6-9: Their respective data changes
+- `_force_refresh()` method bypasses cache (used by Refresh buttons)
+
+**Files to Modify:**
+- `gui/steps/base.py` - Add caching infrastructure
+- `gui/steps/*.py` - Implement `_compute_cache_hash()` per step
+- `functions/manifest_manager.py` - Provide step-level hash computation
+
+**Tests to Add:**
+- `dev/test_tab_caching.py`:
+  - Test cache hit (same data → no refresh)
+  - Test cache miss (data changed → refresh)
+  - Test force refresh bypasses cache
+  - Test cache hash computation
+
+---
+
+### Phase 43 Summary
+
+| Task | Description | Priority | Effort | Dependencies |
+|------|-------------|----------|--------|--------------|
+| 43.1 | Fix Manifest Attribute Bug | CRITICAL | 0.5h | None |
+| 43.2 | Translation Tab Performance Fix | CRITICAL | 8h | None |
+| 43.3 | Merge Columns → "To be Translated" | HIGH | 2h | None |
+| 43.4 | Newline Support in Lines Table | MEDIUM | 2h | 43.3 |
+| 43.5 | Mock Translation Implementation | HIGH | 4h | None |
+| 43.6 | API Provider Management in Global Options | HIGH | 6h | None |
+| 43.7 | Move Request Caching to Global Options | MEDIUM | 2h | 43.6 |
+| 43.8 | Move Thinking Mode to Global Options | MEDIUM | 2h | 43.6 |
+| 43.9 | Move Rolling Context to Global Options | MEDIUM | 2h | 43.6 |
+| 43.10 | Retry Strategy Refinement | HIGH | 4h | None |
+| 43.11 | Prompt Editor Redesign | HIGH | 4h | 43.6 |
+| 43.12 | Lines/Chunk Sync with Estimation | HIGH | 2h | None |
+| 43.13 | Skip Non-Source Language Option | MEDIUM | 3h | None |
+| 43.14 | Tab Caching Strategy (All Tabs) | HIGH | 6h | None |
+
+**Total Estimated Effort:** 47.5 hours
+
+**Implementation Order:**
+1. **Task 43.1** (Bug fix — IMMEDIATE, blocks all Translation testing)
+2. **Task 43.2** (Performance — CRITICAL for usability)
+3. **Tasks 43.3, 43.4** (Column merge and newlines — quick UI wins)
+4. **Task 43.5** (Mock Translation — enables testing without API)
+5. **Task 43.6** (Global Options providers — foundation for 43.7, 43.8, 43.9, 43.11)
+6. **Tasks 43.7, 43.8, 43.9** (Move settings to Global Options — depends on 43.6)
+7. **Task 43.10** (Retry refinement — independent)
+8. **Task 43.11** (Prompt Editor redesign — depends on 43.6)
+9. **Task 43.12** (Chunk sync — independent)
+10. **Task 43.13** (Language skip — independent)
+11. **Task 43.14** (Tab caching — final polish, all tabs benefit)
+
+**Priority Tasks for Next Release:**
+- 43.1, 43.2, 43.3, 43.5, 43.6, 43.10 (24.5 hours — bug fix + core functionality)
+
+---
+
+=============================================================================
+
 FUTURE IDEAS (No Phase Commitment)
 **Priority:** LOW | **Status:** 🔲 PARKED | **Effort:** N/A
 
@@ -4274,6 +4790,16 @@ FUTURE IDEAS (No Phase Commitment)
 - **Functions Not Visible in GUI**: Restore additional processing functions that exist in code but lack GUI exposure
 - **Context-Aware Deduplication**: Use semantic similarity rather than exact match for deduplication
 - **Deduplication Variants Database**: Create database of pattern variants that should be treated as duplicates
+
+### Translation Step Future Enhancements
+- **Edit Before Translation**: Button opens a dialog where the LLM is prompted to fix specific mistakes in the original text (not translate). Requires separate prompt design and dedicated LLM pass. Currently hidden from UI.
+- **Line-by-Line Translation Mode**: Translate each line individually with configurable rolling context window. Slower but more precise for difficult content. Currently hidden from UI.
+- **NMT Mock Translation**: Replace nonsense Mock Translation output with Neural Machine Translation (NMT) engine for basic but meaningful offline translation. Potential engines: MarianMT, CTranslate2, or local model integration.
+- **Isolated Retry Strategy**: Retry each failed line individually with strict one-line instructions. Needs further refinement before UI exposure.
+- **Skip Retry Strategy**: Mark failed lines as Skipped immediately without retrying. Needs UX design for manual review flow.
+- **Advanced Cache Modes**: Implement strict (exact prompt match), model_only (same model), and any (any translation) cache modes beyond the default Line cache.
+- **Daily Limit Check**: Alert before exceeding configured daily API budget/token limits.
+- **Batch API Pricing**: Show batch API pricing with discount percentages for supported models.
 
 Benchmark Mode, requires a small but significant synthesized text which will get at least three passes:
 	-1: Normal Settings

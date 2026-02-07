@@ -1890,75 +1890,77 @@ class TranslationStep(BaseStep):
 
     def _save_temperature_to_manifest(self) -> None:
         """Save temperature value to manifest."""
-        if self.manifest:
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
             try:
                 value = self._temp_var.get()
                 save_nested_float_field(
-                    self.manifest, "RequestOptions", "Temperature", value
+                    mgr, "RequestOptions", "Temperature", value
                 )
             except (tk.TclError, ValueError):
                 pass  # Ignore invalid values during typing
 
     def _load_request_options_from_manifest(self) -> None:
         """Load request options from manifest into UI widgets."""
-        if not self.manifest:
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
             return
 
         # Load Model
-        model = load_nested_text_field(self.manifest, "RequestOptions", "Model", "")
+        model = load_nested_text_field(mgr, "RequestOptions", "Model", "")
         if model:
             self._model_var.set(model)
 
         # Load Temperature
         temp = load_nested_float_field(
-            self.manifest, "RequestOptions", "Temperature", 0.2
+            mgr, "RequestOptions", "Temperature", 0.2
         )
         self._temp_var.set(temp)
 
         # Load LinesPerChunk
         chunk_size = load_nested_int_field(
-            self.manifest, "RequestOptions", "LinesPerChunk", 30
+            mgr, "RequestOptions", "LinesPerChunk", 30
         )
         self._chunk_var.set(chunk_size)
 
         # Load RetryStrategy
-        retry = load_nested_text_field(self.manifest, "RequestOptions", "RetryStrategy", "")
+        retry = load_nested_text_field(mgr, "RequestOptions", "RetryStrategy", "")
         if retry:
             self._retry_var.set(retry)
 
         # Load MaxRetries
         max_retries = load_nested_int_field(
-            self.manifest, "RequestOptions", "MaxRetries", 3
+            mgr, "RequestOptions", "MaxRetries", 3
         )
         self._retries_var.set(max_retries)
 
         # Load EnableRequestCaching
         caching = load_nested_bool_field(
-            self.manifest, "RequestOptions", "EnableRequestCaching", True
+            mgr, "RequestOptions", "EnableRequestCaching", True
         )
         self._cache_var.set(caching)
 
         # Load LineByLineMode
         line_by_line = load_nested_bool_field(
-            self.manifest, "RequestOptions", "LineByLineMode", False
+            mgr, "RequestOptions", "LineByLineMode", False
         )
         self._line_by_line_var.set(line_by_line)
 
         # Load ContextLines
         context_lines = load_nested_int_field(
-            self.manifest, "RequestOptions", "ContextLines", 2
+            mgr, "RequestOptions", "ContextLines", 2
         )
         self._context_lines_var.set(context_lines)
 
         # Load Thinking
         thinking = load_nested_bool_field(
-            self.manifest, "RequestOptions", "Thinking", False
+            mgr, "RequestOptions", "Thinking", False
         )
         self._thinking_var.set(thinking)
 
         # Load ThinkingBudget
         thinking_budget = load_nested_int_field(
-            self.manifest, "RequestOptions", "ThinkingBudget", 10000
+            mgr, "RequestOptions", "ThinkingBudget", 10000
         )
         self._thinking_budget_var.set(thinking_budget)
 
