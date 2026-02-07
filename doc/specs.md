@@ -310,7 +310,7 @@ Each step is a tab in the main notebook. Steps can be navigated freely but follo
 
 **Purpose**: Load source files and extract translatable text. This is where a project begins. Loading files can trigger the entire pipeline automatically based on configured settings.
 
-**Design Goal**: Extract only visible text from any unencrypted text file that a user can theoretically read. Code and non-translatable content should be excluded. In the final step (Output), translated text is injected into copies of the original files to replace the original text (non-destructive).
+**Design Goal**: Extract only visible text from any unencrypted text file that a user can theoretically read. Code not part of the text and any other non-translatable content should be excluded. In the final step (Output), translated text is injected into copies of the original files to replace the original text (non-destructive).
 
 #### Widgets
 
@@ -1589,6 +1589,7 @@ The Translation tab contains four widget sections:
 **Hidden (Future Improvement)**:
 - **Edit Before Translation**: Currently a checkbox; must become a Button that opens a dialog window. The dialog runs a modified system where the LLM is prompted to only fix specific mistakes in the original text (not translate). Hidden from UI until further design.
 - **Line-by-Line Mode**: Translates each line individually instead of in chunks. Hidden for now. When exposed, Context Lines (Rolling Context) will control its context window.
+- **Translation / Edit / TLC Mode Toggle**: A three-way toggle (Translation, Edit, TLC) that changes the behaviour of the Translation step. Translation mode is the default and current implementation. Edit mode uses a different prompt and request-building script: the LLM is instructed to fix the translated text (grammar, naturalness, formatting) without re-translating. TLC (Translation Check) mode sends the original alongside the translation and asks the LLM to verify accuracy, flagging or correcting mistranslations. Key design question to resolve through testing: line matching strategy — whether to match via line numbers, full original lines, or empty lines, since not every line will be edited/TLC'd and unnecessary output is the most expensive token category. Each mode writes to its own manifest field (`lines[].edit{N}`, `lines[].tlc{N}`) and increments the round counter. Hidden from UI until prompt design and line-matching strategy are validated.
 
 **Buttons**:
 | Button | Function |
@@ -1783,16 +1784,37 @@ The Translation tab contains four widget sections:
 
 ### Step 6: Quality Assurance
 
-**Purpose**: Validate translation quality and flag issues.
+**Purpose**: Manual inspection of translation quality for issues that automatic recovery and retries could not resolve. Optimally, this step is never needed — the Translation step (Step 5) and Postprocessing step (Step 7) already employ the same validation scripts to automatically recover or retry failed lines. Only when those automated mechanisms are exhausted and issues remain does the QA step become relevant.
 
-#### Widgets
+**Philosophy**: QA is a safety net, not a primary mechanism. The same scripts used in QA (`functions/validation.py`) are also called during translation (automatic recovery after each chunk) and postprocessing (restoration validation). The QA step surfaces what those automatic passes could not fix, allowing manual review, acceptance, or rejection.
+
+**Current State (Placeholder)**: The QA step is currently rendered non-functional. A toggle switch (on by default, meaning the placeholder is active) replaces all QA widgets with a single informational label:
+
+> *"Yet to be fully Implemented — Translation Step and Postprocessing Step currently employ all automatic fixes and log failures."*
+
+When the toggle is turned off, the full QA interface loads (once implemented). This provides a clean, non-misleading UI until the step is fully built out.
+
+---
+
+#### Widgets (Current — Placeholder Mode)
+
+| Widget | Type | Function |
+|--------|------|----------|
+| Placeholder Toggle | Switch/Checkbutton | On (default): show placeholder. Off: load full QA UI (future) |
+| Placeholder Label | Label | Informational text explaining the step is not yet active |
+
+---
+
+#### Widgets (Future — Full Implementation)
+
+The following widgets will be activated once the Translation/Edit/TLC mode toggle and full QA pipeline are implemented:
 
 | Widget | Type | Function |
 |--------|------|----------|
 | Run QA Checks Button | Button | Execute validation |
 | Export Report Button | Button | Save QA report to file |
 | Refresh Button | Button | Reload translation data |
-| Filter Radios | RadioGroup | all/errors/warnings/unfixed/accepted/rejected |
+| Filter Radios | RadioGroup | all/errors/warnings/unfixed/accepted/rejected/edited/tlc'd |
 | Lines Table | SharedTable | Lines with issue counts |
 | Accept Selected Button | Button | Mark lines as accepted |
 | Reject Selected Button | Button | Mark lines for re-translation |
@@ -1801,11 +1823,15 @@ The Translation tab contains four widget sections:
 | Issue Details Panel | Frame | Show issues for selected line |
 | Fix Suggestions List | Listbox | Suggested fixes for issues |
 
+**Note on Edit/TLC Filtering**: Once Edit and TLC modes are featured in the Translation step, the QA Filter Radios will include "Edited" and "TLC'd" filters. These allow inspecting how much (or little) each inference pass changed, helping measure the value of additional passes.
+
+---
+
 #### Data Flow
 
 **Inputs**:
 - From Step 4: `prepro[]`, `prepro_ops[]` (for placeholder checking)
-- From Step 5: `tl[]` (translation results)
+- From Step 5: `tl[]` (translation results), `edit{N}[]`, `tlc{N}[]` (when Edit/TLC modes exist)
 
 **Processing** (via `functions/validation.py`):
 1. **Placeholder Check**: Verify all `__PROT__` tokens preserved
@@ -1815,6 +1841,8 @@ The Translation tab contains four widget sections:
 5. **Quote Balance**: Check matching quote pairs
 6. **Empty Check**: Flag empty translations
 7. **Line Length**: Flag lines exceeding limit
+
+**Note**: Steps 1-7 are the same validation rules already used by both the Translation step (post-chunk automatic recovery) and the Postprocessing step (restoration validation). QA does NOT add new validation logic — it provides a UI for manually reviewing what the automated passes left unresolved.
 
 **Outputs**:
 - `issues: List[QAIssue]` - All detected issues
@@ -1828,7 +1856,9 @@ The Translation tab contains four widget sections:
 - Manifest step data (step_id=6)
 - Issue list and acceptance status
 
-#### Validation Rules
+---
+
+#### Validation Rules (Reference — same rules as automatic recovery)
 
 | Rule | Severity | Auto-fixable |
 |------|----------|--------------|
@@ -2222,6 +2252,7 @@ Resolution methods:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.5 | 2026-02-07 | Step 5 (Translation): Added Translation/Edit/TLC Mode Toggle to Hidden (Future Improvement) — three-way toggle with line-matching strategy design challenge. Step 6 (Quality Assurance): Complete rewrite — defined purpose as safety net for issues automatic recovery couldn't fix, added philosophy section, specified placeholder toggle mode (current state), preserved full widget spec and validation rules as future reference, added Edit/TLC filtering note. |
 | 2.4 | 2026-02-07 | Comprehensive update to Step 5 (Translation): Complete widget specifications for Translatable Lines (merged Original/Preprocessed into "To be Translated"), Request Options (Model from Global Options providers, Mock Translation default, Lines/Chunk sync with Estimation, Retry Strategy details for Batch/Contextual, Skip Non-Source Language), Prompt Editor (preview-only button, Ban Tokens separated), API Usage (live metrics). Added performance requirements (< 1s load for 100K lines, virtual scrolling, tab caching). Moved Request Caching, Extended Thinking, and Rolling Context to Global Options. Hidden Edit Before Translation and Line-by-Line Mode as Future Improvements. Added Mock Translation specification. |
 | 2.3 | 2026-02-03 | Comprehensive update to Step 4 (Preprocessing): Complete widget specifications for Standard Rules Panel, Custom Placeholders, Protect Code Patterns, and Anchoring (renamed from Anchor Removal). Added detailed process specifications with priority ordering, execution order documentation, Preprocessing↔Postprocessing mirror symmetry, validation and recovery strategies, RegEx toggle support for all pattern widgets, Preview Table with filtering, and comprehensive testing requirements. |
 | 2.2 | 2026-02-01 | Updated Step 3 (Information) with comprehensive widget specifications: Project Details (Name, Title, Genre with ADD behavior), Languages (Source/Target with "Other" custom input), Summary (renamed), Translation Style and Tone (dropdown graying with custom override), System Instructions (renamed from Prompt), Glossary Settings (3-column editable table, selective glossary), Code Database (renamed from Code Glossary, Preserve/Translate/Remove actions), and NEW Global Glossary and Database widget. Added prompt formats and manifest keys for all widgets. |

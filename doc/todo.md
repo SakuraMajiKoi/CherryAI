@@ -4747,6 +4747,85 @@ Goal: Implement tab caching across all step tabs for instant loading when no cha
 
 =============================================================================
 
+## PHASE 44: QA STEP PLACEHOLDER & TRANSLATION STEP FUTURE PREP
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 3.5 hours
+**Depends On:** Phase 43 (Translation Tab must be stable before QA references it)
+
+### TASK 44.1: Render QA Step Non-Functional with Placeholder
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 2 hours
+
+Problem: The QA step currently displays a full interface (validation rules, issue
+table, batch operations, etc.) that is not connected to a functioning pipeline.
+The Translation step and Postprocessing step already employ the same validation
+scripts (`functions/validation.py`) for automatic recovery and retry. Until the
+full QA pipeline and Edit/TLC modes are implemented, the step should clearly
+communicate it is not yet active.
+
+Solution:
+- Replace the current `_build_ui()` in `QAStep` with a two-mode layout controlled
+  by a toggle switch (ttk.Checkbutton or similar)
+- **Toggle ON (default)**: Show a single centered placeholder label:
+  "Yet to be fully Implemented — Translation Step and Postprocessing Step
+  currently employ all automatic fixes and log failures."
+  The toggle text reads "Placeholder Mode" and is ON.
+- **Toggle OFF**: Load the full QA interface (existing `_build_content`,
+  `_build_header`, etc.). For now, this can simply show a message saying
+  "Full QA mode coming soon" or partially load existing widgets.
+- The toggle state is saved to manifest: `QAOptions.PlaceholderMode` (boolean, default True)
+- All existing QA code (dataclasses, validation rules, enums) is preserved
+  — only `_build_ui()` and `on_enter()` are modified to respect the toggle.
+
+Files: `gui/steps/qa.py`
+Tests: `dev/test_qa_placeholder.py`
+  - Test that QA step renders placeholder by default
+  - Test that toggle state persists in manifest
+  - Test that toggling off does not crash (graceful fallback)
+
+---
+
+### TASK 44.2: Verify Shared Validation Scripts in Translation & Postprocessing
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 1.5 hours
+
+Problem: The QA step's philosophy depends on Translation (Step 5) and
+Postprocessing (Step 7) already calling `functions/validation.py` for automatic
+recovery. This needs to be verified and documented.
+
+Solution:
+- Audit `translate.py` to confirm automatic recovery calls (post-chunk validation)
+- Audit `postprocess.py` to confirm restoration validation calls
+- If either step does NOT currently call `functions/validation.py`, add the
+  necessary calls so the QA philosophy holds
+- Document which validation rules are applied at each stage:
+  * Translation: placeholder check, empty check (post-chunk)
+  * Postprocessing: placeholder recovery, bracket balance, quote balance,
+    speaker format, whitespace normalization
+- Add tests confirming validation is called in both steps
+
+Files: `gui/steps/translate.py`, `gui/steps/postprocess.py`, `functions/validation.py`
+Tests: `dev/test_validation_shared.py`
+  - Test that Translation step calls validation after chunk completion
+  - Test that Postprocessing step calls validation during restoration
+  - Test that validation rules produce consistent results across all callers
+
+---
+
+### Phase 44 Summary
+
+| Task | Description | Priority | Effort | Dependencies |
+|------|-------------|----------|--------|--------------|
+| 44.1 | QA Step Placeholder Toggle | HIGH | 2h | None | ✅ FIXED |
+| 44.2 | Verify Shared Validation Scripts | MEDIUM | 1.5h | None |
+
+**Total Estimated Effort:** 3.5 hours
+
+**Implementation Order:**
+1. **Task 44.1** (Placeholder — immediate, cleans up misleading QA UI)
+2. **Task 44.2** (Verification — ensures QA philosophy holds before future work)
+
+---
+
+=============================================================================
+
 FUTURE IDEAS (No Phase Commitment)
 **Priority:** LOW | **Status:** 🔲 PARKED | **Effort:** N/A
 
@@ -4800,6 +4879,15 @@ FUTURE IDEAS (No Phase Commitment)
 - **Advanced Cache Modes**: Implement strict (exact prompt match), model_only (same model), and any (any translation) cache modes beyond the default Line cache.
 - **Daily Limit Check**: Alert before exceeding configured daily API budget/token limits.
 - **Batch API Pricing**: Show batch API pricing with discount percentages for supported models.
+- **Translation / Edit / TLC Mode Toggle**: A three-way toggle switching the Translation step between Translation (default), Edit, and TLC modes. Edit mode prompts the LLM to fix grammar, naturalness, and formatting in existing translations. TLC mode sends original + translation for accuracy verification. Key design challenge: line-matching strategy (line numbers, full lines, or empty lines) since not every line will be edited/TLC'd and unnecessary output tokens are the most expensive component. Each mode writes to its own manifest fields (`lines[].edit{N}`, `lines[].tlc{N}`). Requires dedicated prompt design, matching script development, and cost-optimization testing before UI exposure.
+
+### QA Step Future Enhancements
+- **Full QA Implementation**: Activate the complete QA interface with validation rules panel, issue details, batch accept/reject, auto-fix, and export report. Currently behind a placeholder toggle.
+- **Edit/TLC Filtering**: Once Edit and TLC modes exist in the Translation step, add "Edited" and "TLC'd" filter options to QA. These allow inspecting how much each inference pass changed and measuring the value of additional passes.
+- **Re-run Policy**: Implement configurable re-run policies (FailedOnly, All, None) for selective re-validation after manual fixes.
+- **Issue Severity Customization**: Allow users to override default severity levels per rule (e.g., downgrade Japanese Remaining from WARNING to INFO for mixed-language projects).
+- **QA Report Templates**: Multiple export formats (JSON, XLSX, HTML) with configurable detail levels.
+- **QA History**: Track QA results across translation rounds to show improvement/regression trends.
 
 Benchmark Mode, requires a small but significant synthesized text which will get at least three passes:
 	-1: Normal Settings

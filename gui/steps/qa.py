@@ -243,17 +243,109 @@ class QAStep(BaseStep):
         self._selected_line_idx: int = -1
         # TASK 25.2: Track manifest bindings for validation rules
         self._manifest_bindings: List[BindingInfo] = []
+        # TASK 44.1: Placeholder mode toggle — when True, full QA UI is hidden
+        self._placeholder_mode: bool = True
+        self._full_ui_built: bool = False
         super().__init__(parent, session, manifest_manager=manifest_manager)
 
     def _build_ui(self) -> None:
-        """Build the step UI."""
-        self._build_header()
-        self._build_content()
-        self._build_summary_panel()
+        """Build the step UI.
 
-    def _build_header(self) -> None:
+        TASK 44.1: Placeholder mode is the default. A toggle switch controls
+        whether the full QA interface or a placeholder message is shown.
+        """
+        # Container that holds either placeholder or full UI
+        self._ui_container = ttk.Frame(self)
+        self._ui_container.pack(fill="both", expand=True)
+
+        # Toggle switch at the top
+        toggle_frame = ttk.Frame(self._ui_container)
+        toggle_frame.pack(fill="x", padx=10, pady=(10, 0))
+
+        ttk.Label(
+            toggle_frame,
+            text="Quality Assurance",
+            font=("TkDefaultFont", 12, "bold"),
+        ).pack(side="left")
+
+        self._placeholder_var = tk.BooleanVar(value=self._placeholder_mode)
+        self._placeholder_toggle = ttk.Checkbutton(
+            toggle_frame,
+            text="Placeholder Mode",
+            variable=self._placeholder_var,
+            command=self._on_placeholder_toggled,
+        )
+        self._placeholder_toggle.pack(side="right")
+
+        # Content frame — swapped between placeholder and full UI
+        self._content_frame = ttk.Frame(self._ui_container)
+        self._content_frame.pack(fill="both", expand=True)
+
+        # Build the appropriate view
+        self._build_current_view()
+
+    def _build_current_view(self) -> None:
+        """Build the placeholder or full UI based on toggle state."""
+        # Clear content frame
+        for widget in self._content_frame.winfo_children():
+            widget.destroy()
+
+        if self._placeholder_var.get():
+            self._build_placeholder_view()
+        else:
+            self._build_full_ui()
+
+    def _build_placeholder_view(self) -> None:
+        """Build the placeholder view shown when QA is not yet active."""
+        placeholder_frame = ttk.Frame(self._content_frame)
+        placeholder_frame.pack(fill="both", expand=True)
+
+        # Center the message vertically and horizontally
+        spacer_top = ttk.Frame(placeholder_frame)
+        spacer_top.pack(fill="both", expand=True)
+
+        message_frame = ttk.Frame(placeholder_frame)
+        message_frame.pack(anchor="center", padx=40)
+
+        ttk.Label(
+            message_frame,
+            text=(
+                "Yet to be fully Implemented \u2014 Translation Step and "
+                "Postprocessing Step currently employ all automatic fixes "
+                "and log failures."
+            ),
+            wraplength=500,
+            justify="center",
+            foreground=THEME.text_secondary,
+            font=("TkDefaultFont", 11),
+        ).pack(pady=10)
+
+        spacer_bottom = ttk.Frame(placeholder_frame)
+        spacer_bottom.pack(fill="both", expand=True)
+
+    def _build_full_ui(self) -> None:
+        """Build the full QA interface (existing implementation)."""
+        self._full_ui_built = True
+        parent = self._content_frame
+        self._build_header(parent)
+        self._build_content(parent)
+        self._build_summary_panel(parent)
+
+    def _on_placeholder_toggled(self) -> None:
+        """Handle placeholder toggle change."""
+        self._placeholder_mode = self._placeholder_var.get()
+        self._build_current_view()
+
+        # Persist to manifest
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            save_nested_bool_field(
+                mgr, "QAOptions", "PlaceholderMode", self._placeholder_mode
+            )
+
+    def _build_header(self, parent: Optional[tk.Widget] = None) -> None:
         """Build the header section with controls."""
-        header = ttk.Frame(self)
+        header = ttk.Frame(parent or self)
         header.pack(fill="x", padx=10, pady=5)
 
         # Left: Title and status
@@ -296,10 +388,10 @@ class QAStep(BaseStep):
             command=self._refresh_lines,
         ).pack(side="right", padx=(0, 5))
 
-    def _build_content(self) -> None:
+    def _build_content(self, parent: Optional[tk.Widget] = None) -> None:
         """Build the main content area."""
         # Main paned window (horizontal)
-        content = ttk.PanedWindow(self, orient="horizontal")
+        content = ttk.PanedWindow(parent or self, orient="horizontal")
         content.pack(fill="both", expand=True, padx=10, pady=5)
 
         # Left: Lines table with issues
@@ -636,9 +728,9 @@ class QAStep(BaseStep):
         
         self._rerun_var.trace_add("write", on_rerun_policy_changed)
 
-    def _build_summary_panel(self) -> None:
+    def _build_summary_panel(self, parent: Optional[tk.Widget] = None) -> None:
         """Build the summary panel at the bottom."""
-        frame = ttk.LabelFrame(self, text="QA Summary", padding=5)
+        frame = ttk.LabelFrame(parent or self, text="QA Summary", padding=5)
         frame.pack(fill="x", padx=10, pady=5)
 
         summary_grid = ttk.Frame(frame)
@@ -1403,8 +1495,11 @@ class QAStep(BaseStep):
         """Load QA options from manifest (TASK 26.1).
         
         Loads RerunPolicy, MaxJapaneseChars, MaxLineLength from QAOptions.
+        Only runs when the full UI is active and widgets exist.
         """
         if self.manifest_manager is None:
+            return
+        if not self._full_ui_built:
             return
         
         # Load rerun policy (string field)
@@ -1417,18 +1512,35 @@ class QAStep(BaseStep):
 
     def on_enter(self) -> None:
         """Called when step becomes active."""
-        # TASK 25.2: Load validation rules from manifest
-        self._load_validation_rules_from_manifest()
-        
-        # TASK 26.1: Load QA options from manifest
-        self._load_qa_options_from_manifest()
-        
-        if not self._lines:
-            self._refresh_lines()
+        # TASK 44.1: Load placeholder mode from manifest first
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            stored = load_nested_bool_field(
+                mgr, "QAOptions", "PlaceholderMode", True
+            )
+            self._placeholder_mode = stored
+            self._placeholder_var.set(stored)
+            # Rebuild view if stored state differs from what's shown
+            self._build_current_view()
+
+        # Only load full QA state if not in placeholder mode
+        if not self._placeholder_mode and self._full_ui_built:
+            # TASK 25.2: Load validation rules from manifest
+            self._load_validation_rules_from_manifest()
+
+            # TASK 26.1: Load QA options from manifest
+            self._load_qa_options_from_manifest()
+
+            if not self._lines:
+                self._refresh_lines()
 
     def on_leave(self) -> None:
         """Called when leaving step."""
-        # Store QA state
+        # TASK 44.1: In placeholder mode, only save the toggle state
+        if self._placeholder_mode or not self._full_ui_built:
+            return
+
+        # Store QA state (only when full UI is active and widgets exist)
         step_data = self.session.get_step(self.step_id).data
         step_data["qa_options"] = {
             "max_japanese_chars": self._max_jp_var.get(),
