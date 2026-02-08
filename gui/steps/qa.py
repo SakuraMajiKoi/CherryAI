@@ -506,11 +506,17 @@ class QAStep(BaseStep):
         # Options panel
         self._build_options_panel(scrollable_frame)
 
-        # Enable mousewheel scrolling
+        # Enable mousewheel scrolling (scoped to canvas, not bind_all)
         def _on_mousewheel(event: tk.Event) -> None:
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            try:
+                if canvas.winfo_exists():
+                    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError:
+                pass  # Widget destroyed between winfo_exists() and yview_scroll()
 
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        canvas.bind("<MouseWheel>", _on_mousewheel)
+        # Also bind on child frames so scrolling works when hovering over content
+        scrollable_frame.bind("<MouseWheel>", _on_mousewheel)
 
     def _build_rules_panel(self, parent: ttk.Frame) -> None:
         """Build validation rules panel."""

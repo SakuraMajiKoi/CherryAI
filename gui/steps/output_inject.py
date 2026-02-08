@@ -451,11 +451,14 @@ class OutputInjectStep(BaseStep):
         # Export options panel
         self._build_export_panel(scrollable_frame)
 
-        # Enable mousewheel scrolling
+        # Enable mousewheel scrolling (scoped to canvas, not bind_all)
         def _on_mousewheel(event: tk.Event) -> None:
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            if canvas.winfo_exists():
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        canvas.bind("<MouseWheel>", _on_mousewheel)
+        # Also bind on child frames so scrolling works when hovering over content
+        scrollable_frame.bind("<MouseWheel>", _on_mousewheel)
 
     def _build_destination_panel(self, parent: ttk.Frame) -> None:
         """Build the destination path panel."""
@@ -1507,7 +1510,7 @@ class OutputInjectStep(BaseStep):
             return
 
         try:
-            output_format = self._manifest_manager.get_section("OutputFormat") or {}
+            output_format = self._manifest_manager.get_output_options()
 
             # Load PreserveFolderStructure
             if "PreserveFolderStructure" in output_format:

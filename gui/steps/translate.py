@@ -574,11 +574,14 @@ class EditPreviewDialog(tk.Toplevel):
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
-        # Enable mousewheel scrolling
+        # Enable mousewheel scrolling (scoped to canvas, not bind_all)
         def _on_mousewheel(event: tk.Event) -> None:
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            if canvas.winfo_exists():
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
         
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        canvas.bind("<MouseWheel>", _on_mousewheel)
+        # Also bind on child frames so scrolling works when hovering over content
+        self._scroll_frame.bind("<MouseWheel>", _on_mousewheel)
         
         # Build line editors
         self._text_widgets: List[tk.Text] = []
@@ -867,11 +870,14 @@ class TranslationStep(BaseStep):
         # Prompt editor panel
         self._build_prompt_editor(scrollable_frame)
 
-        # Enable mousewheel scrolling
+        # Enable mousewheel scrolling (scoped to canvas, not bind_all)
         def _on_mousewheel(event: tk.Event) -> None:
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            if canvas.winfo_exists():
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        canvas.bind("<MouseWheel>", _on_mousewheel)
+        # Also bind on child frames so scrolling works when hovering over content
+        scrollable_frame.bind("<MouseWheel>", _on_mousewheel)
 
     def _build_request_options(self, parent: ttk.Frame) -> None:
         """Build per-request options panel."""

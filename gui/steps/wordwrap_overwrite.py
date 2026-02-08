@@ -477,11 +477,14 @@ class WordwrapOverwriteStep(BaseStep):
         # Overwrite strategy panel
         self._build_overwrite_panel(scrollable_frame)
 
-        # Enable mousewheel scrolling
+        # Enable mousewheel scrolling (scoped to canvas, not bind_all)
         def _on_mousewheel(event: tk.Event) -> None:
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            if canvas.winfo_exists():
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        canvas.bind("<MouseWheel>", _on_mousewheel)
+        # Also bind on child frames so scrolling works when hovering over content
+        scrollable_frame.bind("<MouseWheel>", _on_mousewheel)
 
     def _build_wrap_options_panel(self, parent: ttk.Frame) -> None:
         """Build the wordwrap options panel with manifest bindings (TASK 28.1)."""

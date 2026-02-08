@@ -4824,6 +4824,593 @@ Tests: `dev/test_validation_shared.py`
 
 ---
 
+## PHASE 45: POSTPROCESSING TAB OVERHAUL (v2.6 Specs)
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 18 hours
+**Depends On:** Phase 43 (Translation Tab), Phase 44 (QA Placeholder)
+
+### TASK 45.1: Fix MouseWheel bind_all Bug Across All Steps
+**Priority:** CRITICAL | **Status:** ✅ FIXED | **Effort:** 0.5 hours
+
+Problem: `canvas.bind_all("<MouseWheel>", _on_mousewheel)` in multiple step files
+creates an application-wide binding that persists after the canvas is destroyed
+(e.g., by the QA placeholder toggle). Causes `_tkinter.TclError: invalid command
+name` when scrolling after tab switch or widget rebuild.
+
+Solution:
+- Replace `bind_all` with widget-scoped `canvas.bind` and `scrollable_frame.bind`
+- Add `winfo_exists()` guard in the callback to prevent errors on destroyed widgets
+
+Files Fixed:
+- `gui/steps/qa.py` — line 511
+- `gui/steps/postprocess.py` — line 455
+- `gui/steps/translate.py` — lines 581, 874
+- `gui/steps/wordwrap_overwrite.py` — line 484
+- `gui/steps/output_inject.py` — line 458
+
+---
+
+### TASK 45.2: Rename "Postprocessed Lines" to "Processed Lines"
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 0.5 hours
+
+Problem: The table widget is labeled "Postprocessed Lines" which is redundant since
+the entire tab is already labeled "Postprocessing".
+
+Solution:
+- Rename `ttk.LabelFrame(parent, text="Postprocessed Lines")` to `"Processed Lines"`
+  in `gui/steps/postprocess.py` `_build_lines_panel()`
+- Update filter options to include "By Process" filter and "Flagged" filter
+- Remove "Needs Retry" and "Skipped" filters, replace with "Written" and "Flagged"
+
+Files: `gui/steps/postprocess.py`
+Tests: `dev/test_postprocess_gui.py`
+
+---
+
+### TASK 45.3: Remove Refresh and Revert All Buttons
+**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 0.5 hours
+
+Problem: Refresh and Revert All buttons add complexity. Lines should auto-load on
+tab entry, and re-running postprocessing overwrites previous results (with warning).
+
+Solution:
+- Remove "↻ Refresh" and "↩ Revert All" buttons from `_build_header()`
+- Lines auto-populate from previous steps via `on_enter()` → `_refresh_lines()`
+- Add overwrite confirmation dialog when Apply is clicked and results already exist
+
+Files: `gui/steps/postprocess.py`
+Tests: `dev/test_postprocess_gui.py`
+
+---
+
+### TASK 45.4: Make Placeholder/Code/BR Recovery Automatic (No GUI Toggle)
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+Problem: Placeholder Recovery, Restore Code Characters, and Restore `<br>` Tags are
+essential for data integrity and should always run. Users should not be able to
+accidentally disable them.
+
+Solution:
+- Remove Placeholder Recovery, Restore Code Characters, and Restore `<br>` Tags
+  checkboxes from the Recovery Options panel in `_build_options_panel()`
+- Remove their `bind_checkbox_to_field` manifest bindings
+- Hard-code these as always-enabled in `PostprocessOptions` (remove the fields or
+  set them to True without exposing a toggle)
+- The `_apply_postprocessing()` method always calls placeholder recovery, code
+  character restoration, and BR tag restoration regardless of options
+- Keep the corresponding manifest fields for backward compatibility (always True)
+
+Files: `gui/steps/postprocess.py`, `functions/postprocess.py`
+Tests: `dev/test_postprocess_auto_recovery.py`
+
+---
+
+### TASK 45.5: Add Halfwidth→Fullwidth Direction to Symbol Conversion
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 1.5 hours
+
+Problem: Current postprocessing only has Fullwidth→Halfwidth. Need bidirectional
+support so JP target language can restore fullwidth characters.
+
+Solution:
+- Add `HALFWIDTH_TO_FULLWIDTH` map (reverse of existing `FULLWIDTH_TO_HALFWIDTH`)
+  in `gui/steps/postprocess.py`
+- Add "Halfwidth → Fullwidth" checkbox with manifest binding
+- Make Fullwidth→Halfwidth and Halfwidth→Fullwidth mutually exclusive
+  (enabling one disables the other via trace callback)
+- Add corresponding `convert_halfwidth_to_fullwidth` function in
+  `functions/postprocess.py` or keep it in the GUI step
+- Add manifest key `PostProcessing.HalfwidthToFullwidth`
+
+Files: `gui/steps/postprocess.py`, `functions/postprocess.py`
+Tests: `dev/test_postprocess_symbol_conversion.py`
+
+---
+
+### TASK 45.6: Redesign Failure Handling Widget
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 1.5 hours
+
+Problem: Current failure handling has Skip/Flag/Retry options. "Skip" is confusing
+(doesn't actually skip the line), "Flag for review" should be the non-write option,
+and "Retry" is not yet functional.
+
+Solution:
+- Rename and restructure radio options:
+  - "Write (keep as-is)" → default, writes the partially-recovered line
+  - "Flag for Review" → does NOT write, flags line for manual review via Diff View
+- Hide "Queue for Retry" entirely (future improvement)
+- Update `FailurePolicy` enum: `WRITE` (previously `FLAG`), `FLAG` (previously `SKIP`)
+- Update manifest key values to `write` and `flag`
+- Ensure flagged lines show in the "Flagged" filter of the Processed Lines table
+- All failures are logged regardless of policy
+
+Files: `gui/steps/postprocess.py`, `functions/postprocess.py`
+Tests: `dev/test_postprocess_failure_handling.py`
+
+---
+
+### TASK 45.7: Implement Diff View Manual Editing and Mark-as-Fixed
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2.5 hours
+
+Problem: Current Diff View is read-only. Users need to manually fix flagged lines
+directly in the postprocessing step.
+
+Solution:
+- Add an editable Text widget below the diff display, pre-populated with the
+  postprocessed text of the selected line
+- Add "✓ Mark as Fixed" button that:
+  1. Reads the edited text from the Text widget
+  2. Updates `PostprocessLine.postprocessed` with the new text
+  3. Updates the line's status to "Changed"
+  4. Writes to manifest `lines[].postpro`
+  5. Refreshes the diff display and table row
+- Add problem highlighting: lines with unresolved issues get yellow/orange highlights
+  in the diff display
+- The edit field is only enabled when a line is selected
+
+Files: `gui/steps/postprocess.py`
+Tests: `dev/test_postprocess_diff_view.py`
+
+---
+
+### TASK 45.8: Implement Postprocessing Summary Live Updates and Completion Popup
+**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 1.5 hours
+
+Problem: Summary panel currently only updates after all processing. Needs real-time
+updates during processing and a completion popup.
+
+Solution:
+- Use `self.after()` to schedule UI updates during the processing thread
+- After each line is processed, queue a summary update via thread-safe callback
+- Add "Written" and "Flagged" counters to the summary panel
+- At 100% completion, show `messagebox.showinfo()` popup:
+  "Postprocessing Complete — N lines processed, M changes applied, K issues flagged"
+- Add a progress bar (ttk.Progressbar) to the summary panel that fills during processing
+
+Files: `gui/steps/postprocess.py`
+Tests: `dev/test_postprocess_summary.py`
+
+---
+
+### TASK 45.9: Update Processed Lines Filter Options
+**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 1 hour
+
+Problem: Current filters are All/Changed/Needs Retry/Skipped. Need to match the
+new spec: All/Changed/Written/Flagged/By Process.
+
+Solution:
+- Replace filter radio options:
+  - "All" → All lines
+  - "Changed" → Only lines with modifications
+  - "Written" → Lines written despite failures
+  - "Flagged" → Lines flagged for review
+- Add a "By Process" dropdown/combobox that filters by specific process name
+  (e.g., "Bracket Balance", "Deduplication", "Placeholder Recovery")
+- The By Process filter requires tagging each line with the processes that affected it
+  (already available from recovery issues list)
+
+Files: `gui/steps/postprocess.py`
+Tests: `dev/test_postprocess_gui.py`
+
+---
+
+### TASK 45.10: Overwrite Warning Dialog for Re-running Postprocessing
+**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 0.5 hours
+
+Problem: Re-running postprocessing silently overwrites previous results.
+
+Solution:
+- Before `_apply_postprocessing()` executes, check if any lines already have
+  postprocessed results (i.e., `postprocessed != translated`)
+- If yes, show `messagebox.askokcancel()`:
+  "Postprocessing results already exist. Re-running will overwrite them. Continue?"
+- If user cancels, abort. If OK, proceed with overwrite.
+- First run (no existing results) skips the warning.
+
+Files: `gui/steps/postprocess.py`
+Tests: `dev/test_postprocess_overwrite.py`
+
+---
+
+### Phase 45 Summary
+
+| Task | Description | Priority | Effort | Dependencies |
+|------|-------------|----------|--------|--------------|
+| 45.1 | Fix MouseWheel bind_all Bug | CRITICAL | 0.5h | None | ✅ FIXED |
+| 45.2 | Rename to "Processed Lines" | MEDIUM | 0.5h | None |
+| 45.3 | Remove Refresh/Revert Buttons | LOW | 0.5h | None |
+| 45.4 | Auto Placeholder/Code/BR Recovery | HIGH | 2h | None |
+| 45.5 | Bidirectional Symbol Conversion | MEDIUM | 1.5h | None |
+| 45.6 | Redesign Failure Handling | HIGH | 1.5h | None |
+| 45.7 | Diff View Manual Editing | MEDIUM | 2.5h | 45.6 |
+| 45.8 | Summary Live Updates + Popup | LOW | 1.5h | None |
+| 45.9 | Update Filter Options | LOW | 1h | 45.6 |
+| 45.10 | Overwrite Warning Dialog | LOW | 0.5h | 45.3 |
+
+**Total Estimated Effort:** 12 hours (excluding 45.1 already fixed)
+
+**Implementation Order:**
+1. **Task 45.1** ✅ FIXED (MouseWheel bug — already done)
+2. **Task 45.4** (Auto recovery — highest code impact, cleans up GUI)
+3. **Task 45.6** (Failure Handling — changes enum and manifest values)
+4. **Task 45.2** (Rename table — quick UI change)
+5. **Task 45.3** (Remove buttons — quick UI change)
+6. **Task 45.5** (Bidirectional symbol conversion — new feature)
+7. **Task 45.9** (Filter options — depends on 45.6 for new status values)
+8. **Task 45.7** (Diff View editing — depends on 45.6 for flagged lines)
+9. **Task 45.8** (Summary updates — polish)
+10. **Task 45.10** (Overwrite warning — polish)
+
+---
+
+## PHASE 46: WORDWRAP TAB OVERHAUL (v2.7 Specs)
+
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** ~14h
+**Spec Reference:** `doc/specs.md` Step 8 (Wordwrap) — v2.7 rewrite
+**Files:** `gui/steps/wordwrap_overwrite.py`, `functions/wordwrap.py`
+
+### Context
+
+Step 8 (Wordwrap) has been comprehensively respecified in v2.7. Key changes: pretty wrap becomes the standard algorithm (no user toggles for orphan prevention or punctuation-preferred breaks), Overwrite is integrated into the Lines Table instead of being a separate widget, ignore patterns come from the Code Database instead of hardcoded checkboxes, Typography widget is removed, Speaker Handling reduced to two options (Ignore/Count), and Mode becomes a dropdown without RPG Maker or Disabled options.
+
+### TASK 46.1: Mode — Radio Buttons to Dropdown
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 1h
+**File:** `gui/steps/wordwrap_overwrite.py`
+
+Goal: Replace WrapMode radio buttons with a Combobox dropdown. Remove RPG Maker and Disabled options.
+
+Changes:
+- Replace radio button group in `_build_wrap_options_panel()` with `ttk.Combobox`
+- Remove `WrapMode.RPGMAKER` and `WrapMode.DISABLED` enum values (keep only `MANUAL`)
+- Update manifest binding from radio var to combobox var
+- Default: "Manual"
+- If no wrapping desired, user simply doesn't click Apply (no "Disabled" needed)
+
+### TASK 46.2: Remove Prevent Orphans + Prefer Punctuation Checkboxes
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 0.5h
+**File:** `gui/steps/wordwrap_overwrite.py`, `functions/wordwrap.py`
+
+Goal: Remove both checkboxes. These are always active in `pretty_wrap()`.
+
+Changes:
+- Remove `prevent_orphan` checkbox from `_build_wrap_options_panel()`
+- Remove `prefer_punct_breaks` checkbox from `_build_wrap_options_panel()`
+- Remove corresponding `tk.BooleanVar` variables and manifest bindings
+- Update `WrapOptions` dataclass — remove `prevent_orphan` and `prefer_punct_breaks` fields (or hardcode to `True`)
+- Ensure `pretty_wrap()` always passes `prevent_orphan=True, prefer_punct_breaks=True`
+
+### TASK 46.3: Speaker Handling — Reduce to Ignore + Count
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 1h
+**File:** `gui/steps/wordwrap_overwrite.py`, `functions/wordwrap.py`
+
+Goal: Remove Samelineindent and Newline options. Rename Sameline to Count.
+
+Changes:
+- Update `SpeakerMode` enum: keep `IGNORE`, rename `SAMELINE` → `COUNT`, remove `SAMELINEINDENT` and `NEWLINE`
+- Update `_build_speaker_panel()` — reduce from 4 radio buttons to 2 (or switch to Combobox dropdown)
+- Update descriptions: Ignore = "Don't count speaker, only dialogue (name field injection)"; Count = "Speaker counted with : and spaces (inline display)"
+- Update `manual_wrap_line()` and `pretty_wrap()` speaker handling to use new enum values
+- Hanging indent on continuation lines is inherent to Count mode (no separate toggle)
+
+### TASK 46.4: Ignore Patterns — Checkboxes to Code Database Table
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**File:** `gui/steps/wordwrap_overwrite.py`
+
+Goal: Remove ignore pattern checkboxes. Display read-only table sourced from Code Database.
+
+Changes:
+- Remove `_build_ignore_panel()` with its 4 `IgnorePattern` checkboxes
+- Remove `IgnorePattern` enum (ANGLE, SQUARE, CURLY, EN)
+- Add read-only summary table showing Code Database patterns (Pattern, Action, Example columns)
+- Load patterns from manifest Code Database entries where Action = Preserve or Remove
+- Pass loaded patterns to `_build_ignore_patterns()` in `functions/wordwrap.py`
+- Patterns treated as invisible during width calculation
+
+### TASK 46.5: Remove Typography Widget
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 0.5h
+**File:** `gui/steps/wordwrap_overwrite.py`
+
+Goal: Remove the entire Typography panel.
+
+Changes:
+- Remove `_build_typography_panel()` method
+- Remove `TypographyStyle` enum (WESTERN, JAPANESE, CHINESE, KOREAN, MIXED)
+- Remove `TypographyOptions` dataclass
+- Remove typography-related `tk.BooleanVar` variables (fullwidth_punct, ideographic_spaces, convert_quotes)
+- Remove corresponding manifest bindings
+- Remove any typography references in `_on_format_changed()` and apply logic
+
+### TASK 46.6: Remove Overwrite Strategy Widget
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 1.5h
+**File:** `gui/steps/wordwrap_overwrite.py`
+
+Goal: Remove the entire Overwrite Strategy panel. Overwrite becomes a table column.
+
+Changes:
+- Remove `_build_overwrite_panel()` method
+- Remove `OverwriteStrategy` enum (OVERWRITE, BACKUP, MERGE, SKIP)
+- Remove `MergeMethod` enum
+- Remove `OverwriteOptions` dataclass
+- Remove strategy radio buttons, merge combo, backup suffix entry
+- Remove corresponding manifest bindings and event handlers (`_on_strategy_changed`)
+- Overwrite functionality moves to the Lines Table (Task 46.8)
+
+### TASK 46.7: Width — Spinbox to Dropdown with Pixel Option
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 1.5h
+**File:** `gui/steps/wordwrap_overwrite.py`
+
+Goal: Replace Width Spinbox with a Combobox dropdown that includes Character and Pixel options.
+
+Changes:
+- Replace `ttk.Spinbox` with `ttk.Combobox` for width selection
+- Add "Character" and "Pixel" modes to the dropdown
+- Character mode: numeric entry for character count (20–200)
+- Pixel mode: numeric entry for pixel width, with additional font size field
+- Add `WordwrapSettings.WidthMode` manifest key ("character" or "pixel")
+- Wire pixel mode to `estimate_chars_per_line()` and `measure_font_avg_char_px()` in `functions/wordwrap.py`
+
+### TASK 46.8: Overwrite Column in Lines Table
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**File:** `gui/steps/wordwrap_overwrite.py`
+
+Goal: Add Overwrite column to the Lines Table alongside Wordwrap.
+
+Changes:
+- Extend Lines Table columns: #, Original, Wordwrap, Overwrite, Status
+- Populate Overwrite column during wrapping (injection-ready text)
+- Status column shows: OK, Exceeding, Differs
+- "Differs" when Overwrite ≠ Wordwrap (injection changed the text)
+- Output (Step 9) prioritizes `overwrite[]` over `wordwr[]`
+- Store in manifest: `lines[].overwrite`
+
+### TASK 46.9: Table Filter Radios
+**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 1h
+**File:** `gui/steps/wordwrap_overwrite.py`
+
+Goal: Add filter radio buttons to the Lines Table.
+
+Changes:
+- Add RadioGroup above Lines Table: All / Changed / Exceeding / Overwrite Differs
+- All: show all lines
+- Changed: lines where Wordwrap ≠ input
+- Exceeding: lines where wrapping produced more lines than Max Lines
+- Overwrite Differs: lines where Overwrite ≠ Wordwrap
+- Wire filter to table refresh, respecting virtual scrolling performance
+
+### TASK 46.10: Max Lines Flag Behavior
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 1h
+**File:** `gui/steps/wordwrap_overwrite.py`, `functions/wordwrap.py`
+
+Goal: When wrapping exceeds Max Lines, flag the line instead of silently truncating.
+
+Changes:
+- Update `pretty_wrap()` / `apply_wordwrap()` to return overflow metadata
+- Lines exceeding Max Lines get Status = "Exceeding" in the table
+- Visual indicator (color/icon) for exceeding lines
+- Overflow text preserved in metadata for manual review
+- "New box" splitting is future work (requires parser support for text box boundaries)
+
+---
+
+### Phase 46 Summary
+
+| Task | Description | Priority | Effort | Dependencies |
+|------|-------------|----------|--------|--------------|
+| 46.1 | Mode — Radio to Dropdown | HIGH | 1h | None |
+| 46.2 | Remove Prevent Orphans + Prefer Punct | HIGH | 0.5h | None |
+| 46.3 | Speaker Handling — Ignore + Count | MEDIUM | 1h | None |
+| 46.4 | Ignore Patterns → Code Database Table | MEDIUM | 2h | None |
+| 46.5 | Remove Typography Widget | MEDIUM | 0.5h | None |
+| 46.6 | Remove Overwrite Strategy Widget | HIGH | 1.5h | None |
+| 46.7 | Width — Spinbox to Dropdown (Char/Pixel) | MEDIUM | 1.5h | None |
+| 46.8 | Overwrite Column in Lines Table | HIGH | 2h | 46.6 |
+| 46.9 | Table Filter Radios | LOW | 1h | 46.8 |
+| 46.10 | Max Lines Flag Behavior | MEDIUM | 1h | None |
+
+**Total Estimated Effort:** 12 hours
+
+**Implementation Order:**
+1. **Task 46.2** (Remove checkboxes — smallest change, cleans up GUI)
+2. **Task 46.5** (Remove Typography — another removal, simplifies GUI)
+3. **Task 46.6** (Remove Overwrite Strategy — major removal, prerequisite for 46.8)
+4. **Task 46.1** (Mode dropdown — structural change to settings panel)
+5. **Task 46.3** (Speaker Handling — enum cleanup + dropdown)
+6. **Task 46.4** (Ignore Patterns → Code Database table — new integration)
+7. **Task 46.7** (Width dropdown — new Character/Pixel mode)
+8. **Task 46.8** (Overwrite in table — depends on 46.6, major table rework)
+9. **Task 46.10** (Max Lines flag — depends on table being ready)
+10. **Task 46.9** (Table filters — polish, depends on 46.8)
+
+---
+
+## PHASE 47: OUTPUT + PIPELINE COMPLETENESS + IMPORT (v2.8 Specs)
+
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** ~18h
+**Spec Reference:** `doc/specs.md` Step 9 (Output), Step 0 (Input), Step 5 (Translation) — v2.8 updates
+**Files:** `gui/steps/output_inject.py`, `gui/steps/input_loader.py`, `gui/steps/translate.py`, `functions/manifest_manager.py`, `functions/output.py` (new)
+
+### Context
+
+Step 9 (Output) has been comprehensively respecified in v2.8. Key additions: injection priority chain (9-level fallback from overwrite through original), dirty flags (Process and Wordwrap) with pre-export validation, non-destructive default (subfolder naming), failure logging, and complete widget specifications. Step 0 (Input) gets a new Import Translations button for migrating translations between manifests via exact line matching. Step 5 (Translation) gets a Skip Already Translated option for incremental workflows. Three console bugs were also fixed (QA mousewheel TclError, output_inject get_section, preprocess warning level).
+
+### TASK 47.1: Fix output_inject get_section Bug
+**Priority:** CRITICAL | **Status:** ✅ FIXED | **Effort:** 0.25h
+**File:** `gui/steps/output_inject.py`
+
+Goal: Replace non-existent `get_section()` call with `get_output_options()`.
+
+Changes:
+- ✅ Changed `self._manifest_manager.get_section("OutputFormat")` to `self._manifest_manager.get_output_options()`
+- Root cause: `ManifestManager` has `get_output_options()` but no `get_section()` method
+
+### TASK 47.2: Fix QA Mousewheel TclError
+**Priority:** CRITICAL | **Status:** ✅ FIXED | **Effort:** 0.25h
+**File:** `gui/steps/qa.py`
+
+Goal: Prevent TclError when canvas is destroyed between `winfo_exists()` and `yview_scroll()`.
+
+Changes:
+- ✅ Wrapped `canvas.yview_scroll()` in `try/except tk.TclError` inside `_on_mousewheel`
+- Race condition: `winfo_exists()` can return True while the underlying Tcl widget command is already destroyed
+- ✅ Cleared stale `.pyc` cache to ensure fix takes effect
+
+### TASK 47.3: Fix Preprocess Warning Level
+**Priority:** LOW | **Status:** ✅ FIXED | **Effort:** 0.1h
+**File:** `gui/steps/preprocess.py`
+
+Goal: Change misleading WARNING to DEBUG for "Input step restore did not load files".
+
+Changes:
+- ✅ Changed `logger.warning(...)` to `logger.debug(...)` with clarifying message "(no files in project yet)"
+- This message fires during normal startup when no project is loaded — not an actual error
+
+### TASK 47.4: Injection Priority Chain Implementation
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**File:** `functions/output.py` (new), `gui/steps/output_inject.py`
+
+Goal: Implement `get_final_output()` with 9-level priority chain.
+
+Changes:
+- Create `functions/output.py` with `get_final_output(line_entry) -> (text, source_field)` function
+- Priority: overwrite → wordwr → postpro → edit{N} (highest N) → tlc{N} (highest N) → tl → preedit → prepro → orig
+- Handle edit{N}/tlc{N} round numbering (scan for highest available)
+- Return source_field name for logging/display
+- Wire into `_write_file()` in output_inject.py to use resolved text
+- Unit tests for all priority levels, gaps, and edge cases
+
+### TASK 47.5: Dirty Flags — Process and Wordwrap
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**File:** `functions/manifest_manager.py`, `gui/steps/preprocess.py`, `gui/steps/postprocess.py`, `gui/steps/wordwrap_overwrite.py`, `gui/steps/output_inject.py`
+
+Goal: Implement Process and Wordwrap dirty flags with pre-export validation.
+
+Changes:
+- Add `DirtyFlags` dict to manifest: `{process: bool, wordwrap: bool}`
+- Process flag: set True when any preprocessing is applied (Step 4), cleared when postprocessing reaches 100% (Step 7)
+- Wordwrap flag: set True when files are loaded or translation changes, cleared when wordwrap is applied (Step 8)
+- Add `get_dirty_flags()` / `set_dirty_flag()` methods to ManifestManager
+- Before export: check flags, show warning dialog with flag names, allow Export Anyway or Cancel
+- Show flag status in Output Summary panel (⚠ or ✓ indicators)
+
+### TASK 47.6: Non-Destructive Default + Subfolder Naming
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 1h
+**File:** `gui/steps/output_inject.py`
+
+Goal: Ensure default naming strategy is "subfolder" and default behavior is non-destructive.
+
+Changes:
+- Verify `NamingStrategy.SUBFOLDER` is the default in both GUI and manifest defaults
+- Default subfolder name: "translated"
+- Auto-populate destination to `{source_root}/translated/` when no destination set
+- Verify Overwrite checkbox defaults to off
+- Verify Backup defaults to "Timestamp"
+
+### TASK 47.7: Failure Logging
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 1.5h
+**File:** `gui/steps/output_inject.py`
+
+Goal: Log every write failure with file path and error message.
+
+Changes:
+- Add `failure_log: List[Dict]` to ExportStats (or manifest step data)
+- Each failure entry: `{file: str, error: str, timestamp: str}`
+- Store in manifest: `Output.failure_log[]`
+- Display failure log in Summary panel as scrollable list
+- Add "Copy Failure Log" button for easy sharing
+
+### TASK 47.8: Import Translations from Manifest
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**File:** `gui/steps/input_loader.py`, `functions/manifest_manager.py`
+
+Goal: Add Import Translations button with exact line matching from another manifest.
+
+Changes:
+- Add "Import Translations" button to Input step toolbar
+- File dialog to select source `.CherryAI.json` manifest
+- Import function: for each current `lines[].orig`, sequential search in target manifest for exact match
+- On match: copy all fields (prepro, tl, edit{N}, tlc{N}, preedit, postpro, wordwr, overwrite) from target line entry
+- Summary dialog: "Imported X of Y lines. Z lines had no match."
+- Log import in manifest: `Input.last_import = {source_manifest, lines_matched, lines_total, timestamp}`
+- Unit tests for matching, no-match, duplicates, partial matches
+
+### TASK 47.9: Skip Already Translated Option
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 1.5h
+**File:** `gui/steps/translate.py`, `functions/api_client.py`
+
+Goal: Add Skip Already Translated checkbox to Request Options.
+
+Changes:
+- Add `Skip Already Translated` checkbox to Request Options widget
+- When enabled: skip lines where `lines[].tl` is non-empty
+- Status for skipped lines: "Skipped (already translated)"
+- Manifest Key: `RequestOptions.SkipAlreadyTranslated` (bool, default False)
+- Does NOT skip lines with only edit{N}/tlc{N} (only checks base `tl` field)
+- Wire into translation loop to check before sending to API
+- Update skipped count in Translation step data
+
+### TASK 47.10: Output Summary Panel Improvements
+**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 1h
+**File:** `gui/steps/output_inject.py`
+
+Goal: Enhance Summary panel with dirty flag indicators and failure log display.
+
+Changes:
+- Add dirty flag status indicators (⚠ Process / ⚠ Wordwrap / ✓ Clean)
+- Add scrollable failure log section
+- Show injection source breakdown (how many lines came from each priority level)
+- Display duration and throughput stats
+
+---
+
+### Phase 47 Summary
+
+| Task | Description | Priority | Effort | Dependencies |
+|------|-------------|----------|--------|--------------|
+| 47.1 | Fix output_inject get_section Bug | CRITICAL | 0.25h | None | ✅ FIXED |
+| 47.2 | Fix QA Mousewheel TclError | CRITICAL | 0.25h | None | ✅ FIXED |
+| 47.3 | Fix Preprocess Warning Level | LOW | 0.1h | None | ✅ FIXED |
+| 47.4 | Injection Priority Chain | HIGH | 3h | None |
+| 47.5 | Dirty Flags (Process + Wordwrap) | HIGH | 2h | None |
+| 47.6 | Non-Destructive Default | MEDIUM | 1h | None |
+| 47.7 | Failure Logging | MEDIUM | 1.5h | None |
+| 47.8 | Import Translations from Manifest | HIGH | 3h | None |
+| 47.9 | Skip Already Translated Option | MEDIUM | 1.5h | None |
+| 47.10 | Output Summary Panel Updates | LOW | 1h | 47.5, 47.7 |
+
+**Total Estimated Effort:** 13.6 hours (excluding 47.1-47.3 already fixed)
+
+**Implementation Order:**
+1. **Task 47.1** ✅ FIXED (output_inject get_section)
+2. **Task 47.2** ✅ FIXED (QA mousewheel TclError)
+3. **Task 47.3** ✅ FIXED (preprocess warning level)
+4. **Task 47.4** (Injection priority chain — foundation for all output logic)
+5. **Task 47.5** (Dirty flags — validates pipeline completeness)
+6. **Task 47.8** (Import Translations — new Input feature, independent)
+7. **Task 47.9** (Skip Already Translated — pairs with 47.8 workflow)
+8. **Task 47.6** (Non-destructive defaults — quick verification)
+9. **Task 47.7** (Failure logging — output polish)
+10. **Task 47.10** (Summary panel — depends on 47.5 + 47.7, final polish)
+
+---
+
 =============================================================================
 
 FUTURE IDEAS (No Phase Commitment)
@@ -4869,6 +5456,7 @@ FUTURE IDEAS (No Phase Commitment)
 - **Functions Not Visible in GUI**: Restore additional processing functions that exist in code but lack GUI exposure
 - **Context-Aware Deduplication**: Use semantic similarity rather than exact match for deduplication
 - **Deduplication Variants Database**: Create database of pattern variants that should be treated as duplicates
+- **Queue for Retry (Postprocessing)**: When a postprocessing recovery fails, queue the line for re-translation with stricter one-line instructions. Requires retry pipeline integration with Translation Step (Step 5) and a prompt template designed for recovery-focused re-translation. Currently hidden from Failure Handling widget.
 
 ### Translation Step Future Enhancements
 - **Edit Before Translation**: Button opens a dialog where the LLM is prompted to fix specific mistakes in the original text (not translate). Requires separate prompt design and dedicated LLM pass. Currently hidden from UI.
@@ -4880,6 +5468,16 @@ FUTURE IDEAS (No Phase Commitment)
 - **Daily Limit Check**: Alert before exceeding configured daily API budget/token limits.
 - **Batch API Pricing**: Show batch API pricing with discount percentages for supported models.
 - **Translation / Edit / TLC Mode Toggle**: A three-way toggle switching the Translation step between Translation (default), Edit, and TLC modes. Edit mode prompts the LLM to fix grammar, naturalness, and formatting in existing translations. TLC mode sends original + translation for accuracy verification. Key design challenge: line-matching strategy (line numbers, full lines, or empty lines) since not every line will be edited/TLC'd and unnecessary output tokens are the most expensive component. Each mode writes to its own manifest fields (`lines[].edit{N}`, `lines[].tlc{N}`). Requires dedicated prompt design, matching script development, and cost-optimization testing before UI exposure.
+
+### Wordwrap Step Future Enhancements
+- **Parser-Driven Wrap Options**: Parsers auto-populate wordwrap settings (width, break char, max lines) based on the game engine format. Requires each format parser to expose a `get_wrap_config()` method returning engine-appropriate defaults.
+- **RPG Maker as Own Parser**: Move RPG Maker-specific wordwrap logic (pixel-accurate width, `analyze_rpgmaker_project()`, `measure_font_avg_char_px()`) into a dedicated RPG Maker format parser. RPG Maker is no longer a wordwrap mode — it becomes a parser that drives the wordwrap settings automatically.
+- **New Textboxes Structure**: When wrapping overflow exceeds Max Lines, split into a new text box entry instead of flagging. Requires parser support for text box boundaries and understanding of how the engine structures multi-box dialogue sequences.
+- **Font Commands**: Parser-level support for font size commands (`size_up`, `size_down`, `size_increments`, `set_size`, `get_size`) that affect rendered width mid-line. Width calculation must account for font size changes within a single line of text.
+- **Invisible Code and Variable Code**: Distinguish between code that is invisible (zero rendered width, e.g., color codes) and code that represents a variable (rendered width depends on the variable's runtime value). Variable code should use a max-length estimate for width calculation.
+- **Line Break Auto-Detection from Parser**: Parsers identify the engine's native line break character and auto-populate the Break Character field. Currently break char is user-configured with common presets.
+- **Pixel-Accurate Width Calculation**: Full pixel-based width using font metrics from `measure_font_avg_char_px()`. Requires Pillow for font measurement and project analysis via `analyze_rpgmaker_project()`. Show pixel ruler in preview.
+- **Break Character Removal Before Translation**: Remove line breaks before sending to LLM to save tokens (fewer continuation lines = lower cost). Display warning that post-editing may be needed since LLM won't see original line structure. Re-wrapping after translation restores breaks.
 
 ### QA Step Future Enhancements
 - **Full QA Implementation**: Activate the complete QA interface with validation rules panel, issue details, batch accept/reject, auto-fix, and export report. Currently behind a placeholder toggle.

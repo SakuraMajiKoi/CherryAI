@@ -1501,7 +1501,7 @@ class PreprocessingStep(BaseStep):
                             if loaded_files:
                                 logger.debug("Input step restored %d files", len(loaded_files))
                             else:
-                                logger.warning("Input step restore did not load files")
+                                logger.debug("Input step restore did not load files (no files in project yet)")
         except Exception as e:
             logger.debug("Could not ensure input files: %s", e)
 

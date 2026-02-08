@@ -1,6 +1,6 @@
 # CherryAI Specification Document
 
-Version 2.0 | February 2026
+Version 2.8 | February 2026
 
 This document provides a complete functional specification of CherryAI, an LLM-based translation application designed to achieve high-quality translations using Large Language Models. The application requires substantial input and processing which can optimally be performed automatically once an input is selected.
 
@@ -318,6 +318,7 @@ Each step is a tab in the main notebook. Steps can be navigated freely but follo
 |--------|------|----------|
 | **Toolbar** | | |
 | Select File(s) Button | Button | Unified file/folder selector (replaces Load Files and Load Folder) |
+| Import Translations Button | Button | Import translations from another manifest (exact line matching) |
 | **Options Panel** | LabelFrame | Contains Encoding and Format dropdowns |
 | Encoding Dropdown | Combobox | Select file encoding (auto, utf-8, shift_jis, etc.). Default: auto |
 | Format Dropdown | Combobox | Override format detection (auto, txt, csv, json, rpgmaker, image, etc.). Default: auto |
@@ -368,6 +369,47 @@ The unified selector replaces separate Load Files and Load Folder buttons:
 4. After loading:
    - The containing folder is stored in the manifest as `source_root`
    - All selected files/folders and their lines are saved to manifest
+
+#### Import Translations Button Behavior
+
+**Purpose**: Import translations and processing results from another manifest into the current project. This enables reusing translations when source files are updated or when migrating between projects.
+
+**Workflow**:
+1. User clicks "Import Translations" button.
+2. File dialog opens to select a `.CherryAI.json` manifest file.
+3. The import function loads the target manifest and walks the current project's lines sequentially.
+4. For each line index (`idx`) in the current manifest:
+   a. Take the `orig` content of that line.
+   b. Search sequentially through the target manifest's `lines[]` for an **exact string match** on `orig`.
+   c. If found: copy **all other fields** from the matched target line entry and append them to the current line entry.
+   d. If not found: skip (line remains unchanged).
+5. Display a summary: "Imported X of Y lines. Z lines had no match."
+
+**Matching Rules**:
+- Match is based on **exact content** of `lines[].orig` — character-for-character equality.
+- **Not concerned with line numbers**: Line 50 in the current project can match Line 200 in the target manifest.
+- **Not concerned with files**: Lines from `file_a.txt` can match lines originally from `file_b.txt`.
+- Sequential search: for each current line, the target manifest is searched from the beginning.
+- First match wins: if the target has duplicate lines, the first occurrence is used.
+
+**Fields Copied on Match**:
+All processing-related fields are copied to preserve the complete pipeline state:
+- `prepro` (preprocessed text)
+- `tl` (translation)
+- `edit{N}` (edit rounds)
+- `tlc{N}` (TLC rounds)
+- `preedit` (pre-edit result)
+- `postpro` (postprocessed text)
+- `wordwr` (wordwrapped text)
+- `overwrite` (overwrite text)
+- Any other per-line metadata present in the target entry
+
+**Use Cases**:
+- **Game patch update**: Source files changed slightly; most lines are identical. Import preserves existing translations for unchanged lines.
+- **Project migration**: Moving translations from one project structure to another.
+- **Translation merge**: Combining translations from multiple partial projects.
+
+**Manifest Key**: Import action is logged in `step_state.Input.last_import` with `{source_manifest, lines_matched, lines_total, timestamp}`.
 
 #### Loaded Files Panel Details
 
@@ -1554,6 +1596,7 @@ The Translation tab contains four widget sections:
 | Retry Strategy | Dropdown | Batch | How failures are retried (Batch, Contextual) |
 | Max Retries | Spinbox | 3 | Round trips of retries (0 = none) |
 | Skip Non-Source Language | Checkbox | ✗ | Skip lines not detected as source language |
+| Skip Already Translated | Checkbox | ✗ | Skip lines that already have a translation |
 
 **Model Selection**:
 - Models are **not** a hardcoded list. They come from Global Options where the user configures API Providers (Name, URL, Key, Model).
@@ -1580,6 +1623,15 @@ The Translation tab contains four widget sections:
 - NEW option. Uses language detection (`functions/analysis.py`) to identify lines not in the configured source language.
 - Lines detected as already in the target language or a third language are marked as Skipped.
 - Reduces unnecessary API calls and costs.
+
+**Skip Already Translated**:
+- NEW option. When enabled, lines that already have a non-empty `tl` field in the manifest are skipped during translation.
+- Useful for **incremental translation**: when new lines are added to a project (e.g., game patch), only untranslated lines are sent to the LLM.
+- Also useful after **Import Translations** (Step 0): imported lines already have translations and don't need re-translation.
+- Skipped lines are marked as "Skipped (already translated)" in the status column.
+- This does NOT skip lines that have `edit{N}` or `tlc{N}` — it only checks the base `tl` field.
+- Can be combined with Skip Non-Source Language for maximum efficiency.
+- Manifest Key: `RequestOptions.SkipAlreadyTranslated`
 
 **Moved to Global Options**:
 - **Enable Request Caching**: Moved from Translation to Global Options. Becomes a dropdown with cache modes. Default mode: "Line" — every individual line with its translation is cached. Cache is applied both during translation (skip already-cached lines) and after (populate cache from results). Other modes (strict, model_only, any) to be implemented later.
@@ -1875,129 +1927,650 @@ The following widgets will be activated once the Translation/Edit/TLC mode toggl
 
 ### Step 7: Postprocessing
 
-**Purpose**: Restore protected content and apply final transformations.
+**Purpose**: Reverse all Preprocessing transformations and apply post-exclusive recovery processes to produce final translated text. Step 7 mirrors Step 4 — every Preprocessing transformation has a corresponding Postprocessing restoration that executes in reverse priority order. Additionally, Postprocessing includes exclusive recovery processes (Bracket Balance, Quote Balance, Whitespace Normalization) that only run here.
 
-#### Widgets
+**Design Goals**:
+1. **Mirror Symmetry**: Every Preprocessing transformation (Step 4) is reversed here. Without exception, all lines that were preprocessed are postprocessed.
+2. **Reverse Priority Ordering**: Processes execute in descending priority order (highest priority runs first), the inverse of Preprocessing.
+3. **Perfect Restoration**: All Preprocessing changes must be undone to produce accurate final output.
+4. **Post-Exclusive Recovery**: Bracket Balance, Quote Balance, and Whitespace Normalization are Postprocessing-exclusive — they only appear here and address translation-introduced issues.
+5. **Overwrite Semantics**: Postprocessing overwrites any previous postprocessing results. If results already exist, a confirmation warning is shown before overwriting.
+
+---
+
+#### Widgets Overview
+
+The Postprocessing tab is organized into four sections:
+
+1. **Header** — Title, status, and the Apply Postprocessing button (only action button)
+2. **Left: Processed Lines Table** — Filterable table showing translated vs postprocessed text
+3. **Right: Options Panels** — Recovery Options, Postprocess Options, Failure Handling, Diff View, Postprocessing Summary
+4. **Bottom: Summary Bar** — Live aggregate statistics
+
+---
+
+#### Widget: Header
+
+**Purpose**: Controls and status for the Postprocessing step.
 
 | Widget | Type | Function |
 |--------|------|----------|
-| Apply Postprocessing Button | Button | Execute restoration |
-| Refresh Button | Button | Reload translation data |
-| Revert All Button | Button | Undo postprocessing |
-| Filter Radios | RadioGroup | all/changed/retry/skipped |
-| Lines Table | SharedTable | Translated vs postprocessed |
-| Placeholder Recovery Checkbox | Checkbox | Restore __PROT__ tokens |
-| Bracket Recovery Checkbox | Checkbox | Fix bracket balance |
-| Quote Recovery Checkbox | Checkbox | Fix quote balance |
-| Whitespace Normalization Checkbox | Checkbox | Clean whitespace |
-| Symbol Conversion Checkbox | Checkbox | Convert symbols |
-| Fullwidth→Halfwidth Checkbox | Checkbox | Convert fullwidth chars |
-| BR Tag Restoration Checkbox | Checkbox | Restore line break tags |
-| Failure Policy Dropdown | Combobox | skip/flag/retry |
-| Diff View Pane | Text | Show changes between translated and postprocessed |
-| Character Validation Panel | Frame | Validate character/word issues |
+| Title Label | Label | "Postprocessing" |
+| Status Label | Label | Current status (Ready, Processing, Complete, Error) |
+| Apply Postprocessing Button | Button | Execute all postprocessing — the only action trigger |
+
+**Removed from previous spec** (no longer present):
+- ~~Refresh Button~~ — Lines load automatically from previous steps on tab entry
+- ~~Revert All Button~~ — Overwrite semantics replaces revert; re-running overwrites
+
+**Behavior**:
+- Clicking "▶ Apply Postprocessing" runs all enabled processes on all preprocessed lines
+- If postprocessing results already exist, a confirmation dialog warns: "Postprocessing results already exist. Overwrite?" (OK / Cancel)
+- Button is disabled during processing and re-enabled on completion
+- Status label shows real-time progress: "Processing line 42/500…"
+
+---
+
+#### Widget: Processed Lines
+
+**Purpose**: Display all lines with postprocessing results. Renamed from "Postprocessed Lines" to "Processed Lines".
+
+**Columns**:
+| Column | Content |
+|--------|---------|
+| # | Line index (1-based) |
+| Status | Processing status icon and label |
+| Changes | Count of recovery operations applied |
+| Translated | Input text (from Step 5 or Step 6) |
+| Postprocessed | Output text after postprocessing |
+
+**Status Values**:
+| Status | Icon | Meaning |
+|--------|------|---------|
+| Changed | ✓ | Line was modified by postprocessing |
+| Same | – | No changes needed |
+| Written | ✎ | Failure was written as-is (default failure handling) |
+| Flagged | ⚑ | Failure flagged for review (Skip policy) |
+
+**Filters**:
+| Filter | Shows |
+|--------|-------|
+| All | All lines |
+| Changed | Only lines with modifications |
+| Written | Lines where failures were written as-is |
+| Flagged | Lines flagged for manual review |
+| By Process | Filter by specific process name (e.g., "Bracket Balance", "Deduplication") |
+
+**Behavior**:
+- Table populates automatically when entering the tab (reads from previous steps)
+- Only populated after "Apply Postprocessing" is clicked — before that, shows translated text in both columns
+- Selecting a row updates the Diff View and Recovery Details panels
+- Checkboxes allow batch selection for manual operations
+- Supports virtual scrolling for large files (100K+ lines)
+
+---
+
+#### Widget: Recovery Options
+
+**Purpose**: Toggle post-exclusive recovery processes. These processes only exist in Postprocessing and address issues introduced by the translation process itself.
+
+| Widget | Type | Default | Function |
+|--------|------|---------|----------|
+| Bracket Balance Recovery | Checkbox | ✓ | Fix unmatched brackets by comparing with original |
+| Quote Balance Recovery | Checkbox | ✓ | Fix unmatched quotes by comparing with original |
+| Whitespace Normalization | Checkbox | ✓ | Restore indentation and spacing to match original |
+
+**Bracket Balance Recovery** (Post-Exclusive):
+- Compares bracket pairs in translated text against the original
+- Uses anchor logic (line start `^`, end `$`, punctuation) to determine insertion points for missing brackets
+- Supports all bracket types: `[]`, `{}`, `<>`, `()`, `「」`, `『』`, `【】`, `〔〕`, `《》`, `〈〉`, plus fullwidth variants
+- If a bracket is missing, only use the direct position (before/after) from anchor
+- If balance cannot be achieved (no anchor), flags the line for review
+
+**Quote Balance Recovery** (Post-Exclusive):
+- **Important**: Quote recovery runs BEFORE quote balance check. Quotes stripped during Preprocessing Symbol Conversion must be recovered first, then balance is verified.
+- Distinct from Preprocessing quote stripping — Symbol Conversion may convert `「」` to `""` during pre; here we ensure the translated text has matching quote pairs
+- Supports: `""`, `''`, `""`, `''`, fullwidth `＂＂`
+- Missing opening / closing quotes are easily inserted at dialogue start / line end
+- Missing quotes within the dialogue use anchors or are skipped and flagged. 
+- Handles same-character quote pairs (straight quotes) via open/close state tracking
+
+**Whitespace Normalization** (Post-Exclusive):
+- Matches indentation of translated lines to their originals
+- Detects speaker indent patterns (e.g., `　太郎：` uses fullwidth space indent)
+- Preserves leading whitespace count and type (spaces vs tabs vs fullwidth spaces)
+- Normalizes errant spacing around placeholders (`__ PROT __` → `__PROT__`)
+- Does NOT alter intentional whitespace within dialogue text
+
+**Removed from GUI** (automatic from manifest — no user toggle):
+- ~~Placeholder Recovery~~ — Always runs automatically; recovery of `__PROT__`, `__CUSTOM__`, `__DEDUP__` tokens is mandatory and not optional
+- ~~Restore Code Characters~~ — Always runs automatically as part of the Protect Code Patterns restoration
+- ~~Restore `<br>` Tags~~ — Always runs automatically as part of line break restoration from manifest `prepro_ops`
+
+**Manifest Keys**: `PostProcessing.BracketBalanceRecovery`, `PostProcessing.QuoteBalanceRecovery`, `PostProcessing.WhitespaceNormalization`
+
+---
+
+#### Widget: Postprocess Options
+
+**Purpose**: Configure symbol conversion direction for postprocessing. Preprocessing converts JP→EN; Postprocessing can optionally convert back.
+
+| Widget | Type | Default | Function |
+|--------|------|---------|----------|
+| Enable Symbol Conversion | Checkbox | ✓ | Enable/disables other symbol conversion (like quote equivalents) |
+| Fullwidth → Halfwidth | Checkbox | ✗ | Convert fullwidth punctuation/alphanumeric to halfwidth |
+| Halfwidth → Fullwidth | Checkbox | ✗ | Convert halfwidth punctuation/alphanumeric to fullwidth |
+
+**Behavior**:
+- Symbol Conversion is for converting symbols other than punctuation and alphanumeric widths like quotes
+- Fullwidth→Halfwidth and Halfwidth→Fullwidth are mutually exclusive (enabling one disables the other)
+- Direction depends on target language: JP target typically needs Halfwidth→Fullwidth; EN target typically needs Fullwidth→Halfwidth
+- Uses the same conversion table as Preprocessing Step 4 Symbol Conversion, applied in the chosen direction
+
+**Conversion Table** (same as Step 4, bidirectional):
+| Fullwidth | Halfwidth |
+|-----------|-----------|
+| `！` | `!` |
+| `？` | `?` |
+| `：` | `:` |
+| `；` | `;` |
+| `，` | `,` |
+| `。` | `.` |
+| `（` | `(` |
+| `）` | `)` |
+| `【` | `[` |
+| `】` | `]` |
+| `｛` | `{` |
+| `｝` | `}` |
+| `＜` | `<` |
+| `＞` | `>` |
+| `＂` | `"` |
+| `＇` | `'` |
+| `～` | `~` |
+| `＝` | `=` |
+| `＋` | `+` |
+| `－` | `-` |
+| `＊` | `*` |
+| `／` | `/` |
+| `＼` | `\` |
+| `＠` | `@` |
+| `＃` | `#` |
+| `＄` | `$` |
+| `％` | `%` |
+| `＆` | `&` |
+| `＿` | `_` |
+| `　` | ` ` (space) |
+| `０-９` | `0-9` |
+| `Ａ-Ｚ` | `A-Z` |
+| `ａ-ｚ` | `a-z` |
+
+**Manifest Keys**: `PostProcessing.EnableSymbolConversion`, `PostProcessing.FullwidthToHalfwidth`, `PostProcessing.HalfwidthToFullwidth`
+
+---
+
+#### Widget: Failure Handling
+
+**Purpose**: Configure how postprocessing failures (unrecoverable issues) are handled.
+
+| Option | Label | Default | Behavior |
+|--------|-------|---------|----------|
+| Write | "Write (keep as-is)" | ✓ (default) | Write the line to output even if recovery failed. The line is included in results with whatever partial recovery was achieved. This is the nominal path. |
+| Skip | "Flag for Review" | ✗ | Do NOT write an entry. Flag the line for manual review. Log the failure. The line appears in the Flagged filter with details of what went wrong. |
+| ~~Retry~~ | ~~"Queue for Retry"~~ | — | **Hidden (Future Improvement)**: Queue the line for re-translation with stricter instructions. Not yet implemented; will be exposed when retry pipeline is built. |
+
+**Behavior**:
+- "Write" is the default because partial recovery is almost always better than no output
+- "Flag for Review" (previously "Skip") does not produce an output entry — the line remains untranslated/unprocessed until manually resolved via the Diff View
+- Failed lines are always logged regardless of policy
+- Failure details include: which recovery type failed, what was attempted, suggestions for manual fix
+
+**Manifest Key**: `PostProcessing.FailureHandling` (values: `write`, `flag`)
+
+---
+
+#### Widget: Diff View
+
+**Purpose**: Show a character-level diff between the translated input and the postprocessed output for the selected line. Supports manual editing and problem resolution.
+
+| Component | Type | Function |
+|-----------|------|----------|
+| Line Info Label | Label | Shows line number and status |
+| Diff Text Display | ScrolledText | Character-level diff with color highlighting |
+| Edit Field | Text | Editable text field for manual corrections |
+| Mark as Fixed Button | Button | Accept manual edit, update postprocessed result |
+| Recovery Details List | Listbox | List of recovery operations applied to this line |
+
+**Diff Highlighting**:
+| Tag | Color | Meaning |
+|-----|-------|---------|
+| Addition | Green (#22c55e) | Text added by postprocessing |
+| Deletion | Red (#ef4444) | Text removed by postprocessing |
+| Problem | Yellow/Orange (#f59e0b) | Issues that need attention (flagged failures) |
+| Header | Blue (accent_info) | Section headers |
+
+**Manual Editing Behavior**:
+- The Edit Field is pre-populated with the postprocessed text
+- User can modify the text freely
+- Clicking "✓ Mark as Fixed" writes the edited text as the postprocessed result for that line
+- The line's status changes to "Changed" and the diff updates to reflect the manual edit
+- Manual edits are written to the manifest immediately
+
+**Manifest Key**: Manual edits stored in `lines[].postpro` (overwrites automatic result)
+
+---
+
+#### Widget: Postprocessing Summary
+
+**Purpose**: Live aggregate statistics panel showing postprocessing progress and results.
+
+| Metric | Description |
+|--------|-------------|
+| Total | Total lines processed |
+| Changed | Lines with modifications |
+| Recovered | Total recovery operations successfully applied |
+| Written | Lines written despite failures (Write policy) |
+| Flagged | Lines flagged for review (Flag policy) |
+| Rate | Recovery success rate (recovered / total issues × 100%) |
+
+**Behavior**:
+- Updates in real-time during postprocessing (after each line completes)
+- At 100% completion, a popup dialog appears: "Postprocessing Complete — N lines processed, M changes applied, K issues flagged" with OK button
+- Summary data persists in manifest for reference in later steps
+
+**Manifest Keys**: `Postprocessing.recovery_rate`, `Postprocessing.total_processed`, `Postprocessing.flagged_count`
+
+---
+
+#### Process Execution Order
+
+Postprocessing reverses the Preprocessing order. Highest priority runs first (opposite of Preprocessing where lowest runs first). Automatic restorations (from manifest `prepro_ops`) execute first, followed by post-exclusive recovery processes.
+
+**Automatic Restorations** (from manifest — no GUI toggle):
+| Priority | Process | Description |
+|----------|---------|-------------|
+| 10 | Anchoring Restoration | Restore anchored content FIRST (matches Anchoring P75 pre) |
+| 20 | Protect Code Patterns | Restore `__PROT__` tokens to original code |
+| 30 | Custom Placeholders | Restore `__CUSTOM__` tokens to original strings |
+| 40 | PROT Token Decompression | Decompress `__PROT_N__` → N individual `__PROT__` tokens |
+| 50 | Code Spacing Restoration | Restore original code spacing |
+| 60 | Speaker Name Restoration | (No restoration needed — names stay translated) |
+| 70 | Symbol Conversion | Optionally restore JP symbols based on Postprocess Options direction |
+| 80 | Ellipsis Expansion | Restore ellipsis to original length |
+| 90 | Deduplication Restoration | Apply translation to all duplicate lines LAST |
+
+**Post-Exclusive Recovery Processes** (after all automatic restorations, user-toggleable):
+| Priority | Process | Description |
+|----------|---------|-------------|
+| 100 | Quote Balance Recovery | Fix unmatched quotes (runs before bracket balance) |
+| 110 | Bracket Balance Recovery | Fix unmatched brackets using anchor logic |
+| 120 | Whitespace Normalization | Match indentation/spacing to original |
+
+**Execution Note**: Quote Balance Recovery (P100) runs before Bracket Balance Recovery (P110) because quotes stripped during Preprocessing Symbol Conversion must be recovered before bracket balance is assessed — a quote character adjacent to a bracket affects balance detection.
+
+---
+
+#### Character/Word Validation
+
+**Purpose**: After all postprocessing, validate the result for character-level issues.
+
+| Component | Type | Function |
+|-----------|------|----------|
+| Run Validation Button | Button | Execute character/word validation scan |
+| Status Label | Label | "Not scanned" / "N issues in M lines" / "✓ No issues" |
+| Warnings Count | Label | Number of warnings (fixable) |
+| Errors Count | Label | Number of errors (manual review) |
+| Findings List | Listbox | Individual findings with severity, line, and suggestion |
+| Apply Autofix Button | Button | Apply autofix map to all fixable warnings |
+
+**Behavior**:
+- Reads whitelist, blacklist, word blacklist, and autofix map from manifest (`CharacterValidation` section)
+- Checks the `postprocessed` field of each line
+- Autofix applies character replacements from the configured autofix map
+- Re-runs validation after autofix to show remaining issues
+
+---
 
 #### Data Flow
 
 **Inputs**:
-- From Step 4: `prepro_ops[]` (restoration metadata)
-- From Step 5: `tl[]` (or `tlc[]`, `edit[]` if available)
+- From Step 4: `prepro_ops[]` — Restoration metadata per line (what was changed and how to reverse it)
+- From Step 5: `tl[]` — Translated lines (or `edit[]`, `tlc[]` if available from future Edit/TLC modes)
+- From Step 6: `qa_lines[]` — QA-reviewed lines (if QA modified any)
+- From Manifest: Recovery option toggles, symbol conversion settings, failure handling policy
 
-**Processing** (via `functions/postprocess.py`):
-1. For each line with `prepro_ops`:
-   a. Find `__PROT__` tokens in translation
-   b. Match to original protected content
-   c. Replace token with original
-2. Apply bracket/quote recovery if enabled
-3. Apply symbol conversion if enabled
-4. Validate character/word consistency
-5. Track recovery success/failure
+**Processing** (via `functions/postprocess.py` + `modi/` modules):
+1. Load lines from best available source: QA → Edit → TLC → Translation → Preprocessed
+2. For each line with `prepro_ops`:
+   a. Execute automatic restorations in priority order (P10→P90)
+   b. Each restoration reads its metadata from `prepro_ops` and reverses the transformation
+3. Execute post-exclusive recovery processes (P100→P120) if enabled
+4. Apply symbol conversion if enabled (direction per Postprocess Options)
+5. Run failure handling policy on any unrecoverable issues
+6. Update summary statistics in real-time
+7. Store results in manifest
 
 **Outputs**:
-- `postpro: List[str]` - Restored lines
-- `recovery_stats: RecoveryStats` - Success/failure counts
-- `retry_list: List[int]` - Lines needing re-translation
-- `validation_result` - Character/word validation
+- `postpro: List[str]` — Fully restored and recovered lines
+- `recovery_stats: RecoveryStats` — Per-type success/failure counts
+- `flagged_lines: List[int]` — Lines flagged for manual review (Flag policy)
+- `validation_result` — Character/word validation findings (if run)
 
 **Stored In**:
 - Manifest: `lines[].postpro`
-- Manifest step data: `Postprocessing.recovery_rate`
+- Manifest step data: `Postprocessing.recovery_rate`, `Postprocessing.FailureHandling`, all option toggles
 
-#### Recovery Types
+---
 
-| Type | Description |
-|------|-------------|
-| PLACEHOLDER_CASE | Fix __prot__ → __PROT__ |
-| PLACEHOLDER_MANGLED | Fix __PRO_T__ etc. |
-| PLACEHOLDER_MISSING | Flag for manual fix |
-| BRACKET_BALANCE | Fix unmatched brackets |
-| QUOTE_BALANCE | Fix unmatched quotes |
-| BR_TAG | Restore [br] or \n tags |
-| SPEAKER_FORMAT | Restore Name: prefix |
+#### User Actions
+
+| Action | Effect |
+|--------|--------|
+| Click Apply Postprocessing | Execute all postprocessing (warns if overwriting existing results) |
+| Toggle Recovery Option | Enable/disable post-exclusive recovery process |
+| Toggle Symbol Conversion | Enable/disable and configure direction |
+| Change Failure Handling | Switch between Write and Flag policies |
+| Select Line in Table | Show diff and recovery details in right panels |
+| Edit in Diff View | Manually correct postprocessed text |
+| Click Mark as Fixed | Accept manual edit, update manifest |
+| Filter Processed Lines | Show subset matching filter criteria |
+| Run Validation | Execute character/word validation scan |
+| Apply Autofix | Apply autofix map to fixable warnings |
+
+---
+
+#### Testing Requirements
+
+**Required Test Coverage**:
+- Each automatic restoration process individually (Anchoring, PROT, Custom, Dedup, etc.)
+- Each post-exclusive recovery process (Bracket Balance, Quote Balance, Whitespace Normalization)
+- Symbol conversion in both directions (Fullwidth→Halfwidth, Halfwidth→Fullwidth)
+- Failure handling policies (Write vs Flag behavior)
+- Overwrite warning when re-running postprocessing
+- Manual editing via Diff View
+- Summary statistics accuracy and real-time updates
+- Roundtrip: Preprocessing → Translation → Postprocessing produces expected output
+- Large file performance (100K+ lines)
+- Edge cases: empty lines, lines with only code, lines with mixed bracket types
+
+**Test Files** (to be created/extended):
+- `dev/test_postprocessing_restoration.py`
+- `dev/test_postprocessing_bracket_balance.py`
+- `dev/test_postprocessing_quote_balance.py`
+- `dev/test_postprocessing_whitespace.py`
+- `dev/test_postprocessing_symbol_conversion.py`
+- `dev/test_postprocessing_failure_handling.py`
+- `dev/test_postprocessing_diff_view.py`
+- `dev/test_preprocessing_postprocessing_roundtrip.py`
 
 ---
 
 ### Step 8: Wordwrap
 
-**Purpose**: Format text for game engine requirements.
+**Purpose**: Apply wordwrap rules to format text for game engine display requirements. Wordwrap operates in two conceptual modes: **automatic** (parser-detected settings based on the game engine format) or **manual** (user-configured width, break character, and line limits). The core wrapping algorithm is `pretty_wrap` — punctuation-preferred breaks and anti-orphan handling are always active (no user toggle).
+
+#### Philosophy
+
+Wordwrap is the final text-shaping step before output. It must produce lines that fit within the target engine's display constraints while preserving readability. The step combines wrapping with overwrite preview — the Overwrite column shows the final injected text alongside the wrapped text, enabling side-by-side comparison and filtering for discrepancies.
+
+Key principles:
+- **Pretty wrap is standard**: Punctuation-preferred line breaks and orphan prevention are always active — no checkboxes.
+- **Parser-driven when possible**: When a parser provides display constraints (width, break character, max lines), settings are auto-populated and displayed (user can override).
+- **Code-aware**: Ignore patterns come from the Code Database (Step 3), not from hardcoded checkboxes.
+- **Overwrite integrated**: The Overwrite column lives in the same table as Wordwrap, eliminating the need for a separate Overwrite Strategy widget. It can be editted.
 
 #### Widgets
 
 | Widget | Type | Function |
 |--------|------|----------|
-| Apply Wordwrap Button | Button | Execute wrapping |
-| Preview Button | Button | Show wrap preview |
-| Mode Dropdown | Combobox | manual/rpgmaker/disabled |
-| Format Dropdown | Combobox | RPG Maker MV/MZ, Ren'Py, etc. |
-| Width Spinbox | Spinbox | Characters per line |
-| Max Lines Spinbox | Spinbox | Maximum lines (0=unlimited) |
-| Break Character Entry | Entry | Line break sequence (\n, [br]) |
-| Speaker Mode Dropdown | Combobox | ignore/sameline/indent/newline |
-| Prevent Orphan Checkbox | Checkbox | Avoid single-word final lines |
-| Prefer Punct Breaks Checkbox | Checkbox | Break at punctuation |
-| Ignore Patterns Checkboxes | Checkboxes | Ignore <>, [], {}, en() |
-| Lines Table | SharedTable | Original vs wrapped |
-| Overwrite Strategy Dropdown | Combobox | overwrite/backup/merge/skip |
-| Merge Method Dropdown | Combobox | replace_all/replace_changed/append |
-| Typography Style Dropdown | Combobox | western/japanese/chinese |
+| Apply Wordwrap Button | Button | Execute wrapping on all lines |
+| Refresh Preview Button | Button | Recalculate preview without applying |
+| Reset Button | Button | Clear wordwrap results |
+| Mode Dropdown | Combobox | Wrapping mode (Manual, parser-specific modes) |
+| Width Dropdown | Combobox | Line width — Character count or Pixel-based |
+| Break Character Entry | Entry | Line break sequence (auto-detected, editable) |
+| Max Lines Spinbox | Spinbox | Maximum lines per box (0=unlimited) |
+| Speaker Handling Dropdown | Combobox | How to count speaker prefixes: Ignore / Count |
+| Ignore Patterns Table | Table (read-only) | Patterns from Code Database used during wrap |
+| Lines Table | SharedTable | Source, Wordwrap, Overwrite columns with filters |
+| Filter Radios | RadioGroup | All / Changed / Exceeding / Overwrite Differs |
+
+**Removed Widgets** (compared to previous spec):
+- ~~Prevent Orphan Checkbox~~ → Always active (standard `pretty_wrap` behavior)
+- ~~Prefer Punct Breaks Checkbox~~ → Always active (standard `pretty_wrap` behavior)
+- ~~Ignore Patterns Checkboxes~~ → Sourced from Code Database (Step 3), shown as read-only table
+- ~~Typography Style Dropdown~~ → Removed entirely
+- ~~Typography Checkboxes~~ → Removed entirely
+- ~~Overwrite Strategy Dropdown~~ → Overwrite is a table column, not a separate mode
+- ~~Merge Method Dropdown~~ → Removed with Overwrite Strategy
+- ~~Backup Suffix Entry~~ → Removed with Overwrite Strategy
+- ~~Format Dropdown~~ → Replaced by parser-aware Mode Dropdown
+
+#### Widget Specifications
+
+##### Mode Dropdown
+
+| Property | Value |
+|----------|-------|
+| Type | Combobox (dropdown, not radio buttons) |
+| Default | "Manual" |
+| Options | Manual (+ future parser-specific modes) |
+| Manifest Key | `WordwrapSettings.Mode` |
+
+**Behavior**:
+- **Manual**: User configures all settings (width, break char, max lines) directly.
+- Parser-specific modes will be added as parsers are implemented (e.g., when RPG Maker becomes its own parser, it will appear as a mode option that auto-populates width from project analysis).
+- RPG Maker is **not** a wordwrap mode — it becomes its own parser (see Future Improvements).
+- "Disabled" option is removed — if no wrapping is desired, simply don't click Apply.
+
+##### Width Dropdown
+
+| Property | Value |
+|----------|-------|
+| Type | Combobox (dropdown) |
+| Default | "48 characters" |
+| Options | Character-based presets, "Pixel" option |
+| Range (character) | 20–200 |
+| Manifest Key | `WordwrapSettings.Width`, `WordwrapSettings.WidthMode` |
+
+**Behavior**:
+- **Character mode** (default): Width in character count. Simple division of line length.
+- **Pixel mode**: Width in pixels. Requires font metrics for accurate calculation. When selected, shows additional fields for font size and pixel width.
+- Pixel-accurate calculation is primarily relevant for engines like RPG Maker that have variable-width fonts and known display dimensions.
+- Max length per variable: when engine variables are present in text, their maximum rendered length should be accounted for in width calculations.
+
+##### Break Character Entry
+
+| Property | Value |
+|----------|-------|
+| Type | Entry (combobox with common options) |
+| Default | Auto-detected from input format |
+| Common Options | `\n`, `[br]`, `[r]`, `<br>` |
+| Manifest Key | `WordwrapSettings.BreakChar` |
+
+**Behavior**:
+- Auto-detected from the input files during loading (parser identifies the line break convention).
+- Linked to **Preprocessing** (Step 4): The break character should be protected during preprocessing so it is not mangled by translation.
+- Linked to **Translation Prompt** (Step 5): The prompt should state what the line break character is so the LLM can use it correctly.
+- **Cost optimization** (future, belongs to Preprocessing): Line breaks may optionally be removed before translation to reduce token count (fewer characters = fewer costs). If enabled, a warning is displayed that post-editing may be needed since the LLM won't see line structure. Re-wrapping after translation restores line breaks.
+
+##### Max Lines Spinbox
+
+| Property | Value |
+|----------|-------|
+| Type | Spinbox |
+| Default | 0 (unlimited) |
+| Range | 0–20 |
+| Manifest Key | `WordwrapSettings.MaxLines` |
+
+**Behavior**:
+- When wrapping produces more lines than the maximum:
+  - **Flag the line**: Mark in the Lines Table as "Exceeding" for manual review.
+  - **New box** (future): Split overflow into a new text box entry (requires parser support for text box boundaries — see Future Improvements).
+- 0 means unlimited (no max line constraint).
+
+##### Speaker Handling Dropdown
+
+| Property | Value |
+|----------|-------|
+| Type | Combobox (dropdown) |
+| Default | "Ignore" |
+| Options | Ignore, Count |
+| Manifest Key | `WordwrapSettings.SpeakerMode` |
+
+Speaker format is always `Speaker: Dialogue` or `Speaker: "Dialogue"`.
+
+**Options**:
+- **Ignore**: Don't count the speaker prefix toward line width — only measure the dialogue portion. Use when the speaker name is injected into a separate name field during output. The trailing space after `:` belongs to the speaker and is stripped during injection.
+- **Count** (renamed from "Sameline"): Speaker prefix (name + `:` + spaces) is counted toward line width. Use when the speaker is part of the displayed line and takes up horizontal space.
+
+**Removed Options**:
+- ~~Samelineindent~~ → Redundant. Respecting indentation on continuation lines is inherent behavior of `Count` mode (hanging indent from `pretty_wrap`).
+- ~~Newline~~ → Redundant. The choice is binary: either ignore the speaker (separate name field) or count it (inline).
+
+##### Ignore Patterns (Code Database Integration)
+
+Ignore patterns are **no longer configured in Wordwrap settings**. Instead, they are sourced from the **Code Database** (Step 3, Information tab):
+
+- The Code Database defines code patterns with their actions (Preserve, Translate, Remove) and Categories.
+- Patterns marked as **Invisible** are automatically treated as invisible during width calculation.
+- The Wordwrap step displays a read-only summary table showing which patterns are being ignored.
+- No tickboxes — the single source of truth is the Code Database.
+
+| Display Column | Source |
+|----------------|--------|
+| Pattern | Code Database pattern regex |
+| Action | Preserve / Remove |
+| Example | Sample match from loaded text |
+
+##### Lines Table
+
+| Column | Source | Description |
+|--------|--------|-------------|
+| # | Index | Line number |
+| Original | `postpro[]` or best available | Input text (from postprocessing chain) |
+| Wordwrap | `wordwr[]` | Wrapped result |
+| Overwrite | `overwrite[]` | Final injected text (populated during wrap) |
+| Status | Computed | OK / Exceeding / Differs |
+
+**Overwrite Column Behavior**:
+- Filled alongside Wordwrap during the wrapping process.
+- The Overwrite value represents the text as it will appear in the output file after injection.
+- **Standard behavior**: Output (Step 9) prioritizes `overwrite[]` over `wordwr[]`. 
+- When Overwrite differs from Wordwrap, the line is flagged as "Differs" and can be filtered for (like to undo edits).
+- Can be editted.
+
+**Filters**:
+- **All**: Show all lines.
+- **Changed**: Lines where Wordwrap differs from the input.
+- **Exceeding**: Lines where wrapping produced more lines than Max Lines allows.
+- **Overwrite Differs**: Lines where Overwrite ≠ Wordwrap.
 
 #### Data Flow
 
 **Inputs**:
-- From Step 7: `postpro[]` (or best available from chain)
+- From Step 7: `postpro[]` (or best available from processing chain)
+- From Step 3: Code Database patterns (for ignore pattern list)
+- From Manifest: `WordwrapSettings.*` (saved settings)
 
 **Processing** (via `functions/wordwrap.py`):
-1. For each line:
-   a. Measure character width (considering fullwidth)
-   b. Find optimal break points
-   c. Insert break characters
-   d. Handle speaker prefix per mode
-   e. Apply typography rules
-2. Calculate wrap statistics
+1. Load ignore patterns from Code Database (Preserve + Remove action patterns).
+2. For each line:
+   a. Detect speaker prefix per Speaker Handling mode.
+   b. Calculate visible width (excluding ignored code patterns).
+   c. Apply `pretty_wrap()` with punctuation-preferred breaks and anti-orphan (always active).
+   d. Insert break characters at calculated positions.
+   e. Respect max lines constraint (flag if exceeding).
+   f. Populate Overwrite column with injection-ready text.
+3. Calculate wrap statistics (lines changed, lines exceeding, total breaks inserted).
 
 **Outputs**:
-- `wordwr: List[str]` - Wrapped lines
-- `wrap_stats: WrapStats` - Lines wrapped, exceeding
-- `break_positions: List[List[int]]` - Break points per line
+- `wordwr: List[str]` — Wrapped lines
+- `overwrite: List[str]` — Injection-ready output lines
+- `wrap_stats: WrapStats` — Lines wrapped, exceeding count, break count
 
 **Stored In**:
-- Manifest: `lines[].wordwr`
-- Manifest step data: `Wordwrap.width`, `Wordwrap.format`
+- Manifest: `lines[].wordwr`, `lines[].overwrite`
+- Manifest step data: `WordwrapSettings.Mode`, `WordwrapSettings.Width`, `WordwrapSettings.WidthMode`, `WordwrapSettings.BreakChar`, `WordwrapSettings.MaxLines`, `WordwrapSettings.SpeakerMode`
 
-#### Format Presets
+#### Standard Wrapping Rules (Always Active)
 
-| Format | Width | Break | Max Lines |
-|--------|-------|-------|-----------|
-| RPG Maker MV | 48 | \n | 4 |
-| RPG Maker MZ | 55 | \n | 4 |
-| Ren'Py | 60 | \n | 0 |
-| TyranoScript | 45 | [r] | 0 |
+These behaviors are built into `pretty_wrap()` and are NOT user-configurable:
+
+| Rule | Description |
+|------|-------------|
+| Punctuation-preferred breaks | When a line exceeds width, backtrack to the last token ending with punctuation (`.`, `,`, `!`, `?`, `;`, `:`, `—`, `…`) if available |
+| Anti-orphan | If the last wrapped line contains ≤ 20% of width in characters, rebalance by moving one word from the previous line |
+| Hanging indent | Continuation lines for speaker/bullet prefixes maintain the indentation level of the content start |
+| Code-aware width | Ignored patterns (from Code Database) do not count toward visible width |
+
+#### Testing Requirements
+
+- Unit tests for all wrapping modes and edge cases
+- Speaker Ignore vs Count with various prefix formats
+- Code pattern exclusion from width calculation
+- Max lines flagging behavior
+- Overwrite column population and diff detection
+- Break character auto-detection accuracy
+- Width calculation in character and pixel modes
+- Empty lines, code-only lines, very long words (hard-break fallback)
+- Lines with mixed code patterns and visible text
+
+**Test Files** (to be created/extended):
+- `dev/test_wordwrap_modes.py`
+- `dev/test_wordwrap_speaker.py`
+- `dev/test_wordwrap_code_patterns.py`
+- `dev/test_wordwrap_overwrite_integration.py`
+- `dev/test_wordwrap_pixel_width.py`
 
 ---
 
 ### Step 9: Output
 
-**Purpose**: Generate output files and inject translations into copies of originals.
+**Purpose**: Generate output files by injecting the best available translation into copies of the original files. The Output step is the final pipeline stage — it resolves which text to inject per line, validates that upstream steps completed cleanly (via dirty flags), and writes non-destructive output. It receives format and structure settings from Input (Step 0) and has its own settings for destination, naming, and backup.
+
+#### Philosophy
+
+Output's job is to produce files that are ready to use. It must:
+- **Be non-destructive by default**: Original files are never modified. Default naming strategy is `subfolder` ("put in subfolder").
+- **Use the best available text**: The injection priority chain determines which field to use per line.
+- **Validate completeness**: Dirty flags from upstream steps must be cleared before export (with warnings if not).
+- **Log failures**: Every write failure is logged with the file path and error for review.
+
+#### Injection Priority Chain
+
+For each line, Output resolves the text to inject by walking the following priority chain **from top to bottom**, using the **first non-empty value** found:
+
+| Priority | Manifest Field | Source Step | Description |
+|----------|---------------|-------------|-------------|
+| 1 (highest) | `lines[].overwrite` | Step 8: Wordwrap | Manually overwritten / injection-ready text |
+| 2 | `lines[].wordwr` | Step 8: Wordwrap | Wordwrapped text |
+| 3 | `lines[].postpro` | Step 7: Postprocessing | Postprocessed text |
+| 4 | `lines[].edit{N}` | Step 5: Translation (Edit mode) | Latest Edit round (highest N) |
+| 5 | `lines[].tlc{N}` | Step 5: Translation (TLC mode) | Latest TLC round (highest N) |
+| 6 | `lines[].tl` | Step 5: Translation | Base translation |
+| 7 | `lines[].preedit` | Step 5: Translation (Pre-edit) | Pre-edit result |
+| 8 | `lines[].prepro` | Step 4: Preprocessing | Preprocessed text |
+| 9 (lowest) | `lines[].orig` | Step 0: Input | Original extracted text |
+
+**Notes**:
+- `edit{N}` and `tlc{N}` are round-numbered fields (e.g., `edit1`, `edit2`, `tlc1`). The highest available round number is used.
+- When no processing has occurred, the original text is injected (passthrough).
+- The function `get_final_output(line_entry)` implements this chain and returns a `(text, source_field)` tuple for logging.
+
+#### Dirty Flags (Pipeline Completeness Check)
+
+Before exporting, Output checks dirty flags to warn the user if upstream steps have unfinished work:
+
+| Flag | Set When | Cleared When | Warning Message |
+|------|----------|--------------|-----------------|
+| Process Flag | Any preprocessing is applied (Step 4) | Postprocessing reaches 100% completion (Step 7) | "Preprocessing was applied but Postprocessing is not complete. Output may contain unrecovered codes." |
+| Wordwrap Flag | Files are loaded or translation changes | Wordwrap is applied (Step 8) | "Wordwrap has not been applied. Output will use unwrapped text." |
+
+**Behavior**:
+- Dirty flags are stored in manifest step data: `DirtyFlags.process`, `DirtyFlags.wordwrap`
+- On export attempt with dirty flags, a warning dialog is shown listing all dirty flags.
+- User can choose to **Export Anyway** or **Cancel** to go fix the issues first.
+- The Summary panel shows dirty flag status with visual indicators (⚠ or ✓).
 
 #### Widgets
 
@@ -2006,70 +2579,139 @@ The following widgets will be activated once the Translation/Edit/TLC mode toggl
 | Export All Button | Button | Write all output files |
 | Cancel Button | Button | Stop export |
 | Refresh Preview Button | Button | Recalculate output files |
-| Filter Radios | RadioGroup | all/pending/written/failed |
-| Files Table | SharedTable | Source → output mapping |
-| Format Dropdown | Combobox | txt/csv/tsv/json/xlsx |
+| Filter Radios | RadioGroup | all / pending / written / failed |
+| Files Table | SharedTable | Source → output mapping with status |
+| Summary Panel | Frame | Export stats, dirty flag status, failure log |
+| **Destination Options** | | |
 | Destination Entry | Entry | Output directory path |
 | Browse Button | Button | Select output directory |
-| Naming Strategy Dropdown | Combobox | suffix/prefix/replace/subfolder |
-| Suffix/Prefix Entry | Entry | Text to add to filename |
-| Pair Mode Dropdown | Combobox | translated_only/side_by_side/interleaved |
-| Backup Strategy Dropdown | Combobox | none/timestamp/numbered |
-| Preserve Structure Checkbox | Checkbox | Maintain folder hierarchy |
-| Overwrite Checkbox | Checkbox | Overwrite existing files |
-| Export Manifest Checkbox | Checkbox | Include manifest in export |
-| Export Logs Checkbox | Checkbox | Include logs in export |
+| **Format Options** | | |
+| Format Dropdown | Combobox | auto / txt / csv / tsv / json / xlsx |
+| Encoding Dropdown | Combobox | auto / utf-8 / utf-8-sig / shift_jis / etc. |
+| Pair Mode Dropdown | Combobox | translated_only / side_by_side / interleaved / separate_files |
+| **Naming Options** | | |
+| Naming Strategy Dropdown | Combobox | subfolder (default) / suffix / prefix / replace |
+| Naming Value Entry | Entry | Subfolder name, suffix, or prefix text |
+| **Safety Options** | | |
+| Preserve Structure Checkbox | Checkbox | Maintain folder hierarchy in output |
+| Overwrite Checkbox | Checkbox | Overwrite existing output files (default: off) |
+| Backup Strategy Dropdown | Combobox | timestamp (default) / numbered / extension / none |
+| Backup Extension Entry | Entry | Extension for backup files (default: .bk) |
+| **Export Extras** | | |
+| Export Manifest Checkbox | Checkbox | Include manifest copy in export |
+| Export Logs Checkbox | Checkbox | Include processing logs in export |
+| Export Glossary Checkbox | Checkbox | Include glossary entries in export |
 
-#### Injection Mode (Primary Use Case)
+#### Widget Specifications
 
-The primary purpose of Output is to **inject** translated text back into copies of the original files:
+##### Destination Options
 
-1. Original files are copied to the output directory (non-destructive)
-2. Translated text replaces original text at the corresponding positions
-3. File structure, formatting, and non-text content are preserved
-4. Uses `file_dir[]` from Input step to map lines back to source files
+| Property | Value |
+|----------|-------|
+| Default Destination | `{source_root}/translated/` (subfolder of input directory) |
+| Browse | Opens folder picker dialog |
+| Auto-populate | Set to `{source_root}/{naming_value}/` when naming strategy is "subfolder" |
+| Manifest Key | `OutputFormat.Destination` |
 
-#### Data Flow
+##### Files Table
 
-**Inputs**:
-- From Manifest: `file_dir[]` (source file mapping)
-- From Lines: `overwrite[]` or `wordwr[]` or `postpro[]` (final output)
-- Config: Format, naming, destination options
+| Column | Content |
+|--------|---------|
+| # | File index |
+| Status | pending / written / failed (with icon) |
+| Source | Source file path (relative to source_root) |
+| Output | Output file path (relative to destination) |
+| Format | File format |
+| Lines | Line count |
 
-**Processing** (via `formats/` handlers):
-1. Resolve final output text per line (`get_final_output()`)
-2. Map lines back to source files via `file_dir`
-3. Copy original file to output location
-4. Inject translations at correct positions
-5. Create backup if enabled
-6. Update export statistics
+##### Summary Panel
 
-**Outputs**:
-- Output files with injected translations
-- `export_stats: ExportStats` - Files written/failed/skipped
-- Backup files if enabled
-- Manifest export if enabled
-
-**Stored In**:
-- Manifest step data: `Output.files_written`, `Output.format`
+Displays after export:
+- Total files / written / failed / skipped counts
+- Duration and lines written
+- Dirty flag status indicators (⚠ Process / ⚠ Wordwrap / ✓ Clean)
+- **Failure Log**: Scrollable list of failed writes with file path and error message
 
 #### Naming Strategies
 
-| Strategy | Example |
-|----------|---------|
-| suffix | input.txt → input_translated.txt |
-| prefix | input.txt → translated_input.txt |
-| replace | input.txt → output.txt |
-| subfolder | input.txt → translated/input.txt |
+| Strategy | Default Value | Example |
+|----------|---------------|---------|
+| subfolder (default) | "translated" | `input.txt` → `translated/input.txt` |
+| suffix | "_translated" | `input.txt` → `input_translated.txt` |
+| prefix | "translated_" | `input.txt` → `translated_input.txt` |
+| replace | Pattern/replacement | `input.txt` → `output.txt` |
+
+**Default**: `subfolder` with value `"translated"`. This is the safest non-destructive option — originals are untouched.
 
 #### Pair Modes
 
 | Mode | Output Format |
 |------|---------------|
-| translated_only | Only translated text |
-| side_by_side | Original\tTranslated columns |
+| translated_only | Only the resolved output text (injection chain result) |
+| side_by_side | Original\tTranslated columns per line |
 | interleaved | Original line, then translated line |
-| separate_files | Two files: original and translated |
+| separate_files | Two files: `_original` and `_translated` |
+
+#### Settings Received from Input (Step 0)
+
+Output inherits these settings from Input to ensure format consistency:
+- `source_root` — base path for resolving relative file paths
+- `file_dir[]` — line-to-file mapping for injection targeting
+- `source_files[]` — list of loaded source files
+- Encoding per file (from Input format detection)
+- Format per file (for format-aware injection via `formats/` handlers)
+
+#### Data Flow
+
+**Inputs**:
+- From Manifest: `file_dir[]` (source file mapping from Step 0)
+- From Manifest: `lines[]` with all available fields (orig, prepro, tl, edit{N}, tlc{N}, postpro, wordwr, overwrite)
+- From Manifest: `DirtyFlags.process`, `DirtyFlags.wordwrap`
+- Config: `OutputFormat.*` (destination, format, naming, backup, export options)
+
+**Processing** (via `formats/` handlers + `functions/output.py`):
+1. **Check dirty flags** — warn if any are set.
+2. **Resolve final text per line** — walk injection priority chain via `get_final_output()`.
+3. **Map lines to source files** — use `file_dir[]` to group lines by source file.
+4. For each source file:
+   a. Determine output path based on naming strategy.
+   b. Copy original file to output location (non-destructive).
+   c. Inject resolved text at correct positions (replacing original text).
+   d. Create backup of existing output file if it exists and backup is enabled.
+   e. Write output file using appropriate format handler.
+   f. Log success or failure with details.
+5. **Export extras** — manifest, logs, glossary if requested.
+6. **Update statistics** — files written/failed/skipped, total lines, duration.
+
+**Outputs**:
+- Output files with injected translations
+- `export_stats: ExportStats` — Files written/failed/skipped, duration
+- Failure log entries with file path and error message
+- Backup files if enabled
+- Manifest/logs/glossary exports if enabled
+
+**Stored In**:
+- Manifest step data: `Output.files_written`, `Output.files_failed`, `Output.format`, `Output.destination`
+- Manifest step data: `Output.failure_log[]` — Array of `{file, error, timestamp}` entries
+
+#### Testing Requirements
+
+- Injection priority chain resolution (all levels, with gaps)
+- Dirty flag detection and warning display
+- Non-destructive default (subfolder naming)
+- Failure logging with accurate file paths and error messages
+- Format-aware injection (TXT, CSV, JSON, RPG Maker, etc.)
+- Backup strategies (timestamp, numbered, extension)
+- Encoding preservation across input → output
+- Pair modes (translated_only, side_by_side, interleaved, separate_files)
+- Edge cases: empty files, files with no translations, mixed format projects
+- Export extras (manifest copy, log export, glossary export)
+
+**Test Files** (to be created/extended):
+- `dev/test_output_injection_chain.py`
+- `dev/test_output_dirty_flags.py`
+- `dev/test_output_naming_strategies.py`
+- `dev/test_output_format_handlers.py`
 
 ---
 
@@ -2252,6 +2894,9 @@ Resolution methods:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.8 | 2026-02-08 | Comprehensive rewrite of Step 9 (Output): Defined injection priority chain (9-level: overwrite → wordwrap → postprocessed → edit{N} → tlc{N} → translation → preedit → preprocessed → original). Added Dirty Flags system (Process flag set by preprocessing/cleared by postprocessing 100%, Wordwrap flag cleared when applied) with pre-export validation dialog. Non-destructive default (subfolder naming, no overwrite). Failure logging with per-file error tracking. Complete widget specifications with destination, format, naming, safety, and export extras sections. Settings received from Input (source_root, file_dir, encoding, format). Step 0 (Input): Added Import Translations button — imports translations from another manifest via exact `orig` line matching (sequential search, file/line-number agnostic, copies all processing fields). Step 5 (Translation): Added Skip Already Translated checkbox — skips lines with existing `tl` field for incremental translation workflows. Bug fixes: QA mousewheel TclError (try/except wrapper for race condition), output_inject `get_section` → `get_output_options()`, preprocess warning demoted to debug. |
+| 2.7 | 2026-02-08 | Comprehensive rewrite of Step 8 (Wordwrap): Redefined purpose (auto from parser or manual settings). Pretty wrap is now standard — removed Prevent Orphans and Prefer Punctuation Breaks checkboxes (always active). Mode changed from radio buttons to dropdown, removed RPG Maker (→ its own parser) and Disabled options. Width changed from Spinbox to Dropdown with Character/Pixel modes. Break Character linked to Preprocessing and Translation Prompt with cost-optimization note. Speaker Handling reduced to Ignore + Count (renamed from Sameline), removed Samelineindent and Newline. Ignore Patterns replaced with read-only Code Database table (no checkboxes). Removed Typography widget entirely. Removed Overwrite Strategy widget — Overwrite becomes a column in the Lines Table with diff filtering. Added table filters (All/Changed/Exceeding/Overwrite Differs). Added Standard Wrapping Rules table documenting always-active `pretty_wrap()` behavior. Added comprehensive Future Improvements for parser-driven wrap, font commands, pixel-accurate width, New Textboxes, and break char removal before translation. |
+| 2.6 | 2026-02-08 | Comprehensive rewrite of Step 7 (Postprocessing): Complete mirror-symmetry spec with Step 4 Preprocessing — reverse priority ordering, automatic restorations (Placeholder/Code/BR always-on, no GUI toggle), post-exclusive recovery processes (Bracket Balance, Quote Balance, Whitespace Normalization with toggles). Renamed "Postprocessed Lines" to "Processed Lines" with new filters (Changed/Written/Flagged/By Process). Removed Refresh and Revert All buttons (overwrite semantics with confirmation dialog). Added Postprocess Options widget (bidirectional Symbol Conversion: Fullwidth↔Halfwidth). Redesigned Failure Handling (Write=default, Flag for Review=no-write, Queue for Retry=hidden/future). Added Diff View manual editing with Mark-as-Fixed. Added Postprocessing Summary with live updates and 100% completion popup. Fixed MouseWheel `bind_all` bug across all step files (qa.py, postprocess.py, translate.py, wordwrap_overwrite.py, output_inject.py). |
 | 2.5 | 2026-02-07 | Step 5 (Translation): Added Translation/Edit/TLC Mode Toggle to Hidden (Future Improvement) — three-way toggle with line-matching strategy design challenge. Step 6 (Quality Assurance): Complete rewrite — defined purpose as safety net for issues automatic recovery couldn't fix, added philosophy section, specified placeholder toggle mode (current state), preserved full widget spec and validation rules as future reference, added Edit/TLC filtering note. |
 | 2.4 | 2026-02-07 | Comprehensive update to Step 5 (Translation): Complete widget specifications for Translatable Lines (merged Original/Preprocessed into "To be Translated"), Request Options (Model from Global Options providers, Mock Translation default, Lines/Chunk sync with Estimation, Retry Strategy details for Batch/Contextual, Skip Non-Source Language), Prompt Editor (preview-only button, Ban Tokens separated), API Usage (live metrics). Added performance requirements (< 1s load for 100K lines, virtual scrolling, tab caching). Moved Request Caching, Extended Thinking, and Rolling Context to Global Options. Hidden Edit Before Translation and Line-by-Line Mode as Future Improvements. Added Mock Translation specification. |
 | 2.3 | 2026-02-03 | Comprehensive update to Step 4 (Preprocessing): Complete widget specifications for Standard Rules Panel, Custom Placeholders, Protect Code Patterns, and Anchoring (renamed from Anchor Removal). Added detailed process specifications with priority ordering, execution order documentation, Preprocessing↔Postprocessing mirror symmetry, validation and recovery strategies, RegEx toggle support for all pattern widgets, Preview Table with filtering, and comprehensive testing requirements. |
