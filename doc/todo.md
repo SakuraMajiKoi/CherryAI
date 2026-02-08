@@ -5411,6 +5411,222 @@ Changes:
 
 ---
 
+## PHASE 48: PIPELINE LOGGING SYSTEM (v2.9 Specs)
+
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** ~24h
+**Spec Reference:** `doc/specs.md` §9 (Pipeline Logging System) — v2.9
+**Key Files:** `functions/mainhelper.py`, `functions/api_client.py`, `functions/postprocess.py`, `functions/wordwrap.py`, `gui/steps/postprocess.py`, `gui/steps/wordwrap_overwrite.py`, `gui/steps/output_inject.py`
+
+### Context
+
+CherryAI currently has partial logging infrastructure: `api_client.py` writes API call logs to `logs/` and `mainhelper.py` has `setup_logger()` and `write_failure_report()`. The v2.9 spec (§9) defines a comprehensive per-project, per-step logging system with standardized status vocabulary, utility metrics tracking, and log archival. Most functions that need to emit log entries already exist — they need log-writing calls added, not replacement. The spec identifies ~100 existing functions organized by pipeline step that produce loggable events.
+
+### TASK 48.1: Log Rotation & Archival Utility
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**File:** `functions/mainhelper.py`
+
+Goal: Add shared `_rotate_log()` utility and update `setup_logger()` for per-project, per-step log files.
+
+Changes:
+- Add `_rotate_log(project_dir, project_name, step_name)` function
+  - Checks if `{project_name}.{step}.log` exists in `project_dir`
+  - If exists: rename to `{project_name}.{step}.{YYYYMMDD_HHMMSS}.log` using file creation time
+  - Returns path to the new (empty) log file
+- Update `setup_logger()` to accept optional `project_dir`, `project_name`, `step_name` args
+  - When provided, calls `_rotate_log()` and creates a FileHandler pointed at the step log
+  - Default behavior (no args) unchanged for backward compatibility
+- Add `get_step_log_path(project_dir, project_name, step_name)` helper
+- Add `write_step_log_header(log_path, header_dict)` — writes formatted header block
+- Add `write_step_log_footer(log_path, footer_dict)` — writes formatted summary footer
+- All log writes wrapped in `try/except` — never block processing
+- Unit tests: rotation naming, timestamp format, missing file, concurrent access
+
+### TASK 48.2: Unified Status Vocabulary Constants
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 1h
+**File:** `functions/mainhelper.py` (or `functions/common_errors.py`)
+
+Goal: Define the log status constants and formatting functions from §9.3.
+
+Changes:
+- Add `LogStatus` class or constants:
+  - `PASS = "PASS"`
+  - `RECOVERED = "RECOVERED: {type}"` (format function)
+  - `PARTIAL_RETRIAL = "(PARTIAL) RETRIAL {strategy}"` (format function)
+  - `PARTIAL_FAILURE = "(PARTIAL) FAILURE {type}"` (format function)
+  - `FAILURE = "FAILURE {type}"` (format function)
+- Add `format_log_status(status, detail=None)` function
+- Add `derive_step_status(line_statuses: List[str])` — derives aggregate status from worst per-line status
+- Reference `RecoveryType` from `postprocess.py`, `RetryStrategy` from `retry_handler.py`, `FailureType` (new enum or constants for `TRANSLATION_EXHAUSTED`, `API_ERROR`, `VALIDATION_FAILED`, `RECOVERY_FAILED`, `PLACEHOLDER_LOST`, `BRACKET_UNRECOVERABLE`, `QUOTE_UNRECOVERABLE`, `WRAP_OVERFLOW`, `WRITE_ERROR`, `FORMAT_ERROR`, `INJECTION_MISMATCH`)
+- Unit tests: all format functions, step status derivation logic
+
+### TASK 48.3: translation.log Integration
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 5h
+**File:** `functions/api_client.py`, `functions/retry_handler.py`, `functions/chunk_optimizer.py`
+
+Goal: Extend existing API logging to produce the `translation.log` format from §9.2.2.
+
+Changes:
+- **api_client.py**:
+  - Update `write_log_header()` — match spec header format (add Provider, Retry Strategy, Max Retries fields)
+  - Update `write_log_footer()` — add Tokens Saved (Cache), Tokens Saved (Dedup), Retries count, Recovered count
+  - Update `_log_api_call()` — add per-line status detail (OK, CACHED, SKIPPED, RECOVERED, RETRIED:{strategy}, FAILED)
+  - Update `_update_log_summary()` — track cache/dedup savings
+  - Update `get_api_log()` — return project-specific path `{project_dir}/{project_name}.translation.log`
+  - Call `_rotate_log()` at start of translation run
+  - Update `_format_translations_for_log()` — add status annotation per line
+- **retry_handler.py**:
+  - Add log emission in `handle_failed_lines()` — log which strategy was selected
+  - Add log emission in `_retry_batch()`, `_retry_contextual()`, `_retry_isolated()` — log attempt and result
+  - Add log emission in `_retry_skip()` — log skipped lines
+  - Add log emission in `should_continue_retrying()` — log exhaustion decision
+  - Add log emission in `get_exhausted_lines()` — log final exhausted list
+- **chunk_optimizer.py**:
+  - Add log emission in `record_error()` — log error type
+  - Add log emission in `_check_adjustment()` — log adjustment decision
+  - Add log emission in `_reduce_chunk_size()` — log size reduction
+- Wire translation validation functions (`validate_line_pre()`, `validate_line_post()`, `validate_batch_post()`, `detect_repetition()`, `apply_autofix()`) to log findings
+- Unit tests: log file creation, header/footer format, per-chunk entry format, per-line status values
+
+### TASK 48.4: postprocess.log Integration
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 5h
+**File:** `functions/postprocess.py`, `functions/postanalysis.py`, `gui/steps/postprocess.py`
+
+Goal: Add logging to all postprocessing recovery functions to produce `postprocess.log` per §9.2.3.
+
+Changes:
+- **postprocess.py**:
+  - `recover_line()` — emit per-operation log entry with priority, process name, and result
+  - `recover_batch()` — call `_rotate_log()`, write header, process lines, write footer
+  - `PostProcessManager.run()` — wire log file creation and archival
+  - Each `recover_*()` function — add log emission with RecoveryType and detail
+  - Each `check_*()` function — add log emission with detection result
+  - `RecoveryStats` — add `to_log_summary()` method for footer formatting
+- **postanalysis.py**:
+  - `compare_manifest_and_final()` — log comparison findings
+  - `_try_code_recover()`, `_try_speaker_fix()`, `_try_br_recovery()` — log recovery attempt and result
+- **gui/steps/postprocess.py**:
+  - `_do_postprocessing()` — create log file, write header, invoke processing, write footer
+  - `_basic_postprocess()` — log each line result
+  - `_run_character_validation()` — log validation findings
+  - `_apply_character_autofix()` — log autofix applications
+  - `FailurePolicy` — use in log status determination (WRITE → status logged as-is, FLAG → status logged as flagged)
+- Unit tests: log file creation, per-line entry format, summary footer with recovery type breakdown
+
+### TASK 48.5: wordwrap.log Integration
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**File:** `functions/wordwrap.py`, `gui/steps/wordwrap_overwrite.py`
+
+Goal: Add logging to wrapping operations to produce `wordwrap.log` per §9.2.4.
+
+Changes:
+- **wordwrap.py**:
+  - `pretty_wrap()` — return metadata (break positions, wrapped line count) for log emission
+  - `apply_wordwrap()` — call `_rotate_log()`, write header, process lines (log only changed/flagged), write footer
+  - Add `WrapLogEntry` dataclass for per-line metadata
+- **gui/steps/wordwrap_overwrite.py**:
+  - Wire `_rotate_log()` at start of Apply Wordwrap
+  - `_on_wrap_error()` — log error with line index and detail
+  - After wrapping complete: write summary footer with totals
+- Unit tests: log file creation, per-line entry format, exceeding flag logging, summary stats
+
+### TASK 48.6: output.log Integration
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**File:** `gui/steps/output_inject.py`, `functions/output.py` (from Task 47.4)
+
+Goal: Add logging to export operations to produce `output.log` per §9.2.5.
+
+Changes:
+- **gui/steps/output_inject.py**:
+  - On Export All: call `_rotate_log()`, write header (including dirty flag status)
+  - Per-file: log injection source breakdown using `get_final_output()` source_field return value
+  - `_on_export_error()` — log error to output.log with file path and error
+  - After export complete: write summary footer with file counts, line counts, injection source breakdown, extras exported
+  - `_export_logs()` — bundle all step logs (active + archived) found in project directory
+- **functions/output.py**:
+  - `get_final_output()` — already returns `(text, source_field)` from Task 47.4; ensure source_field is tracked per file for aggregate breakdown
+- Add injection source counter (dict counting how many lines came from each priority level)
+- Unit tests: log file creation, per-file entry format, injection source tracking, failure logging
+
+### TASK 48.7: Manifest Utility Metrics Storage
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**File:** `functions/manifest_manager.py`
+
+Goal: Ensure manifest step data stores all utility metrics defined in §9.4.
+
+Changes:
+- Add/verify manifest fields per spec:
+  - `Translation.tokens_saved_cache`, `Translation.tokens_saved_dedup`, `Translation.duration`
+  - `Postprocessing.total_ops`, `Postprocessing.duration`
+  - `Wordwrap.breaks_inserted`, `Wordwrap.lines_exceeding`, `Wordwrap.duration`
+  - `Output.duration`
+- Some fields already exist (`Translation.tokens_used`, `Translation.cost_actual`, `Postprocessing.recovery_rate`, `Output.files_written`, `Output.files_failed`); verify they are populated
+- Add `set_step_metrics(step_name, metrics_dict)` convenience method if not already present
+- Unit tests: metric storage and retrieval roundtrip
+
+### TASK 48.8: Log Export in Output Step
+**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 1.5h
+**File:** `gui/steps/output_inject.py`
+
+Goal: Update Export Logs feature to bundle all per-step logs.
+
+Changes:
+- `_export_logs()` currently exports application logs from `logs/` directory
+- Update to also discover and include step-specific logs from the project directory:
+  - Glob `{project_dir}/{project_name}.*.log` for active logs
+  - Glob `{project_dir}/{project_name}.*.*.log` for archived logs
+- Create a `logs/` subfolder in the export destination
+- Copy all discovered logs into the export `logs/` folder
+- Update export summary to list which logs were included
+- Unit tests: log discovery, export bundling, missing logs handled gracefully
+
+### TASK 48.9: Integration Testing
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 1.5h
+**File:** `dev/test_pipeline_logging.py` (new)
+
+Goal: End-to-end tests verifying log files are created, formatted, and archived correctly.
+
+Changes:
+- Test: translation run creates `translation.log` with correct header/footer
+- Test: postprocessing run creates `postprocess.log` with per-line entries
+- Test: wordwrap run creates `wordwrap.log` with correct metrics
+- Test: output export creates `output.log` with injection source breakdown
+- Test: re-running a step archives the previous log with timestamp
+- Test: log write failure does not block processing (mock file system error)
+- Test: `derive_step_status()` correctly aggregates per-line statuses
+- Test: export logs bundles all active + archived logs
+- Test: all log files are UTF-8 with correct naming convention
+
+---
+
+### Phase 48 Summary
+
+| Task | Description | Priority | Effort | Dependencies |
+|------|-------------|----------|--------|--------------|
+| 48.1 | Log Rotation & Archival Utility | HIGH | 2h | None |
+| 48.2 | Unified Status Vocabulary Constants | HIGH | 1h | None |
+| 48.3 | translation.log Integration | HIGH | 5h | 48.1, 48.2 |
+| 48.4 | postprocess.log Integration | HIGH | 5h | 48.1, 48.2 |
+| 48.5 | wordwrap.log Integration | MEDIUM | 3h | 48.1, 48.2 |
+| 48.6 | output.log Integration | MEDIUM | 3h | 48.1, 48.2, 47.4 |
+| 48.7 | Manifest Utility Metrics Storage | MEDIUM | 2h | None |
+| 48.8 | Log Export in Output Step | LOW | 1.5h | 48.3-48.6 |
+| 48.9 | Integration Testing | HIGH | 1.5h | 48.3-48.6 |
+
+**Total Estimated Effort:** 24 hours
+
+**Implementation Order:**
+1. **Task 48.1** (Log rotation — shared utility, prerequisite for all step logs)
+2. **Task 48.2** (Status vocabulary — shared constants, prerequisite for all step logs)
+3. **Task 48.7** (Manifest metrics — independent, can parallel with 48.1/48.2)
+4. **Task 48.3** (translation.log — highest value, extends existing api_client logging)
+5. **Task 48.4** (postprocess.log — second highest value, most recovery functions)
+6. **Task 48.5** (wordwrap.log — simpler step, fewer functions)
+7. **Task 48.6** (output.log — depends on Task 47.4 injection chain)
+8. **Task 48.8** (Log export — polish, depends on all logs existing)
+9. **Task 48.9** (Integration testing — final validation of entire system)
+
+---
+
 =============================================================================
 
 FUTURE IDEAS (No Phase Commitment)

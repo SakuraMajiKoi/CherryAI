@@ -1,6 +1,6 @@
 # CherryAI Specification Document
 
-Version 2.8 | February 2026
+Version 2.9 | February 2026
 
 This document provides a complete functional specification of CherryAI, an LLM-based translation application designed to achieve high-quality translations using Large Language Models. The application requires substantial input and processing which can optimally be performed automatically once an input is selected.
 
@@ -55,6 +55,7 @@ CherryAI features terms that may not be clear at first glance or slightly differ
 6. [CLI Mode: Automatic Pipeline](#6-cli-mode-automatic-pipeline)
 7. [Manifest Structure](#7-manifest-structure)
 8. [Processing Modules Reference](#8-processing-modules-reference)
+9. [Pipeline Logging System](#9-pipeline-logging-system)
 
 ---
 
@@ -2890,10 +2891,664 @@ Resolution methods:
 
 ---
 
+## 9. Pipeline Logging System
+
+CherryAI maintains per-project, per-step log files that record the outcome of every processing step in the pipeline. Logs are the audit trail: they capture what happened, what went wrong, what was recovered, and how long it took. The manifest remains the single source of truth for data; logs are the single source of truth for *process history*.
+
+### 9.1 Design Principles
+
+1. **Manifest is Data, Logs are History**: The manifest stores line fields (`tl`, `postpro`, `wordwr`, `overwrite`) and step data (counts, flags, options). Logs store chronological event records — what was attempted, what succeeded, what failed, and why. Logs never duplicate manifest data; they reference it by line index.
+2. **Per-Project, Per-Step**: Each log file is scoped to one project and one pipeline step. Log files live alongside the manifest.
+3. **Archival on Re-run**: When a step is re-run, the existing log is archived (renamed with timestamp) and a fresh log is started. This preserves full history without cluttering the active log.
+4. **Unified Status Vocabulary**: All logs use the same status vocabulary (see §9.3) so that cross-step analysis is consistent.
+5. **Utility Metrics Always Present**: Every log entry and summary includes time taken and token counts where applicable.
+6. **Existing Functions First**: The logging system builds on existing infrastructure in `functions/mainhelper.py` (`setup_logger`, `write_failure_report`), `functions/api_client.py` (`write_log_header`, `write_log_footer`, `_log_api_call`, `_update_log_summary`), and `functions/common_errors.py` (`ErrorCollector`). New code extends these — it does not replace them.
+7. **Succintness**: Logs must not log every success. Only the translation.log is supposed to log every request with response. Any other optimally only logs 'Success' and any utility information like timestamp and time taken. 
+
+### 9.2 Log File Specifications
+
+All log files are plain UTF-8 text. They follow a common structure: **Header → Per-Line/Per-Chunk Entries → Summary Footer**.
+
+#### 9.2.1 Log File Location & Naming
+
+| Item | Value |
+|------|-------|
+| Directory | Same directory as the project manifest (`.CherryAI.json`) |
+| Naming | `{project_name}.{step}.log` |
+| Archive Naming | `{project_name}.{step}.{YYYYMMDD_HHMMSS}.log` |
+| Encoding | UTF-8 (no BOM) |
+
+**Examples**:
+- `MyGame.translation.log` — active translation log
+- `MyGame.postprocess.log` — active postprocessing log
+- `MyGame.wordwrap.log` — active wordwrap log
+- `MyGame.output.log` — active output log
+- `MyGame.translation.20260208_143022.log` — archived translation log from Feb 8, 2026 at 14:30:22
+
+#### 9.2.2 translation.log (Step 5: Translation)
+
+**Purpose**: Record every translation chunk request, its result, any retries, and per-line outcomes.
+
+**Header** (written once at start of translation run):
+```
+============================================================
+ CherryAI Translation Log
+ Project: {project_name}
+ Started: {ISO 8601 timestamp}
+ Model: {model_name}
+ Provider: {provider_name}
+ Lines/Chunk: {chunk_size}
+ Total Lines: {total_lines}
+ Retry Strategy: {strategy}
+ Max Retries: {max_retries}
+============================================================
+```
+
+**Per-Chunk Entry**:
+```
+--- Chunk {N}/{total} | Lines {start_idx}-{end_idx} ---
+  Status: {PASS | RECOVERED: {type} | (PARTIAL) RETRIAL {type} | (PARTIAL) FAILURE {type}}
+  Input Tokens: {count}
+  Output Tokens: {count}
+  Time: {seconds}s
+  Cache Hits: {count}
+  Lines:
+    [{idx}] {status} {detail}
+    [{idx}] {status} {detail}
+    ...
+```
+
+**Per-Line Status Values** (within chunk):
+| Status | Meaning |
+|--------|---------|
+| `OK` | Line translated successfully on first attempt |
+| `CACHED` | Line served from cache, no API call |
+| `SKIPPED` | Line skipped (dedup, empty, wrong language, already translated) |
+| `RECOVERED` | Line failed initial validation but was auto-fixed |
+| `RETRIED:{strategy}` | Line required retry (strategy: BATCH, CONTEXTUAL, ISOLATED) |
+| `FAILED` | Line exhausted all retry attempts |
+
+**Summary Footer** (written once at end of translation run):
+```
+============================================================
+ Translation Summary
+ Completed: {ISO 8601 timestamp}
+ Duration: {total_time}
+ Total Lines: {total} | Translated: {count} | Cached: {count} | Skipped: {count} | Failed: {count}
+ Total Tokens: {input + output} (Input: {input}, Output: {output})
+ Tokens Saved (Cache): {saved_count}
+ Tokens Saved (Dedup): {dedup_saved_count}
+ Cost: ${cost} USD
+ Retries: {retry_count} (Recovered: {recovered_count})
+============================================================
+```
+
+**Existing Functions** (to extend, not replace):
+| Function | Module | Current Role | Extension |
+|----------|--------|-------------|-----------|
+| `write_log_header()` | `api_client.py` | Writes API log header | Adapt format to match spec header above |
+| `write_log_footer()` | `api_client.py` | Writes API log summary | Add token-saved and retry metrics |
+| `_log_api_call()` | `api_client.py` | Logs individual API calls | Add per-line status detail |
+| `_update_log_summary()` | `api_client.py` | Updates running totals | Add cache/dedup savings tracking |
+| `_format_system_prompt_for_log()` | `api_client.py` | Formats prompt for log | No change needed |
+| `_format_lines_for_log()` | `api_client.py` | Formats input lines | No change needed |
+| `_format_translations_for_log()` | `api_client.py` | Formats output lines | Add status annotation per line |
+| `get_api_log()` | `api_client.py` | Returns log path | Update to return step-specific path |
+
+**Retry Functions** (log their outcomes into translation.log):
+| Function | Module | What It Logs |
+|----------|--------|-------------|
+| `RetryHandler.handle_failed_lines()` | `retry_handler.py` | Entry point — logs which strategy was selected |
+| `RetryHandler._retry_batch()` | `retry_handler.py` | Logs batch retry attempt and result |
+| `RetryHandler._retry_contextual()` | `retry_handler.py` | Logs contextual retry with context window |
+| `RetryHandler._retry_isolated()` | `retry_handler.py` | Logs per-line isolated retry |
+| `RetryHandler._retry_skip()` | `retry_handler.py` | Logs skipped lines |
+| `RetryHandler.should_continue_retrying()` | `retry_handler.py` | Logs retry exhaustion decision |
+| `RetryHandler.get_exhausted_lines()` | `retry_handler.py` | Logs final exhausted line list |
+
+**Validation Functions** (called during translation, log to translation.log):
+| Function | Module | What It Logs |
+|----------|--------|-------------|
+| `validate_line_pre()` | `validation.py` | Pre-translation validation issues |
+| `validate_line_post()` | `validation.py` | Post-translation validation issues |
+| `validate_batch_post()` | `validation.py` | Batch-level validation summary |
+| `validate_batch_comprehensive()` | `validation.py` | Comprehensive validation findings |
+| `detect_repetition()` | `validation.py` | Repetition detection flags |
+| `apply_autofix()` | `validation.py` | Auto-fix applications |
+
+**Chunk Optimization** (logs adjustment decisions):
+| Function | Module | What It Logs |
+|----------|--------|-------------|
+| `ChunkOptimizer.record_batch()` | `chunk_optimizer.py` | Batch result recording |
+| `ChunkOptimizer.record_error()` | `chunk_optimizer.py` | Error type and rate |
+| `ChunkOptimizer._check_adjustment()` | `chunk_optimizer.py` | Chunk size adjustment decisions |
+| `ChunkOptimizer._reduce_chunk_size()` | `chunk_optimizer.py` | Chunk size reduction events |
+
+#### 9.2.3 postprocess.log (Step 7: Postprocessing)
+
+**Purpose**: Record every postprocessing operation, recovery attempt, and failure for each line.
+
+**Header**:
+```
+============================================================
+ CherryAI Postprocessing Log
+ Project: {project_name}
+ Started: {ISO 8601 timestamp}
+ Total Lines: {total_lines}
+ Failure Policy: {write | flag}
+ Recovery Options: Bracket={on|off}, Quote={on|off}, Whitespace={on|off}
+ Symbol Conversion: {direction | off}
+============================================================
+```
+
+**Per-Line Entry**:
+```
+--- Line {idx} ---
+  Status: {PASS | RECOVERED: {type} | (PARTIAL) RETRIAL {type} | (PARTIAL) FAILURE {type}}
+  Input: "{truncated_input}"
+  Output: "{truncated_output}"
+  Operations:
+    [{priority}] {process_name}: {result}
+    [{priority}] {process_name}: {result}
+  Recovery: {count} operations applied
+  Time: {ms}ms
+```
+
+**Per-Operation Result Values**:
+| Result | Meaning |
+|--------|---------|
+| `OK` | Restoration/recovery succeeded without issues |
+| `RECOVERED: {RecoveryType}` | Issue found and automatically fixed |
+| `SKIPPED` | Process not applicable to this line |
+| `FAILED: {reason}` | Process failed, line handled per FailurePolicy |
+
+**RecoveryType Values** (from `postprocess.py` `RecoveryType` enum):
+| Type | Description |
+|------|-------------|
+| `PLACEHOLDER_CASE` | Fixed placeholder case mismatch |
+| `MANGLED_PLACEHOLDER` | Recovered mangled/split placeholder token |
+| `MISSING_PLACEHOLDER` | Recovered missing placeholder from original |
+| `PLACEHOLDER_WHITESPACE` | Normalized placeholder whitespace |
+| `BRACKET_BALANCE` | Fixed unmatched brackets |
+| `QUOTE_BALANCE` | Fixed unmatched quotes |
+| `SPEAKER_FORMAT` | Restored speaker format |
+| `BR_TAG` | Recovered `<br>` tags |
+| `CODE_PATTERN` | Recovered code pattern via postanalysis |
+| `WHITESPACE` | Normalized whitespace/indentation |
+
+**Summary Footer**:
+```
+============================================================
+ Postprocessing Summary
+ Completed: {ISO 8601 timestamp}
+ Duration: {total_time}
+ Total Lines: {total} | Changed: {count} | Unchanged: {count} | Written: {count} | Flagged: {count}
+ Recovery Operations: {total_ops} (Success: {success}, Failed: {failed})
+ Recovery Rate: {rate}%
+ By Type:
+   Placeholder Case: {count}
+   Mangled Placeholder: {count}
+   Missing Placeholder: {count}
+   Bracket Balance: {count}
+   Quote Balance: {count}
+   Speaker Format: {count}
+   BR Tag: {count}
+   Code Pattern: {count}
+   Whitespace: {count}
+============================================================
+```
+
+**Existing Functions** (to extend):
+| Function | Module | Current Role | Extension |
+|----------|--------|-------------|-----------|
+| `recover_line()` | `postprocess.py` | Master recovery for single line | Add log emission per operation |
+| `recover_batch()` | `postprocess.py` | Batch recovery orchestrator | Add header/footer log writes |
+| `PostProcessManager.run()` | `postprocess.py` | Full postprocessing pipeline | Wire log file creation and archival |
+| `recover_placeholder_case()` | `postprocess.py` | Fix case mismatches | Log recovery type + detail |
+| `recover_mangled_placeholders()` | `postprocess.py` | Fix split/mangled tokens | Log recovery type + detail |
+| `recover_missing_placeholders()` | `postprocess.py` | Restore missing placeholders | Log recovery type + detail |
+| `normalize_placeholder_whitespace()` | `postprocess.py` | Fix placeholder spacing | Log recovery type + detail |
+| `check_bracket_balance()` | `postprocess.py` | Detect bracket issues | Log detection result |
+| `recover_bracket_balance()` | `postprocess.py` | Fix bracket issues | Log recovery type + detail |
+| `check_quote_balance()` | `postprocess.py` | Detect quote issues | Log detection result |
+| `recover_quote_balance()` | `postprocess.py` | Fix quote issues | Log recovery type + detail |
+| `compare_manifest_and_final()` | `postanalysis.py` | Post-analysis comparison | Log comparison findings |
+| `_try_code_recover()` | `postanalysis.py` | Attempt code recovery | Log recovery attempt |
+| `_try_speaker_fix()` | `postanalysis.py` | Attempt speaker fix | Log recovery attempt |
+| `_try_br_recovery()` | `postanalysis.py` | Attempt BR tag recovery | Log recovery attempt |
+
+**GUI Step Functions** (orchestrate logging):
+| Function | Module | Current Role | Extension |
+|----------|--------|-------------|-----------|
+| `_do_postprocessing()` | `gui/steps/postprocess.py` | Main postprocessing entry | Create log, write header, call processing, write footer |
+| `_basic_postprocess()` | `gui/steps/postprocess.py` | Basic postprocess path | Log each line result |
+| `_run_character_validation()` | `gui/steps/postprocess.py` | Character validation | Log validation findings |
+| `_apply_character_autofix()` | `gui/steps/postprocess.py` | Apply autofix rules | Log autofix applications |
+| `FailurePolicy` | `gui/steps/postprocess.py` | Enum for failure handling | Used in log status determination |
+
+#### 9.2.4 wordwrap.log (Step 8: Wordwrap)
+
+**Purpose**: Record wrapping operations, exceeding-line flags, and overwrite generation.
+
+**Header**:
+```
+============================================================
+ CherryAI Wordwrap Log
+ Project: {project_name}
+ Started: {ISO 8601 timestamp}
+ Total Lines: {total_lines}
+ Mode: {Manual | parser_name}
+ Width: {value} {characters | pixels}
+ Break Character: {repr}
+ Max Lines: {value | unlimited}
+ Speaker Handling: {Ignore | Count}
+============================================================
+```
+
+**Per-Line Entry** (only for lines with changes or issues):
+```
+--- Line {idx} ---
+  Status: {PASS | RECOVERED: {type} | (PARTIAL) FAILURE {type}}
+  Wrapped Lines: {count}
+  Exceeding: {yes | no}
+  Overwrite Differs: {yes | no}
+  Break Positions: [{pos1}, {pos2}, ...]
+  Time: {ms}ms
+```
+
+**Summary Footer**:
+```
+============================================================
+ Wordwrap Summary
+ Completed: {ISO 8601 timestamp}
+ Duration: {total_time}
+ Total Lines: {total} | Changed: {count} | Unchanged: {count} | Exceeding: {count}
+ Overwrite Differs: {count}
+ Total Breaks Inserted: {count}
+============================================================
+```
+
+**Existing Functions** (to extend):
+| Function | Module | Current Role | Extension |
+|----------|--------|-------------|-----------|
+| `pretty_wrap()` | `wordwrap.py` | Core wrapping algorithm | Return metadata for logging |
+| `apply_wordwrap()` | `wordwrap.py` | Batch wrapping | Add header/footer log writes |
+| `_on_wrap_error()` | `gui/steps/wordwrap_overwrite.py` | Error handler | Log error with line detail |
+
+#### 9.2.5 output.log (Step 9: Output)
+
+**Purpose**: Record every file export attempt, injection source per line, and any write failures.
+
+**Header**:
+```
+============================================================
+ CherryAI Output Log
+ Project: {project_name}
+ Started: {ISO 8601 timestamp}
+ Total Files: {total_files}
+ Total Lines: {total_lines}
+ Destination: {destination_path}
+ Naming Strategy: {subfolder | suffix | prefix | replace}
+ Format: {auto | txt | csv | json | xlsx}
+ Backup: {timestamp | numbered | extension | none}
+ Dirty Flags: Process={✓|⚠}, Wordwrap={✓|⚠}
+============================================================
+```
+
+**Per-File Entry**:
+```
+--- File {N}/{total}: {filename} ---
+  Status: {PASS | (PARTIAL) FAILURE {type}}
+  Source: {source_path}
+  Output: {output_path}
+  Lines: {count}
+  Injection Sources:
+    overwrite: {count}
+    wordwr: {count}
+    postpro: {count}
+    edit{N}: {count}
+    tlc{N}: {count}
+    tl: {count}
+    preedit: {count}
+    prepro: {count}
+    orig: {count}
+  Time: {seconds}s
+  Errors: {count}
+    [{line_idx}] {error_detail}
+```
+
+**Summary Footer**:
+```
+============================================================
+ Output Summary
+ Completed: {ISO 8601 timestamp}
+ Duration: {total_time}
+ Files: {total} | Written: {count} | Failed: {count} | Skipped: {count}
+ Lines Injected: {count}
+ Injection Source Breakdown:
+   overwrite: {count} | wordwr: {count} | postpro: {count}
+   edit: {count} | tlc: {count} | tl: {count}
+   preedit: {count} | prepro: {count} | orig: {count}
+ Extras Exported: {manifest: yes|no, logs: yes|no, glossary: yes|no}
+============================================================
+```
+
+**Existing Functions** (to extend):
+| Function | Module | Current Role | Extension |
+|----------|--------|-------------|-----------|
+| `_export_logs()` | `gui/steps/output_inject.py` | Export log files | Bundle all step logs into export |
+| `_on_export_error()` | `gui/steps/output_inject.py` | Export error handler | Log error to output.log |
+| `get_final_output()` | `functions/output.py` (new, Task 47.4) | Resolve injection priority | Return source_field for log tracking |
+| `write_failure_report()` | `mainhelper.py` | Write failure report | Adapt to output.log format |
+
+### 9.3 Log Status Definitions
+
+All log entries use a unified status vocabulary. Status is determined at two levels: **per-line** (individual line outcome) and **per-step** (aggregate step outcome derived from line statuses).
+
+#### Per-Line Status
+
+| Status | Format | Meaning |
+|--------|--------|---------|
+| **PASS** | `PASS` | Line processed successfully with no issues |
+| **RECOVERED** | `RECOVERED: {RecoveryType}` | Issue detected and automatically resolved. `{RecoveryType}` specifies what was fixed (e.g., `BRACKET_BALANCE`, `MISSING_PLACEHOLDER`, `MANGLED_PLACEHOLDER`) |
+| **PARTIAL RETRIAL** | `(PARTIAL) RETRIAL {RetryStrategy}` | Line required retrying with the specified strategy. "(PARTIAL)" indicates the line was not fully resolved on first attempt. Applies only to Translation step |
+| **PARTIAL FAILURE** | `(PARTIAL) FAILURE {FailureType}` | Line could not be fully processed. Some operations may have succeeded but the final result is incomplete. `{FailureType}` specifies what failed |
+| **FAILURE** | `FAILURE {FailureType}` | Line processing failed entirely. No usable output was produced |
+
+#### Per-Step Status (Summary)
+
+The step-level status is derived from the worst per-line status:
+
+| Step Status | Condition |
+|-------------|-----------|
+| `PASS` | All lines are PASS |
+| `RECOVERED` | Some lines RECOVERED, none worse |
+| `PARTIAL` | Some lines had PARTIAL RETRIAL or PARTIAL FAILURE |
+| `FAILURE` | Any line has FAILURE status |
+
+#### RecoveryType Reference
+
+| RecoveryType | Applicable Steps | Description |
+|-------------|-----------------|-------------|
+| `PLACEHOLDER_CASE` | Translation, Postprocessing | Placeholder token case corrected (e.g., `__prot__` → `__PROT__`) |
+| `MANGLED_PLACEHOLDER` | Translation, Postprocessing | Split or corrupted placeholder token reconstructed |
+| `MISSING_PLACEHOLDER` | Translation, Postprocessing | Placeholder missing from output, recovered from original |
+| `PLACEHOLDER_WHITESPACE` | Postprocessing | Errant spaces in placeholder token normalized |
+| `BRACKET_BALANCE` | Postprocessing | Missing/extra brackets fixed using original as reference |
+| `QUOTE_BALANCE` | Postprocessing | Missing/extra quotes fixed |
+| `SPEAKER_FORMAT` | Postprocessing | Speaker `Name: "Dialogue"` format restored |
+| `BR_TAG` | Postprocessing | `<br>` tags recovered |
+| `CODE_PATTERN` | Postprocessing | Code pattern recovered via postanalysis comparison |
+| `WHITESPACE` | Postprocessing | Indentation/spacing normalized to match original |
+| `LINE_COUNT_MISMATCH` | Translation | API returned wrong number of lines, remapped |
+| `JSON_PARSE` | Translation | API response JSON repaired |
+| `CONTENT_WARNING` | Translation | Content warning detected and handled |
+
+#### RetryStrategy Reference
+
+| Strategy | When Used | Description |
+|----------|-----------|-------------|
+| `BATCH` | Default | Re-send entire failed chunk |
+| `CONTEXTUAL` | Context-dependent failures | Re-send failed lines with surrounding context |
+| `ISOLATED` | Stubborn failures (hidden) | Retry each line individually |
+| `SKIP` | Give up (hidden) | Mark as Skipped, move on |
+
+#### FailureType Reference
+
+| FailureType | Applicable Steps | Description |
+|-------------|-----------------|-------------|
+| `TRANSLATION_EXHAUSTED` | Translation | All retry attempts exhausted |
+| `API_ERROR` | Translation | API returned error (rate limit, auth, server) |
+| `VALIDATION_FAILED` | Translation, QA | Line failed validation after all recovery |
+| `RECOVERY_FAILED` | Postprocessing | Recovery operation could not fix the issue |
+| `PLACEHOLDER_LOST` | Postprocessing | Placeholder could not be recovered from any source |
+| `BRACKET_UNRECOVERABLE` | Postprocessing | Bracket balance could not be restored (no anchor) |
+| `QUOTE_UNRECOVERABLE` | Postprocessing | Quote balance could not be restored |
+| `WRAP_OVERFLOW` | Wordwrap | Line exceeds Max Lines after wrapping |
+| `WRITE_ERROR` | Output | File write failed (permission, disk, path) |
+| `FORMAT_ERROR` | Output | Format handler could not inject into target file |
+| `INJECTION_MISMATCH` | Output | Line count mismatch between manifest and source file |
+
+### 9.4 Utility Metrics Tracking
+
+Every log captures process-level utility metrics. These are written in both per-entry and summary sections.
+
+| Metric | Steps | Description | Source |
+|--------|-------|-------------|--------|
+| **Time Taken** | All | Wall-clock duration per entry and total | `time.perf_counter()` delta |
+| **Input Tokens** | Translation | Tokens sent to LLM | API response usage field |
+| **Output Tokens** | Translation | Tokens received from LLM | API response usage field |
+| **Tokens Saved (Cache)** | Translation | Tokens not sent due to cache hits | Cache hit count × avg tokens/line |
+| **Tokens Saved (Dedup)** | Translation | Tokens not sent due to deduplication | Dedup skip count × avg tokens/line |
+| **Cost** | Translation | Dollar cost of API calls | Model pricing × token counts |
+| **Recovery Operations** | Postprocessing | Count of recovery ops applied | RecoveryStats from postprocess.py |
+| **Recovery Rate** | Postprocessing | Success rate of recovery attempts | `recovered / (recovered + failed) × 100` |
+| **Breaks Inserted** | Wordwrap | Total line break characters inserted | Wrapping metadata |
+| **Files Written** | Output | Count of successfully written files | Export loop counter |
+
+**Manifest Storage**: Utility metrics are also persisted in manifest step data for later reference:
+- `Translation.tokens_used`, `Translation.tokens_saved_cache`, `Translation.tokens_saved_dedup`, `Translation.cost_actual`, `Translation.duration`
+- `Postprocessing.recovery_rate`, `Postprocessing.total_ops`, `Postprocessing.duration`
+- `Wordwrap.breaks_inserted`, `Wordwrap.lines_exceeding`, `Wordwrap.duration`
+- `Output.files_written`, `Output.files_failed`, `Output.duration`
+
+### 9.5 Log Archival & Lifecycle
+
+| Event | Action |
+|-------|--------|
+| Step re-run | Active log renamed to `{project}.{step}.{timestamp}.log`, fresh log created |
+| Project load | Active logs remain; displayed in Output step's "Export Logs" option |
+| Export Logs (Step 9) | All logs (active + archived) in the project directory are bundled into the export |
+| Manual cleanup | User may delete archived logs at will; active logs are regenerated on next run |
+
+**Archival Implementation**:
+1. Before writing a new log header, check if `{project}.{step}.log` exists
+2. If it exists, rename to `{project}.{step}.{YYYYMMDD_HHMMSS}.log` using the log's own creation timestamp
+3. Create a fresh `{project}.{step}.log` and write the new header
+4. This is handled by a shared `_rotate_log()` utility in `functions/mainhelper.py`
+
+**Existing Function to Extend**:
+| Function | Module | Extension |
+|----------|--------|-----------|
+| `setup_logger()` | `mainhelper.py` | Add `_rotate_log()` call before logger creation |
+| `write_failure_report()` | `mainhelper.py` | Route failure reports to the appropriate step log |
+
+### 9.6 Manifest Integration
+
+Logs are about process history; the manifest is about data state. They complement each other:
+
+| Concern | Manifest | Log |
+|---------|----------|-----|
+| Line text fields | `lines[].tl`, `lines[].postpro`, etc. | Referenced by index, not stored |
+| Step data / totals | `Translation.tokens_used`, `Postprocessing.recovery_rate`, etc. | Duplicated in summary footer for standalone readability |
+| Per-line status | Not stored (derived from field presence) | Explicitly recorded per entry |
+| Failure details | `Output.failure_log[]` (file-level only) | Full detail per line per step |
+| Options / settings | All step options in manifest | Echoed in log header for context |
+| Recovery type breakdown | `Postprocessing.recovery_stats` (summary only) | Per-line per-operation detail |
+
+**Key Rule**: The manifest is always written first (crash resilience). Log writes are best-effort — a log write failure must never block or interrupt processing. Logs are wrapped in `try/except` at every write point.
+
+### 9.7 Recovery & Failure Functions Catalog
+
+This catalog lists every existing function that participates in recovery, validation, retry, or failure handling, organized by pipeline step. These functions produce the log entries described above and are the implementation backbone of the logging system.
+
+#### 9.7.1 Translation Step Functions
+
+**API Client** (`functions/api_client.py`):
+| Function | Purpose |
+|----------|---------|
+| `_translate_chunk_with_retry()` | Orchestrates chunk translation with retry loop |
+| `check_content_warning()` | Detects and handles API content warnings |
+| `write_log_header()` | Writes session log header |
+| `write_log_footer()` | Writes session log summary |
+| `_log_api_call()` | Logs individual API request/response |
+| `_update_log_summary()` | Updates running summary statistics |
+| `_format_system_prompt_for_log()` | Formats system prompt for readable log output |
+| `_format_lines_for_log()` | Formats input lines for log |
+| `_format_translations_for_log()` | Formats translation output for log |
+| `get_api_log()` | Returns path to current API log file |
+
+**Retry Handler** (`functions/retry_handler.py`):
+| Function / Class | Purpose |
+|------------------|---------|
+| `RetryStrategy` (enum) | BATCH, CONTEXTUAL, ISOLATED, SKIP |
+| `RetryConfig` | Max retries, delay, strategy configuration |
+| `RetryResult` | Per-line retry outcome |
+| `BatchRetryResult` | Aggregate retry outcome for a batch |
+| `RetryHandler.handle_failed_lines()` | Entry point for retry logic |
+| `RetryHandler._retry_batch()` | Batch retry implementation |
+| `RetryHandler._retry_contextual()` | Contextual retry with surrounding lines |
+| `RetryHandler._retry_isolated()` | Per-line isolated retry |
+| `RetryHandler._retry_skip()` | Skip strategy (mark as skipped) |
+| `RetryHandler.should_continue_retrying()` | Decides if more retries are warranted |
+| `RetryHandler.get_exhausted_lines()` | Returns lines that exhausted all retries |
+
+**Chunk Optimizer** (`functions/chunk_optimizer.py`):
+| Function / Class | Purpose |
+|------------------|---------|
+| `ErrorType` (enum) | Categorizes chunk errors |
+| `ChunkOptimizer.record_batch()` | Records batch outcome |
+| `ChunkOptimizer.record_success()` | Records successful chunk |
+| `ChunkOptimizer.record_error()` | Records chunk error with type |
+| `ChunkOptimizer._check_adjustment()` | Evaluates whether chunk size should change |
+| `ChunkOptimizer._reduce_chunk_size()` | Reduces chunk size after errors |
+| `ChunkOptimizer.get_error_rate()` | Returns current error rate |
+| `ChunkOptimizer.get_success_rate()` | Returns current success rate |
+
+**Rate Limiter** (`functions/rate_limiter.py`):
+| Function | Purpose |
+|----------|---------|
+| `RateLimiter.wait_if_needed()` | Enforces RPM limits, logs wait events |
+| `RateLimiter.record_request()` | Tracks request timing |
+
+#### 9.7.2 Validation Functions
+
+**Validation** (`functions/validation.py`):
+| Function / Class | Purpose |
+|------------------|---------|
+| `SkipReason` (enum) | Why a line was skipped |
+| `ValidationResult` | Single validation finding |
+| `BatchValidationResult` | Aggregate validation for a batch |
+| `PlaceholderValidationResult` | Placeholder-specific validation |
+| `SpeakerFormatInfo` | Speaker format detection result |
+| `RetryReason` (enum) | Why a line needs retry |
+| `TranslationValidationResult` | Full translation validation |
+| `BatchTranslationValidationResult` | Batch translation validation |
+| `ValidationSeverity` (enum) | ERROR, WARNING, INFO |
+| `CharacterWordFinding` | Character/word validation issue |
+| `CharacterWordValidationResult` | Character validation result set |
+| `RepetitionDetectionResult` | Repetition detection outcome |
+| `extract_placeholders()` | Finds all placeholder tokens in text |
+| `validate_placeholder_preserved()` | Checks placeholder integrity |
+| `detect_speaker_dialogue_format()` | Detects speaker format in text |
+| `validate_line_pre()` | Pre-translation line validation |
+| `validate_line_post()` | Post-translation line validation |
+| `validate_batch_pre()` | Pre-translation batch validation |
+| `validate_batch_post()` | Post-translation batch validation |
+| `validate_batch_comprehensive()` | Full batch validation with all rules |
+| `detect_repetition()` | Detects repetitive patterns |
+| `validate_character_word()` | Character/word blacklist/whitelist check |
+| `apply_autofix()` | Applies automatic fixes from autofix map |
+
+#### 9.7.3 Postprocessing Functions
+
+**Postprocess** (`functions/postprocess.py`):
+| Function / Class | Purpose |
+|------------------|---------|
+| `RecoveryType` (enum) | 10 recovery types (see §9.3) |
+| `RecoveryAction` (enum) | RECOVERED, NEEDS_RETRY, SKIPPED, NO_ACTION |
+| `RecoveryIssue` | Single recovery finding |
+| `RecoveryResult` | Recovery outcome for one line |
+| `BatchRecoveryResult` | Aggregate recovery for a batch |
+| `RecoveryStats` | Per-type success/failure counts |
+| `recover_placeholder_case()` | Fix `__prot__` → `__PROT__` |
+| `recover_mangled_placeholders()` | Reconstruct split/corrupted tokens |
+| `recover_missing_placeholders()` | Restore missing placeholders from original |
+| `normalize_placeholder_whitespace()` | Fix `__ PROT __` → `__PROT__` |
+| `check_bracket_balance()` | Detect unmatched brackets |
+| `recover_bracket_balance()` | Fix brackets using original as reference |
+| `check_quote_balance()` | Detect unmatched quotes |
+| `recover_quote_balance()` | Fix quotes |
+| `recover_line()` | Master recovery — runs all applicable recoveries |
+| `recover_batch()` | Batch recovery — processes all lines |
+| `PostProcessManager` | Orchestrates full postprocessing pipeline |
+
+**Post-Analysis** (`functions/postanalysis.py`):
+| Function | Purpose |
+|----------|---------|
+| `compare_manifest_and_final()` | Compares manifest data with final output |
+| `_try_code_recover()` | Attempts code pattern recovery |
+| `_try_speaker_fix()` | Attempts speaker format restoration |
+| `_try_br_recovery()` | Attempts `<br>` tag recovery |
+
+**GUI Postprocessing** (`gui/steps/postprocess.py`):
+| Function / Class | Purpose |
+|------------------|---------|
+| `FailurePolicy` (enum) | WRITE, FLAG (controls failure handling) |
+| `_do_postprocessing()` | Main postprocessing entry point |
+| `_basic_postprocess()` | Basic postprocessing path |
+| `_run_character_validation()` | Character/word validation scan |
+| `_apply_character_autofix()` | Applies autofix map |
+
+#### 9.7.4 Wordwrap Functions
+
+**Wordwrap** (`functions/wordwrap.py`):
+| Function | Purpose |
+|----------|---------|
+| `pretty_wrap()` | Core wrapping algorithm with anti-orphan and punct-preferred breaks |
+| `apply_wordwrap()` | Batch wrapping orchestrator |
+
+**GUI Wordwrap** (`gui/steps/wordwrap_overwrite.py`):
+| Function | Purpose |
+|----------|---------|
+| `_on_wrap_error()` | Handles wrapping errors per line |
+
+#### 9.7.5 Output Functions
+
+**GUI Output** (`gui/steps/output_inject.py`):
+| Function | Purpose |
+|----------|---------|
+| `_export_logs()` | Bundles and exports all log files |
+| `_on_export_error()` | Handles file write errors during export |
+
+**Output** (`functions/output.py` — new, from Task 47.4):
+| Function | Purpose |
+|----------|---------|
+| `get_final_output()` | Resolves injection priority chain, returns `(text, source_field)` |
+
+#### 9.7.6 General / Cross-Pipeline Functions
+
+**Error Handling** (`functions/common_errors.py`):
+| Function / Class | Purpose |
+|------------------|---------|
+| `ErrorCode` (enum) | Standardized error codes |
+| `CherryError` | Base exception with error code |
+| `ErrorCollector` | Accumulates errors across operations |
+| `validate_config_for_api()` | Validates API configuration before requests |
+| `validate_file_readable()` | Validates file accessibility |
+| `check_dependencies()` | Validates required package availability |
+
+**Main Helper** (`functions/mainhelper.py`):
+| Function | Purpose |
+|----------|---------|
+| `setup_logger()` | Creates and configures log handlers |
+| `log_summary()` | Writes summary to log |
+| `log_warning()` | Writes warning to log |
+| `log_error()` | Writes error to log |
+| `write_failure_report()` | Writes detailed failure report |
+
+**Local LLM** (`functions/local_llm.py`):
+| Function | Purpose |
+|----------|---------|
+| `check_port_open()` | Validates local LLM server port |
+| `check_server_health()` | Health check for local LLM server |
+| `get_local_error_help()` | Returns human-readable error guidance |
+
 ## Document Revision History
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.9 | 2026-02-09 | Added §9 Pipeline Logging System: Complete specification for per-project, per-step log files (translation.log, postprocess.log, wordwrap.log, output.log). Defined unified log status vocabulary (PASS, RECOVERED: {Type}, (PARTIAL) RETRIAL {Strategy}, (PARTIAL) FAILURE {Type}, FAILURE {Type}). Specified log file structure (Header → Per-Entry → Summary Footer) for all four steps. Defined utility metrics tracking (time, tokens, token savings, cost, recovery rate). Specified log archival lifecycle (rename-on-re-run with timestamp). Documented manifest-log complementarity (manifest = data, logs = history). Added complete Recovery & Failure Functions Catalog (§9.7) covering ~100 existing functions organized by pipeline step: Translation (api_client, retry_handler, chunk_optimizer, rate_limiter), Validation (validation.py), Postprocessing (postprocess.py, postanalysis.py), Wordwrap, Output, and General/Cross-Pipeline (common_errors, mainhelper, local_llm). Updated Table of Contents. |
 | 2.8 | 2026-02-08 | Comprehensive rewrite of Step 9 (Output): Defined injection priority chain (9-level: overwrite → wordwrap → postprocessed → edit{N} → tlc{N} → translation → preedit → preprocessed → original). Added Dirty Flags system (Process flag set by preprocessing/cleared by postprocessing 100%, Wordwrap flag cleared when applied) with pre-export validation dialog. Non-destructive default (subfolder naming, no overwrite). Failure logging with per-file error tracking. Complete widget specifications with destination, format, naming, safety, and export extras sections. Settings received from Input (source_root, file_dir, encoding, format). Step 0 (Input): Added Import Translations button — imports translations from another manifest via exact `orig` line matching (sequential search, file/line-number agnostic, copies all processing fields). Step 5 (Translation): Added Skip Already Translated checkbox — skips lines with existing `tl` field for incremental translation workflows. Bug fixes: QA mousewheel TclError (try/except wrapper for race condition), output_inject `get_section` → `get_output_options()`, preprocess warning demoted to debug. |
 | 2.7 | 2026-02-08 | Comprehensive rewrite of Step 8 (Wordwrap): Redefined purpose (auto from parser or manual settings). Pretty wrap is now standard — removed Prevent Orphans and Prefer Punctuation Breaks checkboxes (always active). Mode changed from radio buttons to dropdown, removed RPG Maker (→ its own parser) and Disabled options. Width changed from Spinbox to Dropdown with Character/Pixel modes. Break Character linked to Preprocessing and Translation Prompt with cost-optimization note. Speaker Handling reduced to Ignore + Count (renamed from Sameline), removed Samelineindent and Newline. Ignore Patterns replaced with read-only Code Database table (no checkboxes). Removed Typography widget entirely. Removed Overwrite Strategy widget — Overwrite becomes a column in the Lines Table with diff filtering. Added table filters (All/Changed/Exceeding/Overwrite Differs). Added Standard Wrapping Rules table documenting always-active `pretty_wrap()` behavior. Added comprehensive Future Improvements for parser-driven wrap, font commands, pixel-accurate width, New Textboxes, and break char removal before translation. |
 | 2.6 | 2026-02-08 | Comprehensive rewrite of Step 7 (Postprocessing): Complete mirror-symmetry spec with Step 4 Preprocessing — reverse priority ordering, automatic restorations (Placeholder/Code/BR always-on, no GUI toggle), post-exclusive recovery processes (Bracket Balance, Quote Balance, Whitespace Normalization with toggles). Renamed "Postprocessed Lines" to "Processed Lines" with new filters (Changed/Written/Flagged/By Process). Removed Refresh and Revert All buttons (overwrite semantics with confirmation dialog). Added Postprocess Options widget (bidirectional Symbol Conversion: Fullwidth↔Halfwidth). Redesigned Failure Handling (Write=default, Flag for Review=no-write, Queue for Retry=hidden/future). Added Diff View manual editing with Mark-as-Fixed. Added Postprocessing Summary with live updates and 100% completion popup. Fixed MouseWheel `bind_all` bug across all step files (qa.py, postprocess.py, translate.py, wordwrap_overwrite.py, output_inject.py). |
