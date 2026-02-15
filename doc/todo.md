@@ -43,7 +43,7 @@ Run API Test: `python CherryAI.py test`
 
 MODULE COUNTS (Verified January 2026)
 
-- functions/: 36 modules (+ glossaries/ subfolder with 5 files)
+- functions/: 37 modules (+ glossaries/ subfolder with 5 files)
 - modi/: 12 processing modes
 - formats/: 5 format handlers
 - gui/steps/: 10 workflow tabs
@@ -5624,6 +5624,661 @@ Changes:
 7. **Task 48.6** (output.log — depends on Task 47.4 injection chain)
 8. **Task 48.8** (Log export — polish, depends on all logs existing)
 9. **Task 48.9** (Integration testing — final validation of entire system)
+
+---
+
+=============================================================================
+
+## PHASE 49: Request Formation 4-Step Process
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 20 hours
+**Spec Reference:** specs.md §5.2 API Request Building and Formation
+
+Goal: Implement the 4-step request formation process that groups lines into optimal translation requests using context markers, file boundaries, and size constraints.
+
+### TASK 49.1: Request Builder Foundation
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4h
+**File:** `functions/prompt_builder.py` (extend)
+
+Goal: Establish the shared request builder used by both Estimation and Translation.
+
+Changes:
+- Refactor `prompt_builder.py` to expose a `build_requests()` function returning structured request objects
+- Each request object contains: meta settings, prompt components, lines to translate
+- Request has configurable minimum and maximum size (lines and tokens)
+- Invalid lines (placeholders, deduplicated, context markers) are excluded automatically
+- Ensure the same function is called by both `chunker_adapter.py` (estimation) and `api_client.py` (translation)
+
+### TASK 49.2: Step 1 — Menu/Choice Splitting
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**File:** `functions/prompt_builder.py` (extend)
+
+Goal: Split Menu and Choice blocks into their own respecruve requests using Context Markers.
+
+Changes:
+- Read context markers from manifest lines
+- Group consecutive Menu-marked lines into Menu requests
+- Group consecutive Choice-marked lines into Choice requests
+- Dialogue and Unknown lines remain together for further processing
+- Each request type gets its corresponding conditional prompt
+
+### TASK 49.3: Step 2 — First Dialogue Split
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**File:** `functions/prompt_builder.py` (extend)
+
+Goal: Use File Ending context markers to perform the initial dialogue split.
+
+Changes:
+- Split dialogue/unknown lines at File End markers
+- Remove invalid lines from line counting
+- Each file boundary produces a separate request candidate
+- Preserve file boundary information for rolling context rules
+
+### TASK 49.4: Step 3 — Size-Based Splitting and Balancing
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4h
+**File:** `functions/prompt_builder.py` (extend)
+
+Goal: Apply maximum request size to split oversized candidates and balance line counts.
+
+Changes:
+- Split any request candidate exceeding maximum size (lines or tokens, whichever reached first)
+- Balance line counts within resulting splits to avoid very uneven chunks
+- Track which requests are "split requests" for rolling context determination
+
+### TASK 49.5: Step 4 — Short Request Merging
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**File:** `functions/prompt_builder.py` (extend)
+
+Goal: Merge requests (below minimum size) with other requests.
+
+Changes:
+- Identify requests: those that would receive no rolling context and provide none
+- Merge short requests with other requests up to maximum size
+- Use an algorithm that minimizes request count
+
+### TASK 49.6: Integration Testing
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**File:** `dev/test_request_formation.py` (new)
+
+Goal: Validate the complete 4-step formation process.
+
+Changes:
+- Test: Menu/Choice lines split into separate requests
+- Test: File boundaries create request splits
+- Test: Oversized requests are split and balanced
+- Test: Requests are merged
+- Test: Invalid lines excluded from all requests
+- Test: Estimation and Translation produce identical request structures
+- Test: Conditional prompts match context markers
+
+### Phase 49 Summary
+
+| Task | Description | Priority | Effort | Dependencies |
+|------|-------------|----------|--------|--------------|
+| 49.1 | Request Builder Foundation | HIGH | 4h | None |
+| 49.2 | Step 1 — Menu/Choice Splitting | HIGH | 3h | 49.1 |
+| 49.3 | Step 2 — First Dialogue Split | HIGH | 3h | 49.1 |
+| 49.4 | Step 3 — Size Splitting/Balancing | HIGH | 4h | 49.2, 49.3 |
+| 49.5 | Step 4 — Short Request Merging | HIGH | 3h | 49.4 |
+| 49.6 | Integration Testing | HIGH | 3h | 49.1-49.5 |
+
+**Total Estimated Effort:** 20 hours
+
+---
+
+## PHASE 50: Context Markers Full Implementation
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 16 hours
+**Spec Reference:** specs.md §5.3 Context Markers
+
+Goal: Implement full context marker support beyond the existing scene marker detection. Add Dialogue, Menu, Choice, and File End markers with integration into request building and prompt selection.
+
+### TASK 50.1: Context Marker Data Model
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**File:** `functions/mainhelper.py` (extend)
+
+Goal: Add context marker fields to the line entry model.
+
+Changes:
+- Add `context_marker` field to LineEntry: enum of `None`, `file_end`, `dialogue`, `menu`, `choice`
+- Context marker lines are always flagged as invalid (not translatable)
+- Add helper methods: `is_context_marker()`, `get_active_context_type()`
+- Update manifest serialization to include context markers
+
+### TASK 50.2: Context Marker Detection in Analysis
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4h
+**File:** `functions/analysis.py` (extend)
+
+Goal: Extend analysis to detect and inject context markers when the parser provides none.
+
+Changes:
+- Detect dialogue sections (lines with speaker patterns followed by more speaker patterns)
+- Detect menu patterns (lists of short items, repeated structure)
+- Detect choice patterns (numbered or bulleted option lists)
+- Store detected markers in manifest line entries
+- **Existing code:** `functions/prompt_builder.py` has scene marker detection for rolling context — extend this
+
+### TASK 50.3: Context Marker Integration with Request Builder
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4h
+**File:** `functions/prompt_builder.py` (extend)
+
+Goal: Use context markers to select conditional prompts and control request splitting.
+
+Changes:
+- Pass context markers to the 4-step request formation (Phase 49)
+- Select conditional prompt based on active context type per request
+- Menu/Choice requests ignore file endings and aim for maximum size
+- Dialogue requests respect file endings and use rolling context
+- Unknown (no marker after file start) uses Unknown conditional prompt
+
+### TASK 50.4: Conditional Prompt Templates
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**File:** `config/prompt.txt` (extend), `functions/prompt_builder.py` (extend)
+
+Goal: Create distinct prompt templates for each context type.
+
+Changes:
+- Dialogue prompt: Standard translation instructions with character context
+- Menu prompt: "Translate menu items; preserve formatting and order; choose concise translations"
+- Choice prompt: "Translate choices; keep them concise and distinct"
+- Unknown prompt: "Lines may be dialogue, menu items, or choices; translate each appropriately"
+- Templates stored in `config/` and loaded by prompt builder
+
+### TASK 50.5: Testing
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**File:** `dev/test_context_markers.py` (new)
+
+Goal: Validate context marker detection, storage, and integration.
+
+Changes:
+- Test: File End markers detected at file boundaries
+- Test: Dialogue/Menu/Choice markers detected from content patterns
+- Test: Markers stored and loaded from manifest
+- Test: Request builder uses markers for prompt selection
+- Test: Context markers excluded from translation lines
+
+### Phase 50 Summary
+
+| Task | Description | Priority | Effort | Dependencies |
+|------|-------------|----------|--------|--------------|
+| 50.1 | Context Marker Data Model | HIGH | 2h | None |
+| 50.2 | Detection in Analysis | HIGH | 4h | 50.1 |
+| 50.3 | Integration with Request Builder | HIGH | 4h | 50.1, 49.1 |
+| 50.4 | Conditional Prompt Templates | MEDIUM | 3h | 50.3 |
+| 50.5 | Testing | HIGH | 3h | 50.1-50.4 |
+
+**Total Estimated Effort:** 16 hours
+
+---
+
+## PHASE 51: Speaker Duplicate Removal
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 8 hours
+**Spec Reference:** specs.md §5.1 Speaker:Dialogue Format
+
+Goal: Implement the Global Option to remove speaker names from consecutive same-speaker lines to save tokens during translation.
+
+### TASK 51.1: Speaker Duplicate Detection
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**File:** `functions/validation.py` (extend)
+
+Goal: Detect consecutive lines with the same speaker.
+
+Changes:
+- Add `detect_consecutive_speakers()` function
+- Compare speaker prefix across adjacent lines
+- Handle fullwidth `:` equivalent `：`
+- Return list of line indices where speaker is duplicate of previous
+
+### TASK 51.2: Preprocessing — Remove Duplicate Speakers
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**File:** `modi/speaker_replacement.py` (extend)
+
+Goal: Strip duplicate speaker names during preprocessing.
+
+Changes:
+- When enabled (Global Option), remove speaker prefix from lines where it matches the previous line
+- Store original speaker in `prepro_ops` for restoration
+- Affects token count — estimation must account for removed speakers
+
+### TASK 51.3: Postprocessing — Restore Speakers
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**File:** `modi/speaker_replacement.py` (extend)
+
+Goal: Re-add removed speaker names after translation.
+
+Changes:
+- Read speaker restoration data from `prepro_ops`
+- Re-add speaker prefix before the dialogue content
+- Handle cases where translation changed the line structure
+
+### TASK 51.4: Global Option and Testing
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**Files:** `gui/dialogs/global_options.py`, `dev/test_speaker_dedup.py` (new)
+
+Goal: Add the Global Option toggle and validate.
+
+Changes:
+- Add "Remove Duplicate Speakers" toggle to Global Options
+- Save to `CherryAI.ini` as `RemoveDuplicateSpeakers`
+- Test: consecutive same-speaker lines have speaker removed
+- Test: postprocessing restores removed speakers
+- Test: estimation accounts for removed tokens
+
+### Phase 51 Summary
+
+| Task | Description | Priority | Effort | Dependencies |
+|------|-------------|----------|--------|--------------|
+| 51.1 | Speaker Duplicate Detection | MEDIUM | 2h | None |
+| 51.2 | Preprocessing Removal | MEDIUM | 2h | 51.1 |
+| 51.3 | Postprocessing Restoration | MEDIUM | 2h | 51.2 |
+| 51.4 | Global Option and Testing | MEDIUM | 2h | 51.1-51.3 |
+
+**Total Estimated Effort:** 8 hours
+
+---
+
+## PHASE 52: Selective Glossary Per Chunk
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 10 hours
+**Spec Reference:** specs.md §5.6 Glossary Selective Inclusion
+
+Goal: Filter glossary entries per translation chunk so only entries relevant to the current lines are included in the prompt, reducing token usage.
+
+### TASK 52.1: Glossary Filter Function
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**File:** `functions/glossary.py` (extend)
+
+Goal: Check and change where necessary or if not implemnted create the selective filter that matches glossary entries against chunk lines.
+
+Changes:
+- Add `filter_glossary_for_chunk(glossary_entries, chunk_lines, mode)` function
+- Mode: "original_only" — match against Original column only
+- Mode: "original_or_translation" — match against both Original and Translation columns
+- Include entries with empty Translation or Notes if Original matches (they provide context)
+- Return only matching entries
+
+### TASK 52.2: Integration with Prompt Builder
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**File:** `functions/prompt_builder.py` (extend)
+
+Goal: Use the selective filter when building chunk prompts.
+
+Changes:
+- Call `filter_glossary_for_chunk()` for each chunk during prompt construction
+- Include only matching entries in the Glossary section of the prompt
+- Ensure the same filter runs during both Estimation and Translation
+- Format matching entries as: `- [Original]: [Translation] ([Notes])`
+
+### TASK 52.3: Global Option and GUI
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**Files:** `gui/dialogs/global_options.py`, `CherryAI.ini`
+
+Goal: Add the Global Option for selective glossary mode.
+
+Changes:
+- Add "Glossary Inclusion" dropdown: "All" / "Original Only" / "Original or Translation"
+- Default: "All"
+- Save to CherryAI.ini
+- Pass mode to prompt builder
+
+### TASK 52.4: Testing
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**File:** `dev/test_glossary_selective.py` (new)
+
+Goal: Validate selective filtering.
+
+Changes:
+- Test: entries with matching Original included, others excluded
+- Test: "original_or_translation" mode matches both columns
+- Test: entries with empty Translation still included when Original matches
+- Test: estimation and translation produce identical glossary inclusions
+- Test: token savings from selective filtering
+
+### Phase 52 Summary
+
+| Task | Description | Priority | Effort | Dependencies |
+|------|-------------|----------|--------|--------------|
+| 52.1 | Glossary Filter Function | HIGH | 3h | None |
+| 52.2 | Integration with Prompt Builder | HIGH | 3h | 52.1 |
+| 52.3 | Global Option and GUI | MEDIUM | 2h | 52.1 |
+| 52.4 | Testing | HIGH | 2h | 52.1-52.3 |
+
+**Total Estimated Effort:** 10 hours
+
+---
+
+## PHASE 53: Parser Scripts System
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 24 hours
+**Spec Reference:** specs.md §5.8 Parser Scripts
+
+Goal: Formalize the Parser Scripts interface so game-engine-specific scripts can provide extraction, injection, wordwrap settings, forbidden characters, and context markers.
+
+### TASK 53.1: Parser Script Interface
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4h
+**File:** `formats/parser_base.py` (new)
+
+Goal: Define the base class/interface for parser scripts.
+
+Changes:
+- Create abstract `ParserScript` base class
+- Mandatory methods: `name`, `extract(file_path) → lines`, `inject(file_path, lines)`
+- Optional properties: `wordwrap_config`, `forbidden_chars`, `context_marker_rules`
+- WordwrapConfig dataclass: `max_line_length`, `max_line_number`, `wordwrap_command`, `new_textbox_injection`
+- ForbiddenChars dataclass: `characters`, `logit_bias`, `output_action` (replace/flag)
+
+### TASK 53.2: RPG Maker Parser Migration
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 6h
+**Files:** `formats/rpgmaker.py` (refactor), `formats/parser_rpgmaker.py` (new)
+
+Goal: Migrate existing RPG Maker format handler to the parser script interface.
+
+Changes:
+- Existing `formats/rpgmaker.py` extract/inject logic → `parser_rpgmaker.py` implementing `ParserScript`
+- Add wordwrap config: max line length from project analysis, break char `\n`, max lines per textbox
+- Add context markers: detect scene/map changes, dialogue vs choice vs show text commands
+- Keep backward compatibility with existing format handler
+
+### TASK 53.3: Parser Registration and Discovery
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**File:** `formats/__init__.py` (extend)
+
+Goal: Register parsers and auto-detect which parser to use for loaded files.
+
+Changes:
+- Parser registry mapping format/engine names to ParserScript implementations
+- Auto-detection during file loading based on file structure and content
+- Fallback to base format handlers when no parser script matches
+
+### TASK 53.4: Wordwrap Integration
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**File:** `gui/steps/step8_wordwrap.py` (extend)
+
+Goal: Auto-populate wordwrap settings from parser scripts.
+
+Changes:
+- When a parser with wordwrap config is detected, auto-fill Width, Break Char, Max Lines
+- Show parser name in Mode dropdown
+- User can still override auto-populated values
+
+### TASK 53.5: Forbidden Characters Integration
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**Files:** `functions/api_client.py` (extend), `functions/postprocess.py` (extend)
+
+Goal: Apply parser-defined forbidden characters during translation and output.
+
+Changes:
+- Translation: apply forbidden chars as logit bias in API request
+- Output: auto-replace or flag forbidden chars based on configured action
+- Show forbidden chars in Translation step Prompt Preview
+
+### TASK 53.6: Testing
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 5h
+**File:** `dev/test_parser_scripts.py` (new)
+
+Goal: Validate the parser script system end-to-end.
+
+Changes:
+- Test: base interface enforces mandatory methods
+- Test: RPG Maker parser provides correct wordwrap config
+- Test: context markers from parser are stored in manifest
+- Test: forbidden chars applied as logit bias
+- Test: forbidden chars flagged/replaced in output
+- Test: auto-detection selects correct parser
+
+### Phase 53 Summary
+
+| Task | Description | Priority | Effort | Dependencies |
+|------|-------------|----------|--------|--------------|
+| 53.1 | Parser Script Interface | HIGH | 4h | None |
+| 53.2 | RPG Maker Parser Migration | HIGH | 6h | 53.1 |
+| 53.3 | Parser Registration/Discovery | MEDIUM | 3h | 53.1 |
+| 53.4 | Wordwrap Integration | MEDIUM | 3h | 53.1, 53.3 |
+| 53.5 | Forbidden Characters | MEDIUM | 3h | 53.1 |
+| 53.6 | Testing | HIGH | 5h | 53.1-53.5 |
+
+**Total Estimated Effort:** 24 hours
+
+---
+
+## PHASE 54: Point of View Inference
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 12 hours
+**Spec Reference:** specs.md §5.11 Point of View Inference
+
+Goal: Implement point-of-view detection from narrative text to provide the LLM with perspective context.
+
+### TASK 54.1: Pronoun Pattern Database
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**File:** `functions/analysis.py` (extend)
+
+Goal: Create language-specific pronoun pattern lists for POV detection.
+
+Changes:
+- Japanese 1st person: 私, 僕, 俺, わたし, ぼく, おれ, あたし, 我 (+ kanji/furigana variants)
+- Japanese 2nd person: あなた, 君, きみ, お前, おまえ, てめえ, 貴方, 貴様
+- English 1st person: I, my, mine, me, myself, we, our, ours
+- English 2nd person: you, your, yours, yourself
+- Extensible structure for additional languages
+- Store patterns as configurable per source language
+
+### TASK 54.2: POV Detection Algorithm
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4h
+**File:** `functions/analysis.py` (extend)
+
+Goal: Analyze non-dialogue lines to determine narrative perspective.
+
+Changes:
+- Filter: exclude lines with speaker prefix and lines tagged as Menu/Choice by context markers
+- Count pronoun occurrences per POV type across all narrative lines
+- 3rd person detection: count protagonist name frequency (from Character Notes)
+- Calculate confidence score: high if dominant POV is >60% of pronouns, low if <40%
+- Handle mixed POV (e.g., 1st person narration with 2nd person address)
+- Return: `{pov: "1st"|"2nd"|"3rd"|"mixed", confidence: "high"|"low", counts: {}}`
+
+### TASK 54.3: Prompt Integration
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**File:** `functions/prompt_builder.py` (extend)
+
+Goal: Include POV information in translation prompt when confidence is high.
+
+Changes:
+- Add conditional prompt section: "Narrative Perspective: [1st/2nd/3rd] person"
+- Only include when confidence is "high"
+- Add guidance: "Maintain consistent [X] person perspective throughout"
+- Store POV result in manifest
+
+### TASK 54.4: GUI Display and Testing
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 4h
+**Files:** `gui/steps/step1_analysis.py` (extend), `dev/test_pov_inference.py` (new)
+
+Goal: Display POV results in Analysis step and validate detection.
+
+Changes:
+- Show detected POV and confidence in Analysis findings
+- User can override detected POV in Information step
+- Test: 1st person Japanese text correctly identified
+- Test: 3rd person detected via protagonist name frequency
+- Test: confidence scoring produces expected high/low results
+- Test: mixed POV handled correctly
+
+### Phase 54 Summary
+
+| Task | Description | Priority | Effort | Dependencies |
+|------|-------------|----------|--------|--------------|
+| 54.1 | Pronoun Pattern Database | MEDIUM | 2h | None |
+| 54.2 | POV Detection Algorithm | HIGH | 4h | 54.1 |
+| 54.3 | Prompt Integration | MEDIUM | 2h | 54.2 |
+| 54.4 | GUI Display and Testing | MEDIUM | 4h | 54.2, 54.3 |
+
+**Total Estimated Effort:** 12 hours
+
+---
+
+## PHASE 55: Consistency System
+**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 30 hours
+**Spec Reference:** specs.md §5.12 Consistency System
+
+Goal: Implement the Consistency system with Preliminary, During, and Check modes to ensure consistent translation of recurring terms across all requests.
+
+### TASK 55.1: Consistency Data Model
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**File:** `functions/consistency.py` (new)
+
+Goal: Create the data structures for tracking consistency terms.
+
+Changes:
+- `ConsistencyTerm` dataclass: original, canonical_translation, type (code/glossary/span), confidence, source_line_idx
+- `ConsistencyStore`: collection of terms with lookup and update methods
+- Serialize/deserialize to manifest
+- Term detection: code patterns marked as Translate, glossary entries with empty translation, paired tags
+
+### TASK 55.2: Type Detection — Code, Glossary, Spans
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 4h
+**File:** `functions/consistency.py` (extend)
+
+Goal: Automatically detect consistency-relevant terms from project data.
+
+Changes:
+- Code (Translate): scan Code Database for entries with Action=Translate; auto-detect via RegEx
+- Glossary: scan for entries with empty Translation or empty Notes
+- Spans: detect paired tags (e.g., `\C[1]...\C[0]` for color, `\B[1]...\B[0]` for bold)
+- Build initial ConsistencyStore from detected terms
+
+### TASK 55.3: Preliminary Mode
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 8h
+**File:** `functions/consistency.py` (extend)
+
+Goal: Run pre-translation passes to establish canonical translations for all detected terms.
+
+Changes:
+- Send text-only excerpts (no code) containing each term with surrounding context to the LLM
+- Prompt asks: "Is this a person, location, or term? Provide the appropriate translation."
+- May run multiple times for confidence (compare results across passes)
+- Store canonical translations in ConsistencyStore
+- Modify preprocessed entries: replace term occurrences with canonical translation
+- Track which terms were resolved with high confidence
+
+### TASK 55.4: During Mode
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 6h
+**File:** `functions/consistency.py` (extend), `functions/api_client.py` (extend)
+
+Goal: Use first translated occurrence as canonical and propagate to subsequent requests.
+
+Changes:
+- After each chunk translation, scan output for consistency terms
+- If first occurrence has no code around it, use `<t></t>` markers to locate it
+- Store first translation as canonical
+- Update project glossary with discovered translations
+- Replace terms in all subsequent stored request prompts with canonical translation
+- Handle code-embedded terms (replace code + term combination)
+
+### TASK 55.5: Check Mode
+**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 4h
+**File:** `functions/consistency.py` (extend)
+
+Goal: Post-translation verification flagging inconsistent translations.
+
+Changes:
+- After all translation completes, scan all translated lines for consistency terms
+- Compare translations of the same term across different requests/chunks
+- Flag inconsistencies (same original → different translations)
+- Show in QA step with original term, found translations, and line locations
+- Does not auto-fix — flags for manual review
+
+### TASK 55.6: Global Option and GUI
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**Files:** `gui/dialogs/global_options.py`, `CherryAI.ini`
+
+Goal: Add the Global Option for consistency mode selection.
+
+Changes:
+- Add "Consistency Mode" dropdown: "Disabled" / "Preliminary" / "During" / "Check"
+- Default: "Disabled"
+- Save to CherryAI.ini
+- Show consistency results in Analysis and QA steps
+
+### TASK 55.7: Testing
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**File:** `dev/test_consistency.py` (new)
+
+Goal: Validate all consistency modes and term types.
+
+Changes:
+- Test: Code terms detected from Code Database
+- Test: Glossary terms detected from empty entries
+- Test: Span terms detected from paired tags
+- Test: Preliminary mode produces canonical translations
+- Test: During mode propagates first translation
+- Test: Check mode flags inconsistencies
+- Test: disabled mode skips all consistency logic
+
+### Phase 55 Summary
+
+| Task | Description | Priority | Effort | Dependencies |
+|------|-------------|----------|--------|--------------|
+| 55.1 | Consistency Data Model | MEDIUM | 3h | None |
+| 55.2 | Type Detection | MEDIUM | 4h | 55.1 |
+| 55.3 | Preliminary Mode | MEDIUM | 8h | 55.1, 55.2 |
+| 55.4 | During Mode | MEDIUM | 6h | 55.1, 55.2 |
+| 55.5 | Check Mode | LOW | 4h | 55.1, 55.2 |
+| 55.6 | Global Option and GUI | MEDIUM | 2h | 55.1 |
+| 55.7 | Testing | HIGH | 3h | 55.1-55.6 |
+
+**Total Estimated Effort:** 30 hours
+
+---
+
+## PHASE 56: Mock Translation Flaw Testing
+**Priority:** LOW | **Status:** ✅ DONE | **Effort:** 8 hours
+**Spec Reference:** specs.md §5.13 Mock Translation Extended
+
+Goal: Create dedicated Mock Translation module with deliberate flaw injection
+to test the postprocessing recovery pipeline.
+
+Implementation: Created `functions/mock_translator.py` as a standalone module
+with `MockTranslator` class, `FlawConfig`/`FlawReport` dataclasses, and
+`FlawIntensity` enum. Integrated into `functions/api_client.py` via mock
+routing (`model == "mock"`). Test fixture: `dev/example/example.txt`.
+
+### TASK 56.1: Placeholder Malformation [DONE]
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 2h
+**File:** `functions/mock_translator.py`
+
+Implemented `_flaw_placeholder_malformation()` — surgically removes and adds
+characters in `__PROT__`, `__DEDUP__`, `__CUSTOM__` tokens. Configurable via
+`FlawConfig.placeholder_malformation` and `FlawConfig.flaw_line_ratio`.
+
+### TASK 56.2: Anchor Manipulation [DONE]
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 2h
+**File:** `functions/mock_translator.py`
+
+Implemented `_flaw_anchor_manipulation()` — removes existing anchor characters
+(`[]{}()<>「」『』【】`) and inserts anchors at random positions. Tracked via
+`FlawReport.anchor_removals` and `FlawReport.anchor_insertions`.
+
+### TASK 56.3: Code Intrusion and Character Surgery [DONE]
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 2h
+**File:** `functions/mock_translator.py`
+
+Implemented `_flaw_code_intrusion()` — replaces content inside code patterns
+(`[font size]`, `<color value>`, `{data}`) with random mock words. Implemented
+`_flaw_character_surgery()` — random character insertion and deletion with
+configurable intensity (mild/moderate/severe via `FlawIntensity` enum).
+
+### TASK 56.4: Recovery Validation Testing [DONE]
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 2h
+**File:** `dev/test_mock_translation.py` (59 tests)
+
+Comprehensive test suite covering all flaw types, recovery validation, API
+client mock routing, edge cases, and end-to-end pipeline verification.
+Uses `dev/example/example.txt` as test fixture.
+
+### Phase 56 Summary
+
+| Task | Description | Priority | Effort | Dependencies | Status |
+|------|-------------|----------|--------|--------------|--------|
+| 56.1 | Placeholder Malformation | MEDIUM | 2h | None | ✅ DONE |
+| 56.2 | Anchor Manipulation | MEDIUM | 2h | None | ✅ DONE |
+| 56.3 | Code Intrusion/Character Surgery | MEDIUM | 2h | None | ✅ DONE |
+| 56.4 | Recovery Validation Testing | HIGH | 2h | 56.1-56.3 | ✅ DONE |
+
+**Total Estimated Effort:** 8 hours
 
 ---
 

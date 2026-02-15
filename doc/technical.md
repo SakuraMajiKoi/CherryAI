@@ -57,7 +57,7 @@ TABLE OF CONTENTS
    2.3 prepro_ops Field - Pre-processing operation tracking
    2.4 Processor Class - Core text processing engine
 
-3. FUNCTIONS/ MODULES (36 files - Core Shared Logic)
+3. FUNCTIONS/ MODULES (37 files - Core Shared Logic)
    ✅ = Verified exists | ⚠️ = Needs documentation | 🔗 = GUI integrated
    
    3.1  analysis.py ✅ - File analysis, metrics, glossary extraction
@@ -96,8 +96,9 @@ TABLE OF CONTENTS
    3.34 manifest_manager.py ✅🔗 - Unified manifest state management (TASK 19)
    3.35 manifest_fields.py ✅ - Manifest field type helpers (TASK 22.1) + special format helpers (TASK 22.2)
    3.36 preset_manager.py ✅ - Preset save/load/delete operations (TASK 30.1)
+   3.37 mock_translator.py ✅ - Mock translation engine with flaw injection (Phase 56)
    
-   3.37 glossaries/ (subfolder - 5 files)
+   3.38 glossaries/ (subfolder - 5 files)
         - __init__.py - Package exports
         - code_glossary_constants.py - Code pattern definitions
         - code_glossary_functions.py - Code detection/classification
@@ -467,6 +468,7 @@ CherryAI/
 │   ├── options.py          Options dialog + API_PROVIDERS (single source) - TASK 16.2
 │   ├── dependencies.py     Dependency management (Session 4)
 │   ├── api_client.py       API Client for LLM communication (Session 12)
+│   ├── mock_translator.py  Mock translation engine with flaw injection (Phase 56)
 │   ├── validation.py       Pre/Post API validation (Session 13)
 │   ├── prompt_builder.py   Dynamic prompt construction with game summary
 │   ├── project_config.py   Project-level configuration (game summary, API profiles)
@@ -1903,6 +1905,51 @@ Integration:
 Dependencies:
 - Third-party: openai>=1.0.0
 - Local: config (for loading settings)
+
+=============================================================================
+
+MOCK TRANSLATOR (functions/mock_translator.py) ✓ NEW - Phase 56
+
+Purpose: Standalone mock translation engine with deliberate flaw injection
+for testing the postprocessing recovery pipeline without API keys or network.
+
+Classes:
+- MockTranslator: Deterministic mock translator with optional flaw injection
+- FlawConfig: Dataclass for controlling flaw types and intensity
+- FlawReport: Tracks all injected flaws for test assertions
+- FlawIntensity: Enum (MILD=10%, MODERATE=30%, SEVERE=60%)
+
+Key Features:
+1. STANDARD MOCK TRANSLATION:
+   - Replaces Japanese text segments with NATO phonetic words (alpha, bravo, ...)
+   - Reverses non-Japanese text words as fallback
+   - Preserves all `__PROT__`, `__DEDUP__`, `__CUSTOM__` placeholders
+   - Preserves speaker:dialogue format (speaker names kept intact)
+   - Preserves anchor characters (`[]{}()<>「」『』【】`) via tokenization
+   - Deterministic output via seed-based `random.Random`
+
+2. DELIBERATE FLAW INJECTION (Phase 56):
+   - Placeholder malformation: removes/adds chars in `__PROT__` tokens
+   - Anchor manipulation: removes existing anchors, inserts random ones
+   - Code intrusion: replaces content inside code patterns (`[font]`, etc.)
+   - Character surgery: random character insertion/deletion
+
+3. FLAW REPORTING:
+   - FlawReport tracks every injected flaw with before/after state
+   - Enables test assertions that know exactly what was broken
+   - Reports: total_lines, flawed_lines, per-type counters, details list
+
+Factory Function:
+- `create_mock_translator(enable_flaws, intensity, seed, delay_per_chunk)`
+  Convenience factory for creating configured MockTranslator instances.
+
+Integration:
+- Called from `api_client.py._mock_translate()` when `model == "mock"`
+- No external dependencies — uses only stdlib (random, re, time, logging)
+
+Dependencies:
+- Standard library only (no third-party packages)
+- Local: none (standalone module)
 
 =============================================================================
 

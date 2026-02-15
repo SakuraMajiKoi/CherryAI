@@ -8565,6 +8565,148 @@ If a test takes too long:
 - If purpose justifies duration: extend timeout
 - If not: investigate and fix the root cause
 
+---
+
+### dev/test_mock_translation.py (59 tests) - PHASE 56
+
+Mock Translation Flaw Testing — validates the deliberate flaw injection engine
+in `functions/mock_translator.py` and its integration with the postprocessing
+recovery pipeline. Uses `dev/example/example.txt` as test fixture.
+
+#### TestExampleFile (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_example_file_exists` | Test fixture file present |
+| `test_example_has_content` | File contains expected lines |
+| `test_example_has_speaker_lines` | Speaker:dialogue format present |
+
+#### TestMockTranslatorBasic (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_translate_single_line` | Single line mock translation works |
+| `test_batch_preserves_line_count` | Output count matches input |
+| `test_placeholder_preserved` | `__PROT__` tokens kept intact |
+| `test_deterministic_with_seed` | Same seed produces same output |
+| `test_empty_line_preserved` | Empty lines pass through unchanged |
+| `test_whitespace_only_preserved` | Whitespace-only lines pass through |
+
+#### TestTokenPreservation (7 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_prot_token_preserved` | `__PROT_0__` survives translation |
+| `test_dedup_token_preserved` | `__DEDUP_1__` survives translation |
+| `test_custom_token_preserved` | `__CUSTOM_2__` survives translation |
+| `test_multiple_tokens_preserved` | Multiple tokens in one line |
+| `test_token_at_start_preserved` | Token at line start |
+| `test_token_at_end_preserved` | Token at line end |
+| `test_adjacent_tokens_preserved` | Back-to-back tokens |
+
+#### TestSpeakerPreservation (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_speaker_name_kept` | Speaker name before colon preserved |
+| `test_dialogue_translated` | Dialogue part after colon translated |
+
+#### TestFlawConfig (7 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_default_config_disabled` | Flaws disabled by default |
+| `test_enabled_config` | FlawConfig enables all flaw types |
+| `test_intensity_mild` | Mild intensity = 10% corruption |
+| `test_intensity_moderate` | Moderate intensity = 30% corruption |
+| `test_intensity_severe` | Severe intensity = 60% corruption |
+| `test_selective_flaw_types` | Individual flaw types toggled |
+| `test_from_string_intensity` | String intensity creates valid enum |
+
+#### TestPlaceholderMalformation (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_malformation_changes_placeholder` | Placeholder text is corrupted |
+| `test_malformation_is_documented` | FlawReport records malformations |
+| `test_no_malformation_when_disabled` | Disabled flag prevents flaws |
+| `test_malformation_severe_affects_more` | Severe intensity corrupts more |
+
+#### TestAnchorManipulation (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_anchor_removal` | Anchors are removed from lines |
+| `test_anchor_removal_documented` | FlawReport records removals |
+| `test_anchor_insertion` | Random anchors inserted |
+| `test_no_anchor_flaw_when_disabled` | Disabled flag prevents flaws |
+
+#### TestCodeIntrusion (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_code_gets_intruded` | Code patterns receive replacement |
+| `test_code_intrusion_documented` | FlawReport records intrusions |
+| `test_no_intrusion_when_disabled` | Disabled flag prevents flaws |
+
+#### TestCharacterSurgery (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_character_surgery_changes_text` | Text is modified at character level |
+| `test_surgery_documented` | FlawReport records surgeries |
+| `test_no_surgery_when_disabled` | Disabled flag prevents flaws |
+
+#### TestFlawReport (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_report_tracks_totals` | Report counters increment correctly |
+| `test_report_details_populated` | Detail records have all fields |
+| `test_report_reset` | reset_report() clears counters |
+| `test_report_multiple_batches` | Report accumulates across batches |
+
+#### TestRecoveryValidation (7 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_malformed_placeholders_recoverable` | Postprocess recovers placeholders |
+| `test_anchor_removal_errors_flagged` | Removed anchors detected |
+| `test_code_intrusion_detected_in_validation` | Code intrusion flagged |
+| `test_character_surgery_detectable` | Character surgery detected |
+| `test_end_to_end_with_example_file` | Full pipeline with example.txt |
+| `test_end_to_end_produces_functional_output` | Output is usable text |
+| `test_postprocess_manager_stats` | PostProcessManager tracks stats |
+
+#### TestAPIClientMockRouting (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_mock_model_in_api_config` | APIConfig accepts model="mock" |
+| `test_api_config_from_dict_mock` | Dict-based config with mock model |
+
+#### TestEdgeCases (7 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_line_with_only_placeholders` | Line of only placeholders passes |
+| `test_very_long_line` | Very long line handled correctly |
+| `test_unicode_preservation` | Unicode characters preserved |
+| `test_mixed_japanese_english` | Mixed scripts handled properly |
+| `test_flaw_on_empty_line_no_crash` | Flaws on empty lines don't crash |
+| `test_flaw_severity_increases_corruption` | Severe creates more flaws |
+| `test_delay_per_chunk` | Delay parameter works correctly |
+
+### Running Phase 56 Tests
+
+```bash
+# Run mock translation tests specifically
+python -m pytest CherryAI/dev/test_mock_translation.py -v --timeout=10
+
+# Run all tests with timeout protection
+python -m pytest CherryAI/dev/ -v --timeout=10
+```
+
 ### Running Phase 34 Tests
 
 ```bash

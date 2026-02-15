@@ -1122,12 +1122,20 @@ class APIClient:
         - lines: Chunk by line count (default)
         - tokens: Chunk by token count using tiktoken
         - hybrid: Use whichever limit is reached first
-        """
-        if not self.client:
-            raise TranslationError("API Client not initialized (missing API key?)")
 
+        When ``self.config.model`` is ``"mock"``, translation is routed to
+        :class:`~functions.mock_translator.MockTranslator` instead of a live
+        API, enabling full pipeline testing without network or API keys.
+        """
         if not lines:
             return []
+
+        # Route to mock translator when model is "mock"
+        if self.config.model == "mock":
+            return self._mock_translate(lines)
+
+        if not self.client:
+            raise TranslationError("API Client not initialized (missing API key?)")
         
         # Check cache first if enabled
         if self._request_cache and self.config.cache_enabled:
@@ -1173,6 +1181,22 @@ class APIClient:
             self.logger.debug(f"Cached {len(lines)} lines")
 
         return results
+
+    def _mock_translate(self, lines: List[str]) -> List[str]:
+        """Route translation to MockTranslator for offline pipeline testing.
+
+        Uses the ``mock_translator`` module to produce deterministic nonsense
+        output with optional deliberate flaw injection (Phase 56).
+        """
+        from .mock_translator import create_mock_translator
+
+        self.logger.info("Using Mock Translation for %d lines", len(lines))
+        translator = create_mock_translator(
+            enable_flaws=True,
+            intensity="moderate",
+            seed=42,
+        )
+        return translator.translate_batch(lines)
 
     def translate_line_by_line(
         self,

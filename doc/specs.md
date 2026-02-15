@@ -1,6 +1,6 @@
 # CherryAI Specification Document
 
-Version 2.9 | February 2026
+Version 3.0 | February 2026
 
 This document provides a complete functional specification of CherryAI, an LLM-based translation application designed to achieve high-quality translations using Large Language Models. The application requires substantial input and processing which can optimally be performed automatically once an input is selected.
 
@@ -41,7 +41,21 @@ CherryAI features terms that may not be clear at first glance or slightly differ
 2. [Data Flow Summary](#2-data-flow-summary)
 3. [External Files and Storage](#3-external-files-and-storage)
 4. [Global Options](#4-global-options)
-5. [GUI Mode: Step-by-Step Specification](#5-gui-mode-step-by-step-specification)
+5. [Cross-Step Specifications](#5-cross-step-specifications)
+   - [5.1 Speaker:Dialogue Format](#51-speakerdialogue-format)
+   - [5.2 API Request Building and Formation](#52-api-request-building-and-formation)
+   - [5.3 Context Markers](#53-context-markers)
+   - [5.4 Lines to Translate Rules](#54-lines-to-translate-rules)
+   - [5.5 Rolling Context](#55-rolling-context)
+   - [5.6 Glossary Selective Inclusion](#56-glossary-selective-inclusion)
+   - [5.7 Code Database Extended Properties](#57-code-database-extended-properties)
+   - [5.8 Parser Scripts](#58-parser-scripts)
+   - [5.9 Pre/Post Processing Priority System](#59-prepost-processing-priority-system)
+   - [5.10 Wordwrap Extended Rules](#510-wordwrap-extended-rules)
+   - [5.11 Point of View Inference](#511-point-of-view-inference)
+   - [5.12 Consistency System](#512-consistency-system)
+   - [5.13 Mock Translation Extended](#513-mock-translation-extended)
+6. [GUI Mode: Step-by-Step Specification](#6-gui-mode-step-by-step-specification)
    - [Step 0: Input](#step-0-input)
    - [Step 1: Analysis](#step-1-analysis)
    - [Step 2: Costs](#step-2-costs)
@@ -52,10 +66,10 @@ CherryAI features terms that may not be clear at first glance or slightly differ
    - [Step 7: Postprocessing](#step-7-postprocessing)
    - [Step 8: Wordwrap](#step-8-wordwrap)
    - [Step 9: Output](#step-9-output)
-6. [CLI Mode: Automatic Pipeline](#6-cli-mode-automatic-pipeline)
-7. [Manifest Structure](#7-manifest-structure)
-8. [Processing Modules Reference](#8-processing-modules-reference)
-9. [Pipeline Logging System](#9-pipeline-logging-system)
+7. [CLI Mode: Automatic Pipeline](#7-cli-mode-automatic-pipeline)
+8. [Manifest Structure](#8-manifest-structure)
+9. [Processing Modules Reference](#9-processing-modules-reference)
+10. [Pipeline Logging System](#10-pipeline-logging-system)
 
 ---
 
@@ -301,7 +315,476 @@ Global options are loaded from and saved to `CherryAI.ini`. The `GlobalOptions` 
 
 ---
 
-## 5. GUI Mode: Step-by-Step Specification
+## 5. Cross-Step Specifications
+
+The following systems span multiple pipeline steps. They are documented here as cross-cutting concerns rather than within any single step, since their behaviour affects analysis, preprocessing, request building, translation, postprocessing, and output.
+
+---
+
+### 5.1 Speaker:Dialogue Format
+
+**Affects**: Analysis (Step 1), Preprocessing (Step 4), Translation (Step 5), Postprocessing (Step 7), Wordwrap (Step 8)
+
+**Purpose**: CherryAI uses the `Speaker: "Dialogue"` and `Speaker: Dialogue` formats throughout the pipeline as a structural indicator. Speaker detection is performed during Analysis and the format is preserved or leveraged in every subsequent step.
+
+#### Detection
+
+- Uses Speaker Inference from `functions/validation.py`
+- Matches the `:` separator and its fullwidth equivalent `：` to catch all occurrences with minimal false positives
+- Speaker names are validated against the character glossary when available
+
+#### Cross-Step Behaviour
+
+| Step | Behaviour |
+|------|-----------|
+| Analysis (1) | Detect speaker patterns, count occurrences, build speaker list |
+| Preprocessing (4) | Speaker Name Replacement: optionally replace original speaker names with translated equivalents from glossary |
+| Translation (5) | Speaker format informs the conditional prompt (Dialogue vs Menu vs Choice). Rolling Context is dialogue-only |
+| Postprocessing (7) | Speaker format validated and restored; quote balance respects speaker prefix |
+| Wordwrap (8) | Speaker Handling mode (Ignore / Count) determines whether the speaker prefix counts toward line width |
+
+#### Duplicate Speaker Removal (Global Option)
+
+- **Purpose**: Save tokens by removing the speaker name when it is the same as the previous line's speaker
+- **Affects Estimation**: Removed speakers reduce input count and consequently output token calculation; the request builder accounts for this
+- **Preprocessing**: Speaker is stripped from the line along with the `:` separator and trailing spaces
+- **Postprocessing**: Speaker with : and trailing spaces is re-added after translation, before the dialogue content
+- **Manifest Key**: `Options.RemoveDuplicateSpeakers`
+
+---
+
+### 5.2 API Request Building and Formation
+
+**Affects**: Costs (Step 2), Translation (Step 5)
+
+**Purpose**: Define how translation requests are structured and how lines are grouped into requests. The same request builder function is shared between Estimation (Step 2) and Translation (Step 5) to ensure cost estimates match actual usage.
+
+#### Request Structure
+
+Each API request consists of three layers:
+
+| Layer | Contents | Token Counting |
+|-------|----------|----------------|
+| **Meta Settings** | URL, API Key, Model, Temperature, Logit Bias, No Thinking, Structured Output | NOT counted toward token estimates |
+| **Prompt** | System Instructions, Conditional prompt (Dialogue/Choice/Menu/Unknown), Summary, Style and Tone, Code Instructions (conditional), Glossary (conditional, selective), Rolling Context (conditional) | Counted as input tokens |
+| **Lines to Translate** | Preprocessed lines (preferred) or original lines when preprocessed is empty | Counted as input tokens; output estimated via language multiplier |
+
+#### Request Size
+
+- Requests have a configurable **Minimum** and **Maximum** request size
+- **Maximum**: Hard limit — no request exceeds this (controlled by Lines/Chunk and Tokens/Chunk)
+- **Minimum**: Soft target — requests below this are merged with adjacent requests when possible (see Step 4 of Formation)
+- When both lines and tokens limits exist, whichever is reached first triggers the chunk boundary
+- **Maximum** and **Minimum** can be the same, **Minimum** can not exceed **Maximum**
+
+#### Request Formation (4-Step Process)
+
+Invalid lines (placeholders, deduplicated, context markers) are never counted and are excluded from the final request.
+
+**Step 1**: Split off Menu and Choice blocks into their own requests using Context Markers. Dialogue and Unknown lines remain together.
+
+**Step 2**: Using File Ending Context Markers only, perform the First Dialogue Split. Remove invalid lines from count. Each file boundary produces a separate request candidate.
+
+**Step 3**: Apply the Maximum Request Size to split any oversized First Dialogue Splits. Balance line counts within each resulting Second Dialogue Split where necessary to avoid very uneven chunks.
+
+**Step 4**: Smartly merge Second Dialogue Splits below Minimum Request Size with other requests, up to the Maximum Request Size. In a merge, the 2nd request onwards must not have any rolling context that could be provided.
+
+#### Request Content Selection
+
+- Lines to translate prioritize the preprocessed line (`prepro`); fall back to original (`orig`) when preprocessed is empty
+- The conditional prompt section is selected based on Context Markers:
+  - Dialogue marker → Dialogue prompt
+  - Choice marker → Choice prompt
+  - Menu marker → Menu prompt
+  - No context marker (only file start) → Unknown prompt (treated like Dialogue but with the Unknown conditional)
+
+#### Shared Builder
+
+The request builder function in `functions/prompt_builder.py` is called by both:
+- **Estimation** (Step 2): To calculate accurate token counts matching the actual translation requests
+- **Translation** (Step 5): To build the actual requests sent to the API
+
+This ensures cost estimates are never out of sync with translation behaviour.
+
+---
+
+### 5.3 Context Markers
+
+**Affects**: Analysis (Step 1), Preprocessing (Step 4), Translation (Step 5)
+
+**Purpose**: Context Markers are metadata lines injected by Parser Scripts (§5.8) or detected during Analysis that inform request building and prompt selection. They are never translated and never sent to the LLM.
+
+#### Marker Types
+
+| Marker | Meaning | Effect |
+|--------|---------|--------|
+| **File End** | Marks the boundary between files in a multi-file project | Splits requests at file boundaries; rolling context does not cross file boundaries |
+| **Dialogue** | Everything after this marker is dialogue until the next marker | Selects the Dialogue conditional prompt; enables Rolling Context |
+| **Menu** | Everything after this marker is a menu | Selects the Menu conditional prompt; aims for Maximum Request Size, ignores file endings | No rolling context | 
+| **Choice** | Everything after this marker is a set of choices | Selects the Choice conditional prompt; aims for Maximum Request Size, ignores file endings | No rolling context | 
+
+#### Rules
+
+- Context Markers apply from their position until the next Context Marker (including File End)
+- File Start without a Dialogue/Choice/Menu marker immediately after is treated as **Unknown** — lines can be anything (dialogue, choices, menu) and the Unknown conditional prompt is used
+- Context Markers are entirely optional but significantly increase translation quality by enabling appropriate prompt selection and request grouping
+- Context Markers are marked as invalid lines — they are never counted toward request size and never included in the lines sent to the LLM
+- Parser Scripts provide context markers when the game engine format supports them (see §5.8)
+
+---
+
+### 5.4 Lines to Translate Rules
+
+**Affects**: Preprocessing (Step 4), Translation (Step 5)
+
+**Purpose**: Determine which lines are actually sent to the LLM for translation. Lines failing these rules are skipped automatically.
+
+#### Filtering Rules
+
+| Rule | Type | Default | Description |
+|------|------|---------|-------------|
+| Skip already translated | Global Option | On | Lines with a non-empty `tl` field are not re-translated |
+| Skip non-source language | Global Option | On | Lines detected as not being in the configured source language are skipped |
+| No Placeholders | Mandatory | Always | Lines consisting entirely of `__PROT__`, `__DEDUP__`, `__CUSTOM__` tokens are skipped |
+| No Deduplicated | Mandatory | Always | Lines marked as deduplicated (`__DEDUP_{idx}__`) are skipped |
+| No Context Markers | Mandatory | Always | Context Marker lines are metadata and are never translated |
+
+#### Behaviour
+
+- The mandatory rules cannot be disabled — placeholder-only lines, deduplicated lines, and context markers must never be sent to the LLM
+- The optional Global Option rules provide user control over incremental translation and language filtering
+- Lines that are skipped are marked accordingly in the Translation step status column (e.g., "Skipped (already translated)", "Skipped (wrong language)")
+
+---
+
+### 5.5 Rolling Context
+
+**Affects**: Translation (Step 5), Costs (Step 2)
+
+**Purpose**: Provide preceding lines as context to the LLM for each translation request to improve coherence and consistency.
+
+#### Rules
+
+- **Dialogue only**: Rolling Context is only applied to Dialogue and Unknow requests (not Menu or Choice)
+- **Enabled by default**: Global Option with a configurable line length (default: 3 lines)
+- **Use Translated vs Use Original**: Global Option controlling whether rolling context uses already-translated lines or original lines. Default: "Use Translated". Cannot be used with Batch API usage automatically falls back to "Use Original"
+- **File boundary**: Rolling context does not cross file boundaries (respects File End context markers)
+
+#### Split Request Logic
+
+After the first step of request formation (§5.2), the system determines which requests get or provide rolling context:
+
+| Condition | Gets Rolling Context | Provides Rolling Context |
+|-----------|---------------------|------------------------|
+| 2nd request onward of a Split Request (a request that was deemed too big and split) | Yes | — |
+| Not the last request of a Split Request | — | Yes |
+| First request of a new file | No | — |
+| Single request (not split) | No | No |
+
+- **Gets**: The request will include preceding lines from the previous request as rolling context in the prompt
+- **Provides**: The last N lines of this request are stored for the next request to use as rolling context
+
+#### Fallback Rules
+
+- When "Use Translated" is selected but the previous request's translation is not yet available (e.g., during the first pass), falls back to using original lines
+- When rolling context is disabled (line length = 0), no context is included regardless of request type
+
+---
+
+### 5.6 Glossary Selective Inclusion
+
+**Affects**: Translation (Step 5), Costs (Step 2)
+
+**Purpose**: Include only relevant glossary entries in the translation prompt for each chunk, reducing token usage while maintaining translation consistency.
+
+#### Behaviour
+
+- For each chunk of lines to translate, the glossary is filtered to include only entries whose **Original** term appears in the current chunk's lines
+- **Global Option**: "Original Only" vs "Original or Translation" — controls whether matching is done against the Original column only or against both Original and Translation columns
+- Project glossary and Global glossary are both filtered selectively
+- Glossary entries with empty Translation or empty Notes still appear if the Original matches (they serve as context for the LLM)
+- The selective filter runs identically during Estimation and Translation via the shared request builder
+
+#### Prompt Format
+
+When glossary entries match, they are included in the prompt as:
+```
+Glossary:
+- [Original]: [Translation] ([Notes])
+```
+
+Only matching entries appear — the LLM never sees the full glossary.
+
+---
+
+### 5.7 Code Database Extended Properties
+
+**Affects**: Preprocessing (Step 4), Postprocessing (Step 7), Wordwrap (Step 8)
+
+**Purpose**: The Code Database categorizes code patterns with both an Action (how to handle during translation) and extended properties that control spacing and width behaviour.
+
+#### Actions
+
+| Action | Translation Behaviour | Postprocessing Behaviour |
+|--------|----------------------|-------------------------|
+| **Translate** | Added to prompt with notes for contextual translation | No special handling |
+| **Protect** | Optionally replaced with `__PROT__` token during Preproccessing, checks translation and tries to recover or retry when missing | Restored from `prepro_ops` |
+| **Custom Placeholder** | Replaced with custom named token during Preproccessing, checks translation and tries to recover or retry when missing | Restored from `prepro_ops` |
+| **Placeholder** | Generic `__PROT__` / `__PROT_X__` replacement during Preproccessing, checks translation and tries to recover or retry when missing | Restored from `prepro_ops` |
+| **Anchor** | Entirely removed; position stored relative to anchors during Preproccessing | Restored at anchor positions |
+
+#### Extended Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| **IsInvisible** | bool | Code renders with zero visible width. Adjacent characters are spaced depending on whether they are symbols, punctuation, numbers, words, or a mix. Used by Code Spacing Rules and Wordwrap width calculation. |
+| **IsCouple** | bool | Like IsInvisible but the code is a pair (e.g., font and color with their reset commands). The second element of the pair gets a space after instead of before it when applicable (if word or number and not already present). |
+| **IsNumber** | bool | Code renders as a number (like a variable showing `100G`). Must be treated like a written number. Requires a whitelist of characters — `100m` is different from `100 meters`. All single characters with a space after are whitelisted through RegEx. |
+| **IsWord** | bool | Code renders as a written word. Must be spaced like a word — whitespace before and after in running text. |
+
+#### Code Spacing Rules
+
+Code Spacing Rules (processed in both Pre and Post steps) apply these extended properties:
+- **IsInvisible**: No spaces added around the code; adjacent characters determine spacing
+- **IsCouple**: Treated like IsInvisible but the closing/reset command gets a trailing space
+- **IsNumber**: Spaced like a numeric value following its specific whitelist rules
+- **IsWord**: Spaced like any other word in the text
+
+---
+
+### 5.8 Parser Scripts
+
+**Affects**: Input (Step 0), Analysis (Step 1), Preprocessing (Step 4), Wordwrap (Step 8), Output (Step 9)
+
+**Purpose**: Parser Scripts are game-engine-specific or format-specific scripts that handle extraction, injection, and optionally provide wordwrap settings and context markers. They extend the base format handlers in `formats/` with engine-aware logic.
+
+**Status**: Not yet implemented — currently format handlers in `formats/` provide basic extraction/injection. Parser Scripts will formalize the interface and add wordwrap and context marker support.
+
+#### Interface
+
+**Mandatory Fields**:
+| Field | Type | Description |
+|-------|------|-------------|
+| Name | string | Parser identifier (e.g., "RPGMakerMV", "WolfRPG", "RenPy") |
+| Extract | function | Extract translatable lines from source files |
+| Inject | function | Inject translated lines back into file copies |
+
+**Optional Fields**:
+| Field | Type | Description |
+|-------|------|-------------|
+| Wordwrap | object | Engine-specific wrapping configuration |
+| Wordwrap.MaxLineLength | int | Maximum characters or pixels per line |
+| Wordwrap.MaxLineNumber | int | Maximum lines per text box |
+| Wordwrap.WordwrapCommand | string | Line break command for the engine (e.g., `\n`, `[br]`) |
+| Wordwrap.NewTextboxInjection | string | Command to start a new text box when overflow occurs |
+| ForbiddenCharacters | list | Characters that must not appear in output |
+| ForbiddenCharacters.logit_bias | dict | Applied during Translation (Step 5) via API logit bias |
+| ForbiddenCharacters.output_action | enum | "replace" (auto) or "flag" (manual review and block) |
+| ContextMarkers | object | Engine-specific context marker definitions |
+| ContextMarkers.Scenes | pattern | RegEx or rule to detect scene/file boundaries |
+| ContextMarkers.Dialogue | pattern | RegEx or rule to detect dialogue sections |
+| ContextMarkers.Menu | pattern | RegEx or rule to detect menu sections |
+| ContextMarkers.Choices | pattern | RegEx or rule to detect choice sections |
+
+#### Wordwrap Integration
+
+When a Parser Script provides wordwrap settings, these auto-populate the Wordwrap step (Step 8):
+- `MaxLineLength` → Width setting
+- `MaxLineNumber` → Max Lines setting
+- `WordwrapCommand` → Break Character
+- `NewTextboxInjection` → Used when overflow exceeds Max Lines to create a new text box instead of flagging
+
+#### Forbidden Characters
+
+Parser-defined forbidden characters affect:
+- **Translation (Step 5)**: Applied as logit bias to prevent the LLM from producing them
+- **Output (Step 9)**: Characters are either auto-replaced or flagged for manual review, depending on the configured action
+
+---
+
+### 5.9 Pre/Post Processing Priority System
+
+**Affects**: Preprocessing (Step 4), Postprocessing (Step 7)
+
+**Purpose**: Document the complete priority ordering for all pre- and post-processing operations. Preprocessing runs lowest-priority-first; Postprocessing runs in reverse (highest-priority-first, matching the table below top-to-bottom for Post).
+
+#### Full Priority Table
+
+The following table lists all processes in their execution order. Preprocessing reads top-to-bottom; Postprocessing reads bottom-to-top.
+
+| Order | Process | Pre Step | Post Step | Notes |
+|-------|---------|----------|-----------|-------|
+| 1 | Deduplication | First (P10) | Last (P90) | Replaces duplicates with `__DEDUP__`; post recovers from unique translation |
+| 2 | Code Spacing Rules | — | P50 (Post only for recovery) | Post-exclusive spacing recovery; also pre for normalization |
+| 3 | Whitespace Normalization | — | P120 (Post-exclusive) | Post-exclusive: matches indentation to original |
+| 4 | Bracket Balance | — | P110 (Post-exclusive) | Post-exclusive: fixes unmatched brackets |
+| 5 | Quote Balance | — | P100 (Post-exclusive) | Post-exclusive: fixes unmatched quotes |
+| 6 | Custom Placeholder | P70 | P30 | Custom named replacement tokens for variables |
+| 7 | Placeholder | P80 | P20 | Generic `__PROT__` / `__PROT_X__` protection |
+| 8 | PROT Compression | P60 | P40 | Adjacent `__PROT__` → `__PROT_N__` |
+| 9 | Ellipsis Compression | P20 | P80 | Normalize ellipsis length |
+| 10 | Symbol Conversion | P30 (Pre only) | P70 | JP→EN symbols; Post optionally converts back |
+| 11 | Width Conversion | P35 (Pre only) | — | Fullwidth↔Halfwidth character width; Pre only |
+| 12 | Anchoring | P75 | P10 | Remove code at anchors; restore first in Post |
+| 13 | Quote Stripping | P76 (after Anchoring) | P9 (before Anchoring restore) | Strip quotes at dialogue boundaries to save tokens |
+| 14 | Aggressive Deduplication | Last (P90) | First (P5) | Variant-aware dedup with generic substitutions |
+
+#### Width Conversion (Pre only)
+
+- Converts character width from source language width to target language width
+- Most languages use halfwidth characters; East Asian (Chinese/Japanese/Korean) use fullwidth
+- Runs after Symbol Conversion and before Anchoring (in case of missing anchor equivalents)
+- No postprocessing reversal needed — the target language width is the desired output width
+
+#### Quote Stripping
+
+- Removes quotes at line/dialogue start and end to save tokens
+- Runs after Anchoring in preprocessing (quotes at anchored boundaries)
+- Restored before Anchoring restoration in postprocessing
+- Distinct from Quote Balance (which is post-exclusive and fixes LLM-introduced mismatches)
+
+#### Aggressive Deduplication
+
+- Similar to standard Deduplication except that variations of lines are deduplicated
+- Uses generic substitutions: one `{CODE}` for all code, `X` for all numbers
+- Runs last in preprocessing (after all other transformations have normalized the text)
+- Restored first in postprocessing (before any other restoration)
+- Lines deduplicated aggressively use the postprocessed result of their unique original (`X` turns back into the respective number &c)
+
+---
+
+### 5.10 Wordwrap Extended Rules
+
+**Affects**: Wordwrap (Step 8)
+
+**Purpose**: Additional rules and terminology for the wordwrap system beyond the step-level specification.
+
+#### Overflow and Runaway
+
+- **Overflow**: Text exceeds the horizontal boundary (characters/pixels per line exceeded). Flagged as "Overflow".
+- **Runaway**: Text exceeds the vertical boundary (more lines than the textbox maximum). Flagged as "Runaway".
+- Both must be prevented; `pretty_wrap` handles overflow, and Max Lines handles runaway.
+- When a parser defines `NewTextboxInjection`, runaway can be automatically resolved by injecting a new textbox command instead of flagging.
+
+#### Variable Words
+
+- Engine variables rendered in text (e.g., `\V[1]` displaying a character name) have variable visible length
+- Width calculation must use the **maximum** value/token length for each variable
+- Variables marked as `IsInvisible` in the Code Database are excluded from width calculation entirely
+
+#### Fontresize Commands
+
+- Some engines support inline font size changes (e.g., `\{` to increase, `\}` to decrease in RPG Maker)
+- When font resize commands are present, width calculation must account for the changed character width after each command
+- Parser Scripts can provide `size_up`, `size_down`, `size_increments`, `set_size`, `get_size` commands
+
+#### PrettyWrap Rules
+
+PrettyWrap is the standard wrapping algorithm. Its priority rules:
+
+1. **Prevent Overflow and Runaway** — Top priority. Never exceed width or max lines.
+2. **Prefer breaks after Punctuation/Symbols** — Break after `.`, `,`, `!`, `?`, `;`, `—`, `…` or before bullet points (`•`, `→`, `▶`, and equivalents)
+3. **Balance Lines** — Avoid single or few words on the last line by pulling words from the previous line. Default balance threshold: 30% (Global Option). A last line should contain at least 30% of the line width in characters.
+
+---
+
+### 5.11 Point of View Inference
+
+**Affects**: Analysis (Step 1), Translation (Step 5)
+
+**Status**: Not yet implemented — future feature.
+
+**Purpose**: Infer the narrative point of view from non-dialogue text to provide the LLM with accurate context for pronoun and perspective handling.
+
+#### Detection Rules
+
+- Applies only to non-dialogue lines (no speaker prefix) and non-menu lines (using Context Markers to exclude menus and choices)
+- Requires proper RegEx, counting, and calculation to avoid false numbers and provide confidence scores
+
+| Point of View | Indicators | Notes |
+|---------------|------------|-------|
+| **1st Person** | I, my, mine; Japanese equivalents (私, 僕, 俺, わたし, ぼく, おれ — both furigana and kanji); extensible per language | High confidence when multiple 1st-person pronouns appear consistently |
+| **2nd Person** | You, yours; Japanese equivalents (あなた, 君, きみ, お前, おまえ); extensible per language | Less common as primary narrative perspective |
+| **3rd Person** | Frequent use of the protagonist's name (from Character Notes); absence of 1st/2nd person markers | Requires protagonist name to be configured in Character Notes or detected by Analysis |
+
+#### Output
+
+- Produces a confidence score (high/low) based on pronoun frequency and consistency
+- Result stored in manifest and included in the translation prompt when confidence is high
+- Extensible: language-specific pronoun lists can be configured per source language
+
+---
+
+### 5.12 Consistency System
+
+**Affects**: Preprocessing (Step 4), Translation (Step 5), Postprocessing (Step 7)
+
+**Status**: Not yet implemented — future feature.
+
+**Purpose**: Ensure consistent translation of recurring terms, code-embedded text, and styled spans across all requests.
+
+#### Global Option: Mode
+
+The Consistency system operates in one of three modes (Global Option, can be disabled):
+
+| Mode | When | Description |
+|------|------|-------------|
+| **Preliminary** | Before translation requests are prepared | Runs additional LLM requests to establish consistent translations. Does not send code, only text. May run multiple times for confidence. Modifies the preprocessed entry directly. |
+| **During** | During translation | Uses the first translated occurrence of each term as the canonical translation. If the first occurrence has no code, uses `<t></t>` tags to mark and locate it. Updates the glossary dynamically. Replaces codes and spans in all subsequent stored requests. |
+| **Check** | After translation | Post-translation verification pass that flags inconsistent translations of the same term across different requests. Does not auto-fix — flags for manual review. |
+
+#### Types
+
+| Type | Detection | Behaviour |
+|------|-----------|-----------|
+| **Code (Translate)** | Code categorized as "Translate" in the Code Database; automatically covers any found through RegEx | Term and surrounding context are provided to the LLM for consistent translation |
+| **Glossary** | Glossary entries with empty Translation or empty Notes | Lines containing the term with surrounding context are provided. Prompt asks whether it is a person with gender, location, or term. |
+| **Spans** | Automatically discovered through paired tags (e.g., color and color reset commands, bold start/end) | Content within spans is extracted and tracked for consistency across requests |
+
+---
+
+### 5.13 Mock Translation Extended
+
+**Affects**: Translation (Step 5)
+**Status**: ✅ Implemented (Phase 56)
+
+**Purpose**: Extended specification for Mock Translation behaviour, including deliberate flaw testing for recovery validation.
+
+**Implementation**: `functions/mock_translator.py` (standalone module), integrated
+via `functions/api_client.py` mock routing (`model == "mock"`).
+Tests: `dev/test_mock_translation.py` (59 tests). Fixture: `dev/example/example.txt`.
+
+#### Standard Mock Behaviour
+
+- Always available and the only Model option when no API providers are configured
+- Produces deterministic nonsense output (swift random word replacement from a limited list)
+- Languages like Japanese have custom replacement settings
+- Preserves all `__PROT__`, `__DEDUP__`, `__CUSTOM__` tokens in output
+- Preserves speaker:dialogue format and anchor characters
+- Does NOT require API key or network connectivity
+
+#### Deliberate Flaw Testing
+
+Mock Translation intentionally introduces flaws to test the recovery pipeline:
+
+| Flaw Type | Description |
+|-----------|-------------|
+| **Malformed Placeholders** | Surgically remove and add characters to placeholder tokens (e.g., `__PROT__` → `__PRT__`, or `__PRO T__`) |
+| **Anchor Manipulation** | Remove existing anchors and add anchors where they do not belong |
+| **Code Intrusion** | No respect for text within code boundaries — random word replacement occurs inside code patterns as well |
+| **Character Surgery** | Add and remove characters at random positions to stress-test character-level recovery |
+
+#### Purpose of Flaws
+
+These deliberate flaws validate that the Translation pipeline correctly handles:
+- Placeholder recovery (case recovery, mangled recovery, position shift)
+- Anchor verification and restoration
+- Code spacing rule enforcement
+- Quote and bracket balance after distortion
+
+---
+
+## 6. GUI Mode: Step-by-Step Specification
 
 Each step is a tab in the main notebook. Steps can be navigated freely but follow a logical workflow progression.
 
@@ -744,26 +1227,35 @@ The Costs step has **two distinct estimation states** tracked separately:
    - Rolling context prompt (if enabled)
    - Per-chunk content
 4. Calculate savings from preprocessing
-5. Estimate output tokens (input × 1.2 multiplier)
+5. Estimate output tokens: count tokens of Lines to Translate and apply a language-specific output multiplier (e.g., ×1.2 for JP→EN; every language pair has its custom multiplier based on typical expansion/contraction ratios)
 6. Look up model pricing (input/output per 1M tokens)
 7. Calculate costs for multiple models
 8. Estimate time using concurrent requests, rate limits, and token speed
 
 **Outputs**:
-- `input_tokens_original: int` - Input tokens before preprocessing
-- `input_tokens_preprocessed: int` - Input tokens after preprocessing
-- `output_tokens: int` - Estimated output tokens
+- `input_tokens_original: int` - Input tokens before preprocessing (saved in manifest)
+- `input_tokens_preprocessed: int` - Input tokens after preprocessing (saved in manifest)
+- `output_tokens_original: int` - Estimated output tokens from original (saved in manifest)
+- `output_tokens_preprocessed: int` - Estimated output tokens from preprocessed (saved in manifest)
 - `prompt_overhead: int` - Tokens per request from system prompt
-- `cost_original: float` - Cost before preprocessing
-- `cost_preprocessed: float` - Cost after preprocessing
-- `cost_saved: float` - Savings from preprocessing
-- `savings_percent: float` - Percentage saved
+- `cost_original: float` - Cost before preprocessing (not saved — calculated on display)
+- `cost_preprocessed: float` - Cost after preprocessing (not saved — calculated on display)
+- `cost_saved: float` - Savings from preprocessing (not saved — calculated on display)
+- `savings_percent: float` - Percentage saved (not saved — calculated on display)
 - `chunks_required: int` - Number of API requests
 - `estimated_time: str` - Formatted duration
+- `difference: float` - Token difference between original and preprocessed (displayed, not saved)
+
+**Four Saved Token Counts**: The manifest stores exactly four token values from estimation — input/output for both original and preprocessed states. These are used to calculate costs with available models and their rates for display. Cost estimations and savings are saved for the selected model only when translation actually starts.
 
 **Stored In**:
 - Manifest step data (step_id=2)
-- Fields: `Costs.input_tokens`, `Costs.output_tokens`, `Costs.total_cost`, `Costs.cost_original`, `Costs.cost_preprocessed`, `Costs.savings_percent`, `Costs.estimation_state`
+- Fields: `Costs.input_tokens_original`, `Costs.input_tokens_preprocessed`, `Costs.output_tokens_original`, `Costs.output_tokens_preprocessed`, `Costs.estimation_state`
+
+**Estimation uses the shared Request Builder** (see §5.2): The same `functions/prompt_builder.py` request builder function used by Translation is called during estimation to ensure token counts match actual request composition. Input tokens exclude Meta Settings (they are not counted). Estimation runs:
+- Once automatically after files are loaded, defaults are written, and default-enabled preprocessing has been done
+- When triggered after preprocessing settings change
+- Before translation starts (confirmation window)
 
 #### User Actions
 
@@ -1133,9 +1625,12 @@ The Preprocessing tab is organized into three sections:
 | Deduplication | Checkbox + Spinbox | ✓, Threshold=1 | Replace duplicate lines with tokens |
 | Ellipsis Compression | Checkbox | ✓ | Compress ellipsis sequences to save tokens |
 | Symbol Conversion | Checkbox | ✓ | Convert JP→EN punctuation before translation |
+| Width Conversion | Checkbox | ✓ | Convert fullwidth↔halfwidth characters based on language pair |
 | PROT Token Compression | Checkbox | ✓ | Compress adjacent `__PROT__` tokens |
 | Speaker Name Replacement | Checkbox | ✗ | Replace speaker names with glossary translations |
 | Code Spacing Rules | Checkbox | ✓ | Apply code-aware spacing normalization |
+| Quote Stripping | Checkbox | ✗ | Strip quotes at dialogue boundaries to save tokens |
+| Aggressive Deduplication | Checkbox | ✗ | Variant-aware deduplication (code→{CODE}, numbers→X) |
 
 **Buttons**:
 | Button | Function |
@@ -1272,6 +1767,56 @@ The Preprocessing tab is organized into three sections:
 **Future Improvement**: Needs deeper integration with Code Database and expanded rule definitions
 
 **Manifest Key**: `CodeSpacingRules`
+
+---
+
+#### Process: Width Conversion
+
+**Priority**: 35 (After Symbol Conversion, before Speaker Name Replacement)
+
+**Purpose**: Convert character width from source language width to target language width. Most languages use halfwidth characters; East Asian languages (Chinese/Japanese/Korean) use fullwidth.
+
+**Behavior**:
+- Converts fullwidth alphanumerics to halfwidth (or vice versa) depending on source→target language direction
+- Runs after Symbol Conversion and before Anchoring to ensure anchor equivalents are available
+- **Preprocessing only** — no postprocessing reversal needed. The target language width is the desired output width.
+
+**Manifest Key**: `WidthConversion`
+
+---
+
+#### Process: Quote Stripping
+
+**Priority**: 76 (After Anchoring)
+
+**Purpose**: Remove quotes at line/dialogue start and line end to save tokens during translation.
+
+**Behavior**:
+- Strips opening and closing quotes from dialogue boundaries
+- Records original quote characters and positions for restoration
+- Distinct from Quote Balance (which is post-exclusive and fixes LLM-introduced mismatches)
+
+**Postprocessing**: Restored before Anchoring restoration (Priority 9 in Post)
+
+**Manifest Key**: `QuoteStripping`
+
+---
+
+#### Process: Aggressive Deduplication
+
+**Priority**: 90 (Runs last — after all other preprocessing)
+
+**Purpose**: Deduplicate variations of lines that differ only in code or numbers, beyond what standard Deduplication handles.
+
+**Behavior**:
+- Replaces all code patterns with a generic `{CODE}` and all numbers with `X`
+- Lines that are identical after these substitutions are treated as duplicates
+- Runs last in preprocessing because it operates on the fully preprocessed form of each line
+- Uses the postprocessed result of the unique original to restore all variant-deduplicated lines
+
+**Postprocessing**: Restored first (Priority 5 in Post), before any other restoration, to ensure the deduplicated variants receive the correct restored translation
+
+**Manifest Key**: `AggressiveDeduplication`
 
 ---
 
@@ -1423,17 +1968,22 @@ The Preprocessing tab is organized into three sections:
 | 10 | Deduplication | Remove duplicates before any changes |
 | 20 | Ellipsis Compression | Normalize ellipsis |
 | 30 | Symbol Conversion | Convert JP→EN symbols |
+| 35 | Width Conversion | Convert fullwidth↔halfwidth characters (Pre only) |
 | 40 | Speaker Name Replacement | Replace speaker names |
 | 50 | Code Spacing Rules | Normalize code spacing |
 | 60 | PROT Token Compression | Compress adjacent PROTs (runs after patterns create them) |
 | 70 | Custom Placeholders | Apply user-defined patterns |
 | 75 | Anchoring | Remove anchored content |
+| 76 | Quote Stripping | Strip quotes at dialogue/line boundaries to save tokens |
 | 80 | Protect Code Patterns | Protect remaining code |
+| 90 | Aggressive Deduplication | Variant-aware dedup with generic substitutions (runs last) |
 
 **Postprocessing** (reverse order - highest priority runs first):
 | Priority | Process | Description |
 |----------|---------|-------------|
-| 10 | Anchoring | Restore anchored content FIRST |
+| 5 | Aggressive Deduplication | Restore variant-deduplicated lines FIRST |
+| 9 | Quote Stripping | Restore stripped quotes before anchoring restoration |
+| 10 | Anchoring | Restore anchored content |
 | 20 | Protect Code Patterns | Restore `__PROT__` tokens |
 | 30 | Custom Placeholders | Restore custom tokens |
 | 40 | PROT Token Decompression | Decompress `__PROT_N__` |
@@ -1442,6 +1992,12 @@ The Preprocessing tab is organized into three sections:
 | 70 | Symbol Conversion | Optionally restore JP symbols |
 | 80 | Ellipsis Expansion | Restore ellipsis length |
 | 90 | Deduplication | Apply translation to all duplicates LAST |
+| 100 | Quote Balance Recovery | Fix unmatched quotes (Post-exclusive) |
+| 110 | Bracket Balance Recovery | Fix unmatched brackets (Post-exclusive) |
+| 120 | Whitespace Normalization | Match indentation/spacing to original (Post-exclusive) |
+| 130 | Code Spacing Rules (Post) | Specialized whitespace for code patterns (Post-exclusive) |
+
+**Full reference**: See §5.9 Pre/Post Processing Priority System for the complete cross-step priority table.
 
 ---
 
@@ -2716,11 +3272,11 @@ Output inherits these settings from Input to ensure format consistency:
 
 ---
 
-## 6. CLI Mode: Automatic Pipeline
+## 7. CLI Mode: Automatic Pipeline
 
 CLI mode provides fully automated translation without GUI interaction.
 
-### 6.1 Commands
+### 7.1 Commands
 
 | Command | Purpose |
 |---------|---------|
@@ -2735,7 +3291,7 @@ CLI mode provides fully automated translation without GUI interaction.
 | `test` | Run diagnostic tests |
 | `help` | Show command help |
 
-### 6.2 Translate Command Options
+### 7.2 Translate Command Options
 
 | Option | Short | Description |
 |--------|-------|-------------|
@@ -2752,7 +3308,7 @@ CLI mode provides fully automated translation without GUI interaction.
 | `--preset` | | Apply API preset |
 | `--no-api-key` | | Skip key validation (local LLM) |
 
-### 6.3 Automatic Pipeline Flow
+### 7.3 Automatic Pipeline Flow
 
 ```
 python CherryAI.py translate file.txt -s ja -t en
@@ -2767,7 +3323,7 @@ python CherryAI.py translate file.txt -s ja -t en
 7. **Postprocess**: Restore protected content
 8. **Output**: Write translated file
 
-### 6.4 Progress Display
+### 7.4 Progress Display
 
 ```
   [1/1] input.txt
@@ -2785,11 +3341,11 @@ python CherryAI.py translate file.txt -s ja -t en
 
 ---
 
-## 7. Manifest Structure
+## 8. Manifest Structure
 
 The manifest (`.CherryAI.json`) is the single source of truth for project state.
 
-### 7.1 Top-Level Structure
+### 8.1 Top-Level Structure
 
 ```json
 {
@@ -2806,7 +3362,7 @@ The manifest (`.CherryAI.json`) is the single source of truth for project state.
 }
 ```
 
-### 7.2 LineEntry Structure
+### 8.2 LineEntry Structure
 
 ```json
 {
@@ -2821,7 +3377,7 @@ The manifest (`.CherryAI.json`) is the single source of truth for project state.
 }
 ```
 
-### 7.3 Field Progression
+### 8.3 Field Progression
 
 ```
 orig → prepro → edited_prepro → tl → tlc1 → edit1 → tlc2 → ... → postpro → wordwr → overwrite
@@ -2835,9 +3391,9 @@ Resolution methods:
 
 ---
 
-## 8. Processing Modules Reference
+## 9. Processing Modules Reference
 
-### 8.1 functions/ Modules
+### 9.1 functions/ Modules
 
 | Module | Purpose |
 |--------|---------|
@@ -2857,7 +3413,7 @@ Resolution methods:
 | `prompt_builder.py` | Translation prompt construction |
 | `manifest_manager.py` | Unified state management |
 
-### 8.2 modi/ Modules (Pre/Post Processing)
+### 9.2 modi/ Modules (Pre/Post Processing)
 
 | Module | Purpose |
 |--------|---------|
@@ -2868,7 +3424,7 @@ Resolution methods:
 | `anchor_equivalence.py` | Anchor pattern handling |
 | `speaker_replacement.py` | Speaker name handling |
 
-### 8.3 formats/ Modules (File I/O)
+### 9.3 formats/ Modules (File I/O)
 
 | Module | Purpose |
 |--------|---------|
@@ -2878,7 +3434,7 @@ Resolution methods:
 | `xlsx.py` | Excel files |
 | `rpgmaker.py` | RPG Maker data (placeholder) |
 
-### 8.4 gui/helpers/ Modules (Adapters)
+### 9.4 gui/helpers/ Modules (Adapters)
 
 | Module | Purpose |
 |--------|---------|
@@ -2891,11 +3447,11 @@ Resolution methods:
 
 ---
 
-## 9. Pipeline Logging System
+## 10. Pipeline Logging System
 
 CherryAI maintains per-project, per-step log files that record the outcome of every processing step in the pipeline. Logs are the audit trail: they capture what happened, what went wrong, what was recovered, and how long it took. The manifest remains the single source of truth for data; logs are the single source of truth for *process history*.
 
-### 9.1 Design Principles
+### 10.1 Design Principles
 
 1. **Manifest is Data, Logs are History**: The manifest stores line fields (`tl`, `postpro`, `wordwr`, `overwrite`) and step data (counts, flags, options). Logs store chronological event records — what was attempted, what succeeded, what failed, and why. Logs never duplicate manifest data; they reference it by line index.
 2. **Per-Project, Per-Step**: Each log file is scoped to one project and one pipeline step. Log files live alongside the manifest.
@@ -2905,7 +3461,7 @@ CherryAI maintains per-project, per-step log files that record the outcome of ev
 6. **Existing Functions First**: The logging system builds on existing infrastructure in `functions/mainhelper.py` (`setup_logger`, `write_failure_report`), `functions/api_client.py` (`write_log_header`, `write_log_footer`, `_log_api_call`, `_update_log_summary`), and `functions/common_errors.py` (`ErrorCollector`). New code extends these — it does not replace them.
 7. **Succintness**: Logs must not log every success. Only the translation.log is supposed to log every request with response. Any other optimally only logs 'Success' and any utility information like timestamp and time taken. 
 
-### 9.2 Log File Specifications
+### 10.2 Log File Specifications
 
 All log files are plain UTF-8 text. They follow a common structure: **Header → Per-Line/Per-Chunk Entries → Summary Footer**.
 
@@ -3241,7 +3797,7 @@ All log files are plain UTF-8 text. They follow a common structure: **Header →
 | `get_final_output()` | `functions/output.py` (new, Task 47.4) | Resolve injection priority | Return source_field for log tracking |
 | `write_failure_report()` | `mainhelper.py` | Write failure report | Adapt to output.log format |
 
-### 9.3 Log Status Definitions
+### 10.3 Log Status Definitions
 
 All log entries use a unified status vocabulary. Status is determined at two levels: **per-line** (individual line outcome) and **per-step** (aggregate step outcome derived from line statuses).
 
@@ -3309,7 +3865,7 @@ The step-level status is derived from the worst per-line status:
 | `FORMAT_ERROR` | Output | Format handler could not inject into target file |
 | `INJECTION_MISMATCH` | Output | Line count mismatch between manifest and source file |
 
-### 9.4 Utility Metrics Tracking
+### 10.4 Utility Metrics Tracking
 
 Every log captures process-level utility metrics. These are written in both per-entry and summary sections.
 
@@ -3332,7 +3888,7 @@ Every log captures process-level utility metrics. These are written in both per-
 - `Wordwrap.breaks_inserted`, `Wordwrap.lines_exceeding`, `Wordwrap.duration`
 - `Output.files_written`, `Output.files_failed`, `Output.duration`
 
-### 9.5 Log Archival & Lifecycle
+### 10.5 Log Archival & Lifecycle
 
 | Event | Action |
 |-------|--------|
@@ -3353,7 +3909,7 @@ Every log captures process-level utility metrics. These are written in both per-
 | `setup_logger()` | `mainhelper.py` | Add `_rotate_log()` call before logger creation |
 | `write_failure_report()` | `mainhelper.py` | Route failure reports to the appropriate step log |
 
-### 9.6 Manifest Integration
+### 10.6 Manifest Integration
 
 Logs are about process history; the manifest is about data state. They complement each other:
 
@@ -3368,7 +3924,7 @@ Logs are about process history; the manifest is about data state. They complemen
 
 **Key Rule**: The manifest is always written first (crash resilience). Log writes are best-effort — a log write failure must never block or interrupt processing. Logs are wrapped in `try/except` at every write point.
 
-### 9.7 Recovery & Failure Functions Catalog
+### 10.7 Recovery & Failure Functions Catalog
 
 This catalog lists every existing function that participates in recovery, validation, retry, or failure handling, organized by pipeline step. These functions produce the log entries described above and are the implementation backbone of the logging system.
 

@@ -80,6 +80,13 @@ TABLE OF CONTENTS
    - Retry Strategy Options
    - Line-by-Line Translation Mode
    - Translation Style Presets
+   - Context Markers
+   - Parser Scripts
+   - Width Conversion
+   - Aggressive Deduplication
+   - Point of View Inference
+   - Consistency System
+   - Mock Translation (Flaw Testing)
 
 5. MANIFEST v3.1 - PROFESSIONAL TRANSLATION WORKFLOW
    - How It Works
@@ -1667,6 +1674,83 @@ TRANSLATION STYLE PRESETS (Implemented)
   - `irish_dialect`: Irish English expressions
   - `southern_us`: American Southern dialect
   - `cockney`: London working-class speech
+
+CONTEXT MARKERS (Planned)
+- Metadata lines injected by Parser Scripts or detected during Analysis
+- Inform how lines are grouped into API requests and which prompt is selected
+- **Marker Types:**
+  - `File End` — Marks boundaries between files; requests do not cross file boundaries
+  - `Dialogue` — Marks dialogue sections; enables Rolling Context and Dialogue prompt
+  - `Menu` — Marks menu sections; uses Menu prompt, aims for maximum request size
+  - `Choice` — Marks choice sections; uses Choice prompt, aims for maximum request size
+- Context Markers are never translated or sent to the LLM
+- When no markers are present, lines are treated as "Unknown" (mixed content)
+- Quality improvement: Appropriate prompt selection per content type
+
+PARSER SCRIPTS (Planned)
+- Game-engine-specific scripts that extend the format system with engine-aware logic
+- **Mandatory:** Name, Extract (load lines from files), Inject (write translations back)
+- **Optional:**
+  - Wordwrap settings (max line length, max lines, break command, new textbox injection)
+  - Forbidden Characters (applied as logit bias during translation; flagged or auto-replaced in output)
+  - Context Markers (scene/file boundaries, dialogue/menu/choice detection)
+- Parser Scripts auto-populate Wordwrap step settings when available
+- Examples: RPG Maker MV/MZ, WolfRPG, RenPy, Unity dialogue systems
+
+WIDTH CONVERSION (Implemented)
+- Converts character width from source language to target language encoding
+- East Asian languages (Chinese/Japanese/Korean) use fullwidth characters
+- Most other languages use halfwidth characters
+- Runs during Preprocessing after Symbol Conversion
+- No postprocessing reversal needed — the target width is the desired output
+- Implemented in `modi/standard_mode.py`
+
+AGGRESSIVE DEDUPLICATION (Implemented)
+- Goes beyond standard deduplication by detecting line variants
+- Replaces all code with generic `{CODE}` and all numbers with `X`
+- Lines identical after substitution are treated as duplicates
+- Runs last in preprocessing (after all normalization is complete)
+- Variant-deduplicated lines receive the postprocessed result of their unique original
+- Implemented in `functions/dedup.py`
+
+POINT OF VIEW INFERENCE (Planned)
+- Infers narrative perspective (1st/2nd/3rd person) from non-dialogue text
+- Uses pronoun frequency analysis with language-specific patterns:
+  - **1st Person:** I, my, mine / 私, 僕, 俺 (Japanese) / extensible
+  - **2nd Person:** You, yours / あなた, 君, お前 (Japanese) / extensible
+  - **3rd Person:** Frequent use of protagonist's name (from Character Notes)
+- Provides confidence scoring (high/low) based on consistency
+- Result included in translation prompt when confidence is high
+- Helps the LLM maintain consistent perspective throughout translation
+
+CONSISTENCY SYSTEM (Planned)
+- Ensures consistent translation of recurring terms across all requests
+- **Three modes** (Global Option):
+  - `Preliminary` — Pre-translation LLM passes to establish canonical translations
+  - `During` — Uses first translated occurrence as canonical; updates glossary dynamically
+  - `Check` — Post-translation verification flagging inconsistencies
+- **Three types:**
+  - `Code (Translate)` — Code patterns marked for translation in the Code Database
+  - `Glossary` — Entries with empty translations; prompts LLM for type classification
+  - `Spans` — Content within paired tags (color/bold) tracked across requests
+
+MOCK TRANSLATION — FLAW TESTING (Implemented)
+- Default translation mode when no API providers are configured
+- Produces random word replacements for pipeline testing
+- Standalone module: `functions/mock_translator.py`
+- Integrated via mock routing in `functions/api_client.py` (model == "mock")
+- **Deliberate flaw injection** to validate recovery (Phase 56):
+  - Malformed placeholders (missing/added characters in `__PROT__` tokens)
+  - Anchor manipulation (removed/added at wrong positions)
+  - Code intrusion (replacements inside code boundaries)
+  - Character surgery (random character insertion/deletion)
+- Configurable flaw intensity: mild (10%), moderate (30%), severe (60%)
+- `FlawConfig` dataclass controls which flaw types are active
+- `FlawReport` tracks every injected flaw for test assertions
+- Deterministic via seed-based `random.Random` for reproducible tests
+- Tests that Postprocessing recovery handles all failure modes correctly
+- No API key or network required
+- Test suite: `dev/test_mock_translation.py` (59 tests)
 
 =============================================================================
 
