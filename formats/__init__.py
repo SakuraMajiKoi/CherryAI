@@ -23,10 +23,15 @@ IO Configuration:
     - Extract from .csv, inject to .txt for simple output
 """
 
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Type, Any
+from typing import Dict, List, Optional, Tuple, Type, Any, TYPE_CHECKING
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
+
+if TYPE_CHECKING:
+    from .parser_base import ParserScript
 
 
 __all__ = [
@@ -34,6 +39,9 @@ __all__ = [
     "FormatRegistry",
     "get_handler",
     "get_registry",
+    "ParserRegistry",
+    "get_parser_registry",
+    "detect_parser",
     "SUPPORTED_FORMATS",
     "SIMPLE_FORMATS",
     "RPGMAKER_FORMATS",
@@ -284,3 +292,87 @@ def get_handler(format_id_or_ext: str) -> Optional[FormatHandler]:
     
     # Try as extension
     return registry.get_by_extension(format_id_or_ext)
+
+
+# ---------------------------------------------------------------------------
+# Phase 53 — Parser Script Registry
+# ---------------------------------------------------------------------------
+
+class ParserRegistry:
+    """Registry for :class:`ParserScript` implementations.
+
+    Provides lookup by parser name and auto-detection for file paths.
+    """
+
+    def __init__(self) -> None:
+        from .parser_base import ParserScript
+        self._parsers: Dict[str, "ParserScript"] = {}
+
+    def register(self, parser: "ParserScript") -> None:
+        """Register a parser script.
+
+        Args:
+            parser: ParserScript instance to register.
+        """
+        self._parsers[parser.name.lower()] = parser
+
+    def get(self, name: str) -> Optional["ParserScript"]:
+        """Lookup parser by name (case-insensitive).
+
+        Args:
+            name: Parser name.
+
+        Returns:
+            ParserScript or None.
+        """
+        return self._parsers.get(name.lower())
+
+    def detect(self, file_path: Path) -> Optional["ParserScript"]:
+        """Auto-detect which parser handles *file_path*.
+
+        Iterates registered parsers calling :meth:`can_handle` and returns
+        the first match.  Returns ``None`` if no parser matches.
+        """
+        for parser in self._parsers.values():
+            try:
+                if parser.can_handle(file_path):
+                    return parser
+            except Exception:
+                continue
+        return None
+
+    def list_parsers(self) -> List[Dict[str, Any]]:
+        """List registered parsers with capability summaries."""
+        return [p.info() for p in self._parsers.values()]
+
+
+# Global parser registry singleton
+_parser_registry: Optional[ParserRegistry] = None
+
+
+def get_parser_registry() -> ParserRegistry:
+    """Get the global parser registry, initializing if needed."""
+    global _parser_registry
+    if _parser_registry is None:
+        _parser_registry = ParserRegistry()
+        _load_parsers()
+    return _parser_registry
+
+
+def _load_parsers() -> None:
+    """Load all parser scripts into the registry."""
+    global _parser_registry
+    if _parser_registry is None:
+        return
+
+    try:
+        from .parser_rpgmaker import RpgMakerMVParser, RpgMakerMZParser
+        _parser_registry.register(RpgMakerMVParser())
+        _parser_registry.register(RpgMakerMZParser())
+    except Exception:
+        pass  # Graceful degradation
+
+
+def detect_parser(file_path: Path) -> Optional["ParserScript"]:
+    """Convenience: auto-detect parser for *file_path*."""
+    return get_parser_registry().detect(file_path)

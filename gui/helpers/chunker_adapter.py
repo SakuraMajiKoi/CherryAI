@@ -736,14 +736,28 @@ def estimate_rate_limit_time(
     rate_limit_rpm: int = DEFAULT_RPM,
     include_buffer: bool = True,
     buffer_percent: float = 0.1,
+    concurrent_requests: int = 1,
+    total_output_tokens: int = 0,
+    token_speed: int = 50,
 ) -> TimeEstimateView:
-    """Estimate time to complete requests given rate limits.
+    """Estimate time to complete requests given rate limits (Task 40.7).
+
+    Uses the formula::
+
+        time = max(
+            total_requests / concurrent_requests * time_per_request,
+            total_output_tokens / token_speed,
+            total_requests / rate_limit_rpm * 60,
+        )
 
     Args:
         total_requests: Total number of API requests to make.
         rate_limit_rpm: Requests per minute limit.
         include_buffer: Whether to add safety buffer.
         buffer_percent: Buffer percentage (0.1 = 10%).
+        concurrent_requests: Max parallel API calls allowed.
+        total_output_tokens: Total output tokens to generate.
+        token_speed: Tokens per second for the model (default 50).
 
     Returns:
         TimeEstimateView with time estimation.
@@ -763,14 +777,30 @@ def estimate_rate_limit_time(
             formatted="No rate limit",
         )
 
-    # Calculate raw time
-    minutes = total_requests / rate_limit_rpm
+    concurrent = max(concurrent_requests, 1)
+    tps = max(token_speed, 1)
+
+    # Three bottleneck calculations (Task 40.7)
+    # 1. Concurrent request throughput (avg ~2s per request)
+    time_per_request = 2.0  # seconds
+    concurrent_seconds = (total_requests / concurrent) * time_per_request
+
+    # 2. Token generation speed
+    token_seconds = (
+        total_output_tokens / tps if total_output_tokens > 0 else 0.0
+    )
+
+    # 3. Rate limit constraint
+    rate_limit_seconds = (total_requests / rate_limit_rpm) * 60
+
+    # Take the maximum bottleneck
+    seconds = max(concurrent_seconds, token_seconds, rate_limit_seconds)
 
     # Add buffer if requested
     if include_buffer:
-        minutes *= (1 + buffer_percent)
+        seconds *= (1 + buffer_percent)
 
-    seconds = minutes * 60
+    minutes = seconds / 60
 
     # Format string
     if minutes >= 60:

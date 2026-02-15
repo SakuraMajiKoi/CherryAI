@@ -1474,6 +1474,32 @@ class ManifestManager:
         state.skipped = True
         state.status = "completed"
         self.set_step_state(step_index, state)
+
+    def set_step_metrics(self, step_name: str, metrics: Dict[str, Any]) -> None:
+        """Store utility metrics for a pipeline step.
+
+        Merges *metrics* into the top-level manifest under the given
+        *step_name* key (e.g. ``"Translation"``, ``"Postprocessing"``).
+
+        Args:
+            step_name: Canonical step identifier.
+            metrics: Metric key-value pairs to store/update.
+        """
+        section = self._manifest_data.setdefault(step_name, {})
+        section.update(metrics)
+        self._mark_dirty()
+
+    def get_step_metrics(self, step_name: str) -> Dict[str, Any]:
+        """Retrieve stored utility metrics for a pipeline step.
+
+        Args:
+            step_name: Canonical step identifier.
+
+        Returns:
+            Copy of the metrics dict (empty dict if none stored).
+        """
+        from copy import deepcopy
+        return deepcopy(self._manifest_data.get(step_name, {}))
     
     # ========================== Project Info Operations ========================== #
     
@@ -2341,7 +2367,32 @@ class ManifestManager:
         """Set output options."""
         self._manifest_data["OutputFormat"] = options
         self._mark_dirty()
-    
+
+    def get_dirty_flags(self) -> Dict[str, bool]:
+        """Get pipeline dirty flags.
+
+        Returns dict with ``process`` and ``wordwrap`` booleans indicating
+        whether those pipeline stages need re-running before export.
+        """
+        return deepcopy(self._manifest_data.get("DirtyFlags", {
+            "process": False,
+            "wordwrap": False,
+        }))
+
+    def set_dirty_flag(self, flag_name: str, value: bool) -> None:
+        """Set a single pipeline dirty flag.
+
+        Args:
+            flag_name: ``"process"`` or ``"wordwrap"``.
+            value: True if the stage needs re-running.
+        """
+        flags = self._manifest_data.setdefault("DirtyFlags", {
+            "process": False,
+            "wordwrap": False,
+        })
+        flags[flag_name] = value
+        self._mark_dirty()
+
     def get_estimation_data(self) -> Dict[str, int]:
         """Get estimation data.
         

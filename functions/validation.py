@@ -525,6 +525,155 @@ def should_retry_for_speaker_format(
     return False
 
 
+# ============================================================================
+# Speaker Duplicate Removal (Phase 51)
+# ============================================================================
+
+# Pattern matching Speaker: or Speaker：  (halfwidth or fullwidth colon)
+_SPEAKER_PREFIX_RE = re.compile(
+    r"^(?P<name>[^\s:：][^:：]{0,100}?)\s*(?P<colon>[:：])\s*"
+)
+
+
+def detect_consecutive_speakers(
+    lines: List[str],
+) -> List[int]:
+    """Return indices of lines whose speaker duplicates the previous line's.
+
+    Only consecutive lines sharing the exact same (case-sensitive) speaker
+    name are reported.  The **first** occurrence is never reported.
+
+    Args:
+        lines: Raw text lines.
+
+    Returns:
+        Sorted list of line indices where the speaker is a duplicate.
+    """
+    duplicates: List[int] = []
+    prev_speaker: Optional[str] = None
+
+    for i, line in enumerate(lines):
+        m = _SPEAKER_PREFIX_RE.match(line)
+        speaker = m.group("name").strip() if m else None
+
+        if speaker is not None and speaker == prev_speaker:
+            duplicates.append(i)
+
+        prev_speaker = speaker
+
+    return duplicates
+
+
+@dataclass
+class SpeakerDedupOp:
+    """Prepro operation metadata for speaker duplicate removal.
+
+    Stored in ``LineEntry.prepro_ops`` so the speaker can be restored
+    during postprocessing.
+    """
+
+    speaker: str
+    colon_char: str  # ':' or '：'
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialise as prepro_ops entry."""
+        return {
+            "op": "speaker_dedup_remove",
+            "speaker": self.speaker,
+            "colon": self.colon_char,
+        }
+
+    @staticmethod
+    def from_dict(d: Dict[str, Any]) -> "SpeakerDedupOp":
+        """Deserialise from prepro_ops entry."""
+        return SpeakerDedupOp(
+            speaker=d.get("speaker", ""),
+            colon_char=d.get("colon", ":"),
+        )
+
+
+def remove_duplicate_speakers(
+    lines: List[str],
+    indices: Optional[List[int]] = None,
+) -> Tuple[List[str], List[SpeakerDedupOp]]:
+    """Strip the speaker prefix from duplicate-speaker lines.
+
+    If *indices* is ``None``, :func:`detect_consecutive_speakers` is called
+    first.
+
+    Args:
+        lines: Raw text lines.
+        indices: Pre-computed duplicate indices (optional).
+
+    Returns:
+        Tuple of (modified_lines, ops) where *ops* has one entry per
+        modified line (same order as *indices*).
+    """
+    if indices is None:
+        indices = detect_consecutive_speakers(lines)
+
+    result = list(lines)
+    ops: List[SpeakerDedupOp] = []
+
+    for idx in indices:
+        if idx < 0 or idx >= len(result):
+            continue
+        m = _SPEAKER_PREFIX_RE.match(result[idx])
+        if m is None:
+            continue
+        speaker = m.group("name").strip()
+        colon = m.group("colon")
+        # Remove everything up to and including the colon + space
+        result[idx] = result[idx][m.end():]
+        ops.append(SpeakerDedupOp(speaker=speaker, colon_char=colon))
+
+    return result, ops
+
+
+def restore_duplicate_speakers(
+    lines: List[str],
+    ops: List[Dict[str, Any]],
+    line_indices: Optional[List[int]] = None,
+) -> List[str]:
+    """Re-add removed speaker names after translation.
+
+    If *line_indices* is ``None``, operations are applied in order from
+    the beginning of *lines*.
+
+    Args:
+        lines: Translated lines.
+        ops: Serialised :class:`SpeakerDedupOp` dicts (from ``prepro_ops``).
+        line_indices: Which lines in *lines* correspond to the ops (optional).
+
+    Returns:
+        Lines with speaker prefixes restored.
+    """
+    result = list(lines)
+
+    applicable = [
+        d for d in ops if d.get("op") == "speaker_dedup_remove"
+    ]
+
+    if line_indices is not None:
+        # Map ops to specified lines using indices
+        for i, d in enumerate(applicable):
+            if i >= len(line_indices):
+                break
+            idx = line_indices[i]
+            if 0 <= idx < len(result):
+                op = SpeakerDedupOp.from_dict(d)
+                result[idx] = f"{op.speaker}{op.colon_char} {result[idx]}"
+    else:
+        # Apply ops sequentially from the start
+        for i, d in enumerate(applicable):
+            if i >= len(result):
+                break
+            op = SpeakerDedupOp.from_dict(d)
+            result[i] = f"{op.speaker}{op.colon_char} {result[i]}"
+
+    return result
+
+
 def has_japanese(text: str) -> bool:
     """Check if text contains any Japanese characters (hiragana, katakana, kanji)."""
     for ch in text:

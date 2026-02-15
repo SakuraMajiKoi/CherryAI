@@ -57,7 +57,7 @@ TABLE OF CONTENTS
    2.3 prepro_ops Field - Pre-processing operation tracking
    2.4 Processor Class - Core text processing engine
 
-3. FUNCTIONS/ MODULES (37 files - Core Shared Logic)
+3. FUNCTIONS/ MODULES (38 files - Core Shared Logic)
    ✅ = Verified exists | ⚠️ = Needs documentation | 🔗 = GUI integrated
    
    3.1  analysis.py ✅ - File analysis, metrics, glossary extraction
@@ -97,6 +97,7 @@ TABLE OF CONTENTS
    3.35 manifest_fields.py ✅ - Manifest field type helpers (TASK 22.1) + special format helpers (TASK 22.2)
    3.36 preset_manager.py ✅ - Preset save/load/delete operations (TASK 30.1)
    3.37 mock_translator.py ✅ - Mock translation engine with flaw injection (Phase 56)
+   3.38 consistency.py ✅ - Consistency system for term translation tracking (Phase 55)
    
    3.38 glossaries/ (subfolder - 5 files)
         - __init__.py - Package exports
@@ -121,14 +122,16 @@ TABLE OF CONTENTS
    4.11 template_mode.py ✅❌ - Template-based processing
    4.12 temporary_replacement.py ✅❌ - Temp replacement with restore
 
-5. FORMATS/ MODULES (5 handlers - File I/O)
+5. FORMATS/ MODULES (7 handlers - File I/O)
    ✅ = Verified exists | 🔗 = GUI integrated
    
-   5.1 __init__.py ✅🔗 - FormatHandler base, FormatRegistry (Step 0)
+   5.1 __init__.py ✅🔗 - FormatHandler base, FormatRegistry, ParserRegistry (Step 0)
    5.2 simple.py ✅🔗 - TXT, CSV, TSV, JSON, XLSX handlers (Step 0)
    5.3 document.py ✅ - PDF, EPUB handlers (placeholder)
    5.4 html.py ✅ - HTML parsing (under development)
    5.5 rpgmaker.py ✅ - RPG Maker MV/MZ (placeholder)
+   5.6 parser_base.py ✅ - ParserScript ABC, WordwrapConfig, ForbiddenChars, ContextMarkerRules
+   5.7 parser_rpgmaker.py ✅ - RpgMakerMVParser, RpgMakerMZParser implementations
 
 6. GUI V2 ARCHITECTURE (gui/ - 7 packages)
    
@@ -138,13 +141,14 @@ TABLE OF CONTENTS
    
    6.4 gui/steps/ (11 files - 10 workflow tabs)
        - __init__.py - Step exports
-       - base.py - BaseStep abstract class
+       - base.py - BaseStep abstract class (TASK 43.14: tab caching infra)
        - input_extract.py - Step 0: Input/Extraction 🔗formats/
        - analysis.py - Step 1: Analysis ❌NO shared imports
-       - estimate.py - Step 2: Estimation ❌NO shared imports (moved from Step 4)
+       - costs.py - Step 2: Costs (renamed from estimate.py in Phase 40)
+       - estimate.py - Backward-compat redirect to costs.py
        - information.py - Step 3: Information ❌NO shared imports (moved from Step 2)
        - preprocess.py - Step 4: Preprocessing ❌NO shared imports (moved from Step 3)
-       - translate.py - Step 5: Translation 🔗api_client
+       - translate.py - Step 5: Translation 🔗api_client, mock_translator (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching)
        - qa.py - Step 6: QA 🔗validation
        - postprocess.py - Step 7: Postprocess 🔗postprocess
        - wordwrap_overwrite.py - Step 8: Wordwrap 🔗wordwrap
@@ -152,7 +156,7 @@ TABLE OF CONTENTS
    
    6.5 gui/components/ (2 files)
        - __init__.py - Component exports
-       - table.py - SharedTable, ColumnDef, TableRow
+       - table.py - SharedTable, ColumnDef, TableRow (Phase 43: batch insertion for large datasets)
    
    6.6 gui/dialogs/ (3 files - 2 dialog modules)
        - __init__.py - Dialog exports
@@ -160,7 +164,12 @@ TABLE OF CONTENTS
          - OptionSection enum: API, REQUEST, CACHING, LOGGING, SESSION, SAFETY, FILE_IO, PROMPTS
          - Settings dataclasses: APISettings, RequestSettings, CachingSettings, LoggingSettings,
            SessionSettings, SafetySettings, FileIOSettings, PromptsSettings
-         - GlobalOptions container aggregates all settings
+         - APIProviderEntry dataclass: name, provider_type, url, api_key, model (Task 43.6)
+         - PROVIDER_PRESETS: 5 provider presets (Task 43.6)
+         - _ProviderEditDialog, _PresetPickerDialog helper dialogs (Task 43.6)
+         - GlobalOptions container: all settings + providers list, get_model_list(), get_provider_for_model()
+         - RequestSettings: +thinking_enabled, +thinking_budget, +rolling_context_lines (Tasks 43.8, 43.9)
+         - CachingSettings: +cache_mode (Task 43.7)
          - Sections organized in CATEGORY_ORDER: Connection, Processing, Application
          - TASK 33.2: PromptsSettings for Edit/TLC custom prompts
            - edit_prompt: str - Custom prompt for Edit steps
@@ -258,7 +267,7 @@ TABLE OF CONTENTS
          - Standard toggles: Deduplication, DeduplicationThreshold, EllipsisCompression,
            SymbolConversion, ProtCompression, SpeakerNameReplacement, CodeSpacingRules
          - Special formats: ProtectCodePatterns, CustomPlaceholders, AnchorRemoval
-       - **Phase 25 Integration:** EstimationStep and QAStep manifest bindings:
+       - **Phase 25 Integration:** CostsStep (renamed from EstimationStep) and QAStep manifest bindings:
          - Analysis results: InputLines, InputTokens, OutputTokens (int fields)
          - ValidationRules nested: PlaceholderPreservation, AnchorPreservation,
            JapaneseCharacterDetection, SpeakerFormat, QuoteBalance, EmptyTranslation
@@ -294,6 +303,219 @@ TABLE OF CONTENTS
          - After file load: InputExtractionStep._save_manifest_after_file_load()
          - Before translation: TranslationStep._save_manifest_before_translation()
          - All save methods check is_loaded, have try/except, log success/failure
+       - **Phase 41 Integration:** Information Step UI enhancements:
+         - Widget renames: Summary, System Instructions, Code Database
+         - Genre dialog merges selected genres with existing (non_common preserved)
+         - "Other" language triggers simpledialog; reverts on cancel via _prev_source_lang/_prev_target_lang
+         - Style/Tone preset combos disabled when custom field has content (trace_add callback)
+         - Glossary table: 4-column Treeview (Active ✓/✗, Original, Translation, Notes)
+         - Inline editing via double-click with Entry overlay; Delete key removes entries
+         - Import from Analysis: code patterns → category="Detected"; speakers → glossary entries with Notes
+         - Code Database actions in prompt_builder: Preserve="Do not translate", Translate="Translate as", Remove=filtered out
+         - Global Glossary/Database widget: mode switch, search filter, import/export JSON/CSV
+         - Files: user/global_glossary.json, user/global_codes.json
+         - Selective glossary: active field (bool) in manifest GlossaryEntries, defaults True
+       - **Phase 42 Integration:** Preprocessing & Postprocessing complete implementation:
+         - Anchoring Treeview: 5-column (Pattern, Action, Anchor Spec, RegEx, Description), _AnchorDialog, _sync_anchor_tree_to_manifest
+         - Custom Placeholders RegEx: _RuleDialog.show_regex param, regex_result attr, checkbox in dialog
+         - Protect Code Treeview: 3-column (Pattern, RegEx, Description), dict-based storage in config
+         - Aggressive Dedup UI: _aggressive_dedup_var checkbox, set_aggressive_dedup() in dedup.py, wired via mainhelper.py
+         - Code spacing manifest: visible/spacing fields in code_glossary, _apply_code_spacing(processor=) reads manifest overrides
+         - Preview filtering: _preview_filter_var combobox (7 options), _filter_count_label, filter logic in _update_preview()
+         - PostProcess validation: RecoveryType.PLACEHOLDER_POSITION_SHIFT/EXTRA, detect_position_shift(), detect_extra_tokens()
+         - PostProcessManager.save_to_manifest(): stores recovery_analysis in manifest.mappings
+         - Process order: functions/process_order.py, PRE_PRIORITIES (12 entries), POST_PRIORITIES (15 entries)
+         - New file: functions/process_order.py (get_pre_order, get_post_order)
+         - Modified: gui/steps/preprocess.py, gui/state/store.py, functions/dedup.py, functions/mainhelper.py
+         - Modified: functions/manifest_fields.py, functions/postprocess.py, modi/standard_mode.py
+       - **Phase 43 Integration:** Translation Tab Overhaul:
+         - Merged Column: "To be Translated" replaces Original+Preprocessed (resolution: edited_prepro → preprocessed → original)
+         - Newline Rendering: ↵ symbol in table cells, 200-char truncation
+         - Mock Translation: MODEL_OPTIONS[0] = "Mock Translation", routes to MockTranslator(delay_per_chunk=0.1)
+         - API Provider Management: APIProviderEntry dataclass, PROVIDER_PRESETS (5), providers Treeview, _ProviderEditDialog, _PresetPickerDialog
+         - Settings Migration: CachingSettings.cache_mode, RequestSettings.thinking_enabled/budget/rolling_context_lines
+         - _sync_from_global_options() applies Global Options overrides on tab enter
+         - Retry Refinement: RETRY_STRATEGIES (2: Batch+Contextual for UI), ALL_RETRY_STRATEGIES (4 for CLI), min retries=0
+         - Prompt Editor: Preview-only button, Ban Tokens LabelFrame with _BAN_PRESETS (None/Clean English/Strict)
+         - Chunk Sync: costs.py reads/writes LinesPerChunk to manifest RequestOptions
+         - Language Skip: detect_line_script() in analysis.py, _LANG_SCRIPT_MAP, _apply_language_skip()
+         - Tab Caching: BaseStep._compute_cache_hash/_is_cache_valid/_update_cache/_invalidate_cache/_force_refresh
+         - Performance: SharedTable batch insertion (500-row batches), _refresh_lines() batch manifest dict read
+         - Modified: gui/steps/translate.py, gui/steps/base.py, gui/steps/costs.py, gui/components/table.py
+         - Modified: gui/dialogs/global_options.py, functions/analysis.py
+       - **Phase 44 Integration:** QA Step Placeholder & Shared Validation:
+         - QA Step placeholder mode: _placeholder_mode bool, _placeholder_var toggle, _placeholder_toggle Checkbutton
+         - Validation shared: Translation imports prompt_adapter for retry; Postprocessing imports recover_line + validate_character_word
+         - Test file: dev/test_validation_shared.py (24 tests)
+       - **Phase 45 Integration:** Postprocessing Tab Overhaul:
+         - FailurePolicy enum: SKIP→WRITE (value="write"), FLAG (value="flag"), RETRY kept hidden
+         - PostprocessOptions: convert_halfwidth_to_fullwidth bool field; placeholder/code/br hardcoded True
+         - PostprocessLine: written/flagged bool fields for new filter system
+         - HALFWIDTH_TO_FULLWIDTH: reverse dict comprehension from FULLWIDTH_TO_HALFWIDTH (30 entries)
+         - Mutual exclusion: _on_fullwidth_change/_on_halfwidth_change trace callbacks
+         - Diff View editing: _edit_text ScrolledText (height=4), _mark_fixed_btn, _mark_line_as_fixed()
+         - Summary: _progress_bar (ttk.Progressbar), _written_label, _flagged_label; self.after(0, _update_summary) every 10 lines
+         - Overwrite warning: messagebox.askokcancel in _apply_postprocessing()
+         - Filters: All/Changed/Written/Flagged radio buttons; status icons ⚠/✓
+         - Modified: gui/steps/postprocess.py (~1732 lines)
+         - Test file: dev/test_postprocess_phase45.py (49 tests)
+
+       - **Phase 46 Integration:**
+         - WrapMode enum reduced to MANUAL only (removed RPGMAKER, DISABLED)
+         - SpeakerMode enum reduced to IGNORE and COUNT (removed SAMELINE, SAMELINEINDENT, NEWLINE)
+         - Removed enums: IgnorePattern, OverwriteStrategy, MergeMethod, TypographyStyle
+         - Removed dataclasses: OverwriteOptions, TypographyOptions
+         - WrapLine dataclass: added overwrite field and overwrite_differs property
+         - WrapOptions dataclass: removed ignore_patterns field; hardcoded prevent_orphan/prefer_punct_breaks
+         - Mode: ttk.Combobox replacing radio buttons
+         - Speaker: ttk.Combobox with dynamic _speaker_desc_label
+         - Ignore patterns: read-only ttk.Treeview from manifest CodeDatabase
+         - Width: _width_mode_combo (Character/Pixel) with _char_width_frame and _pixel_width_frame
+         - _on_width_mode_changed() toggles between character (20-200) and pixel (100-2000px + font 8-72) frames
+         - Overwrite column in table with "↔ Differs" status
+         - Filter radios: All/Changed/Exceeding/Overwrite Differs
+         - _simple_wrap() sets exceeds_limit from max_lines
+         - Modified: gui/steps/wordwrap_overwrite.py (~1200 lines)
+         - Test file: dev/test_wordwrap_phase46.py (45 tests)
+
+       - **Phase 47 Integration:**
+         - New module: functions/output.py (~148 lines)
+         - get_final_output(line_entry) -> (text, source_field): 9-level priority chain
+         - Priority: overwrite → wordwr → postpro → edit{N} (highest) → tlc{N} (highest) → tl → preedit → prepro → orig
+         - _find_highest_numbered_field(entry, prefix) scans for highest round number
+         - resolve_all_lines(lines): batch resolution returning list of (text, source) tuples
+         - get_source_breakdown(lines): Counter of source fields across all lines
+         - PRIORITY_CHAIN constant: ordered list of field names
+         - ManifestManager: get_dirty_flags() / set_dirty_flag() for {process, wordwrap} booleans
+         - NamingOptions.strategy default: SUFFIX → SUBFOLDER
+         - ExportStats.failure_log: List[Dict[str, str]] with file/error/timestamp entries
+         - output_inject._run_export(): dirty flag pre-check with messagebox.askokcancel
+         - output_inject._build_summary_panel(): _process_flag_label / _wordwrap_flag_label with ⚠/✓
+         - output_inject._update_dirty_flags(): reads flags and updates indicator labels
+         - input_extract._on_import_translations(): file dialog + JSON load + orig matching + field copy
+         - TranslationOptions.skip_already_translated: bool field for skipping translated lines
+         - translate._build_request_options(): Skip Already Translated checkbox + manifest binding
+         - translate._do_translation(): skip logic checking tl field, marks LineStatus.SKIPPED
+         - Modified: functions/output.py (new), functions/manifest_manager.py, gui/steps/output_inject.py, gui/steps/input_extract.py, gui/steps/translate.py
+         - Test file: dev/test_output_phase47.py (51 tests)
+
+      6.16 Pipeline Logging System Integration (Phase 48)
+         - Log Rotation & Archival:
+           - _rotate_log(project_dir, project_name, step_name) → archives existing log with ctime timestamp, returns fresh path
+           - get_step_log_path(project_dir, project_name, step_name) → canonical path helper
+           - Archive naming: {project}.{step}.{YYYYMMDD_HHMMSS}.log with collision avoidance
+         - Status Vocabulary Constants:
+           - LogStatus class: PASS constant, recovered()/partial_retrial()/partial_failure()/failure() static methods
+           - FailureType class: 11 constants (TRANSLATION_EXHAUSTED, API_ERROR, VALIDATION_FAILED, etc.)
+           - format_log_status(status, detail) → formatted status string
+           - derive_step_status(line_statuses) → worst-of aggregation: FAILURE > PARTIAL > RECOVERED > PASS
+         - Step Log I/O Functions:
+           - write_step_log_header(log_path, header_dict) → writes separator-delimited header block; creates parent dirs
+           - write_step_log_footer(log_path, footer_dict) → appends summary footer block
+           - append_step_log_entry(log_path, entry_text) → free-form text append
+           - All wrapped in try/except — never block processing
+         - translation.log: APIClient._step_log_path attribute; write_log_header/footer/call integrate step log writes
+         - postprocess.log: _do_postprocessing() emits header at start, footer with duration/lines/issues/recovered at completion
+         - wordwrap.log: _apply_wordwrap() run_wrap() emits header with mode/width, footer with duration/total/changed/exceeding
+         - output.log: _run_export() run_export() emits header with total files/naming, footer with duration/written/failed
+         - Manifest Metrics: ManifestManager.set_step_metrics()/get_step_metrics() for per-step metric storage with merge-update
+         - Log Export: _export_logs() discovers step logs via glob, copies to logs/ subfolder in export destination
+         - Modified: functions/mainhelper.py, functions/api_client.py, functions/manifest_manager.py, gui/steps/postprocess.py, gui/steps/wordwrap_overwrite.py, gui/steps/output_inject.py
+         - Test file: dev/test_pipeline_logging.py (52 tests)
+
+      6.17 Request Formation 4-Step Process (Phase 49)
+         - Data Model:
+           - LineInfo dataclass: index, text, is_invalid, context_marker fields
+           - RequestFormationConfig dataclass: max_lines, min_lines, max_tokens, model
+           - TranslationRequest dataclass: lines, line_indices, context_type, is_split, provides_context, receives_context
+         - build_requests(line_infos, config) → shared builder for Estimation + Translation
+         - Step 1: _step1_split_menu_choice() → groups consecutive menu/choice lines into dedicated requests (no rolling context)
+         - Step 2: _step2_split_at_file_boundaries() → splits at file_end markers, drops marker lines
+         - Step 3: _step3_split_and_balance() → splits oversized groups, balances sub-groups evenly, respects max_lines and max_tokens
+         - Step 4: _step4_merge_short_requests() → merges below-min same-type requests up to max_lines; menu/choice never merged
+         - _extract_valid_lines() → separates valid from invalid (placeholder/dedup/marker) lines
+         - _count_tokens_for_lines() → uses analysis.count_tokens for token estimation
+         - Results sorted by first line index to maintain document order
+         - Modified: functions/prompt_builder.py
+         - Test file: dev/test_request_formation.py (50 tests)
+
+   6.18 Context Markers Full Implementation (Phase 50)
+         - Data Model (Task 50.1):
+           - LineEntry.context_marker: Optional[str] field (None, "file_end", "dialogue", "menu", "choice")
+           - LineEntry.VALID_MARKERS: frozenset of accepted marker types
+           - is_context_marker() → bool: True when line is metadata-only
+           - get_marker_type() → Optional[str]: returns marker type
+           - Sparse serialization: to_dict() includes context_marker only when set
+           - from_dict() restores context_marker (defaults to None)
+         - Detection in Analysis (Task 50.2):
+           - _is_choice_item(line) → bool: regex for numbered/bulleted choice patterns
+           - _is_menu_item(line) → bool: short non-speaker items (≤60 chars)
+           - _is_dialogue_line(line) → bool: speaker:dialogue via detect_speaker()
+           - detect_context_markers(lines, min_run=3) → List[Optional[str]]: contiguous run detection
+           - get_active_context_type(markers, index) → str: backwards scan for nearest marker
+           - Modified: functions/analysis.py
+         - Integration with Request Builder (Task 50.3):
+           - build_line_infos(entries, detected_markers) → List[LineInfo]: converts LineEntry to LineInfo
+           - Context propagation: marker entries → is_invalid=True; subsequent lines inherit active type
+           - file_end does not propagate as content type (resets to "unknown")
+           - Placeholder and empty lines flagged as invalid
+           - build_requests() passes file_end markers to Step 2 for boundary splitting
+           - _file_section tracking prevents Step 4 from merging across file boundaries
+           - Modified: functions/prompt_builder.py
+         - Conditional Prompt Templates (Task 50.4):
+           - CONTEXT_PROMPT_DIALOGUE: character voice and emotional nuance instructions
+           - CONTEXT_PROMPT_MENU: concise, action-oriented UI translation instructions
+           - CONTEXT_PROMPT_CHOICE: distinct option formatting instructions
+           - CONTEXT_PROMPT_UNKNOWN: mixed-content adaptive translation instructions
+           - _CONTEXT_PROMPT_MAP: Dict[str, str] mapping context types to templates
+           - get_context_prompt(context_type) → str: template lookup
+           - _construct_system_prompt(lines, context_type) → str: injects template at slot 2
+           - Modified: functions/prompt_builder.py
+         - Test file: dev/test_context_markers.py (70 tests)
+
+   6.19 Speaker Duplicate Removal (Phase 51)
+         - Detection (Task 51.1):
+           - _SPEAKER_PREFIX_RE: regex for Name: and Name： patterns
+           - detect_consecutive_speakers(lines) → List[int]: returns indices of duplicate-speaker lines
+           - Case-sensitive comparison, first occurrence never flagged
+           - Modified: functions/validation.py
+         - Preprocessing Removal (Task 51.2):
+           - SpeakerDedupOp dataclass: speaker, colon_char, to_dict(), from_dict()
+           - remove_duplicate_speakers(lines, indices?) → (modified, ops)
+           - Strips speaker prefix; stores metadata for restoration
+           - Modified: functions/validation.py
+         - Postprocessing Restoration (Task 51.3):
+           - restore_duplicate_speakers(lines, ops, line_indices?) → List[str]
+           - Filters ops by op=="speaker_dedup_remove"
+           - Supports explicit line_indices or sequential application
+           - Modified: functions/validation.py
+         - Global Option & Testing (Task 51.4):
+           - RequestSettings.remove_duplicate_speakers: bool = False
+           - UI: Checkbutton in Speaker Deduplication LabelFrame
+           - Saved via to_dict/from_dict serialization
+           - Modified: gui/dialogs/global_options.py
+           - Test file: dev/test_speaker_dedup.py (47 tests)
+
+   6.20 Selective Glossary Per Chunk (Phase 52)
+         - Glossary Filter Function (Task 52.1):
+           - filter_glossary_for_chunk(entries, chunk_lines, mode) → List[GlossaryEntry]
+           - Mode "all": returns all entries unfiltered (default)
+           - Mode "original_only": matches Original column against batch text
+           - Mode "original_or_translation": matches both Original and Translation columns
+           - Entries with empty Translation included when Original matches
+           - Constants: GLOSSARY_FILTER_ALL, GLOSSARY_FILTER_ORIGINAL, GLOSSARY_FILTER_BOTH
+           - Modified: functions/glossary.py
+         - Prompt Builder Integration (Task 52.2):
+           - PromptBuilder.glossary_filter_mode attribute (default "all")
+           - _construct_system_prompt() uses filter_glossary_for_chunk() instead of inline loop
+           - Import: filter_glossary_for_chunk, GLOSSARY_FILTER_ALL/ORIGINAL/BOTH
+           - Modified: functions/prompt_builder.py
+         - Global Option & GUI (Task 52.3):
+           - RequestSettings.glossary_filter_mode: str = "all"
+           - UI: Combobox with ["all", "original_only", "original_or_translation"]
+           - Saved via to_dict/from_dict serialization
+           - Modified: gui/dialogs/global_options.py
+           - Test file: dev/test_glossary_selective.py (28 tests)
 
 7. CLI ARCHITECTURE
    7.1 Command Line Interface Structure (CLI.py)
@@ -441,7 +663,8 @@ CherryAI/
 │   │   ├── analysis.py     AnalysisStep (step 1)
 │   │   ├── information.py  InformationStep (step 2)
 │   │   ├── preprocess.py   PreprocessingStep (step 3)
-│   │   ├── estimate.py     EstimationStep (step 4)
+│   │   ├── costs.py        CostsStep (step 2, renamed Phase 40)
+│   │   ├── estimate.py     Backward-compat redirect
 │   │   ├── translate.py    TranslationStep (step 5)
 │   │   ├── qa.py           QAStep (step 6)
 │   │   ├── postprocess.py  PostprocessingStep (step 7)
@@ -460,6 +683,7 @@ CherryAI/
 │   ├── common_errors.py    Centralized error codes and messages
 │   ├── modehelper.py       Shared utilities for modes
 │   ├── analysis.py         Deep file analysis with glossary detection
+│   ├── consistency.py      Consistency system (Phase 55)
 │   ├── glossary.py         Unified glossary system (CSV-based)
 │   ├── languages.py        Language definitions (single source of truth) - TASK 16.1
 │   ├── API2Glossary.py     Optional LLM-based name enrichment
@@ -1410,13 +1634,13 @@ GUI V2 MODULE INTEGRATION MATRIX (gui/)
 Purpose: 10-step workflow interface replacing legacy gui_legacy.py.
 Location: gui/app.py and gui/steps/*.py
 
-Step Overview (Updated December 2025 - Estimation moved to Step 2):
+Step Overview (Updated Phase 40 - Estimation renamed to Costs):
 
 | Step | Tab Name | File | Primary Purpose |
 |------|----------|------|-----------------|
 | 0 | Input/Extract | input_extract.py | Load files/folders, extract text via format handlers |
 | 1 | Analysis | analysis.py | Static analysis: line counts, duplicates, speakers |
-| 2 | Estimate | estimate.py | Token/cost estimation for translation |
+| 2 | Costs | costs.py | Token/cost estimation, dual workflow, concurrent time |
 | 3 | Information | information.py | Project info, glossary, game summary |
 | 4 | Preprocess | preprocess.py | Preprocessing rules (dedup, placeholders, PROT) |
 | 5 | Translation | translate.py | API translation with progress tracking |
@@ -3367,11 +3591,44 @@ Dependencies:
 - Optional: tiktoken (for accurate token counting)
 - Local: glossaries package, dedup (lazy), API2Glossary (lazy if enabled)
 
+Point of View Inference:
+- _RAW_POV_PATTERNS: Pronoun patterns for Japanese, English, Chinese, Korean (1st/2nd person)
+- _COMPILED_POV: Cache dict for compiled regex patterns
+- _get_pov_patterns(language): Returns compiled patterns; English uses re.IGNORECASE; falls back to Japanese
+- POVResult dataclass: pov ("1st"/"2nd"/"3rd"/"mixed"/"unknown"), confidence ("high"/"low"), counts, total_narrative_lines; to_dict/from_dict
+- detect_pov(lines, language, protagonist_name, context_markers): Filters dialogue/menu/choice lines, counts pronoun matches per category, infers 3rd person via protagonist name frequency, derives confidence (high if dominant >60%, mixed if dominant <60% and secondary ≥20%)
+- Integrated into prompt_builder.py: PromptBuilder.pov_result attribute; "Narrative Perspective" section added to system prompt when confidence is "high"
+
 Notes:
 - Token counting uses tiktoken if available, else heuristic
 - Cost estimation based on GPT-4.1 pricing (configurable)
 - Language detection uses heuristics (Japanese, English, etc.)
 - All glossary detection is non-blocking (failures don't stop analysis)
+
+CONSISTENCY.PY (Consistency System - Phase 55)
+
+Purpose: Ensure consistent translation of recurring terms across all requests.
+
+Data Model:
+- ConsistencyTerm: dataclass with original, canonical_translation, type, confidence, source_line_idx
+- ConsistencyStore: collection with case-insensitive lookup, add/remove/update, serialisation
+- InconsistencyFlag: dataclass for check mode results with translations_found locations
+
+Type Detection:
+- detect_code_terms(code_patterns): Scans Code Database for action='translate'
+- detect_glossary_terms(glossary_entries): Finds empty translation/notes entries
+- detect_span_terms(lines): Detects paired tags (RPG Maker \C[n], HTML <b>)
+- build_consistency_store(): Combines all three detections
+
+Modes:
+- run_preliminary(store, lines, api_call, passes): Pre-translation LLM passes, multi-pass confidence
+- during_scan_output(store, originals, translated): Captures first translations
+- during_replace_in_requests(store, lines): Propagates canonical to pending chunks
+- check_consistency(store, chunks, originals): Post-translation inconsistency flagging
+
+Dependencies:
+- Stdlib: logging, re, dataclasses
+- No external dependencies
 
 DEDUP.PY (Deduplication Logic)
 

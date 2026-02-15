@@ -343,7 +343,7 @@ def apply_post(processor, lines: List[str], op, stats: Dict[str, int]) -> int:
     try:
         cfg = get_standard_config(processor)
         if cfg.get("code_spacing", False):
-            _apply_code_spacing(lines, stats)
+            _apply_code_spacing(lines, stats, processor=processor)
     except Exception:
         logging.exception("Standard mode: code spacing failed")
 
@@ -417,8 +417,38 @@ def _apply_speaker_replacements(lines: List[str], stats: Dict[str, int]) -> None
 
 # ---------------- Code spacing ---------------- #
 
-def _apply_code_spacing(lines: List[str], stats: Dict[str, int]) -> None:
+def _apply_code_spacing(
+    lines: List[str],
+    stats: Dict[str, int],
+    processor: Any = None,
+) -> None:
     rows = _read_tsv(_code_glossary_path())
+    # TASK 42.7: Also read code_patterns from manifest for spacing tags
+    manifest_spacing: Dict[str, str] = {}
+    if processor is not None:
+        try:
+            code_pats = processor.manifest.mappings.get("code_patterns", [])
+            if not code_pats:
+                try:
+                    code_pats = getattr(processor.manifest, "_manifest_data", {}).get(
+                        "code_patterns", [],
+                    )
+                except Exception:
+                    code_pats = []
+            for cp in code_pats or []:
+                if isinstance(cp, dict) and cp.get("pattern"):
+                    pat = cp["pattern"]
+                    if not cp.get("visible", True):
+                        manifest_spacing[pat] = "invisible"
+                    else:
+                        spacing = cp.get("spacing", "preserve")
+                        if spacing == "none":
+                            manifest_spacing[pat] = "invisible"
+                        elif spacing == "normalize":
+                            manifest_spacing[pat] = "word"
+                        # "preserve" means no modification
+        except Exception:
+            pass
     if not rows:
         return
     # Build classification map; skip if multiple TRUE flags set for a code item (warn once)
@@ -444,6 +474,12 @@ def _apply_code_spacing(lines: List[str], stats: Dict[str, int]) -> None:
             if warned_multi < 5:
                 _log.warning("Code glossary: multiple TRUE flags for %r — skipping", code)
                 warned_multi += 1
+    if not cls_map:
+        # TASK 42.7: Use manifest spacing if TSV has no data
+        cls_map = manifest_spacing
+    else:
+        # TASK 42.7: Merge manifest spacing (overrides TSV when present)
+        cls_map.update(manifest_spacing)
     if not cls_map:
         return
 

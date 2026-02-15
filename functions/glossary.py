@@ -831,6 +831,58 @@ def _is_valid_speaker_entry(name: str, count: int) -> bool:
     return _impl(name, count)
 
 
+# ---------------------------------------------------------------------------
+# Phase 52 — Selective Glossary Per Chunk
+# ---------------------------------------------------------------------------
+
+# Valid modes for glossary filtering
+GLOSSARY_FILTER_ALL = "all"
+GLOSSARY_FILTER_ORIGINAL = "original_only"
+GLOSSARY_FILTER_BOTH = "original_or_translation"
+
+GLOSSARY_FILTER_MODES = frozenset({
+    GLOSSARY_FILTER_ALL,
+    GLOSSARY_FILTER_ORIGINAL,
+    GLOSSARY_FILTER_BOTH,
+})
+
+
+def filter_glossary_for_chunk(
+    glossary_entries: Dict[str, "GlossaryEntry"],
+    chunk_lines: List[str],
+    mode: str = GLOSSARY_FILTER_ALL,
+) -> List["GlossaryEntry"]:
+    """Filter glossary entries to those relevant for a given chunk.
+
+    Args:
+        glossary_entries: Mapping of original term to GlossaryEntry.
+        chunk_lines: Lines of text in the current translation chunk.
+        mode: Filtering mode — one of ``"all"``, ``"original_only"``,
+            or ``"original_or_translation"``.
+
+    Returns:
+        List of matching :class:`GlossaryEntry` instances.  When *mode*
+        is ``"all"`` every entry is returned (unfiltered).
+    """
+    if mode == GLOSSARY_FILTER_ALL:
+        return list(glossary_entries.values())
+
+    batch_text = "\n".join(chunk_lines)
+    result: List["GlossaryEntry"] = []
+
+    for original, entry in glossary_entries.items():
+        if original and original in batch_text:
+            result.append(entry)
+        elif (
+            mode == GLOSSARY_FILTER_BOTH
+            and entry.translation
+            and entry.translation in batch_text
+        ):
+            result.append(entry)
+
+    return result
+
+
 # Re-export constants that analysis.py expects (lazy-loaded to avoid circular imports)
 # These will be populated on first access via __getattr__ below
 _LAZY_CONSTANTS = {

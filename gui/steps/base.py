@@ -4,10 +4,13 @@ Abstract base class for all workflow step tabs.
 
 TASK 19: Updated to support ManifestManager for unified state persistence.
 The session parameter is kept for backward compatibility during migration.
+TASK 43.14: Added tab caching infrastructure.
 """
 
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+import hashlib
+import json
 import logging
 import tkinter as tk
 from tkinter import ttk
@@ -58,6 +61,8 @@ class BaseStep(ABC, ttk.Frame):
         super().__init__(parent, **kwargs)
         self.session = session
         self._manifest_manager = manifest_manager
+        # TASK 43.14: Tab caching state
+        self._cache_hash: Optional[str] = None
         self._build_ui()
 
     @property
@@ -210,6 +215,51 @@ class BaseStep(ABC, ttk.Frame):
         mgr = self.manifest_manager
         if mgr is not None and mgr.is_loaded:
             mgr.save()
+
+    # -----------------------------------------------------------------
+    # Tab Caching (TASK 43.14)
+    # -----------------------------------------------------------------
+
+    def _compute_cache_hash(self) -> str:
+        """Compute a hash representing the relevant manifest data for this step.
+
+        Subclasses should override to include only the manifest keys that
+        affect this step's display.  The default implementation hashes
+        the entire step data dict.
+
+        Returns:
+            Hex digest string.
+        """
+        data = self.get_step_data()
+        raw = json.dumps(data, sort_keys=True, default=str)
+        return hashlib.md5(raw.encode()).hexdigest()
+
+    def _is_cache_valid(self) -> bool:
+        """Check whether the cached state still matches the manifest.
+
+        Returns:
+            ``True`` if the cache hash matches (no refresh needed).
+        """
+        if self._cache_hash is None:
+            return False
+        return self._compute_cache_hash() == self._cache_hash
+
+    def _update_cache(self) -> None:
+        """Store the current cache hash after a refresh."""
+        self._cache_hash = self._compute_cache_hash()
+
+    def _invalidate_cache(self) -> None:
+        """Invalidate the cache so the next ``on_enter`` forces refresh."""
+        self._cache_hash = None
+
+    def _force_refresh(self) -> None:
+        """Bypass cache and perform a full refresh.
+
+        Subclasses can bind this to a Refresh button.  The default
+        invalidates the cache and calls ``on_enter()``.
+        """
+        self._invalidate_cache()
+        self.on_enter()
 
 
 class PlaceholderStep(BaseStep):

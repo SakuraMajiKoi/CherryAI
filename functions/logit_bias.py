@@ -458,3 +458,40 @@ def provider_supports_logit_bias(provider: str) -> bool:
         True if provider supports logit_bias.
     """
     return PROVIDER_SUPPORTS_LOGIT_BIAS.get(provider.lower(), False)
+
+
+def merge_parser_forbidden_chars(
+    parser_chars: List[str],
+    parser_logit_bias: Dict[str, float],
+    existing_config: LogitBiasConfig,
+) -> LogitBiasConfig:
+    """Merge parser-defined forbidden characters into a logit bias config (TASK 53.5).
+
+    Adds forbidden characters from a :class:`ForbiddenChars` instance
+    (provided by a parser script) to an existing :class:`LogitBiasConfig`.
+    Existing banned/discouraged chars are preserved; parser chars are
+    appended without duplicates.
+
+    Args:
+        parser_chars: Characters from the parser's forbidden_chars.characters.
+        parser_logit_bias: Token→bias mapping from parser's forbidden_chars.logit_bias.
+        existing_config: Base logit bias configuration to extend.
+
+    Returns:
+        New :class:`LogitBiasConfig` with parser chars merged in.
+    """
+    merged_banned = list(existing_config.banned_chars)
+    existing_set: Set[str] = set(merged_banned)
+    for ch in parser_chars:
+        if ch not in existing_set:
+            merged_banned.append(ch)
+            existing_set.add(ch)
+
+    return LogitBiasConfig(
+        enabled=existing_config.enabled or bool(parser_chars),
+        banned_chars=merged_banned,
+        discouraged_chars=list(existing_config.discouraged_chars),
+        discourage_strength=existing_config.discourage_strength,
+        model=existing_config.model,
+        preset=existing_config.preset,
+    )

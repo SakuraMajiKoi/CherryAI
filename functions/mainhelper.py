@@ -81,6 +81,14 @@ class LineEntry:
     # Tags (v2.1) - Content classification, status, and quality tags
     tags: Optional[Any] = None  # LineTags from auto_tagger module
 
+    # Context marker (Phase 50) — marks this line as a section boundary.
+    # Values: None (normal line), "file_end", "dialogue", "menu", "choice".
+    # Marker lines are metadata — never translated, never sent to LLM.
+    context_marker: Optional[str] = None
+
+    # --- Valid marker constants ---
+    VALID_MARKERS = frozenset({"file_end", "dialogue", "menu", "choice"})
+
     def __post_init__(self) -> None:
         """Initialize dynamic tlc/edit attributes storage."""
         # Dynamic TLC/Edit passes are stored as regular attributes
@@ -106,6 +114,17 @@ class LineEntry:
     def get_edit(self, pass_num: int) -> Optional[str]:
         """Get Edit pass N result, or None if not set."""
         return getattr(self, f"edit{pass_num}", None)
+
+    def is_context_marker(self) -> bool:
+        """Return ``True`` if this line is a context marker (metadata only).
+
+        Context marker lines are never translated and never sent to the LLM.
+        """
+        return self.context_marker is not None
+
+    def get_marker_type(self) -> Optional[str]:
+        """Return the context marker type, or ``None`` for normal lines."""
+        return self.context_marker
 
     def get_input_for_translation(self) -> str:
         """Input for Translation API call.
@@ -351,6 +370,10 @@ class LineEntry:
             if tags_dict:  # Only include if non-empty
                 result["tags"] = tags_dict
 
+        # Context marker (Phase 50) — only serialise when set
+        if self.context_marker is not None:
+            result["context_marker"] = self.context_marker
+
         # Dynamic TLC/Edit fields
         for n in range(1, _MAX_PASS_SEARCH + 1):
             tlc_val = getattr(self, f"tlc{n}", None)
@@ -397,6 +420,7 @@ class LineEntry:
             deleted=data.get("deleted", False),
             updated=data.get("updated"),
             tags=tags,
+            context_marker=data.get("context_marker"),
         )
 
         # Restore dynamic TLC/Edit fields
@@ -1000,6 +1024,206 @@ def write_failure_report(logs_dir: Path, basename: str, line_no_1based: int, lin
         return None
 
 
+# ----------------------- Pipeline Logging Utilities ----------------------- #
+
+
+class LogStatus:
+    """Unified status vocabulary for pipeline log entries.
+
+    All step logs use these statuses for consistency.
+    """
+
+    PASS = "PASS"
+
+    @staticmethod
+    def recovered(recovery_type: str) -> str:
+        """Format a RECOVERED status with recovery type detail."""
+        return f"RECOVERED: {recovery_type}"
+
+    @staticmethod
+    def partial_retrial(strategy: str) -> str:
+        """Format a PARTIAL RETRIAL status with strategy detail."""
+        return f"(PARTIAL) RETRIAL {strategy}"
+
+    @staticmethod
+    def partial_failure(failure_type: str) -> str:
+        """Format a PARTIAL FAILURE status with failure type detail."""
+        return f"(PARTIAL) FAILURE {failure_type}"
+
+    @staticmethod
+    def failure(failure_type: str) -> str:
+        """Format a FAILURE status with failure type detail."""
+        return f"FAILURE {failure_type}"
+
+
+class FailureType:
+    """Standardised failure type constants for log entries."""
+
+    TRANSLATION_EXHAUSTED = "TRANSLATION_EXHAUSTED"
+    API_ERROR = "API_ERROR"
+    VALIDATION_FAILED = "VALIDATION_FAILED"
+    RECOVERY_FAILED = "RECOVERY_FAILED"
+    PLACEHOLDER_LOST = "PLACEHOLDER_LOST"
+    BRACKET_UNRECOVERABLE = "BRACKET_UNRECOVERABLE"
+    QUOTE_UNRECOVERABLE = "QUOTE_UNRECOVERABLE"
+    WRAP_OVERFLOW = "WRAP_OVERFLOW"
+    WRITE_ERROR = "WRITE_ERROR"
+    FORMAT_ERROR = "FORMAT_ERROR"
+    INJECTION_MISMATCH = "INJECTION_MISMATCH"
+
+
+def format_log_status(status: str, detail: Optional[str] = None) -> str:
+    """Format a log status string with optional detail.
+
+    Args:
+        status: Base status (e.g. ``"PASS"``, ``"RECOVERED"``).
+        detail: Optional detail appended after a colon.
+
+    Returns:
+        Formatted status string.
+    """
+    if detail:
+        return f"{status}: {detail}"
+    return status
+
+
+def derive_step_status(line_statuses: List[str]) -> str:
+    """Derive an aggregate step status from per-line statuses.
+
+    The returned status equals the *worst* individual status observed:
+    ``FAILURE`` > ``PARTIAL`` > ``RECOVERED`` > ``PASS``.
+
+    Args:
+        line_statuses: List of per-line status strings.
+
+    Returns:
+        Aggregate step status string.
+    """
+    if not line_statuses:
+        return LogStatus.PASS
+
+    worst = 0  # 0=PASS, 1=RECOVERED, 2=PARTIAL, 3=FAILURE
+    for s in line_statuses:
+        upper = s.upper()
+        if upper.startswith("FAILURE"):
+            worst = max(worst, 3)
+        elif "(PARTIAL)" in upper:
+            worst = max(worst, 2)
+        elif upper.startswith("RECOVERED"):
+            worst = max(worst, 1)
+
+    return ["PASS", "RECOVERED", "PARTIAL", "FAILURE"][worst]
+
+
+def _rotate_log(project_dir: Path, project_name: str, step_name: str) -> Path:
+    """Archive an existing step log and return a fresh log path.
+
+    If ``{project_name}.{step_name}.log`` already exists, it is renamed to
+    ``{project_name}.{step_name}.{YYYYMMDD_HHMMSS}.log`` using its creation
+    time.  A new empty path is then returned.
+
+    Args:
+        project_dir: Directory containing the project manifest.
+        project_name: Project name used in the log file name.
+        step_name: Pipeline step identifier (``translation``, ``postprocess``,
+            ``wordwrap``, ``output``).
+
+    Returns:
+        Path to the fresh (empty) log file.
+    """
+    log_path = project_dir / f"{project_name}.{step_name}.log"
+    try:
+        if log_path.exists():
+            try:
+                ctime = log_path.stat().st_ctime
+                stamp = dt.datetime.fromtimestamp(ctime).strftime("%Y%m%d_%H%M%S")
+            except Exception:
+                stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+            archive = project_dir / f"{project_name}.{step_name}.{stamp}.log"
+            # Avoid overwriting an existing archive
+            if archive.exists():
+                stamp += f"_{id(log_path) % 10000:04d}"
+                archive = project_dir / f"{project_name}.{step_name}.{stamp}.log"
+            log_path.rename(archive)
+    except Exception as exc:
+        logging.debug("Log rotation skipped for %s: %s", log_path, exc)
+    return log_path
+
+
+def get_step_log_path(project_dir: Path, project_name: str, step_name: str) -> Path:
+    """Return the canonical active log path for a pipeline step.
+
+    Args:
+        project_dir: Directory containing the project manifest.
+        project_name: Project name.
+        step_name: Pipeline step identifier.
+
+    Returns:
+        Path object (may or may not exist yet).
+    """
+    return project_dir / f"{project_name}.{step_name}.log"
+
+
+def write_step_log_header(log_path: Path, header_dict: Dict[str, Any]) -> None:
+    """Write a formatted header block to a step log file.
+
+    The header is written as key-value pairs between separator lines.
+    All writes are wrapped in ``try/except`` so they never block
+    processing.
+
+    Args:
+        log_path: Path to the log file (created/overwritten).
+        header_dict: Ordered key-value pairs for the header.
+    """
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        sep = "=" * 60
+        lines: List[str] = [sep]
+        for key, value in header_dict.items():
+            lines.append(f" {key}: {value}")
+        lines.append(sep)
+        lines.append("")
+        log_path.write_text("\n".join(lines), encoding="utf-8")
+    except Exception as exc:
+        logging.debug("Failed to write log header to %s: %s", log_path, exc)
+
+
+def write_step_log_footer(log_path: Path, footer_dict: Dict[str, Any]) -> None:
+    """Append a formatted summary footer block to a step log file.
+
+    Args:
+        log_path: Path to the log file.
+        footer_dict: Ordered key-value pairs for the footer.
+    """
+    try:
+        sep = "=" * 60
+        lines: List[str] = ["", sep]
+        for key, value in footer_dict.items():
+            lines.append(f" {key}: {value}")
+        lines.append(sep)
+        lines.append("")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+    except Exception as exc:
+        logging.debug("Failed to write log footer to %s: %s", log_path, exc)
+
+
+def append_step_log_entry(log_path: Path, entry_text: str) -> None:
+    """Append a free-form text entry to a step log file.
+
+    Args:
+        log_path: Path to the log file.
+        entry_text: Text to append.
+    """
+    try:
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(entry_text)
+            if not entry_text.endswith("\n"):
+                f.write("\n")
+    except Exception:
+        pass
+
+
 def summarize_unrestored_placeholders(per_line_occurs: Dict[str, List[str]]) -> None:
     """Emit one-line SUMMARY logs for leftover placeholders.
 
@@ -1210,6 +1434,12 @@ class Processor:
             cfg = (self.manifest.mappings.get("standard_mode_config") if isinstance(self.manifest.mappings, dict) else None) or {}
             do_dedup = bool(cfg.get("dedup_enabled", True))
             thresh = int(cfg.get("dedup_threshold", getattr(self, "DEDUP_THRESHOLD_DEFAULT", 1)))
+            # TASK 42.4: Set aggressive dedup flag from runtime config
+            try:
+                from .dedup import set_aggressive_dedup
+                set_aggressive_dedup(bool(cfg.get("aggressive_dedup_enabled", False)))
+            except Exception:
+                pass
             if do_dedup and _dedup_func is not None:
                 try:
                     d_changes = _dedup_func(self, lines, thresh)

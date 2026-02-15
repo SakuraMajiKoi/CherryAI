@@ -83,65 +83,88 @@ def get_models_for_encoding(encoding: str) -> List[str]:
 # =============================================================================
 
 # Pricing data for LLM models (USD per 1M tokens)
-# Structure: model_id -> {"name": display_name, "input": price, "output": price}
+# Structure: model_id -> {"name": display_name, "input": price, "output": price,
+#   "concurrent": max concurrent requests, "token_speed": tokens/sec output}
 MODEL_PRICING: Dict[str, Dict[str, Any]] = {
     # OpenAI models
     "gpt-4.1": {
         "name": "GPT-4.1",
         "input": 2.00,
         "output": 8.00,
+        "concurrent": 5,
+        "token_speed": 80,
     },
     "gpt-4o": {
         "name": "GPT-4o",
         "input": 2.50,
         "output": 10.00,
+        "concurrent": 5,
+        "token_speed": 80,
     },
     "gpt-4o-mini": {
         "name": "GPT-4o Mini",
         "input": 0.15,
         "output": 0.60,
+        "concurrent": 10,
+        "token_speed": 120,
     },
     "gpt-4-turbo": {
         "name": "GPT-4 Turbo",
         "input": 10.00,
         "output": 30.00,
+        "concurrent": 3,
+        "token_speed": 50,
     },
     # Anthropic Claude models
     "claude-3-5-sonnet": {
         "name": "Claude 3.5 Sonnet",
         "input": 3.00,
         "output": 15.00,
+        "concurrent": 3,
+        "token_speed": 70,
     },
     "claude-3-opus": {
         "name": "Claude 3 Opus",
         "input": 15.00,
         "output": 75.00,
+        "concurrent": 2,
+        "token_speed": 30,
     },
     "claude-3-haiku": {
         "name": "Claude 3 Haiku",
         "input": 0.25,
         "output": 1.25,
+        "concurrent": 5,
+        "token_speed": 150,
     },
     # Google Gemini models
     "gemini-1.5-pro": {
         "name": "Gemini 1.5 Pro",
         "input": 1.25,
         "output": 5.00,
+        "concurrent": 3,
+        "token_speed": 60,
     },
     "gemini-1.5-flash": {
         "name": "Gemini 1.5 Flash",
         "input": 0.075,
         "output": 0.30,
+        "concurrent": 10,
+        "token_speed": 150,
     },
     "gemini-2.0-flash": {
         "name": "Gemini 2.0 Flash",
         "input": 0.10,
         "output": 0.40,
+        "concurrent": 10,
+        "token_speed": 200,
     },
     "gemini-2.0-flash-lite": {
         "name": "Gemini 2.0 Flash Lite",
         "input": 0.0,  # Free tier
         "output": 0.0,
+        "concurrent": 5,
+        "token_speed": 200,
     },
 }
 

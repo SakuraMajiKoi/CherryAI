@@ -146,6 +146,8 @@ class TranslationOptions:
     thinking_budget: int = 10000  # Token budget for thinking
     # Edit before translation (Task 33.1)
     edit_before_translation: bool = False  # Show edit dialog before API call
+    # Skip already translated lines (Task 47.9)
+    skip_already_translated: bool = False  # Skip lines with existing tl field
 
 
 @dataclass
@@ -717,8 +719,9 @@ class TranslationStep(BaseStep):
     # Test visibility for explicit import expectation
     _IMPORT_EXPECTATION = "from functions.api_client import"
 
-    # Model options for dropdown
+    # Model options for dropdown (TASK 43.5: Mock Translation always available)
     MODEL_OPTIONS = [
+        "Mock Translation",
         "gpt-4.1",
         "gpt-4o",
         "gpt-4o-mini",
@@ -730,8 +733,14 @@ class TranslationStep(BaseStep):
         "gemini-1.5-flash",
     ]
 
-    # Retry strategy options - from prompt_adapter
+    # Retry strategy options - TASK 43.10: Only Batch and Contextual visible in UI
+    # Isolated and Skip still supported internally for CLI compatibility
     RETRY_STRATEGIES = [
+        (RetryStrategyView.BATCH.value, RetryStrategyView.BATCH.display_name),
+        (RetryStrategyView.CONTEXTUAL.value, RetryStrategyView.CONTEXTUAL.display_name),
+    ]
+    # Full set kept for CLI/internal use
+    ALL_RETRY_STRATEGIES = [
         (RetryStrategyView.BATCH.value, RetryStrategyView.BATCH.display_name),
         (RetryStrategyView.CONTEXTUAL.value, RetryStrategyView.CONTEXTUAL.display_name),
         (RetryStrategyView.ISOLATED.value, RetryStrategyView.ISOLATED.display_name),
@@ -828,14 +837,15 @@ class TranslationStep(BaseStep):
         self._build_options_panels(right_frame)
 
     def _build_lines_table(self, parent: ttk.LabelFrame) -> None:
-        """Build the lines table view."""
-        # Define columns
+        """Build the lines table view.
+
+        TASK 43.3: Merged Original/Preprocessed into "To be Translated".
+        """
         columns = [
             ColumnDef(key="idx", title="#", width=50, anchor="center"),
             ColumnDef(key="status", title="Status", width=80, anchor="center"),
-            ColumnDef(key="original", title="Original", width=200),
-            ColumnDef(key="preprocessed", title="Preprocessed", width=200),
-            ColumnDef(key="translated", title="Translated", width=200),
+            ColumnDef(key="to_translate", title="To be Translated", width=300),
+            ColumnDef(key="translated", title="Translated", width=300),
         ]
 
         self._lines_table = SharedTable(
@@ -996,7 +1006,7 @@ class TranslationStep(BaseStep):
         self._retries_var = tk.IntVar(value=self._translation_options.max_retries)
         self._retries_spin = ttk.Spinbox(
             retries_frame,
-            from_=1,
+            from_=0,
             to=10,
             textvariable=self._retries_var,
             width=6,
@@ -1010,7 +1020,7 @@ class TranslationStep(BaseStep):
                 var=self._retries_var,
                 manager_getter=lambda: self.manifest_manager,
                 field_key="MaxRetries",
-                min_val=1,
+                min_val=0,
                 max_val=10,
                 default=3,
                 parent_key="RequestOptions",
@@ -1062,6 +1072,56 @@ class TranslationStep(BaseStep):
                 var=self._edit_before_var,
                 manager_getter=lambda: self.manifest_manager,
                 field_key="EditBeforeTranslation",
+                default=False,
+                parent_key="RequestOptions",
+            )
+        )
+
+        # Skip Already Translated (Task 47.9)
+        skip_translated_frame = ttk.Frame(frame)
+        skip_translated_frame.pack(fill="x", pady=2)
+
+        self._skip_translated_var = tk.BooleanVar(
+            value=self._translation_options.skip_already_translated
+        )
+        skip_translated_cb = ttk.Checkbutton(
+            skip_translated_frame,
+            text="Skip Already Translated",
+            variable=self._skip_translated_var,
+        )
+        skip_translated_cb.pack(side="left")
+
+        # Bind skip already translated to manifest
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=skip_translated_cb,
+                var=self._skip_translated_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="SkipAlreadyTranslated",
+                default=False,
+                parent_key="RequestOptions",
+            )
+        )
+
+        # Skip Non-Source Language (Task 43.13)
+        skip_lang_frame = ttk.Frame(frame)
+        skip_lang_frame.pack(fill="x", pady=2)
+
+        self._skip_non_source_var = tk.BooleanVar(value=False)
+        skip_lang_cb = ttk.Checkbutton(
+            skip_lang_frame,
+            text="Skip Non-Source Language Lines",
+            variable=self._skip_non_source_var,
+        )
+        skip_lang_cb.pack(side="left")
+
+        # Bind skip non-source to manifest
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=skip_lang_cb,
+                var=self._skip_non_source_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="SkipNonSourceLanguage",
                 default=False,
                 parent_key="RequestOptions",
             )
@@ -1190,79 +1250,104 @@ class TranslationStep(BaseStep):
         ).pack(anchor="w", pady=(5, 0))
 
     def _build_prompt_editor(self, parent: ttk.Frame) -> None:
-        """Build prompt editor panel with preview capability.
-        
-        Note: Glossary and Conditional Prompts have been moved to their
-        dedicated management locations (Information step for glossary,
-        separate conditional prompts dialog).
+        """Build prompt editor panel (Task 43.11 redesign).
+
+        Simplified to a prompt preview button (read-only) and a separate
+        Ban Tokens section.  Style Preset and Game Summary are now managed
+        in the Information step.
         """
         frame = ttk.LabelFrame(parent, text="Prompt Editor", padding=10)
         frame.pack(fill="x", padx=5, pady=5)
 
-        # Style preset with preview button
-        style_frame = ttk.Frame(frame)
-        style_frame.pack(fill="x", pady=2)
+        # Preview button — shows the fully-constructed prompt read-only
+        preview_row = ttk.Frame(frame)
+        preview_row.pack(fill="x", pady=2)
 
-        ttk.Label(style_frame, text="Style Preset:").pack(side="left")
-        ttk.Button(
-            style_frame,
-            text="👁 Preview",
-            command=self._show_prompt_preview,
-            width=10,
-        ).pack(side="right", padx=(5, 0))
-        self._style_var = tk.StringVar(value="")
-        self._style_entry = ttk.Entry(
-            style_frame,
-            textvariable=self._style_var,
-            width=20,
-        )
-        self._style_entry.pack(side="right")
-
-        # Summary/context
-        ttk.Label(frame, text="Game Summary:").pack(anchor="w", pady=(5, 0))
-        self._summary_text = scrolledtext.ScrolledText(
-            frame,
-            height=4,
-            wrap="word",
-            font=("TkDefaultFont", 9),
-        )
-        self._summary_text.pack(fill="x", pady=2)
-
-        # Info about managed sections
-        info_frame = ttk.Frame(frame)
-        info_frame.pack(fill="x", pady=(5, 2))
-        
         ttk.Label(
-            info_frame,
-            text="📋 Glossary and Character Notes: Edit in Information step",
+            preview_row,
+            text="Prompt is built from Information step data (glossary, summary, style).",
+            foreground=THEME.text_secondary,
+            font=("TkDefaultFont", 8),
+        ).pack(side="left")
+        ttk.Button(
+            preview_row,
+            text="👁 Preview Prompt",
+            command=self._show_prompt_preview,
+            width=15,
+        ).pack(side="right")
+
+        # Ban Tokens section (Task 43.11)
+        ban_lf = ttk.LabelFrame(frame, text="Ban Tokens", padding=5)
+        ban_lf.pack(fill="x", pady=(10, 0))
+
+        preset_row = ttk.Frame(ban_lf)
+        preset_row.pack(fill="x", pady=2)
+        ttk.Label(preset_row, text="Preset:").pack(side="left")
+        self._ban_preset_var = tk.StringVar(value="None")
+        ban_preset_combo = ttk.Combobox(
+            preset_row,
+            textvariable=self._ban_preset_var,
+            values=["None", "Clean English", "Strict"],
+            state="readonly",
+            width=15,
+        )
+        ban_preset_combo.pack(side="left", padx=5)
+        ban_preset_combo.bind("<<ComboboxSelected>>", self._on_ban_preset_change)
+
+        ban_entry_row = ttk.Frame(ban_lf)
+        ban_entry_row.pack(fill="x", pady=2)
+        ttk.Label(ban_entry_row, text="Tokens:").pack(side="left")
+        self._ban_var = tk.StringVar(value="")
+        self._ban_entry = ttk.Entry(
+            ban_entry_row,
+            textvariable=self._ban_var,
+            width=30,
+        )
+        self._ban_entry.pack(side="left", padx=5, fill="x", expand=True)
+
+        ttk.Label(
+            ban_lf,
+            text="Comma-separated: em_dash, smart_quotes, ellipsis, etc.",
             foreground=THEME.text_secondary,
             font=("TkDefaultFont", 8),
         ).pack(anchor="w")
 
-        # Ban tokens
-        ban_frame = ttk.Frame(frame)
-        ban_frame.pack(fill="x", pady=(5, 2))
-
-        ttk.Label(ban_frame, text="Ban Tokens:").pack(side="left")
-        self._ban_var = tk.StringVar(value="")
-        self._ban_entry = ttk.Entry(
-            ban_frame,
-            textvariable=self._ban_var,
-            width=25,
+        # Bind ban tokens to manifest
+        self._manifest_bindings.append(
+            bind_entry_to_field(
+                entry=self._ban_entry,
+                var=self._ban_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="BanTokens",
+                default="",
+                parent_key="RequestOptions",
+            )
         )
-        self._ban_entry.pack(side="right")
 
-        # Help text
-        ttk.Label(
-            frame,
-            text="(Comma-separated: em_dash, smart_quotes, etc.)",
-            foreground=THEME.text_secondary,
-            font=("TkDefaultFont", 8),
-        ).pack(anchor="e")
+        # Hidden summary text for backward compat (loaded by _load_prompt_data)
+        self._summary_text = scrolledtext.ScrolledText(
+            frame, height=0, wrap="word",
+        )
+        # Don't pack — kept only as data holder
 
-        # Initialize removed fields as None for compatibility
+        # Removed fields — set None for compatibility
+        self._style_var = tk.StringVar(value="")
+        self._style_entry = None
         self._glossary_text = None
         self._conditional_text = None
+
+    # Ban-token presets (Task 43.11)
+    _BAN_PRESETS: dict[str, str] = {
+        "None": "",
+        "Clean English": "em_dash, smart_quotes",
+        "Strict": "em_dash, smart_quotes, ellipsis, en_dash, curly_apostrophe",
+    }
+
+    def _on_ban_preset_change(self, _event: object = None) -> None:
+        """Apply selected ban-token preset."""
+        preset = self._ban_preset_var.get()
+        tokens = self._BAN_PRESETS.get(preset, "")
+        self._ban_var.set(tokens)
 
     def _build_api_usage_panel(self) -> None:
         """Build the API usage panel at the bottom."""
@@ -1331,31 +1416,41 @@ class TranslationStep(BaseStep):
         return original, preprocessed
 
     def _refresh_lines(self) -> None:
-        """Refresh lines from previous steps."""
+        """Refresh lines from previous steps.
+
+        TASK 43.2: Optimized to avoid per-line manifest lookups for
+        edited_prepro when the manifest has no edit data.
+        """
         original, preprocessed = self._get_lines_from_previous_steps()
 
         if not original:
             self._status_label.configure(text="No lines loaded")
             return
 
+        # TASK 43.2: Batch-read edited_prepro from manifest
+        edit_map: dict[int, str] = {}
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            lines_section = mgr._manifest_data.get("Lines", {})
+            for idx_str, line_data in lines_section.items():
+                if isinstance(line_data, dict):
+                    ep = line_data.get("edited_prepro", "")
+                    if ep:
+                        try:
+                            edit_map[int(idx_str)] = ep
+                        except (ValueError, TypeError):
+                            pass
+
         # Create TranslatableLine objects
-        self._lines = []
-        for idx, (orig, prep) in enumerate(zip(original, preprocessed)):
-            # Load edited_prepro from manifest if available (Task 33.1)
-            edited = ""
-            mgr = self.manifest_manager
-            if mgr is not None and mgr.is_loaded:
-                line_data = mgr.get_line(idx)
-                if line_data:
-                    edited = line_data.get("edited_prepro", "")
-            
-            line = TranslatableLine(
+        self._lines = [
+            TranslatableLine(
                 idx=idx,
                 original=orig,
                 preprocessed=prep,
-                edited_prepro=edited,
+                edited_prepro=edit_map.get(idx, ""),
             )
-            self._lines.append(line)
+            for idx, (orig, prep) in enumerate(zip(original, preprocessed))
+        ]
 
         # Update table
         self._update_lines_table()
@@ -1364,7 +1459,12 @@ class TranslationStep(BaseStep):
         self._status_label.configure(text=f"{len(self._lines)} lines ready")
 
     def _update_lines_table(self) -> None:
-        """Update the lines table with current data."""
+        """Update the lines table with current data.
+
+        TASK 43.3: Uses merged "To be Translated" column showing
+        edited_prepro → preprocessed → original (first available).
+        TASK 43.4: Renders newlines as ↵ symbol for visible line breaks.
+        """
         rows: List[TableRow] = []
 
         for line in self._lines:
@@ -1377,14 +1477,25 @@ class TranslationStep(BaseStep):
                 LineStatus.SKIPPED: "⊘ Skipped",
             }.get(line.status, "?")
 
+            # TASK 43.3: Merge column resolution order
+            to_translate = line.edited_prepro or line.preprocessed or line.original
+            # TASK 43.4: Render newlines as ↵ symbol
+            to_translate_display = to_translate.replace("\n", "↵")
+            translated_display = line.translated.replace("\n", "↵")
+            # Truncate for display
+            max_len = 200
+            if len(to_translate_display) > max_len:
+                to_translate_display = to_translate_display[:max_len] + "..."
+            if len(translated_display) > max_len:
+                translated_display = translated_display[:max_len] + "..."
+
             row = TableRow(
                 id=line.idx,
                 values={
                     "idx": str(line.idx + 1),
                     "status": status_display,
-                    "original": line.original[:100] + "..." if len(line.original) > 100 else line.original,
-                    "preprocessed": line.preprocessed[:100] + "..." if len(line.preprocessed) > 100 else line.preprocessed,
-                    "translated": line.translated[:100] + "..." if len(line.translated) > 100 else line.translated,
+                    "to_translate": to_translate_display,
+                    "translated": translated_display,
                 },
             )
             rows.append(row)
@@ -1579,31 +1690,66 @@ class TranslationStep(BaseStep):
         try:
             self._log_progress("Starting translation...")
 
-            # Try to import and initialize API client
-            try:
-                from CherryAI.functions.api_client import APIClient, APIConfig, TranslationError
-                self._api_client = APIClient(enable_api_log=True)
+            # TASK 43.5: Check for Mock Translation before API setup
+            is_mock = self._translation_options.model in (
+                "Mock Translation", "mock",
+            )
 
-                # Apply options
-                self._api_client.config.model = self._translation_options.model
-                self._api_client.config.temperature = self._translation_options.temperature
-                self._api_client.config.chunk_size = self._translation_options.chunk_size
-                self._api_client.config.retries = self._translation_options.max_retries
-                self._api_client.config.cache_enabled = self._translation_options.cache_enabled
-
-                if self._translation_options.banned_tokens:
-                    self._api_client.configure_logit_bias(
-                        enabled=True,
-                        banned_tokens=self._translation_options.banned_tokens,
-                    )
-
-            except ImportError as e:
-                self._log_progress(f"API client not available: {e}")
-                self._log_progress("Running in simulation mode (no actual translation)")
+            if is_mock:
+                from CherryAI.functions.mock_translator import MockTranslator
+                self._mock_translator = MockTranslator(delay_per_chunk=0.1)
                 self._api_client = None
+                self._log_progress("Using Mock Translation (no API required)")
+            else:
+                self._mock_translator = None
+                # Try to import and initialize API client
+                try:
+                    from CherryAI.functions.api_client import APIClient, APIConfig, TranslationError
+                    self._api_client = APIClient(enable_api_log=True)
+
+                    # Apply options
+                    self._api_client.config.model = self._translation_options.model
+                    self._api_client.config.temperature = self._translation_options.temperature
+                    self._api_client.config.chunk_size = self._translation_options.chunk_size
+                    self._api_client.config.retries = self._translation_options.max_retries
+                    self._api_client.config.cache_enabled = self._translation_options.cache_enabled
+
+                    if self._translation_options.banned_tokens:
+                        self._api_client.configure_logit_bias(
+                            enabled=True,
+                            banned_tokens=self._translation_options.banned_tokens,
+                        )
+
+                except ImportError as e:
+                    self._log_progress(f"API client not available: {e}")
+                    self._log_progress("Running in simulation mode (no actual translation)")
+                    self._api_client = None
 
             # Get pending lines
             pending_lines = [l for l in self._lines if l.status == LineStatus.PENDING]
+
+            # Task 47.9: Skip lines that already have a base translation
+            if self._skip_translated_var.get() and self._manifest_manager:
+                skipped_count = 0
+                still_pending = []
+                for line in pending_lines:
+                    manifest_line = self._manifest_manager.get_line(line.idx)
+                    tl_val = manifest_line.get("tl", "") if manifest_line else ""
+                    if tl_val and str(tl_val).strip():
+                        line.status = LineStatus.SKIPPED
+                        self._progress.skipped_lines += 1
+                        skipped_count += 1
+                    else:
+                        still_pending.append(line)
+                pending_lines = still_pending
+                if skipped_count:
+                    self._log_progress(
+                        f"Skipped {skipped_count} already translated lines"
+                    )
+
+            # TASK 43.13: Skip lines not in source language
+            if self._skip_non_source_var.get():
+                pending_lines = self._apply_language_skip(pending_lines)
 
             # Build chunks
             chunks = self._build_chunks(pending_lines)
@@ -1721,6 +1867,70 @@ class TranslationStep(BaseStep):
             self._translation_state = TranslationState.FAILED
             self.after(0, self._on_translation_complete)
 
+    # Language → expected script mapping for Task 43.13
+    _LANG_SCRIPT_MAP: dict[str, str] = {
+        "Japanese": "japanese",
+        "Chinese (Simplified)": "chinese",
+        "Chinese (Traditional)": "chinese",
+        "Korean": "korean",
+        "English": "latin",
+        "French": "latin",
+        "German": "latin",
+        "Spanish": "latin",
+        "Portuguese": "latin",
+        "Italian": "latin",
+        "Russian": "latin",  # Cyrillic would need extension
+        "Polish": "latin",
+        "Dutch": "latin",
+        "Turkish": "latin",
+        "Vietnamese": "latin",
+    }
+
+    def _apply_language_skip(
+        self, lines: list[TranslatableLine],
+    ) -> list[TranslatableLine]:
+        """Skip lines not matching the source language script (Task 43.13).
+
+        Lines shorter than 3 non-whitespace characters are never skipped.
+
+        Args:
+            lines: Pending lines to filter.
+
+        Returns:
+            Lines that should still be translated.
+        """
+        from CherryAI.functions.analysis import detect_line_script
+
+        # Determine expected source script from manifest
+        source_lang = "Japanese"
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            source_lang = mgr._manifest_data.get("SourceLanguage", "Japanese")
+
+        expected_script = self._LANG_SCRIPT_MAP.get(source_lang)
+        if expected_script is None:
+            # Unknown language — can't filter, return all
+            return lines
+
+        kept: list[TranslatableLine] = []
+        skipped = 0
+        for line in lines:
+            text = line.preprocessed or line.original
+            script = detect_line_script(text)
+            if script == "unknown" or script == "mixed" or script == expected_script:
+                kept.append(line)
+            else:
+                line.status = LineStatus.SKIPPED
+                line.translated = ""
+                skipped += 1
+
+        if skipped:
+            self._log_progress(
+                f"Skipped {skipped} lines (not {source_lang})"
+            )
+
+        return kept
+
     def _build_chunks(self, lines: List[TranslatableLine]) -> List[List[TranslatableLine]]:
         """Build chunks from lines.
 
@@ -1742,16 +1952,25 @@ class TranslationStep(BaseStep):
     def _translate_chunk(self, chunk: List[TranslatableLine]) -> List[str]:
         """Translate a chunk of lines.
 
+        TASK 43.5: Routes to MockTranslator when mock model selected.
+
         Args:
             chunk: Lines to translate.
 
         Returns:
             List of translations.
         """
+        # TASK 43.5: Use mock translator if available
+        if hasattr(self, "_mock_translator") and self._mock_translator is not None:
+            lines_to_translate = [
+                line.edited_prepro if line.edited_prepro else line.preprocessed
+                for line in chunk
+            ]
+            return self._mock_translator.translate_batch(lines_to_translate)
+
         if self._api_client is None:
-            # Simulation mode
-            time.sleep(0.5)  # Simulate API delay
-            # Use edited_prepro if available (Task 33.1)
+            # Simulation mode (fallback when no API and not mock)
+            time.sleep(0.5)
             return [
                 f"[Translated] {line.edited_prepro or line.preprocessed}"
                 for line in chunk
@@ -1858,7 +2077,7 @@ class TranslationStep(BaseStep):
             self._usage_tokens_label.configure(text=f"{tokens:,}")
 
             # Estimate cost
-            from CherryAI.gui.steps.estimate import estimate_cost
+            from CherryAI.gui.steps.costs import estimate_cost
             cost = estimate_cost(tokens // 2, tokens // 2, self._translation_options.model)
             self._usage_cost_label.configure(text=f"${cost['total_usd']:.2f}")
 
@@ -1884,6 +2103,13 @@ class TranslationStep(BaseStep):
 
     def on_enter(self) -> None:
         """Called when step becomes active."""
+        # TASK 43.6: Update model list from Global Options
+        self._update_model_list_from_global_options()
+
+        # TASK 43.14: Skip refresh when cache is valid
+        if self._is_cache_valid():
+            return
+
         # Refresh lines from previous steps
         if not self._lines:
             self._refresh_lines()
@@ -1893,6 +2119,27 @@ class TranslationStep(BaseStep):
 
         # Load request options from manifest
         self._load_request_options_from_manifest()
+
+        # TASK 43.14: Update cache hash after full refresh
+        self._update_cache()
+
+    def _update_model_list_from_global_options(self) -> None:
+        """Refresh model dropdown from Global Options providers (Task 43.6).
+
+        Falls back to hardcoded MODEL_OPTIONS when no providers are
+        configured or session/global_options is unavailable.
+        """
+        try:
+            go = getattr(self.session, "global_options", None)
+            if go is not None and hasattr(go, "get_model_list"):
+                models = go.get_model_list()
+                if len(models) > 1:  # More than just Mock Translation
+                    self._model_combo["values"] = models
+                    return
+        except Exception:
+            pass
+        # Fallback: use hardcoded list
+        self._model_combo["values"] = self.MODEL_OPTIONS
 
     def _save_temperature_to_manifest(self) -> None:
         """Save temperature value to manifest."""
@@ -1969,6 +2216,35 @@ class TranslationStep(BaseStep):
             mgr, "RequestOptions", "ThinkingBudget", 10000
         )
         self._thinking_budget_var.set(thinking_budget)
+
+        # TASK 43.7/43.8/43.9: Override from Global Options when available
+        self._sync_from_global_options()
+
+    def _sync_from_global_options(self) -> None:
+        """Apply Global Options overrides for caching, thinking, context.
+
+        Global Options values take precedence over per-project manifest
+        values for these settings (Tasks 43.7, 43.8, 43.9).
+        """
+        try:
+            go = getattr(self.session, "global_options", None)
+        except Exception:
+            return
+        if go is None:
+            return
+
+        # Task 43.7: Cache mode from Global Options
+        if hasattr(go, "caching"):
+            self._cache_var.set(go.caching.enabled)
+
+        # Task 43.8: Thinking mode from Global Options
+        if hasattr(go, "request"):
+            self._thinking_var.set(go.request.thinking_enabled)
+            self._thinking_budget_var.set(go.request.thinking_budget)
+
+        # Task 43.9: Rolling context from Global Options
+        if hasattr(go, "request"):
+            self._context_lines_var.set(go.request.rolling_context_lines)
 
     def on_leave(self) -> None:
         """Called when leaving step."""

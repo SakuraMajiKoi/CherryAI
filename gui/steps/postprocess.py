@@ -95,11 +95,15 @@ class RecoveryAction(Enum):
 
 
 class FailurePolicy(Enum):
-    """How to handle unrecoverable issues."""
+    """How to handle unrecoverable issues.
 
-    SKIP = "skip"
+    TASK 45.6: Redesigned — WRITE keeps partially-recovered text,
+    FLAG marks for manual review. RETRY hidden (future).
+    """
+
+    WRITE = "write"
     FLAG = "flag"
-    RETRY = "retry"
+    RETRY = "retry"  # Hidden from UI, kept for backward compat
 
 
 class PostprocessStatus(Enum):
@@ -141,6 +145,8 @@ class PostprocessLine:
     has_changes: bool = False
     needs_retry: bool = False
     skipped: bool = False
+    written: bool = False  # TASK 45.9: Line was written despite failures
+    flagged: bool = False  # TASK 45.9: Line flagged for manual review
 
     @property
     def issue_count(self) -> int:
@@ -164,8 +170,9 @@ class PostprocessOptions:
     enable_quote_recovery: bool = True
     enable_whitespace_normalization: bool = True
     enable_symbol_conversion: bool = True
-    failure_policy: FailurePolicy = FailurePolicy.FLAG
+    failure_policy: FailurePolicy = FailurePolicy.WRITE
     convert_fullwidth_to_halfwidth: bool = False
+    convert_halfwidth_to_fullwidth: bool = False
     restore_code_characters: bool = True
     restore_br_tags: bool = True
 
@@ -228,6 +235,11 @@ FULLWIDTH_TO_HALFWIDTH: Dict[str, str] = {
     "＿": "_",
 }
 
+# TASK 45.5: Reverse map for Halfwidth → Fullwidth conversion
+HALFWIDTH_TO_FULLWIDTH: Dict[str, str] = {
+    v: k for k, v in FULLWIDTH_TO_HALFWIDTH.items()
+}
+
 
 # ============================================================================
 # PostprocessingStep Class
@@ -286,7 +298,12 @@ class PostprocessingStep(BaseStep):
         self._build_summary_panel()
 
     def _build_header(self) -> None:
-        """Build the header section with controls."""
+        """Build the header section with controls.
+
+        TASK 45.3: Removed Refresh and Revert All buttons. Lines
+        auto-load on tab entry via on_enter(). Overwrite warning
+        added in _apply_postprocessing() (TASK 45.10).
+        """
         header = ttk.Frame(self)
         header.pack(fill="x", padx=10, pady=5)
 
@@ -307,7 +324,7 @@ class PostprocessingStep(BaseStep):
         )
         self._status_label.pack(side="left", padx=(10, 0))
 
-        # Right: Buttons
+        # Right: Apply button only
         right_frame = ttk.Frame(header)
         right_frame.pack(side="right")
 
@@ -317,18 +334,6 @@ class PostprocessingStep(BaseStep):
             command=self._apply_postprocessing,
         )
         self._apply_btn.pack(side="right")
-
-        ttk.Button(
-            right_frame,
-            text="↻ Refresh",
-            command=self._refresh_lines,
-        ).pack(side="right", padx=(0, 5))
-
-        ttk.Button(
-            right_frame,
-            text="↩ Revert All",
-            command=self._revert_all,
-        ).pack(side="right", padx=(0, 5))
 
     def _build_content(self) -> None:
         """Build the main content area."""
@@ -347,8 +352,8 @@ class PostprocessingStep(BaseStep):
         self._build_right_panels(right_frame)
 
     def _build_lines_panel(self, parent: ttk.Frame) -> None:
-        """Build the lines table with postprocessing status."""
-        frame = ttk.LabelFrame(parent, text="Postprocessed Lines")
+        """Build the lines table with postprocessing status (TASK 45.2)."""
+        frame = ttk.LabelFrame(parent, text="Processed Lines")
         frame.pack(fill="both", expand=True)
 
         # Filter controls
@@ -358,11 +363,12 @@ class PostprocessingStep(BaseStep):
         ttk.Label(filter_frame, text="Filter:").pack(side="left")
 
         self._filter_var = tk.StringVar(value="all")
+        # TASK 45.9: Updated filter options (All/Changed/Written/Flagged)
         filter_options = [
             ("All", "all"),
             ("Changed", "changed"),
-            ("Needs Retry", "retry"),
-            ("Skipped", "skipped"),
+            ("Written", "written"),
+            ("Flagged", "flagged"),
         ]
         for text, value in filter_options:
             ttk.Radiobutton(
@@ -453,33 +459,24 @@ class PostprocessingStep(BaseStep):
         scrollable_frame.bind("<MouseWheel>", _on_mousewheel)
 
     def _build_options_panel(self, parent: ttk.Frame) -> None:
-        """Build recovery options panel with manifest bindings (TASK 27.1)."""
+        """Build recovery options panel with manifest bindings (TASK 27.1).
+
+        TASK 45.4: Placeholder Recovery, Restore Code Characters, and
+        Restore <br> Tags are always-on (no GUI toggle). Only optional
+        recoveries are shown as checkboxes.
+        """
         frame = ttk.LabelFrame(parent, text="Recovery Options", padding=10)
         frame.pack(fill="x", padx=5, pady=5)
 
-        # Recovery toggles
-        self._placeholder_var = tk.BooleanVar(
-            value=self._pp_options.enable_placeholder_recovery
-        )
-        placeholder_cb = ttk.Checkbutton(
+        # TASK 45.4: Always-on recoveries (no checkbox)
+        auto_label = ttk.Label(
             frame,
-            text="Placeholder Recovery",
-            variable=self._placeholder_var,
+            text="✓ Placeholder / Code / BR recovery (always on)",
+            foreground=THEME.text_secondary,
         )
-        placeholder_cb.pack(anchor="w", pady=2)
-        
-        # TASK 27.1: Bind to manifest
-        self._manifest_bindings.append(
-            bind_checkbox_to_field(
-                checkbox=placeholder_cb,
-                var=self._placeholder_var,
-                manager_getter=lambda: self.manifest_manager,
-                field_key="PlaceholderRecovery",
-                default=True,
-                parent_key="PostProcessing",
-            )
-        )
+        auto_label.pack(anchor="w", pady=(0, 5))
 
+        # Optional recovery toggles
         self._bracket_var = tk.BooleanVar(
             value=self._pp_options.enable_bracket_recovery
         )
@@ -489,7 +486,7 @@ class PostprocessingStep(BaseStep):
             variable=self._bracket_var,
         )
         bracket_cb.pack(anchor="w", pady=2)
-        
+
         self._manifest_bindings.append(
             bind_checkbox_to_field(
                 checkbox=bracket_cb,
@@ -510,7 +507,7 @@ class PostprocessingStep(BaseStep):
             variable=self._quote_var,
         )
         quote_cb.pack(anchor="w", pady=2)
-        
+
         self._manifest_bindings.append(
             bind_checkbox_to_field(
                 checkbox=quote_cb,
@@ -531,55 +528,13 @@ class PostprocessingStep(BaseStep):
             variable=self._whitespace_var,
         )
         whitespace_cb.pack(anchor="w", pady=2)
-        
+
         self._manifest_bindings.append(
             bind_checkbox_to_field(
                 checkbox=whitespace_cb,
                 var=self._whitespace_var,
                 manager_getter=lambda: self.manifest_manager,
                 field_key="WhitespaceNormalization",
-                default=True,
-                parent_key="PostProcessing",
-            )
-        )
-
-        self._code_var = tk.BooleanVar(
-            value=self._pp_options.restore_code_characters
-        )
-        code_cb = ttk.Checkbutton(
-            frame,
-            text="Restore Code Characters",
-            variable=self._code_var,
-        )
-        code_cb.pack(anchor="w", pady=2)
-        
-        self._manifest_bindings.append(
-            bind_checkbox_to_field(
-                checkbox=code_cb,
-                var=self._code_var,
-                manager_getter=lambda: self.manifest_manager,
-                field_key="RestoreCodeCharacters",
-                default=True,
-                parent_key="PostProcessing",
-            )
-        )
-
-        self._br_var = tk.BooleanVar(
-            value=self._pp_options.restore_br_tags
-        )
-        br_cb = ttk.Checkbutton(
-            frame,
-            text="Restore <br> Tags",
-            variable=self._br_var,
-        )
-        br_cb.pack(anchor="w", pady=2)
-        
-        self._manifest_bindings.append(
-            bind_checkbox_to_field(
-                checkbox=br_cb,
-                var=self._br_var,
-                manager_getter=lambda: self.manifest_manager,
-                field_key="RestoreLinebreaks",
                 default=True,
                 parent_key="PostProcessing",
             )
@@ -620,7 +575,7 @@ class PostprocessingStep(BaseStep):
             variable=self._fullwidth_var,
         )
         fullwidth_cb.pack(anchor="w", pady=2, padx=10)
-        
+
         self._manifest_bindings.append(
             bind_checkbox_to_field(
                 checkbox=fullwidth_cb,
@@ -632,20 +587,53 @@ class PostprocessingStep(BaseStep):
             )
         )
 
-        # Failure handling
+        # TASK 45.5: Halfwidth → Fullwidth (reverse direction)
+        self._halfwidth_var = tk.BooleanVar(
+            value=self._pp_options.convert_halfwidth_to_fullwidth
+        )
+        halfwidth_cb = ttk.Checkbutton(
+            frame,
+            text="Halfwidth → Fullwidth",
+            variable=self._halfwidth_var,
+        )
+        halfwidth_cb.pack(anchor="w", pady=2, padx=10)
+
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=halfwidth_cb,
+                var=self._halfwidth_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="HalfwidthToFullwidth",
+                default=False,
+                parent_key="PostProcessing",
+            )
+        )
+
+        # TASK 45.5: Mutual exclusion — enabling one disables the other
+        def _on_fullwidth_change(*_args: Any) -> None:
+            if self._fullwidth_var.get():
+                self._halfwidth_var.set(False)
+
+        def _on_halfwidth_change(*_args: Any) -> None:
+            if self._halfwidth_var.get():
+                self._fullwidth_var.set(False)
+
+        self._fullwidth_var.trace_add("write", _on_fullwidth_change)
+        self._halfwidth_var.trace_add("write", _on_halfwidth_change)
+
+        # Failure handling (TASK 45.6: Write/Flag only, Retry hidden)
         ttk.Separator(frame, orient="horizontal").pack(fill="x", pady=5)
 
         ttk.Label(frame, text="Failure Handling:").pack(anchor="w")
 
         self._failure_var = tk.StringVar(value=self._pp_options.failure_policy.value)
-        
+
         # TASK 27.1: Trace failure handling changes to manifest
         self._failure_var.trace_add("write", self._save_failure_policy_to_manifest)
-        
+
         policies = [
-            ("Skip (keep original)", "skip"),
-            ("Flag for review", "flag"),
-            ("Queue for retry", "retry"),
+            ("Write (keep as-is)", "write"),
+            ("Flag for Review", "flag"),
         ]
         for text, value in policies:
             ttk.Radiobutton(
@@ -684,13 +672,13 @@ class PostprocessingStep(BaseStep):
         
         # Load failure handling policy
         value = load_nested_text_field(
-            self.manifest_manager, "PostProcessing", "FailureHandling", "skip"
+            self.manifest_manager, "PostProcessing", "FailureHandling", "write"
         )
         self._failure_var.set(value)
         logger.debug("Postprocessing options loaded from manifest")
 
     def _build_diff_panel(self, parent: ttk.Frame) -> None:
-        """Build diff view panel."""
+        """Build diff view panel with edit capability (TASK 45.7)."""
         frame = ttk.LabelFrame(parent, text="Diff View", padding=10)
         frame.pack(fill="x", padx=5, pady=5)
 
@@ -702,10 +690,10 @@ class PostprocessingStep(BaseStep):
         )
         self._diff_line_label.pack(anchor="w")
 
-        # Diff text display
+        # Diff text display (read-only)
         self._diff_text = scrolledtext.ScrolledText(
             frame,
-            height=10,
+            height=8,
             wrap="word",
             state="disabled",
             font=("Consolas", 9),
@@ -727,6 +715,32 @@ class PostprocessingStep(BaseStep):
             "header",
             foreground=THEME.accent_info,
         )
+
+        # TASK 45.7: Editable text field for manual fixes
+        edit_label = ttk.Label(
+            frame,
+            text="Edit postprocessed text:",
+            foreground=THEME.text_secondary,
+        )
+        edit_label.pack(anchor="w", pady=(5, 0))
+
+        self._edit_text = scrolledtext.ScrolledText(
+            frame,
+            height=4,
+            wrap="word",
+            state="disabled",
+            font=("Consolas", 9),
+        )
+        self._edit_text.pack(fill="x", pady=2)
+
+        # Mark as Fixed button
+        self._mark_fixed_btn = ttk.Button(
+            frame,
+            text="✓ Mark as Fixed",
+            command=self._mark_line_as_fixed,
+            state="disabled",
+        )
+        self._mark_fixed_btn.pack(anchor="e", pady=2)
 
     def _build_issues_panel(self, parent: ttk.Frame) -> None:
         """Build issues panel."""
@@ -982,9 +996,15 @@ class PostprocessingStep(BaseStep):
         )
 
     def _build_summary_panel(self) -> None:
-        """Build the summary panel at the bottom."""
+        """Build the summary panel at the bottom (TASK 45.8)."""
         frame = ttk.LabelFrame(self, text="Postprocessing Summary", padding=5)
         frame.pack(fill="x", padx=10, pady=5)
+
+        # TASK 45.8: Progress bar
+        self._progress_bar = ttk.Progressbar(
+            frame, mode="determinate", length=200
+        )
+        self._progress_bar.pack(fill="x", pady=(0, 5))
 
         summary_grid = ttk.Frame(frame)
         summary_grid.pack(fill="x")
@@ -992,7 +1012,7 @@ class PostprocessingStep(BaseStep):
         # Total lines
         ttk.Label(summary_grid, text="Total:").grid(row=0, column=0, sticky="w")
         self._total_label = ttk.Label(summary_grid, text="0")
-        self._total_label.grid(row=0, column=1, sticky="w", padx=(10, 30))
+        self._total_label.grid(row=0, column=1, sticky="w", padx=(10, 20))
 
         # Lines with changes
         ttk.Label(summary_grid, text="Changed:").grid(row=0, column=2, sticky="w")
@@ -1001,7 +1021,7 @@ class PostprocessingStep(BaseStep):
             text="0",
             foreground=THEME.accent_info,
         )
-        self._changed_label.grid(row=0, column=3, sticky="w", padx=(10, 30))
+        self._changed_label.grid(row=0, column=3, sticky="w", padx=(10, 20))
 
         # Recovered
         ttk.Label(summary_grid, text="Recovered:").grid(row=0, column=4, sticky="w")
@@ -1010,24 +1030,33 @@ class PostprocessingStep(BaseStep):
             text="0",
             foreground=THEME.accent_success,
         )
-        self._recovered_label.grid(row=0, column=5, sticky="w", padx=(10, 30))
+        self._recovered_label.grid(row=0, column=5, sticky="w", padx=(10, 20))
 
-        # Needs retry
-        ttk.Label(summary_grid, text="Needs Retry:").grid(row=0, column=6, sticky="w")
-        self._retry_label = ttk.Label(
+        # Written (TASK 45.8)
+        ttk.Label(summary_grid, text="Written:").grid(row=0, column=6, sticky="w")
+        self._written_label = ttk.Label(
+            summary_grid,
+            text="0",
+            foreground=THEME.accent_info,
+        )
+        self._written_label.grid(row=0, column=7, sticky="w", padx=(10, 20))
+
+        # Flagged (TASK 45.8)
+        ttk.Label(summary_grid, text="Flagged:").grid(row=0, column=8, sticky="w")
+        self._flagged_label = ttk.Label(
             summary_grid,
             text="0",
             foreground=THEME.accent_warning,
         )
-        self._retry_label.grid(row=0, column=7, sticky="w", padx=(10, 0))
+        self._flagged_label.grid(row=0, column=9, sticky="w", padx=(10, 20))
 
         # Recovery rate
-        ttk.Label(summary_grid, text="Rate:").grid(row=0, column=8, sticky="w")
+        ttk.Label(summary_grid, text="Rate:").grid(row=0, column=10, sticky="w")
         self._rate_label = ttk.Label(
             summary_grid,
             text="0%",
         )
-        self._rate_label.grid(row=0, column=9, sticky="w", padx=(10, 0))
+        self._rate_label.grid(row=0, column=11, sticky="w", padx=(10, 0))
 
     def _get_lines_from_previous_steps(self) -> Tuple[List[str], List[str]]:
         """Get original and translated lines from previous steps.
@@ -1107,24 +1136,24 @@ class PostprocessingStep(BaseStep):
         self._status_label.configure(text=f"{len(self._lines)} lines loaded")
 
     def _update_lines_table(self) -> None:
-        """Update the lines table with current data."""
+        """Update the lines table with current data (TASK 45.9)."""
         rows: List[TableRow] = []
         filter_value = self._filter_var.get()
 
         for line in self._lines:
-            # Apply filter
+            # Apply filter (TASK 45.9: All/Changed/Written/Flagged)
             if filter_value == "changed" and not line.has_changes:
                 continue
-            elif filter_value == "retry" and not line.needs_retry:
+            elif filter_value == "written" and not line.written:
                 continue
-            elif filter_value == "skipped" and not line.skipped:
+            elif filter_value == "flagged" and not line.flagged:
                 continue
 
-            # Status display
-            if line.needs_retry:
-                status = "⚠ Retry"
-            elif line.skipped:
-                status = "○ Skipped"
+            # Status display (TASK 45.6: new statuses)
+            if line.flagged:
+                status = "⚠ Flagged"
+            elif line.written:
+                status = "✓ Written"
             elif line.has_changes:
                 status = "✓ Changed"
             else:
@@ -1153,19 +1182,26 @@ class PostprocessingStep(BaseStep):
         self._lines_table.set_data(rows)
 
     def _update_summary(self) -> None:
-        """Update the summary panel."""
+        """Update the summary panel (TASK 45.8: live updates)."""
         total = len(self._lines)
         changed = sum(1 for l in self._lines if l.has_changes)
         recovered = sum(l.recovered_count for l in self._lines)
-        retry = sum(1 for l in self._lines if l.needs_retry)
+        written = sum(1 for l in self._lines if l.written)
+        flagged = sum(1 for l in self._lines if l.flagged)
 
         total_issues = self._stats.total_issues if self._stats.total_issues > 0 else 1
         rate = (self._stats.issues_recovered / total_issues) * 100
 
+        # Update progress bar
+        if total > 0:
+            progress = (self._stats.lines_processed / total) * 100
+            self._progress_bar.configure(value=progress)
+
         self._total_label.configure(text=str(total))
         self._changed_label.configure(text=str(changed))
         self._recovered_label.configure(text=str(recovered))
-        self._retry_label.configure(text=str(retry))
+        self._written_label.configure(text=str(written))
+        self._flagged_label.configure(text=str(flagged))
         self._rate_label.configure(text=f"{rate:.1f}%")
 
     def _apply_filter(self) -> None:
@@ -1192,11 +1228,16 @@ class PostprocessingStep(BaseStep):
             self._show_issues(line)
 
     def _clear_diff(self) -> None:
-        """Clear the diff view."""
+        """Clear the diff view and edit field (TASK 45.7)."""
         self._diff_line_label.configure(text="Select a line to see diff")
         self._diff_text.configure(state="normal")
         self._diff_text.delete("1.0", "end")
         self._diff_text.configure(state="disabled")
+        # TASK 45.7: Clear edit field
+        self._edit_text.configure(state="normal")
+        self._edit_text.delete("1.0", "end")
+        self._edit_text.configure(state="disabled")
+        self._mark_fixed_btn.configure(state="disabled")
         self._issues_listbox.delete(0, "end")
 
     def _show_diff(self, line: PostprocessLine) -> None:
@@ -1248,6 +1289,12 @@ class PostprocessingStep(BaseStep):
 
         self._diff_text.configure(state="disabled")
 
+        # TASK 45.7: Populate edit field with postprocessed text
+        self._edit_text.configure(state="normal")
+        self._edit_text.delete("1.0", "end")
+        self._edit_text.insert("1.0", line.postprocessed)
+        self._mark_fixed_btn.configure(state="normal")
+
     def _show_issues(self, line: PostprocessLine) -> None:
         """Show issues for a specific line.
 
@@ -1273,20 +1320,62 @@ class PostprocessingStep(BaseStep):
                 f"{action_symbol} [{issue.recovery_type.value}] {issue.description}",
             )
 
+    def _mark_line_as_fixed(self) -> None:
+        """Apply manual edit and mark line as fixed (TASK 45.7).
+
+        Reads the edited text from the edit field, updates the line's
+        postprocessed text, clears flagged status, and refreshes the display.
+        """
+        if self._selected_line_idx < 0:
+            return
+        if self._selected_line_idx >= len(self._lines):
+            return
+
+        line = self._lines[self._selected_line_idx]
+        new_text = self._edit_text.get("1.0", "end-1c")
+
+        # Update line
+        line.postprocessed = new_text
+        line.has_changes = line.translated != new_text
+        line.flagged = False
+        line.written = True
+        line.needs_retry = False
+
+        # Write to manifest if available
+        if self.manifest_manager is not None:
+            try:
+                self.manifest_manager.update_line_field(
+                    line.idx, "postpro", new_text
+                )
+            except Exception as exc:
+                logger.debug("Could not write to manifest: %s", exc)
+
+        # Refresh display
+        self._update_lines_table()
+        self._update_summary()
+        self._show_diff(line)
+        self._show_issues(line)
+
     def _update_options(self) -> None:
-        """Update options from UI."""
-        self._pp_options.enable_placeholder_recovery = self._placeholder_var.get()
+        """Update options from UI.
+
+        TASK 45.4: Placeholder, code, and BR recovery are always-on.
+        """
+        # Always-on recoveries (TASK 45.4)
+        self._pp_options.enable_placeholder_recovery = True
+        self._pp_options.restore_code_characters = True
+        self._pp_options.restore_br_tags = True
+        # User-configurable options
         self._pp_options.enable_bracket_recovery = self._bracket_var.get()
         self._pp_options.enable_quote_recovery = self._quote_var.get()
         self._pp_options.enable_whitespace_normalization = self._whitespace_var.get()
         self._pp_options.enable_symbol_conversion = self._symbol_var.get()
         self._pp_options.convert_fullwidth_to_halfwidth = self._fullwidth_var.get()
-        self._pp_options.restore_code_characters = self._code_var.get()
-        self._pp_options.restore_br_tags = self._br_var.get()
+        self._pp_options.convert_halfwidth_to_fullwidth = self._halfwidth_var.get()
         self._pp_options.failure_policy = FailurePolicy(self._failure_var.get())
 
     def _apply_postprocessing(self) -> None:
-        """Apply postprocessing to all lines."""
+        """Apply postprocessing to all lines (TASK 45.10: overwrite warning)."""
         if not self._lines:
             self._refresh_lines()
 
@@ -1303,6 +1392,18 @@ class PostprocessingStep(BaseStep):
                 "Postprocessing already running.",
             )
             return
+
+        # TASK 45.10: Overwrite warning if results already exist
+        has_results = any(
+            l.postprocessed != l.translated for l in self._lines
+        )
+        if has_results:
+            if not messagebox.askokcancel(
+                "Overwrite Results",
+                "Postprocessing results already exist. "
+                "Re-running will overwrite them. Continue?",
+            ):
+                return
 
         # Update options from UI
         self._update_options()
@@ -1323,6 +1424,29 @@ class PostprocessingStep(BaseStep):
 
     def _do_postprocessing(self) -> None:
         """Perform postprocessing in background thread."""
+        # Phase 48: Write postprocess step log header
+        _pp_log_path = None
+        try:
+            from CherryAI.functions.mainhelper import (
+                _rotate_log, write_step_log_header, write_step_log_footer,
+            )
+            mm = getattr(self, "_manifest_manager", None)
+            if mm:
+                pdir = getattr(mm, "_project_dir", None)
+                pname = mm.get_project_info().name if hasattr(mm, "get_project_info") else None
+                if pdir and pname:
+                    from pathlib import Path as _P
+                    _pp_log_path = _rotate_log(_P(str(pdir)), pname, "postprocess")
+                    write_step_log_header(_pp_log_path, {
+                        "CherryAI Postprocessing Log": "",
+                        "Started": __import__("time").strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "Total Lines": str(len(self._lines)),
+                    })
+        except Exception:
+            pass
+
+        import time as _time
+        _pp_start = _time.perf_counter()
         try:
             for line in self._lines:
                 self._stats.lines_processed += 1
@@ -1398,8 +1522,36 @@ class PostprocessingStep(BaseStep):
                 if line.has_changes:
                     self._stats.lines_with_changes += 1
 
+                # TASK 45.6/45.9: Set written/flagged based on policy
+                if line.needs_retry or any(
+                    i.action == RecoveryAction.FAILED for i in line.issues
+                ):
+                    if self._pp_options.failure_policy == FailurePolicy.WRITE:
+                        line.written = True
+                    elif self._pp_options.failure_policy == FailurePolicy.FLAG:
+                        line.flagged = True
+
+                # TASK 45.8: Schedule live summary update every 10 lines
+                if self._stats.lines_processed % 10 == 0:
+                    self.after(0, self._update_summary)
+
             # Complete
             self._status = PostprocessStatus.COMPLETED
+            # Phase 48: Write postprocess step log footer
+            try:
+                if _pp_log_path:
+                    dur = _time.perf_counter() - _pp_start
+                    write_step_log_footer(_pp_log_path, {
+                        "Postprocessing Summary": "",
+                        "Completed": _time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "Duration": f"{dur:.2f}s",
+                        "Total Lines": str(self._stats.lines_processed),
+                        "Changed": str(self._stats.lines_with_changes),
+                        "Issues": str(self._stats.total_issues),
+                        "Recovered": str(self._stats.issues_recovered),
+                    })
+            except Exception:
+                pass
             self.after(0, self._on_postprocess_complete)
 
         except Exception as e:
@@ -1442,7 +1594,7 @@ class PostprocessingStep(BaseStep):
         return text
 
     def _apply_symbol_conversion(self, text: str) -> str:
-        """Apply symbol conversion to text.
+        """Apply symbol conversion to text (TASK 45.5: bidirectional).
 
         Args:
             text: Text to convert.
@@ -1450,21 +1602,22 @@ class PostprocessingStep(BaseStep):
         Returns:
             Converted text.
         """
-        if not self._pp_options.convert_fullwidth_to_halfwidth:
-            return text
-
         result = text
-        for full, half in FULLWIDTH_TO_HALFWIDTH.items():
-            result = result.replace(full, half)
-
+        if self._pp_options.convert_fullwidth_to_halfwidth:
+            for full, half in FULLWIDTH_TO_HALFWIDTH.items():
+                result = result.replace(full, half)
+        elif self._pp_options.convert_halfwidth_to_fullwidth:
+            for half, full in HALFWIDTH_TO_FULLWIDTH.items():
+                result = result.replace(half, full)
         return result
 
     def _on_postprocess_complete(self) -> None:
-        """Called when postprocessing completes."""
+        """Called when postprocessing completes (TASK 45.8: popup)."""
         self._apply_btn.configure(state="normal")
         self._update_lines_table()
         self._update_summary()
 
+        flagged = sum(1 for l in self._lines if l.flagged)
         self._status_label.configure(
             text=(
                 f"Complete: {self._stats.lines_with_changes} lines changed, "
@@ -1485,6 +1638,16 @@ class PostprocessingStep(BaseStep):
 
         # Store postprocessed lines for next step
         step_data["postprocessed_lines"] = [l.postprocessed for l in self._lines]
+
+        # TASK 45.8: Completion popup
+        messagebox.showinfo(
+            "Postprocessing Complete",
+            (
+                f"{len(self._lines)} lines processed, "
+                f"{self._stats.lines_with_changes} changes applied, "
+                f"{flagged} issues flagged"
+            ),
+        )
 
     def _accept_selected(self) -> None:
         """Accept selected postprocessed lines."""
@@ -1571,17 +1734,18 @@ class PostprocessingStep(BaseStep):
 
     def on_leave(self) -> None:
         """Called when leaving step."""
-        # Store options state
+        # Store options state (TASK 45.4: auto-recovery always True)
         step_data = self.session.get_step(self.step_id).data
         step_data["postprocess_options"] = {
-            "enable_placeholder_recovery": self._placeholder_var.get(),
+            "enable_placeholder_recovery": True,
             "enable_bracket_recovery": self._bracket_var.get(),
             "enable_quote_recovery": self._quote_var.get(),
             "enable_whitespace_normalization": self._whitespace_var.get(),
             "enable_symbol_conversion": self._symbol_var.get(),
             "convert_fullwidth_to_halfwidth": self._fullwidth_var.get(),
-            "restore_code_characters": self._code_var.get(),
-            "restore_br_tags": self._br_var.get(),
+            "convert_halfwidth_to_fullwidth": self._halfwidth_var.get(),
+            "restore_code_characters": True,
+            "restore_br_tags": True,
             "failure_policy": self._failure_var.get(),
         }
 

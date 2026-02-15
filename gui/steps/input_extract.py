@@ -1,17 +1,23 @@
 """CherryAI GUI v2 Input and Extraction Step.
 
 First workflow tab for loading files, previewing content, and detecting manifests.
+
+TASK 39: Modernized Input step with unified selector, Treeview file tree,
+auto-encoding, format filtering, multi-line preview, and progress dialog.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import tkinter as tk
 from tkinter import ttk
+
+from CherryAI.gui.dialogs.loading_progress import LoadingProgressDialog
 
 from CherryAI.gui.steps.base import BaseStep
 from CherryAI.gui.theme.colors import THEME
@@ -21,24 +27,40 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Supported file extensions for loading
+# Supported file extensions for loading (TASK 39.3: rpgmaker and image added)
 SUPPORTED_EXTENSIONS = [
-    ("All Supported", "*.txt *.csv *.tsv *.json *.xlsx"),
+    ("All Supported", "*.txt *.csv *.tsv *.json *.xlsx *.png *.jpg *.jpeg *.bmp"),
     ("Text Files", "*.txt"),
     ("CSV Files", "*.csv"),
     ("TSV Files", "*.tsv"),
     ("JSON Files", "*.json"),
     ("Excel Files", "*.xlsx"),
+    ("Image Files", "*.png *.jpg *.jpeg *.bmp"),
     ("All Files", "*.*"),
 ]
 
-# Format detection map
+# Format detection map (TASK 39.3: rpgmaker and image formats added)
 FORMAT_MAP = {
     ".txt": "txt",
     ".csv": "csv",
     ".tsv": "tsv",
     ".json": "json",
     ".xlsx": "xlsx",
+    ".png": "image",
+    ".jpg": "image",
+    ".jpeg": "image",
+    ".bmp": "image",
+}
+
+# Format extension mapping for format filtering (TASK 39.3)
+FORMAT_EXTENSIONS = {
+    "txt": {".txt"},
+    "csv": {".csv"},
+    "tsv": {".tsv"},
+    "json": {".json"},
+    "xlsx": {".xlsx"},
+    "rpgmaker": {".json", ".js"},
+    "image": {".png", ".jpg", ".jpeg", ".bmp"},
 }
 
 
@@ -133,6 +155,9 @@ class InputExtractionStep(BaseStep):
         # Folder root for relative path display (set when loading folder)
         self._folder_root: Optional[Path] = None
 
+        # TASK 39.4: Tree item ID to LoadedFile index mapping
+        self._tree_item_to_index: Dict[str, int] = {}
+
         # UI variables
         self._encoding_var: Optional[tk.StringVar] = None
         self._format_var: Optional[tk.StringVar] = None
@@ -158,37 +183,34 @@ class InputExtractionStep(BaseStep):
         toolbar = ttk.Frame(self)
         toolbar.grid(row=0, column=0, sticky="ew", padx=10, pady=5)
 
-        # Load Files button
-        load_btn = ttk.Button(
-            toolbar,
-            text="📁 Load Files...",
+        # TASK 39.1: Unified Select File(s) button with dropdown for file/folder
+        self._select_menu = tk.Menu(toolbar, tearoff=0)
+        self._select_menu.add_command(
+            label="Select File(s)...",
             command=self._on_load_files,
         )
-        load_btn.pack(side="left", padx=2)
-
-        # Load Folder button
-        folder_btn = ttk.Button(
-            toolbar,
-            text="📂 Load Folder...",
+        self._select_menu.add_command(
+            label="Select Folder...",
             command=self._on_load_folder,
         )
-        folder_btn.pack(side="left", padx=2)
 
-        # Load Manifest button
-        manifest_btn = ttk.Button(
+        self._select_btn = ttk.Button(
             toolbar,
-            text="📋 Load Manifest...",
-            command=self._on_load_manifest,
+            text="📁 Select File(s) ▾",
+            command=self._show_select_menu,
         )
-        manifest_btn.pack(side="left", padx=2)
+        self._select_btn.pack(side="left", padx=2)
 
-        # Clear button
-        clear_btn = ttk.Button(
+        # Import Translations button (Task 47.8)
+        self._import_btn = ttk.Button(
             toolbar,
-            text="🗑 Clear All",
-            command=self._on_clear_all,
+            text="📥 Import Translations",
+            command=self._on_import_translations,
         )
-        clear_btn.pack(side="left", padx=2)
+        self._import_btn.pack(side="left", padx=2)
+
+        # TASK 39.2: "Load Manifest" and "Clear All" buttons removed from toolbar.
+        # Use File → Open Project... and File → New Project menus instead.
 
         # Separator
         ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=10)
@@ -197,25 +219,25 @@ class InputExtractionStep(BaseStep):
         options_frame = ttk.LabelFrame(toolbar, text="Options")
         options_frame.pack(side="left", padx=5)
 
-        # Encoding selection
+        # Encoding selection (TASK 39.3: "auto" added as first/default option)
         ttk.Label(options_frame, text="Encoding:").pack(side="left", padx=2)
-        self._encoding_var = tk.StringVar(value="utf-8")
+        self._encoding_var = tk.StringVar(value="auto")
         encoding_cb = ttk.Combobox(
             options_frame,
             textvariable=self._encoding_var,
-            values=["utf-8", "utf-8-sig", "shift_jis", "cp932", "latin-1", "utf-16"],
+            values=["auto", "utf-8", "utf-8-sig", "shift_jis", "cp932", "latin-1", "utf-16"],
             width=10,
             state="readonly",
         )
         encoding_cb.pack(side="left", padx=2)
 
-        # Format override
+        # Format override (TASK 39.3: rpgmaker and image added)
         ttk.Label(options_frame, text="Format:").pack(side="left", padx=5)
         self._format_var = tk.StringVar(value="auto")
         format_cb = ttk.Combobox(
             options_frame,
             textvariable=self._format_var,
-            values=["auto", "txt", "csv", "tsv", "json", "xlsx"],
+            values=["auto", "txt", "csv", "tsv", "json", "xlsx", "rpgmaker", "image"],
             width=8,
             state="readonly",
         )
@@ -234,33 +256,46 @@ class InputExtractionStep(BaseStep):
         list_frame = ttk.Frame(left_frame)
         list_frame.pack(fill="both", expand=True, padx=5, pady=5)
 
-        self._file_listbox = tk.Listbox(
+        # TASK 39.4: Treeview with collapsible folder hierarchy replaces flat Listbox
+        self._file_tree = ttk.Treeview(
             list_frame,
-            selectmode="single",
-            font=("Segoe UI", 10),
-            bg=THEME.bg_input,
-            fg=THEME.text_primary,
-            selectbackground=THEME.bg_selected,
+            columns=("lines",),
+            show="tree headings",
+            selectmode="extended",
         )
-        self._file_listbox.pack(side="left", fill="both", expand=True)
-        self._file_listbox.bind("<<ListboxSelect>>", self._on_file_select)
-        
-        # Add right-click context menu
-        self._file_context_menu = tk.Menu(self._file_listbox, tearoff=0)
-        self._file_context_menu.add_command(label="Remove File", command=self._on_remove_selected_file)
-        self._file_context_menu.add_command(label="Clear All", command=self._on_clear_all)
-        self._file_listbox.bind("<Button-3>", self._on_file_listbox_right_click)
-        
-        # Add Delete key binding
-        self._file_listbox.bind("<Delete>", lambda e: self._on_remove_selected_file())
+        self._file_tree.heading("#0", text="Name", anchor="w")
+        self._file_tree.heading("lines", text="Lines", anchor="e")
+        self._file_tree.column("#0", width=200, stretch=True)
+        self._file_tree.column("lines", width=60, stretch=False)
+        self._file_tree.pack(side="left", fill="both", expand=True)
+        self._file_tree.bind("<<TreeviewSelect>>", self._on_file_select)
+
+        # Backward-compat alias so existing code referencing _file_listbox still works
+        self._file_listbox = self._file_tree
+
+        # Tree item ID to LoadedFile index mapping
+        self._tree_item_to_index: Dict[str, int] = {}
+
+        # Right-click context menu
+        self._file_context_menu = tk.Menu(self._file_tree, tearoff=0)
+        self._file_context_menu.add_command(
+            label="Remove Selected", command=self._on_remove_selected_file,
+        )
+        self._file_context_menu.add_command(
+            label="Select All in Folder", command=self._on_select_all_in_folder,
+        )
+        self._file_tree.bind("<Button-3>", self._on_file_listbox_right_click)
+
+        # Delete key removes selected items
+        self._file_tree.bind("<Delete>", lambda e: self._on_remove_selected_file())
 
         file_scroll = ttk.Scrollbar(
             list_frame,
             orient="vertical",
-            command=self._file_listbox.yview,
+            command=self._file_tree.yview,
         )
         file_scroll.pack(side="right", fill="y")
-        self._file_listbox.configure(yscrollcommand=file_scroll.set)
+        self._file_tree.configure(yscrollcommand=file_scroll.set)
 
         # Right: Preview table
         right_frame = ttk.LabelFrame(content, text="Preview")
@@ -291,24 +326,8 @@ class InputExtractionStep(BaseStep):
         preview_scroll.pack(side="right", fill="y")
         self._preview_tree.configure(yscrollcommand=preview_scroll.set)
 
-        # Manifest info below preview
-        self._manifest_frame = ttk.Frame(right_frame)
-        self._manifest_frame.pack(fill="x", padx=5, pady=5)
-
-        self._manifest_label = ttk.Label(
-            self._manifest_frame,
-            text="No manifest detected",
-            foreground=THEME.text_secondary,
-        )
-        self._manifest_label.pack(side="left")
-
-        self._load_manifest_btn = ttk.Button(
-            self._manifest_frame,
-            text="Load Manifest",
-            command=self._on_load_detected_manifest,
-            state="disabled",
-        )
-        self._load_manifest_btn.pack(side="right")
+        # TASK 39.6: Manifest status label removed from Preview panel.
+        # Manifest status is shown in the window title bar instead.
 
     def _build_summary_bar(self) -> None:
         """Build the bottom summary bar."""
@@ -348,6 +367,26 @@ class InputExtractionStep(BaseStep):
 
     # ----------------------------- Event Handlers ----------------------------- #
 
+    def _show_select_menu(self) -> None:
+        """Show the Select File(s) dropdown menu below the button."""
+        try:
+            x = self._select_btn.winfo_rootx()
+            y = self._select_btn.winfo_rooty() + self._select_btn.winfo_height()
+            self._select_menu.tk_popup(x, y)
+        finally:
+            self._select_menu.grab_release()
+
+    def _select_first_file_in_tree(self) -> None:
+        """Select the first file item in the file tree and update preview."""
+        if not self._tree_item_to_index:
+            return
+        # Find the first leaf (file) item in tree order
+        first_item = next(iter(self._tree_item_to_index))
+        self._file_tree.selection_set(first_item)
+        self._file_tree.see(first_item)
+        self._current_file_index = self._tree_item_to_index[first_item]
+        self._update_preview()
+
     def _on_load_files(self) -> None:
         """Handle Load Files button click.
         
@@ -362,23 +401,52 @@ class InputExtractionStep(BaseStep):
         if not filepaths:
             return
 
-        encoding = self._encoding_var.get() if self._encoding_var else "utf-8"
+        encoding = self._encoding_var.get() if self._encoding_var else "auto"
         format_override = self._format_var.get() if self._format_var else "auto"
 
         loaded_count = 0
-        for filepath in filepaths:
-            path = Path(filepath)
+        skipped_files: List[str] = []
+
+        # TASK 39.7: Show progress dialog for multi-file loading
+        paths_to_load = [Path(fp) for fp in filepaths]
+        progress: Optional[LoadingProgressDialog] = None
+        if len(paths_to_load) > 3:
+            progress = LoadingProgressDialog(self, len(paths_to_load))
+
+        for path in paths_to_load:
+            if progress is not None and progress.cancelled:
+                break
+            # TASK 39.3: Format filtering - skip files that don't match forced format
+            if format_override != "auto" and not self._file_matches_format(path, format_override):
+                skipped_files.append(path.name)
+                if progress is not None:
+                    progress.update(path.name)
+                continue
             if self._load_file(path, encoding, format_override):
                 loaded_count += 1
+            if progress is not None:
+                progress.update(path.name)
+
+        if progress is not None:
+            progress.close()
+
+        # TASK 39.3: Warn about skipped files
+        if skipped_files:
+            names = "\n".join(skipped_files[:10])
+            if len(skipped_files) > 10:
+                names += f"\n...and {len(skipped_files) - 10} more"
+            messagebox.showwarning(
+                "Files Skipped",
+                f"The following files were skipped because they don't match "
+                f"the '{format_override}' format filter:\n\n{names}",
+            )
 
         if loaded_count > 0:
             self._update_summary()
             self._update_file_list()
             # Select first file if none selected
             if self._current_file_index < 0 and self._loaded_files:
-                self._current_file_index = 0
-                self._file_listbox.selection_set(0)
-                self._update_preview()
+                self._select_first_file_in_tree()
             self.set_status("in-progress")
             logger.info("Loaded %d file(s)", loaded_count)
             
@@ -417,11 +485,15 @@ class InputExtractionStep(BaseStep):
         # Store the root folder for relative path display
         self._folder_root = root_folder
 
-        encoding = self._encoding_var.get() if self._encoding_var else "utf-8"
+        encoding = self._encoding_var.get() if self._encoding_var else "auto"
         format_override = self._format_var.get() if self._format_var else "auto"
 
-        # Collect all supported files recursively
-        supported_suffixes = {".txt", ".csv", ".tsv", ".json", ".xlsx"}
+        # TASK 39.3: Determine supported suffixes based on format filter
+        if format_override != "auto" and format_override in FORMAT_EXTENSIONS:
+            supported_suffixes = FORMAT_EXTENSIONS[format_override]
+        else:
+            supported_suffixes = {".txt", ".csv", ".tsv", ".json", ".xlsx",
+                                  ".png", ".jpg", ".jpeg", ".bmp"}
         file_paths = self._collect_files_from_folder(root_folder, supported_suffixes)
 
         if not file_paths:
@@ -436,18 +508,29 @@ class InputExtractionStep(BaseStep):
         file_paths.sort()
 
         loaded_count = 0
+
+        # TASK 39.7: Show progress dialog for folder loading
+        progress: Optional[LoadingProgressDialog] = None
+        if len(file_paths) > 3:
+            progress = LoadingProgressDialog(self, len(file_paths))
+
         for filepath in file_paths:
+            if progress is not None and progress.cancelled:
+                break
             if self._load_file(filepath, encoding, format_override):
                 loaded_count += 1
+            if progress is not None:
+                progress.update(filepath.name)
+
+        if progress is not None:
+            progress.close()
 
         if loaded_count > 0:
             self._update_summary()
             self._update_file_list()
             # Select first file if none selected
             if self._current_file_index < 0 and self._loaded_files:
-                self._current_file_index = 0
-                self._file_listbox.selection_set(0)
-                self._update_preview()
+                self._select_first_file_in_tree()
             self.set_status("in-progress")
             logger.info("Loaded %d file(s) from folder %s", loaded_count, root_folder)
             
@@ -490,6 +573,55 @@ class InputExtractionStep(BaseStep):
         except Exception as e:
             logger.error("Error scanning folder %s: %s", folder, e)
         return files
+
+    def _file_matches_format(self, path: Path, format_id: str) -> bool:
+        """Check if a file matches the specified format filter.
+
+        Args:
+            path: File path to check.
+            format_id: Required format identifier.
+
+        Returns:
+            True if file extension matches the format, False otherwise.
+        """
+        allowed = FORMAT_EXTENSIONS.get(format_id)
+        if allowed is None:
+            return True  # Unknown format, allow all
+        return path.suffix.lower() in allowed
+
+    @staticmethod
+    def _detect_encoding(path: Path) -> str:
+        """Detect file encoding by reading BOM or falling back to utf-8.
+
+        Args:
+            path: File path.
+
+        Returns:
+            Detected encoding string.
+        """
+        try:
+            with open(path, "rb") as f:
+                raw = f.read(4)
+            # Check BOM markers
+            if raw[:3] == b"\xef\xbb\xbf":
+                return "utf-8-sig"
+            if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+                return "utf-16"
+            # Try utf-8 first (most common)
+            try:
+                path.read_text(encoding="utf-8")
+                return "utf-8"
+            except UnicodeDecodeError:
+                pass
+            # Try shift_jis for Japanese content
+            try:
+                path.read_text(encoding="shift_jis")
+                return "shift_jis"
+            except UnicodeDecodeError:
+                pass
+            return "utf-8"  # Fallback
+        except Exception:
+            return "utf-8"
 
     def _save_manifest_after_file_load(self) -> None:
         """Save manifest after files are loaded (TASK 29.2).
@@ -660,84 +792,193 @@ class InputExtractionStep(BaseStep):
             self.set_step_data({})
             logger.info("Cleared all loaded files")
 
-    def _on_file_listbox_right_click(self, event: tk.Event) -> None:
-        """Handle right-click on file listbox to show context menu."""
-        # Select the item under the cursor
+    def _on_import_translations(self) -> None:
+        """Import translations from another manifest via exact line matching.
+
+        Task 47.8: Opens a file dialog to select a source manifest, then
+        copies translation fields for lines whose ``orig`` matches exactly.
+        """
+        if not self._manifest_manager:
+            messagebox.showwarning("Warning", "No project loaded.")
+            return
+
+        import json
+
+        source_path = filedialog.askopenfilename(
+            title="Select Source Manifest",
+            filetypes=[("CherryAI Manifest", "*.CherryAI.json"), ("All Files", "*.*")],
+        )
+        if not source_path:
+            return
+
         try:
-            index = self._file_listbox.nearest(event.y)
-            if index >= 0:
-                self._file_listbox.selection_clear(0, tk.END)
-                self._file_listbox.selection_set(index)
-                self._file_listbox.activate(index)
-                self._current_file_index = index
-            
-            # Show the context menu
+            with open(source_path, "r", encoding="utf-8") as f:
+                source_data = json.load(f)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to read manifest: {e}")
+            return
+
+        source_lines = source_data.get("lines", [])
+        if not source_lines:
+            messagebox.showinfo("Info", "Source manifest has no lines.")
+            return
+
+        # Build lookup: orig → source line entry
+        source_lookup: Dict[str, Dict[str, Any]] = {}
+        for sl in source_lines:
+            orig = sl.get("orig", "")
+            if orig and orig not in source_lookup:
+                source_lookup[orig] = sl
+
+        # Fields to copy
+        copy_fields = [
+            "prepro", "tl", "preedit", "postpro", "wordwr", "overwrite",
+        ]
+        # Also copy numbered fields (edit1, edit2, tlc1, tlc2, etc.)
+        numbered_prefixes = ("edit", "tlc")
+
+        current_lines = self._manifest_manager.get_lines()
+        matched = 0
+        total = len(current_lines)
+
+        for line in current_lines:
+            orig = line.get("orig", "")
+            if not orig:
+                continue
+            match = source_lookup.get(orig)
+            if match is None:
+                continue
+            matched += 1
+            for field in copy_fields:
+                if field in match and match[field]:
+                    line[field] = match[field]
+            # Copy numbered fields
+            for key, val in match.items():
+                for prefix in numbered_prefixes:
+                    if key.startswith(prefix) and val:
+                        line[key] = val
+
+        self._manifest_manager.set_lines(current_lines)
+
+        # Log import metadata
+        self._manifest_manager.update_step_data(0, "last_import", {
+            "source_manifest": str(source_path),
+            "lines_matched": matched,
+            "lines_total": total,
+            "timestamp": datetime.now().isoformat(),
+        })
+
+        messagebox.showinfo(
+            "Import Complete",
+            f"Imported {matched} of {total} lines.\n"
+            f"{total - matched} lines had no match.",
+        )
+        logger.info(
+            "Imported translations: %d/%d matched from %s",
+            matched, total, source_path,
+        )
+
+    def _on_file_listbox_right_click(self, event: tk.Event) -> None:
+        """Handle right-click on file tree to show context menu."""
+        try:
+            item = self._file_tree.identify_row(event.y)
+            if item:
+                self._file_tree.selection_set(item)
             self._file_context_menu.tk_popup(event.x_root, event.y_root)
         finally:
             self._file_context_menu.grab_release()
 
-    def _on_remove_selected_file(self) -> None:
-        """Remove the currently selected file from the loaded files list."""
-        selection = self._file_listbox.curselection()
+    def _on_select_all_in_folder(self) -> None:
+        """Select all files in the folder of the currently selected item."""
+        selection = self._file_tree.selection()
         if not selection:
             return
-            
-        index = selection[0]
-        if 0 <= index < len(self._loaded_files):
-            removed_file = self._loaded_files[index]
-            del self._loaded_files[index]
-            
-            # Update session state
-            if self.session is not None and index < len(self.session.loaded_files):
-                del self.session.loaded_files[index]
-            
-            # Update current index
-            if self._loaded_files:
-                self._current_file_index = min(index, len(self._loaded_files) - 1)
+        item = selection[0]
+        parent = self._file_tree.parent(item)
+        # If the item itself is a folder (has children), select children
+        children = self._file_tree.get_children(item)
+        if children:
+            parent = item
+        elif parent:
+            children = self._file_tree.get_children(parent)
+        else:
+            children = self._file_tree.get_children("")
+
+        file_items = [c for c in children if c in self._tree_item_to_index]
+        if file_items:
+            self._file_tree.selection_set(file_items)
+
+    def _on_remove_selected_file(self) -> None:
+        """Remove all selected files from the loaded files list."""
+        selection = self._file_tree.selection()
+        if not selection:
+            return
+
+        # Collect indices to remove (sorted descending to avoid index shift)
+        indices_to_remove: List[int] = []
+        for item_id in selection:
+            if item_id in self._tree_item_to_index:
+                indices_to_remove.append(self._tree_item_to_index[item_id])
             else:
-                self._current_file_index = -1
-            
-            # Update UI
-            self._update_file_list()
-            self._update_preview()
-            self._update_summary()
-            
-            # Select next file if available
-            if self._loaded_files and self._current_file_index >= 0:
-                self._file_listbox.selection_set(self._current_file_index)
-            
-            logger.info(f"Removed file: {removed_file.path}")
-            
-            # Update step status
-            if not self._loaded_files:
-                self.set_status("not-started")
+                # It's a folder — remove all children
+                for child in self._file_tree.get_children(item_id):
+                    if child in self._tree_item_to_index:
+                        indices_to_remove.append(self._tree_item_to_index[child])
+
+        indices_to_remove = sorted(set(indices_to_remove), reverse=True)
+        for idx in indices_to_remove:
+            if 0 <= idx < len(self._loaded_files):
+                removed = self._loaded_files[idx]
+                del self._loaded_files[idx]
+                if self.session is not None and idx < len(self.session.loaded_files):
+                    del self.session.loaded_files[idx]
+                logger.info("Removed file: %s", removed.path)
+
+        # Reset current index
+        if self._loaded_files:
+            self._current_file_index = 0
+        else:
+            self._current_file_index = -1
+
+        self._update_file_list()
+        self._update_preview()
+        self._update_summary()
+
+        if not self._loaded_files:
+            self.set_status("not-started")
 
     def _on_file_select(self, event: tk.Event) -> None:
-        """Handle file selection in listbox."""
-        selection = self._file_listbox.curselection()
+        """Handle file selection in tree."""
+        selection = self._file_tree.selection()
         if selection:
-            self._current_file_index = selection[0]
-            self._update_preview()
+            item_id = selection[0]
+            if item_id in self._tree_item_to_index:
+                self._current_file_index = self._tree_item_to_index[item_id]
+                self._update_preview()
 
     # ----------------------------- File Loading ----------------------------- #
 
     def _load_file(
         self,
         path: Path,
-        encoding: str = "utf-8",
+        encoding: str = "auto",
         format_override: str = "auto",
     ) -> bool:
         """Load a file and extract its content.
 
         Args:
             path: Path to the file.
-            encoding: Text encoding.
+            encoding: Text encoding or "auto" for auto-detection.
             format_override: Format override or "auto".
 
         Returns:
             True if loaded successfully.
         """
         try:
+            # TASK 39.3: Auto-detect encoding if set to "auto"
+            if encoding == "auto":
+                encoding = self._detect_encoding(path)
+
             # Detect format
             if format_override != "auto":
                 format_id = format_override
@@ -1070,9 +1311,7 @@ class InputExtractionStep(BaseStep):
         self._update_file_list()
         self._update_summary()
         if self._loaded_files:
-            self._current_file_index = 0
-            self._file_listbox.selection_set(0)
-            self._update_preview()
+            self._select_first_file_in_tree()
         
         # Mark step as in-progress if we have files
         if self._loaded_files:
@@ -1081,37 +1320,70 @@ class InputExtractionStep(BaseStep):
     # ----------------------------- UI Updates ----------------------------- #
 
     def _update_file_list(self) -> None:
-        """Update the file listbox.
-        
-        If files were loaded from a folder, shows relative paths with subfolder.
-        Otherwise shows just the filename.
+        """Update the file tree with collapsible folder hierarchy.
+
+        TASK 39.4: Builds a tree structure from loaded files. When files
+        come from a folder, parent nodes are collapsible folders; leaf
+        nodes are individual files with line counts.
         """
-        self._file_listbox.delete(0, tk.END)
+        # Clear existing tree
+        for item in self._file_tree.get_children():
+            self._file_tree.delete(item)
+        self._tree_item_to_index.clear()
 
         # Get source file status from step data
         step_data = self.get_step_data()
         source_status = step_data.get("source_files_status", {})
 
+        # Build folder → files mapping for hierarchy
+        folder_items: Dict[str, str] = {}  # folder path → tree item ID
+
         for i, file in enumerate(self._loaded_files):
-            # Build display name with relative path if loaded from folder
             display_name = self._get_display_name(file.path)
-            display = f"{display_name} ({file.line_count} lines)"
-            self._file_listbox.insert(tk.END, display)
-            
-            # Determine color based on file status
-            file_path = str(file.path)
-            status = source_status.get(file_path, "found" if file.path.exists() else "missing")
-            
-            if status == "found":
-                # File found - green if manifest exists, normal otherwise
-                if file.manifest_path:
-                    self._file_listbox.itemconfig(i, fg=THEME.accent_success)
+            parts = display_name.replace("\\", "/").split("/")
+
+            # Determine status tag for coloring
+            file_path_str = str(file.path)
+            status = source_status.get(
+                file_path_str, "found" if file.path.exists() else "missing",
+            )
+            tags: Tuple[str, ...] = ()
+            if status == "found" and file.manifest_path:
+                tags = ("manifest",)
             elif status == "recoverable":
-                # File missing but recoverable - yellow warning
-                self._file_listbox.itemconfig(i, fg="#DAA520")  # Goldenrod/yellow
+                tags = ("recoverable",)
+            elif status == "missing":
+                tags = ("missing",)
+
+            if len(parts) > 1:
+                # File is inside subfolder(s): create folder nodes
+                parent = ""
+                for depth, folder_name in enumerate(parts[:-1]):
+                    folder_key = "/".join(parts[: depth + 1])
+                    if folder_key not in folder_items:
+                        folder_id = self._file_tree.insert(
+                            parent, "end", text=f"📂 {folder_name}", open=True,
+                        )
+                        folder_items[folder_key] = folder_id
+                    parent = folder_items[folder_key]
+                # Insert file under deepest folder
+                item_id = self._file_tree.insert(
+                    parent, "end", text=f"📄 {parts[-1]}",
+                    values=(file.line_count,), tags=tags,
+                )
             else:
-                # File missing and not recoverable - red error
-                self._file_listbox.itemconfig(i, fg=THEME.accent_error)
+                # File at root level
+                item_id = self._file_tree.insert(
+                    "", "end", text=f"📄 {display_name}",
+                    values=(file.line_count,), tags=tags,
+                )
+
+            self._tree_item_to_index[item_id] = i
+
+        # Configure tag colors
+        self._file_tree.tag_configure("manifest", foreground=THEME.accent_success)
+        self._file_tree.tag_configure("recoverable", foreground="#DAA520")
+        self._file_tree.tag_configure("missing", foreground=THEME.accent_error)
 
     def _get_display_name(self, file_path: Path) -> str:
         """Get display name for a file, showing relative path if from folder.
@@ -1139,7 +1411,6 @@ class InputExtractionStep(BaseStep):
             self._preview_tree.delete(item)
 
         if self._current_file_index < 0 or not self._loaded_files:
-            self._update_manifest_info(None)
             return
 
         file = self._loaded_files[self._current_file_index]
@@ -1147,10 +1418,12 @@ class InputExtractionStep(BaseStep):
         # Show first 1000 lines (for performance)
         max_preview = 1000
         for i, line in enumerate(file.lines[:max_preview]):
+            # TASK 39.5: Replace newlines with visible markers for multi-line content
+            display_line = line.replace("\r\n", "↵").replace("\n", "↵").replace("\r", "↵")
             self._preview_tree.insert(
                 "",
                 "end",
-                values=(i + 1, line),
+                values=(i + 1, display_line),
             )
 
         if len(file.lines) > max_preview:
@@ -1159,34 +1432,6 @@ class InputExtractionStep(BaseStep):
                 "end",
                 values=("...", f"(+{len(file.lines) - max_preview} more lines)"),
             )
-
-        # Update manifest info
-        self._update_manifest_info(file)
-
-    def _update_manifest_info(self, file: Optional[LoadedFile]) -> None:
-        """Update manifest detection info.
-
-        Args:
-            file: Currently selected file.
-        """
-        if file is None:
-            self._manifest_label.configure(
-                text="No file selected",
-                foreground=THEME.text_secondary,
-            )
-            self._load_manifest_btn.configure(state="disabled")
-        elif file.manifest_path:
-            self._manifest_label.configure(
-                text=f"✓ Manifest found: {file.manifest_path.name}",
-                foreground=THEME.accent_success,
-            )
-            self._load_manifest_btn.configure(state="normal")
-        else:
-            self._manifest_label.configure(
-                text="No manifest detected for this file",
-                foreground=THEME.text_secondary,
-            )
-            self._load_manifest_btn.configure(state="disabled")
 
     def _update_summary(self) -> None:
         """Update the summary bar."""
@@ -1248,10 +1493,7 @@ class InputExtractionStep(BaseStep):
             self._update_summary()
             # Select first file if none selected
             if self._current_file_index < 0:
-                self._current_file_index = 0
-                if self._file_listbox.size() > 0:
-                    self._file_listbox.selection_set(0)
-                self._update_preview()
+                self._select_first_file_in_tree()
         logger.debug("Entered Input and Extraction step")
 
     def _restore_files_from_session(self, step_data: Dict[str, Any]) -> None:

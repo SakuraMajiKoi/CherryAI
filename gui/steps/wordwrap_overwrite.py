@@ -38,6 +38,12 @@ try:
 except ImportError:  # pragma: no cover
     _HAS_WORDWRAP = False
 
+try:
+    from CherryAI.formats import get_parser_registry
+    _HAS_PARSER_REGISTRY = True
+except ImportError:  # pragma: no cover
+    _HAS_PARSER_REGISTRY = False
+
 # Test expectation: include direct import form for functions package resolution
 try:  # pragma: no cover
     from functions.wordwrap import apply_wordwrap as _test_hook_apply_wordwrap
@@ -60,54 +66,13 @@ class WrapMode(Enum):
     """Wordwrap mode selection."""
 
     MANUAL = "manual"
-    RPGMAKER = "rpgmaker"
-    DISABLED = "disabled"
 
 
 class SpeakerMode(Enum):
     """Speaker handling mode."""
 
     IGNORE = "ignore"
-    SAMELINE = "sameline"
-    SAMELINEINDENT = "samelineindent"
-    NEWLINE = "newline"
-
-
-class IgnorePattern(Enum):
-    """Pattern types to ignore during wrapping."""
-
-    ANGLE = "angle"
-    SQUARE = "square"
-    CURLY = "curly"
-    EN = "en"
-
-
-class OverwriteStrategy(Enum):
-    """Strategy for handling output file conflicts."""
-
-    OVERWRITE = "overwrite"
-    BACKUP = "backup"
-    MERGE = "merge"
-    SKIP = "skip"
-
-
-class MergeMethod(Enum):
-    """Method for merging translated content."""
-
-    REPLACE_ALL = "replace_all"
-    REPLACE_CHANGED = "replace_changed"
-    APPEND = "append"
-    INTERLEAVE = "interleave"
-
-
-class TypographyStyle(Enum):
-    """Typography style for punctuation and spacing."""
-
-    WESTERN = "western"
-    JAPANESE = "japanese"
-    CHINESE = "chinese"
-    KOREAN = "korean"
-    MIXED = "mixed"
+    COUNT = "count"
 
 
 class WrapStatus(Enum):
@@ -131,6 +96,7 @@ class WrapLine:
     idx: int
     original: str
     wrapped: str = ""
+    overwrite: str = ""
     char_count: int = 0
     line_count: int = 1
     exceeds_limit: bool = False
@@ -142,10 +108,17 @@ class WrapLine:
         return self.original != self.wrapped
 
     @property
+    def overwrite_differs(self) -> bool:
+        """Check if overwrite differs from wrapped."""
+        return self.overwrite != "" and self.overwrite != self.wrapped
+
+    @property
     def status(self) -> str:
         """Get display status."""
         if self.exceeds_limit:
             return "⚠ Exceeds"
+        if self.overwrite_differs:
+            return "↔ Differs"
         if self.has_changes:
             return "✓ Wrapped"
         return "— No change"
@@ -167,36 +140,13 @@ class WrapOptions:
     """Options for wordwrap operations."""
 
     mode: WrapMode = WrapMode.MANUAL
-    speaker_mode: SpeakerMode = SpeakerMode.SAMELINE
-    ignore_patterns: List[IgnorePattern] = field(default_factory=list)
+    speaker_mode: SpeakerMode = SpeakerMode.COUNT
     width: int = 48
     break_char: str = "\\n"
     max_lines: int = 4
     prevent_orphan: bool = True
     prefer_punct_breaks: bool = True
     format_configs: Dict[str, FormatConfig] = field(default_factory=dict)
-
-
-@dataclass
-class OverwriteOptions:
-    """Options for overwrite and merge strategies."""
-
-    strategy: OverwriteStrategy = OverwriteStrategy.BACKUP
-    merge_method: MergeMethod = MergeMethod.REPLACE_ALL
-    create_backup: bool = True
-    backup_suffix: str = ".bak"
-    preserve_formatting: bool = True
-
-
-@dataclass
-class TypographyOptions:
-    """Typography options per language."""
-
-    style: TypographyStyle = TypographyStyle.WESTERN
-    use_fullwidth_punct: bool = False
-    use_ideographic_space: bool = False
-    convert_quotes: bool = False
-    quote_style: str = '""'
 
 
 @dataclass
@@ -232,18 +182,8 @@ DEFAULT_FORMAT_CONFIGS: Dict[str, FormatConfig] = {
 
 
 SPEAKER_MODE_DESCRIPTIONS: Dict[SpeakerMode, str] = {
-    SpeakerMode.IGNORE: "Remove speaker prefix before wrapping",
-    SpeakerMode.SAMELINE: "Keep prefix on first line only",
-    SpeakerMode.SAMELINEINDENT: "Prefix on first line, indent continuation",
-    SpeakerMode.NEWLINE: "Speaker prefix on its own line",
-}
-
-
-IGNORE_PATTERN_DESCRIPTIONS: Dict[IgnorePattern, str] = {
-    IgnorePattern.ANGLE: "Ignore <tags> (HTML/XML)",
-    IgnorePattern.SQUARE: "Ignore [codes] (RPG Maker)",
-    IgnorePattern.CURLY: "Ignore {vars} (template)",
-    IgnorePattern.EN: "Ignore en() escapes",
+    SpeakerMode.IGNORE: "Don't count speaker, only dialogue (name field injection)",
+    SpeakerMode.COUNT: "Speaker counted with : and spaces (inline display)",
 }
 
 
@@ -286,8 +226,6 @@ class WordwrapOverwriteStep(BaseStep):
         # because base class calls _build_ui() which needs these
         self._lines: List[WrapLine] = []
         self._wrap_options = WrapOptions()
-        self._overwrite_options = OverwriteOptions()
-        self._typography_options = TypographyOptions()
         self._status = WrapStatus.IDLE
         self._stats = WrapStats()
         self._process_thread: Optional[threading.Thread] = None
@@ -394,14 +332,35 @@ class WordwrapOverwriteStep(BaseStep):
         )
         self._width_label.pack(side="left", padx=10)
 
-        # Define columns
+        # Filter radios (Task 46.9)
+        filter_frame = ttk.Frame(frame)
+        filter_frame.pack(fill="x", padx=5, pady=(5, 0))
+
+        ttk.Label(filter_frame, text="Filter:").pack(side="left")
+        self._filter_var = tk.StringVar(value="all")
+        for val, text in [
+            ("all", "All"),
+            ("changed", "Changed"),
+            ("exceeding", "Exceeding"),
+            ("differs", "Overwrite Differs"),
+        ]:
+            ttk.Radiobutton(
+                filter_frame,
+                text=text,
+                variable=self._filter_var,
+                value=val,
+                command=self._refresh_table,
+            ).pack(side="left", padx=4)
+
+        # Define columns (Task 46.8: added Overwrite column)
         columns = [
             ColumnDef(key="idx", title="#", width=50, anchor="center"),
             ColumnDef(key="status", title="Status", width=90, anchor="center"),
             ColumnDef(key="chars", title="Chars", width=60, anchor="center"),
             ColumnDef(key="lines", title="Lines", width=50, anchor="center"),
-            ColumnDef(key="original", title="Original", width=200),
-            ColumnDef(key="wrapped", title="Wrapped Preview", width=250),
+            ColumnDef(key="original", title="Original", width=180),
+            ColumnDef(key="wrapped", title="Wordwrap", width=180),
+            ColumnDef(key="overwrite", title="Overwrite", width=180),
         ]
 
         self._preview_table = SharedTable(
@@ -471,12 +430,6 @@ class WordwrapOverwriteStep(BaseStep):
         # Ignore patterns panel
         self._build_ignore_panel(scrollable_frame)
 
-        # Typography panel
-        self._build_typography_panel(scrollable_frame)
-
-        # Overwrite strategy panel
-        self._build_overwrite_panel(scrollable_frame)
-
         # Enable mousewheel scrolling (scoped to canvas, not bind_all)
         def _on_mousewheel(event: tk.Event) -> None:
             if canvas.winfo_exists():
@@ -491,34 +444,55 @@ class WordwrapOverwriteStep(BaseStep):
         frame = ttk.LabelFrame(parent, text="Wordwrap Settings")
         frame.pack(fill="x", padx=5, pady=5)
 
-        # Mode selection
+        # Mode selection (Task 46.1: dropdown instead of radio buttons)
         mode_frame = ttk.Frame(frame)
         mode_frame.pack(fill="x", padx=5, pady=5)
 
         ttk.Label(mode_frame, text="Mode:").pack(side="left")
 
         self._mode_var = tk.StringVar(value=WrapMode.MANUAL.value)
-        
+
         # TASK 28.1: Trace mode changes to manifest
         self._mode_var.trace_add("write", self._save_wordwrap_mode_to_manifest)
-        
-        for mode in WrapMode:
-            ttk.Radiobutton(
-                mode_frame,
-                text=mode.value.title(),
-                variable=self._mode_var,
-                value=mode.value,
-                command=self._on_mode_changed,
-            ).pack(side="left", padx=5)
 
-        # Width setting
+        self._mode_combo = ttk.Combobox(
+            mode_frame,
+            textvariable=self._mode_var,
+            values=[m.value.title() for m in WrapMode],
+            state="readonly",
+            width=12,
+        )
+        self._mode_combo.pack(side="left", padx=5)
+        self._mode_combo.bind(
+            "<<ComboboxSelected>>", lambda e: self._on_mode_changed()
+        )
+
+        # Width setting (Task 46.7: dropdown with Character/Pixel modes)
         width_frame = ttk.Frame(frame)
         width_frame.pack(fill="x", padx=5, pady=3)
 
-        ttk.Label(width_frame, text="Width:").pack(side="left")
+        ttk.Label(width_frame, text="Width mode:").pack(side="left")
+        self._width_mode_var = tk.StringVar(value="character")
+        self._width_mode_combo = ttk.Combobox(
+            width_frame,
+            textvariable=self._width_mode_var,
+            values=["Character", "Pixel"],
+            state="readonly",
+            width=10,
+        )
+        self._width_mode_combo.pack(side="left", padx=5)
+        self._width_mode_combo.bind(
+            "<<ComboboxSelected>>", self._on_width_mode_changed
+        )
+
+        # Character width entry
+        self._char_width_frame = ttk.Frame(frame)
+        self._char_width_frame.pack(fill="x", padx=5, pady=3)
+
+        ttk.Label(self._char_width_frame, text="Width:").pack(side="left")
         self._width_var = tk.IntVar(value=48)
         width_spin = ttk.Spinbox(
-            width_frame,
+            self._char_width_frame,
             from_=20,
             to=200,
             textvariable=self._width_var,
@@ -526,7 +500,35 @@ class WordwrapOverwriteStep(BaseStep):
             command=self._on_width_changed,
         )
         width_spin.pack(side="left", padx=5)
-        ttk.Label(width_frame, text="characters").pack(side="left")
+        ttk.Label(
+            self._char_width_frame, text="characters"
+        ).pack(side="left")
+
+        # Pixel width entry (initially hidden)
+        self._pixel_width_frame = ttk.Frame(frame)
+
+        ttk.Label(self._pixel_width_frame, text="Width:").pack(side="left")
+        self._pixel_width_var = tk.IntVar(value=400)
+        ttk.Spinbox(
+            self._pixel_width_frame,
+            from_=100,
+            to=2000,
+            textvariable=self._pixel_width_var,
+            width=8,
+        ).pack(side="left", padx=5)
+        ttk.Label(self._pixel_width_frame, text="px").pack(side="left")
+
+        ttk.Label(
+            self._pixel_width_frame, text="  Font size:"
+        ).pack(side="left", padx=(10, 0))
+        self._font_size_var = tk.IntVar(value=14)
+        ttk.Spinbox(
+            self._pixel_width_frame,
+            from_=8,
+            to=72,
+            textvariable=self._font_size_var,
+            width=5,
+        ).pack(side="left", padx=5)
         
         # TASK 28.1: Bind width spinbox to manifest
         self._manifest_bindings.append(
@@ -599,230 +601,96 @@ class WordwrapOverwriteStep(BaseStep):
             )
         )
 
-        # Options
+        # Options — prevent orphan and prefer punctuation breaks are always
+        # active in pretty_wrap(); no user toggle needed (Task 46.2)
         opts_frame = ttk.Frame(frame)
         opts_frame.pack(fill="x", padx=5, pady=5)
 
-        self._orphan_var = tk.BooleanVar(value=True)
-        orphan_cb = ttk.Checkbutton(
+        ttk.Label(
             opts_frame,
-            text="Prevent orphans",
-            variable=self._orphan_var,
-        )
-        orphan_cb.pack(anchor="w")
-        
-        # TASK 28.1: Bind orphan checkbox to manifest
-        self._manifest_bindings.append(
-            bind_checkbox_to_field(
-                checkbox=orphan_cb,
-                var=self._orphan_var,
-                manager_getter=lambda: self.manifest_manager,
-                field_key="PreventOrphans",
-                default=True,
-                parent_key="WordwrapSettings",
-            )
-        )
-
-        self._punct_var = tk.BooleanVar(value=True)
-        punct_cb = ttk.Checkbutton(
-            opts_frame,
-            text="Prefer punctuation breaks",
-            variable=self._punct_var,
-        )
-        punct_cb.pack(anchor="w")
-        
-        # TASK 28.1: Bind punctuation checkbox to manifest
-        self._manifest_bindings.append(
-            bind_checkbox_to_field(
-                checkbox=punct_cb,
-                var=self._punct_var,
-                manager_getter=lambda: self.manifest_manager,
-                field_key="PreferPunctuationBreaks",
-                default=True,
-                parent_key="WordwrapSettings",
-            )
-        )
+            text="✓ Orphan prevention and punctuation breaks (always on)",
+            foreground=THEME.text_secondary,
+        ).pack(anchor="w")
 
     def _build_speaker_panel(self, parent: ttk.Frame) -> None:
-        """Build the speaker handling options panel with manifest binding (TASK 28.1)."""
+        """Build the speaker handling options panel (Task 46.3: Ignore + Count)."""
         frame = ttk.LabelFrame(parent, text="Speaker Handling")
         frame.pack(fill="x", padx=5, pady=5)
 
-        self._speaker_var = tk.StringVar(value=SpeakerMode.SAMELINE.value)
-        
+        self._speaker_var = tk.StringVar(value=SpeakerMode.COUNT.value)
+
         # TASK 28.1: Trace speaker mode changes to manifest
-        self._speaker_var.trace_add("write", self._save_speaker_handling_to_manifest)
+        self._speaker_var.trace_add(
+            "write", self._save_speaker_handling_to_manifest
+        )
 
-        for mode in SpeakerMode:
-            rb_frame = ttk.Frame(frame)
-            rb_frame.pack(fill="x", padx=5, pady=2)
+        speaker_frame = ttk.Frame(frame)
+        speaker_frame.pack(fill="x", padx=5, pady=5)
 
-            ttk.Radiobutton(
-                rb_frame,
-                text=mode.value.title(),
-                variable=self._speaker_var,
-                value=mode.value,
-            ).pack(side="left")
+        ttk.Label(speaker_frame, text="Mode:").pack(side="left")
 
-            ttk.Label(
-                rb_frame,
-                text=SPEAKER_MODE_DESCRIPTIONS[mode],
-                foreground=THEME.text_secondary,
-                font=("TkDefaultFont", 8),
-            ).pack(side="left", padx=5)
-
-    def _build_ignore_panel(self, parent: ttk.Frame) -> None:
-        """Build the ignore patterns panel."""
-        frame = ttk.LabelFrame(parent, text="Ignore Patterns")
-        frame.pack(fill="x", padx=5, pady=5)
-
-        self._ignore_vars: Dict[IgnorePattern, tk.BooleanVar] = {}
-
-        for pattern in IgnorePattern:
-            cb_frame = ttk.Frame(frame)
-            cb_frame.pack(fill="x", padx=5, pady=2)
-
-            var = tk.BooleanVar(value=False)
-            self._ignore_vars[pattern] = var
-
-            ttk.Checkbutton(
-                cb_frame,
-                text=pattern.value.title(),
-                variable=var,
-            ).pack(side="left")
-
-            ttk.Label(
-                cb_frame,
-                text=IGNORE_PATTERN_DESCRIPTIONS[pattern],
-                foreground=THEME.text_secondary,
-                font=("TkDefaultFont", 8),
-            ).pack(side="left", padx=5)
-
-    def _build_typography_panel(self, parent: ttk.Frame) -> None:
-        """Build the typography options panel with manifest binding (TASK 28.1)."""
-        frame = ttk.LabelFrame(parent, text="Typography")
-        frame.pack(fill="x", padx=5, pady=5)
-
-        # Style selection
-        style_frame = ttk.Frame(frame)
-        style_frame.pack(fill="x", padx=5, pady=5)
-
-        ttk.Label(style_frame, text="Style:").pack(side="left")
-
-        self._typo_style_var = tk.StringVar(value=TypographyStyle.WESTERN.value)
-        typo_combo = ttk.Combobox(
-            style_frame,
-            textvariable=self._typo_style_var,
-            values=[s.value.title() for s in TypographyStyle],
+        self._speaker_combo = ttk.Combobox(
+            speaker_frame,
+            textvariable=self._speaker_var,
+            values=[m.value.title() for m in SpeakerMode],
             state="readonly",
             width=12,
         )
-        typo_combo.pack(side="left", padx=5)
-        
-        # TASK 28.1: Bind typography combobox to manifest
-        typo_options = [s.value for s in TypographyStyle]
-        self._manifest_bindings.append(
-            bind_combobox_to_field(
-                combobox=typo_combo,
-                var=self._typo_style_var,
-                manager_getter=lambda: self.manifest_manager,
-                field_key="Typography",
-                options=typo_options,
-                default=TypographyStyle.WESTERN.value,
-                parent_key="WordwrapSettings",
-            )
+        self._speaker_combo.pack(side="left", padx=5)
+
+        self._speaker_desc_label = ttk.Label(
+            frame,
+            text=SPEAKER_MODE_DESCRIPTIONS[SpeakerMode.COUNT],
+            foreground=THEME.text_secondary,
+            font=("TkDefaultFont", 8),
+        )
+        self._speaker_desc_label.pack(padx=5, pady=(0, 5), anchor="w")
+
+        def _update_speaker_desc(*_args: Any) -> None:
+            value = self._speaker_var.get().lower()
+            for mode in SpeakerMode:
+                if mode.value == value:
+                    self._speaker_desc_label.configure(
+                        text=SPEAKER_MODE_DESCRIPTIONS[mode]
+                    )
+                    break
+
+        self._speaker_combo.bind(
+            "<<ComboboxSelected>>", _update_speaker_desc
         )
 
-        # Options
-        opts_frame = ttk.Frame(frame)
-        opts_frame.pack(fill="x", padx=5, pady=3)
+    def _build_ignore_panel(self, parent: ttk.Frame) -> None:
+        """Build the ignore patterns panel from Code Database (Task 46.4).
 
-        self._fullwidth_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            opts_frame,
-            text="Use fullwidth punctuation",
-            variable=self._fullwidth_var,
-        ).pack(anchor="w")
-
-        self._ideographic_space_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            opts_frame,
-            text="Use ideographic spaces",
-            variable=self._ideographic_space_var,
-        ).pack(anchor="w")
-
-        self._convert_quotes_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            opts_frame,
-            text="Convert quotation marks",
-            variable=self._convert_quotes_var,
-        ).pack(anchor="w")
-
-    def _build_overwrite_panel(self, parent: ttk.Frame) -> None:
-        """Build the overwrite strategy panel."""
-        frame = ttk.LabelFrame(parent, text="Overwrite Strategy")
+        Shows a read-only table of patterns sourced from the Code Database
+        instead of hardcoded checkboxes.
+        """
+        frame = ttk.LabelFrame(parent, text="Ignore Patterns (Code Database)")
         frame.pack(fill="x", padx=5, pady=5)
 
-        # Strategy selection
-        self._strategy_var = tk.StringVar(value=OverwriteStrategy.BACKUP.value)
-
-        strategies = [
-            (OverwriteStrategy.OVERWRITE, "Replace existing files"),
-            (OverwriteStrategy.BACKUP, "Create backup before overwrite"),
-            (OverwriteStrategy.MERGE, "Merge with existing content"),
-            (OverwriteStrategy.SKIP, "Skip if file exists"),
-        ]
-
-        for strategy, desc in strategies:
-            rb_frame = ttk.Frame(frame)
-            rb_frame.pack(fill="x", padx=5, pady=2)
-
-            ttk.Radiobutton(
-                rb_frame,
-                text=strategy.value.title(),
-                variable=self._strategy_var,
-                value=strategy.value,
-                command=self._on_strategy_changed,
-            ).pack(side="left")
-
-            ttk.Label(
-                rb_frame,
-                text=desc,
-                foreground=THEME.text_secondary,
-                font=("TkDefaultFont", 8),
-            ).pack(side="left", padx=5)
-
-        # Merge options (shown when merge selected)
-        self._merge_frame = ttk.Frame(frame)
-        self._merge_frame.pack(fill="x", padx=20, pady=5)
-
-        ttk.Label(self._merge_frame, text="Merge method:").pack(side="left")
-
-        self._merge_var = tk.StringVar(value=MergeMethod.REPLACE_ALL.value)
-        merge_combo = ttk.Combobox(
-            self._merge_frame,
-            textvariable=self._merge_var,
-            values=[m.value.replace("_", " ").title() for m in MergeMethod],
-            state="readonly",
-            width=15,
+        # Read-only Treeview showing Code Database patterns
+        cols = ("pattern", "action", "example")
+        self._ignore_tree = ttk.Treeview(
+            frame,
+            columns=cols,
+            show="headings",
+            height=4,
+            selectmode="none",
         )
-        merge_combo.pack(side="left", padx=5)
+        self._ignore_tree.heading("pattern", text="Pattern")
+        self._ignore_tree.heading("action", text="Action")
+        self._ignore_tree.heading("example", text="Example")
+        self._ignore_tree.column("pattern", width=100)
+        self._ignore_tree.column("action", width=80)
+        self._ignore_tree.column("example", width=120)
+        self._ignore_tree.pack(fill="x", padx=5, pady=5)
 
-        # Initially hide merge options
-        self._merge_frame.pack_forget()
-
-        # Backup suffix
-        backup_frame = ttk.Frame(frame)
-        backup_frame.pack(fill="x", padx=5, pady=5)
-
-        ttk.Label(backup_frame, text="Backup suffix:").pack(side="left")
-
-        self._backup_suffix_var = tk.StringVar(value=".bak")
-        ttk.Entry(
-            backup_frame,
-            textvariable=self._backup_suffix_var,
-            width=10,
-        ).pack(side="left", padx=5)
+        ttk.Label(
+            frame,
+            text="Patterns loaded from Code Database (Step 3)",
+            foreground=THEME.text_secondary,
+            font=("TkDefaultFont", 8),
+        ).pack(padx=5, pady=(0, 5), anchor="w")
 
     def _build_summary_panel(self) -> None:
         """Build the summary statistics panel."""
@@ -893,16 +761,17 @@ class WordwrapOverwriteStep(BaseStep):
         self._width_label.configure(text=f"Width: {width} chars")
         self._refresh_preview()
 
-    def _on_strategy_changed(self) -> None:
-        """Handle overwrite strategy change."""
-        strategy = OverwriteStrategy(self._strategy_var.get())
-        self._overwrite_options.strategy = strategy
-
-        # Show/hide merge options
-        if strategy == OverwriteStrategy.MERGE:
-            self._merge_frame.pack(fill="x", padx=20, pady=5)
+    def _on_width_mode_changed(
+        self, event: Optional[tk.Event] = None
+    ) -> None:
+        """Handle width mode toggle between Character and Pixel (Task 46.7)."""
+        mode = self._width_mode_var.get().lower()
+        if mode == "pixel":
+            self._char_width_frame.pack_forget()
+            self._pixel_width_frame.pack(fill="x", padx=5, pady=3)
         else:
-            self._merge_frame.pack_forget()
+            self._pixel_width_frame.pack_forget()
+            self._char_width_frame.pack(fill="x", padx=5, pady=3)
 
     def _on_line_selected(self, row_ids: List[int]) -> None:
         """Handle line selection in preview table."""
@@ -929,9 +798,53 @@ class WordwrapOverwriteStep(BaseStep):
         self._apply_btn.configure(state="disabled")
 
         def run_wrap() -> None:
+            # Phase 48: Write wordwrap step log
+            _ww_log = None
+            import time as _time
+            _ww_start = _time.perf_counter()
+            try:
+                from CherryAI.functions.mainhelper import (
+                    _rotate_log, write_step_log_header,
+                    write_step_log_footer,
+                )
+                mm = getattr(self, "_manifest_manager", None)
+                if mm:
+                    pdir = getattr(mm, "_project_dir", None)
+                    pname = (
+                        mm.get_project_info().name
+                        if hasattr(mm, "get_project_info") else None
+                    )
+                    if pdir and pname:
+                        from pathlib import Path as _P
+                        _ww_log = _rotate_log(_P(str(pdir)), pname, "wordwrap")
+                        write_step_log_header(_ww_log, {
+                            "CherryAI Wordwrap Log": "",
+                            "Started": _time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            "Mode": self._mode_var.get(),
+                            "Width": str(self._width_var.get()),
+                        })
+            except Exception:
+                pass
+
             try:
                 self._process_wrap()
                 self._status = WrapStatus.COMPLETED
+                # Phase 48: Footer
+                try:
+                    if _ww_log:
+                        dur = _time.perf_counter() - _ww_start
+                        changed = sum(1 for ln in self._lines if ln.wrapped != ln.original)
+                        exceeding = sum(1 for ln in self._lines if ln.exceeds_limit)
+                        write_step_log_footer(_ww_log, {
+                            "Wordwrap Summary": "",
+                            "Completed": _time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            "Duration": f"{dur:.2f}s",
+                            "Total Lines": str(len(self._lines)),
+                            "Changed": str(changed),
+                            "Exceeding": str(exceeding),
+                        })
+                except Exception:
+                    pass
                 self.after(0, self._on_wrap_complete)
             except Exception as e:
                 logger.exception("Wordwrap failed")
@@ -992,17 +905,21 @@ class WordwrapOverwriteStep(BaseStep):
         lines = step_data.get("lines", [])
         width = self._width_var.get()
         break_char = self._break_var.get()
+        max_lines = self._max_lines_var.get()
 
         self._lines = []
         for i, line in enumerate(lines):
             # Simple character-based wrap
             wrapped = self._wrap_line(line, width, break_char)
+            lc = wrapped.count(break_char) + 1
+            exceeds = bool(max_lines and lc > max_lines)
             wrap_line = WrapLine(
                 idx=i,
                 original=line,
                 wrapped=wrapped,
                 char_count=len(wrapped),
-                line_count=wrapped.count(break_char) + 1,
+                line_count=lc,
+                exceeds_limit=exceeds,
             )
             self._lines.append(wrap_line)
 
@@ -1099,10 +1016,26 @@ class WordwrapOverwriteStep(BaseStep):
     # =========================================================================
 
     def _refresh_table(self) -> None:
-        """Refresh the preview table with current lines."""
+        """Refresh the preview table with current lines and filter."""
         rows: List[TableRow] = []
+        trunc = 45
+        active_filter = self._filter_var.get()
 
         for line in self._lines:
+            # Apply filter (Task 46.9)
+            if active_filter == "changed" and not line.has_changes:
+                continue
+            if active_filter == "exceeding" and not line.exceeds_limit:
+                continue
+            if active_filter == "differs" and not line.overwrite_differs:
+                continue
+
+            orig = (line.original[:trunc] + "..."
+                    if len(line.original) > trunc else line.original)
+            wrap = (line.wrapped[:trunc] + "..."
+                    if len(line.wrapped) > trunc else line.wrapped)
+            ow = (line.overwrite[:trunc] + "..."
+                  if len(line.overwrite) > trunc else line.overwrite)
             row = TableRow(
                 id=line.idx,
                 values={
@@ -1110,8 +1043,9 @@ class WordwrapOverwriteStep(BaseStep):
                     "status": line.status,
                     "chars": str(line.char_count),
                     "lines": str(line.line_count),
-                    "original": line.original[:50] + "..." if len(line.original) > 50 else line.original,
-                    "wrapped": line.wrapped[:50] + "..." if len(line.wrapped) > 50 else line.wrapped,
+                    "original": orig,
+                    "wrapped": wrap,
+                    "overwrite": ow,
                 },
             )
             rows.append(row)
@@ -1186,12 +1120,19 @@ class WordwrapOverwriteStep(BaseStep):
         self._stats_labels["avg_len"].configure(text=f"{self._stats.avg_line_length:.1f}")
 
     def _get_ignore_codes(self) -> str:
-        """Get comma-separated ignore code names."""
-        codes = []
-        for pattern, var in self._ignore_vars.items():
-            if var.get():
-                codes.append(pattern.value)
-        return ",".join(codes)
+        """Get comma-separated ignore code names from Code Database."""
+        if self.manifest_manager is None:
+            return ""
+        try:
+            codes = self.manifest_manager.get("CodeDatabase", {})
+            patterns = []
+            for entry in codes.get("entries", []):
+                action = entry.get("action", "")
+                if action.lower() in ("preserve", "remove"):
+                    patterns.append(entry.get("pattern", ""))
+            return ",".join(p for p in patterns if p)
+        except Exception:
+            return ""
 
     # =========================================================================
     # BaseStep Implementation
@@ -1246,14 +1187,71 @@ class WordwrapOverwriteStep(BaseStep):
         
         # Load speaker handling
         speaker_value = load_nested_text_field(
-            self.manifest_manager, "WordwrapSettings", "SpeakerHandling", SpeakerMode.SAMELINE.value
+            self.manifest_manager, "WordwrapSettings", "SpeakerHandling", SpeakerMode.COUNT.value
         )
         self._speaker_var.set(speaker_value)
         
         logger.debug("Wordwrap settings loaded from manifest")
 
+    def _apply_parser_wordwrap_defaults(self) -> None:
+        """Auto-populate format configs from registered parser scripts (TASK 53.4).
+
+        Iterates the parser registry and, for each parser that provides a
+        :attr:`wordwrap_config`, registers a :class:`FormatConfig` entry.
+        The format dropdown values are updated accordingly.
+
+        User-set manifest values take precedence because
+        ``_load_wordwrap_settings_from_manifest`` runs after this method.
+        """
+        if not _HAS_PARSER_REGISTRY:
+            return
+
+        try:
+            registry = get_parser_registry()
+        except Exception:
+            return
+
+        for info in registry.list_parsers():
+            parser = registry.get(info["name"])
+            if parser is None or not info.get("has_wordwrap"):
+                continue
+
+            ww = parser.wordwrap_config
+            if ww is None:
+                continue
+
+            key = parser.name.lower()
+            self._format_configs[key] = FormatConfig(
+                format_name=parser.name,
+                wrap_width=ww.max_line_length,
+                break_char=ww.wordwrap_command,
+                max_lines=ww.max_line_number,
+                enabled=True,
+            )
+            logger.debug(
+                "Parser '%s' registered wordwrap defaults: "
+                "width=%d, break='%s', max_lines=%d",
+                parser.name,
+                ww.max_line_length,
+                ww.wordwrap_command,
+                ww.max_line_number,
+            )
+
+        # Refresh format dropdown values
+        if hasattr(self, "_format_var"):
+            try:
+                self._format_var.configure(  # type: ignore[attr-defined]
+                    values=list(self._format_configs.keys()),  # type: ignore[arg-type]
+                )
+            except Exception:
+                pass
+
     def on_enter(self) -> None:
         """Called when entering this tab."""
+        # TASK 53.4: Register parser-provided format defaults (before
+        # manifest loading so manifest values override parser defaults)
+        self._apply_parser_wordwrap_defaults()
+
         # TASK 28.1: Load wordwrap settings from manifest
         self._load_wordwrap_settings_from_manifest()
         
@@ -1288,14 +1286,6 @@ class WordwrapOverwriteStep(BaseStep):
             "break_char": self._break_var.get(),
             "max_lines": self._max_lines_var.get(),
             "speaker_mode": self._speaker_var.get(),
-            "ignore_patterns": [
-                p.value for p, v in self._ignore_vars.items() if v.get()
-            ],
-        }
-        step_data["overwrite_options"] = {
-            "strategy": self._strategy_var.get(),
-            "merge_method": self._merge_var.get(),
-            "backup_suffix": self._backup_suffix_var.get(),
         }
         step_data["wrapped_lines"] = [l.wrapped for l in self._lines]
         self.set_step_data(step_data)
@@ -1313,39 +1303,11 @@ class WordwrapOverwriteStep(BaseStep):
         return WrapOptions(
             mode=WrapMode(self._mode_var.get()),
             speaker_mode=SpeakerMode(self._speaker_var.get()),
-            ignore_patterns=[
-                p for p, v in self._ignore_vars.items() if v.get()
-            ],
             width=self._width_var.get(),
             break_char=self._break_var.get(),
             max_lines=self._max_lines_var.get(),
-            prevent_orphan=self._orphan_var.get(),
-            prefer_punct_breaks=self._punct_var.get(),
-        )
-
-    def get_overwrite_options(self) -> OverwriteOptions:
-        """Get current overwrite options.
-
-        Returns:
-            OverwriteOptions with current settings.
-        """
-        return OverwriteOptions(
-            strategy=OverwriteStrategy(self._strategy_var.get()),
-            merge_method=MergeMethod(self._merge_var.get().lower().replace(" ", "_")),
-            backup_suffix=self._backup_suffix_var.get(),
-        )
-
-    def get_typography_options(self) -> TypographyOptions:
-        """Get current typography options.
-
-        Returns:
-            TypographyOptions with current settings.
-        """
-        return TypographyOptions(
-            style=TypographyStyle(self._typo_style_var.get().lower()),
-            use_fullwidth_punct=self._fullwidth_var.get(),
-            use_ideographic_space=self._ideographic_space_var.get(),
-            convert_quotes=self._convert_quotes_var.get(),
+            prevent_orphan=True,
+            prefer_punct_breaks=True,
         )
 
     def get_lines(self) -> List[WrapLine]:

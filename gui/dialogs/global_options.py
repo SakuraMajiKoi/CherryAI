@@ -126,6 +126,86 @@ class APISettings:
 
 
 @dataclass
+class APIProviderEntry:
+    """Single API provider configuration (Task 43.6).
+
+    Attributes:
+        name: Display name for the provider (e.g. 'OpenAI GPT-4o').
+        provider_type: Provider backend type (openai, gemini, anthropic, local).
+        url: API base URL (empty for defaults).
+        api_key: API key/token.
+        model: Model identifier string.
+    """
+
+    name: str = ""
+    provider_type: str = "openai"
+    url: str = ""
+    api_key: str = ""
+    model: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "name": self.name,
+            "provider_type": self.provider_type,
+            "url": self.url,
+            "api_key": self.api_key,
+            "model": self.model,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "APIProviderEntry":
+        """Create from dictionary."""
+        return cls(
+            name=data.get("name", ""),
+            provider_type=data.get("provider_type", "openai"),
+            url=data.get("url", ""),
+            api_key=data.get("api_key", ""),
+            model=data.get("model", ""),
+        )
+
+
+# Provider presets for quick setup (Task 43.6)
+PROVIDER_PRESETS: List[APIProviderEntry] = [
+    APIProviderEntry(
+        name="OpenAI GPT-4o-mini",
+        provider_type="openai",
+        url="",
+        api_key="",
+        model="gpt-4o-mini",
+    ),
+    APIProviderEntry(
+        name="OpenAI GPT-4o",
+        provider_type="openai",
+        url="",
+        api_key="",
+        model="gpt-4o",
+    ),
+    APIProviderEntry(
+        name="Google Gemini 2.5 Flash",
+        provider_type="gemini",
+        url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        api_key="",
+        model="gemini-2.5-flash-preview-05-20",
+    ),
+    APIProviderEntry(
+        name="Anthropic Claude Sonnet",
+        provider_type="anthropic",
+        url="https://api.anthropic.com/v1/",
+        api_key="",
+        model="claude-sonnet-4-20250514",
+    ),
+    APIProviderEntry(
+        name="Local LLM (OpenAI-compat)",
+        provider_type="local",
+        url="http://localhost:1234/v1",
+        api_key="not-needed",
+        model="local-model",
+    ),
+]
+
+
+@dataclass
 class RequestSettings:
     """API request settings."""
 
@@ -133,6 +213,12 @@ class RequestSettings:
     retries: int = 3
     rate_limit: int = 60
     chunk_size: int = 50
+    thinking_enabled: bool = False  # Task 43.8
+    thinking_budget: int = 10000  # Task 43.8
+    rolling_context_lines: int = 3  # Task 43.9
+    remove_duplicate_speakers: bool = False  # Task 51.4
+    glossary_filter_mode: str = "all"  # Task 52.3
+    consistency_mode: str = "disabled"  # Phase 55
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -141,6 +227,12 @@ class RequestSettings:
             "retries": self.retries,
             "rate_limit": self.rate_limit,
             "chunk_size": self.chunk_size,
+            "thinking_enabled": self.thinking_enabled,
+            "thinking_budget": self.thinking_budget,
+            "rolling_context_lines": self.rolling_context_lines,
+            "remove_duplicate_speakers": self.remove_duplicate_speakers,
+            "glossary_filter_mode": self.glossary_filter_mode,
+            "consistency_mode": self.consistency_mode,
         }
 
     @classmethod
@@ -151,6 +243,18 @@ class RequestSettings:
             retries=int(data.get("retries", 3)),
             rate_limit=int(data.get("rate_limit", 60)),
             chunk_size=int(data.get("chunk_size", 50)),
+            thinking_enabled=bool(data.get("thinking_enabled", False)),
+            thinking_budget=int(data.get("thinking_budget", 10000)),
+            rolling_context_lines=int(data.get("rolling_context_lines", 3)),
+            remove_duplicate_speakers=bool(
+                data.get("remove_duplicate_speakers", False)
+            ),
+            glossary_filter_mode=str(
+                data.get("glossary_filter_mode", "all")
+            ),
+            consistency_mode=str(
+                data.get("consistency_mode", "disabled")
+            ),
         )
 
 
@@ -162,6 +266,7 @@ class CachingSettings:
     cache_dir: str = "temp/cache"
     max_age_hours: int = 24
     max_size_mb: int = 100
+    cache_mode: str = "line"  # Task 43.7: disabled, line, strict, model_only, any
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -170,6 +275,7 @@ class CachingSettings:
             "cache_dir": self.cache_dir,
             "max_age_hours": self.max_age_hours,
             "max_size_mb": self.max_size_mb,
+            "cache_mode": self.cache_mode,
         }
 
     @classmethod
@@ -180,6 +286,7 @@ class CachingSettings:
             cache_dir=str(data.get("cache_dir", "temp/cache")),
             max_age_hours=int(data.get("max_age_hours", 24)),
             max_size_mb=int(data.get("max_size_mb", 100)),
+            cache_mode=str(data.get("cache_mode", "line")),
         )
 
 
@@ -426,6 +533,7 @@ class GlobalOptions:
     safety: SafetySettings = field(default_factory=SafetySettings)
     file_io: FileIOSettings = field(default_factory=FileIOSettings)
     prompts: PromptsSettings = field(default_factory=PromptsSettings)
+    providers: List[APIProviderEntry] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -438,11 +546,14 @@ class GlobalOptions:
             "safety": self.safety.to_dict(),
             "file_io": self.file_io.to_dict(),
             "prompts": self.prompts.to_dict(),
+            "providers": [p.to_dict() for p in self.providers],
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "GlobalOptions":
         """Create from dictionary."""
+        providers_raw = data.get("providers", [])
+        providers = [APIProviderEntry.from_dict(p) for p in providers_raw]
         return cls(
             api=APISettings.from_dict(data.get("api", {})),
             request=RequestSettings.from_dict(data.get("request", {})),
@@ -452,7 +563,26 @@ class GlobalOptions:
             safety=SafetySettings.from_dict(data.get("safety", {})),
             file_io=FileIOSettings.from_dict(data.get("file_io", {})),
             prompts=PromptsSettings.from_dict(data.get("prompts", {})),
+            providers=providers,
         )
+
+    def get_model_list(self) -> List[str]:
+        """Return list of available model names from providers (Task 43.6).
+
+        Always includes 'Mock Translation' as first entry.
+        """
+        models: List[str] = ["Mock Translation"]
+        for p in self.providers:
+            if p.model and p.model not in models:
+                models.append(p.model)
+        return models
+
+    def get_provider_for_model(self, model: str) -> Optional[APIProviderEntry]:
+        """Return the provider entry for a given model name."""
+        for p in self.providers:
+            if p.model == model:
+                return p
+        return None
 
 
 
@@ -650,12 +780,31 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.retries_var = tk.IntVar(value=self.options.request.retries)
         self.rate_limit_var = tk.IntVar(value=self.options.request.rate_limit)
         self.chunk_size_var = tk.IntVar(value=self.options.request.chunk_size)
+        self.thinking_enabled_var = tk.BooleanVar(
+            value=self.options.request.thinking_enabled,
+        )
+        self.thinking_budget_var = tk.IntVar(
+            value=self.options.request.thinking_budget,
+        )
+        self.rolling_context_var = tk.IntVar(
+            value=self.options.request.rolling_context_lines,
+        )
+        self.remove_dup_speakers_var = tk.BooleanVar(
+            value=self.options.request.remove_duplicate_speakers,
+        )
+        self.glossary_filter_var = tk.StringVar(
+            value=self.options.request.glossary_filter_mode,
+        )
+        self.consistency_mode_var = tk.StringVar(
+            value=self.options.request.consistency_mode,
+        )
 
         # Caching settings
         self.cache_enabled_var = tk.BooleanVar(value=self.options.caching.enabled)
         self.cache_dir_var = tk.StringVar(value=self.options.caching.cache_dir)
         self.cache_max_age_var = tk.IntVar(value=self.options.caching.max_age_hours)
         self.cache_max_size_var = tk.IntVar(value=self.options.caching.max_size_mb)
+        self.cache_mode_var = tk.StringVar(value=self.options.caching.cache_mode)
 
         # Logging settings
         self.log_level_var = tk.StringVar(value=self.options.logging.level)
@@ -922,6 +1071,45 @@ class GlobalOptionsDialog(tk.Toplevel):
         self._test_status_label = ttk.Label(test_frame, text="")
         self._test_status_label.pack(side=tk.LEFT, padx=10)
 
+        # ---- Provider Table (Task 43.6) ----
+        providers_frame = ttk.LabelFrame(panel, text="Saved Providers", padding=10)
+        providers_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+
+        # Treeview
+        cols = ("name", "type", "model")
+        self._providers_tree = ttk.Treeview(
+            providers_frame, columns=cols, show="headings", height=5,
+        )
+        self._providers_tree.heading("name", text="Name")
+        self._providers_tree.heading("type", text="Type")
+        self._providers_tree.heading("model", text="Model")
+        self._providers_tree.column("name", width=180)
+        self._providers_tree.column("type", width=80)
+        self._providers_tree.column("model", width=180)
+        self._providers_tree.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
+
+        # Scrollbar
+        prov_scroll = ttk.Scrollbar(
+            providers_frame, orient="vertical",
+            command=self._providers_tree.yview,
+        )
+        self._providers_tree.configure(yscrollcommand=prov_scroll.set)
+        prov_scroll.pack(side=tk.LEFT, fill=tk.Y)
+
+        # Buttons
+        prov_btns = ttk.Frame(providers_frame)
+        prov_btns.pack(side=tk.LEFT, padx=(10, 0), fill=tk.Y)
+
+        ttk.Button(prov_btns, text="Add", width=8, command=self._add_provider).pack(pady=2)
+        ttk.Button(prov_btns, text="Edit", width=8, command=self._edit_provider).pack(pady=2)
+        ttk.Button(prov_btns, text="Remove", width=8, command=self._remove_provider).pack(pady=2)
+
+        ttk.Separator(prov_btns, orient="horizontal").pack(fill=tk.X, pady=5)
+        ttk.Button(prov_btns, text="Preset…", width=8, command=self._add_preset_provider).pack(pady=2)
+
+        # Populate from options
+        self._refresh_providers_tree()
+
     def _build_request_section(self) -> None:
         """Build the request settings section."""
         panel = ttk.Frame(self._content_frame, padding=15)
@@ -970,6 +1158,120 @@ class GlobalOptionsDialog(tk.Toplevel):
         ttk.Spinbox(rate_row, from_=1, to=1000, textvariable=self.rate_limit_var, width=10).pack(side=tk.LEFT, padx=5)
         ttk.Label(rate_row, text="(1-1000, default: 60)", foreground="gray").pack(side=tk.LEFT, padx=5)
 
+        # Thinking Mode (Task 43.8)
+        think_frame = ttk.LabelFrame(panel, text="Thinking Mode", padding=10)
+        think_frame.pack(fill=tk.X, pady=(0, 10))
+
+        think_check = ttk.Checkbutton(
+            think_frame, text="Enable Thinking Mode",
+            variable=self.thinking_enabled_var,
+        )
+        think_check.pack(anchor=tk.W, pady=2)
+
+        budget_row = ttk.Frame(think_frame)
+        budget_row.pack(fill=tk.X, pady=5)
+        ttk.Label(budget_row, text="Thinking Budget:", width=18).pack(side=tk.LEFT)
+        ttk.Spinbox(
+            budget_row, from_=1000, to=100000, increment=1000,
+            textvariable=self.thinking_budget_var, width=10,
+        ).pack(side=tk.LEFT, padx=5)
+        ttk.Label(budget_row, text="tokens (1000-100000)", foreground="gray").pack(
+            side=tk.LEFT, padx=5,
+        )
+
+        think_help = ttk.Label(
+            think_frame,
+            text="Applies extended thinking for Claude and reasoning effort for OpenAI models.",
+            foreground="gray",
+        )
+        think_help.pack(anchor=tk.W, pady=(0, 5))
+
+        # Rolling Context (Task 43.9)
+        ctx_frame = ttk.LabelFrame(panel, text="Rolling Context", padding=10)
+        ctx_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ctx_row = ttk.Frame(ctx_frame)
+        ctx_row.pack(fill=tk.X, pady=5)
+        ttk.Label(ctx_row, text="Context Lines:", width=18).pack(side=tk.LEFT)
+        ttk.Spinbox(
+            ctx_row, from_=0, to=10,
+            textvariable=self.rolling_context_var, width=10,
+        ).pack(side=tk.LEFT, padx=5)
+        ttk.Label(ctx_row, text="(0-10 preceding lines, default: 3)", foreground="gray").pack(
+            side=tk.LEFT, padx=5,
+        )
+
+        ctx_help = ttk.Label(
+            ctx_frame,
+            text="Number of preceding translated lines included for context in each request.",
+            foreground="gray",
+        )
+        ctx_help.pack(anchor=tk.W, pady=(0, 5))
+
+        # Speaker Dedup (Task 51.4)
+        speaker_frame = ttk.LabelFrame(
+            panel, text="Speaker Deduplication", padding=10,
+        )
+        speaker_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Checkbutton(
+            speaker_frame,
+            text="Remove duplicate speakers",
+            variable=self.remove_dup_speakers_var,
+        ).pack(anchor=tk.W, pady=5)
+
+        ttk.Label(
+            speaker_frame,
+            text="Strip repeated speaker prefixes in consecutive lines to save tokens.",
+            foreground="gray",
+        ).pack(anchor=tk.W, pady=(0, 5))
+
+        # Glossary Filter (Task 52.3)
+        gloss_frame = ttk.LabelFrame(
+            panel, text="Glossary Inclusion", padding=10,
+        )
+        gloss_frame.pack(fill=tk.X, pady=(0, 10))
+
+        gloss_row = ttk.Frame(gloss_frame)
+        gloss_row.pack(fill=tk.X, pady=5)
+        ttk.Label(gloss_row, text="Filter Mode:", width=18).pack(side=tk.LEFT)
+        ttk.Combobox(
+            gloss_row,
+            textvariable=self.glossary_filter_var,
+            values=["all", "original_only", "original_or_translation"],
+            state="readonly",
+            width=22,
+        ).pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(
+            gloss_frame,
+            text="Selective: include only glossary entries whose terms appear in the chunk.",
+            foreground="gray",
+        ).pack(anchor=tk.W, pady=(0, 5))
+
+        # Consistency Mode (Phase 55)
+        consist_frame = ttk.LabelFrame(
+            panel, text="Consistency System", padding=10,
+        )
+        consist_frame.pack(fill=tk.X, pady=(0, 10))
+
+        consist_row = ttk.Frame(consist_frame)
+        consist_row.pack(fill=tk.X, pady=5)
+        ttk.Label(consist_row, text="Mode:", width=18).pack(side=tk.LEFT)
+        ttk.Combobox(
+            consist_row,
+            textvariable=self.consistency_mode_var,
+            values=["disabled", "preliminary", "during", "check"],
+            state="readonly",
+            width=22,
+        ).pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(
+            consist_frame,
+            text="Ensure recurring terms are translated consistently across all requests.",
+            foreground="gray",
+        ).pack(anchor=tk.W, pady=(0, 5))
+
     def _build_caching_section(self) -> None:
         """Build the caching settings section."""
         panel = ttk.Frame(self._content_frame, padding=15)
@@ -985,6 +1287,21 @@ class GlobalOptionsDialog(tk.Toplevel):
         # Enable caching
         enable_check = ttk.Checkbutton(panel, text="Enable request caching", variable=self.cache_enabled_var)
         enable_check.pack(anchor=tk.W, pady=5)
+
+        # Cache mode (Task 43.7)
+        mode_row = ttk.Frame(panel)
+        mode_row.pack(fill=tk.X, pady=5)
+        ttk.Label(mode_row, text="Cache Mode:", width=15).pack(side=tk.LEFT)
+        cache_modes = ["disabled", "line", "strict", "model_only", "any"]
+        ttk.Combobox(
+            mode_row, textvariable=self.cache_mode_var,
+            values=cache_modes, state="readonly", width=15,
+        ).pack(side=tk.LEFT, padx=5)
+        ttk.Label(
+            mode_row,
+            text="(line = per-line match, strict = exact request, any = model-agnostic)",
+            foreground="gray",
+        ).pack(side=tk.LEFT, padx=5)
 
         # Cache settings frame
         cache_frame = ttk.LabelFrame(panel, text="Cache Settings", padding=10)
@@ -1441,6 +1758,58 @@ class GlobalOptionsDialog(tk.Toplevel):
         except Exception as e:
             self._test_status_label.config(text=f"Error: {e}", foreground="red")
 
+    # ---- Provider table helpers (Task 43.6) ----
+
+    def _refresh_providers_tree(self) -> None:
+        """Rebuild the providers Treeview from ``self.options.providers``."""
+        tree = self._providers_tree
+        for child in tree.get_children():
+            tree.delete(child)
+        for idx, p in enumerate(self.options.providers):
+            tree.insert("", "end", iid=str(idx), values=(p.name, p.provider_type, p.model))
+
+    def _add_provider(self) -> None:
+        """Open dialog to add a new provider entry."""
+        entry = APIProviderEntry()
+        result = _ProviderEditDialog(self, entry).result
+        if result is not None:
+            self.options.providers.append(result)
+            self._refresh_providers_tree()
+
+    def _edit_provider(self) -> None:
+        """Edit the selected provider entry."""
+        sel = self._providers_tree.selection()
+        if not sel:
+            return
+        idx = int(sel[0])
+        entry = self.options.providers[idx]
+        result = _ProviderEditDialog(self, entry).result
+        if result is not None:
+            self.options.providers[idx] = result
+            self._refresh_providers_tree()
+
+    def _remove_provider(self) -> None:
+        """Remove the selected provider entry."""
+        sel = self._providers_tree.selection()
+        if not sel:
+            return
+        idx = int(sel[0])
+        name = self.options.providers[idx].name or "(unnamed)"
+        if messagebox.askyesno("Remove Provider", f"Remove provider '{name}'?"):
+            del self.options.providers[idx]
+            self._refresh_providers_tree()
+
+    def _add_preset_provider(self) -> None:
+        """Show preset picker and add the chosen preset."""
+        names = [p.name for p in PROVIDER_PRESETS]
+        dlg = _PresetPickerDialog(self, names)
+        chosen = dlg.result
+        if chosen is not None and 0 <= chosen < len(PROVIDER_PRESETS):
+            import copy
+            preset = copy.deepcopy(PROVIDER_PRESETS[chosen])
+            self.options.providers.append(preset)
+            self._refresh_providers_tree()
+
     def _browse_cache_dir(self) -> None:
         """Browse for cache directory."""
         directory = filedialog.askdirectory(title="Select Cache Directory")
@@ -1767,6 +2136,12 @@ class GlobalOptionsDialog(tk.Toplevel):
             retries=self.retries_var.get(),
             rate_limit=self.rate_limit_var.get(),
             chunk_size=self.chunk_size_var.get(),
+            thinking_enabled=self.thinking_enabled_var.get(),
+            thinking_budget=self.thinking_budget_var.get(),
+            rolling_context_lines=self.rolling_context_var.get(),
+            remove_duplicate_speakers=self.remove_dup_speakers_var.get(),
+            glossary_filter_mode=self.glossary_filter_var.get(),
+            consistency_mode=self.consistency_mode_var.get(),
         )
 
         self.options.caching = CachingSettings(
@@ -1774,6 +2149,7 @@ class GlobalOptionsDialog(tk.Toplevel):
             cache_dir=self.cache_dir_var.get(),
             max_age_hours=self.cache_max_age_var.get(),
             max_size_mb=self.cache_max_size_var.get(),
+            cache_mode=self.cache_mode_var.get(),
         )
 
         self.options.logging = LoggingSettings(
@@ -1864,3 +2240,135 @@ class GlobalOptionsDialog(tk.Toplevel):
             pass
         
         logger.debug("GlobalOptionsDialog destroyed")
+
+
+# =============================================================================
+# Provider Helper Dialogs (Task 43.6)
+# =============================================================================
+
+
+class _ProviderEditDialog(tk.Toplevel):
+    """Modal dialog for adding/editing a single API provider entry."""
+
+    def __init__(
+        self,
+        parent: tk.Toplevel,
+        entry: APIProviderEntry,
+    ) -> None:
+        super().__init__(parent)
+        self.title("Edit Provider")
+        self.geometry("420x280")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+
+        self.result: Optional[APIProviderEntry] = None
+        self._entry = entry
+
+        frame = ttk.Frame(self, padding=15)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        # Name
+        ttk.Label(frame, text="Name:").grid(row=0, column=0, sticky="w", pady=4)
+        self._name_var = tk.StringVar(value=entry.name)
+        ttk.Entry(frame, textvariable=self._name_var, width=35).grid(
+            row=0, column=1, sticky="ew", pady=4,
+        )
+
+        # Type
+        ttk.Label(frame, text="Type:").grid(row=1, column=0, sticky="w", pady=4)
+        self._type_var = tk.StringVar(value=entry.provider_type)
+        ttk.Combobox(
+            frame, textvariable=self._type_var,
+            values=["openai", "gemini", "anthropic", "local"],
+            state="readonly", width=32,
+        ).grid(row=1, column=1, sticky="ew", pady=4)
+
+        # URL
+        ttk.Label(frame, text="URL:").grid(row=2, column=0, sticky="w", pady=4)
+        self._url_var = tk.StringVar(value=entry.url)
+        ttk.Entry(frame, textvariable=self._url_var, width=35).grid(
+            row=2, column=1, sticky="ew", pady=4,
+        )
+
+        # API Key
+        ttk.Label(frame, text="API Key:").grid(row=3, column=0, sticky="w", pady=4)
+        self._key_var = tk.StringVar(value=entry.api_key)
+        ttk.Entry(frame, textvariable=self._key_var, width=35, show="•").grid(
+            row=3, column=1, sticky="ew", pady=4,
+        )
+
+        # Model
+        ttk.Label(frame, text="Model:").grid(row=4, column=0, sticky="w", pady=4)
+        self._model_var = tk.StringVar(value=entry.model)
+        ttk.Entry(frame, textvariable=self._model_var, width=35).grid(
+            row=4, column=1, sticky="ew", pady=4,
+        )
+
+        frame.columnconfigure(1, weight=1)
+
+        # Buttons
+        btn_row = ttk.Frame(frame)
+        btn_row.grid(row=5, column=0, columnspan=2, pady=(15, 0))
+        ttk.Button(btn_row, text="OK", width=10, command=self._on_ok).pack(
+            side=tk.LEFT, padx=5,
+        )
+        ttk.Button(btn_row, text="Cancel", width=10, command=self.destroy).pack(
+            side=tk.LEFT, padx=5,
+        )
+
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.wait_window()
+
+    def _on_ok(self) -> None:
+        """Accept edits and close."""
+        self.result = APIProviderEntry(
+            name=self._name_var.get().strip(),
+            provider_type=self._type_var.get(),
+            url=self._url_var.get().strip(),
+            api_key=self._key_var.get().strip(),
+            model=self._model_var.get().strip(),
+        )
+        self.destroy()
+
+
+class _PresetPickerDialog(tk.Toplevel):
+    """Simple listbox picker for provider presets."""
+
+    def __init__(self, parent: tk.Toplevel, names: List[str]) -> None:
+        super().__init__(parent)
+        self.title("Add Preset Provider")
+        self.geometry("320x250")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+
+        self.result: Optional[int] = None
+
+        frame = ttk.Frame(self, padding=10)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frame, text="Select a preset:").pack(anchor="w", pady=(0, 5))
+
+        self._lb = tk.Listbox(frame, height=8)
+        for n in names:
+            self._lb.insert(tk.END, n)
+        self._lb.pack(fill=tk.BOTH, expand=True)
+
+        btn_row = ttk.Frame(frame)
+        btn_row.pack(pady=(10, 0))
+        ttk.Button(btn_row, text="Add", width=10, command=self._on_ok).pack(
+            side=tk.LEFT, padx=5,
+        )
+        ttk.Button(btn_row, text="Cancel", width=10, command=self.destroy).pack(
+            side=tk.LEFT, padx=5,
+        )
+
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.wait_window()
+
+    def _on_ok(self) -> None:
+        sel = self._lb.curselection()
+        if sel:
+            self.result = sel[0]
+        self.destroy()

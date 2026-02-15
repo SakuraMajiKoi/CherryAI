@@ -5,7 +5,7 @@ Contains the 10 workflow step tab implementations.
 
 from CherryAI.gui.steps.analysis import AnalysisStep
 from CherryAI.gui.steps.base import BaseStep, PlaceholderStep
-from CherryAI.gui.steps.estimate import EstimationStep
+from CherryAI.gui.steps.costs import CostsStep, EstimationStep
 from CherryAI.gui.steps.information import InformationStep
 from CherryAI.gui.steps.input_extract import InputExtractionStep, LoadedFile
 from CherryAI.gui.steps.output_inject import OutputInjectStep
@@ -18,6 +18,7 @@ from CherryAI.gui.steps.wordwrap_overwrite import WordwrapOverwriteStep
 __all__ = [
     "AnalysisStep",
     "BaseStep",
+    "CostsStep",
     "EstimationStep",
     "InformationStep",
     "InputExtractionStep",

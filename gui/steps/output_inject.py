@@ -124,7 +124,7 @@ class OutputFile:
 class NamingOptions:
     """Options for file naming."""
 
-    strategy: NamingStrategy = NamingStrategy.SUFFIX
+    strategy: NamingStrategy = NamingStrategy.SUBFOLDER
     suffix: str = "_translated"
     prefix: str = "translated_"
     replace_pattern: str = ""
@@ -166,6 +166,7 @@ class ExportStats:
     total_lines: int = 0
     start_time: Optional[float] = None
     end_time: Optional[float] = None
+    failure_log: List[Dict[str, str]] = field(default_factory=list)
 
     @property
     def duration(self) -> float:
@@ -854,6 +855,24 @@ class OutputInjectStep(BaseStep):
         frame = ttk.Frame(self)
         frame.pack(fill="x", padx=10, pady=5)
 
+        # Dirty flag indicators (Task 47.10)
+        flag_frame = ttk.Frame(frame)
+        flag_frame.pack(fill="x", pady=(0, 5))
+
+        ttk.Label(flag_frame, text="Pipeline:").pack(side="left")
+        self._process_flag_label = ttk.Label(
+            flag_frame,
+            text="✓ Process",
+            foreground=THEME.accent_success,
+        )
+        self._process_flag_label.pack(side="left", padx=5)
+        self._wordwrap_flag_label = ttk.Label(
+            flag_frame,
+            text="✓ Wordwrap",
+            foreground=THEME.accent_success,
+        )
+        self._wordwrap_flag_label.pack(side="left", padx=5)
+
         # Stats labels
         stats_frame = ttk.Frame(frame)
         stats_frame.pack(side="left")
@@ -1051,6 +1070,23 @@ class OutputInjectStep(BaseStep):
             messagebox.showinfo("Info", "Export is already running.")
             return
 
+        # Pre-export dirty flag check (Task 47.5)
+        if self._manifest_manager:
+            try:
+                flags = self._manifest_manager.get_dirty_flags()
+                dirty_names = [
+                    name for name, dirty in flags.items() if dirty
+                ]
+                if dirty_names:
+                    msg = (
+                        f"Pipeline stages need re-running: {', '.join(dirty_names)}.\n\n"
+                        "Export anyway?"
+                    )
+                    if not messagebox.askokcancel("Dirty Flags", msg):
+                        return
+            except Exception:
+                pass
+
         self._status = ExportStatus.RUNNING
         self._cancel_requested = False
         self._status_label.configure(text="Exporting...")
@@ -1063,10 +1099,59 @@ class OutputInjectStep(BaseStep):
         )
 
         def run_export() -> None:
+            # Phase 48: Write output step log
+            _out_log = None
+            import time as _time
+            _out_start = _time.perf_counter()
+            try:
+                from CherryAI.functions.mainhelper import (
+                    _rotate_log, write_step_log_header,
+                    write_step_log_footer,
+                )
+                mm = self._manifest_manager
+                if mm:
+                    pdir = getattr(mm, "_project_dir", None)
+                    pname = (
+                        mm.get_project_info().name
+                        if hasattr(mm, "get_project_info") else None
+                    )
+                    if pdir and pname:
+                        from pathlib import Path as _P
+                        _out_log = _rotate_log(
+                            _P(str(pdir)), pname, "output",
+                        )
+                        write_step_log_header(_out_log, {
+                            "CherryAI Output Log": "",
+                            "Started": _time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            "Total Files": str(len(files)),
+                            "Naming Strategy": self._naming_var.get(),
+                        })
+            except Exception:
+                pass
+
             try:
                 self._process_export(files)
                 self._stats.end_time = time.time()
                 self._status = ExportStatus.COMPLETED
+                # Phase 48: Footer
+                try:
+                    if _out_log:
+                        dur = _time.perf_counter() - _out_start
+                        write_step_log_footer(_out_log, {
+                            "Output Summary": "",
+                            "Completed": _time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ",
+                            ),
+                            "Duration": f"{dur:.2f}s",
+                            "Files Written": str(
+                                self._stats.files_written,
+                            ),
+                            "Files Failed": str(
+                                self._stats.files_failed,
+                            ),
+                        })
+                except Exception:
+                    pass
                 self.after(0, self._on_export_complete)
             except Exception as e:
                 logger.exception("Export failed")
@@ -1094,6 +1179,11 @@ class OutputInjectStep(BaseStep):
                 output_file.status = "failed"
                 output_file.error = str(e)
                 self._stats.files_failed += 1
+                self._stats.failure_log.append({
+                    "file": output_file.output_path,
+                    "error": str(e),
+                    "timestamp": datetime.now().isoformat(),
+                })
                 logger.error(f"Failed to write {output_file.output_path}: {e}")
 
             # Update progress
@@ -1240,7 +1330,7 @@ class OutputInjectStep(BaseStep):
             logger.error(f"Failed to export manifest: {e}")
 
     def _export_logs(self, dest_base: Path) -> None:
-        """Export processing logs."""
+        """Export processing logs and step-specific log files."""
         log_path = dest_base / "export_log.txt"
 
         try:
@@ -1261,6 +1351,33 @@ class OutputInjectStep(BaseStep):
                         f.write(f"  Error: {output_file.error}\n")
         except Exception as e:
             logger.error(f"Failed to export logs: {e}")
+
+        # Phase 48: Also bundle per-project step logs
+        try:
+            mm = self._manifest_manager
+            if mm:
+                pdir = getattr(mm, "_project_dir", None)
+                pname = (
+                    mm.get_project_info().name
+                    if hasattr(mm, "get_project_info") else None
+                )
+                if pdir and pname:
+                    import glob
+                    logs_dest = dest_base / "logs"
+                    logs_dest.mkdir(parents=True, exist_ok=True)
+                    project_dir = Path(str(pdir))
+                    # Active + archived step logs
+                    for pattern in [
+                        f"{pname}.*.log",
+                    ]:
+                        for lf in project_dir.glob(pattern):
+                            try:
+                                import shutil
+                                shutil.copy2(lf, logs_dest / lf.name)
+                            except Exception:
+                                pass
+        except Exception:
+            pass
 
     def _cancel_export(self) -> None:
         """Cancel the export operation."""
@@ -1488,6 +1605,34 @@ class OutputInjectStep(BaseStep):
         self._stats_labels["failed"].configure(text=str(self._stats.files_failed))
         self._stats_labels["lines"].configure(text=str(self._stats.total_lines))
         self._stats_labels["time"].configure(text=f"{self._stats.duration:.1f}s")
+
+        # Update dirty flag indicators (Task 47.10)
+        self._update_dirty_flags()
+
+    def _update_dirty_flags(self) -> None:
+        """Update dirty flag indicator labels from manifest."""
+        if not self._manifest_manager:
+            return
+        try:
+            flags = self._manifest_manager.get_dirty_flags()
+            if flags.get("process", False):
+                self._process_flag_label.configure(
+                    text="⚠ Process", foreground=THEME.accent_warning,
+                )
+            else:
+                self._process_flag_label.configure(
+                    text="✓ Process", foreground=THEME.accent_success,
+                )
+            if flags.get("wordwrap", False):
+                self._wordwrap_flag_label.configure(
+                    text="⚠ Wordwrap", foreground=THEME.accent_warning,
+                )
+            else:
+                self._wordwrap_flag_label.configure(
+                    text="✓ Wordwrap", foreground=THEME.accent_success,
+                )
+        except Exception:
+            pass
 
     # =========================================================================
     # Manifest Integration Methods (TASK 28.2)

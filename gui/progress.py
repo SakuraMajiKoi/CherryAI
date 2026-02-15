@@ -15,7 +15,7 @@ import logging
 import tkinter as tk
 from dataclasses import dataclass, field
 from tkinter import ttk, messagebox
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from CherryAI.gui.theme.colors import THEME
 from CherryAI.gui.state.store import (
@@ -152,6 +152,7 @@ class StepRow(ttk.Frame):
 
     Provides:
     - Status icon (✓, –, ✗, ⊘ for skipped)
+    - Dual tick display for multi-phase steps (Task 40.5)
     - Clickable step name
     - Context menu for skip/rollback
     - Subtask expansion with progress display
@@ -166,6 +167,7 @@ class StepRow(ttk.Frame):
         on_skip: Callable[[int], None],
         on_rollback: Callable[[int], None],
         subtask_group: Optional[SubtaskGroup] = None,
+        dual_ticks: Optional[Tuple[bool, bool]] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize step row.
@@ -178,6 +180,8 @@ class StepRow(ttk.Frame):
             on_skip: Callback to skip this step.
             on_rollback: Callback to rollback this step.
             subtask_group: Optional subtask group for this step.
+            dual_ticks: Optional tuple of (tick1, tick2) for dual-phase
+                steps. None means single-icon mode.
             **kwargs: Additional keyword arguments.
         """
         super().__init__(parent, **kwargs)
@@ -187,6 +191,7 @@ class StepRow(ttk.Frame):
         self.on_skip = on_skip
         self.on_rollback = on_rollback
         self.subtask_group = subtask_group
+        self.dual_ticks = dual_ticks
         self._subtasks_frame: Optional[ttk.Frame] = None
         self._build_ui()
 
@@ -335,9 +340,17 @@ class StepRow(ttk.Frame):
     def _get_status_icon(self) -> str:
         """Get the status icon for this step.
 
+        For dual-tick steps (Task 40.5), returns ☐☐ / ☑☐ / ☑☑.
+        Otherwise returns the standard single-character icon.
+
         Returns:
-            Status icon character.
+            Status icon character(s).
         """
+        if self.dual_ticks is not None:
+            tick1, tick2 = self.dual_ticks
+            c1 = "☑" if tick1 else "☐"
+            c2 = "☑" if tick2 else "☐"
+            return f"{c1}{c2}"
         if self.step_state.skipped:
             return "⊘"  # Skipped
         icons = {
@@ -420,6 +433,8 @@ class ProgressPanel(ttk.Frame):
         self._collapsed = False
         self._step_rows: List[StepRow] = []
         self._subtask_groups: Dict[int, SubtaskGroup] = {}
+        # Task 40.5: Dual ticks state per step (step_id -> (tick1, tick2))
+        self._dual_ticks: Dict[int, Tuple[bool, bool]] = {}
         self._build_ui()
 
         # Listen for session changes
@@ -547,6 +562,9 @@ class ProgressPanel(ttk.Frame):
             is_current = step_id == self.session.current_step
             subtask_group = self._subtask_groups.get(step_id)
 
+            # Task 40.5: Dual ticks for Costs step (step_id 2)
+            dual_ticks = self._dual_ticks.get(step_id)
+
             row = StepRow(
                 self._steps_frame,
                 step_state=step_state,
@@ -555,6 +573,7 @@ class ProgressPanel(ttk.Frame):
                 on_skip=self._on_skip_step,
                 on_rollback=self._on_rollback_step,
                 subtask_group=subtask_group,
+                dual_ticks=dual_ticks,
             )
             row.pack(fill="x", pady=1)
             self._step_rows.append(row)
@@ -774,6 +793,46 @@ class ProgressPanel(ttk.Frame):
         if group:
             group.expanded = expanded
             self.refresh()
+
+    # ========================================================================
+    # Dual Tick API (TASK 40.5)
+    # ========================================================================
+
+    def set_dual_ticks(
+        self,
+        step_id: int,
+        tick1: bool,
+        tick2: bool,
+    ) -> None:
+        """Set dual tick state for a multi-phase step (Task 40.5).
+
+        Args:
+            step_id: The step ID to set dual ticks for.
+            tick1: Whether the first tick is checked.
+            tick2: Whether the second tick is checked.
+        """
+        self._dual_ticks[step_id] = (tick1, tick2)
+        self.refresh()
+
+    def clear_dual_ticks(self, step_id: int) -> None:
+        """Remove dual tick state for a step.
+
+        Args:
+            step_id: The step ID to clear dual ticks from.
+        """
+        self._dual_ticks.pop(step_id, None)
+        self.refresh()
+
+    def get_dual_ticks(self, step_id: int) -> Optional[Tuple[bool, bool]]:
+        """Get dual tick state for a step.
+
+        Args:
+            step_id: The step ID to check.
+
+        Returns:
+            Tuple of (tick1, tick2) or None if not a dual-tick step.
+        """
+        return self._dual_ticks.get(step_id)
 
     def destroy(self) -> None:
         """Clean up when widget is destroyed."""

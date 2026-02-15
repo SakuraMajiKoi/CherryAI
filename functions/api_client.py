@@ -33,7 +33,13 @@ else:
 
 from .chunker import Chunker, ChunkerConfig, ChunkMode, create_chunker
 from .config import load_config, get_preset_config, list_preset_names
-from .logit_bias import LogitBiasManager, LogitBiasConfig, parse_ban_tokens_arg, create_logit_bias_manager
+from .logit_bias import (
+    LogitBiasManager,
+    LogitBiasConfig,
+    parse_ban_tokens_arg,
+    create_logit_bias_manager,
+    merge_parser_forbidden_chars,
+)
 from .request_cache import RequestCache, CacheConfig, CacheMode, parse_cache_mode_arg, create_request_cache
 from .rate_limiter import RateLimiter, RateLimiterConfig, create_rate_limiter
 
@@ -183,6 +189,9 @@ class APIClient:
         
         # Content warning
         self.content_warning_enabled = content_warning_enabled
+
+        # Step log path for per-project translation.log (Phase 48)
+        self._step_log_path: Optional[Path] = None
         
         # Logit bias manager (initialized lazily when needed)
         self._logit_bias_manager: Optional[LogitBiasManager] = None
@@ -461,6 +470,53 @@ class APIClient:
             return None
         from typing import Optional as _Optional, cast
         return cast(_Optional[str], self._logit_bias_manager.get_summary())
+
+    def apply_parser_forbidden_chars(self, parser_name: str) -> bool:
+        """Merge parser-defined forbidden characters into logit bias (TASK 53.5).
+
+        Looks up the named parser in the parser registry.  If it defines
+        :attr:`forbidden_chars`, those characters are merged into the
+        current logit bias configuration.
+
+        Args:
+            parser_name: Name of the parser (e.g. ``"RPGMakerMV"``).
+
+        Returns:
+            ``True`` if chars were merged, ``False`` otherwise.
+        """
+        try:
+            from CherryAI.formats import get_parser_registry
+        except ImportError:
+            return False
+
+        parser = get_parser_registry().get(parser_name)
+        if parser is None or parser.forbidden_chars is None:
+            return False
+
+        fc = parser.forbidden_chars
+        base = LogitBiasConfig(
+            enabled=self.config.logit_bias_enabled,
+            banned_chars=list(
+                parse_ban_tokens_arg(self.config.banned_tokens)
+            ),
+            model=self.config.model,
+        )
+        merged = merge_parser_forbidden_chars(
+            fc.characters, fc.logit_bias, base,
+        )
+
+        self._logit_bias_manager = create_logit_bias_manager(
+            enabled=merged.enabled,
+            banned_chars=merged.banned_chars,
+            discouraged_chars=merged.discouraged_chars,
+            discourage_strength=merged.discourage_strength,
+            model=merged.model,
+        )
+        self.config.logit_bias_enabled = merged.enabled
+        self.logger.info(
+            "Parser '%s' forbidden chars merged into logit bias", parser_name,
+        )
+        return True
     
     def configure_cache(
         self,
@@ -816,6 +872,25 @@ class APIClient:
                     f.write(f"  {warning}\n")
             f.write("\n")
 
+        # Phase 48: Also write a per-project step log header if configured
+        try:
+            if self._step_log_path:
+                from .mainhelper import write_step_log_header
+                header = {
+                    "CherryAI Translation Log": "",
+                    "Project": filename,
+                    "Started": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "Model": self.config.model,
+                    "Provider": self.config.provider,
+                    "Lines/Chunk": str(self.config.chunk_size),
+                    "Total Lines": str(total_lines),
+                    "Retry Strategy": self.config.retry_strategy,
+                    "Max Retries": str(self.config.retries),
+                }
+                write_step_log_header(self._step_log_path, header)
+        except Exception:
+            pass
+
     def _format_system_prompt_for_log(self, content: str) -> str:
         """Format system prompt content for readable log output.
         
@@ -994,6 +1069,21 @@ class APIClient:
             
             f.write("\n")
 
+        # Phase 48: Per-chunk summary to step log
+        try:
+            if self._step_log_path:
+                from .mainhelper import append_step_log_entry
+                entry_lines = [
+                    f"--- Chunk {self._chunk_counter}/{self._initial_chunk_count} ---",
+                    f"  Status: PASS",
+                    f"  Input Tokens: {prompt_tokens}",
+                    f"  Output Tokens: {completion_tokens}",
+                    "",
+                ]
+                append_step_log_entry(self._step_log_path, "\n".join(entry_lines))
+        except Exception:
+            pass
+
     def get_api_log(self) -> List[Dict[str, Any]]:
         """Get all logged API calls.
         
@@ -1053,6 +1143,25 @@ class APIClient:
         
         # Update summary file
         self._update_log_summary(log_path, total_cost)
+
+        # Phase 48: Also write per-project step log footer
+        try:
+            if self._step_log_path:
+                from .mainhelper import write_step_log_footer
+                footer = {
+                    "Translation Summary": "",
+                    "Completed": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "Chunks Processed": f"{self._chunk_counter}/{self._initial_chunk_count}",
+                    "Total Tokens": (
+                        f"{self._total_prompt_tokens + self._total_completion_tokens:,} "
+                        f"(Input: {self._total_prompt_tokens:,}, "
+                        f"Output: {self._total_completion_tokens:,})"
+                    ),
+                    "Estimated Cost": f"${total_cost:.4f} USD",
+                }
+                write_step_log_footer(self._step_log_path, footer)
+        except Exception:
+            pass
 
     def _update_log_summary(self, log_path: Path, total_cost: float) -> None:
         """Update the API log summary CSV with session statistics.

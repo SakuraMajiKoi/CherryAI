@@ -33,6 +33,8 @@ class RecoveryType(Enum):
     PLACEHOLDER_CASE = "placeholder_case"  # __prot__ -> __PROT__
     PLACEHOLDER_MANGLED = "placeholder_mangled"  # __PR OT__ -> __PROT__
     PLACEHOLDER_MISSING = "placeholder_missing"  # Placeholder removed by LLM
+    PLACEHOLDER_POSITION_SHIFT = "placeholder_position_shift"  # TASK 42.10
+    PLACEHOLDER_EXTRA = "placeholder_extra"  # TASK 42.10
     QUOTE_BALANCE = "quote_balance"  # Unbalanced quotes
     BRACKET_BALANCE = "bracket_balance"  # Missing bracket pairs
     WHITESPACE_NORMALIZATION = "whitespace_normalization"  # Errant spacing
@@ -662,6 +664,104 @@ def recover_quote_balance(
     return result, issues
 
 
+def detect_position_shift(
+    text: str,
+    original: str,
+    original_placeholders: List[str],
+) -> List[RecoveryIssue]:
+    """Detect placeholders that are present but at a different relative position.
+
+    TASK 42.10: Flags placeholders whose relative position shifted
+    significantly (>30% of line length) compared to the original.
+
+    Args:
+        text: The translated text.
+        original: The original text (before translation).
+        original_placeholders: List of original placeholders.
+
+    Returns:
+        List of RecoveryIssue for each shifted placeholder.
+    """
+    issues: List[RecoveryIssue] = []
+    if not original_placeholders or not text or not original:
+        return issues
+
+    orig_positions = extract_placeholders_ordered(original)
+    trans_positions = extract_placeholders_ordered(text)
+
+    orig_len = max(len(original), 1)
+    trans_len = max(len(text), 1)
+
+    # Match by placeholder name (first occurrence of each)
+    matched_orig: Dict[str, float] = {}
+    for ph, start, _ in orig_positions:
+        if ph not in matched_orig:
+            matched_orig[ph] = start / orig_len
+
+    for ph, start, _ in trans_positions:
+        if ph in matched_orig:
+            orig_rel = matched_orig[ph]
+            trans_rel = start / trans_len
+            shift = abs(orig_rel - trans_rel)
+            if shift > 0.30:
+                issues.append(RecoveryIssue(
+                    type=RecoveryType.PLACEHOLDER_POSITION_SHIFT,
+                    description=(
+                        f"Placeholder {ph} shifted from ~{orig_rel:.0%} "
+                        f"to ~{trans_rel:.0%} ({shift:.0%} shift)"
+                    ),
+                    position=start,
+                    original_text=ph,
+                    recovered_text=ph,
+                    action=RecoveryAction.SKIPPED,
+                ))
+    return issues
+
+
+def detect_extra_tokens(
+    text: str,
+    original_placeholders: List[str],
+) -> List[RecoveryIssue]:
+    """Detect extra placeholders not present in the original.
+
+    TASK 42.10: Flags placeholders in the translation that appear
+    more times than in the original, indicating potential duplication.
+
+    Args:
+        text: The translated text.
+        original_placeholders: List of original placeholders.
+
+    Returns:
+        List of RecoveryIssue for each extra token.
+    """
+    issues: List[RecoveryIssue] = []
+    if not text:
+        return issues
+
+    trans_phs = [p for p, _, _ in extract_placeholders_ordered(text)]
+
+    from collections import Counter
+    orig_counts = Counter(original_placeholders)
+    trans_counts = Counter(trans_phs)
+
+    for ph, count in trans_counts.items():
+        expected = orig_counts.get(ph, 0)
+        if count > expected:
+            extra = count - expected
+            issues.append(RecoveryIssue(
+                type=RecoveryType.PLACEHOLDER_EXTRA,
+                description=(
+                    f"Extra token: {ph} appears {count} times "
+                    f"(expected {expected}, {extra} extra)"
+                ),
+                position=-1,
+                original_text=ph,
+                recovered_text="",
+                action=RecoveryAction.NEEDS_RETRY,
+            ))
+    return issues
+
+
 # ============================================================================
 # Main Recovery Functions
 # ============================================================================
@@ -714,6 +814,16 @@ def recover_line(
             current_text, original, original_placeholders
         )
         all_issues.extend(issues)
+
+        # TASK 42.10: Detect position-shifted placeholders
+        shift_issues = detect_position_shift(
+            current_text, original, original_placeholders,
+        )
+        all_issues.extend(shift_issues)
+
+        # TASK 42.10: Detect extra tokens
+        extra_issues = detect_extra_tokens(current_text, original_placeholders)
+        all_issues.extend(extra_issues)
     
     if enable_bracket_recovery:
         # 5. Fix bracket balance
@@ -876,7 +986,9 @@ class PostProcessManager:
     
     def get_recovery_summary(self) -> Dict[str, Any]:
         """Get a summary of recovery operations.
-        
+
+        TASK 42.10: Includes all recovery type data for manifest persistence.
+
         Returns:
             Dictionary with summary information.
         """
@@ -892,6 +1004,20 @@ class PostProcessManager:
                 t.value: c for t, c in self.stats.recovered_by_type.items()
             },
         }
+
+    def save_to_manifest(self, manifest: Any) -> None:
+        """Save recovery analysis results to manifest for persistence.
+
+        TASK 42.10: Stores the summary under manifest.mappings['recovery_analysis'].
+
+        Args:
+            manifest: Manifest object with a .mappings dict.
+        """
+        try:
+            if hasattr(manifest, "mappings") and isinstance(manifest.mappings, dict):
+                manifest.mappings["recovery_analysis"] = self.get_recovery_summary()
+        except Exception:
+            logging.debug("Failed to save recovery analysis to manifest")
 
 
 # ============================================================================
@@ -940,6 +1066,8 @@ def get_recovery_type_description(recovery_type: RecoveryType) -> str:
         RecoveryType.PLACEHOLDER_CASE: "Fix placeholder case (e.g., __prot__ → __PROT__)",
         RecoveryType.PLACEHOLDER_MANGLED: "Fix mangled placeholders (e.g., __PR OT__ → __PROT__)",
         RecoveryType.PLACEHOLDER_MISSING: "Recover missing placeholders",
+        RecoveryType.PLACEHOLDER_POSITION_SHIFT: "Placeholder position shifted significantly",
+        RecoveryType.PLACEHOLDER_EXTRA: "Extra placeholder tokens detected",
         RecoveryType.QUOTE_BALANCE: "Balance unmatched quotes",
         RecoveryType.BRACKET_BALANCE: "Balance unmatched brackets",
         RecoveryType.WHITESPACE_NORMALIZATION: "Fix errant whitespace in placeholders",
@@ -960,3 +1088,46 @@ def list_recovery_types() -> List[Dict[str, str]]:
         {"type": rt.value, "description": get_recovery_type_description(rt)}
         for rt in RecoveryType
     ]
+
+
+def replace_forbidden_chars(
+    text: str,
+    characters: List[str],
+    action: str = "replace",
+    replacement: str = "",
+) -> Tuple[str, List[str]]:
+    """Replace or flag forbidden characters in translated output (TASK 53.5).
+
+    Args:
+        text: Translated text to clean.
+        characters: List of forbidden character strings.
+        action: ``"replace"`` to auto-remove or ``"flag"`` to report only.
+        replacement: Replacement string when *action* is ``"replace"``.
+
+    Returns:
+        Tuple of (cleaned_text, list_of_issues).  When *action* is
+        ``"flag"`` the text is returned unchanged and issues list the
+        offending characters found.
+    """
+    issues: List[str] = []
+
+    if not characters or not text:
+        return text, issues
+
+    if action == "flag":
+        for ch in characters:
+            if ch in text:
+                issues.append(
+                    f"Forbidden character {repr(ch)} found in output"
+                )
+        return text, issues
+
+    # action == "replace" (default)
+    cleaned = text
+    for ch in characters:
+        if ch in cleaned:
+            issues.append(
+                f"Replaced forbidden character {repr(ch)}"
+            )
+            cleaned = cleaned.replace(ch, replacement)
+    return cleaned, issues

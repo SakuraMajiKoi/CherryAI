@@ -1009,6 +1009,9 @@ def save_code_glossary(
                 "action": str(pat.get("action", "preserve")),
                 "example": str(pat.get("example", "")),
                 "notes": str(pat.get("notes", "")),
+                # TASK 42.7: Code spacing integration fields
+                "visible": bool(pat.get("visible", True)),
+                "spacing": str(pat.get("spacing", "preserve")),
             })
         elif hasattr(pat, "to_dict"):
             # Support CodePattern dataclass
@@ -1046,6 +1049,9 @@ def load_code_glossary(
                 "action": str(pat.get("action", "preserve")),
                 "example": str(pat.get("example", "")),
                 "notes": str(pat.get("notes", "")),
+                # TASK 42.7: Code spacing integration fields
+                "visible": bool(pat.get("visible", True)),
+                "spacing": str(pat.get("spacing", "preserve")),
             })
     
     return result
@@ -1185,11 +1191,12 @@ def save_anchor_removal(
 ) -> None:
     """Save anchor removal patterns to manifest.
     
-    Anchor removal patterns for preprocessing:
+    Anchor removal patterns for preprocessing (TASK 42.1 redesign):
     - pattern: str (anchor pattern to match)
     - action: str (remove, preserve, replace)
-    - replacement: str (replacement text if action is replace)
-    - is_regex: bool (whether pattern is regex)
+    - anchor_spec: str (anchor position spec, e.g. "line_start;line_end")
+    - is_regex: bool (whether pattern is regex, default True)
+    - description: str (human-readable description)
     
     Args:
         manager: ManifestManager instance.
@@ -1204,8 +1211,11 @@ def save_anchor_removal(
             cleaned.append({
                 "pattern": str(anchor.get("pattern", "")),
                 "action": str(anchor.get("action", "remove")),
-                "replacement": str(anchor.get("replacement", "")),
-                "is_regex": bool(anchor.get("is_regex", False)),
+                "anchor_spec": str(anchor.get(
+                    "anchor_spec", anchor.get("replacement", "")
+                )),
+                "is_regex": bool(anchor.get("is_regex", True)),
+                "description": str(anchor.get("description", "")),
             })
     
     manager._manifest_data["AnchorRemoval"] = cleaned
@@ -1217,8 +1227,8 @@ def load_anchor_removal(
 ) -> List[Dict[str, Any]]:
     """Load anchor removal patterns from manifest.
     
-    Returns list of anchor dicts with fields:
-    pattern, action, replacement, is_regex
+    Returns list of anchor dicts with fields (TASK 42.1):
+    pattern, action, anchor_spec, is_regex, description
     
     Args:
         manager: ManifestManager instance.
@@ -1236,8 +1246,11 @@ def load_anchor_removal(
             result.append({
                 "pattern": str(anchor.get("pattern", "")),
                 "action": str(anchor.get("action", "remove")),
-                "replacement": str(anchor.get("replacement", "")),
-                "is_regex": bool(anchor.get("is_regex", False)),
+                "anchor_spec": str(anchor.get(
+                    "anchor_spec", anchor.get("replacement", "")
+                )),
+                "is_regex": bool(anchor.get("is_regex", True)),
+                "description": str(anchor.get("description", "")),
             })
     
     return result
@@ -1255,6 +1268,7 @@ def save_glossary_entries(
     - category: str (name, term, place, etc.)
     - context: str (usage context)
     - notes: str (additional notes)
+    - active: bool (TASK 41.10 — whether entry is used in prompt)
     
     Args:
         manager: ManifestManager instance.
@@ -1272,6 +1286,7 @@ def save_glossary_entries(
                 "category": str(entry.get("category", "")),
                 "context": str(entry.get("context", "")),
                 "notes": str(entry.get("notes", "")),
+                "active": bool(entry.get("active", True)),
             })
     
     # Store in glossary.project_entries
@@ -1288,7 +1303,7 @@ def load_glossary_entries(
     """Load project glossary entries from manifest.
     
     Returns list of entry dicts with fields:
-    source, target, category, context, notes
+    source, target, category, context, notes, active
     
     Args:
         manager: ManifestManager instance.
@@ -1313,6 +1328,7 @@ def load_glossary_entries(
                 "category": str(entry.get("category", "")),
                 "context": str(entry.get("context", "")),
                 "notes": str(entry.get("notes", "")),
+                "active": bool(entry.get("active", True)),
             })
     
     return result

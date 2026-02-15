@@ -37,7 +37,7 @@ from CherryAI.gui.state.store import (
 from CherryAI.gui.progress import ProgressTracker
 from CherryAI.gui.steps.analysis import AnalysisStep
 from CherryAI.gui.steps.base import BaseStep, PlaceholderStep
-from CherryAI.gui.steps.estimate import EstimationStep
+from CherryAI.gui.steps.costs import CostsStep
 from CherryAI.gui.steps.information import InformationStep
 from CherryAI.gui.steps.input_extract import InputExtractionStep
 from CherryAI.gui.steps.output_inject import OutputInjectStep
@@ -299,8 +299,8 @@ class App(tk.Tk):
                     manifest_manager=self._manifest_manager,
                 )
             elif step_id == 2:
-                # Estimation - fully implemented (moved from step 4)
-                tab = EstimationStep(
+                # Costs step (renamed from Estimation in Phase 40)
+                tab = CostsStep(
                     self._notebook,
                     self.session,
                     manifest_manager=self._manifest_manager,

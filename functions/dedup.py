@@ -772,3 +772,16 @@ def _is_aggressive_enabled() -> bool:
     _AGGR_DEDUP_FLAG = enabled
     return enabled
 
+
+def set_aggressive_dedup(enabled: bool) -> None:
+    """Set the aggressive dedup flag at runtime.
+
+    TASK 42.4: Called by mainhelper before dedup runs to honour the
+    UI toggle / manifest config value.
+
+    Args:
+        enabled: Whether aggressive number deduplication is active.
+    """
+    global _AGGR_DEDUP_FLAG
+    _AGGR_DEDUP_FLAG = enabled
+

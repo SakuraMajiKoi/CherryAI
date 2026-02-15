@@ -323,6 +323,8 @@ The following systems span multiple pipeline steps. They are documented here as 
 
 ### 5.1 Speaker:Dialogue Format
 
+**Implementation Status:** ✅ Phase 51 DONE — All 4 tasks implemented (47 tests passing, 5100 total suite)
+
 **Affects**: Analysis (Step 1), Preprocessing (Step 4), Translation (Step 5), Postprocessing (Step 7), Wordwrap (Step 8)
 
 **Purpose**: CherryAI uses the `Speaker: "Dialogue"` and `Speaker: Dialogue` formats throughout the pipeline as a structural indicator. Speaker detection is performed during Analysis and the format is preserved or leveraged in every subsequent step.
@@ -354,6 +356,8 @@ The following systems span multiple pipeline steps. They are documented here as 
 ---
 
 ### 5.2 API Request Building and Formation
+
+**Implementation Status:** ✅ Phase 49 DONE — All 6 tasks implemented (50 tests passing, 4985 total suite)
 
 **Affects**: Costs (Step 2), Translation (Step 5)
 
@@ -409,6 +413,8 @@ This ensures cost estimates are never out of sync with translation behaviour.
 ---
 
 ### 5.3 Context Markers
+
+**Implementation Status:** ✅ Phase 50 DONE — All 5 tasks implemented (70 tests passing, 5010 total suite)
 
 **Affects**: Analysis (Step 1), Preprocessing (Step 4), Translation (Step 5)
 
@@ -493,6 +499,8 @@ After the first step of request formation (§5.2), the system determines which r
 
 ### 5.6 Glossary Selective Inclusion
 
+**Implementation Status:** ✅ Phase 52 DONE — All 4 tasks implemented (28 tests passing, 5130 total suite)
+
 **Affects**: Translation (Step 5), Costs (Step 2)
 
 **Purpose**: Include only relevant glossary entries in the translation prompt for each chunk, reducing token usage while maintaining translation consistency.
@@ -558,7 +566,7 @@ Code Spacing Rules (processed in both Pre and Post steps) apply these extended p
 
 **Purpose**: Parser Scripts are game-engine-specific or format-specific scripts that handle extraction, injection, and optionally provide wordwrap settings and context markers. They extend the base format handlers in `formats/` with engine-aware logic.
 
-**Status**: Not yet implemented — currently format handlers in `formats/` provide basic extraction/injection. Parser Scripts will formalize the interface and add wordwrap and context marker support.
+**Status**: Implemented (Phase 53) — `formats/parser_base.py` defines the `ParserScript` ABC with `WordwrapConfig`, `ForbiddenChars`, and `ContextMarkerRules` dataclasses. RPG Maker MV/MZ parsers live in `formats/parser_rpgmaker.py`. A `ParserRegistry` in `formats/__init__.py` handles discovery and auto-detection. Wordwrap step auto-populates settings from detected parsers; forbidden characters integrate with logit bias and postprocessing.
 
 #### Interface
 
@@ -692,7 +700,7 @@ PrettyWrap is the standard wrapping algorithm. Its priority rules:
 
 **Affects**: Analysis (Step 1), Translation (Step 5)
 
-**Status**: Not yet implemented — future feature.
+**Status**: Implemented (Phase 54) — `functions/analysis.py` contains `_RAW_POV_PATTERNS` (Japanese, English, Chinese, Korean), `_get_pov_patterns()` with compiled caching, `POVResult` dataclass, and `detect_pov()` algorithm. Prompt integration via `PromptBuilder.pov_result` in `functions/prompt_builder.py`. Tests in `dev/test_pov_inference.py` (36 tests).
 
 **Purpose**: Infer the narrative point of view from non-dialogue text to provide the LLM with accurate context for pronoun and perspective handling.
 
@@ -719,7 +727,7 @@ PrettyWrap is the standard wrapping algorithm. Its priority rules:
 
 **Affects**: Preprocessing (Step 4), Translation (Step 5), Postprocessing (Step 7)
 
-**Status**: Not yet implemented — future feature.
+**Status**: Implemented (Phase 55).
 
 **Purpose**: Ensure consistent translation of recurring terms, code-embedded text, and styled spans across all requests.
 
@@ -1282,6 +1290,8 @@ The Costs step has **two distinct estimation states** tracked separately:
 
 **Purpose**: Configure project metadata and translation context. All fields contribute to building the final translation prompt. Every entry is saved in the manifest for persistence.
 
+**Implementation Status:** ✅ Phase 41 DONE — All 10 tasks implemented (56 tests passing)
+
 #### Design Goals
 
 1. **Prompt Construction**: Every relevant field feeds into the translation prompt sent to the LLM
@@ -1594,6 +1604,8 @@ Characters:
 ---
 
 ### Step 4: Preprocessing
+
+**Implementation Status:** ✅ Phase 42 DONE — All 12 tasks implemented (80 tests passing, 4679 total suite)
 
 **Purpose**: Process text before translation with transformations that will be exactly mirrored and restored in Step 7: Postprocessing. Each process has a priority integer determining execution order. Preprocessing reduces tokens, protects code, and normalizes text while ensuring perfect reversibility.
 
@@ -2366,6 +2378,8 @@ The Translation tab contains four widget sections:
 - Translation results are updated (after a translation run)
 - User explicitly clicks "Refresh Lines"
 
+**Implementation Status:** ✅ Phase 43 DONE — All 14 tasks implemented (48 tests passing, 4727 total suite)
+
 ---
 
 #### Testing Requirements
@@ -2382,12 +2396,8 @@ The Translation tab contains four widget sections:
 - Ban Tokens applied to API request
 - Prompt Preview shows correct constructed prompt from manifest
 
-**Test Files** (to be created/extended):
-- `dev/test_translation_performance.py`
-- `dev/test_mock_translation.py`
-- `dev/test_translation_retry.py`
-- `dev/test_translation_cache.py`
-- `dev/test_translation_prompt.py`
+**Test Files**:
+- `dev/test_translation_phase43.py` — 48 tests covering all Phase 43 tasks
 
 ---
 
@@ -2492,6 +2502,8 @@ The following widgets will be activated once the Translation/Edit/TLC mode toggl
 3. **Perfect Restoration**: All Preprocessing changes must be undone to produce accurate final output.
 4. **Post-Exclusive Recovery**: Bracket Balance, Quote Balance, and Whitespace Normalization are Postprocessing-exclusive — they only appear here and address translation-introduced issues.
 5. **Overwrite Semantics**: Postprocessing overwrites any previous postprocessing results. If results already exist, a confirmation warning is shown before overwriting.
+
+**Implementation Status:** ✅ Phase 45 DONE — All 10 tasks implemented (49 tests passing, 4755 total suite)
 
 ---
 
@@ -3079,6 +3091,8 @@ These behaviors are built into `pretty_wrap()` and are NOT user-configurable:
 - `dev/test_wordwrap_overwrite_integration.py`
 - `dev/test_wordwrap_pixel_width.py`
 
+**Implementation Status:** ✅ Phase 46 DONE — All 10 tasks implemented (45 tests passing, 4832 total suite)
+
 ---
 
 ### Step 9: Output
@@ -3270,6 +3284,8 @@ Output inherits these settings from Input to ensure format consistency:
 - `dev/test_output_naming_strategies.py`
 - `dev/test_output_format_handlers.py`
 
+**Implementation Status:** ✅ Phase 47 DONE — All 10 tasks implemented (51 tests passing, 4883 total suite)
+
 ---
 
 ## 7. CLI Mode: Automatic Pipeline
@@ -3448,6 +3464,8 @@ Resolution methods:
 ---
 
 ## 10. Pipeline Logging System
+
+**Implementation Status:** ✅ Phase 48 DONE — All 9 tasks implemented (52 tests passing, 4890 total suite)
 
 CherryAI maintains per-project, per-step log files that record the outcome of every processing step in the pipeline. Logs are the audit trail: they capture what happened, what went wrong, what was recovered, and how long it took. The manifest remains the single source of truth for data; logs are the single source of truth for *process history*.
 

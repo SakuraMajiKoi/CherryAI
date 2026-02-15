@@ -48,7 +48,7 @@ MODULE COUNTS (Verified January 2026)
 - formats/: 5 format handlers
 - gui/steps/: 10 workflow tabs
 - gui/helpers/: 6 adapter modules (mode, analysis, glossary, chunker, prompt, manifest_binding)
-- gui/dialogs/: 2 dialog modules (global_options, project_dialog)
+- gui/dialogs/: 3 dialog modules (global_options, project_dialog, loading_progress)
 
 =============================================================================
 
@@ -2963,7 +2963,7 @@ Large manifest files (e.g., 24 MB for 48,000 lines) contained excessive redundan
 =============================================================================
 
 ## PHASE 39: INPUT STEP IMPROVEMENTS
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 12-18 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 12-18 hours
 
 Goal: Modernize and polish the Input step (Step 0) per specs.md v2.0 requirements.
 
@@ -2976,7 +2976,7 @@ implementation up to spec with improved UX, better file handling, and proper aut
 triggers. The changes are primarily UI/UX improvements with minimal processing logic changes.
 
 ### TASK 39.1: Unified File/Folder Selector
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 3 hours
 
 Goal: Replace separate "Load Files" and "Load Folder" buttons with unified "Select File(s)".
 
@@ -3003,7 +3003,7 @@ Goal: Replace separate "Load Files" and "Load Folder" buttons with unified "Sele
 ---
 
 ### TASK 39.2: Remove Load Manifest and Clear All Buttons
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 1 hour
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 1 hour
 
 Goal: Remove redundant toolbar buttons per spec.
 
@@ -3028,7 +3028,7 @@ Goal: Remove redundant toolbar buttons per spec.
 ---
 
 ### TASK 39.3: Encoding and Format Dropdown Enhancements
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 2 hours
 
 Goal: Add "auto" option to dropdowns and implement format filtering.
 
@@ -3055,7 +3055,7 @@ Goal: Add "auto" option to dropdowns and implement format filtering.
 ---
 
 ### TASK 39.4: Collapsible Folder Hierarchy in Loaded Files
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 4 hours
 
 Goal: Replace flat Listbox with Treeview showing collapsible folder hierarchy.
 
@@ -3090,7 +3090,7 @@ Goal: Replace flat Listbox with Treeview showing collapsible folder hierarchy.
 ---
 
 ### TASK 39.5: Multi-Line Preview Support
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 2 hours
 
 Goal: Fix Preview panel to properly display multi-line content.
 
@@ -3119,7 +3119,7 @@ Goal: Fix Preview panel to properly display multi-line content.
 ---
 
 ### TASK 39.6: Remove Manifest Status Label
-**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 30 minutes
+**Priority:** LOW | **Status:** ✅ DONE | **Effort:** 30 minutes
 
 Goal: Remove the manifest label at the bottom of Preview panel per spec.
 
@@ -3141,7 +3141,7 @@ Goal: Remove the manifest label at the bottom of Preview panel per spec.
 ---
 
 ### TASK 39.7: Progress Window for File Loading
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 3 hours
 
 Goal: Show progress window during file loading operations.
 
@@ -3175,7 +3175,7 @@ Goal: Show progress window during file loading operations.
 ---
 
 ### TASK 39.8: Update specs.md with Implementation Status
-**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 30 minutes
+**Priority:** LOW | **Status:** ✅ DONE | **Effort:** 30 minutes
 
 Goal: Update specs.md Step 0 section to mark implemented features.
 
@@ -3190,7 +3190,7 @@ Goal: Update specs.md Step 0 section to mark implemented features.
 ---
 
 ### TASK 39.9: Update Tests and Documentation
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 2 hours
 
 Goal: Ensure all Input step tests pass after changes.
 
@@ -3237,7 +3237,7 @@ Goal: Ensure all Input step tests pass after changes.
 =============================================================================
 
 PHASE 40: COSTS STEP IMPROVEMENTS
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** ~22 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** ~22 hours
 **Dependencies:** None (can be done in parallel with Phase 39)
 **Cross-Reference:** See `doc/specs.md` Step 2: Costs for full specification
 
@@ -3248,7 +3248,7 @@ track actual costs post-translation.
 ---
 
 ### TASK 40.1: Rename Estimation to Costs
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 1 hour
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 1 hour
 
 Goal: Rename the step from "Estimation" to "Costs" throughout the codebase.
 
@@ -3273,7 +3273,7 @@ Goal: Rename the step from "Estimation" to "Costs" throughout the codebase.
 ---
 
 ### TASK 40.2: Tokens/Request Limit Implementation
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 3 hours
 
 Goal: Add Tokens/Request spinbox as alternative maximum alongside Lines/Request.
 
@@ -3300,7 +3300,7 @@ Goal: Add Tokens/Request spinbox as alternative maximum alongside Lines/Request.
 ---
 
 ### TASK 40.3: Prompt Overhead Calculation
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 4 hours
 
 Goal: Calculate accurate prompt tokens including all prompt components.
 
@@ -3337,7 +3337,7 @@ Goal: Calculate accurate prompt tokens including all prompt components.
 ---
 
 ### TASK 40.4: Dual Estimation Workflow
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 4 hours
 
 Goal: Implement two-state estimation (Original and Preprocessed) with separate triggers.
 
@@ -3381,7 +3381,7 @@ Goal: Implement two-state estimation (Original and Preprocessed) with separate t
 ---
 
 ### TASK 40.5: Progress Tracker Dual Ticks
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 2 hours
 
 Goal: Update progress tracker to show two checkmarks for Costs step.
 
@@ -3406,7 +3406,7 @@ Goal: Update progress tracker to show two checkmarks for Costs step.
 ---
 
 ### TASK 40.6: Model Comparison Expanded Columns
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 3 hours
 
 Goal: Add Price Original, Price Preprocessed, and Savings columns to Model Comparison.
 
@@ -3437,7 +3437,7 @@ Goal: Add Price Original, Price Preprocessed, and Savings columns to Model Compa
 ---
 
 ### TASK 40.7: Time Estimate with Concurrent Requests
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 2 hours
 
 Goal: Update time estimation to account for concurrent requests and token speed.
 
@@ -3475,7 +3475,7 @@ time = max(
 ---
 
 ### TASK 40.8: Refresh Button Model Data Fetch
-**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+**Priority:** LOW | **Status:** 🔲 DEFERRED | **Effort:** 3 hours
 
 Goal: Implement Refresh button to fetch latest model data from providers.
 
@@ -3513,7 +3513,7 @@ Goal: Implement Refresh button to fetch latest model data from providers.
 ---
 
 ### TASK 40.9: Use Preprocessed Lines After Step 4
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 1 hour
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 1 hour
 
 Goal: Ensure estimation uses preprocessed lines when available.
 
@@ -3569,7 +3569,7 @@ Goal: Ensure estimation uses preprocessed lines when available.
 ---
 
 ### Phase 41: Information Step UI Enhancements
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 28 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 28 hours
 **File:** `gui/steps/information.py`
 **Spec Reference:** specs.md Step 3: Information
 
@@ -3579,7 +3579,7 @@ Complete UI overhaul for Step 3 (Information) per specs.md v2.2. Includes widget
 ---
 
 #### Task 41.1: Widget Renames
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 1 hour
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 1 hour
 
 **Goal:** Update widget titles per spec naming conventions.
 
@@ -3597,7 +3597,7 @@ Complete UI overhaul for Step 3 (Information) per specs.md v2.2. Includes widget
 ---
 
 #### Task 41.2: Genre Dialog ADD Behavior
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 2 hours
 
 **Goal:** Genre `...` button should ADD to existing text, not overwrite.
 
@@ -3616,7 +3616,7 @@ Complete UI overhaul for Step 3 (Information) per specs.md v2.2. Includes widget
 ---
 
 #### Task 41.3: "Other" Language Custom Input
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 2 hours
 
 **Goal:** When "Other" selected in Source/Target Language, prompt for custom input.
 
@@ -3636,7 +3636,7 @@ Complete UI overhaul for Step 3 (Information) per specs.md v2.2. Includes widget
 ---
 
 #### Task 41.4: Style/Tone Dropdown Graying
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 2 hours
 
 **Goal:** Visual feedback for dropdown vs custom override state.
 
@@ -3653,7 +3653,7 @@ Complete UI overhaul for Step 3 (Information) per specs.md v2.2. Includes widget
 ---
 
 #### Task 41.5: Glossary Table Inline Editing
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 4 hours
 
 **Goal:** Editable 3-column table for Glossary Settings.
 
@@ -3673,7 +3673,7 @@ Complete UI overhaul for Step 3 (Information) per specs.md v2.2. Includes widget
 ---
 
 #### Task 41.6: Import from Analysis (Code Patterns)
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 3 hours
 
 **Goal:** Make "Import from Analysis" button functional for Code Database.
 
@@ -3693,7 +3693,7 @@ Complete UI overhaul for Step 3 (Information) per specs.md v2.2. Includes widget
 ---
 
 #### Task 41.7: Import from Analysis (Glossary)
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 3 hours
 
 **Goal:** Make "Import from Analysis" button functional for Glossary Settings.
 
@@ -3713,7 +3713,7 @@ Complete UI overhaul for Step 3 (Information) per specs.md v2.2. Includes widget
 ---
 
 #### Task 41.8: Code Database Actions
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 3 hours
 
 **Goal:** Implement three action types for Code Database entries.
 
@@ -3732,7 +3732,7 @@ Complete UI overhaul for Step 3 (Information) per specs.md v2.2. Includes widget
 ---
 
 #### Task 41.9: NEW Global Glossary and Database Widget
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 6 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 6 hours
 
 **Goal:** New widget for managing global (cross-project) glossary and code patterns.
 
@@ -3765,7 +3765,7 @@ Complete UI overhaul for Step 3 (Information) per specs.md v2.2. Includes widget
 ---
 
 #### Task 41.10: Selective Glossary Feature
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 2 hours
 
 **Goal:** Allow users to select which glossary entries apply to current project.
 
@@ -3798,6 +3798,9 @@ Complete UI overhaul for Step 3 (Information) per specs.md v2.2. Includes widget
 
 **Total Estimated Effort:** 28 hours
 
+**Tests:** 56 tests in `dev/test_information_step_phase41.py` — all passing
+**Test Suite:** 4554 passed, 70 skipped, 0 failed
+
 **Implementation Order:**
 1. Task 41.1 (renames - quick win, establishes naming)
 2. Tasks 41.2, 41.3, 41.4 (behavior fixes - independent)
@@ -3815,9 +3818,10 @@ Complete UI overhaul for Step 3 (Information) per specs.md v2.2. Includes widget
 =============================================================================
 
 ## PHASE 42: PREPROCESSING & POSTPROCESSING COMPLETE IMPLEMENTATION
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 40-50 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 40-50 hours
 **Dependencies:** None (can be done in parallel with other phases)
 **Cross-Reference:** See `doc/specs.md` Step 4: Preprocessing for full specification
+**Completed:** Phase 42 — All 12 tasks implemented (80 tests passing, 4679 total suite)
 
 This phase implements comprehensive Preprocessing and Postprocessing functionality as specified
 in specs.md v2.3. Both steps must exactly mirror each other - many Preprocessing transformations
@@ -3827,7 +3831,7 @@ execution order.
 ---
 
 ### TASK 42.1: Anchoring Widget Redesign (Rename from Anchor Removal)
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 4 hours
 
 Goal: Redesign the Anchor Removal widget as "Anchoring" with proper table-based management.
 
@@ -3857,7 +3861,7 @@ Goal: Redesign the Anchor Removal widget as "Anchoring" with proper table-based 
 ---
 
 ### TASK 42.2: Custom Placeholders RegEx Support
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 2 hours
 
 Goal: Add RegEx toggle to Custom Placeholders widget.
 
@@ -3884,7 +3888,7 @@ Goal: Add RegEx toggle to Custom Placeholders widget.
 ---
 
 ### TASK 42.3: Protect Code Patterns Default Toggle
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 1 hour
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 1 hour
 
 Goal: Ensure Protect Code Patterns defaults to RegEx enabled.
 
@@ -3909,7 +3913,7 @@ Goal: Ensure Protect Code Patterns defaults to RegEx enabled.
 ---
 
 ### TASK 42.4: Aggressive Deduplication - Number Normalization
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 4 hours
 
 Goal: Implement aggressive deduplication that treats all numbers as equivalent 'X'.
 
@@ -3946,7 +3950,7 @@ Result: First line translated, second line gets same translation with "864" rest
 ---
 
 ### TASK 42.5: Ellipsis Compression Testing & Verification
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 2 hours
 
 Goal: Verify Ellipsis Compression is feature-complete and add comprehensive tests.
 
@@ -3975,7 +3979,7 @@ Goal: Verify Ellipsis Compression is feature-complete and add comprehensive test
 ---
 
 ### TASK 42.6: PROT Token Compression Testing & Verification
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 2 hours
 
 Goal: Verify PROT Token Compression works correctly with adjacency requirement.
 
@@ -4003,7 +4007,7 @@ Goal: Verify PROT Token Compression works correctly with adjacency requirement.
 ---
 
 ### TASK 42.7: Code Database Integration with Code Spacing Rules
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 5 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 5 hours
 
 Goal: Integrate Code Spacing Rules with Code Database entries.
 
@@ -4035,7 +4039,7 @@ Goal: Integrate Code Spacing Rules with Code Database entries.
 ---
 
 ### TASK 42.8: Preview Widget Filtering
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 3 hours
 
 Goal: Implement filtering options for the Preview Table.
 
@@ -4068,7 +4072,7 @@ Goal: Implement filtering options for the Preview Table.
 ---
 
 ### TASK 42.9: Preprocessing/Postprocessing Roundtrip Tests
-**Priority:** CRITICAL | **Status:** 🔲 NOT STARTED | **Effort:** 6 hours
+**Priority:** CRITICAL | **Status:** ✅ DONE | **Effort:** 6 hours
 
 Goal: Comprehensive roundtrip tests ensuring Preprocessing and Postprocessing exactly mirror.
 
@@ -4101,7 +4105,7 @@ Goal: Comprehensive roundtrip tests ensuring Preprocessing and Postprocessing ex
 ---
 
 ### TASK 42.10: Validation Enhancement - Pattern/Anchor Recovery
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 4 hours
 
 Goal: Enhance QA Step validation with comprehensive recovery checks.
 
@@ -4136,7 +4140,7 @@ Goal: Enhance QA Step validation with comprehensive recovery checks.
 ---
 
 ### TASK 42.11: Process Priority Documentation and Enforcement
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 2 hours
 
 Goal: Document and enforce process execution priority in modi/ modules.
 
@@ -4173,7 +4177,7 @@ Goal: Document and enforce process execution priority in modi/ modules.
 ---
 
 ### TASK 42.12: Test Suite Completion
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 6 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 6 hours
 
 Goal: Create comprehensive test coverage for all Preprocessing/Postprocessing functionality.
 
@@ -4196,20 +4200,20 @@ Goal: Create comprehensive test coverage for all Preprocessing/Postprocessing fu
 
 ### Phase 42 Summary
 
-| Task | Description | Priority | Effort | Dependencies |
-|------|-------------|----------|--------|--------------|
-| 42.1 | Anchoring Widget Redesign | HIGH | 4h | None |
-| 42.2 | Custom Placeholders RegEx Support | HIGH | 2h | None |
-| 42.3 | Protect Code Patterns Default Toggle | MEDIUM | 1h | None |
-| 42.4 | Aggressive Deduplication - Numbers | HIGH | 4h | None |
-| 42.5 | Ellipsis Compression Testing | MEDIUM | 2h | None |
-| 42.6 | PROT Token Compression Testing | MEDIUM | 2h | None |
-| 42.7 | Code Database Integration | HIGH | 5h | Step 3 Code Database |
-| 42.8 | Preview Widget Filtering | MEDIUM | 3h | None |
-| 42.9 | Roundtrip Tests (CRITICAL) | CRITICAL | 6h | 42.1-42.8 |
-| 42.10 | Validation Enhancement - Recovery | HIGH | 4h | None |
-| 42.11 | Process Priority Documentation | MEDIUM | 2h | None |
-| 42.12 | Test Suite Completion | HIGH | 6h | 42.1-42.11 |
+| Task | Description | Priority | Effort | Status |
+|------|-------------|----------|--------|--------|
+| 42.1 | Anchoring Widget Redesign | HIGH | 4h | ✅ DONE |
+| 42.2 | Custom Placeholders RegEx Support | HIGH | 2h | ✅ DONE |
+| 42.3 | Protect Code Patterns Default Toggle | MEDIUM | 1h | ✅ DONE |
+| 42.4 | Aggressive Deduplication - Numbers | HIGH | 4h | ✅ DONE |
+| 42.5 | Ellipsis Compression Testing | MEDIUM | 2h | ✅ DONE |
+| 42.6 | PROT Token Compression Testing | MEDIUM | 2h | ✅ DONE |
+| 42.7 | Code Database Integration | HIGH | 5h | ✅ DONE |
+| 42.8 | Preview Widget Filtering | MEDIUM | 3h | ✅ DONE |
+| 42.9 | Roundtrip Tests (CRITICAL) | CRITICAL | 6h | ✅ DONE |
+| 42.10 | Validation Enhancement - Recovery | HIGH | 4h | ✅ DONE |
+| 42.11 | Process Priority Documentation | MEDIUM | 2h | ✅ DONE |
+| 42.12 | Test Suite Completion | HIGH | 6h | ✅ DONE |
 
 **Total Estimated Effort:** 41 hours
 
@@ -4232,17 +4236,16 @@ Goal: Create comprehensive test coverage for all Preprocessing/Postprocessing fu
 =============================================================================
 
 ## PHASE 43: TRANSLATION TAB OVERHAUL
-**Priority:** CRITICAL | **Status:** 🔲 NOT STARTED | **Effort:** 50-60 hours
+**Priority:** CRITICAL | **Status:** ✅ DONE | **Effort:** 50-60 hours
 **Dependencies:** Phase 42 (Preprocessing must be stable for translation input)
 **Cross-Reference:** See `doc/specs.md` Step 5: Translation for full specification
 
-This phase addresses critical performance issues, the manifest attribute bug, and comprehensive
+This phase addressed critical performance issues, the manifest attribute bug, and comprehensive
 UI/UX improvements to the Translation step. Includes Mock Translation, model management via
 Global Options, retry strategy refinement, prompt editor redesign, and caching relocation.
 
-**Known Bug (CRITICAL)**: `AttributeError: 'TranslationStep' object has no attribute 'manifest'`
-in `translate.py` line 1904. The code uses `self.manifest` but BaseStep only provides
-`self.manifest_manager`. Must be fixed immediately.
+**Known Bug (FIXED)**: `AttributeError` in translate.py — all `self.manifest` references
+already migrated to `self.manifest_manager` (verified in Task 43.1).
 
 ---
 
@@ -4274,7 +4277,7 @@ Goal: Fix the `AttributeError: 'TranslationStep' object has no attribute 'manife
 ---
 
 ### TASK 43.2: Translation Tab Performance Fix (CRITICAL)
-**Priority:** CRITICAL | **Status:** 🔲 NOT STARTED | **Effort:** 8 hours
+**Priority:** CRITICAL | **Status:** ✅ FIXED | **Effort:** 8 hours
 
 Goal: Make the Translation tab load in under 1 second for 100K lines.
 
@@ -4313,8 +4316,8 @@ Goal: Make the Translation tab load in under 1 second for 100K lines.
 
 ---
 
-### TASK 43.3: Merge Original/Preprocessed into "To be Translated" Column
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+### TASK 43.3: Merge Original/Preprocessed into "To be Translated" Column [FIXED]
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 2 hours
 
 Goal: Replace the separate "Original" and "Preprocessed" columns with a single "To be Translated" column.
 
@@ -4340,8 +4343,8 @@ Goal: Replace the separate "Original" and "Preprocessed" columns with a single "
 
 ---
 
-### TASK 43.4: Newline Support in Translatable Lines Table
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+### TASK 43.4: Newline Support in Translatable Lines Table [FIXED]
+**Priority:** MEDIUM | **Status:** ✅ FIXED | **Effort:** 2 hours
 
 Goal: Render multi-line content with visible line breaks in the table, matching Step 0 Input behavior.
 
@@ -4365,8 +4368,8 @@ Goal: Render multi-line content with visible line breaks in the table, matching 
 
 ---
 
-### TASK 43.5: Mock Translation Implementation
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+### TASK 43.5: Mock Translation Implementation [FIXED]
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 4 hours
 
 Goal: Implement Mock Translation as the default model when no API providers are configured.
 
@@ -4404,8 +4407,8 @@ Goal: Implement Mock Translation as the default model when no API providers are 
 
 ---
 
-### TASK 43.6: API Provider Management in Global Options
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 6 hours
+### TASK 43.6: API Provider Management in Global Options [FIXED]
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 6 hours
 
 Goal: Move model configuration to Global Options with proper provider management.
 
@@ -4437,8 +4440,8 @@ Goal: Move model configuration to Global Options with proper provider management
 
 ---
 
-### TASK 43.7: Move Request Caching to Global Options
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+### TASK 43.7: Move Request Caching to Global Options [FIXED]
+**Priority:** MEDIUM | **Status:** ✅ FIXED | **Effort:** 2 hours
 
 Goal: Relocate Request Caching from Translation step to Global Options.
 
@@ -4468,8 +4471,8 @@ Goal: Relocate Request Caching from Translation step to Global Options.
 
 ---
 
-### TASK 43.8: Move Thinking Mode to Global Options
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+### TASK 43.8: Move Thinking Mode to Global Options [FIXED]
+**Priority:** MEDIUM | **Status:** ✅ FIXED | **Effort:** 2 hours
 
 Goal: Relocate Thinking Mode from Translation step to Global Options and make it model-agnostic.
 
@@ -4501,8 +4504,8 @@ Goal: Relocate Thinking Mode from Translation step to Global Options and make it
 
 ---
 
-### TASK 43.9: Move Rolling Context to Global Options
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+### TASK 43.9: Move Rolling Context to Global Options [FIXED]
+**Priority:** MEDIUM | **Status:** ✅ FIXED | **Effort:** 2 hours
 
 Goal: Relocate Context Lines (Rolling Context) from Translation step to Global Options.
 
@@ -4531,8 +4534,8 @@ Goal: Relocate Context Lines (Rolling Context) from Translation step to Global O
 
 ---
 
-### TASK 43.10: Retry Strategy Refinement
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+### TASK 43.10: Retry Strategy Refinement [FIXED]
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 4 hours
 
 Goal: Implement detailed Batch and Contextual retry behaviors as specified.
 
@@ -4569,8 +4572,8 @@ Goal: Implement detailed Batch and Contextual retry behaviors as specified.
 
 ---
 
-### TASK 43.11: Prompt Editor Redesign
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4 hours
+### TASK 43.11: Prompt Editor Redesign [FIXED]
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 4 hours
 
 Goal: Redesign Prompt Editor to be preview-only with separated Ban Tokens.
 
@@ -4605,8 +4608,8 @@ Goal: Redesign Prompt Editor to be preview-only with separated Ban Tokens.
 
 ---
 
-### TASK 43.12: Lines/Chunk Sync with Estimation
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+### TASK 43.12: Lines/Chunk Sync with Estimation [FIXED]
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 2 hours
 
 Goal: Synchronize Lines/Chunk between Translation and Estimation steps.
 
@@ -4637,8 +4640,8 @@ Goal: Synchronize Lines/Chunk between Translation and Estimation steps.
 
 ---
 
-### TASK 43.13: Skip Non-Source Language Option
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+### TASK 43.13: Skip Non-Source Language Option [FIXED]
+**Priority:** MEDIUM | **Status:** ✅ FIXED | **Effort:** 3 hours
 
 Goal: Add option to skip lines not detected as being in the source language.
 
@@ -4668,8 +4671,8 @@ Goal: Add option to skip lines not detected as being in the source language.
 
 ---
 
-### TASK 43.14: Tab Caching Strategy (All Tabs)
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 6 hours
+### TASK 43.14: Tab Caching Strategy (All Tabs) [FIXED]
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 6 hours
 
 Goal: Implement tab caching across all step tabs for instant loading when no changes occurred.
 
@@ -4748,7 +4751,7 @@ Goal: Implement tab caching across all step tabs for instant loading when no cha
 =============================================================================
 
 ## PHASE 44: QA STEP PLACEHOLDER & TRANSLATION STEP FUTURE PREP
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 3.5 hours
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 3.5 hours
 **Depends On:** Phase 43 (Translation Tab must be stable before QA references it)
 
 ### TASK 44.1: Render QA Step Non-Functional with Placeholder
@@ -4783,8 +4786,7 @@ Tests: `dev/test_qa_placeholder.py`
 
 ---
 
-### TASK 44.2: Verify Shared Validation Scripts in Translation & Postprocessing
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 1.5 hours
+### TASK 44.2: Verify Shared Validation Scripts in Translation & Postprocessing [FIXED]\n**Priority:** MEDIUM | **Status:** ✅ FIXED | **Effort:** 1.5 hours
 
 Problem: The QA step's philosophy depends on Translation (Step 5) and
 Postprocessing (Step 7) already calling `functions/validation.py` for automatic
@@ -4825,7 +4827,7 @@ Tests: `dev/test_validation_shared.py`
 ---
 
 ## PHASE 45: POSTPROCESSING TAB OVERHAUL (v2.6 Specs)
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 18 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 18 hours
 **Depends On:** Phase 43 (Translation Tab), Phase 44 (QA Placeholder)
 
 ### TASK 45.1: Fix MouseWheel bind_all Bug Across All Steps
@@ -4850,7 +4852,7 @@ Files Fixed:
 ---
 
 ### TASK 45.2: Rename "Postprocessed Lines" to "Processed Lines"
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 0.5 hours
+**Priority:** MEDIUM | **Status:** ✅ FIXED | **Effort:** 0.5 hours
 
 Problem: The table widget is labeled "Postprocessed Lines" which is redundant since
 the entire tab is already labeled "Postprocessing".
@@ -4867,7 +4869,7 @@ Tests: `dev/test_postprocess_gui.py`
 ---
 
 ### TASK 45.3: Remove Refresh and Revert All Buttons
-**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 0.5 hours
+**Priority:** LOW | **Status:** ✅ FIXED | **Effort:** 0.5 hours
 
 Problem: Refresh and Revert All buttons add complexity. Lines should auto-load on
 tab entry, and re-running postprocessing overwrites previous results (with warning).
@@ -4883,7 +4885,7 @@ Tests: `dev/test_postprocess_gui.py`
 ---
 
 ### TASK 45.4: Make Placeholder/Code/BR Recovery Automatic (No GUI Toggle)
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 2 hours
 
 Problem: Placeholder Recovery, Restore Code Characters, and Restore `<br>` Tags are
 essential for data integrity and should always run. Users should not be able to
@@ -4905,7 +4907,7 @@ Tests: `dev/test_postprocess_auto_recovery.py`
 ---
 
 ### TASK 45.5: Add Halfwidth→Fullwidth Direction to Symbol Conversion
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 1.5 hours
+**Priority:** MEDIUM | **Status:** ✅ FIXED | **Effort:** 1.5 hours
 
 Problem: Current postprocessing only has Fullwidth→Halfwidth. Need bidirectional
 support so JP target language can restore fullwidth characters.
@@ -4926,7 +4928,7 @@ Tests: `dev/test_postprocess_symbol_conversion.py`
 ---
 
 ### TASK 45.6: Redesign Failure Handling Widget
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 1.5 hours
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 1.5 hours
 
 Problem: Current failure handling has Skip/Flag/Retry options. "Skip" is confusing
 (doesn't actually skip the line), "Flag for review" should be the non-write option,
@@ -4948,7 +4950,7 @@ Tests: `dev/test_postprocess_failure_handling.py`
 ---
 
 ### TASK 45.7: Implement Diff View Manual Editing and Mark-as-Fixed
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2.5 hours
+**Priority:** MEDIUM | **Status:** ✅ FIXED | **Effort:** 2.5 hours
 
 Problem: Current Diff View is read-only. Users need to manually fix flagged lines
 directly in the postprocessing step.
@@ -4972,7 +4974,7 @@ Tests: `dev/test_postprocess_diff_view.py`
 ---
 
 ### TASK 45.8: Implement Postprocessing Summary Live Updates and Completion Popup
-**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 1.5 hours
+**Priority:** LOW | **Status:** ✅ FIXED | **Effort:** 1.5 hours
 
 Problem: Summary panel currently only updates after all processing. Needs real-time
 updates during processing and a completion popup.
@@ -4991,7 +4993,7 @@ Tests: `dev/test_postprocess_summary.py`
 ---
 
 ### TASK 45.9: Update Processed Lines Filter Options
-**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 1 hour
+**Priority:** LOW | **Status:** ✅ FIXED | **Effort:** 1 hour
 
 Problem: Current filters are All/Changed/Needs Retry/Skipped. Need to match the
 new spec: All/Changed/Written/Flagged/By Process.
@@ -5013,7 +5015,7 @@ Tests: `dev/test_postprocess_gui.py`
 ---
 
 ### TASK 45.10: Overwrite Warning Dialog for Re-running Postprocessing
-**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 0.5 hours
+**Priority:** LOW | **Status:** ✅ FIXED | **Effort:** 0.5 hours
 
 Problem: Re-running postprocessing silently overwrites previous results.
 
@@ -5035,35 +5037,35 @@ Tests: `dev/test_postprocess_overwrite.py`
 | Task | Description | Priority | Effort | Dependencies |
 |------|-------------|----------|--------|--------------|
 | 45.1 | Fix MouseWheel bind_all Bug | CRITICAL | 0.5h | None | ✅ FIXED |
-| 45.2 | Rename to "Processed Lines" | MEDIUM | 0.5h | None |
-| 45.3 | Remove Refresh/Revert Buttons | LOW | 0.5h | None |
-| 45.4 | Auto Placeholder/Code/BR Recovery | HIGH | 2h | None |
-| 45.5 | Bidirectional Symbol Conversion | MEDIUM | 1.5h | None |
-| 45.6 | Redesign Failure Handling | HIGH | 1.5h | None |
-| 45.7 | Diff View Manual Editing | MEDIUM | 2.5h | 45.6 |
-| 45.8 | Summary Live Updates + Popup | LOW | 1.5h | None |
-| 45.9 | Update Filter Options | LOW | 1h | 45.6 |
-| 45.10 | Overwrite Warning Dialog | LOW | 0.5h | 45.3 |
+| 45.2 | Rename to "Processed Lines" | MEDIUM | 0.5h | None | ✅ FIXED |
+| 45.3 | Remove Refresh/Revert Buttons | LOW | 0.5h | None | ✅ FIXED |
+| 45.4 | Auto Placeholder/Code/BR Recovery | HIGH | 2h | None | ✅ FIXED |
+| 45.5 | Bidirectional Symbol Conversion | MEDIUM | 1.5h | None | ✅ FIXED |
+| 45.6 | Redesign Failure Handling | HIGH | 1.5h | None | ✅ FIXED |
+| 45.7 | Diff View Manual Editing | MEDIUM | 2.5h | 45.6 | ✅ FIXED |
+| 45.8 | Summary Live Updates + Popup | LOW | 1.5h | None | ✅ FIXED |
+| 45.9 | Update Filter Options | LOW | 1h | 45.6 | ✅ FIXED |
+| 45.10 | Overwrite Warning Dialog | LOW | 0.5h | 45.3 | ✅ FIXED |
 
 **Total Estimated Effort:** 12 hours (excluding 45.1 already fixed)
 
 **Implementation Order:**
 1. **Task 45.1** ✅ FIXED (MouseWheel bug — already done)
-2. **Task 45.4** (Auto recovery — highest code impact, cleans up GUI)
-3. **Task 45.6** (Failure Handling — changes enum and manifest values)
-4. **Task 45.2** (Rename table — quick UI change)
-5. **Task 45.3** (Remove buttons — quick UI change)
-6. **Task 45.5** (Bidirectional symbol conversion — new feature)
-7. **Task 45.9** (Filter options — depends on 45.6 for new status values)
-8. **Task 45.7** (Diff View editing — depends on 45.6 for flagged lines)
-9. **Task 45.8** (Summary updates — polish)
-10. **Task 45.10** (Overwrite warning — polish)
+2. **Task 45.4** ✅ FIXED (Auto recovery — highest code impact, cleans up GUI)
+3. **Task 45.6** ✅ FIXED (Failure Handling — changes enum and manifest values)
+4. **Task 45.2** ✅ FIXED (Rename table — quick UI change)
+5. **Task 45.3** ✅ FIXED (Remove buttons — quick UI change)
+6. **Task 45.5** ✅ FIXED (Bidirectional symbol conversion — new feature)
+7. **Task 45.9** ✅ FIXED (Filter options — depends on 45.6 for new status values)
+8. **Task 45.7** ✅ FIXED (Diff View editing — depends on 45.6 for flagged lines)
+9. **Task 45.8** ✅ FIXED (Summary updates — polish)
+10. **Task 45.10** ✅ FIXED (Overwrite warning — polish)
 
 ---
 
 ## PHASE 46: WORDWRAP TAB OVERHAUL (v2.7 Specs)
 
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** ~14h
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** ~14h
 **Spec Reference:** `doc/specs.md` Step 8 (Wordwrap) — v2.7 rewrite
 **Files:** `gui/steps/wordwrap_overwrite.py`, `functions/wordwrap.py`
 
@@ -5072,7 +5074,7 @@ Tests: `dev/test_postprocess_overwrite.py`
 Step 8 (Wordwrap) has been comprehensively respecified in v2.7. Key changes: pretty wrap becomes the standard algorithm (no user toggles for orphan prevention or punctuation-preferred breaks), Overwrite is integrated into the Lines Table instead of being a separate widget, ignore patterns come from the Code Database instead of hardcoded checkboxes, Typography widget is removed, Speaker Handling reduced to two options (Ignore/Count), and Mode becomes a dropdown without RPG Maker or Disabled options.
 
 ### TASK 46.1: Mode — Radio Buttons to Dropdown
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 1h
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 1h
 **File:** `gui/steps/wordwrap_overwrite.py`
 
 Goal: Replace WrapMode radio buttons with a Combobox dropdown. Remove RPG Maker and Disabled options.
@@ -5085,7 +5087,7 @@ Changes:
 - If no wrapping desired, user simply doesn't click Apply (no "Disabled" needed)
 
 ### TASK 46.2: Remove Prevent Orphans + Prefer Punctuation Checkboxes
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 0.5h
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 0.5h
 **File:** `gui/steps/wordwrap_overwrite.py`, `functions/wordwrap.py`
 
 Goal: Remove both checkboxes. These are always active in `pretty_wrap()`.
@@ -5098,7 +5100,7 @@ Changes:
 - Ensure `pretty_wrap()` always passes `prevent_orphan=True, prefer_punct_breaks=True`
 
 ### TASK 46.3: Speaker Handling — Reduce to Ignore + Count
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 1h
+**Priority:** MEDIUM | **Status:** ✅ FIXED | **Effort:** 1h
 **File:** `gui/steps/wordwrap_overwrite.py`, `functions/wordwrap.py`
 
 Goal: Remove Samelineindent and Newline options. Rename Sameline to Count.
@@ -5111,7 +5113,7 @@ Changes:
 - Hanging indent on continuation lines is inherent to Count mode (no separate toggle)
 
 ### TASK 46.4: Ignore Patterns — Checkboxes to Code Database Table
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**Priority:** MEDIUM | **Status:** ✅ FIXED | **Effort:** 2h
 **File:** `gui/steps/wordwrap_overwrite.py`
 
 Goal: Remove ignore pattern checkboxes. Display read-only table sourced from Code Database.
@@ -5125,7 +5127,7 @@ Changes:
 - Patterns treated as invisible during width calculation
 
 ### TASK 46.5: Remove Typography Widget
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 0.5h
+**Priority:** MEDIUM | **Status:** ✅ FIXED | **Effort:** 0.5h
 **File:** `gui/steps/wordwrap_overwrite.py`
 
 Goal: Remove the entire Typography panel.
@@ -5139,7 +5141,7 @@ Changes:
 - Remove any typography references in `_on_format_changed()` and apply logic
 
 ### TASK 46.6: Remove Overwrite Strategy Widget
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 1.5h
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 1.5h
 **File:** `gui/steps/wordwrap_overwrite.py`
 
 Goal: Remove the entire Overwrite Strategy panel. Overwrite becomes a table column.
@@ -5154,7 +5156,7 @@ Changes:
 - Overwrite functionality moves to the Lines Table (Task 46.8)
 
 ### TASK 46.7: Width — Spinbox to Dropdown with Pixel Option
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 1.5h
+**Priority:** MEDIUM | **Status:** ✅ FIXED | **Effort:** 1.5h
 **File:** `gui/steps/wordwrap_overwrite.py`
 
 Goal: Replace Width Spinbox with a Combobox dropdown that includes Character and Pixel options.
@@ -5168,7 +5170,7 @@ Changes:
 - Wire pixel mode to `estimate_chars_per_line()` and `measure_font_avg_char_px()` in `functions/wordwrap.py`
 
 ### TASK 46.8: Overwrite Column in Lines Table
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 2h
 **File:** `gui/steps/wordwrap_overwrite.py`
 
 Goal: Add Overwrite column to the Lines Table alongside Wordwrap.
@@ -5182,7 +5184,7 @@ Changes:
 - Store in manifest: `lines[].overwrite`
 
 ### TASK 46.9: Table Filter Radios
-**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 1h
+**Priority:** LOW | **Status:** ✅ FIXED | **Effort:** 1h
 **File:** `gui/steps/wordwrap_overwrite.py`
 
 Goal: Add filter radio buttons to the Lines Table.
@@ -5196,7 +5198,7 @@ Changes:
 - Wire filter to table refresh, respecting virtual scrolling performance
 
 ### TASK 46.10: Max Lines Flag Behavior
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 1h
+**Priority:** MEDIUM | **Status:** ✅ FIXED | **Effort:** 1h
 **File:** `gui/steps/wordwrap_overwrite.py`, `functions/wordwrap.py`
 
 Goal: When wrapping exceeds Max Lines, flag the line instead of silently truncating.
@@ -5228,22 +5230,22 @@ Changes:
 **Total Estimated Effort:** 12 hours
 
 **Implementation Order:**
-1. **Task 46.2** (Remove checkboxes — smallest change, cleans up GUI)
-2. **Task 46.5** (Remove Typography — another removal, simplifies GUI)
-3. **Task 46.6** (Remove Overwrite Strategy — major removal, prerequisite for 46.8)
-4. **Task 46.1** (Mode dropdown — structural change to settings panel)
-5. **Task 46.3** (Speaker Handling — enum cleanup + dropdown)
-6. **Task 46.4** (Ignore Patterns → Code Database table — new integration)
-7. **Task 46.7** (Width dropdown — new Character/Pixel mode)
-8. **Task 46.8** (Overwrite in table — depends on 46.6, major table rework)
-9. **Task 46.10** (Max Lines flag — depends on table being ready)
-10. **Task 46.9** (Table filters — polish, depends on 46.8)
+1. **Task 46.2** ✅ FIXED (Remove checkboxes — smallest change, cleans up GUI)
+2. **Task 46.5** ✅ FIXED (Remove Typography — another removal, simplifies GUI)
+3. **Task 46.6** ✅ FIXED (Remove Overwrite Strategy — major removal, prerequisite for 46.8)
+4. **Task 46.1** ✅ FIXED (Mode dropdown — structural change to settings panel)
+5. **Task 46.3** ✅ FIXED (Speaker Handling — enum cleanup + dropdown)
+6. **Task 46.4** ✅ FIXED (Ignore Patterns → Code Database table — new integration)
+7. **Task 46.7** ✅ FIXED (Width dropdown — new Character/Pixel mode)
+8. **Task 46.8** ✅ FIXED (Overwrite in table — depends on 46.6, major table rework)
+9. **Task 46.10** ✅ FIXED (Max Lines flag — depends on table being ready)
+10. **Task 46.9** ✅ FIXED (Table filters — polish, depends on 46.8)
 
 ---
 
 ## PHASE 47: OUTPUT + PIPELINE COMPLETENESS + IMPORT (v2.8 Specs)
 
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** ~18h
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** ~18h
 **Spec Reference:** `doc/specs.md` Step 9 (Output), Step 0 (Input), Step 5 (Translation) — v2.8 updates
 **Files:** `gui/steps/output_inject.py`, `gui/steps/input_loader.py`, `gui/steps/translate.py`, `functions/manifest_manager.py`, `functions/output.py` (new)
 
@@ -5283,7 +5285,7 @@ Changes:
 - This message fires during normal startup when no project is loaded — not an actual error
 
 ### TASK 47.4: Injection Priority Chain Implementation
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 3h
 **File:** `functions/output.py` (new), `gui/steps/output_inject.py`
 
 Goal: Implement `get_final_output()` with 9-level priority chain.
@@ -5297,7 +5299,7 @@ Changes:
 - Unit tests for all priority levels, gaps, and edge cases
 
 ### TASK 47.5: Dirty Flags — Process and Wordwrap
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 2h
 **File:** `functions/manifest_manager.py`, `gui/steps/preprocess.py`, `gui/steps/postprocess.py`, `gui/steps/wordwrap_overwrite.py`, `gui/steps/output_inject.py`
 
 Goal: Implement Process and Wordwrap dirty flags with pre-export validation.
@@ -5311,7 +5313,7 @@ Changes:
 - Show flag status in Output Summary panel (⚠ or ✓ indicators)
 
 ### TASK 47.6: Non-Destructive Default + Subfolder Naming
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 1h
+**Priority:** MEDIUM | **Status:** ✅ FIXED | **Effort:** 1h
 **File:** `gui/steps/output_inject.py`
 
 Goal: Ensure default naming strategy is "subfolder" and default behavior is non-destructive.
@@ -5324,7 +5326,7 @@ Changes:
 - Verify Backup defaults to "Timestamp"
 
 ### TASK 47.7: Failure Logging
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 1.5h
+**Priority:** MEDIUM | **Status:** ✅ FIXED | **Effort:** 1.5h
 **File:** `gui/steps/output_inject.py`
 
 Goal: Log every write failure with file path and error message.
@@ -5337,7 +5339,7 @@ Changes:
 - Add "Copy Failure Log" button for easy sharing
 
 ### TASK 47.8: Import Translations from Manifest
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 3h
 **File:** `gui/steps/input_loader.py`, `functions/manifest_manager.py`
 
 Goal: Add Import Translations button with exact line matching from another manifest.
@@ -5352,7 +5354,7 @@ Changes:
 - Unit tests for matching, no-match, duplicates, partial matches
 
 ### TASK 47.9: Skip Already Translated Option
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 1.5h
+**Priority:** MEDIUM | **Status:** ✅ FIXED | **Effort:** 1.5h
 **File:** `gui/steps/translate.py`, `functions/api_client.py`
 
 Goal: Add Skip Already Translated checkbox to Request Options.
@@ -5367,7 +5369,7 @@ Changes:
 - Update skipped count in Translation step data
 
 ### TASK 47.10: Output Summary Panel Improvements
-**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 1h
+**Priority:** LOW | **Status:** ✅ FIXED | **Effort:** 1h
 **File:** `gui/steps/output_inject.py`
 
 Goal: Enhance Summary panel with dirty flag indicators and failure log display.
@@ -5387,13 +5389,13 @@ Changes:
 | 47.1 | Fix output_inject get_section Bug | CRITICAL | 0.25h | None | ✅ FIXED |
 | 47.2 | Fix QA Mousewheel TclError | CRITICAL | 0.25h | None | ✅ FIXED |
 | 47.3 | Fix Preprocess Warning Level | LOW | 0.1h | None | ✅ FIXED |
-| 47.4 | Injection Priority Chain | HIGH | 3h | None |
-| 47.5 | Dirty Flags (Process + Wordwrap) | HIGH | 2h | None |
-| 47.6 | Non-Destructive Default | MEDIUM | 1h | None |
-| 47.7 | Failure Logging | MEDIUM | 1.5h | None |
-| 47.8 | Import Translations from Manifest | HIGH | 3h | None |
-| 47.9 | Skip Already Translated Option | MEDIUM | 1.5h | None |
-| 47.10 | Output Summary Panel Updates | LOW | 1h | 47.5, 47.7 |
+| 47.4 | Injection Priority Chain | HIGH | 3h | None | ✅ FIXED |
+| 47.5 | Dirty Flags (Process + Wordwrap) | HIGH | 2h | None | ✅ FIXED |
+| 47.6 | Non-Destructive Default | MEDIUM | 1h | None | ✅ FIXED |
+| 47.7 | Failure Logging | MEDIUM | 1.5h | None | ✅ FIXED |
+| 47.8 | Import Translations from Manifest | HIGH | 3h | None | ✅ FIXED |
+| 47.9 | Skip Already Translated Option | MEDIUM | 1.5h | None | ✅ FIXED |
+| 47.10 | Output Summary Panel Updates | LOW | 1h | 47.5, 47.7 | ✅ FIXED |
 
 **Total Estimated Effort:** 13.6 hours (excluding 47.1-47.3 already fixed)
 
@@ -5401,19 +5403,19 @@ Changes:
 1. **Task 47.1** ✅ FIXED (output_inject get_section)
 2. **Task 47.2** ✅ FIXED (QA mousewheel TclError)
 3. **Task 47.3** ✅ FIXED (preprocess warning level)
-4. **Task 47.4** (Injection priority chain — foundation for all output logic)
-5. **Task 47.5** (Dirty flags — validates pipeline completeness)
-6. **Task 47.8** (Import Translations — new Input feature, independent)
-7. **Task 47.9** (Skip Already Translated — pairs with 47.8 workflow)
-8. **Task 47.6** (Non-destructive defaults — quick verification)
-9. **Task 47.7** (Failure logging — output polish)
-10. **Task 47.10** (Summary panel — depends on 47.5 + 47.7, final polish)
+4. **Task 47.4** ✅ FIXED (Injection priority chain — foundation for all output logic)
+5. **Task 47.5** ✅ FIXED (Dirty flags — validates pipeline completeness)
+6. **Task 47.8** ✅ FIXED (Import Translations — new Input feature, independent)
+7. **Task 47.9** ✅ FIXED (Skip Already Translated — pairs with 47.8 workflow)
+8. **Task 47.6** ✅ FIXED (Non-destructive defaults — quick verification)
+9. **Task 47.7** ✅ FIXED (Failure logging — output polish)
+10. **Task 47.10** ✅ FIXED (Summary panel — depends on 47.5 + 47.7, final polish)
 
 ---
 
 ## PHASE 48: PIPELINE LOGGING SYSTEM (v2.9 Specs)
 
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** ~24h
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** ~24h
 **Spec Reference:** `doc/specs.md` §9 (Pipeline Logging System) — v2.9
 **Key Files:** `functions/mainhelper.py`, `functions/api_client.py`, `functions/postprocess.py`, `functions/wordwrap.py`, `gui/steps/postprocess.py`, `gui/steps/wordwrap_overwrite.py`, `gui/steps/output_inject.py`
 
@@ -5422,7 +5424,7 @@ Changes:
 CherryAI currently has partial logging infrastructure: `api_client.py` writes API call logs to `logs/` and `mainhelper.py` has `setup_logger()` and `write_failure_report()`. The v2.9 spec (§9) defines a comprehensive per-project, per-step logging system with standardized status vocabulary, utility metrics tracking, and log archival. Most functions that need to emit log entries already exist — they need log-writing calls added, not replacement. The spec identifies ~100 existing functions organized by pipeline step that produce loggable events.
 
 ### TASK 48.1: Log Rotation & Archival Utility
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 2h
 **File:** `functions/mainhelper.py`
 
 Goal: Add shared `_rotate_log()` utility and update `setup_logger()` for per-project, per-step log files.
@@ -5442,7 +5444,7 @@ Changes:
 - Unit tests: rotation naming, timestamp format, missing file, concurrent access
 
 ### TASK 48.2: Unified Status Vocabulary Constants
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 1h
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 1h
 **File:** `functions/mainhelper.py` (or `functions/common_errors.py`)
 
 Goal: Define the log status constants and formatting functions from §9.3.
@@ -5460,7 +5462,7 @@ Changes:
 - Unit tests: all format functions, step status derivation logic
 
 ### TASK 48.3: translation.log Integration
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 5h
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 5h
 **File:** `functions/api_client.py`, `functions/retry_handler.py`, `functions/chunk_optimizer.py`
 
 Goal: Extend existing API logging to produce the `translation.log` format from §9.2.2.
@@ -5488,7 +5490,7 @@ Changes:
 - Unit tests: log file creation, header/footer format, per-chunk entry format, per-line status values
 
 ### TASK 48.4: postprocess.log Integration
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 5h
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 5h
 **File:** `functions/postprocess.py`, `functions/postanalysis.py`, `gui/steps/postprocess.py`
 
 Goal: Add logging to all postprocessing recovery functions to produce `postprocess.log` per §9.2.3.
@@ -5513,7 +5515,7 @@ Changes:
 - Unit tests: log file creation, per-line entry format, summary footer with recovery type breakdown
 
 ### TASK 48.5: wordwrap.log Integration
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**Priority:** MEDIUM | **Status:** ✅ FIXED | **Effort:** 3h
 **File:** `functions/wordwrap.py`, `gui/steps/wordwrap_overwrite.py`
 
 Goal: Add logging to wrapping operations to produce `wordwrap.log` per §9.2.4.
@@ -5530,7 +5532,7 @@ Changes:
 - Unit tests: log file creation, per-line entry format, exceeding flag logging, summary stats
 
 ### TASK 48.6: output.log Integration
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**Priority:** MEDIUM | **Status:** ✅ FIXED | **Effort:** 3h
 **File:** `gui/steps/output_inject.py`, `functions/output.py` (from Task 47.4)
 
 Goal: Add logging to export operations to produce `output.log` per §9.2.5.
@@ -5548,7 +5550,7 @@ Changes:
 - Unit tests: log file creation, per-file entry format, injection source tracking, failure logging
 
 ### TASK 48.7: Manifest Utility Metrics Storage
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**Priority:** MEDIUM | **Status:** ✅ FIXED | **Effort:** 2h
 **File:** `functions/manifest_manager.py`
 
 Goal: Ensure manifest step data stores all utility metrics defined in §9.4.
@@ -5564,7 +5566,7 @@ Changes:
 - Unit tests: metric storage and retrieval roundtrip
 
 ### TASK 48.8: Log Export in Output Step
-**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 1.5h
+**Priority:** LOW | **Status:** ✅ FIXED | **Effort:** 1.5h
 **File:** `gui/steps/output_inject.py`
 
 Goal: Update Export Logs feature to bundle all per-step logs.
@@ -5580,7 +5582,7 @@ Changes:
 - Unit tests: log discovery, export bundling, missing logs handled gracefully
 
 ### TASK 48.9: Integration Testing
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 1.5h
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 1.5h
 **File:** `dev/test_pipeline_logging.py` (new)
 
 Goal: End-to-end tests verifying log files are created, formatted, and archived correctly.
@@ -5615,28 +5617,28 @@ Changes:
 **Total Estimated Effort:** 24 hours
 
 **Implementation Order:**
-1. **Task 48.1** (Log rotation — shared utility, prerequisite for all step logs)
-2. **Task 48.2** (Status vocabulary — shared constants, prerequisite for all step logs)
-3. **Task 48.7** (Manifest metrics — independent, can parallel with 48.1/48.2)
-4. **Task 48.3** (translation.log — highest value, extends existing api_client logging)
-5. **Task 48.4** (postprocess.log — second highest value, most recovery functions)
-6. **Task 48.5** (wordwrap.log — simpler step, fewer functions)
-7. **Task 48.6** (output.log — depends on Task 47.4 injection chain)
-8. **Task 48.8** (Log export — polish, depends on all logs existing)
-9. **Task 48.9** (Integration testing — final validation of entire system)
+1. ✅ **Task 48.1** (Log rotation — shared utility, prerequisite for all step logs)
+2. ✅ **Task 48.2** (Status vocabulary — shared constants, prerequisite for all step logs)
+3. ✅ **Task 48.7** (Manifest metrics — independent, can parallel with 48.1/48.2)
+4. ✅ **Task 48.3** (translation.log — highest value, extends existing api_client logging)
+5. ✅ **Task 48.4** (postprocess.log — second highest value, most recovery functions)
+6. ✅ **Task 48.5** (wordwrap.log — simpler step, fewer functions)
+7. ✅ **Task 48.6** (output.log — depends on Task 47.4 injection chain)
+8. ✅ **Task 48.8** (Log export — polish, depends on all logs existing)
+9. ✅ **Task 48.9** (Integration testing — final validation of entire system)
 
 ---
 
 =============================================================================
 
 ## PHASE 49: Request Formation 4-Step Process
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 20 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 20 hours
 **Spec Reference:** specs.md §5.2 API Request Building and Formation
 
 Goal: Implement the 4-step request formation process that groups lines into optimal translation requests using context markers, file boundaries, and size constraints.
 
 ### TASK 49.1: Request Builder Foundation
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4h
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 4h
 **File:** `functions/prompt_builder.py` (extend)
 
 Goal: Establish the shared request builder used by both Estimation and Translation.
@@ -5649,7 +5651,7 @@ Changes:
 - Ensure the same function is called by both `chunker_adapter.py` (estimation) and `api_client.py` (translation)
 
 ### TASK 49.2: Step 1 — Menu/Choice Splitting
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 3h
 **File:** `functions/prompt_builder.py` (extend)
 
 Goal: Split Menu and Choice blocks into their own respecruve requests using Context Markers.
@@ -5662,7 +5664,7 @@ Changes:
 - Each request type gets its corresponding conditional prompt
 
 ### TASK 49.3: Step 2 — First Dialogue Split
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 3h
 **File:** `functions/prompt_builder.py` (extend)
 
 Goal: Use File Ending context markers to perform the initial dialogue split.
@@ -5674,7 +5676,7 @@ Changes:
 - Preserve file boundary information for rolling context rules
 
 ### TASK 49.4: Step 3 — Size-Based Splitting and Balancing
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4h
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 4h
 **File:** `functions/prompt_builder.py` (extend)
 
 Goal: Apply maximum request size to split oversized candidates and balance line counts.
@@ -5685,7 +5687,7 @@ Changes:
 - Track which requests are "split requests" for rolling context determination
 
 ### TASK 49.5: Step 4 — Short Request Merging
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 3h
 **File:** `functions/prompt_builder.py` (extend)
 
 Goal: Merge requests (below minimum size) with other requests.
@@ -5696,7 +5698,7 @@ Changes:
 - Use an algorithm that minimizes request count
 
 ### TASK 49.6: Integration Testing
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 3h
 **File:** `dev/test_request_formation.py` (new)
 
 Goal: Validate the complete 4-step formation process.
@@ -5726,13 +5728,13 @@ Changes:
 ---
 
 ## PHASE 50: Context Markers Full Implementation
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 16 hours
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 16 hours
 **Spec Reference:** specs.md §5.3 Context Markers
 
 Goal: Implement full context marker support beyond the existing scene marker detection. Add Dialogue, Menu, Choice, and File End markers with integration into request building and prompt selection.
 
 ### TASK 50.1: Context Marker Data Model
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 2h
 **File:** `functions/mainhelper.py` (extend)
 
 Goal: Add context marker fields to the line entry model.
@@ -5744,7 +5746,7 @@ Changes:
 - Update manifest serialization to include context markers
 
 ### TASK 50.2: Context Marker Detection in Analysis
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4h
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 4h
 **File:** `functions/analysis.py` (extend)
 
 Goal: Extend analysis to detect and inject context markers when the parser provides none.
@@ -5757,7 +5759,7 @@ Changes:
 - **Existing code:** `functions/prompt_builder.py` has scene marker detection for rolling context — extend this
 
 ### TASK 50.3: Context Marker Integration with Request Builder
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4h
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 4h
 **File:** `functions/prompt_builder.py` (extend)
 
 Goal: Use context markers to select conditional prompts and control request splitting.
@@ -5770,7 +5772,7 @@ Changes:
 - Unknown (no marker after file start) uses Unknown conditional prompt
 
 ### TASK 50.4: Conditional Prompt Templates
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**Priority:** MEDIUM | **Status:** ✅ FIXED | **Effort:** 3h
 **File:** `config/prompt.txt` (extend), `functions/prompt_builder.py` (extend)
 
 Goal: Create distinct prompt templates for each context type.
@@ -5783,7 +5785,7 @@ Changes:
 - Templates stored in `config/` and loaded by prompt builder
 
 ### TASK 50.5: Testing
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**Priority:** HIGH | **Status:** ✅ FIXED | **Effort:** 3h
 **File:** `dev/test_context_markers.py` (new)
 
 Goal: Validate context marker detection, storage, and integration.
@@ -5810,13 +5812,13 @@ Changes:
 ---
 
 ## PHASE 51: Speaker Duplicate Removal
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 8 hours
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 8 hours
 **Spec Reference:** specs.md §5.1 Speaker:Dialogue Format
 
 Goal: Implement the Global Option to remove speaker names from consecutive same-speaker lines to save tokens during translation.
 
 ### TASK 51.1: Speaker Duplicate Detection
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 2h
 **File:** `functions/validation.py` (extend)
 
 Goal: Detect consecutive lines with the same speaker.
@@ -5828,7 +5830,7 @@ Changes:
 - Return list of line indices where speaker is duplicate of previous
 
 ### TASK 51.2: Preprocessing — Remove Duplicate Speakers
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 2h
 **File:** `modi/speaker_replacement.py` (extend)
 
 Goal: Strip duplicate speaker names during preprocessing.
@@ -5839,7 +5841,7 @@ Changes:
 - Affects token count — estimation must account for removed speakers
 
 ### TASK 51.3: Postprocessing — Restore Speakers
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 2h
 **File:** `modi/speaker_replacement.py` (extend)
 
 Goal: Re-add removed speaker names after translation.
@@ -5850,7 +5852,7 @@ Changes:
 - Handle cases where translation changed the line structure
 
 ### TASK 51.4: Global Option and Testing
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 2h
 **Files:** `gui/dialogs/global_options.py`, `dev/test_speaker_dedup.py` (new)
 
 Goal: Add the Global Option toggle and validate.
@@ -5876,13 +5878,13 @@ Changes:
 ---
 
 ## PHASE 52: Selective Glossary Per Chunk
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 10 hours
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 10 hours
 **Spec Reference:** specs.md §5.6 Glossary Selective Inclusion
 
 Goal: Filter glossary entries per translation chunk so only entries relevant to the current lines are included in the prompt, reducing token usage.
 
 ### TASK 52.1: Glossary Filter Function
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 3h
 **File:** `functions/glossary.py` (extend)
 
 Goal: Check and change where necessary or if not implemnted create the selective filter that matches glossary entries against chunk lines.
@@ -5895,7 +5897,7 @@ Changes:
 - Return only matching entries
 
 ### TASK 52.2: Integration with Prompt Builder
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 3h
 **File:** `functions/prompt_builder.py` (extend)
 
 Goal: Use the selective filter when building chunk prompts.
@@ -5907,7 +5909,7 @@ Changes:
 - Format matching entries as: `- [Original]: [Translation] ([Notes])`
 
 ### TASK 52.3: Global Option and GUI
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**Priority:** MEDIUM | **Status:** ✅ DONE | **Effort:** 2h
 **Files:** `gui/dialogs/global_options.py`, `CherryAI.ini`
 
 Goal: Add the Global Option for selective glossary mode.
@@ -5919,7 +5921,7 @@ Changes:
 - Pass mode to prompt builder
 
 ### TASK 52.4: Testing
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**Priority:** HIGH | **Status:** ✅ DONE | **Effort:** 2h
 **File:** `dev/test_glossary_selective.py` (new)
 
 Goal: Validate selective filtering.
@@ -5945,13 +5947,13 @@ Changes:
 ---
 
 ## PHASE 53: Parser Scripts System
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 24 hours
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 24 hours
 **Spec Reference:** specs.md §5.8 Parser Scripts
 
 Goal: Formalize the Parser Scripts interface so game-engine-specific scripts can provide extraction, injection, wordwrap settings, forbidden characters, and context markers.
 
 ### TASK 53.1: Parser Script Interface
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4h
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 4h
 **File:** `formats/parser_base.py` (new)
 
 Goal: Define the base class/interface for parser scripts.
@@ -5964,7 +5966,7 @@ Changes:
 - ForbiddenChars dataclass: `characters`, `logit_bias`, `output_action` (replace/flag)
 
 ### TASK 53.2: RPG Maker Parser Migration
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 6h
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 6h
 **Files:** `formats/rpgmaker.py` (refactor), `formats/parser_rpgmaker.py` (new)
 
 Goal: Migrate existing RPG Maker format handler to the parser script interface.
@@ -5976,7 +5978,7 @@ Changes:
 - Keep backward compatibility with existing format handler
 
 ### TASK 53.3: Parser Registration and Discovery
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 3h
 **File:** `formats/__init__.py` (extend)
 
 Goal: Register parsers and auto-detect which parser to use for loaded files.
@@ -5987,7 +5989,7 @@ Changes:
 - Fallback to base format handlers when no parser script matches
 
 ### TASK 53.4: Wordwrap Integration
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 3h
 **File:** `gui/steps/step8_wordwrap.py` (extend)
 
 Goal: Auto-populate wordwrap settings from parser scripts.
@@ -5998,7 +6000,7 @@ Changes:
 - User can still override auto-populated values
 
 ### TASK 53.5: Forbidden Characters Integration
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 3h
 **Files:** `functions/api_client.py` (extend), `functions/postprocess.py` (extend)
 
 Goal: Apply parser-defined forbidden characters during translation and output.
@@ -6009,7 +6011,7 @@ Changes:
 - Show forbidden chars in Translation step Prompt Preview
 
 ### TASK 53.6: Testing
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 5h
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 5h
 **File:** `dev/test_parser_scripts.py` (new)
 
 Goal: Validate the parser script system end-to-end.
@@ -6038,13 +6040,13 @@ Changes:
 ---
 
 ## PHASE 54: Point of View Inference
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 12 hours
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 12 hours
 **Spec Reference:** specs.md §5.11 Point of View Inference
 
 Goal: Implement point-of-view detection from narrative text to provide the LLM with perspective context.
 
 ### TASK 54.1: Pronoun Pattern Database
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 2h
 **File:** `functions/analysis.py` (extend)
 
 Goal: Create language-specific pronoun pattern lists for POV detection.
@@ -6058,7 +6060,7 @@ Changes:
 - Store patterns as configurable per source language
 
 ### TASK 54.2: POV Detection Algorithm
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 4h
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 4h
 **File:** `functions/analysis.py` (extend)
 
 Goal: Analyze non-dialogue lines to determine narrative perspective.
@@ -6072,7 +6074,7 @@ Changes:
 - Return: `{pov: "1st"|"2nd"|"3rd"|"mixed", confidence: "high"|"low", counts: {}}`
 
 ### TASK 54.3: Prompt Integration
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 2h
 **File:** `functions/prompt_builder.py` (extend)
 
 Goal: Include POV information in translation prompt when confidence is high.
@@ -6084,7 +6086,7 @@ Changes:
 - Store POV result in manifest
 
 ### TASK 54.4: GUI Display and Testing
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 4h
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 4h
 **Files:** `gui/steps/step1_analysis.py` (extend), `dev/test_pov_inference.py` (new)
 
 Goal: Display POV results in Analysis step and validate detection.
@@ -6111,13 +6113,13 @@ Changes:
 ---
 
 ## PHASE 55: Consistency System
-**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 30 hours
+**Priority:** LOW | **Status:** ✅ COMPLETE | **Effort:** 30 hours
 **Spec Reference:** specs.md §5.12 Consistency System
 
 Goal: Implement the Consistency system with Preliminary, During, and Check modes to ensure consistent translation of recurring terms across all requests.
 
 ### TASK 55.1: Consistency Data Model
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 3h
 **File:** `functions/consistency.py` (new)
 
 Goal: Create the data structures for tracking consistency terms.
@@ -6129,7 +6131,7 @@ Changes:
 - Term detection: code patterns marked as Translate, glossary entries with empty translation, paired tags
 
 ### TASK 55.2: Type Detection — Code, Glossary, Spans
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 4h
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 4h
 **File:** `functions/consistency.py` (extend)
 
 Goal: Automatically detect consistency-relevant terms from project data.
@@ -6141,7 +6143,7 @@ Changes:
 - Build initial ConsistencyStore from detected terms
 
 ### TASK 55.3: Preliminary Mode
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 8h
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 8h
 **File:** `functions/consistency.py` (extend)
 
 Goal: Run pre-translation passes to establish canonical translations for all detected terms.
@@ -6155,7 +6157,7 @@ Changes:
 - Track which terms were resolved with high confidence
 
 ### TASK 55.4: During Mode
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 6h
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 6h
 **File:** `functions/consistency.py` (extend), `functions/api_client.py` (extend)
 
 Goal: Use first translated occurrence as canonical and propagate to subsequent requests.
@@ -6169,7 +6171,7 @@ Changes:
 - Handle code-embedded terms (replace code + term combination)
 
 ### TASK 55.5: Check Mode
-**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 4h
+**Priority:** LOW | **Status:** ✅ COMPLETE | **Effort:** 4h
 **File:** `functions/consistency.py` (extend)
 
 Goal: Post-translation verification flagging inconsistent translations.
@@ -6182,7 +6184,7 @@ Changes:
 - Does not auto-fix — flags for manual review
 
 ### TASK 55.6: Global Option and GUI
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2h
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 2h
 **Files:** `gui/dialogs/global_options.py`, `CherryAI.ini`
 
 Goal: Add the Global Option for consistency mode selection.
@@ -6194,7 +6196,7 @@ Changes:
 - Show consistency results in Analysis and QA steps
 
 ### TASK 55.7: Testing
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3h
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3h
 **File:** `dev/test_consistency.py` (new)
 
 Goal: Validate all consistency modes and term types.

@@ -360,7 +360,12 @@ class SharedTable(ttk.Frame):
         self._refresh_display()
 
     def _refresh_display(self) -> None:
-        """Refresh the treeview display."""
+        """Refresh the treeview display.
+
+        TASK 43.2: Uses batch insertion for large datasets (>1000 rows).
+        Rows are inserted in chunks of ``_BATCH_SIZE`` with periodic
+        ``update_idletasks()`` to keep the UI responsive.
+        """
         # Clear existing items
         for item in self._tree.get_children():
             self._tree.delete(item)
@@ -368,12 +373,29 @@ class SharedTable(ttk.Frame):
         # Get visible columns
         visible_cols = [c for c in self.columns if c.visible]
 
-        # Insert rows
-        for i, row in enumerate(self._filtered_rows):
-            values = []
+        rows = self._filtered_rows
+        batch_size = 500
+
+        if len(rows) <= batch_size:
+            # Small dataset: insert synchronously
+            self._insert_rows(rows, visible_cols, 0)
+        else:
+            # Large dataset: batch insert
+            self._batch_insert(rows, visible_cols, 0, batch_size)
+
+        self._update_status()
+
+    def _insert_rows(
+        self,
+        rows: list,
+        visible_cols: list,
+        start: int,
+    ) -> None:
+        """Insert rows into the Treeview (Task 43.2 helper)."""
+        for i, row in enumerate(rows, start=start):
+            values: list = []
             if self._show_checkboxes:
                 values.append("☑" if row.id in self._checked_rows else "☐")
-
             for col in visible_cols:
                 val = row.values.get(col.key, "")
                 values.append(str(val) if val is not None else "")
@@ -382,14 +404,30 @@ class SharedTable(ttk.Frame):
             tags.append("odd" if i % 2 == 0 else "even")
 
             self._tree.insert(
-                "",
-                "end",
-                iid=str(row.id),
-                values=values,
-                tags=tags,
+                "", "end", iid=str(row.id), values=values, tags=tags,
             )
 
-        self._update_status()
+    def _batch_insert(
+        self,
+        rows: list,
+        visible_cols: list,
+        offset: int,
+        batch_size: int,
+    ) -> None:
+        """Insert a batch of rows and schedule the next batch (Task 43.2)."""
+        end = min(offset + batch_size, len(rows))
+        self._insert_rows(rows[offset:end], visible_cols, offset)
+
+        if end < len(rows):
+            # Schedule next batch (non-blocking)
+            self.after(1, lambda: self._batch_insert(
+                rows, visible_cols, end, batch_size,
+            ))
+            self._status_label.configure(
+                text=f"Loading {end}/{len(rows)} rows..."
+            )
+        else:
+            self._update_status()
 
     def _update_status(self) -> None:
         """Update the status bar text."""

@@ -66,6 +66,7 @@ except ImportError:
     DEFAULT_PREPROCESS_CONFIG: Dict[str, Any] = {  # type: ignore[no-redef]
         "dedup_enabled": True,
         "dedup_threshold": 1,
+        "aggressive_dedup_enabled": False,  # TASK 42.4
         "ellipsis_enabled": True,
         "symbol_conversion_enabled": True,
         "symbol_src_lang": "ja",
@@ -161,6 +162,7 @@ class PreprocessingStep(BaseStep):
         # UI variables (created in _build_ui)
         self._dedup_var: Optional[tk.BooleanVar] = None
         self._dedup_threshold_var: Optional[tk.IntVar] = None
+        self._aggressive_dedup_var: Optional[tk.BooleanVar] = None  # TASK 42.4
         self._ellipsis_var: Optional[tk.BooleanVar] = None
         self._symbol_var: Optional[tk.BooleanVar] = None
         self._prot_var: Optional[tk.BooleanVar] = None
@@ -261,8 +263,8 @@ class PreprocessingStep(BaseStep):
         # Protect Code section
         self._build_protect_code_section(scrollable)
 
-        # Anchor Removal section
-        self._build_anchor_removal_section(scrollable)
+        # Anchoring section (TASK 42.1: renamed from Anchor Removal)
+        self._build_anchoring_section(scrollable)
 
     def _build_standard_rules(self, parent: ttk.Frame) -> None:
         """Build standard preprocessing rules section.
@@ -313,6 +315,36 @@ class PreprocessingStep(BaseStep):
         )
         threshold_spin.pack(side="left")
         
+        # TASK 42.4: Aggressive number deduplication toggle
+        aggr_frame = ttk.Frame(section)
+        aggr_frame.pack(fill="x", padx=10, pady=(0, 5))
+        self._aggressive_dedup_var = tk.BooleanVar(
+            value=self._config.get("aggressive_dedup_enabled", False),
+        )
+        aggr_cb = ttk.Checkbutton(
+            aggr_frame,
+            text="Aggressive Number Dedup",
+            variable=self._aggressive_dedup_var,
+            command=self._on_config_changed,
+        )
+        aggr_cb.pack(side="left", padx=(20, 0))
+        self._add_tooltip(
+            aggr_cb,
+            "Treat lines differing only by numbers as duplicates.\n"
+            "Numbers are normalized to a token for comparison "
+            "and restored during postprocessing.",
+        )
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=aggr_cb,
+                var=self._aggressive_dedup_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="AggressiveNumberDedup",
+                default=False,
+                parent_key="Preprocessing",
+            )
+        )
+
         # TASK 24.1: Bind threshold to manifest
         self._manifest_bindings.append(
             bind_spinbox_to_field(
@@ -460,6 +492,8 @@ class PreprocessingStep(BaseStep):
     def _build_placeholder_section(self, parent: ttk.Frame) -> None:
         """Build custom placeholder rules section.
 
+        TASK 42.2: Added RegEx toggle and Treeview-based table.
+
         Args:
             parent: Parent frame.
         """
@@ -474,28 +508,36 @@ class PreprocessingStep(BaseStep):
         )
         info_label.pack(anchor="w", padx=10, pady=(5, 0))
 
-        # Rules list
-        list_frame = ttk.Frame(section)
-        list_frame.pack(fill="x", padx=10, pady=5)
+        # Treeview table (TASK 42.2)
+        tree_frame = ttk.Frame(section)
+        tree_frame.pack(fill="x", padx=10, pady=5)
 
-        self._placeholder_listbox = tk.Listbox(
-            list_frame,
-            height=4,
-            bg=THEME.bg_input,
-            fg=THEME.text_primary,
-            selectbackground=THEME.bg_selected,
+        cols = ("pattern", "token", "is_regex")
+        self._placeholder_tree = ttk.Treeview(
+            tree_frame, columns=cols, show="headings", height=4,
         )
-        self._placeholder_listbox.pack(side="left", fill="x", expand=True)
+        self._placeholder_tree.heading("pattern", text="Pattern")
+        self._placeholder_tree.heading("token", text="Token")
+        self._placeholder_tree.heading("is_regex", text="RegEx")
+
+        self._placeholder_tree.column("pattern", width=180, stretch=True)
+        self._placeholder_tree.column("token", width=120)
+        self._placeholder_tree.column("is_regex", width=50, anchor="center")
 
         scrollbar = ttk.Scrollbar(
-            list_frame, orient="vertical", command=self._placeholder_listbox.yview
+            tree_frame, orient="vertical", command=self._placeholder_tree.yview,
         )
+        self._placeholder_tree.configure(yscrollcommand=scrollbar.set)
+        self._placeholder_tree.pack(side="left", fill="x", expand=True)
         scrollbar.pack(side="right", fill="y")
-        self._placeholder_listbox.configure(yscrollcommand=scrollbar.set)
 
         # Bind double-click for editing and Delete for removal
-        self._placeholder_listbox.bind("<Double-1>", lambda e: self._edit_placeholder_rule())
-        self._placeholder_listbox.bind("<Delete>", lambda e: self._remove_placeholder_rule())
+        self._placeholder_tree.bind(
+            "<Double-1>", lambda e: self._edit_placeholder_rule(),
+        )
+        self._placeholder_tree.bind(
+            "<Delete>", lambda e: self._remove_placeholder_rule(),
+        )
 
         # Add/Remove buttons
         btn_frame = ttk.Frame(section)
@@ -514,6 +556,8 @@ class PreprocessingStep(BaseStep):
     def _build_protect_code_section(self, parent: ttk.Frame) -> None:
         """Build protect code patterns section.
 
+        TASK 42.3: Treeview with RegEx column (default enabled).
+
         Args:
             parent: Parent frame.
         """
@@ -523,33 +567,41 @@ class PreprocessingStep(BaseStep):
         # Info label
         info_label = ttk.Label(
             section,
-            text="Regex patterns to protect from translation.",
+            text="Patterns to protect from translation (replaced with __PROT__).",
             foreground=THEME.text_secondary,
         )
         info_label.pack(anchor="w", padx=10, pady=(5, 0))
 
-        # Patterns list
-        list_frame = ttk.Frame(section)
-        list_frame.pack(fill="x", padx=10, pady=5)
+        # Treeview table (TASK 42.3)
+        tree_frame = ttk.Frame(section)
+        tree_frame.pack(fill="x", padx=10, pady=5)
 
-        self._protect_listbox = tk.Listbox(
-            list_frame,
-            height=4,
-            bg=THEME.bg_input,
-            fg=THEME.text_primary,
-            selectbackground=THEME.bg_selected,
+        cols = ("pattern", "is_regex", "description")
+        self._protect_tree = ttk.Treeview(
+            tree_frame, columns=cols, show="headings", height=4,
         )
-        self._protect_listbox.pack(side="left", fill="x", expand=True)
+        self._protect_tree.heading("pattern", text="Pattern")
+        self._protect_tree.heading("is_regex", text="RegEx")
+        self._protect_tree.heading("description", text="Description")
+
+        self._protect_tree.column("pattern", width=200, stretch=True)
+        self._protect_tree.column("is_regex", width=50, anchor="center")
+        self._protect_tree.column("description", width=150, stretch=True)
 
         scrollbar = ttk.Scrollbar(
-            list_frame, orient="vertical", command=self._protect_listbox.yview
+            tree_frame, orient="vertical", command=self._protect_tree.yview,
         )
+        self._protect_tree.configure(yscrollcommand=scrollbar.set)
+        self._protect_tree.pack(side="left", fill="x", expand=True)
         scrollbar.pack(side="right", fill="y")
-        self._protect_listbox.configure(yscrollcommand=scrollbar.set)
 
         # Bind double-click for editing and Delete for removal
-        self._protect_listbox.bind("<Double-1>", lambda e: self._edit_protect_pattern())
-        self._protect_listbox.bind("<Delete>", lambda e: self._remove_protect_pattern())
+        self._protect_tree.bind(
+            "<Double-1>", lambda e: self._edit_protect_pattern(),
+        )
+        self._protect_tree.bind(
+            "<Delete>", lambda e: self._remove_protect_pattern(),
+        )
 
         # Add/Remove buttons
         btn_frame = ttk.Frame(section)
@@ -570,113 +622,205 @@ class PreprocessingStep(BaseStep):
             btn_frame, text="📋 Common Patterns", command=self._show_common_patterns
         ).pack(side="right", padx=2)
 
-    def _build_anchor_removal_section(self, parent: ttk.Frame) -> None:
-        """Build anchor removal section.
+    def _build_anchoring_section(self, parent: ttk.Frame) -> None:
+        """Build anchoring section with table-based management.
+
+        TASK 42.1: Redesigned from single-field "Anchor Removal" to
+        table-based "Anchoring" with Pattern, Action, Anchor Spec,
+        RegEx, and Description columns.
 
         Args:
             parent: Parent frame.
         """
-        section = ttk.LabelFrame(parent, text="Anchor Removal")
+        section = ttk.LabelFrame(parent, text="Anchoring")
         section.pack(fill="x", padx=5, pady=5)
-
-        # Enable toggle
-        enable_frame = ttk.Frame(section)
-        enable_frame.pack(fill="x", padx=10, pady=5)
-
-        self._anchor_enabled_var = tk.BooleanVar(
-            value=self._config.get("anchor_removal_enabled", False)
-        )
-        anchor_cb = ttk.Checkbutton(
-            enable_frame,
-            text="Enable anchor-based removal",
-            variable=self._anchor_enabled_var,
-            command=self._on_config_changed,
-        )
-        anchor_cb.pack(side="left")
 
         # Info label
         info_label = ttk.Label(
             section,
-            text="Remove content at specific anchors (restored after translation).",
+            text="Remove patterns and restore at anchor positions after translation.",
             foreground=THEME.text_secondary,
         )
-        info_label.pack(anchor="w", padx=10, pady=(0, 5))
+        info_label.pack(anchor="w", padx=10, pady=(5, 0))
 
-        # Content pattern
-        pattern_frame = ttk.Frame(section)
-        pattern_frame.pack(fill="x", padx=10, pady=2)
+        # Anchoring table (Treeview)
+        tree_frame = ttk.Frame(section)
+        tree_frame.pack(fill="x", padx=10, pady=5)
 
-        ttk.Label(pattern_frame, text="Content Pattern:", width=14).pack(side="left")
-        self._anchor_pattern_var = tk.StringVar(
-            value=self._config.get("anchor_content_pattern", "")
+        cols = ("pattern", "action", "anchor_spec", "is_regex", "description")
+        self._anchor_tree = ttk.Treeview(
+            tree_frame, columns=cols, show="headings", height=4,
         )
-        self._anchor_pattern_entry = ttk.Entry(
-            pattern_frame,
-            textvariable=self._anchor_pattern_var,
-            width=30,
+        self._anchor_tree.heading("pattern", text="Pattern")
+        self._anchor_tree.heading("action", text="Action")
+        self._anchor_tree.heading("anchor_spec", text="Anchor Spec")
+        self._anchor_tree.heading("is_regex", text="RegEx")
+        self._anchor_tree.heading("description", text="Description")
+
+        self._anchor_tree.column("pattern", width=140, stretch=True)
+        self._anchor_tree.column("action", width=70, anchor="center")
+        self._anchor_tree.column("anchor_spec", width=120)
+        self._anchor_tree.column("is_regex", width=50, anchor="center")
+        self._anchor_tree.column("description", width=140, stretch=True)
+
+        scrollbar = ttk.Scrollbar(
+            tree_frame, orient="vertical", command=self._anchor_tree.yview,
         )
-        self._anchor_pattern_entry.pack(side="left", fill="x", expand=True)
-        self._anchor_pattern_entry.bind("<KeyRelease>", lambda e: self._on_config_changed())
+        self._anchor_tree.configure(yscrollcommand=scrollbar.set)
+        self._anchor_tree.pack(side="left", fill="x", expand=True)
+        scrollbar.pack(side="right", fill="y")
 
-        # Anchor spec
-        spec_frame = ttk.Frame(section)
-        spec_frame.pack(fill="x", padx=10, pady=2)
+        # Bind double-click for editing and Delete for removal
+        self._anchor_tree.bind("<Double-1>", lambda e: self._edit_anchor_entry())
+        self._anchor_tree.bind("<Delete>", lambda e: self._remove_anchor_entry())
 
-        ttk.Label(spec_frame, text="Anchor Spec:", width=14).pack(side="left")
-        self._anchor_spec_var = tk.StringVar(
-            value=self._config.get("anchor_spec", "line_start;line_end")
+        # Add/Edit/Remove buttons
+        btn_frame = ttk.Frame(section)
+        btn_frame.pack(fill="x", padx=10, pady=5)
+
+        ttk.Button(btn_frame, text="+ Add", command=self._add_anchor_entry).pack(
+            side="left", padx=2,
         )
-        self._anchor_spec_entry = ttk.Entry(
-            spec_frame,
-            textvariable=self._anchor_spec_var,
-            width=30,
+        ttk.Button(btn_frame, text="- Remove", command=self._remove_anchor_entry).pack(
+            side="left", padx=2,
         )
-        self._anchor_spec_entry.pack(side="left", fill="x", expand=True)
-        self._anchor_spec_entry.bind("<KeyRelease>", lambda e: self._on_config_changed())
-
-        # Quick presets
-        preset_frame = ttk.Frame(section)
-        preset_frame.pack(fill="x", padx=10, pady=5)
-
-        ttk.Label(preset_frame, text="Presets:").pack(side="left")
-
-        def set_anchor_preset(preset: str) -> None:
-            """Set anchor spec from preset."""
-            presets = {
-                "Line Boundaries": "line_start;line_end",
-                "After Punctuation": "after:。;after:.;after:!;after:?",
-                "Before Punctuation": "before:。;before:.;before:!;before:?",
-                "Around Quotes": "around:「;around:」;around:\";around:'",
-            }
-            self._anchor_spec_var.set(presets.get(preset, ""))
-            self._on_config_changed()
-
-        for preset in ["Line Boundaries", "After Punctuation", "Before Punctuation", "Around Quotes"]:
-            ttk.Button(
-                preset_frame,
-                text=preset,
-                command=lambda p=preset: set_anchor_preset(p),  # type: ignore
-                width=len(preset) + 2,
-            ).pack(side="left", padx=2)
-
-        # Help text
-        help_text = ttk.Label(
-            section,
-            text=(
-                "Spec format: line_start; line_end; after:CHAR; before:CHAR; around:CHAR\n"
-                "Separate multiple specs with semicolon (;)"
-            ),
-            font=("Segoe UI", 8),
-            foreground="gray",
+        ttk.Button(btn_frame, text="Edit", command=self._edit_anchor_entry).pack(
+            side="left", padx=2,
         )
-        help_text.pack(anchor="w", padx=10, pady=(0, 5))
+
+    # ── Anchoring management methods (TASK 42.1) ──
+
+    def _add_anchor_entry(self) -> None:
+        """Add a new anchoring entry via dialog.
+
+        TASK 42.1: Opens _AnchorDialog with fields for Pattern,
+        Action, Anchor Spec, RegEx, and Description.
+        """
+        dialog = _AnchorDialog(self, "Add Anchoring Rule")
+        if dialog.result:
+            vals = (
+                dialog.result["pattern"],
+                dialog.result["action"],
+                dialog.result["anchor_spec"],
+                "✓" if dialog.result["is_regex"] else "✗",
+                dialog.result["description"],
+            )
+            self._anchor_tree.insert("", tk.END, values=vals)
+            self._sync_anchor_tree_to_manifest()
+            self.session.set_dirty(True)
+
+    def _remove_anchor_entry(self) -> None:
+        """Remove selected anchoring entry.
+
+        TASK 42.1: Deletes from tree and syncs to manifest.
+        """
+        sel = self._anchor_tree.selection()
+        if sel:
+            for item in sel:
+                self._anchor_tree.delete(item)
+            self._sync_anchor_tree_to_manifest()
+            self.session.set_dirty(True)
+
+    def _edit_anchor_entry(self) -> None:
+        """Edit selected anchoring entry via dialog.
+
+        TASK 42.1: Opens _AnchorDialog pre-populated with selected row.
+        """
+        sel = self._anchor_tree.selection()
+        if not sel:
+            return
+        item = sel[0]
+        vals = self._anchor_tree.item(item, "values")
+        if not vals or len(vals) < 5:
+            return
+        defaults = {
+            "pattern": vals[0],
+            "action": vals[1],
+            "anchor_spec": vals[2],
+            "is_regex": vals[3] == "✓",
+            "description": vals[4],
+        }
+        dialog = _AnchorDialog(self, "Edit Anchoring Rule", defaults=defaults)
+        if dialog.result:
+            new_vals = (
+                dialog.result["pattern"],
+                dialog.result["action"],
+                dialog.result["anchor_spec"],
+                "✓" if dialog.result["is_regex"] else "✗",
+                dialog.result["description"],
+            )
+            self._anchor_tree.item(item, values=new_vals)
+            self._sync_anchor_tree_to_manifest()
+            self.session.set_dirty(True)
+
+    def _sync_anchor_tree_to_manifest(self) -> None:
+        """Sync anchoring tree data to manifest.
+
+        TASK 42.1: Reads all tree items and saves via save_anchor_removal.
+        """
+        anchors: List[Dict[str, Any]] = []
+        for child in self._anchor_tree.get_children():
+            vals = self._anchor_tree.item(child, "values")
+            if vals and len(vals) >= 5:
+                anchors.append({
+                    "pattern": vals[0],
+                    "action": vals[1],
+                    "anchor_spec": vals[2],
+                    "is_regex": vals[3] == "✓",
+                    "description": vals[4],
+                })
+        # Update config list
+        self._config["anchor_entries"] = anchors
+        if self.manifest_manager:
+            save_anchor_removal(self.manifest_manager, anchors)
+
+    def _refresh_anchor_entries(self) -> None:
+        """Refresh anchoring tree from manifest data.
+
+        TASK 42.1: Loads entries and populates tree.
+        """
+        if not hasattr(self, "_anchor_tree"):
+            return
+        self._anchor_tree.delete(*self._anchor_tree.get_children())
+        if not self.manifest_manager or not self.manifest_manager.is_loaded:
+            return
+        anchors = load_anchor_removal(self.manifest_manager)
+        for a in anchors:
+            vals = (
+                a.get("pattern", ""),
+                a.get("action", "remove"),
+                a.get("anchor_spec", ""),
+                "✓" if a.get("is_regex", True) else "✗",
+                a.get("description", ""),
+            )
+            self._anchor_tree.insert("", tk.END, values=vals)
+        self._config["anchor_entries"] = anchors
 
     def _build_preview_panel(self, parent: ttk.LabelFrame) -> None:
         """Build the preview table panel.
 
+        TASK 42.8: Includes filter dropdown for preview filtering.
+
         Args:
             parent: Parent frame.
         """
+        # TASK 42.8: Filter dropdown
+        filter_frame = ttk.Frame(parent)
+        filter_frame.pack(fill="x", padx=5, pady=(5, 0))
+        ttk.Label(filter_frame, text="Filter:").pack(side="left")
+        self._preview_filter_var = tk.StringVar(value="All")
+        filter_combo = ttk.Combobox(
+            filter_frame,
+            textvariable=self._preview_filter_var,
+            values=["All", "Changed", "Custom", "Deduplicated", "Protected", "Anchored", "Errors"],
+            state="readonly",
+            width=16,
+        )
+        filter_combo.pack(side="left", padx=5)
+        filter_combo.bind("<<ComboboxSelected>>", lambda _: self._update_preview())
+        self._filter_count_label = ttk.Label(filter_frame, text="")
+        self._filter_count_label.pack(side="left", padx=5)
+
         # Define columns for preview
         columns = [
             ColumnDef(key="line_num", title="#", width=50, anchor="e"),
@@ -743,6 +887,10 @@ class PreprocessingStep(BaseStep):
         self._config["dedup_threshold"] = (
             self._dedup_threshold_var.get() if self._dedup_threshold_var else 1
         )
+        # TASK 42.4: Aggressive dedup setting
+        self._config["aggressive_dedup_enabled"] = (
+            self._aggressive_dedup_var.get() if self._aggressive_dedup_var else False
+        )
         self._config["ellipsis_enabled"] = self._ellipsis_var.get() if self._ellipsis_var else True
         self._config["symbol_conversion_enabled"] = (
             self._symbol_var.get() if self._symbol_var else True
@@ -755,16 +903,8 @@ class PreprocessingStep(BaseStep):
             self._code_spacing_var.get() if self._code_spacing_var else False
         )
 
-        # Anchor removal settings
-        if hasattr(self, "_anchor_enabled_var"):
-            self._config["anchor_removal_enabled"] = self._anchor_enabled_var.get()
-        if hasattr(self, "_anchor_pattern_var"):
-            self._config["anchor_content_pattern"] = self._anchor_pattern_var.get()
-        if hasattr(self, "_anchor_spec_var"):
-            self._config["anchor_spec"] = self._anchor_spec_var.get()
-
-        # TASK 24.3: Save anchor removal to manifest
-        self._save_anchor_removal_to_manifest()
+        # TASK 42.1: Anchor entries managed via tree, no single-field config
+        # Sync is done in _sync_anchor_tree_to_manifest() on add/edit/remove
 
         # Mark session as dirty
         self.session.set_dirty(True)
@@ -906,13 +1046,34 @@ class PreprocessingStep(BaseStep):
         return result
 
     def _update_preview(self) -> None:
-        """Update the preview table with processed lines."""
+        """Update the preview table with processed lines.
+
+        TASK 42.8: Respects the preview filter dropdown to show subsets.
+        """
         rows = []
         changed_count = 0
+        active_filter = "All"
+        if hasattr(self, "_preview_filter_var"):
+            active_filter = self._preview_filter_var.get() or "All"
 
         for idx, (original, processed, changes) in enumerate(self._preview_lines):
             if changes:
                 changed_count += 1
+
+            # TASK 42.8: Apply filter
+            if active_filter != "All":
+                if active_filter == "Changed" and not changes:
+                    continue
+                if active_filter == "Custom" and "__CUST__" not in processed:
+                    continue
+                if active_filter == "Deduplicated" and "__DEDUP__" not in processed:
+                    continue
+                if active_filter == "Protected" and "__PROT__" not in processed:
+                    continue
+                if active_filter == "Anchored" and "anchor" not in (changes or "").lower():
+                    continue
+                if active_filter == "Errors" and "error" not in (changes or "").lower():
+                    continue
 
             rows.append(
                 TableRow(
@@ -929,6 +1090,14 @@ class PreprocessingStep(BaseStep):
             )
 
         self._preview_table.set_data(rows)
+
+        # TASK 42.8: Update filter count
+        if hasattr(self, "_filter_count_label") and active_filter != "All":
+            self._filter_count_label.configure(
+                text=f"({len(rows)} of {len(self._preview_lines)} lines)",
+            )
+        elif hasattr(self, "_filter_count_label"):
+            self._filter_count_label.configure(text="")
 
         # Update summary
         total = len(self._preview_lines)
@@ -953,8 +1122,14 @@ class PreprocessingStep(BaseStep):
         """Reset rules to defaults."""
         self._config = dict(DEFAULT_PREPROCESS_CONFIG)
         self._update_ui_from_config()
-        self._placeholder_listbox.delete(0, tk.END)
-        self._protect_listbox.delete(0, tk.END)
+        # TASK 42.2/42.3: Clear placeholder and protect trees
+        if hasattr(self, "_placeholder_tree"):
+            self._placeholder_tree.delete(*self._placeholder_tree.get_children())
+        if hasattr(self, "_protect_tree"):
+            self._protect_tree.delete(*self._protect_tree.get_children())
+        # TASK 42.1: Clear anchoring tree
+        if hasattr(self, "_anchor_tree"):
+            self._anchor_tree.delete(*self._anchor_tree.get_children())
         self.session.set_dirty(True)
 
     def _update_ui_from_config(self) -> None:
@@ -963,6 +1138,11 @@ class PreprocessingStep(BaseStep):
             self._dedup_var.set(self._config.get("dedup_enabled", True))
         if self._dedup_threshold_var:
             self._dedup_threshold_var.set(self._config.get("dedup_threshold", 1))
+        # TASK 42.4
+        if self._aggressive_dedup_var:
+            self._aggressive_dedup_var.set(
+                self._config.get("aggressive_dedup_enabled", False),
+            )
         if self._ellipsis_var:
             self._ellipsis_var.set(self._config.get("ellipsis_enabled", True))
         if self._symbol_var:
@@ -974,13 +1154,7 @@ class PreprocessingStep(BaseStep):
         if self._code_spacing_var:
             self._code_spacing_var.set(self._config.get("code_spacing_enabled", False))
 
-        # Anchor removal settings
-        if hasattr(self, "_anchor_enabled_var"):
-            self._anchor_enabled_var.set(self._config.get("anchor_removal_enabled", False))
-        if hasattr(self, "_anchor_pattern_var"):
-            self._anchor_pattern_var.set(self._config.get("anchor_content_pattern", ""))
-        if hasattr(self, "_anchor_spec_var"):
-            self._anchor_spec_var.set(self._config.get("anchor_spec", "line_start;line_end"))
+        # TASK 42.1: Anchor entries loaded via _refresh_anchor_entries()
 
     def _auto_suggest(self) -> None:
         """Auto-suggest rules based on loaded content and analysis results.
@@ -1096,7 +1270,10 @@ class PreprocessingStep(BaseStep):
             for p in new_patterns:
                 if p not in existing_patterns:
                     self._config["protect_code_patterns"].append(p)
-                    self._protect_listbox.insert(tk.END, p)
+                    self._protect_tree.insert(
+                        "", "end",
+                        values=(p, "Yes", ""),
+                    )
                     applied.append(f"Protect: {p}")
 
             # Add placeholder suggestions
@@ -1114,27 +1291,40 @@ class PreprocessingStep(BaseStep):
     def _add_placeholder_rule(self) -> None:
         """Add a new custom placeholder rule.
         
-        TASK 24.3: Also saves to manifest.
+        TASK 42.2: Now uses Treeview with RegEx toggle.
         """
-        dialog = _RuleDialog(self, "Add Placeholder Rule", ["Pattern:", "Token:"])
+        dialog = _RuleDialog(
+            self, "Add Placeholder Rule",
+            ["Pattern:", "Token:"],
+            regex_default=False,
+            show_regex=True,
+        )
         if dialog.result:
-            pattern, token = dialog.result
+            pattern = dialog.result[0]
+            token = dialog.result[1] or "__CUST__"
+            is_regex = dialog.regex_result
             if pattern:
-                rule_str = f"{pattern} → {token or '__CUST__'}"
-                self._placeholder_listbox.insert(tk.END, rule_str)
-                self._config["placeholder_rules"].append({"pattern": pattern, "token": token})
+                self._placeholder_tree.insert(
+                    "", tk.END,
+                    values=(pattern, token, "✓" if is_regex else "✗"),
+                )
+                self._config["placeholder_rules"].append({
+                    "pattern": pattern, "token": token, "is_regex": is_regex,
+                })
                 self._save_custom_placeholders_to_manifest()
                 self.session.set_dirty(True)
 
     def _remove_placeholder_rule(self) -> None:
         """Remove selected placeholder rule.
         
-        TASK 24.3: Also saves to manifest.
+        TASK 42.2: Now uses Treeview.
         """
-        selection = self._placeholder_listbox.curselection()
-        if selection:
-            idx = selection[0]
-            self._placeholder_listbox.delete(idx)
+        sel = self._placeholder_tree.selection()
+        if sel:
+            # Find index of selected item
+            children = self._placeholder_tree.get_children()
+            idx = list(children).index(sel[0])
+            self._placeholder_tree.delete(sel[0])
             if idx < len(self._config["placeholder_rules"]):
                 del self._config["placeholder_rules"][idx]
             self._save_custom_placeholders_to_manifest()
@@ -1143,13 +1333,14 @@ class PreprocessingStep(BaseStep):
     def _edit_placeholder_rule(self) -> None:
         """Edit selected placeholder rule.
         
-        TASK 24.3: Also saves to manifest.
+        TASK 42.2: Now uses Treeview with RegEx.
         """
-        selection = self._placeholder_listbox.curselection()
-        if not selection:
+        sel = self._placeholder_tree.selection()
+        if not sel:
             return
 
-        idx = selection[0]
+        children = self._placeholder_tree.get_children()
+        idx = list(children).index(sel[0])
         if idx >= len(self._config["placeholder_rules"]):
             return
 
@@ -1159,40 +1350,60 @@ class PreprocessingStep(BaseStep):
             "Edit Placeholder Rule",
             ["Pattern:", "Token:"],
             [rule.get("pattern", ""), rule.get("token", "")],
+            regex_default=rule.get("is_regex", False),
+            show_regex=True,
         )
         if dialog.result:
-            pattern, token = dialog.result
+            pattern = dialog.result[0]
+            token = dialog.result[1] or "__CUST__"
+            is_regex = dialog.regex_result
             if pattern:
-                rule_str = f"{pattern} → {token or '__CUST__'}"
-                self._placeholder_listbox.delete(idx)
-                self._placeholder_listbox.insert(idx, rule_str)
-                self._config["placeholder_rules"][idx] = {"pattern": pattern, "token": token}
+                self._placeholder_tree.item(
+                    sel[0], values=(pattern, token, "✓" if is_regex else "✗"),
+                )
+                self._config["placeholder_rules"][idx] = {
+                    "pattern": pattern, "token": token, "is_regex": is_regex,
+                }
                 self._save_custom_placeholders_to_manifest()
                 self.session.set_dirty(True)
 
     def _add_protect_pattern(self) -> None:
         """Add a new protect code pattern.
         
-        TASK 24.2: Also saves to manifest.
+        TASK 42.3: Now uses Treeview with RegEx (default enabled).
         """
-        dialog = _RuleDialog(self, "Add Protect Pattern", ["Regex Pattern:"])
+        dialog = _RuleDialog(
+            self, "Add Protect Pattern",
+            ["Pattern:", "Description:"],
+            regex_default=True,
+            show_regex=True,
+        )
         if dialog.result:
             pattern = dialog.result[0]
+            description = dialog.result[1] if len(dialog.result) > 1 else ""
+            is_regex = dialog.regex_result
             if pattern:
-                self._protect_listbox.insert(tk.END, pattern)
-                self._config["protect_code_patterns"].append(pattern)
+                self._protect_tree.insert(
+                    "", tk.END,
+                    values=(pattern, "✓" if is_regex else "✗", description),
+                )
+                self._config["protect_code_patterns"].append({
+                    "pattern": pattern, "is_regex": is_regex,
+                    "description": description,
+                })
                 self._save_protect_patterns_to_manifest()
                 self.session.set_dirty(True)
 
     def _remove_protect_pattern(self) -> None:
         """Remove selected protect pattern.
         
-        TASK 24.2: Also saves to manifest.
+        TASK 42.3: Now uses Treeview.
         """
-        selection = self._protect_listbox.curselection()
-        if selection:
-            idx = selection[0]
-            self._protect_listbox.delete(idx)
+        sel = self._protect_tree.selection()
+        if sel:
+            children = self._protect_tree.get_children()
+            idx = list(children).index(sel[0])
+            self._protect_tree.delete(sel[0])
             if idx < len(self._config["protect_code_patterns"]):
                 del self._config["protect_code_patterns"][idx]
             self._save_protect_patterns_to_manifest()
@@ -1201,24 +1412,46 @@ class PreprocessingStep(BaseStep):
     def _edit_protect_pattern(self) -> None:
         """Edit selected protect pattern.
         
-        TASK 24.2: Also saves to manifest.
+        TASK 42.3: Now uses Treeview with RegEx.
         """
-        selection = self._protect_listbox.curselection()
-        if not selection:
+        sel = self._protect_tree.selection()
+        if not sel:
             return
 
-        idx = selection[0]
+        children = self._protect_tree.get_children()
+        idx = list(children).index(sel[0])
         if idx >= len(self._config["protect_code_patterns"]):
             return
 
-        pattern = self._config["protect_code_patterns"][idx]
-        dialog = _RuleDialog(self, "Edit Protect Pattern", ["Regex Pattern:"], [pattern])
+        entry = self._config["protect_code_patterns"][idx]
+        # Handle both old (plain string) and new (dict) formats
+        if isinstance(entry, str):
+            pattern, is_regex, description = entry, True, ""
+        else:
+            pattern = entry.get("pattern", "")
+            is_regex = entry.get("is_regex", True)
+            description = entry.get("description", "")
+
+        dialog = _RuleDialog(
+            self, "Edit Protect Pattern",
+            ["Pattern:", "Description:"],
+            [pattern, description],
+            regex_default=is_regex,
+            show_regex=True,
+        )
         if dialog.result:
             new_pattern = dialog.result[0]
+            new_desc = dialog.result[1] if len(dialog.result) > 1 else ""
+            new_regex = dialog.regex_result
             if new_pattern:
-                self._protect_listbox.delete(idx)
-                self._protect_listbox.insert(idx, new_pattern)
-                self._config["protect_code_patterns"][idx] = new_pattern
+                self._protect_tree.item(
+                    sel[0],
+                    values=(new_pattern, "✓" if new_regex else "✗", new_desc),
+                )
+                self._config["protect_code_patterns"][idx] = {
+                    "pattern": new_pattern, "is_regex": new_regex,
+                    "description": new_desc,
+                }
                 self._save_protect_patterns_to_manifest()
                 self.session.set_dirty(True)
 
@@ -1264,17 +1497,36 @@ class PreprocessingStep(BaseStep):
             self._config = step_data["config"]
             self._update_ui_from_config()
 
-            # Restore placeholder rules
-            self._placeholder_listbox.delete(0, tk.END)
-            for rule in self._config.get("placeholder_rules", []):
-                pattern = rule.get("pattern", "")
-                token = rule.get("token", "__CUST__")
-                self._placeholder_listbox.insert(tk.END, f"{pattern} → {token}")
+            # Restore placeholder rules (TASK 42.2: Treeview)
+            if hasattr(self, "_placeholder_tree"):
+                self._placeholder_tree.delete(
+                    *self._placeholder_tree.get_children(),
+                )
+                for rule in self._config.get("placeholder_rules", []):
+                    pattern = rule.get("pattern", "")
+                    token = rule.get("token", "__CUST__")
+                    is_regex = "Yes" if rule.get("is_regex", False) else "No"
+                    self._placeholder_tree.insert(
+                        "", "end", values=(pattern, token, is_regex),
+                    )
 
-            # Restore protect patterns
-            self._protect_listbox.delete(0, tk.END)
-            for pattern in self._config.get("protect_code_patterns", []):
-                self._protect_listbox.insert(tk.END, pattern)
+            # Restore protect patterns (TASK 42.3: Treeview)
+            if hasattr(self, "_protect_tree"):
+                self._protect_tree.delete(
+                    *self._protect_tree.get_children(),
+                )
+                for entry in self._config.get("protect_code_patterns", []):
+                    if isinstance(entry, dict):
+                        pat = entry.get("pattern", "")
+                        is_re = "Yes" if entry.get("is_regex", True) else "No"
+                        desc = entry.get("description", "")
+                    else:
+                        pat = str(entry)
+                        is_re = "Yes"
+                        desc = ""
+                    self._protect_tree.insert(
+                        "", "end", values=(pat, is_re, desc),
+                    )
     
     def _load_from_manifest_bindings(self) -> None:
         """Load values from manifest into bound widgets.
@@ -1299,17 +1551,24 @@ class PreprocessingStep(BaseStep):
         if not self.manifest_manager:
             return
         
-        # Convert simple strings to manifest format
+        # TASK 42.3: Convert config entries (dict or string) to manifest format
         patterns = self._config.get("protect_code_patterns", [])
-        manifest_patterns = [
-            {
-                "pattern": p,
-                "replacement": "__PROT__",
-                "is_regex": True,
-                "description": "",
-            }
-            for p in patterns
-        ]
+        manifest_patterns = []
+        for entry in patterns:
+            if isinstance(entry, dict):
+                manifest_patterns.append({
+                    "pattern": entry.get("pattern", ""),
+                    "replacement": "__PROT__",
+                    "is_regex": entry.get("is_regex", True),
+                    "description": entry.get("description", ""),
+                })
+            else:
+                manifest_patterns.append({
+                    "pattern": str(entry),
+                    "replacement": "__PROT__",
+                    "is_regex": True,
+                    "description": "",
+                })
         
         save_protect_code_patterns(self.manifest_manager, manifest_patterns)
 
@@ -1327,16 +1586,29 @@ class PreprocessingStep(BaseStep):
         # Load from manifest
         manifest_patterns = load_protect_code_patterns(self.manifest_manager)
         
-        # Convert to simple string list
-        patterns = [p.get("pattern", "") for p in manifest_patterns if p.get("pattern")]
+        # TASK 42.3: Convert to dict entries preserving is_regex/description
+        entries = [
+            {
+                "pattern": p.get("pattern", ""),
+                "is_regex": p.get("is_regex", True),
+                "description": p.get("description", ""),
+            }
+            for p in manifest_patterns
+            if p.get("pattern")
+        ]
         
         # Update config
-        self._config["protect_code_patterns"] = patterns
+        self._config["protect_code_patterns"] = entries
         
-        # Update listbox
-        self._protect_listbox.delete(0, tk.END)
-        for pattern in patterns:
-            self._protect_listbox.insert(tk.END, pattern)
+        # Update tree (TASK 42.3)
+        if hasattr(self, "_protect_tree"):
+            self._protect_tree.delete(*self._protect_tree.get_children())
+            for entry in entries:
+                is_re = "Yes" if entry.get("is_regex", True) else "No"
+                self._protect_tree.insert(
+                    "", "end",
+                    values=(entry["pattern"], is_re, entry.get("description", "")),
+                )
 
     def _save_custom_placeholders_to_manifest(self) -> None:
         """Save custom placeholder rules to manifest.
@@ -1352,7 +1624,7 @@ class PreprocessingStep(BaseStep):
             {
                 "pattern": r.get("pattern", ""),
                 "placeholder": r.get("token", "__CUST__"),
-                "is_regex": False,  # Config format uses literal matches
+                "is_regex": r.get("is_regex", False),  # TASK 42.2: From config
                 "restore_after": True,
             }
             for r in rules
@@ -1374,9 +1646,13 @@ class PreprocessingStep(BaseStep):
         # Load from manifest
         manifest_placeholders = load_custom_placeholders(self.manifest_manager)
         
-        # Convert to config format
+        # TASK 42.2: Convert to config format with is_regex
         rules = [
-            {"pattern": p.get("pattern", ""), "token": p.get("placeholder", "__CUST__")}
+            {
+                "pattern": p.get("pattern", ""),
+                "token": p.get("placeholder", "__CUST__"),
+                "is_regex": p.get("is_regex", False),
+            }
             for p in manifest_placeholders
             if p.get("pattern")
         ]
@@ -1384,90 +1660,34 @@ class PreprocessingStep(BaseStep):
         # Update config
         self._config["placeholder_rules"] = rules
         
-        # Update listbox
-        self._placeholder_listbox.delete(0, tk.END)
-        for rule in rules:
-            pattern = rule.get("pattern", "")
-            token = rule.get("token", "__CUST__")
-            self._placeholder_listbox.insert(tk.END, f"{pattern} → {token}")
+        # Update tree (TASK 42.2)
+        if hasattr(self, "_placeholder_tree"):
+            self._placeholder_tree.delete(
+                *self._placeholder_tree.get_children(),
+            )
+            for rule in rules:
+                pattern = rule.get("pattern", "")
+                token = rule.get("token", "__CUST__")
+                is_regex = "Yes" if rule.get("is_regex", False) else "No"
+                self._placeholder_tree.insert(
+                    "", "end", values=(pattern, token, is_regex),
+                )
 
     def _save_anchor_removal_to_manifest(self) -> None:
-        """Save anchor removal settings to manifest.
+        """Save anchoring entries to manifest.
         
-        TASK 24.3: Saves anchor settings as a single-item list.
-        The spec is stored in the 'replacement' field since we're not using it.
+        TASK 42.1: Delegates to _sync_anchor_tree_to_manifest.
+        Kept for backward compatibility with callers.
         """
-        if not self.manifest_manager:
-            return
-        
-        # Check if enabled
-        enabled = getattr(self, "_anchor_enabled_var", None)
-        if not enabled or not enabled.get():
-            # Save empty list if disabled
-            save_anchor_removal(self.manifest_manager, [])
-            return
-        
-        # Get current values
-        pattern = getattr(self, "_anchor_pattern_var", None)
-        spec = getattr(self, "_anchor_spec_var", None)
-        
-        pattern_val = pattern.get() if pattern else ""
-        spec_val = spec.get() if spec else ""
-        
-        # Only save if there's a pattern
-        if not pattern_val:
-            save_anchor_removal(self.manifest_manager, [])
-            return
-        
-        # Convert to manifest format
-        # Store spec in 'replacement' field since we're not using it for this purpose
-        manifest_anchors = [
-            {
-                "pattern": pattern_val,
-                "action": "remove",
-                "replacement": spec_val,  # Store spec here
-                "is_regex": True,
-            }
-        ]
-        
-        save_anchor_removal(self.manifest_manager, manifest_anchors)
+        if hasattr(self, "_anchor_tree"):
+            self._sync_anchor_tree_to_manifest()
 
     def _load_anchor_removal_from_manifest(self) -> None:
-        """Load anchor removal settings from manifest.
+        """Load anchoring entries from manifest into tree.
         
-        TASK 24.3: Loads anchor settings from manifest.
-        The spec is loaded from the 'replacement' field.
+        TASK 42.1: Delegates to _refresh_anchor_entries.
         """
-        if not self.manifest_manager:
-            return
-        
-        if not self.manifest_manager.is_loaded:
-            return
-        
-        # Load from manifest
-        manifest_anchors = load_anchor_removal(self.manifest_manager)
-        
-        # Check if we have any anchors
-        if not manifest_anchors:
-            # Disable anchor removal
-            if hasattr(self, "_anchor_enabled_var"):
-                self._anchor_enabled_var.set(False)
-            return
-        
-        # Take the first anchor entry
-        anchor = manifest_anchors[0]
-        
-        # Update UI
-        if hasattr(self, "_anchor_enabled_var"):
-            self._anchor_enabled_var.set(True)
-        
-        if hasattr(self, "_anchor_pattern_var"):
-            self._anchor_pattern_var.set(anchor.get("pattern", ""))
-        
-        if hasattr(self, "_anchor_spec_var"):
-            # Spec is stored in 'replacement' field
-            spec = anchor.get("replacement", "line_start;line_end")
-            self._anchor_spec_var.set(spec)
+        self._refresh_anchor_entries()
 
     def _ensure_input_files_restored(self) -> None:
         """Ensure Input step has its files restored from session.
@@ -1519,6 +1739,8 @@ class _RuleDialog(tk.Toplevel):
         title: str,
         labels: List[str],
         defaults: Optional[List[str]] = None,
+        regex_default: bool = False,
+        show_regex: bool = False,
     ) -> None:
         """Initialize rule dialog.
 
@@ -1527,6 +1749,8 @@ class _RuleDialog(tk.Toplevel):
             title: Dialog title.
             labels: Input field labels.
             defaults: Default values for inputs.
+            regex_default: Default state for RegEx checkbox (TASK 42.2).
+            show_regex: Whether to show the RegEx checkbox (TASK 42.2).
         """
         super().__init__(parent)
         self.title(title)
@@ -1534,7 +1758,9 @@ class _RuleDialog(tk.Toplevel):
         self.grab_set()
 
         self.result: Optional[List[str]] = None
+        self.regex_result: bool = regex_default
         self._entries: List[ttk.Entry] = []
+        self._regex_var: Optional[tk.BooleanVar] = None
 
         defaults = defaults or [""] * len(labels)
 
@@ -1548,6 +1774,16 @@ class _RuleDialog(tk.Toplevel):
             entry.pack(side="left", fill="x", expand=True)
             entry.insert(0, defaults[i] if i < len(defaults) else "")
             self._entries.append(entry)
+
+        # RegEx checkbox (TASK 42.2)
+        if show_regex:
+            regex_frame = ttk.Frame(self)
+            regex_frame.pack(fill="x", padx=10, pady=5)
+            ttk.Label(regex_frame, text="RegEx:", width=12).pack(side="left")
+            self._regex_var = tk.BooleanVar(value=regex_default)
+            ttk.Checkbutton(
+                regex_frame, variable=self._regex_var, text="Enabled",
+            ).pack(side="left")
 
         # Buttons
         btn_frame = ttk.Frame(self)
@@ -1575,9 +1811,119 @@ class _RuleDialog(tk.Toplevel):
     def _on_ok(self) -> None:
         """Handle OK button."""
         self.result = [entry.get() for entry in self._entries]
+        if self._regex_var is not None:
+            self.regex_result = self._regex_var.get()
         self.destroy()
 
     def _on_cancel(self) -> None:
         """Handle Cancel button."""
+        self.result = None
+        self.destroy()
+
+
+class _AnchorDialog(tk.Toplevel):
+    """Dialog for adding/editing anchoring rules.
+
+    TASK 42.1: Provides fields for Pattern, Action (combobox),
+    Anchor Spec, RegEx (checkbox), and Description.
+    """
+
+    def __init__(
+        self,
+        parent: tk.Widget,
+        title: str,
+        defaults: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Initialize anchor dialog.
+
+        Args:
+            parent: Parent widget.
+            title: Dialog title.
+            defaults: Pre-populated field values.
+        """
+        super().__init__(parent)
+        self.title(title)
+        self.transient(parent)  # type: ignore[call-overload]
+        self.grab_set()
+
+        self.result: Optional[Dict[str, Any]] = None
+        defaults = defaults or {}
+
+        # Pattern
+        f1 = ttk.Frame(self)
+        f1.pack(fill="x", padx=10, pady=5)
+        ttk.Label(f1, text="Pattern:", width=14).pack(side="left")
+        self._pattern_entry = ttk.Entry(f1, width=40)
+        self._pattern_entry.pack(side="left", fill="x", expand=True)
+        self._pattern_entry.insert(0, defaults.get("pattern", ""))
+
+        # Action
+        f2 = ttk.Frame(self)
+        f2.pack(fill="x", padx=10, pady=5)
+        ttk.Label(f2, text="Action:", width=14).pack(side="left")
+        self._action_var = tk.StringVar(value=defaults.get("action", "remove"))
+        action_combo = ttk.Combobox(
+            f2, textvariable=self._action_var, values=["remove", "preserve", "replace"],
+            state="readonly", width=12,
+        )
+        action_combo.pack(side="left")
+
+        # Anchor Spec
+        f3 = ttk.Frame(self)
+        f3.pack(fill="x", padx=10, pady=5)
+        ttk.Label(f3, text="Anchor Spec:", width=14).pack(side="left")
+        self._spec_entry = ttk.Entry(f3, width=40)
+        self._spec_entry.pack(side="left", fill="x", expand=True)
+        self._spec_entry.insert(0, defaults.get("anchor_spec", "line_start;line_end"))
+
+        # RegEx
+        f4 = ttk.Frame(self)
+        f4.pack(fill="x", padx=10, pady=5)
+        ttk.Label(f4, text="RegEx:", width=14).pack(side="left")
+        self._regex_var = tk.BooleanVar(value=defaults.get("is_regex", True))
+        ttk.Checkbutton(f4, variable=self._regex_var, text="Enabled").pack(side="left")
+
+        # Description
+        f5 = ttk.Frame(self)
+        f5.pack(fill="x", padx=10, pady=5)
+        ttk.Label(f5, text="Description:", width=14).pack(side="left")
+        self._desc_entry = ttk.Entry(f5, width=40)
+        self._desc_entry.pack(side="left", fill="x", expand=True)
+        self._desc_entry.insert(0, defaults.get("description", ""))
+
+        # Buttons
+        btn_frame = ttk.Frame(self)
+        btn_frame.pack(fill="x", padx=10, pady=10)
+        ttk.Button(btn_frame, text="OK", command=self._on_ok).pack(side="right", padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=self._on_cancel).pack(side="right")
+
+        self._pattern_entry.focus_set()
+        self.bind("<Return>", lambda e: self._on_ok())
+        self.bind("<Escape>", lambda e: self._on_cancel())
+
+        self.update_idletasks()
+        x = parent.winfo_rootx() + 50
+        y = parent.winfo_rooty() + 50
+        self.geometry(f"+{x}+{y}")
+        self.wait_window()
+
+    def _on_ok(self) -> None:
+        """Handle OK — collect all fields."""
+        pattern = self._pattern_entry.get().strip()
+        if not pattern:
+            self.result = None
+            self.destroy()
+            return
+        self.result = {
+            "pattern": pattern,
+            "action": self._action_var.get(),
+            "anchor_spec": self._spec_entry.get().strip(),
+            "is_regex": self._regex_var.get(),
+            "description": self._desc_entry.get().strip(),
+        }
+        self.destroy()
+
+    def _on_cancel(self) -> None:
+        """Handle Cancel."""
         self.result = None
         self.destroy()

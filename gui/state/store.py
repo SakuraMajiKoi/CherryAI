@@ -94,7 +94,7 @@ class StepState:
 STEP_DEFINITIONS: List[tuple] = [
     (0, "Input and Extraction"),
     (1, "Analysis"),
-    (2, "Estimation"),       # Moved from position 4 - now Step 3 (0-indexed: 2)
+    (2, "Costs"),            # Renamed from Estimation in Phase 40
     (3, "Information"),      # Moved from position 2
     (4, "Preprocessing"),    # Moved from position 3
     (5, "Translation"),
@@ -105,7 +105,7 @@ STEP_DEFINITIONS: List[tuple] = [
 ]
 
 # Preset definitions: name -> list of step indices to mark as done automatically
-# NOTE: Step order changed - 2=Estimation, 3=Information, 4=Preprocessing
+# NOTE: Step order - 2=Costs, 3=Information, 4=Preprocessing
 PRESET_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "Sample": {
         "description": "Quick test with minimal steps",
@@ -136,6 +136,7 @@ DEFAULT_PREPROCESS_CONFIG: Dict[str, Any] = {
     # Deduplication
     "dedup_enabled": True,
     "dedup_threshold": 1,
+    "aggressive_dedup_enabled": False,  # TASK 42.4: Number normalization
     # Ellipsis handling (via modi/standard_mode.py)
     "ellipsis_enabled": True,
     # Symbol conversion (via modi/standard_mode.py)

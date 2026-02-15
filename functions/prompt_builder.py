@@ -21,7 +21,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from .glossary import read_unified_glossary, GlossaryEntry, TYPE_NAME, TYPE_TERM
+from .glossary import (
+    read_unified_glossary,
+    GlossaryEntry,
+    TYPE_NAME,
+    TYPE_TERM,
+    filter_glossary_for_chunk,
+    GLOSSARY_FILTER_ALL,
+    GLOSSARY_FILTER_ORIGINAL,
+    GLOSSARY_FILTER_BOTH,
+)
 from .analysis import count_tokens
 from .conditional_prompts import ConditionalPromptManager
 from .config import load_config
@@ -38,6 +47,557 @@ DEFAULT_PROMPT_TEMPLATE = "config/prompt.txt"
 MAX_CONTEXT_TOKENS = 4000  # Conservative limit for context window (adjust per model)
 ROLLING_CONTEXT_LINES = 3  # Number of preceding lines to include
 MAX_STYLE_CHARS = 2000  # Maximum characters for translation style
+
+# =============================================================================
+# Context-Type Prompt Templates (Phase 50)
+# =============================================================================
+# Short instruction snippets injected into the system prompt based on the
+# detected or inherited context type of a request.
+
+CONTEXT_PROMPT_DIALOGUE = (
+    "# Content Type: Dialogue\n"
+    "These lines are character dialogue. "
+    "Pay attention to the speaker names, maintain consistent voice and tone "
+    "for each character, and preserve emotional nuances in the conversation."
+)
+
+CONTEXT_PROMPT_MENU = (
+    "# Content Type: Menu\n"
+    "These lines are menu items from a game UI. "
+    "Translate each item concisely and clearly. Preserve formatting, order, "
+    "and any shortcut indicators. Keep translations brief and action-oriented."
+)
+
+CONTEXT_PROMPT_CHOICE = (
+    "# Content Type: Choices\n"
+    "These lines are player choices or options. "
+    "Translate each choice concisely and distinctly so the player can "
+    "differentiate between options. Preserve numbering or bullet formatting."
+)
+
+CONTEXT_PROMPT_UNKNOWN = (
+    "# Content Type: Mixed\n"
+    "These lines may contain dialogue, menu items, or choices. "
+    "Translate each line appropriately based on its apparent purpose. "
+    "Maintain formatting and keep menu/choice items concise."
+)
+
+_CONTEXT_PROMPT_MAP: Dict[str, str] = {
+    "dialogue": CONTEXT_PROMPT_DIALOGUE,
+    "menu": CONTEXT_PROMPT_MENU,
+    "choice": CONTEXT_PROMPT_CHOICE,
+    "unknown": CONTEXT_PROMPT_UNKNOWN,
+}
+
+
+def get_context_prompt(context_type: str) -> str:
+    """Return the prompt snippet for the given context type.
+
+    Args:
+        context_type: ``"dialogue"``, ``"menu"``, ``"choice"``, or ``"unknown"``.
+
+    Returns:
+        Prompt instruction block (may be empty if *context_type* is not recognised).
+    """
+    return _CONTEXT_PROMPT_MAP.get(context_type, "")
+
+
+# =============================================================================
+# REQUEST FORMATION (4-STEP PROCESS) — Phase 49
+# =============================================================================
+
+
+@dataclass
+class LineInfo:
+    """Lightweight line representation for request formation.
+
+    Attributes:
+        index: Original manifest line index (0-based).
+        text: Text to translate (prepro or orig).
+        is_invalid: True for placeholder, dedup, or context marker lines.
+        context_marker: Optional marker type (``"file_end"``, ``"dialogue"``,
+            ``"menu"``, ``"choice"``).  ``None`` means no marker.
+    """
+
+    index: int
+    text: str
+    is_invalid: bool = False
+    context_marker: Optional[str] = None
+
+
+@dataclass
+class RequestFormationConfig:
+    """Configuration for the 4-step request formation process.
+
+    Attributes:
+        max_lines: Hard maximum lines per request.
+        min_lines: Soft minimum — requests below this are merged (Step 4).
+        max_tokens: Token limit per request (0 = no token limit).
+        model: Model name for token counting.
+    """
+
+    max_lines: int = 50
+    min_lines: int = 10
+    max_tokens: int = 0
+    model: str = "gpt-4o"
+
+
+@dataclass
+class TranslationRequest:
+    """A structured translation request produced by :func:`build_requests`.
+
+    Attributes:
+        lines: Translatable line texts (invalid lines excluded).
+        line_indices: Original manifest indices corresponding to *lines*.
+        context_type: ``"dialogue"``, ``"menu"``, ``"choice"``, or ``"unknown"``.
+        is_split: ``True`` if this request was created by size-based splitting.
+        provides_context: Whether this request provides rolling context forward.
+        receives_context: Whether this request receives rolling context from prior.
+    """
+
+    lines: List[str] = field(default_factory=list)
+    line_indices: List[int] = field(default_factory=list)
+    context_type: str = "unknown"
+    is_split: bool = False
+    provides_context: bool = True
+    receives_context: bool = True
+    _file_section: int = 0  # Internal: file-section id (Step 2 groups)
+
+    @property
+    def line_count(self) -> int:
+        """Number of translatable lines in this request."""
+        return len(self.lines)
+
+
+# ---- Step helpers ----------------------------------------------------------
+
+
+def _extract_valid_lines(
+    line_infos: List[LineInfo],
+) -> Tuple[List[LineInfo], List[LineInfo]]:
+    """Separate valid (translatable) lines from invalid lines.
+
+    Args:
+        line_infos: Full list of line info objects.
+
+    Returns:
+        Tuple of (valid_lines, invalid_lines).
+    """
+    valid: List[LineInfo] = []
+    invalid: List[LineInfo] = []
+    for li in line_infos:
+        if li.is_invalid:
+            invalid.append(li)
+        else:
+            valid.append(li)
+    return valid, invalid
+
+
+def _step1_split_menu_choice(
+    line_infos: List[LineInfo],
+) -> Tuple[List[TranslationRequest], List[LineInfo]]:
+    """Step 1: Split Menu and Choice blocks into their own requests.
+
+    Consecutive lines with the same ``context_marker`` of ``"menu"`` or
+    ``"choice"`` are grouped into dedicated requests.  All other valid
+    lines are returned as remaining for subsequent steps.
+
+    Args:
+        line_infos: Translatable line infos (invalid lines already removed).
+
+    Returns:
+        Tuple of (menu_choice_requests, remaining_line_infos).
+    """
+    requests: List[TranslationRequest] = []
+    remaining: List[LineInfo] = []
+    current_block: List[LineInfo] = []
+    current_marker: Optional[str] = None
+
+    def _flush_block() -> None:
+        if not current_block:
+            return
+        req = TranslationRequest(
+            lines=[li.text for li in current_block],
+            line_indices=[li.index for li in current_block],
+            context_type=current_marker or "unknown",
+            provides_context=False,
+            receives_context=False,
+        )
+        requests.append(req)
+
+    for li in line_infos:
+        marker = li.context_marker
+        if marker in ("menu", "choice"):
+            if marker == current_marker:
+                current_block.append(li)
+            else:
+                _flush_block()
+                current_block = [li]
+                current_marker = marker
+        else:
+            _flush_block()
+            current_block = []
+            current_marker = None
+            remaining.append(li)
+
+    _flush_block()
+    return requests, remaining
+
+
+def _step2_split_at_file_boundaries(
+    line_infos: List[LineInfo],
+) -> List[List[LineInfo]]:
+    """Step 2: Split remaining lines at File End context markers.
+
+    Each file boundary produces a separate candidate group.  Lines with
+    ``context_marker == "file_end"`` act as separators and are discarded
+    (they are invalid and already excluded from valid lines, but if they
+    somehow appear here they are dropped).
+
+    Args:
+        line_infos: Remaining valid lines after Step 1.
+
+    Returns:
+        List of line-info groups (one per file section).
+    """
+    if not line_infos:
+        return []
+
+    groups: List[List[LineInfo]] = []
+    current: List[LineInfo] = []
+
+    for li in line_infos:
+        if li.context_marker == "file_end":
+            if current:
+                groups.append(current)
+                current = []
+            # file_end itself is dropped
+        else:
+            current.append(li)
+
+    if current:
+        groups.append(current)
+
+    return groups if groups else [line_infos]
+
+
+def _count_tokens_for_lines(texts: List[str], model: str = "gpt-4o") -> int:
+    """Estimate total tokens for a list of line texts.
+
+    Uses :func:`analysis.count_tokens` (char-based estimate) as a fast
+    fallback when tiktoken is not available.
+
+    Args:
+        texts: Line texts.
+        model: Model name (unused currently; reserved for tiktoken).
+
+    Returns:
+        Estimated token count.
+    """
+    total = 0
+    for text in texts:
+        tokens, _ = count_tokens(text)
+        total += tokens
+    return total
+
+
+def _step3_split_and_balance(
+    groups: List[List[LineInfo]],
+    config: RequestFormationConfig,
+) -> List[TranslationRequest]:
+    """Step 3: Split oversized groups and balance line counts.
+
+    Each group from Step 2 that exceeds ``config.max_lines`` (or
+    ``config.max_tokens`` when > 0) is split into balanced sub-groups.
+
+    Args:
+        groups: Line-info groups from Step 2.
+        config: Formation configuration.
+
+    Returns:
+        List of TranslationRequest objects.
+    """
+    requests: List[TranslationRequest] = []
+
+    for group in groups:
+        if not group:
+            continue
+
+        line_count = len(group)
+
+        # Check token limit if configured
+        exceeds_tokens = False
+        if config.max_tokens > 0:
+            total_tokens = _count_tokens_for_lines(
+                [li.text for li in group], config.model,
+            )
+            exceeds_tokens = total_tokens > config.max_tokens
+
+        if line_count <= config.max_lines and not exceeds_tokens:
+            # Fits in one request
+            ctx = group[0].context_marker if group[0].context_marker in (
+                "dialogue", "menu", "choice",
+            ) else "unknown"
+            requests.append(TranslationRequest(
+                lines=[li.text for li in group],
+                line_indices=[li.index for li in group],
+                context_type=ctx,
+            ))
+            continue
+
+        # Need to split — calculate number of sub-groups
+        if config.max_tokens > 0 and exceeds_tokens:
+            total_tokens = _count_tokens_for_lines(
+                [li.text for li in group], config.model,
+            )
+            n_by_tokens = max(1, -(-total_tokens // config.max_tokens))
+            n_by_lines = max(1, -(-line_count // config.max_lines))
+            n_splits = max(n_by_tokens, n_by_lines)
+        else:
+            n_splits = max(1, -(-line_count // config.max_lines))
+
+        # Balance: divide lines as evenly as possible
+        base_size = line_count // n_splits
+        remainder = line_count % n_splits
+        offset = 0
+        for i in range(n_splits):
+            size = base_size + (1 if i < remainder else 0)
+            chunk = group[offset : offset + size]
+            if chunk:
+                ctx = chunk[0].context_marker if chunk[0].context_marker in (
+                    "dialogue", "menu", "choice",
+                ) else "unknown"
+                requests.append(TranslationRequest(
+                    lines=[li.text for li in chunk],
+                    line_indices=[li.index for li in chunk],
+                    context_type=ctx,
+                    is_split=True,
+                ))
+            offset += size
+
+    return requests
+
+
+def _step4_merge_short_requests(
+    requests: List[TranslationRequest],
+    config: RequestFormationConfig,
+) -> List[TranslationRequest]:
+    """Step 4: Merge short requests below ``config.min_lines``.
+
+    Only requests that would receive no rolling context and provide none
+    are candidates for merging.  Merged requests must not exceed
+    ``config.max_lines``.
+
+    Args:
+        requests: Requests from Step 3.
+        config: Formation configuration.
+
+    Returns:
+        Optimised list of TranslationRequests.
+    """
+    if not requests or config.min_lines <= 0:
+        return requests
+
+    merged: List[TranslationRequest] = []
+
+    for req in requests:
+        if (
+            req.line_count >= config.min_lines
+            or req.context_type in ("menu", "choice")
+        ):
+            merged.append(req)
+            continue
+
+        # Try to merge with previous request of the same context type
+        if merged:
+            prev = merged[-1]
+            combined = prev.line_count + req.line_count
+            same_type = prev.context_type == req.context_type
+            same_section = prev._file_section == req._file_section
+            fits = combined <= config.max_lines
+            # Check token limit
+            token_ok = True
+            if config.max_tokens > 0 and fits:
+                combined_tokens = _count_tokens_for_lines(
+                    prev.lines + req.lines, config.model,
+                )
+                token_ok = combined_tokens <= config.max_tokens
+
+            if same_type and same_section and fits and token_ok:
+                prev.lines.extend(req.lines)
+                prev.line_indices.extend(req.line_indices)
+                prev.is_split = False
+                continue
+
+        merged.append(req)
+
+    return merged
+
+
+def build_requests(
+    line_infos: List[LineInfo],
+    config: Optional[RequestFormationConfig] = None,
+) -> List[TranslationRequest]:
+    """Build translation requests using the 4-step formation process.
+
+    This is the shared builder called by both **Estimation** (Step 2) and
+    **Translation** (Step 5) to guarantee cost estimates match actual usage.
+
+    The four steps are:
+
+    1. Split Menu/Choice blocks into dedicated requests.
+    2. Split remaining lines at file-end boundaries.
+    3. Apply max-size limits and balance sub-groups.
+    4. Merge short requests below the minimum size.
+
+    Invalid lines (placeholders, dedup, context markers) are excluded
+    automatically.
+
+    Args:
+        line_infos: List of :class:`LineInfo` for all manifest lines.
+        config: Formation configuration.  Uses defaults if ``None``.
+
+    Returns:
+        Ordered list of :class:`TranslationRequest` objects.
+    """
+    if config is None:
+        config = RequestFormationConfig()
+
+    # Remove invalid lines BUT keep file_end markers for Step 2
+    valid, _ = _extract_valid_lines(line_infos)
+
+    # Collect file_end markers separately — they are boundaries, not content
+    file_ends: List[LineInfo] = [
+        li for li in line_infos
+        if li.is_invalid and li.context_marker == "file_end"
+    ]
+
+    if not valid:
+        return []
+
+    # Step 1 — split Menu / Choice
+    mc_requests, remaining = _step1_split_menu_choice(valid)
+
+    # Step 2 — split at file boundaries
+    # Merge file_end markers back into remaining for boundary detection
+    boundary_input = sorted(
+        remaining + file_ends,
+        key=lambda li: li.index,
+    )
+    groups = _step2_split_at_file_boundaries(boundary_input)
+
+    # Step 3 — size-based splitting and balancing
+    dialogue_requests = _step3_split_and_balance(groups, config)
+
+    # Tag file-section IDs so Step 4 does not merge across boundaries
+    section_id = 0
+    req_idx = 0
+    for group in groups:
+        if not group:
+            continue
+        # Count how many requests belong to this group
+        group_indices = {li.index for li in group}
+        while req_idx < len(dialogue_requests):
+            r = dialogue_requests[req_idx]
+            if r.line_indices and r.line_indices[0] in group_indices:
+                r._file_section = section_id
+                req_idx += 1
+            else:
+                break
+        section_id += 1
+
+    # Step 4 — merge short requests (respects file section boundaries)
+    dialogue_requests = _step4_merge_short_requests(dialogue_requests, config)
+
+    # Combine: menu/choice first, then dialogue/unknown in original order
+    all_requests = mc_requests + dialogue_requests
+
+    # Sort by first line index to maintain document order
+    all_requests.sort(key=lambda r: r.line_indices[0] if r.line_indices else 0)
+
+    return all_requests
+
+
+# ---- LineEntry → LineInfo conversion (Phase 50) ----------------------------
+
+
+def build_line_infos(
+    entries: "List[Any]",
+    detected_markers: Optional[List[Optional[str]]] = None,
+) -> List[LineInfo]:
+    """Create :class:`LineInfo` objects from manifest ``LineEntry`` instances.
+
+    For each entry the function determines:
+
+    * **is_invalid** — ``True`` for context-marker lines, placeholder-only
+      lines (``__PROT__``, ``__DEDUP__``, ``__CUSTOM__``), or entries whose
+      ``orig`` is empty.
+    * **context_marker** — propagated from the ``LineEntry.context_marker``
+      field first; if that is ``None``, the ``detected_markers`` list is
+      consulted.  Normal (non-marker) lines inherit the *active* context
+      type from the most recent preceding marker.
+
+    Args:
+        entries: Manifest ``LineEntry`` objects (duck-typed — only ``idx``,
+            ``orig``, ``prepro``, ``context_marker``, and
+            ``is_context_marker()`` are accessed).
+        detected_markers: Optional per-line marker list produced by
+            :func:`analysis.detect_context_markers`.  Must be the same
+            length as *entries* when provided.
+
+    Returns:
+        List of :class:`LineInfo`, one per entry.
+    """
+    import re as _re
+
+    _PLACEHOLDER_RE = _re.compile(
+        r"^(?:__PROT__\d*|__DEDUP_\d+__|__CUSTOM__\d*)$"
+    )
+
+    n = len(entries)
+    result: List[LineInfo] = []
+
+    # Build a merged marker list: entry.context_marker > detected_markers
+    merged: List[Optional[str]] = [None] * n
+    for i, entry in enumerate(entries):
+        cm = getattr(entry, "context_marker", None)
+        if cm is not None:
+            merged[i] = cm
+        elif detected_markers is not None and i < len(detected_markers):
+            merged[i] = detected_markers[i]
+
+    # Determine active context type at each position
+    active: List[str] = ["unknown"] * n
+    current_ctx = "unknown"
+    for i in range(n):
+        if merged[i] is not None:
+            current_ctx = merged[i]
+        active[i] = current_ctx
+
+    for i, entry in enumerate(entries):
+        text = getattr(entry, "prepro", None) or getattr(entry, "orig", "")
+
+        # Determine if invalid
+        is_marker = getattr(entry, "is_context_marker", lambda: False)()
+        is_placeholder = bool(_PLACEHOLDER_RE.match(text.strip())) if text else False
+        is_empty = not text.strip()
+        invalid = is_marker or is_placeholder or is_empty
+
+        # For marker lines, use the marker type directly;
+        # for normal lines, use the active (inherited) context type.
+        if is_marker:
+            ctx = merged[i]
+        else:
+            ctx = active[i] if active[i] != "file_end" else "unknown"
+
+        result.append(LineInfo(
+            index=getattr(entry, "idx", i),
+            text=text,
+            is_invalid=invalid,
+            context_marker=ctx,
+        ))
+
+    return result
 
 
 # =============================================================================
@@ -411,6 +971,8 @@ class PromptBuilder:
         self.logger = logging.getLogger("cherryai.prompt")
         self.config_dir = config_dir
         self.glossary: Dict[str, GlossaryEntry] = {}
+        self.glossary_filter_mode: str = GLOSSARY_FILTER_ALL  # Phase 52
+        self.pov_result: Optional[Dict[str, Any]] = None  # Phase 54
         self.base_prompt_template = ""
         self.conditional_manager = ConditionalPromptManager(config_dir)
         
@@ -636,45 +1198,57 @@ class PromptBuilder:
         summary_lower = self.game_summary.lower()
         return any(p in summary_lower for p in placeholders)
 
-    def _construct_system_prompt(self, lines: List[str]) -> str:
+    def _construct_system_prompt(
+        self,
+        lines: List[str],
+        context_type: Optional[str] = None,
+    ) -> str:
         """Construct the system prompt with game summary, glossary, and conditional instructions.
         
         Injection order (optimized for token savings - TASK 12):
         1. Base prompt template (instructions)
-        2. Game summary (project context - if not empty/placeholder)
-        3. Output examples (from output_examples.txt)
-        4. Glossary terms (content-based, only if entries found)
-        5. Character list (content-based, only if characters found)
-        6. Translation style (user preferences)
-        7. Conditional instructions (pattern-triggered)
+        2. Context-type instructions (Phase 50 — dialogue/menu/choice/unknown)
+        3. Game summary (project context - if not empty/placeholder)
+        4. Output examples (from output_examples.txt)
+        5. Glossary terms (content-based, only if entries found)
+        6. Character list (content-based, only if characters found)
+        7. Translation style (user preferences)
+        8. Conditional instructions (pattern-triggered)
         
         Empty sections are SKIPPED to save tokens.
+
+        Args:
+            lines: Batch lines for glossary/conditional matching.
+            context_type: Optional context type from request formation
+                (``"dialogue"``, ``"menu"``, ``"choice"``, ``"unknown"``).
         """
         prompt_parts = []
         
         # 1. Base prompt template (instructions)
         if self.base_prompt_template:
             prompt_parts.append(self.base_prompt_template)
+
+        # 2. Context-type instructions (Phase 50)
+        if context_type:
+            ctx_prompt = get_context_prompt(context_type)
+            if ctx_prompt:
+                prompt_parts.append(ctx_prompt)
         
-        # 2. Inject Game Summary (context) - skip if empty or just a template
+        # 3. Inject Game Summary (context) - skip if empty or just a template
         if self.game_summary and not self._is_game_summary_empty():
             prompt_parts.append(self.game_summary)
         
-        # 3. Output examples (from output_examples.txt)
+        # 4. Output examples (from output_examples.txt)
         output_examples = self._load_output_examples()
         if output_examples:
             prompt_parts.append(f"# Output Format Examples\n{output_examples}")
         
-        # 4. Identify Glossary Terms present in this batch
-        batch_text = "\n".join(lines)
-        relevant_entries = []
+        # 5. Filter glossary entries for this batch (Phase 52)
+        relevant_entries = filter_glossary_for_chunk(
+            self.glossary, lines, self.glossary_filter_mode,
+        )
         
-        # Optimization: Check for terms in the text
-        for original, entry in self.glossary.items():
-            if original in batch_text:
-                relevant_entries.append(entry)
-        
-        # 5. Format Glossary Block (conditional - only if terms found with translations)
+        # 6. Format Glossary Block (conditional - only if terms found with translations)
         entries_with_translation = [e for e in relevant_entries if e.translation]
         if entries_with_translation:
             glossary_block = "# Glossary\nUse these terms strictly:\n"
@@ -683,7 +1257,7 @@ class PromptBuilder:
                 glossary_block += f"- {entry.original}: {entry.translation}{notes}\n"
             prompt_parts.append(glossary_block)
 
-        # 6. Add Character List (conditional - only if characters found with translations)
+        # 7. Add Character List (conditional - only if characters found with translations)
         characters = [e for e in relevant_entries if e.entry_type == TYPE_NAME and e.translation]
         if characters:
             char_block = "# Game Characters\n"
@@ -692,7 +1266,7 @@ class PromptBuilder:
                 char_block += f"- {char.original}: {char.translation} (Gender: {gender})\n"
             prompt_parts.append(char_block)
         
-        # 7. Inject Translation Style (user preferences) - skip if empty
+        # 8. Inject Translation Style (user preferences) - skip if empty
         # Ensure style is loaded even if resources were not yet loaded
         if not self.translation_style and self.style_file:
             try:
@@ -709,7 +1283,21 @@ class PromptBuilder:
             # Use canonical formatting to satisfy tests
             prompt_parts.append(format_style_for_prompt(self.translation_style))
 
-        # 8. Add Conditional Instructions (pattern-triggered)
+        # 9. Narrative Perspective (Phase 54 — only when confidence is high)
+        if self.pov_result and self.pov_result.get("confidence") == "high":
+            pov_label = {
+                "1st": "first",
+                "2nd": "second",
+                "3rd": "third",
+            }.get(self.pov_result["pov"], self.pov_result["pov"])
+            pov_block = (
+                f"# Narrative Perspective\n"
+                f"The narrative uses {pov_label} person perspective. "
+                f"Maintain consistent {pov_label} person perspective throughout."
+            )
+            prompt_parts.append(pov_block)
+
+        # 10. Add Conditional Instructions (pattern-triggered)
         conditional_block = self.conditional_manager.build_conditional_instructions(lines)
         if conditional_block:
             prompt_parts.append(conditional_block.strip())
@@ -812,21 +1400,31 @@ class PromptBuilder:
             if char_notes_block != "# Character Notes\n":
                 prompt_parts.append(char_notes_block)
 
-        # 5. Code glossary from manifest (conditional)
+        # 5. Code database from manifest (conditional)
+        # TASK 41.8: Handle Preserve / Translate / Remove actions.
         if components.get("code_glossary", True) and code_glossary:
-            code_block = "# Code Patterns\nPreserve these code patterns exactly:\n"
+            code_block = "# Code Patterns\n"
             for pattern in code_glossary:
                 pat = pattern.get("pattern", "")
                 action = pattern.get("action", "preserve")
+                notes = pattern.get("notes", "")
                 example = pattern.get("example", "")
-                if pat:
-                    code_block += f"- {pat}"
-                    if action != "preserve":
-                        code_block += f" [{action}]"
+                if not pat:
+                    continue
+                # "Remove" entries are NOT sent to the prompt; they
+                # are handled entirely in post-processing.
+                if action == "remove":
+                    continue
+                if action == "translate":
+                    hint = notes if notes else "contextually"
+                    code_block += f"- Translate [{pat}] as {hint}\n"
+                else:
+                    # Default "preserve"
+                    code_block += f"- Do not translate [{pat}]"
                     if example:
                         code_block += f" (e.g., {example})"
                     code_block += "\n"
-            if code_block != "# Code Patterns\nPreserve these code patterns exactly:\n":
+            if code_block != "# Code Patterns\n":
                 prompt_parts.append(code_block)
 
         return "\n\n".join(prompt_parts)

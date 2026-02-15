@@ -2585,6 +2585,8 @@ Thank you.
 | test_gui_v2.py | 595 | GUI v2 framework (TASK 15.8-15.14: core + theme/CLI/deprecated) |
 | test_session_persistence.py | 40 | Session auto-save/load, step persistence, file restoration (Release Stabilization) |
 | test_folder_loading.py | 23 | Folder loading in InputExtractionStep |
+| test_input_step_phase39.py | 38 | Input step Phase 39 improvements (unified selector, treeview, format filtering, progress) |
+| test_costs_step_phase40.py | 52 | Costs step Phase 40 improvements (rename, dual estimation, dual ticks, concurrent time, prepro lines) |
 | test_estimate_manifest.py | 33 | Estimation/Analysis manifest integration (TASK 25.1, 25.2) |
 | test_qa_manifest.py | 17 | QA step manifest integration (TASK 26.1) |
 | test_translate_manifest.py | 47 | Translation step manifest integration (TASK 26.2) |
@@ -2638,8 +2640,20 @@ Thank you.
 | test_gui_layout.py | 12 | 2-column layout tests (TASK 18.2) |
 | test_subtask_tracking.py | 14 | Subtask progress tracking (TASK 18.3) |
 | test_code_glossary_display.py | 12 | Code glossary widget (TASK 18.5) |
+| test_information_step_phase41.py | 56 | Information step Phase 41 UI enhancements |
+| test_preprocess_phase42.py | 80 | Preprocessing & Postprocessing Phase 42 |
+| test_translation_phase43.py | 48 | Translation Tab Overhaul Phase 43 |
+| test_validation_shared.py | 24 | Shared Validation Phase 44 |
+| test_postprocess_phase45.py | 49 | Postprocessing Tab Overhaul Phase 45 |
+| test_wordwrap_phase46.py | 45 | Wordwrap Tab Overhaul Phase 46 |
+| test_output_phase47.py | 51 | Output + Pipeline Completeness + Import Phase 47 |
+| test_pipeline_logging.py | 52 | Pipeline Logging System Phase 48 |
+| test_request_formation.py | 50 | Request Formation 4-Step Process Phase 49 |
+| test_context_markers.py | 70 | Context Markers Full Implementation Phase 50 |
+| test_speaker_dedup.py | 47 | Speaker Duplicate Removal Phase 51 |
+| test_glossary_selective.py | 28 | Selective Glossary Per Chunk Phase 52 |
 | smoke_test/*.py | 5+ | Smoke tests |
-| **Total Script Tests** | **2900** | (+97 manifest integration from Phase 25-26) |
+| **Total Script Tests** | **3476** | (+28 Phase 52 selective glossary) |
 | One_Click_Test.py | 7 stages | API integration |
 
 ### TASK 11: Integration Test - 200 Lines (Completed)
@@ -7233,6 +7247,216 @@ collection, relative path display, and cleanup verification.
 
 ---
 
+### dev/test_input_step_phase39.py (38 tests) - Phase 39 Input Step Improvements
+
+Comprehensive tests for Phase 39 Input step UI/UX improvements including unified
+file selector, Treeview hierarchy, format filtering, encoding auto-detect, and
+progress dialog.
+
+#### TestUnifiedSelector (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_select_button_exists` | Unified "Select File(s)" button exists |
+| `test_show_select_menu_method` | `_show_select_menu` method exists |
+
+#### TestRemovedButtons (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_load_manifest_button_removed` | Load Manifest button removed from toolbar |
+| `test_clear_all_button_removed` | Clear All button removed from toolbar |
+
+#### TestEncodingDropdown (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_auto_encoding_option` | "auto" is in encoding values |
+| `test_auto_encoding_default` | Default encoding is "auto" |
+| `test_detect_encoding_method` | `_detect_encoding` static method exists |
+| `test_encoding_values_count` | Correct number of encoding options |
+
+#### TestFormatDropdown (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_rpgmaker_format_option` | "rpgmaker" is in format values |
+| `test_image_format_option` | "image" is in format values |
+| `test_format_values_count` | Correct number of format options |
+
+#### TestFormatFiltering (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_format_extensions_dict` | FORMAT_EXTENSIONS dict exists |
+| `test_file_matches_format_method` | `_file_matches_format` method exists |
+| `test_txt_format_extensions` | TXT format has correct extensions |
+| `test_csv_format_extensions` | CSV format has correct extensions |
+
+#### TestFileTree (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_file_tree_is_treeview` | File list is a ttk.Treeview |
+| `test_tree_item_to_index_dict` | `_tree_item_to_index` mapping exists |
+| `test_treeview_columns` | Treeview has correct columns |
+| `test_treeview_multiselect` | Treeview supports extended selection |
+| `test_backward_compat_alias` | `_file_listbox` aliases `_file_tree` |
+| `test_select_all_in_folder_method` | `_on_select_all_in_folder` method exists |
+
+#### TestMultiLinePreview (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_update_preview_method` | `_update_preview` method exists |
+| `test_newline_marker_in_preview` | Newlines replaced with ↵ markers |
+| `test_crlf_replaced` | CRLF sequences replaced |
+| `test_cr_replaced` | CR-only sequences replaced |
+
+#### TestManifestLabelRemoved (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_no_manifest_frame` | `_manifest_frame` removed |
+| `test_no_manifest_label` | `_manifest_label` removed |
+
+#### TestLoadingProgressDialog (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_import` | LoadingProgressDialog importable |
+| `test_init_signature` | Constructor accepts parent and total_files |
+| `test_update_method` | Has `update()` method |
+| `test_close_method` | Has `close()` method |
+
+#### TestSupportedExtensions (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_image_in_supported` | Image extensions in SUPPORTED_EXTENSIONS |
+| `test_rpgmaker_in_format_map` | RPG Maker in FORMAT_MAP |
+
+#### TestPhase39Integration (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_all_phase39_methods` | All Phase 39 methods exist on class |
+| `test_all_phase39_attributes` | All Phase 39 attributes exist |
+| `test_loading_progress_module` | Loading progress module accessible |
+| `test_input_step_importable` | InputExtractionStep still importable |
+
+#### TestPhase39Cleanup (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_no_deprecated_widgets` | Deprecated widgets removed |
+
+---
+
+### dev/test_costs_step_phase40.py (52 tests) - Phase 40 Costs Step Improvements
+
+Tests for all Phase 40 tasks: renaming, hybrid chunking, prompt overhead,
+dual estimation, dual ticks, model comparison, concurrent time, prepro lines.
+
+#### TestCostsRename (10 tests) - TASK 40.1
+
+| Test | Purpose |
+|------|---------|
+| `test_costs_step_class_exists` | CostsStep importable from costs module |
+| `test_costs_step_name` | step_name is "Costs" |
+| `test_costs_step_id` | step_id is 2 |
+| `test_backward_compat_alias` | EstimationStep alias → CostsStep |
+| `test_backward_compat_estimate_module` | estimate.py re-exports both |
+| `test_init_exports` | Steps __init__ exports CostsStep |
+| `test_step_definitions_name` | STEP_DEFINITIONS uses "Costs" |
+| `test_estimate_re_exports_dataclasses` | estimate.py re-exports dataclasses |
+| `test_estimate_re_exports_functions` | estimate.py re-exports functions |
+| `test_estimate_re_exports_constants` | estimate.py re-exports pricing constants |
+
+#### TestTokensRequestLimit (4 tests) - TASK 40.2
+
+| Test | Purpose |
+|------|---------|
+| `test_estimate_chunks_hybrid_mode` | Hybrid mode works with both limits |
+| `test_hybrid_respects_lines_limit` | Lines limit respected in hybrid |
+| `test_hybrid_respects_tokens_limit` | Tokens limit respected in hybrid |
+| `test_estimate_chunks_modes` | All three modes (lines/tokens/hybrid) work |
+
+#### TestPromptOverhead (3 tests) - TASK 40.3
+
+| Test | Purpose |
+|------|---------|
+| `test_build_prompt_preview_exists` | build_prompt_preview importable |
+| `test_build_prompt_preview_returns_text` | Returns PromptPreviewView with content |
+| `test_count_tokens_function` | count_tokens returns positive value |
+
+#### TestDualEstimation (5 tests) - TASK 40.4
+
+| Test | Purpose |
+|------|---------|
+| `test_estimation_state_structure` | _estimation_state has correct keys |
+| `test_estimation_result_dataclass` | EstimationResult fields correct |
+| `test_comparison_result_dataclass` | ComparisonResult fields correct |
+| `test_reset_estimation_method_exists` | reset_estimation method exists |
+| `test_reset_estimation_signature` | Accepts reset_preprocessed_only param |
+
+#### TestDualTicks (7 tests) - TASK 40.5
+
+| Test | Purpose |
+|------|---------|
+| `test_step_row_accepts_dual_ticks` | StepRow accepts dual_ticks param |
+| `test_progress_panel_has_dual_tick_api` | ProgressPanel has set/clear/get methods |
+| `test_dual_tick_icons_unchecked` | ☐☐ when both False |
+| `test_dual_tick_icons_first_checked` | ☑☐ when first True |
+| `test_dual_tick_icons_both_checked` | ☑☑ when both True |
+| `test_single_tick_unchanged` | Standard ✓ when dual_ticks is None |
+| `test_skipped_icon_with_no_dual` | ⊘ icon when skipped, no dual ticks |
+
+#### TestModelComparisonColumns (4 tests) - TASK 40.6
+
+| Test | Purpose |
+|------|---------|
+| `test_model_pricing_has_all_models` | Expected models present in MODEL_PRICING |
+| `test_model_pricing_structure` | Each model has name, input, output |
+| `test_estimate_cost_function` | Returns dict with cost breakdown |
+| `test_estimate_cost_different_models` | Expensive models cost more |
+
+#### TestTimeConcurrent (10 tests) - TASK 40.7
+
+| Test | Purpose |
+|------|---------|
+| `test_model_pricing_has_concurrent` | concurrent field in all models |
+| `test_model_pricing_has_token_speed` | token_speed field in all models |
+| `test_estimate_rate_limit_time_signature` | Accepts concurrent/token params |
+| `test_time_decrease_with_concurrency` | Higher concurrency → shorter time |
+| `test_time_rate_limit_dominates` | Rate limit dominates when RPM low |
+| `test_time_token_speed_dominates` | Token speed dominates for large output |
+| `test_time_concurrent_dominates` | Concurrent throughput dominates |
+| `test_time_zero_requests` | Zero requests → 0 seconds |
+| `test_time_no_rate_limit` | RPM=0 → "No rate limit" |
+| `test_time_with_buffer` | Buffer increases time |
+| `test_time_formatted_string` | Non-empty formatted string |
+
+#### TestPreprocessedLines (3 tests) - TASK 40.9
+
+| Test | Purpose |
+|------|---------|
+| `test_costs_step_has_get_lines` | _get_lines method exists |
+| `test_get_lines_returns_tuple` | Return annotation present |
+| `test_manifest_prepro_fallback_in_source` | Checks manifest prepro[] entries |
+
+#### TestCostsModuleIntegrity (5 tests) - Integration
+
+| Test | Purpose |
+|------|---------|
+| `test_all_imports_resolve` | costs.py imports resolve |
+| `test_all_imports_estimate_resolve` | estimate.py imports resolve |
+| `test_costs_step_inherits_base` | CostsStep inherits BaseStep |
+| `test_count_tokens_returns_tuple` | Returns (int, str) tuple |
+| `test_update_dual_ticks_method_exists` | _update_dual_ticks method exists |
+
+---
+
 ### dev/test_estimate_manifest.py (33 tests)
 
 Estimation and Analysis step manifest integration for Phase 25.
@@ -8707,6 +8931,134 @@ python -m pytest CherryAI/dev/test_mock_translation.py -v --timeout=10
 python -m pytest CherryAI/dev/ -v --timeout=10
 ```
 
+### dev/test_information_step_phase41.py (56 tests) - Phase 41 Information Step UI Enhancements
+
+Comprehensive tests for Phase 41 Information step UI enhancements including widget
+renames, genre dialog ADD behavior, language custom input, style/tone graying,
+glossary inline editing, import from analysis, code database actions, global
+glossary widget, and selective glossary feature.
+
+#### TestWidgetRenames (5 tests) - TASK 41.1
+
+| Test | Purpose |
+|------|---------|
+| `test_summary_label_in_source` | "Summary / Description" replaced with "Summary" |
+| `test_system_instructions_label_in_source` | "System Instructions" label present |
+| `test_code_database_label_in_source` | "Code Database" label present |
+| `test_old_prompt_label_removed` | Old "Prompt" LabelFrame removed |
+| `test_old_code_glossary_label_removed` | Old "Code Glossary" LabelFrame removed |
+
+#### TestGenreDialogAdd (3 tests) - TASK 41.2
+
+| Test | Purpose |
+|------|---------|
+| `test_open_genre_dialog_method_exists` | _open_genre_dialog method exists |
+| `test_genre_dialog_merge_logic_in_source` | Merge logic (non_common) in source |
+| `test_common_genres_constant_exists` | COMMON_GENRES available |
+
+#### TestOtherLanguageCustom (4 tests) - TASK 41.3
+
+| Test | Purpose |
+|------|---------|
+| `test_on_language_change_method_exists` | _on_language_change method exists |
+| `test_simpledialog_imported` | simpledialog imported |
+| `test_prev_lang_attributes_in_source` | _prev_source_lang/_prev_target_lang tracked |
+| `test_combobox_selected_binding_in_source` | <<ComboboxSelected>> binding present |
+
+#### TestStyleToneGraying (3 tests) - TASK 41.4
+
+| Test | Purpose |
+|------|---------|
+| `test_toggle_preset_state_method_exists` | _toggle_preset_state method exists |
+| `test_trace_add_in_style_section` | trace_add callbacks on style/tone vars |
+| `test_disabled_state_logic_in_source` | state='disabled' logic present |
+
+#### TestGlossaryTableInlineEdit (7 tests) - TASK 41.5
+
+| Test | Purpose |
+|------|---------|
+| `test_add_glossary_entry_method` | _add_glossary_entry method exists |
+| `test_remove_glossary_entry_method` | _remove_glossary_entry method exists |
+| `test_on_glossary_double_click_method` | _on_glossary_double_click method exists |
+| `test_start_glossary_inline_edit_method` | _start_glossary_inline_edit method exists |
+| `test_sync_glossary_tree_to_manifest_method` | _sync_glossary_tree_to_manifest method exists |
+| `test_refresh_glossary_entries_method` | _refresh_glossary_entries method exists |
+| `test_glossary_treeview_columns_in_source` | Treeview columns defined |
+
+#### TestImportCodePatterns (3 tests) - TASK 41.6
+
+| Test | Purpose |
+|------|---------|
+| `test_import_code_patterns_method_exists` | _on_import_code_patterns method exists |
+| `test_detected_category_in_source` | category="Detected" in import |
+| `test_import_merges_no_duplicates_logic` | Dedup logic present |
+
+#### TestImportGlossaryFromAnalysis (4 tests) - TASK 41.7
+
+| Test | Purpose |
+|------|---------|
+| `test_import_glossary_from_analysis_method` | _on_import_glossary_from_analysis method exists |
+| `test_speaker_import_logic` | Speaker detection data used |
+| `test_import_glossary_dedup_logic` | Deduplication against existing entries |
+| `test_import_glossary_refresh_call` | Calls _refresh_glossary_entries after import |
+
+#### TestCodeDatabaseActions (6 tests) - TASK 41.8
+
+| Test | Purpose |
+|------|---------|
+| `test_preserve_action_format` | Preserve → "Do not translate" |
+| `test_translate_action_format` | Translate → "Translate [pattern] as" |
+| `test_remove_action_excluded` | Remove action filtered from prompt |
+| `test_preserve_with_example` | Example shown as "(e.g., ...)" |
+| `test_translate_with_notes` | Notes used as translation target |
+| `test_code_patterns_header` | "# Code Patterns" header in prompt |
+
+#### TestGlobalGlossaryWidget (7 tests) - TASK 41.9
+
+| Test | Purpose |
+|------|---------|
+| `test_build_global_database_section_method` | _build_global_database_section method exists |
+| `test_global_db_path_method` | _global_db_path method exists |
+| `test_load_global_db_missing_file` | Returns empty list when file missing |
+| `test_save_and_load_global_db` | Save/load roundtrip works |
+| `test_refresh_global_database_method` | _refresh_global_database method exists |
+| `test_import_export_methods_exist` | Import/export methods exist |
+| `test_global_db_mode_switch_logic` | Mode switch (Glossary/Code Database) in source |
+
+#### TestSelectiveGlossary (8 tests) - TASK 41.10
+
+| Test | Purpose |
+|------|---------|
+| `test_active_column_in_glossary_tree` | Active column defined in Treeview |
+| `test_on_glossary_click_method` | _on_glossary_click toggle method exists |
+| `test_active_toggle_symbols` | ✓ and ✗ symbols used for toggle |
+| `test_save_glossary_entries_includes_active` | active field saved to manifest |
+| `test_load_glossary_entries_includes_active` | active field loaded from manifest |
+| `test_active_defaults_true` | Missing active field defaults to True |
+| `test_sync_glossary_includes_active` | Sync reads active from tree values |
+| `test_manifest_active_field_roundtrip` | Full roundtrip with active field |
+
+#### TestPhase41Integrity (6 tests) - Integration
+
+| Test | Purpose |
+|------|---------|
+| `test_all_phase41_methods_exist` | All Phase 41 methods present on class |
+| `test_information_step_importable` | InformationStep importable |
+| `test_prompt_builder_importable` | PromptBuilder importable |
+| `test_manifest_fields_importable` | manifest_fields importable |
+| `test_no_syntax_errors_in_information` | information.py has no syntax errors |
+| `test_no_syntax_errors_in_prompt_builder` | prompt_builder.py has no syntax errors |
+
+### Running Phase 41 Tests
+
+```bash
+# Run Phase 41 Information Step tests
+python -m pytest CherryAI/dev/test_information_step_phase41.py -v --timeout=10
+
+# Run all tests with timeout protection
+python -m pytest CherryAI/dev/ -v --timeout=10
+```
+
 ### Running Phase 34 Tests
 
 ```bash
@@ -8718,4 +9070,342 @@ python -m pytest CherryAI/dev/ -v --timeout=10
 
 # Run mypy validation manually
 python -m mypy CherryAI/functions CherryAI/modi CherryAI/formats
+```
+
+### Phase 42: Preprocessing & Postprocessing Tests (80 tests)
+
+**File:** `dev/test_preprocess_phase42.py`
+
+| Test Class | Tests | Coverage |
+|-----------|-------|----------|
+| TestAnchoringWidget | 6 | Anchoring section, _AnchorDialog, tree methods, manifest format |
+| TestCustomPlaceholdersRegex | 5 | _RuleDialog show_regex, regex_result, placeholder tree |
+| TestProtectCodeDefaults | 4 | Protect tree, regex default, config format, save/load |
+| TestAggressiveDedup | 15 | Normalize, mask, restore, set_aggressive_dedup, UI/config |
+| TestEllipsisCompression | 7 | Compress 3/6/9 dots, decompress, multiple, passthrough |
+| TestPROTCompression | 7 | Adjacent, non-adjacent, three-way, decompress, mixed |
+| TestCodeSpacingIntegration | 3 | save_code_glossary visible/spacing, manifest reads |
+| TestPreviewFiltering | 4 | Filter var, options, update_preview, count label |
+| TestRoundtrip | 4 | Ellipsis, PROT, aggressive dedup, empty line roundtrips |
+| TestValidationRecovery | 11 | Position shift, extra tokens, recover_line, save_to_manifest |
+| TestProcessOrder | 7 | Module import, pre/post ordering, get_pre/post_order |
+| TestEdgeCases | 7 | Empty input, special chars, long lines, unicode, mixed PROT |
+
+```bash
+# Run Phase 42 tests
+python -m pytest CherryAI/dev/test_preprocess_phase42.py -v --timeout=10
+```
+
+### Phase 43: Translation Tab Overhaul Tests (48 tests)
+
+**File:** `dev/test_translation_phase43.py`
+
+| Test Class | Tests | Coverage |
+|-----------|-------|----------|
+| TestManifestAttribute | 1 | No raw self.manifest in translate.py (Task 43.1) |
+| TestMergedColumn | 5 | "To be Translated" column, resolution priority (Task 43.3) |
+| TestNewlineRendering | 3 | ↵ symbol replacement, multiple newlines (Task 43.4) |
+| TestMockTranslation | 4 | MODEL_OPTIONS, MockTranslator, PROT preservation (Task 43.5) |
+| TestAPIProviderManagement | 6 | APIProviderEntry roundtrip, providers, presets (Task 43.6) |
+| TestCachingGlobalOptions | 2 | cache_mode default and roundtrip (Task 43.7) |
+| TestThinkingGlobalOptions | 2 | thinking_enabled/budget defaults and roundtrip (Task 43.8) |
+| TestRollingContextGlobalOptions | 2 | rolling_context_lines default and roundtrip (Task 43.9) |
+| TestRetryRefinement | 2 | RETRY_STRATEGIES (2), ALL_RETRY_STRATEGIES (4) (Task 43.10) |
+| TestPromptEditorRedesign | 2 | _BAN_PRESETS existence and content (Task 43.11) |
+| TestChunkSync | 2 | Read/write LinesPerChunk manifest sync (Task 43.12) |
+| TestSkipNonSourceLanguage | 10 | detect_line_script(), _LANG_SCRIPT_MAP (Task 43.13) |
+| TestTabCaching | 4 | Hash computation, validity, update, invalidate (Task 43.14) |
+| TestTablePerformance | 2 | Batch threshold (100 vs 600 rows) (Task 43.2) |
+| TestGlobalOptionsIntegration | 1 | Full GlobalOptions roundtrip with all Phase 43 fields |
+
+```bash
+# Run Phase 43 tests
+python -m pytest CherryAI/dev/test_translation_phase43.py -v --timeout=10
+```
+
+### Phase 44: Shared Validation & QA Placeholder Tests (24 tests)
+
+**File:** `dev/test_validation_shared.py`
+
+| Test Class | Tests | Coverage |
+|-----------|-------|----------|
+| TestValidationModuleAvailability | 7 | Core validation functions importable |
+| TestPostprocessingUsesValidation | 4 | Postprocess imports recover_line, validation |
+| TestTranslationUsesRetryRecovery | 3 | Translation imports prompt_adapter retry |
+| TestValidationConsistency | 7 | Placeholder validation, extract, pre/post, recovery types |
+| TestQAPlaceholder | 3 | QA step placeholder mode, toggle, dataclasses preserved |
+
+```bash
+# Run Phase 44 tests
+python -m pytest CherryAI/dev/test_validation_shared.py -v --timeout=10
+```
+
+### Phase 45: Postprocessing Tab Overhaul Tests (49 tests)
+
+**File:** `dev/test_postprocess_phase45.py`
+
+| Test Class | Tests | Coverage |
+|-----------|-------|----------|
+| TestTask451MouseWheel | 1 | bind_all not used (scoped binding check) |
+| TestTask452RenameLabel | 1 | "Processed Lines" label present |
+| TestTask453RemoveButtons | 3 | No Refresh/Revert All buttons in header |
+| TestTask454AutoRecovery | 5 | Auto recovery always on, no checkboxes, hardcoded True |
+| TestTask455BidirectionalSymbol | 8 | HALFWIDTH_TO_FULLWIDTH map, mutual exclusion, bidirectional conversion |
+| TestTask456FailureHandling | 6 | FailurePolicy.WRITE/FLAG enum, default WRITE, manifest values |
+| TestTask457DiffViewEditing | 5 | Edit text widget, mark-as-fixed flow, _mark_line_as_fixed method |
+| TestTask458SummaryUpdates | 6 | Progress bar, Written/Flagged labels, completion popup |
+| TestTask459FilterOptions | 8 | All/Changed/Written/Flagged filters, PostprocessLine.written/flagged fields |
+| TestTask4510OverwriteWarning | 4 | Overwrite dialog on re-run, skip on first run |
+| TestFailurePolicyPropagation | 2 | FailurePolicy WRITE/FLAG propagation in _do_postprocessing |
+
+```bash
+# Run Phase 45 tests
+python -m pytest CherryAI/dev/test_postprocess_phase45.py -v --timeout=10
+```
+
+### Phase 46: Wordwrap Tab Overhaul Tests (45 tests)
+
+Test file: `dev/test_wordwrap_phase46.py`
+
+| Test Class | Count | Coverage |
+|------------|-------|----------|
+| TestTask461ModeDropdown | 3 | WrapMode.MANUAL only, count==1, combobox values |
+| TestTask462RemoveOrphanPunct | 2 | No _orphan_var/_punct_var, get_wrap_options hardcodes True |
+| TestTask463SpeakerHandling | 6 | SpeakerMode IGNORE/COUNT, count==2, descriptions match |
+| TestTask464IgnorePatterns | 3 | No IgnorePattern enum, _get_ignore_codes reads CodeDatabase |
+| TestTask465RemoveTypography | 2 | No TypographyStyle/TypographyOptions, no get_typography_options |
+| TestTask466RemoveOverwriteStrategy | 3 | No OverwriteStrategy/MergeMethod/OverwriteOptions, no get_overwrite_options |
+| TestTask467WidthDropdown | 4 | _on_width_mode_changed, char/pixel frames toggle, pixel has font_size |
+| TestTask468OverwriteColumn | 7 | WrapLine.overwrite field, overwrite_differs property, table columns |
+| TestTask469TableFilters | 5 | Filter values All/Changed/Exceeding/Overwrite Differs, _refresh_table filter logic |
+| TestTask4610MaxLinesFlag | 4 | _simple_wrap exceeds_limit detection, WrapLine exceeds_limit field |
+| TestRemainingEnumsDataclasses | 6 | WrapStatus intact, FormatConfig intact, WrapStats intact |
+
+```bash
+# Run Phase 46 tests
+python -m pytest CherryAI/dev/test_wordwrap_phase46.py -v --timeout=10
+```
+
+### Phase 47: Output + Pipeline Completeness + Import Tests (51 tests)
+
+Test file: `dev/test_output_phase47.py`
+
+| Test Class | Count | Coverage |
+|------------|-------|----------|
+| TestGetFinalOutput | 14 | 9-level priority chain, edit{N}/tlc{N} highest round, gaps, empty |
+| TestResolveAllLines | 2 | Batch resolution, empty input |
+| TestGetSourceBreakdown | 2 | Source field counting across lines |
+| TestPriorityChainConstant | 1 | PRIORITY_CHAIN list order and completeness |
+| TestDirtyFlags | 6 | get_dirty_flags, set_dirty_flag, defaults, isolation |
+| TestNonDestructiveDefaults | 4 | NamingOptions default SUBFOLDER, field defaults |
+| TestFailureLogging | 4 | ExportStats.failure_log, append entries, empty default |
+| TestImportTranslations | 4 | _on_import_translations method, field copy, matching |
+| TestSkipAlreadyTranslated | 4 | TranslationOptions.skip_already_translated, skip logic |
+| TestOutputSummaryPanel | 5 | Dirty flag labels, _update_dirty_flags method |
+| TestExistingAPIStability | 5 | OutputFormat, NamingStrategy, BackupStrategy, ExportStatus enums intact |
+
+```bash
+# Run Phase 47 tests
+python -m pytest CherryAI/dev/test_output_phase47.py -v --timeout=10
+```
+
+### Phase 48: Pipeline Logging System Tests (test_pipeline_logging.py)
+
+**File:** `dev/test_pipeline_logging.py`
+**Test Count:** 52
+**Coverage:** Log rotation, status vocabulary, step log I/O, API client step log, GUI step integration, manifest metrics, log export, naming conventions, error resilience, UTF-8 encoding, API stability
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestRotateLog | 3 | No existing log, archive existing, multiple archives |
+| TestGetStepLogPath | 2 | Canonical path format, all step names |
+| TestWriteStepLogHeader | 2 | Header content with separators, parent dir creation |
+| TestWriteStepLogFooter | 2 | Footer appended to existing, non-existent file safe |
+| TestAppendStepLogEntry | 1 | Free-form text append |
+| TestLogStatus | 5 | PASS constant, recovered/partial_retrial/partial_failure/failure formats |
+| TestFailureType | 2 | All 11 constants defined, uppercase verification |
+| TestFormatLogStatus | 2 | Without detail, with detail |
+| TestDeriveStepStatus | 6 | Empty, all PASS, recovered, partial, failure, partial retrial |
+| TestAPIClientStepLog | 4 | _step_log_path attribute, write_log_header/footer/call integration |
+| TestPostprocessStepLogIntegration | 2 | Log code presence, step name |
+| TestWordwrapStepLogIntegration | 2 | Log code presence, step name |
+| TestOutputStepLogIntegration | 3 | Log code presence, step name, export glob |
+| TestManifestStepMetrics | 6 | Set/get roundtrip, merge update, empty, copy isolation, multi-step, spec fields |
+| TestLogFileNamingConvention | 2 | Active log naming, archive naming pattern |
+| TestLogWriteNeverBlocks | 3 | Header/footer/append invalid path safe |
+| TestLogUTF8Encoding | 2 | Header UTF-8, entry UTF-8 |
+| TestExistingAPIStability | 3 | setup_logger signature, write_failure_report, now_iso |
+
+```bash
+# Run Phase 48 tests
+python -m pytest CherryAI/dev/test_pipeline_logging.py -v --timeout=10
+```
+
+### Phase 49: Request Formation Tests (test_request_formation.py)
+
+**File:** `dev/test_request_formation.py`
+**Test Count:** 50
+**Coverage:** LineInfo, RequestFormationConfig, TranslationRequest, build_requests 4-step process, menu/choice splitting, file boundaries, size balancing, short request merging, existing API stability
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestLineInfo | 2 | Defaults, with marker |
+| TestRequestFormationConfig | 2 | Defaults, custom values |
+| TestTranslationRequest | 2 | Defaults, line_count property |
+| TestExtractValidLines | 3 | All valid, mixed, empty |
+| TestStep1MenuChoiceSplitting | 6 | No markers, menu block, choice block, multiple blocks, no rolling context, dialogue stays |
+| TestStep2FileBoundarySplitting | 6 | No markers, single, multiple, empty, start boundary, consecutive |
+| TestStep3SplitAndBalance | 7 | Small group, oversized, balanced, is_split flag, multiple groups, empty, exact max |
+| TestStep4MergeShortRequests | 6 | No short, merge same-type, different types, exceeds max, menu never merged, empty |
+| TestBuildRequestsIntegration | 10 | Simple chunking, invalid excluded, menu/choice separated, file boundaries, order preserved, empty/all-invalid, single line, estimation=translation, context types, default config |
+| TestExistingPromptBuilderStability | 5 | RequestBatch, RollingContextConfig, PromptBuilder, strip_speaker_quotes, format_rolling_context |
+
+```bash
+# Run Phase 49 tests
+python -m pytest CherryAI/dev/test_request_formation.py -v --timeout=10
+```
+
+---
+
+### Phase 50: Context Markers Full Implementation (70 tests)
+
+**File:** `dev/test_context_markers.py`
+**Baseline:** 5010 passed, 70 skipped
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestLineEntryContextMarker | 5 | Default None, set marker, all valid types, get_marker_type, VALID_MARKERS |
+| TestLineEntryContextMarkerSerialization | 6 | to_dict without/with marker, from_dict with/without marker, roundtrip both |
+| TestIsChoiceItem | 7 | Numbered, bullet, CJK bullet, circled number, long reject, empty, plain |
+| TestIsMenuItem | 5 | Short items, speaker reject, long reject, multi-sentence reject, empty |
+| TestIsDialogueLine | 3 | Speaker colon, Japanese speaker, no speaker |
+| TestDetectContextMarkers | 8 | Empty, all dialogue, below threshold, menu, choice, mixed, no file_end, empty lines |
+| TestGetActiveContextType | 4 | No markers, inherits earlier, overridden by later, at marker position |
+| TestBuildLineInfos | 11 | Basic, marker invalid, placeholder invalid, empty invalid, propagation, file_end no propagate, detected fallback, entry override, prepro, index |
+| TestBuildLineInfosIntegrationWithBuildRequests | 3 | Dialogue end-to-end, menu end-to-end, file boundary splitting |
+| TestContextPromptTemplates | 7 | All types have templates, dialogue/menu/choice/unknown content, invalid type, map matches |
+| TestConstructSystemPromptContextType | 5 | No context, dialogue, menu, choice, unknown |
+| TestContextMarkerEdgeCases | 7 | Backward compat, empty inputs, no markers unknown, single line, marker excluded, populated fields, builder stability |
+
+```bash
+# Run Phase 50 tests
+python -m pytest CherryAI/dev/test_context_markers.py -v --timeout=10
+```
+
+---
+
+### Phase 51: Speaker Duplicate Removal (47 tests)
+
+**File:** `dev/test_speaker_dedup.py`
+**Baseline:** 5100 passed, 27 skipped
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestDetectConsecutiveSpeakers | 12 | No speakers, no duplicates, simple, multiple consecutive, non-consecutive, fullwidth, mixed colon, empty lines, single, empty input, case-sensitive, spaces in name |
+| TestSpeakerDedupOp | 4 | to_dict, from_dict, roundtrip, defaults |
+| TestRemoveDuplicateSpeakers | 7 | Basic removal, no duplicates, custom indices, fullwidth, original unchanged, out-of-range, multiple groups |
+| TestRestoreDuplicateSpeakers | 6 | Basic restore, with indices, fullwidth, non-dedup ops ignored, more ops than lines, original unchanged |
+| TestRoundTrip | 5 | Simple, multi-group, fullwidth, no duplicates, translated |
+| TestRequestSettingsToggle | 6 | Default false, enable, to_dict, from_dict, default false, serialization roundtrip |
+| TestEdgeCases | 7 | Colon-only speaker, colon in dialogue, whitespace, long name, negative index, many consecutive, empty ops |
+
+```bash
+# Run Phase 51 tests
+python -m pytest CherryAI/dev/test_speaker_dedup.py -v --timeout=10
+```
+
+---
+
+### Phase 52: Selective Glossary Per Chunk (28 tests)
+
+**File:** `dev/test_glossary_selective.py`
+**Baseline:** 5130 passed, 25 skipped
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestFilterAll | 3 | Returns all entries, empty glossary, empty chunk |
+| TestFilterOriginalOnly | 4 | Matching originals, no matches, translation not matched, empty translation included |
+| TestFilterBoth | 5 | Original match, translation match, both no duplicates, empty translation, partial match |
+| TestConstants | 2 | Modes frozenset, mode string values |
+| TestPromptBuilderIntegration | 2 | Original-only filters prompt, all mode includes everything |
+| TestRequestSettingsGlossaryFilter | 6 | Default all, set original_only, to_dict, from_dict, default, roundtrip |
+| TestEdgeCases | 6 | Empty glossary, empty chunk, empty original key, multiline, identical orig/tl, case-sensitive |
+
+```bash
+# Run Phase 52 tests
+python -m pytest CherryAI/dev/test_glossary_selective.py -v --timeout=10
+```
+
+---
+
+### Phase 53: Parser Scripts System (54 tests)
+
+**File:** `dev/test_parser_scripts.py`
+**Baseline:** 5184 passed, 25 skipped
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestWordwrapConfig | 4 | Defaults, custom values, roundtrip serialisation, from_dict defaults |
+| TestForbiddenChars | 4 | Defaults, custom values, roundtrip serialisation, from_dict defaults |
+| TestContextMarkerRules | 4 | Defaults, compiled empty patterns, compiled valid regex, roundtrip |
+| TestParserScriptABC | 3 | Cannot instantiate base, minimal implementation, info summary |
+| TestRpgMakerMVParser | 7 | Name, wordwrap config, forbidden chars, context markers, can_handle www/data, non-json rejected, info capabilities |
+| TestRpgMakerMZParser | 4 | Name, wider wordwrap than MV, same forbidden chars as MV, non-json rejected |
+| TestParserRegistry | 4 | Register/get case-insensitive, get missing, list parsers, detect no match |
+| TestGlobalRegistry | 3 | Returns instance, has RPG Maker parsers, detect non-json |
+| TestMergeParserForbiddenChars | 4 | Merge adds chars, no duplicates, empty parser chars, preserves discouraged |
+| TestReplaceForbiddenChars | 6 | Replace action, flag action, no chars, empty text, custom replacement, no match |
+| TestWordwrapParserIntegration | 2 | MV format config values, MZ wider width |
+| TestCanHandleRealFiles | 3 | Detects RPG Maker array, rejects plain JSON, rejects array without null |
+| TestEdgeCases | 6 | Negative width, both output actions, invalid regex, registry overwrite, nonexistent file, type coercion |
+
+```bash
+# Run Phase 53 tests
+python -m pytest CherryAI/dev/test_parser_scripts.py -v --timeout=10
+```
+
+### Phase 54: Point of View Inference (36 tests)
+
+**File:** `dev/test_pov_inference.py`
+**Baseline:** 5218 passed, 27 skipped
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestPronounPatterns | 9 | Pattern existence for 4 languages, English case-insensitive, Japanese patterns match, fallback to Japanese for unknown |
+| TestDetectPOVJapanese | 4 | 1st person dominant, 2nd person dominant, empty lines, non-dialogue only |
+| TestDetectPOVEnglish | 3 | 1st person "I/my/mine", 2nd person "you/your", mixed case handling |
+| TestPOVConfidence | 4 | High confidence >60%, low confidence, mixed when secondary ≥20%, unknown on empty |
+| TestPOVWithContextMarkers | 3 | Menu lines excluded, choice lines excluded, dialogue lines excluded |
+| TestPOVResult | 3 | to_dict roundtrip, from_dict, default values |
+| TestPromptPOVIntegration | 5 | High confidence adds section, low confidence excluded, 1st/2nd/3rd person labels, None pov_result safe |
+| TestEdgeCases | 5 | All dialogue lines, protagonist name 3rd person, single line, mixed languages, no protagonist name |
+
+```bash
+# Run Phase 54 tests
+python -m pytest CherryAI/dev/test_pov_inference.py -v --timeout=10
+```
+
+### Phase 55: Consistency System (60 tests)
+
+**File:** `dev/test_consistency.py`
+**Baseline:** 5235 passed, 70 skipped
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestConsistencyTerm | 7 | Defaults, resolved/unresolved, invalid type, all valid types, roundtrip, from_dict defaults |
+| TestConsistencyStore | 11 | Empty store, add/get, case-insensitive, update canonical (found/missing), remove, resolved/unresolved filters, by_type, roundtrip, invalid entries, overwrite |
+| TestDetectCodeTerms | 4 | Translate action detected, preserve/remove ignored, empty pattern skipped, case-insensitive action |
+| TestDetectGlossaryTerms | 4 | Empty translation, empty notes, complete entry skipped, empty source skipped |
+| TestDetectSpanTerms | 5 | RPG Maker color span, HTML bold, no spans, dedup, source_line_idx |
+| TestBuildConsistencyStore | 3 | Combined detection, empty inputs, no duplicate between types |
+| TestPreliminaryMode | 5 | Single pass, multi-pass agreement, disagreement majority, API failure, all resolved skips |
+| TestDuringMode | 4 | First occurrence captured, resolved skipped, replace in requests, unresolved not replaced |
+| TestCheckMode | 4 | Consistent no flags, inconsistent flagged, no originals skips, flag to_dict |
+| TestGlobalOption | 4 | Modes constant, RequestSettings default, roundtrip, GlobalOptions roundtrip |
+| TestDisabledMode | 3 | Empty store preliminary, during, check |
+| TestEdgeCases | 6 | Special regex chars, mismatched line counts, empty chunks, multiline spans, empty dict, term types constant |
+
+```bash
+# Run Phase 55 tests
+python -m pytest CherryAI/dev/test_consistency.py -v --timeout=10
 ```

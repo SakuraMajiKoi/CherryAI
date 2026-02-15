@@ -50,7 +50,7 @@ from pathlib import Path
 import csv
 from typing import Any, Dict, List, Optional, Tuple, Callable
 import difflib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 
 # Centralized aggressive dedup normalization from dedup module (fallback if unavailable)
@@ -544,6 +544,63 @@ def _has_japanese(text: str) -> bool:
     return False
 
 
+def detect_line_script(text: str) -> str:
+    """Detect the dominant script of a line.
+
+    Returns one of: 'japanese', 'chinese', 'korean', 'latin', 'mixed',
+    or 'unknown' for very short / empty lines.
+
+    Short lines (< 3 non-whitespace chars) return 'unknown' to avoid
+    false positives.
+
+    Args:
+        text: Line of text to classify.
+
+    Returns:
+        Script identifier string.
+    """
+    stripped = text.strip()
+    # Short lines are ambiguous — never skip them
+    if len(stripped) < 3:
+        return "unknown"
+
+    cjk = 0
+    hiragana_katakana = 0
+    hangul = 0
+    latin = 0
+    total = 0
+
+    for ch in stripped:
+        o = ord(ch)
+        if ch.isspace():
+            continue
+        total += 1
+        if (0x3040 <= o <= 0x30FF):
+            hiragana_katakana += 1
+        elif (0x3400 <= o <= 0x4DBF) or (0x4E00 <= o <= 0x9FFF):
+            cjk += 1
+        elif (0xAC00 <= o <= 0xD7AF) or (0x1100 <= o <= 0x11FF):
+            hangul += 1
+        elif (0x0041 <= o <= 0x005A) or (0x0061 <= o <= 0x007A):
+            latin += 1
+        elif (0x00C0 <= o <= 0x024F):
+            latin += 1
+
+    if total == 0:
+        return "unknown"
+
+    jp = hiragana_katakana + cjk
+    if hiragana_katakana > 0 and jp / total > 0.3:
+        return "japanese"
+    if hangul / total > 0.3:
+        return "korean"
+    if cjk / total > 0.3:
+        return "chinese"
+    if latin / total > 0.3:
+        return "latin"
+    return "mixed"
+
+
 def _normalize_for_dedup(line: str) -> str:
     """Delegate to centralized dedup.aggressive_normalize_line when available.
 
@@ -588,6 +645,173 @@ def count_tokens(text: str) -> Tuple[int, str]:
 
 
 # ---------------- End imported constants and helpers (from glossaries/*) ---------------- #
+
+
+# ============================================================================
+# Context Marker Detection (Phase 50)
+# ============================================================================
+
+# Patterns for detecting numbered/bulleted choice items
+_CHOICE_RE = re.compile(
+    r"^\s*(?:"
+    r"\d+[.)]\s"           # 1. / 1) numbered lists
+    r"|[・●■□◆▶►▸→]\s?"    # Bullet-like markers (CJK/Unicode)
+    r"|[-*]\s"             # Markdown-style bullets
+    r"|[①②③④⑤⑥⑦⑧⑨⑩]"    # Circled numbers
+    r")",
+)
+
+# Short-line threshold for menu detection (chars)
+_MENU_MAX_LEN = 60
+
+
+def _is_choice_item(line: str) -> bool:
+    """Return ``True`` if *line* looks like a numbered or bulleted choice.
+
+    Heuristic: starts with a number/bullet pattern AND is reasonably short
+    (to avoid matching numbered paragraphs).
+
+    Args:
+        line: Raw line text.
+
+    Returns:
+        True if the line matches a choice-item pattern.
+    """
+    stripped = line.strip()
+    if not stripped or len(stripped) > 120:
+        return False
+    return bool(_CHOICE_RE.match(stripped))
+
+
+def _is_menu_item(line: str) -> bool:
+    """Return ``True`` if *line* looks like a short menu item.
+
+    Menu items are typically short, self-contained strings without speaker
+    prefixes.  Examples: "New Game", "Settings", "はい", "いいえ".
+
+    Args:
+        line: Raw line text.
+
+    Returns:
+        True if the line looks like a menu item.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return False
+    # Too long for a menu item
+    if len(stripped) > _MENU_MAX_LEN:
+        return False
+    # Has a speaker prefix → likely dialogue, not menu
+    if detect_speaker(stripped):
+        return False
+    # Multi-sentence lines are not menu items
+    if stripped.count("。") > 1 or stripped.count(". ") > 1:
+        return False
+    return True
+
+
+def _is_dialogue_line(line: str) -> bool:
+    """Return ``True`` if *line* has a speaker:dialogue pattern.
+
+    Relies on the established ``detect_speaker`` function from glossary.
+
+    Args:
+        line: Raw line text.
+
+    Returns:
+        True if a Speaker: Dialogue pattern is detected.
+    """
+    return detect_speaker(line.strip()) is not None
+
+
+def detect_context_markers(
+    lines: List[str],
+    min_run: int = 3,
+) -> List[Optional[str]]:
+    """Detect context marker annotations for a list of raw lines.
+
+    Scans *lines* for contiguous runs of menu items, choice items, or
+    dialogue lines.  A run of ``min_run`` or more consecutive matching
+    lines earns a marker annotation; shorter runs are left as ``None``
+    (treated as "unknown").
+
+    This function does **not** produce file_end markers — those come from
+    the file-loading layer or from Parser Scripts.
+
+    Args:
+        lines: Raw text lines (orig or prepro).
+        min_run: Minimum consecutive lines to trigger a marker annotation.
+
+    Returns:
+        List of marker strings or ``None`` per line, same length as *lines*.
+        Possible values: ``"dialogue"``, ``"menu"``, ``"choice"``, ``None``.
+    """
+    n = len(lines)
+    markers: List[Optional[str]] = [None] * n
+
+    if n == 0:
+        return markers
+
+    # Classify each line independently
+    raw_types: List[Optional[str]] = [None] * n
+    for i, line in enumerate(lines):
+        text = line.strip()
+        if not text:
+            # Empty lines don't belong to any category
+            continue
+        if _is_choice_item(text):
+            raw_types[i] = "choice"
+        elif _is_dialogue_line(text):
+            raw_types[i] = "dialogue"
+        elif _is_menu_item(text):
+            raw_types[i] = "menu"
+
+    # Identify contiguous runs and apply min_run threshold
+    i = 0
+    while i < n:
+        kind = raw_types[i]
+        if kind is None:
+            i += 1
+            continue
+
+        # Scan the run of the same kind
+        j = i
+        while j < n and raw_types[j] == kind:
+            j += 1
+
+        run_len = j - i
+        if run_len >= min_run:
+            for k in range(i, j):
+                markers[k] = kind
+
+        i = j
+
+    return markers
+
+
+def get_active_context_type(
+    context_markers: List[Optional[str]],
+    index: int,
+) -> str:
+    """Return the active context type at *index* by scanning backwards.
+
+    Context markers apply from their position until the next marker.  If no
+    marker precedes *index*, the result is ``"unknown"``.
+
+    Args:
+        context_markers: Per-line marker list (from :func:`detect_context_markers`
+            or from LineEntry.context_marker values).
+        index: The line index to query.
+
+    Returns:
+        Active context type: ``"dialogue"``, ``"menu"``, ``"choice"``, or
+        ``"unknown"``.
+    """
+    for i in range(index, -1, -1):
+        marker = context_markers[i]
+        if marker is not None:
+            return marker
+    return "unknown"
 
 
 def analyze_file(input_path: Path, logs_dir: Path) -> Dict[str, Any]:
@@ -1651,6 +1875,208 @@ def analyze_language(lines: List[str]) -> Dict[str, Any]:
         "sentences": sentence_section,
     }
     return lang
+
+
+# ============================================================================
+# Point of View Inference (Phase 54)
+# ============================================================================
+
+# -- Pronoun pattern database (Task 54.1) ------------------------------------
+# Each entry maps a language key to a dict of POV → list of patterns.
+# Patterns are compiled once and cached via _get_pov_patterns().
+
+_RAW_POV_PATTERNS: Dict[str, Dict[str, List[str]]] = {
+    "japanese": {
+        "1st": [
+            r"私", r"僕", r"俺", r"わたし", r"ぼく", r"おれ",
+            r"あたし", r"我", r"わし", r"拙者", r"某",
+            r"ウチ", r"うち", r"オレ", r"ボク", r"ワタシ",
+            r"アタシ", r"オイラ",
+        ],
+        "2nd": [
+            r"あなた", r"君", r"きみ", r"お前", r"おまえ",
+            r"てめえ", r"貴方", r"貴様", r"そなた", r"キミ",
+            r"アンタ", r"あんた", r"オマエ",
+        ],
+    },
+    "english": {
+        "1st": [
+            r"\bI\b", r"\bmy\b", r"\bmine\b", r"\bme\b",
+            r"\bmyself\b", r"\bwe\b", r"\bour\b", r"\bours\b",
+        ],
+        "2nd": [
+            r"\byou\b", r"\byour\b", r"\byours\b", r"\byourself\b",
+        ],
+    },
+    "chinese": {
+        "1st": [r"我", r"咱", r"余", r"吾"],
+        "2nd": [r"你", r"您", r"汝"],
+    },
+    "korean": {
+        "1st": [r"나", r"저", r"제"],
+        "2nd": [r"너", r"당신", r"그대"],
+    },
+}
+
+# Compiled cache
+_COMPILED_POV: Dict[str, Dict[str, List[re.Pattern]]] = {}
+
+
+def _get_pov_patterns(
+    language: str,
+) -> Dict[str, List[re.Pattern]]:
+    """Return compiled POV regex patterns for *language*.
+
+    Args:
+        language: Language key (lowercase).  Falls back to ``"japanese"``
+            when the key is not found.
+
+    Returns:
+        Dict mapping ``"1st"`` / ``"2nd"`` to lists of compiled patterns.
+    """
+    lang_key = language.lower()
+    if lang_key not in _RAW_POV_PATTERNS:
+        lang_key = "japanese"  # default
+
+    if lang_key not in _COMPILED_POV:
+        # English patterns use word boundaries and need case-insensitive
+        flags = re.IGNORECASE if lang_key == "english" else 0
+        compiled: Dict[str, List[re.Pattern]] = {}
+        for pov, pats in _RAW_POV_PATTERNS[lang_key].items():
+            compiled[pov] = [re.compile(p, flags) for p in pats]
+        _COMPILED_POV[lang_key] = compiled
+
+    return _COMPILED_POV[lang_key]
+
+
+# -- POV detection algorithm (Task 54.2) -------------------------------------
+
+@dataclass
+class POVResult:
+    """Result of point-of-view inference.
+
+    Attributes:
+        pov: Detected perspective (``"1st"``, ``"2nd"``, ``"3rd"``,
+            ``"mixed"``, or ``"unknown"``).
+        confidence: ``"high"`` when the dominant POV accounts for
+            >60 % of pronoun matches; ``"low"`` otherwise.
+        counts: Per-POV match counts.
+        total_narrative_lines: Number of lines analysed.
+    """
+
+    pov: str = "unknown"
+    confidence: str = "low"
+    counts: Dict[str, int] = field(default_factory=dict)
+    total_narrative_lines: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialise to dictionary."""
+        return {
+            "pov": self.pov,
+            "confidence": self.confidence,
+            "counts": dict(self.counts),
+            "total_narrative_lines": self.total_narrative_lines,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "POVResult":
+        """Deserialise from dictionary."""
+        return cls(
+            pov=str(data.get("pov", "unknown")),
+            confidence=str(data.get("confidence", "low")),
+            counts=dict(data.get("counts", {})),
+            total_narrative_lines=int(data.get("total_narrative_lines", 0)),
+        )
+
+
+def detect_pov(
+    lines: List[str],
+    language: str = "japanese",
+    protagonist_name: str = "",
+    context_markers: Optional[List[Optional[str]]] = None,
+) -> POVResult:
+    """Infer the narrative point of view from non-dialogue lines.
+
+    Filters out dialogue (speaker prefix) and menu/choice lines, then
+    counts pronoun occurrences for 1st and 2nd person.  3rd person is
+    inferred when the protagonist name appears frequently and
+    1st/2nd counts are low.
+
+    Args:
+        lines: Raw text lines.
+        language: Source language key (``"japanese"``, ``"english"``, etc.).
+        protagonist_name: Protagonist name from Character Notes (used for
+            3rd-person detection).  Empty string disables 3rd-person probe.
+        context_markers: Optional per-line marker list from
+            :func:`detect_context_markers`.
+
+    Returns:
+        :class:`POVResult` with detected perspective and confidence.
+    """
+    patterns = _get_pov_patterns(language)
+
+    counts: Dict[str, int] = {"1st": 0, "2nd": 0, "3rd": 0}
+    narrative_lines = 0
+
+    for idx, line in enumerate(lines):
+        text = line.strip()
+        if not text:
+            continue
+
+        # Skip dialogue lines (speaker prefix)
+        if detect_speaker(text) is not None:
+            continue
+
+        # Skip menu / choice lines via context markers
+        if context_markers and idx < len(context_markers):
+            marker = context_markers[idx]
+            if marker in ("menu", "choice"):
+                continue
+
+        narrative_lines += 1
+
+        # 1st / 2nd person pattern matching
+        for pov, pats in patterns.items():
+            for pat in pats:
+                counts[pov] += len(pat.findall(text))
+
+        # 3rd person: protagonist name frequency
+        if protagonist_name and protagonist_name in text:
+            counts["3rd"] += text.count(protagonist_name)
+
+    total = counts["1st"] + counts["2nd"] + counts["3rd"]
+
+    if total == 0 or narrative_lines == 0:
+        return POVResult(
+            pov="unknown",
+            confidence="low",
+            counts=counts,
+            total_narrative_lines=narrative_lines,
+        )
+
+    # Determine dominant POV
+    dominant_pov = max(counts, key=lambda k: counts[k])
+    dominant_ratio = counts[dominant_pov] / total
+
+    # Secondary POV check
+    secondary = sorted(counts, key=lambda k: counts[k], reverse=True)
+    secondary_pov = secondary[1] if len(secondary) > 1 else None
+    secondary_ratio = counts[secondary_pov] / total if secondary_pov else 0.0
+
+    # Mixed POV: dominant < 60 % and secondary >= 20 %
+    if dominant_ratio < 0.6 and secondary_ratio >= 0.2:
+        pov = "mixed"
+        confidence = "low"
+    else:
+        pov = dominant_pov
+        confidence = "high" if dominant_ratio > 0.6 else "low"
+
+    return POVResult(
+        pov=pov,
+        confidence=confidence,
+        counts=counts,
+        total_narrative_lines=narrative_lines,
+    )
 
 
 # ---------------- Glossary delegates ---------------- #

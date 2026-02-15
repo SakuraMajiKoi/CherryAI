@@ -5,8 +5,8 @@ Provides fields for project name, summary, style, and character notes.
 
 TASK 23.1: Basic Metadata Fields bound to manifest.
 TASK 23.2: Style and Tone Fields bound to manifest.
-TASK 23.3: Character Notes and Code Glossary bound to manifest.
-TASK 23.4: Prompt field (renamed from Additional Notes) bound to manifest.
+TASK 23.3: Character Notes and Code Database bound to manifest.
+TASK 23.4: System Instructions field (renamed Prompt←Additional Notes) bound to manifest.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import ttk, messagebox, scrolledtext, simpledialog
 
 from CherryAI.gui.steps.base import BaseStep
 from CherryAI.gui.theme.colors import THEME
@@ -466,8 +466,10 @@ class InformationStep(BaseStep):
         """Build the main content area with 2-column layout.
         
         Layout:
-        - Left column: Project Details, Languages, Summary, Style & Tone, Prompt, Characters
-        - Right column: Glossary Settings, Code Glossary, JSON View
+        - Left column: Project Details, Languages, Summary, Style & Tone,
+          System Instructions, Characters
+        - Right column: Glossary Settings, Code Database, Global Glossary/Database,
+          JSON View
         
         TASK 23.4: Prompt field moved from right column to left column before Characters.
         """
@@ -520,6 +522,7 @@ class InformationStep(BaseStep):
         # Right column sections:
         self._build_glossary_settings_section()  # TASK 19 Phase 4
         self._build_code_glossary_section()  # TASK 18.5
+        self._build_global_database_section()  # TASK 41.9
         self._build_inference_section()  # Variables only, UI removed (deprecated)
         self._build_json_section()
 
@@ -610,12 +613,17 @@ class InformationStep(BaseStep):
         """Build language selection section.
         
         TASK 23.1: Language fields bound to manifest for auto-save/load.
+        TASK 41.3: 'Other' selection prompts for custom language name.
         """
         frame = ttk.LabelFrame(self._left_column, text="Languages")
         frame.pack(fill="x", padx=5, pady=5)
 
         row = ttk.Frame(frame)
         row.pack(fill="x", padx=10, pady=5)
+
+        # Track previous selections for revert on cancel
+        self._prev_source_lang = "Japanese"
+        self._prev_target_lang = "English"
 
         # Source Language
         ttk.Label(row, text="Source:").pack(side="left", padx=(0, 5))
@@ -628,6 +636,10 @@ class InformationStep(BaseStep):
             width=20,
         )
         self._source_lang_combo.pack(side="left", padx=(0, 20))
+        self._source_lang_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda _e: self._on_language_change("source"),
+        )
         
         # TASK 23.1: Bind to manifest
         self._manifest_bindings.append(
@@ -655,6 +667,10 @@ class InformationStep(BaseStep):
             width=20,
         )
         self._target_lang_combo.pack(side="left")
+        self._target_lang_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda _e: self._on_language_change("target"),
+        )
         
         # TASK 23.1: Bind to manifest
         self._manifest_bindings.append(
@@ -669,11 +685,12 @@ class InformationStep(BaseStep):
         )
 
     def _build_summary_section(self) -> None:
-        """Build summary/description section.
+        """Build summary section.
         
         TASK 23.1: Summary field bound to manifest for auto-save/load.
+        TASK 41.1: Renamed from 'Summary / Description' to 'Summary'.
         """
-        frame = ttk.LabelFrame(self._left_column, text="Summary / Description")
+        frame = ttk.LabelFrame(self._left_column, text="Summary")
         frame.pack(fill="x", padx=5, pady=5)
 
         # Summary text area
@@ -707,6 +724,7 @@ class InformationStep(BaseStep):
         """Build style and tone section.
         
         TASK 23.2: Style/Tone fields bound to manifest for auto-save/load.
+        TASK 41.4: Custom field content disables corresponding dropdown.
         """
         frame = ttk.LabelFrame(self._left_column, text="Translation Style & Tone")
         frame.pack(fill="x", padx=5, pady=5)
@@ -828,6 +846,20 @@ class InformationStep(BaseStep):
             )
         )
 
+        # TASK 41.4: Gray out dropdowns when custom fields have content
+        self._style_var.trace_add(
+            "write",
+            lambda *_a: self._toggle_preset_state(
+                self._style_var, self._style_preset_combo,
+            ),
+        )
+        self._tone_var.trace_add(
+            "write",
+            lambda *_a: self._toggle_preset_state(
+                self._tone_var, self._tone_preset_combo,
+            ),
+        )
+
     def _build_character_section(self) -> None:
         """Build character notes section."""
         frame = ttk.LabelFrame(self._left_column, text="Character Notes")
@@ -909,9 +941,13 @@ class InformationStep(BaseStep):
     def _build_glossary_settings_section(self) -> None:
         """Build Glossary Settings section (TASK 19 Phase 4).
         
+        TASK 41.5: Added editable 3-column Treeview for project glossary
+        entries with inline editing, Add/Remove buttons.
+
         Controls glossary source:
         - Use Global Glossary checkbox (user/glossary.csv)
         - Copy from Global button (copies global entries to project)
+        - Editable table of project glossary entries
         """
         frame = ttk.LabelFrame(self._right_column, text="Glossary Settings")
         frame.pack(fill="x", padx=5, pady=5)
@@ -945,7 +981,14 @@ class InformationStep(BaseStep):
             text="↓ Copy from Global",
             command=self._on_copy_from_global_glossary,
         ).pack(side="left")
-        
+
+        # Import from Analysis (speakers)
+        ttk.Button(
+            btn_frame,
+            text="↓ Import from Analysis",
+            command=self._on_import_glossary_from_analysis,
+        ).pack(side="left", padx=5)
+
         # Project glossary count
         self._project_glossary_count_var = tk.StringVar(value="Project entries: 0")
         ttk.Label(
@@ -955,13 +998,73 @@ class InformationStep(BaseStep):
             foreground="gray",
         ).pack(side="right")
 
+        # TASK 41.5 / 41.10: Editable glossary entries table with Active column
+        table_frame = ttk.Frame(frame)
+        table_frame.pack(fill="x", padx=10, pady=(0, 5))
+
+        gloss_cols = ("active", "original", "translation", "notes")
+        self._glossary_tree = ttk.Treeview(
+            table_frame,
+            columns=gloss_cols,
+            show="headings",
+            height=5,
+        )
+        self._glossary_tree.heading("active", text="Active")
+        self._glossary_tree.heading("original", text="Original")
+        self._glossary_tree.heading("translation", text="Translation")
+        self._glossary_tree.heading("notes", text="Notes")
+
+        self._glossary_tree.column("active", width=45, anchor="center")
+        self._glossary_tree.column("original", width=105)
+        self._glossary_tree.column("translation", width=105)
+        self._glossary_tree.column("notes", width=105)
+
+        gloss_scroll = ttk.Scrollbar(
+            table_frame,
+            orient="vertical",
+            command=self._glossary_tree.yview,
+        )
+        self._glossary_tree.configure(yscrollcommand=gloss_scroll.set)
+
+        self._glossary_tree.pack(side="left", fill="x", expand=True)
+        gloss_scroll.pack(side="right", fill="y")
+
+        # Inline editing on double-click
+        self._glossary_tree.bind(
+            "<Double-1>", self._on_glossary_double_click
+        )
+        # TASK 41.10: Single click toggles Active column
+        self._glossary_tree.bind(
+            "<Button-1>", self._on_glossary_click
+        )
+        self._glossary_tree.bind(
+            "<Delete>", lambda _e: self._remove_glossary_entry()
+        )
+
+        # Add / Remove buttons for glossary entries
+        gloss_btn_frame = ttk.Frame(frame)
+        gloss_btn_frame.pack(fill="x", padx=10, pady=(0, 5))
+
+        ttk.Button(
+            gloss_btn_frame,
+            text="+ Add Entry",
+            command=self._add_glossary_entry,
+        ).pack(side="left")
+
+        ttk.Button(
+            gloss_btn_frame,
+            text="Remove",
+            command=self._remove_glossary_entry,
+        ).pack(side="left", padx=5)
+
     def _build_code_glossary_section(self) -> None:
-        """Build Code Glossary section in right column (TASK 18.5).
+        """Build Code Database section in right column (TASK 18.5).
         
+        TASK 41.1: Renamed from 'Code Glossary' to 'Code Database'.
         Displays code patterns detected during Analysis that should be
         preserved during translation (e.g., variables, control codes).
         """
-        frame = ttk.LabelFrame(self._right_column, text="Code Glossary")
+        frame = ttk.LabelFrame(self._right_column, text="Code Database")
         frame.pack(fill="x", padx=5, pady=5)
 
         # Toolbar
@@ -1035,14 +1138,110 @@ class InformationStep(BaseStep):
             foreground="gray",
         ).pack(anchor="w", padx=10, pady=(0, 5))
 
+    def _build_global_database_section(self) -> None:
+        """Build Global Glossary and Database widget (TASK 41.9).
+
+        Provides a mode-switchable widget for managing cross-project
+        glossary and code pattern entries.  Data is persisted to
+        ``user/global_glossary.json`` and ``user/global_codes.json``.
+        """
+        frame = ttk.LabelFrame(
+            self._right_column, text="Global Glossary and Database"
+        )
+        frame.pack(fill="x", padx=5, pady=5)
+
+        # Top row: Mode switch, search, import/export
+        top_row = ttk.Frame(frame)
+        top_row.pack(fill="x", padx=10, pady=5)
+
+        ttk.Label(top_row, text="Mode:").pack(side="left", padx=(0, 5))
+        self._global_db_mode_var = tk.StringVar(value="Glossary")
+        mode_combo = ttk.Combobox(
+            top_row,
+            textvariable=self._global_db_mode_var,
+            values=["Glossary", "Code Database"],
+            state="readonly",
+            width=14,
+        )
+        mode_combo.pack(side="left", padx=(0, 10))
+        mode_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda _e: self._refresh_global_database(),
+        )
+
+        ttk.Label(top_row, text="Search:").pack(side="left", padx=(0, 5))
+        self._global_db_search_var = tk.StringVar()
+        search_entry = ttk.Entry(
+            top_row, textvariable=self._global_db_search_var, width=14,
+        )
+        search_entry.pack(side="left", padx=(0, 10))
+        self._global_db_search_var.trace_add(
+            "write", lambda *_a: self._refresh_global_database()
+        )
+
+        ttk.Button(
+            top_row, text="Import", command=self._import_global_database,
+        ).pack(side="right", padx=2)
+        ttk.Button(
+            top_row, text="Export", command=self._export_global_database,
+        ).pack(side="right", padx=2)
+
+        # Treeview — columns vary by mode but we build the superset
+        table_frame = ttk.Frame(frame)
+        table_frame.pack(fill="x", padx=10, pady=(0, 5))
+
+        gdb_cols = ("col1", "col2", "col3")
+        self._global_db_tree = ttk.Treeview(
+            table_frame, columns=gdb_cols, show="headings", height=5,
+        )
+        self._global_db_tree.heading("col1", text="Original")
+        self._global_db_tree.heading("col2", text="Translation")
+        self._global_db_tree.heading("col3", text="Notes")
+        self._global_db_tree.column("col1", width=110)
+        self._global_db_tree.column("col2", width=110)
+        self._global_db_tree.column("col3", width=110)
+
+        gdb_scroll = ttk.Scrollbar(
+            table_frame, orient="vertical",
+            command=self._global_db_tree.yview,
+        )
+        self._global_db_tree.configure(yscrollcommand=gdb_scroll.set)
+        self._global_db_tree.pack(side="left", fill="x", expand=True)
+        gdb_scroll.pack(side="right", fill="y")
+
+        self._global_db_tree.bind(
+            "<Double-1>", self._on_global_db_double_click,
+        )
+        self._global_db_tree.bind(
+            "<Delete>", lambda _e: self._remove_global_db_entry(),
+        )
+
+        # Button row
+        btn_row = ttk.Frame(frame)
+        btn_row.pack(fill="x", padx=10, pady=(0, 5))
+
+        ttk.Button(
+            btn_row, text="+ Add Entry",
+            command=self._add_global_db_entry,
+        ).pack(side="left")
+        ttk.Button(
+            btn_row, text="Remove Selected",
+            command=self._remove_global_db_entry,
+        ).pack(side="left", padx=5)
+        ttk.Button(
+            btn_row, text="Clear All",
+            command=self._clear_global_database,
+        ).pack(side="left")
+
     def _build_notes_section(self) -> None:
-        """Build Prompt section (left column, before Characters).
+        """Build System Instructions section (left column, before Characters).
         
         TASK 23.4: Renamed from 'Additional Notes' to 'Prompt'.
+        TASK 41.1: Renamed from 'Prompt' to 'System Instructions'.
         Moved from right column to left column before Character Notes.
         Bound to manifest for persistence.
         """
-        frame = ttk.LabelFrame(self._left_column, text="Prompt")
+        frame = ttk.LabelFrame(self._left_column, text="System Instructions")
         frame.pack(fill="x", padx=5, pady=5)
 
         self._notes_text = scrolledtext.ScrolledText(
@@ -1111,6 +1310,65 @@ class InformationStep(BaseStep):
     # ========================================================================
     # Event Handlers
     # ========================================================================
+
+    def _on_language_change(self, which: str) -> None:
+        """Handle language combobox selection.
+
+        TASK 41.3: When 'Other' is chosen, prompt for a custom language
+        name via ``simpledialog``.  If the user cancels the dialog the
+        previous selection is restored.
+
+        Args:
+            which: ``"source"`` or ``"target"``.
+        """
+        if which == "source":
+            var = self._source_lang_var
+            combo = self._source_lang_combo
+            prev_attr = "_prev_source_lang"
+            options = SOURCE_LANGUAGES
+        else:
+            var = self._target_lang_var
+            combo = self._target_lang_combo
+            prev_attr = "_prev_target_lang"
+            options = TARGET_LANGUAGES
+
+        current = var.get()
+        if current == "Other":
+            custom = simpledialog.askstring(
+                f"Custom {which.title()} Language",
+                f"Enter custom {which} language name:",
+                parent=self,
+            )
+            if custom and custom.strip():
+                # Temporarily allow editing to set non-list value
+                combo.configure(state="normal")
+                var.set(custom.strip())
+                combo.configure(state="readonly")
+            else:
+                # User cancelled — revert
+                var.set(getattr(self, prev_attr))
+                return
+        setattr(self, prev_attr, var.get())
+
+    def _toggle_preset_state(
+        self,
+        custom_var: tk.StringVar,
+        preset_combo: ttk.Combobox,
+    ) -> None:
+        """Enable or disable a preset dropdown based on custom field content.
+
+        TASK 41.4: When the custom override entry contains text the
+        corresponding preset combobox is grayed out.  Clearing the
+        custom field re-enables it.
+
+        Args:
+            custom_var: StringVar for the custom override entry.
+            preset_combo: Combobox to toggle.
+        """
+        if custom_var.get().strip():
+            preset_combo.configure(state="disabled")
+        else:
+            preset_combo.configure(state="readonly")
 
     def _on_style_changed(self, event: Optional[tk.Event] = None) -> None:
         """Handle style preset change."""
@@ -1403,7 +1661,12 @@ class InformationStep(BaseStep):
         combo.bind("<FocusOut>", on_select)
 
     def _open_genre_dialog(self) -> None:
-        """Open a dialog for multi-selecting genres."""
+        """Open a dialog for multi-selecting genres.
+        
+        TASK 41.2: ADD behavior — selections are merged with existing
+        genres rather than overwriting them.  Custom genres typed
+        directly into the field are preserved.
+        """
         dialog = tk.Toplevel(self)
         dialog.title("Select Genres")
         dialog.geometry("300x450")
@@ -1462,7 +1725,19 @@ class InformationStep(BaseStep):
             custom = custom_var.get().strip()
             if custom and custom not in selected:
                 selected.append(custom)
-            self._genre_var.set(", ".join(selected))
+            # TASK 41.2: Preserve custom genres already in field that
+            # are not part of COMMON_GENRES (user-typed entries).
+            existing = [
+                g.strip()
+                for g in self._genre_var.get().split(",")
+                if g.strip()
+            ]
+            non_common = [
+                g for g in existing
+                if g not in COMMON_GENRES and g not in selected
+            ]
+            merged = selected + non_common
+            self._genre_var.set(", ".join(merged))
             dialog.destroy()
         
         def on_cancel():
@@ -1572,7 +1847,7 @@ class InformationStep(BaseStep):
             messagebox.showerror("Import Error", f"Failed to import: {e}")
 
     # ========================================================================
-    # Code Glossary Management (TASK 18.5)
+    # Code Database Management (TASK 18.5, TASK 41.1)
     # ========================================================================
 
     def _add_code_pattern(self) -> None:
@@ -1787,9 +2062,10 @@ class InformationStep(BaseStep):
                 if category in existing_patterns:
                     continue
 
+                # TASK 41.6: Category="Detected", Action="Preserve"
                 pattern = CodePattern(
                     pattern=category,
-                    category=category,
+                    category="Detected",
                     action="preserve",
                     notes=f"Imported from Analysis ({count} occurrences)",
                 )
@@ -1917,6 +2193,518 @@ class InformationStep(BaseStep):
             logger.error(f"Failed to copy from global glossary: {e}")
             messagebox.showerror("Error", f"Failed to copy glossary: {e}")
 
+        # TASK 41.5: Refresh table after copy
+        self._refresh_glossary_entries()
+
+    # ========================================================================
+    # Glossary Entry Management (TASK 41.5)
+    # ========================================================================
+
+    def _add_glossary_entry(self) -> None:
+        """Add an empty glossary entry row (active by default)."""
+        self._glossary_tree.insert(
+            "", "end", values=("✓", "", "", "")
+        )
+        # Auto-start editing on the new row's first cell
+        children = self._glossary_tree.get_children()
+        if children:
+            last = children[-1]
+            self._glossary_tree.selection_set(last)
+            self._glossary_tree.see(last)
+        self._sync_glossary_tree_to_manifest()
+
+    def _remove_glossary_entry(self) -> None:
+        """Remove the selected glossary entry."""
+        selection = self._glossary_tree.selection()
+        if not selection:
+            messagebox.showwarning(
+                "No Selection", "Please select an entry to remove."
+            )
+            return
+        for item in selection:
+            self._glossary_tree.delete(item)
+        self._sync_glossary_tree_to_manifest()
+
+    def _on_glossary_click(self, event: tk.Event) -> None:
+        """Toggle Active column on single click (TASK 41.10)."""
+        region = self._glossary_tree.identify_region(event.x, event.y)
+        if region != "cell":
+            return
+        column = self._glossary_tree.identify_column(event.x)
+        item = self._glossary_tree.identify_row(event.y)
+        if not item:
+            return
+        col_idx = int(column.replace("#", "")) - 1
+        if col_idx != 0:
+            return  # only handle Active column
+        vals = list(self._glossary_tree.item(item, "values"))
+        vals[0] = "✗" if vals[0] == "✓" else "✓"
+        self._glossary_tree.item(item, values=vals)
+        self._sync_glossary_tree_to_manifest()
+
+    def _on_glossary_double_click(self, event: tk.Event) -> None:
+        """Handle double-click on glossary table for inline editing.
+
+        TASK 41.5: Same pattern as code tree inline edit.
+        TASK 41.10: Skips Active column (col 0) — toggled by single click.
+        """
+        region = self._glossary_tree.identify_region(event.x, event.y)
+        if region != "cell":
+            return
+
+        column = self._glossary_tree.identify_column(event.x)
+        item = self._glossary_tree.identify_row(event.y)
+        if not item:
+            return
+
+        col_idx = int(column.replace("#", "")) - 1
+        col_keys = ("active", "original", "translation", "notes")
+        if col_idx <= 0 or col_idx >= len(col_keys):
+            return  # skip active column and out-of-range
+
+        self._start_glossary_inline_edit(item, col_keys[col_idx], col_idx)
+
+    def _start_glossary_inline_edit(
+        self, item: str, col_key: str, col_idx: int,
+    ) -> None:
+        """Start inline editing of a glossary cell.
+
+        Args:
+            item: Treeview item id.
+            col_key: Column key name.
+            col_idx: Column index (1-3, skipping 0=active).
+        """
+        columns = ("active", "original", "translation", "notes")
+        try:
+            bbox = self._glossary_tree.bbox(item, columns[col_idx])
+            if not bbox:
+                return
+        except tk.TclError:
+            return
+
+        x, y, width, height = bbox
+        current_values = self._glossary_tree.item(item, "values")
+        current_value = current_values[col_idx] if col_idx < len(current_values) else ""
+
+        entry = ttk.Entry(self._glossary_tree)
+        entry.insert(0, str(current_value))
+        entry.select_range(0, "end")
+        entry.place(x=x, y=y, width=width, height=height)
+        entry.focus_set()
+
+        def on_confirm(event: Optional[tk.Event] = None) -> None:
+            new_value = entry.get()
+            entry.destroy()
+            if new_value != str(current_value):
+                vals = list(self._glossary_tree.item(item, "values"))
+                while len(vals) <= col_idx:
+                    vals.append("")
+                vals[col_idx] = new_value
+                self._glossary_tree.item(item, values=vals)
+                self._sync_glossary_tree_to_manifest()
+
+        def on_cancel(event: Optional[tk.Event] = None) -> None:
+            entry.destroy()
+
+        entry.bind("<Return>", on_confirm)
+        entry.bind("<Tab>", on_confirm)
+        entry.bind("<Escape>", on_cancel)
+        entry.bind("<FocusOut>", on_confirm)
+
+    def _sync_glossary_tree_to_manifest(self) -> None:
+        """Persist current glossary tree contents to manifest.
+
+        TASK 41.5 / 41.10: Reads all rows from the Treeview (including
+        the Active flag) and writes them to the manifest.
+        """
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            return
+
+        entries: List[Dict[str, Any]] = []
+        for child in self._glossary_tree.get_children():
+            vals = self._glossary_tree.item(child, "values")
+            active = (vals[0] == "✓") if len(vals) > 0 else True
+            source = vals[1] if len(vals) > 1 else ""
+            target = vals[2] if len(vals) > 2 else ""
+            notes = vals[3] if len(vals) > 3 else ""
+            if source or target:
+                entries.append({
+                    "source": source,
+                    "target": target,
+                    "notes": notes,
+                    "category": "",
+                    "context": "",
+                    "active": active,
+                })
+
+        from CherryAI.functions.manifest_fields import save_glossary_entries
+        save_glossary_entries(mgr, entries)
+        self._project_glossary_count_var.set(
+            f"Project entries: {len(entries)}"
+        )
+        logger.debug("Synced %d glossary entries to manifest", len(entries))
+
+    def _refresh_glossary_entries(self) -> None:
+        """Reload glossary Treeview from manifest data.
+
+        TASK 41.5 / 41.10: Populates the inline-editable table
+        including the Active checkbox column.
+        """
+        for item in self._glossary_tree.get_children():
+            self._glossary_tree.delete(item)
+
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            return
+
+        from CherryAI.functions.manifest_fields import load_glossary_entries
+        entries = load_glossary_entries(mgr)
+        for entry in entries:
+            active = "✓" if entry.get("active", True) else "✗"
+            self._glossary_tree.insert("", "end", values=(
+                active,
+                entry.get("source", ""),
+                entry.get("target", ""),
+                entry.get("notes", ""),
+            ))
+        self._project_glossary_count_var.set(
+            f"Project entries: {len(entries)}"
+        )
+
+    def _on_import_glossary_from_analysis(self) -> None:
+        """Import detected speakers from Analysis as glossary entries.
+
+        TASK 41.7: Fetches speakers from Analysis step data and converts
+        them to glossary entries with Notes="Speaker".
+        """
+        try:
+            analysis_step_data = self.session.get_step(1).data
+            analysis_results = analysis_step_data.get("analysis_results", {})
+            speakers = analysis_results.get("speakers", {})
+
+            if not speakers:
+                messagebox.showinfo(
+                    "No Speakers",
+                    "No speakers were detected in Analysis.\n\n"
+                    "Run Analysis first to detect speakers.",
+                )
+                return
+
+            # Collect existing source terms to avoid dupes
+            existing: set[str] = set()
+            for child in self._glossary_tree.get_children():
+                vals = self._glossary_tree.item(child, "values")
+                if len(vals) > 1:
+                    existing.add(str(vals[1]))
+
+            imported_count = 0
+            sorted_speakers = sorted(
+                speakers.items(), key=lambda x: x[1], reverse=True
+            )
+            for name, count in sorted_speakers:
+                if name in existing:
+                    continue
+                self._glossary_tree.insert("", "end", values=(
+                    "✓", name, "", f"Speaker ({count} occurrences)"
+                ))
+                existing.add(name)
+                imported_count += 1
+
+            self._sync_glossary_tree_to_manifest()
+
+            if imported_count > 0:
+                messagebox.showinfo(
+                    "Import Complete",
+                    f"Imported {imported_count} speakers as glossary entries.",
+                )
+            else:
+                messagebox.showinfo(
+                    "No New Entries",
+                    "All detected speakers already exist in the glossary.",
+                )
+
+        except (AttributeError, KeyError, IndexError):
+            messagebox.showwarning(
+                "Analysis Required",
+                "Run Analysis first to detect speakers.",
+            )
+        except Exception as e:
+            logger.error("Failed to import glossary from analysis: %s", e)
+            messagebox.showerror("Import Error", f"Failed to import: {e}")
+
+    # ========================================================================
+    # Global Glossary / Database Management (TASK 41.9)
+    # ========================================================================
+
+    @staticmethod
+    def _global_db_path(mode: str) -> Path:
+        """Return the JSON path for a global database mode.
+
+        Args:
+            mode: ``"Glossary"`` or ``"Code Database"``.
+
+        Returns:
+            Absolute path to the JSON file.
+        """
+        base = Path(__file__).resolve().parents[2] / "user"
+        if mode == "Code Database":
+            return base / "global_codes.json"
+        return base / "global_glossary.json"
+
+    def _load_global_db(self, mode: str) -> List[Dict[str, str]]:
+        """Load entries from the global JSON file.
+
+        Args:
+            mode: ``"Glossary"`` or ``"Code Database"``.
+
+        Returns:
+            List of entry dicts.
+        """
+        path = self._global_db_path(mode)
+        if not path.exists():
+            return []
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            if isinstance(data, list):
+                return data
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("Failed to load global DB %s: %s", path, exc)
+        return []
+
+    def _save_global_db(
+        self, mode: str, entries: List[Dict[str, str]]
+    ) -> None:
+        """Persist entries to the global JSON file.
+
+        Args:
+            mode: ``"Glossary"`` or ``"Code Database"``.
+            entries: List of entry dicts.
+        """
+        path = self._global_db_path(mode)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(entries, fh, ensure_ascii=False, indent=2)
+        except OSError as exc:
+            logger.error("Failed to save global DB %s: %s", path, exc)
+
+    def _refresh_global_database(self) -> None:
+        """Reload the Global Glossary / Database treeview.
+
+        Applies the current search filter.
+        """
+        for child in self._global_db_tree.get_children():
+            self._global_db_tree.delete(child)
+
+        mode = self._global_db_mode_var.get()
+        search = self._global_db_search_var.get().strip().lower()
+
+        # Adjust headings per mode
+        if mode == "Code Database":
+            self._global_db_tree.heading("col1", text="Pattern")
+            self._global_db_tree.heading("col2", text="Category")
+            self._global_db_tree.heading("col3", text="Action")
+        else:
+            self._global_db_tree.heading("col1", text="Original")
+            self._global_db_tree.heading("col2", text="Translation")
+            self._global_db_tree.heading("col3", text="Notes")
+
+        entries = self._load_global_db(mode)
+        for entry in entries:
+            c1 = entry.get("col1", "")
+            c2 = entry.get("col2", "")
+            c3 = entry.get("col3", "")
+            if search:
+                combined = f"{c1} {c2} {c3}".lower()
+                if search not in combined:
+                    continue
+            self._global_db_tree.insert("", "end", values=(c1, c2, c3))
+
+    def _add_global_db_entry(self) -> None:
+        """Add a blank entry to the global database."""
+        self._global_db_tree.insert("", "end", values=("", "", ""))
+        self._sync_global_db_tree()
+
+    def _remove_global_db_entry(self) -> None:
+        """Remove selected entries from the global database."""
+        selection = self._global_db_tree.selection()
+        if not selection:
+            return
+        for item in selection:
+            self._global_db_tree.delete(item)
+        self._sync_global_db_tree()
+
+    def _clear_global_database(self) -> None:
+        """Clear all entries in the current global database mode."""
+        mode = self._global_db_mode_var.get()
+        if not messagebox.askyesno(
+            "Confirm Clear",
+            f"Remove all entries from Global {mode}?",
+        ):
+            return
+        for child in self._global_db_tree.get_children():
+            self._global_db_tree.delete(child)
+        self._sync_global_db_tree()
+
+    def _on_global_db_double_click(self, event: tk.Event) -> None:
+        """Inline-edit a cell in the global database Treeview."""
+        region = self._global_db_tree.identify_region(event.x, event.y)
+        if region != "cell":
+            return
+        column = self._global_db_tree.identify_column(event.x)
+        item = self._global_db_tree.identify_row(event.y)
+        if not item:
+            return
+        col_idx = int(column.replace("#", "")) - 1
+        if col_idx < 0 or col_idx > 2:
+            return
+        self._start_global_db_inline_edit(item, col_idx)
+
+    def _start_global_db_inline_edit(
+        self, item: str, col_idx: int
+    ) -> None:
+        """Show an Entry widget over a global database cell.
+
+        Args:
+            item: Treeview item id.
+            col_idx: Column index (0-2).
+        """
+        col_names = ("col1", "col2", "col3")
+        try:
+            bbox = self._global_db_tree.bbox(item, col_names[col_idx])
+            if not bbox:
+                return
+        except tk.TclError:
+            return
+
+        x, y, width, height = bbox
+        vals = self._global_db_tree.item(item, "values")
+        current = vals[col_idx] if col_idx < len(vals) else ""
+
+        entry = ttk.Entry(self._global_db_tree)
+        entry.insert(0, str(current))
+        entry.select_range(0, "end")
+        entry.place(x=x, y=y, width=width, height=height)
+        entry.focus_set()
+
+        def on_confirm(event: Optional[tk.Event] = None) -> None:
+            new_val = entry.get()
+            entry.destroy()
+            if new_val != str(current):
+                new_vals = list(self._global_db_tree.item(item, "values"))
+                while len(new_vals) <= col_idx:
+                    new_vals.append("")
+                new_vals[col_idx] = new_val
+                self._global_db_tree.item(item, values=new_vals)
+                self._sync_global_db_tree()
+
+        def on_cancel(event: Optional[tk.Event] = None) -> None:
+            entry.destroy()
+
+        entry.bind("<Return>", on_confirm)
+        entry.bind("<Tab>", on_confirm)
+        entry.bind("<Escape>", on_cancel)
+        entry.bind("<FocusOut>", on_confirm)
+
+    def _sync_global_db_tree(self) -> None:
+        """Persist current Treeview contents to the global JSON file."""
+        mode = self._global_db_mode_var.get()
+        entries: List[Dict[str, str]] = []
+        for child in self._global_db_tree.get_children():
+            vals = self._global_db_tree.item(child, "values")
+            entries.append({
+                "col1": vals[0] if len(vals) > 0 else "",
+                "col2": vals[1] if len(vals) > 1 else "",
+                "col3": vals[2] if len(vals) > 2 else "",
+            })
+        self._save_global_db(mode, entries)
+
+    def _import_global_database(self) -> None:
+        """Import entries from a JSON or CSV file into the global DB."""
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(
+            title="Import Global Database",
+            filetypes=[("JSON files", "*.json"), ("CSV files", "*.csv")],
+            parent=self,
+        )
+        if not path:
+            return
+        try:
+            file_path = Path(path)
+            entries: List[Dict[str, str]] = []
+            if file_path.suffix.lower() == ".csv":
+                import csv
+                with open(file_path, "r", encoding="utf-8") as fh:
+                    reader = csv.DictReader(fh)
+                    for row in reader:
+                        keys = list(row.keys())
+                        entries.append({
+                            "col1": row.get(keys[0], "") if keys else "",
+                            "col2": row.get(keys[1], "") if len(keys) > 1 else "",
+                            "col3": row.get(keys[2], "") if len(keys) > 2 else "",
+                        })
+            else:
+                with open(file_path, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                if isinstance(data, list):
+                    for item in data:
+                        if isinstance(item, dict):
+                            entries.append({
+                                "col1": str(item.get("col1", item.get("original", item.get("pattern", "")))),
+                                "col2": str(item.get("col2", item.get("translation", item.get("category", "")))),
+                                "col3": str(item.get("col3", item.get("notes", item.get("action", "")))),
+                            })
+            mode = self._global_db_mode_var.get()
+            existing = self._load_global_db(mode)
+            existing.extend(entries)
+            self._save_global_db(mode, existing)
+            self._refresh_global_database()
+            messagebox.showinfo(
+                "Import Complete",
+                f"Imported {len(entries)} entries.",
+            )
+        except Exception as e:
+            logger.error("Failed to import global DB: %s", e)
+            messagebox.showerror("Import Error", str(e))
+
+    def _export_global_database(self) -> None:
+        """Export current global database to a JSON or CSV file."""
+        from tkinter import filedialog
+        mode = self._global_db_mode_var.get()
+        default_name = (
+            "global_codes" if mode == "Code Database" else "global_glossary"
+        )
+        path = filedialog.asksaveasfilename(
+            title="Export Global Database",
+            defaultextension=".json",
+            initialfile=default_name,
+            filetypes=[("JSON files", "*.json"), ("CSV files", "*.csv")],
+            parent=self,
+        )
+        if not path:
+            return
+        try:
+            entries = self._load_global_db(mode)
+            file_path = Path(path)
+            if file_path.suffix.lower() == ".csv":
+                import csv
+                with open(file_path, "w", encoding="utf-8", newline="") as fh:
+                    writer = csv.DictWriter(fh, fieldnames=["col1", "col2", "col3"])
+                    writer.writeheader()
+                    writer.writerows(entries)
+            else:
+                with open(file_path, "w", encoding="utf-8") as fh:
+                    json.dump(entries, fh, ensure_ascii=False, indent=2)
+            messagebox.showinfo(
+                "Export Complete",
+                f"Exported {len(entries)} entries to {file_path.name}.",
+            )
+        except Exception as e:
+            logger.error("Failed to export global DB: %s", e)
+            messagebox.showerror("Export Error", str(e))
+
     # ========================================================================
     # Data Management
     # ========================================================================
@@ -1971,7 +2759,10 @@ class InformationStep(BaseStep):
         self._refresh_glossary_settings()  # TASK 19 Phase 4
 
     def _refresh_glossary_settings(self) -> None:
-        """Refresh glossary settings from ManifestManager (TASK 19 Phase 4)."""
+        """Refresh glossary settings from ManifestManager (TASK 19 Phase 4).
+
+        TASK 41.5: Also reloads the inline-editable glossary table.
+        """
         mgr = self.manifest_manager
         if mgr is not None and mgr.is_loaded:
             config = mgr.get_glossary_config()
@@ -1988,6 +2779,8 @@ class InformationStep(BaseStep):
                 self._glossary_info_label.config(
                     text="Only project-specific glossary entries will be used."
                 )
+            # TASK 41.5: Refresh the editable table
+            self._refresh_glossary_entries()
 
     def _save_metadata(self) -> None:
         """Save metadata to session state."""
@@ -2236,7 +3029,7 @@ class InformationStep(BaseStep):
             logger.debug("Loaded %d characters from manifest", len(characters_data))
     
     def _save_code_patterns_to_manifest(self) -> None:
-        """Save code glossary patterns to manifest.
+        """Save code database patterns to manifest.
         
         TASK 23.3: Persist code patterns to manifest for project persistence.
         """
@@ -2248,7 +3041,7 @@ class InformationStep(BaseStep):
         logger.debug("Saved %d code patterns to manifest", len(patterns_data))
     
     def _load_code_patterns_from_manifest(self) -> None:
-        """Load code glossary patterns from manifest.
+        """Load code database patterns from manifest.
         
         TASK 23.3: Restore code patterns from manifest on step enter.
         """
@@ -2374,7 +3167,7 @@ class InformationStep(BaseStep):
         """Auto-import code patterns from Analysis if none exist.
         
         Silently imports code patterns detected during Analysis to the
-        Code Glossary if no patterns are currently defined.
+        Code Database if no patterns are currently defined.
         """
         # Only auto-import if no patterns exist
         if self._metadata.code_patterns:
