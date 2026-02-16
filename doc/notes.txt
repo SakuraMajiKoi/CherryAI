@@ -1,0 +1,25 @@
+Minor Tasks
+-Input and Extraction Step
+	Rename to just 'Input'
+	Rename Select File(s) button to input and instead of selecting files and folders with separate commands to choose from, have the button open a window that can do both load (multiple) files and (multiple) folders.
+	Increase the size of New Translation Project Window (Create New Translation Project) since the buttons are partially hidden
+	Adjust Loaded Files to always have folders above all files in the same folder and when loaded the files hidden instead of expanded 
+-Analysis Step
+	Improve Language Detection to treat Chinese as Japanese when Chinese content is lower than 30%. Translation Step also must not skip them when the option to not translate non-source language is enabled (see specs.md about the existing global option)
+	Add a new statistic (below Duplicate Lines:) and fucntion analyse and find lines that can be aggressively deduplicated (see specs.md about the existing method)
+	Have the Findings Table display all found Speakers and all Code Patterns
+	Add contextual right-click functionality (for each Categtory) to the Findings table with custom options to choose. Implement multi-select too. (Read and supplement relevant feature sections in the specs.md since they interact with the Glossary and Code Database)
+	-Speakers: (see specs.md for glossary specs, tests must ensure that Character Notes in Information gets populated)
+		Add to Glossary (fills glossary 'Original')
+		Set Role -> Protagonist | Love Interest | Major | Minor | (added to glossary 'Notes'. Overwrites itself, gets added to Gender.)
+		Set Gender -> Male | Female | (added to glossary 'Notes'. Overwrites itself, gets added to Role.)
+		Set Translation -> Custom Input (fills glossary 'Translation'. Replaces itself.)
+	-Code Patterns: (see specs.md for code database specs, tests must ensure that Code Database in Information and Preprocessing get populated)
+		Preserve (Checkmark. Mutually exclusive with Remove and Replace. Default Checked)
+		Remove (Checkmark. Mutually exclusive with Preserve, Translate and Replace)
+		Translate (Checkmark. Mutually exclusive with Remove and Replace)
+		Replace -> Generic | Custom Input | (Mutually exclusive with Remove, Preserve and Translate)
+		Is a Name (Checkmark. Mutually exclusive with all 'Is')
+		Is Text (Checkmark. Mutually exclusive with all 'Is')
+		Is a Number (Checkmark. Mutually exclusive with all 'Is')
+		Is Invisible (Checkmark. Mutually exclusive with all 'Is'. Default Checked)

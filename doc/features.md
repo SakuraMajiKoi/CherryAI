@@ -2105,9 +2105,130 @@ The tool works with:
   Structured data with key-value pairs
   Tool translates the text values
 
+- MARKDOWN FILES (.md)
+  Preserves code blocks, inline code, and frontmatter (YAML headers).
+  Only translates text content while maintaining heading structure.
+
+- LENIENT JSON FILES (.json5, .jsonc)
+  Handles JSON with trailing commas, single quotes, unquoted keys,
+  and comments (// and /* */). Auto-sanitizes before parsing.
+
+- TRANSLATOR++ FILES (.trans)
+  SQLite-based translation databases from Translator++.
+  Reads/writes translation pairs directly from the database tables.
+
 - MULTIPLE FILE FORMATS
   You can load a file, prepare it, send to AI, get back result
   then restore it - all in the same format
+
+=============================================================================
+
+BATCH API SUPPORT (Phase 17)
+
+CherryAI supports provider Batch APIs for cost savings of up to 50%.
+Batch mode queues requests for asynchronous processing (up to 24h turnaround)
+instead of real-time translation.
+
+Features:
+- Batch mode toggle in Translation step
+- JSONL-based request building and result parsing
+- Persistent job tracking (user/batch_jobs.json)
+- Submit, poll, retrieve, and cancel batch jobs
+- Automatic fallback to real-time if batch is unavailable
+
+Limitations:
+- Rolling context is source-language only (no translated context mid-batch)
+- Results may arrive hours later
+- Not all providers support batch mode
+
+=============================================================================
+
+MULTI-KEY MANAGEMENT (Phase 17)
+
+Manage multiple API keys per provider with automatic rotation on rate limits.
+
+Features:
+- Store and label multiple keys ("Personal", "Work", "Free Tier")
+- Mark keys as active/inactive/exhausted
+- Auto-rotate on rate limit errors or daily exhaustion
+- Pool modes: Sequential, Even Distribution, Priority-Based
+- Usage tracking per key (requests today, tokens used)
+- Persistent storage in user/api_keys.json
+
+=============================================================================
+
+NAMED API PROFILES (Phase 17)
+
+Organize API configurations with names and quick-switching.
+
+Features:
+- Name profiles (e.g., "Fast Translation", "Quality Check", "Cheap Bulk")
+- Profile-specific display names and system prompt tweaks
+- Rename, duplicate, and delete profiles
+- Profile display map for UI selection
+
+=============================================================================
+
+USAGE ANALYTICS (Phase 17)
+
+Comprehensive tracking of API usage with SQLite-backed analytics.
+
+Features:
+- Records every request: timestamp, model, key, profile, task type, tokens, cost
+- Task types: API Tests, Glossary, Game Summary, Translation, TLC, Editing
+- Query and filter by any criteria
+- Usage summaries with GROUP BY aggregation
+- Export to CSV for external analysis
+- Data maintenance (purge old records)
+
+=============================================================================
+
+AGENT-ASSISTED MODES (Phase 17)
+
+Optional AI agent modes for interactive help, language assistance, script
+authoring, and translation checking.
+
+Modes:
+- Interactive Help: Contextual Q&A about CherryAI usage and configuration
+- Language Assistant: Language analysis and translation quality review
+- Script Author: Generate format handlers and mode plugins (sandboxed)
+- Translation Check: Targeted translation review and validation
+
+Safety:
+- All write operations sandboxed in dev/sandbox/
+- Audit trail in logs/agent/audit.jsonl
+- Configurable read/write scopes per mode
+- Degrades gracefully without API credentials
+
+=============================================================================
+
+ESTIMATION ENGINE (Phase 17)
+
+Advanced cost estimation with configurable inference options and live pricing.
+
+Features:
+- Itemized cost breakdown: translation, summary, glossary, editing, TLC
+- Configurable pipeline toggles: batch mode, dedup, rolling context
+- Model comparison across all known providers
+- Batch API discount calculation (50% savings)
+- Persistent inference options for session reuse
+- Token estimation from line counts
+
+=============================================================================
+
+MULTI-LANGUAGE UI & TOOLTIPS (Phase 17)
+
+Internationalization support and restored tooltips.
+
+Features:
+- Translation system with t(key) function and JSON language files
+- Nested key support with dot separation (e.g., "step.input.title")
+- Format interpolation with placeholders
+- Language auto-detection from user/lang/ directory
+- Fallback to English for missing translations
+- Tooltip helper with global enable/disable toggle
+- Configurable tooltip delay and wrap length
+- Currently ships with English (en.json); template for adding more
 
 =============================================================================
 

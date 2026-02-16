@@ -9409,3 +9409,160 @@ python -m pytest CherryAI/dev/test_pov_inference.py -v --timeout=10
 # Run Phase 55 tests
 python -m pytest CherryAI/dev/test_consistency.py -v --timeout=10
 ```
+
+### Phase 17: New Infrastructure (331 tests)
+
+Phase 17 adds 8 new test files covering batch API support, multi-key management,
+named API profiles, additional file formats, usage analytics, agent-assisted modes,
+estimation engine, and i18n/tooltips.
+
+**Baseline after Phase 17:** 5611 passed, 25 skipped
+
+#### test_batch_api.py (41 tests)
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestBatchRequest | 3 | Defaults, to_dict roundtrip, custom_id format |
+| TestBuildBatchJSONL | 5 | Single/multiple chunks, model/temperature forwarded, custom system prompt, empty list |
+| TestParseBatchResults | 5 | Single/multiple results, missing choices, error entry, empty input |
+| TestBatchJob | 6 | Defaults, elapsed, is_terminal states, to_dict/from_dict roundtrip, status updates |
+| TestBatchJobPersistence | 5 | Save/load roundtrip, multiple jobs, remove, empty file, corrupt file |
+| TestSubmitBatch | 4 | Success, file upload, API error, invalid client |
+| TestPollBatchStatus | 4 | Completed, failed, in_progress, cancelled |
+| TestRetrieveBatchResults | 5 | Success, no output file, API error, download, parse integration |
+| TestCancelBatch | 2 | Success, API error |
+| TestAPIClientBatchMethods | 2 | batch_mode config field, submit_batch_translation delegates |
+
+```bash
+python -m pytest CherryAI/dev/test_batch_api.py -v --timeout=10
+```
+
+#### test_key_manager.py (34 tests)
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestAPIKey | 4 | Defaults, status transitions, rate_limited_until, mask |
+| TestKeyPoolBasic | 6 | Empty pool, add/remove, get by id, duplicate rejection, active_keys filter, reset_daily |
+| TestPoolModeSequential | 4 | First key, skip exhausted, skip rate_limited, all exhausted returns None |
+| TestPoolModeEven | 4 | Fewest requests, tie-break by key_id, increment on pick, all exhausted |
+| TestPoolModePriority | 4 | Lowest priority first, skip inactive, equal priority sequential, single key |
+| TestPersistence | 6 | Save/load roundtrip, empty pool, corrupt file, pool mode preserved, key status preserved, missing file |
+| TestMarkMethods | 4 | mark_exhausted, mark_rate_limited with until, mark back to active, unknown key_id |
+| TestEdgeCases | 2 | Thread safety (sequential calls), large pool performance |
+
+```bash
+python -m pytest CherryAI/dev/test_key_manager.py -v --timeout=10
+```
+
+#### test_named_api_profiles.py (45 tests)
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestAPIProfileEnhancements | 8 | display_name default, label with/without display_name, system_prompt_tweak, to_dict/from_dict, roundtrip |
+| TestListProfileNames | 5 | Default profile, multiple profiles, empty ini, profile order, special chars |
+| TestRenameProfile | 6 | Basic rename, nonexistent source, target exists, preserve fields, same name noop, special chars |
+| TestDuplicateProfile | 6 | Basic duplicate, nonexistent source, target exists, all fields copied, display_name/tweak copied |
+| TestGetProfileDisplayMap | 5 | Empty, single, multiple, display_name used, mixed |
+| TestProfileIntegration | 8 | Create+list, rename+verify, duplicate+modify, display_map after rename, delete+list, profile switching |
+| TestEdgeCases | 7 | Unicode names, empty display_name, long tweak, special ini chars, concurrent operations, case sensitivity |
+
+```bash
+python -m pytest CherryAI/dev/test_named_api_profiles.py -v --timeout=10
+```
+
+#### test_file_formats_17_4.py (62 tests)
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestMarkdownExtract | 10 | Plain text, headings, code blocks preserved, lists, frontmatter skipped, empty, inline code, links, images, mixed |
+| TestMarkdownInject | 8 | Basic inject, heading count match, code blocks untouched, frontmatter preserved, roundtrip, partial, empty, line count match |
+| TestMarkdownMetadata | 4 | Basic, with frontmatter, code block count, empty |
+| TestJsonLenientExtract | 10 | Simple pairs, nested, arrays, sanitise pipeline, BOM removal, trailing commas, single quotes, comments, empty, corrupt |
+| TestJsonLenientInject | 8 | Basic, preserve structure, nested, array, roundtrip, partial, key order, empty |
+| TestJsonLenientMetadata | 4 | Basic, nested depth, key count, empty |
+| TestTranslatorPlusExtract | 6 | Basic table, multiple columns, empty cells, no table, missing file, encoding |
+| TestTranslatorPlusInject | 6 | Basic, roundtrip, partial, column selection, empty, new rows |
+| TestTranslatorPlusMetadata | 4 | Row/column count, table names, empty db, missing file |
+| TestFormatRegistration | 2 | All three handlers registered, handler lookup by extension |
+
+```bash
+python -m pytest CherryAI/dev/test_file_formats_17_4.py -v --timeout=10
+```
+
+#### test_usage_tracker.py (27 tests)
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestRecordUsage | 5 | Basic insert, all task types, optional fields, auto-timestamp, invalid task_type |
+| TestQueryUsage | 5 | By date range, by task_type, by model, combined filters, empty result |
+| TestUsageSummary | 4 | By model, by task_type, date range, empty |
+| TestTotalCostTokens | 3 | total_cost, total_tokens (input+output), filtered |
+| TestExportCSV | 3 | Basic export, filtered, empty |
+| TestPurgeBefore | 3 | Purge old records, purge all, purge none |
+| TestEdgeCases | 4 | Concurrent writes, record_count, db creation, special chars in notes |
+
+```bash
+python -m pytest CherryAI/dev/test_usage_tracker.py -v --timeout=10
+```
+
+#### test_agent_modes.py (42 tests)
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestAgentMode | 5 | Defaults, all fields, read/write scopes, to_dict/from_dict, roundtrip |
+| TestRegistry | 8 | Built-in modes present, register custom, unregister, get by name, list sorted, duplicate error, unregister unknown, re-register |
+| TestAgentRequestResponse | 5 | Request defaults, response roundtrip, empty context, conversation history, metadata |
+| TestGatherContext | 4 | Basic context, scope filtering, empty request, mode system_prompt |
+| TestAgentCall | 6 | Success, API error, empty response, streaming disabled, mode not found, conversation history forwarded |
+| TestSandbox | 4 | Write creates file, nested path, overwrite, directory in sandbox |
+| TestAuditLog | 6 | Log entry, load entries, limit, empty log, multiple entries, corrupt line skipped |
+| TestEdgeCases | 4 | Unicode content, large context, special chars in mode name, concurrent calls |
+
+```bash
+python -m pytest CherryAI/dev/test_agent_modes.py -v --timeout=10
+```
+
+#### test_estimation.py (45 tests)
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestInferenceOptions | 5 | Defaults, custom values, to_dict/from_dict, roundtrip, validation |
+| TestEstimateTokens | 5 | Basic estimation, empty lines, long lines, chars_per_token ratio, single line |
+| TestEstimateChunks | 4 | Basic, single chunk, exact fit, zero tokens |
+| TestComputeCost | 8 | Basic, batch discount 50%, zero tokens, asymmetric pricing, line items check, notes, free model, large volume |
+| TestBuildEstimate | 8 | Basic, with batch, custom options, empty lines, model lookup, unknown model, output ratio, chunk count |
+| TestCompareModels | 5 | Two models, three models, sorted by total, with/without batch, empty lines |
+| TestPersistence | 6 | Save/load roundtrip, missing file defaults, corrupt file defaults, all fields preserved, path creation, overwrite |
+| TestEdgeCases | 4 | Very large file, unicode lines, mixed empty lines, zero cost model |
+
+```bash
+python -m pytest CherryAI/dev/test_estimation.py -v --timeout=10
+```
+
+#### test_i18n.py (30 tests)
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestInit | 4 | Default English, custom lang dir, missing lang falls back, re-init switches |
+| TestTranslation | 6 | Basic key, nested key, format substitution, missing key returns key, empty key, special chars |
+| TestLanguageSwitch | 4 | set_language, get_language, available_languages, switch and verify |
+| TestHasKey | 3 | Existing key, missing key, nested key |
+| TestMissingKeys | 3 | No missing, some missing, reference same as active |
+| TestFlattenDict | 3 | Flat dict, nested dict, deeply nested |
+| TestTooltipAttach | 3 | Attach returns id, detach, get_tooltip_text |
+| TestTooltipEnable | 2 | Enable/disable toggle, are_tooltips_enabled |
+| TestTooltipDelay | 2 | set_tooltip_delay, default delay |
+
+```bash
+python -m pytest CherryAI/dev/test_i18n.py -v --timeout=10
+```
+
+#### Session Persistence (test_session_persistence.py, 7 tests)
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestSessionPersistence | 7 | Save/restore step index, clamp out-of-range, default on missing, INI integration, close handler saves, app init restores, negative index clamped |
+
+```bash
+python -m pytest CherryAI/dev/test_session_persistence.py -v --timeout=10
+```

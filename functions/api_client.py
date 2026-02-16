@@ -80,6 +80,8 @@ class APIConfig:
     rate_limit_margin: float = 0.1  # Safety margin for rate limits (0.0-0.5)
     # Local LLM settings
     no_api_key: bool = False  # Skip API key validation for local LLMs
+    # Batch API settings (TASK 17.1)
+    batch_mode: bool = False  # Use async Batch API (50% cheaper)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> APIConfig:
@@ -127,6 +129,10 @@ class APIConfig:
         if "no_api_key" in filtered_data:
             val = filtered_data["no_api_key"]
             filtered_data["no_api_key"] = val if isinstance(val, bool) else str(val).lower() in ("true", "1", "yes")
+        # Batch API fields
+        if "batch_mode" in filtered_data:
+            val = filtered_data["batch_mode"]
+            filtered_data["batch_mode"] = val if isinstance(val, bool) else str(val).lower() in ("true", "1", "yes")
             
         return cls(**filtered_data)
 
@@ -1648,6 +1654,114 @@ class APIClient:
                  raise TranslationError(f"API refused to translate line {i}: {translated}")
 
         return translations
+
+    # ------------------------------------------------------------------
+    # Batch API methods (TASK 17.1)
+    # ------------------------------------------------------------------
+
+    def submit_batch_translation(
+        self,
+        chunks: List[List[str]],
+        system_prompt: Optional[str] = None,
+        manifest_path: str = "",
+    ) -> "BatchJob":
+        """Submit translation chunks as an async Batch API job.
+
+        Args:
+            chunks: List of line-lists (same format as ``translate_batch``).
+            system_prompt: Optional additional system prompt.
+            manifest_path: Path to the manifest file for tracking.
+
+        Returns:
+            A :class:`BatchJob` tracking object.
+
+        Raises:
+            TranslationError: If the batch cannot be submitted.
+        """
+        from .batch_tracker import build_batch_jsonl, submit_batch, BatchJob
+
+        if not self.client:
+            raise TranslationError("API client not initialized")
+
+        jsonl = build_batch_jsonl(
+            chunks=chunks,
+            model=self.config.model,
+            source_lang=self.config.source_lang,
+            target_lang=self.config.target_lang,
+            system_prompt=system_prompt,
+            temperature=self.config.temperature,
+        )
+
+        chunk_ids = [f"chunk_{i:04d}" for i in range(len(chunks))]
+
+        try:
+            job = submit_batch(
+                client=self.client,
+                jsonl_content=jsonl,
+                model=self.config.model,
+                manifest_path=manifest_path,
+                chunk_ids=chunk_ids,
+            )
+        except Exception as exc:
+            raise TranslationError(f"Batch submission failed: {exc}") from exc
+
+        self.logger.info(
+            "Batch %s submitted (%d chunks, model=%s)",
+            job.batch_id,
+            len(chunks),
+            self.config.model,
+        )
+        return job
+
+    def check_batch_status(self, batch_id: str) -> "BatchJob":
+        """Poll the provider for the latest batch status.
+
+        Returns:
+            Updated :class:`BatchJob`.
+        """
+        from .batch_tracker import poll_batch_status
+
+        if not self.client:
+            raise TranslationError("API client not initialized")
+        return poll_batch_status(self.client, batch_id)
+
+    def retrieve_batch_translations(
+        self,
+        batch_id: str,
+        total_chunks: int,
+    ) -> Optional[Dict[int, List[str]]]:
+        """Download and parse results for a completed batch.
+
+        Args:
+            batch_id: The batch ID to retrieve.
+            total_chunks: Expected number of chunks.
+
+        Returns:
+            Mapping ``{chunk_index: [translated_lines]}``,
+            or ``None`` if results are not available yet.
+        """
+        from .batch_tracker import retrieve_batch_results, parse_batch_results
+
+        if not self.client:
+            raise TranslationError("API client not initialized")
+
+        raw = retrieve_batch_results(self.client, batch_id)
+        if raw is None:
+            return None
+
+        return parse_batch_results(raw, total_chunks)
+
+    def cancel_batch_job(self, batch_id: str) -> "BatchJob":
+        """Cancel an in-progress batch.
+
+        Returns:
+            Updated :class:`BatchJob`.
+        """
+        from .batch_tracker import cancel_batch
+
+        if not self.client:
+            raise TranslationError("API client not initialized")
+        return cancel_batch(self.client, batch_id)
 
     def get_models(self) -> List[str]:
         """Fetch available models from the API."""

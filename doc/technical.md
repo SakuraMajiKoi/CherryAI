@@ -3838,6 +3838,170 @@ Dependencies:
 
 =============================================================================
 
+PHASE 17 MODULES
+
+BATCH_TRACKER.PY (Batch API Job Tracking - Phase 17.1)
+
+Purpose: Build JSONL payloads, submit/poll/cancel OpenAI-compatible batch jobs,
+         persist job metadata to user/batch_jobs.json.
+
+Classes:
+- BatchRequest: Single request envelope (custom_id, method, url, body)
+- BatchJob: Persistent batch job with status tracking and timing
+
+Functions:
+- build_batch_jsonl(chunks, model, system_prompt, temperature) → str
+- parse_batch_results(jsonl_text) → Dict[str, str]
+- submit_batch(client, jsonl, description) → BatchJob
+- poll_batch_status(client, job) → BatchJob
+- retrieve_batch_results(client, job) → Dict[str, str]
+- cancel_batch(client, job) → BatchJob
+- list_provider_batches(client, limit) → List[Dict]
+- save_batch_job(job) / load_batch_jobs() / remove_batch_job(job_id)
+
+Dependencies:
+- Stdlib: json, pathlib, dataclasses, datetime, logging
+- Third-party: openai (OpenAI client)
+- Local: none
+
+KEY_MANAGER.PY (Multi-Key Rotation - Phase 17.2)
+
+Purpose: Manage pools of API keys with automatic rotation strategies.
+
+Classes:
+- APIKey: Dataclass holding key, provider, status, rate-limit counters
+- KeyPool: Pool of APIKey objects with configurable rotation
+- PoolMode(Enum): SEQUENTIAL | EVEN | PRIORITY
+- KeyStatus(Enum): ACTIVE | EXHAUSTED | REVOKED | RATE_LIMITED
+
+Functions:
+- KeyPool.add(key) / remove(key_id) / get(key_id) → APIKey
+- KeyPool.next_key() → APIKey | None (applies rotation strategy)
+- KeyPool.mark_exhausted(key_id) / mark_rate_limited(key_id, until)
+- KeyPool.save(path) / KeyPool.load(path) → KeyPool
+
+Persistence: user/api_keys.json
+
+Dependencies:
+- Stdlib: dataclasses, enum, json, pathlib, datetime, logging
+- Local: none
+
+USAGE_TRACKER.PY (Usage Analytics - Phase 17.5)
+
+Purpose: SQLite-backed usage database for token/cost analytics.
+
+Functions:
+- record_usage(task_type, model, input_tokens, output_tokens, cost, ...) → int
+- query_usage(start, end, task_type, model) → List[Dict]
+- usage_summary(start, end) → Dict (totals by model and task_type)
+- total_cost(start, end) → float
+- total_tokens(start, end) → Tuple[int, int]
+- export_csv(path, start, end) → int
+- purge_before(cutoff) → int
+- record_count() → int
+
+Storage: user/usage.db (SQLite)
+
+TASK_TYPES: api_test, glossary, game_summary, translation, tlc, editing
+
+Dependencies:
+- Stdlib: sqlite3, csv, pathlib, datetime, logging
+- Local: none
+
+AGENT_MODES.PY (Agent-Assisted Modes - Phase 17.8)
+
+Purpose: Mode registry for agent-assisted workflows with sandboxed writes
+         and full audit logging.
+
+Classes:
+- AgentMode: Registered mode with name, description, scopes, system_prompt
+- AgentRequest / AgentResponse: I/O dataclasses for agent_call()
+- AuditEntry: Timestamped audit record
+- ReadScope / WriteScope (Enum): Permission scopes
+
+Built-in Modes:
+- INTERACTIVE_HELP: Read-only help on CherryAI features
+- LANGUAGE_ASSISTANT: Language/grammar questions
+- SCRIPT_AUTHOR: Script authoring in sandbox
+- TRANSLATION_CHECK: Review translated lines
+
+Functions:
+- register_mode(mode) / unregister_mode(name)
+- get_mode(name) / list_modes() → List[AgentMode]
+- agent_call(client, request) → AgentResponse
+- gather_context(mode, request) → str
+- write_to_sandbox(filename, content) → Path
+- log_audit_entry(entry) / load_audit_log(limit) → List[AuditEntry]
+
+Sandbox: dev/sandbox/
+Audit log: logs/agent/audit.jsonl
+
+Dependencies:
+- Stdlib: dataclasses, enum, json, pathlib, datetime, logging
+- Third-party: openai (OpenAI client)
+- Local: none
+
+ESTIMATION.PY (Estimation Engine - Phase 17.9)
+
+Purpose: Token/cost estimation with itemized billing and model comparison.
+
+Classes:
+- InferenceOptions: Dataclass for estimation parameters
+- CostLineItem: Single billing line (label, tokens, unit_cost, subtotal)
+- CostEstimate: Full estimate with line items, totals, notes
+
+Functions:
+- estimate_tokens_for_lines(lines, chars_per_token) → int
+- estimate_chunks(total_tokens, chunk_size) → int
+- compute_cost(input_tokens, output_tokens, input_price, output_price, batch) → CostEstimate
+- build_estimate(lines, options) → CostEstimate
+- compare_models(lines, model_options_list) → List[CostEstimate]
+- save_options(options, path) / load_options(path) → InferenceOptions
+
+Dependencies:
+- Stdlib: dataclasses, json, math, pathlib, logging
+- Local: functions.config (MODEL_PRICING)
+
+I18N.PY (Internationalization - Phase 17.10)
+
+Purpose: Language string loading and translation helper.
+
+Functions:
+- init(lang, lang_dir) → None: Load language JSON from user/lang/
+- t(key, **kwargs) → str: Look up translated string with format substitution
+- set_language(lang) / get_language() → str
+- get_available_languages() → List[str]
+- has_key(key) → bool
+- missing_keys(reference_lang) → List[str]
+- _flatten_dict(d, prefix) → Dict[str, str]: Flatten nested JSON keys
+
+Language files: user/lang/<code>.json (nested JSON, dot-separated keys)
+Fallback: English strings when key missing in active language
+
+Dependencies:
+- Stdlib: json, pathlib, logging
+- Local: none
+
+GUI/HELPERS/TOOLTIP.PY (Tooltip Helper - Phase 17.10)
+
+Purpose: Attach configurable tooltips to any Tkinter widget.
+
+Functions:
+- attach_tooltip(widget, text, delay, wrap_length, use_i18n) → str (tooltip_id)
+- detach_tooltip(tooltip_id) → bool
+- get_tooltip_text(tooltip_id) → str | None
+- set_tooltips_enabled(enabled) / are_tooltips_enabled() → bool
+- set_tooltip_delay(ms) → None
+
+Implementation: Uses Tk Toplevel overrideredirect window with enter/leave bindings.
+When use_i18n=True, text is treated as an i18n key resolved via i18n.t().
+
+Dependencies:
+- Stdlib: tkinter
+- Local: functions.i18n (optional, for use_i18n mode)
+
+=============================================================================
+
 BATCH PROCESSING ARCHITECTURE
 
 Batch processing is the primary workflow in CherryAI, allowing multiple files to

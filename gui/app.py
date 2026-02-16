@@ -104,7 +104,7 @@ class App(tk.Tk):
         # TASK 21.4: Flag to track if startup dialog should be shown
         self._show_startup_dialog = True
         
-        # Try to restore manifest from INI (TASK 21.4)
+        # Try to restore manifest from INI (TASK 21.4 + TASK 17.7)
         if ini_manager.get_restore_on_launch():
             last_manifest = ini_manager.get_last_manifest()
             if last_manifest and last_manifest.exists():
@@ -112,7 +112,15 @@ class App(tk.Tk):
                     if self._manifest_manager.load(last_manifest):
                         self.session.manifest_path = last_manifest
                         ini_manager.add_to_recent_manifests(last_manifest)
-                        logger.info("Restored last manifest: %s", last_manifest)
+                        # TASK 17.7: Restore last active step index
+                        saved_step = ini_manager.get_int(
+                            "recent", "last_step", 0
+                        )
+                        self.session.current_step = max(0, min(saved_step, 9))
+                        logger.info(
+                            "Restored last manifest: %s (step %d)",
+                            last_manifest, self.session.current_step,
+                        )
                         self._show_startup_dialog = False
                 except Exception as e:
                     logger.warning("Failed to restore last manifest: %s", e)
@@ -860,6 +868,11 @@ For more information, see the documentation.
                     ini_manager.set_last_manifest(manifest_path)
                     ini_manager.add_to_recent_manifests(manifest_path)
                     logger.debug("Saved last manifest to INI: %s", manifest_path)
+                
+                # TASK 17.7: Save current step index for session restore
+                ini_manager.set_default(
+                    "recent", "last_step", str(self._current_tab_index)
+                )
             except Exception as e:
                 logger.warning("Failed to save manifest on close: %s", e)
             

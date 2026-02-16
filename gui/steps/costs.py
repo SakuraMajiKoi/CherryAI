@@ -147,6 +147,9 @@ def estimate_rate_limit_time(
     total_requests: int,
     rate_limit_rpm: int = DEFAULT_RPM,
     avg_request_time_sec: float = 2.0,
+    concurrent_requests: int = 1,
+    total_output_tokens: int = 0,
+    token_speed: int = 50,
 ) -> Dict[str, Any]:
     """Estimate time to complete all requests with rate limiting.
 
@@ -157,6 +160,9 @@ def estimate_rate_limit_time(
         total_requests: Number of API requests.
         rate_limit_rpm: Requests per minute limit.
         avg_request_time_sec: Average time per request.
+        concurrent_requests: Max parallel API calls allowed.
+        total_output_tokens: Total output tokens to generate.
+        token_speed: Tokens per second for the model (default 50).
 
     Returns:
         Dict with time estimates including formatted string.
@@ -166,6 +172,9 @@ def estimate_rate_limit_time(
         total_requests=total_requests,
         rate_limit_rpm=rate_limit_rpm,
         include_buffer=True,
+        concurrent_requests=concurrent_requests,
+        total_output_tokens=total_output_tokens,
+        token_speed=token_speed,
     )
 
     # Convert to expected format (backward compatible)

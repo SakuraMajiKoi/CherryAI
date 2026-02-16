@@ -4118,11 +4118,81 @@ This catalog lists every existing function that participates in recovery, valida
 | `check_server_health()` | Health check for local LLM server |
 | `get_local_error_help()` | Returns human-readable error guidance |
 
+**Batch Tracker** (`functions/batch_tracker.py`):
+| Function | Purpose |
+|----------|---------|
+| `build_batch_jsonl()` | Builds JSONL payload for OpenAI Batch API |
+| `parse_batch_results()` | Parses JSONL response into custom_id→content map |
+| `submit_batch()` | Uploads JSONL and creates batch job |
+| `poll_batch_status()` | Checks current status of a batch job |
+| `retrieve_batch_results()` | Downloads and parses completed batch output |
+| `cancel_batch()` | Cancels an in-progress batch job |
+| `save_batch_job()` | Persists batch job metadata to JSON |
+| `load_batch_jobs()` | Loads all persisted batch jobs |
+
+**Key Manager** (`functions/key_manager.py`):
+| Function/Class | Purpose |
+|----------|---------|
+| `APIKey` | Dataclass for key metadata, status, and rate-limit tracking |
+| `KeyPool` | Manages pool of keys with rotation strategies |
+| `PoolMode` | Enum: SEQUENTIAL, EVEN, PRIORITY |
+| `KeyPool.next_key()` | Returns next available key per rotation strategy |
+| `KeyPool.save()` / `load()` | JSON persistence for key pool state |
+
+**Usage Tracker** (`functions/usage_tracker.py`):
+| Function | Purpose |
+|----------|---------|
+| `record_usage()` | Inserts usage record into SQLite DB |
+| `query_usage()` | Queries records by date, task_type, model |
+| `usage_summary()` | Aggregated totals by model and task_type |
+| `total_cost()` | Sum of costs in date range |
+| `total_tokens()` | Sum of input/output tokens in date range |
+| `export_csv()` | Exports usage records to CSV file |
+| `purge_before()` | Deletes records older than cutoff date |
+
+**Agent Modes** (`functions/agent_modes.py`):
+| Function | Purpose |
+|----------|---------|
+| `register_mode()` | Registers a new agent mode |
+| `unregister_mode()` | Removes a registered mode |
+| `get_mode()` / `list_modes()` | Mode lookup and listing |
+| `agent_call()` | Executes an agent request against an LLM |
+| `gather_context()` | Assembles context string for a mode/request |
+| `write_to_sandbox()` | Writes content to sandboxed dev/sandbox/ directory |
+| `log_audit_entry()` | Appends audit entry to JSONL log |
+
+**Estimation Engine** (`functions/estimation.py`):
+| Function | Purpose |
+|----------|---------|
+| `estimate_tokens_for_lines()` | Estimates token count from line list |
+| `estimate_chunks()` | Calculates chunk count from tokens and chunk_size |
+| `compute_cost()` | Builds CostEstimate with itemized line items |
+| `build_estimate()` | Full estimation pipeline from lines + options |
+| `compare_models()` | Side-by-side cost comparison across models |
+| `save_options()` / `load_options()` | InferenceOptions JSON persistence |
+
+**Internationalization** (`functions/i18n.py`):
+| Function | Purpose |
+|----------|---------|
+| `init()` | Loads language JSON strings from user/lang/ |
+| `t()` | Translates key to localized string with format args |
+| `set_language()` / `get_language()` | Active language management |
+| `get_available_languages()` | Lists available language files |
+| `has_key()` / `missing_keys()` | Key validation and coverage checking |
+
+**Tooltip Helper** (`gui/helpers/tooltip.py`):
+| Function | Purpose |
+|----------|---------|
+| `attach_tooltip()` | Binds tooltip to a Tk widget, returns tooltip_id |
+| `detach_tooltip()` | Removes tooltip binding by id |
+| `set_tooltips_enabled()` | Global enable/disable toggle |
+| `set_tooltip_delay()` | Configures hover delay before showing |
+
 ## Document Revision History
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 2.9 | 2026-02-09 | Added §9 Pipeline Logging System: Complete specification for per-project, per-step log files (translation.log, postprocess.log, wordwrap.log, output.log). Defined unified log status vocabulary (PASS, RECOVERED: {Type}, (PARTIAL) RETRIAL {Strategy}, (PARTIAL) FAILURE {Type}, FAILURE {Type}). Specified log file structure (Header → Per-Entry → Summary Footer) for all four steps. Defined utility metrics tracking (time, tokens, token savings, cost, recovery rate). Specified log archival lifecycle (rename-on-re-run with timestamp). Documented manifest-log complementarity (manifest = data, logs = history). Added complete Recovery & Failure Functions Catalog (§9.7) covering ~100 existing functions organized by pipeline step: Translation (api_client, retry_handler, chunk_optimizer, rate_limiter), Validation (validation.py), Postprocessing (postprocess.py, postanalysis.py), Wordwrap, Output, and General/Cross-Pipeline (common_errors, mainhelper, local_llm). Updated Table of Contents. |
+| 3.0 | 2026-02-10 | Phase 17 Infrastructure: Added Batch API support (batch_tracker.py — JSONL builder, job persistence, submit/poll/cancel), Multi-Key Management (key_manager.py — key pools with sequential/even/priority rotation), Named API Profiles (project_config.py — display_name, system_prompt_tweak, rename/duplicate), Additional File Formats (markdown.py, json_lenient.py, translator_plus.py), Usage Analytics (usage_tracker.py — SQLite-backed token/cost tracking with CSV export), Agent-Assisted Modes (agent_modes.py — mode registry, sandboxed writes, audit logging), Estimation Engine (estimation.py — itemized billing, model comparison, persistence), i18n & Tooltips (i18n.py — JSON language files with fallback, tooltip.py — configurable Tk tooltips). Session persistence (app.py saves/restores last step). Bug fix: estimate_rate_limit_time() missing concurrent_requests/total_output_tokens/token_speed params. Added 331 new tests (5611 total). |
 | 2.8 | 2026-02-08 | Comprehensive rewrite of Step 9 (Output): Defined injection priority chain (9-level: overwrite → wordwrap → postprocessed → edit{N} → tlc{N} → translation → preedit → preprocessed → original). Added Dirty Flags system (Process flag set by preprocessing/cleared by postprocessing 100%, Wordwrap flag cleared when applied) with pre-export validation dialog. Non-destructive default (subfolder naming, no overwrite). Failure logging with per-file error tracking. Complete widget specifications with destination, format, naming, safety, and export extras sections. Settings received from Input (source_root, file_dir, encoding, format). Step 0 (Input): Added Import Translations button — imports translations from another manifest via exact `orig` line matching (sequential search, file/line-number agnostic, copies all processing fields). Step 5 (Translation): Added Skip Already Translated checkbox — skips lines with existing `tl` field for incremental translation workflows. Bug fixes: QA mousewheel TclError (try/except wrapper for race condition), output_inject `get_section` → `get_output_options()`, preprocess warning demoted to debug. |
 | 2.7 | 2026-02-08 | Comprehensive rewrite of Step 8 (Wordwrap): Redefined purpose (auto from parser or manual settings). Pretty wrap is now standard — removed Prevent Orphans and Prefer Punctuation Breaks checkboxes (always active). Mode changed from radio buttons to dropdown, removed RPG Maker (→ its own parser) and Disabled options. Width changed from Spinbox to Dropdown with Character/Pixel modes. Break Character linked to Preprocessing and Translation Prompt with cost-optimization note. Speaker Handling reduced to Ignore + Count (renamed from Sameline), removed Samelineindent and Newline. Ignore Patterns replaced with read-only Code Database table (no checkboxes). Removed Typography widget entirely. Removed Overwrite Strategy widget — Overwrite becomes a column in the Lines Table with diff filtering. Added table filters (All/Changed/Exceeding/Overwrite Differs). Added Standard Wrapping Rules table documenting always-active `pretty_wrap()` behavior. Added comprehensive Future Improvements for parser-driven wrap, font commands, pixel-accurate width, New Textboxes, and break char removal before translation. |
 | 2.6 | 2026-02-08 | Comprehensive rewrite of Step 7 (Postprocessing): Complete mirror-symmetry spec with Step 4 Preprocessing — reverse priority ordering, automatic restorations (Placeholder/Code/BR always-on, no GUI toggle), post-exclusive recovery processes (Bracket Balance, Quote Balance, Whitespace Normalization with toggles). Renamed "Postprocessed Lines" to "Processed Lines" with new filters (Changed/Written/Flagged/By Process). Removed Refresh and Revert All buttons (overwrite semantics with confirmation dialog). Added Postprocess Options widget (bidirectional Symbol Conversion: Fullwidth↔Halfwidth). Redesigned Failure Handling (Write=default, Flag for Review=no-write, Queue for Retry=hidden/future). Added Diff View manual editing with Mark-as-Fixed. Added Postprocessing Summary with live updates and 100% completion popup. Fixed MouseWheel `bind_all` bug across all step files (qa.py, postprocess.py, translate.py, wordwrap_overwrite.py, output_inject.py). |

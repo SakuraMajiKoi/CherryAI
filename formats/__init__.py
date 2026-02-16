@@ -46,6 +46,9 @@ __all__ = [
     "SIMPLE_FORMATS",
     "RPGMAKER_FORMATS",
     "DOCUMENT_FORMATS",
+    "MARKDOWN_FORMATS",
+    "LENIENT_JSON_FORMATS",
+    "TRANSLATOR_FORMATS",
 ]
 
 
@@ -53,8 +56,18 @@ __all__ = [
 SIMPLE_FORMATS = {".txt", ".csv", ".tsv", ".json", ".xlsx"}
 RPGMAKER_FORMATS = {".rpgjson", ".rpgjs"}  # Custom extensions for clarity
 DOCUMENT_FORMATS = {".pdf", ".epub"}
+MARKDOWN_FORMATS = {".md"}
+LENIENT_JSON_FORMATS = {".json5", ".jsonc"}
+TRANSLATOR_FORMATS = {".trans"}
 
-SUPPORTED_FORMATS = SIMPLE_FORMATS | RPGMAKER_FORMATS | DOCUMENT_FORMATS
+SUPPORTED_FORMATS = (
+    SIMPLE_FORMATS
+    | RPGMAKER_FORMATS
+    | DOCUMENT_FORMATS
+    | MARKDOWN_FORMATS
+    | LENIENT_JSON_FORMATS
+    | TRANSLATOR_FORMATS
+)
 
 
 @dataclass
@@ -270,6 +283,30 @@ def _load_handlers() -> None:
     except ImportError:
         pass  # beautifulsoup4 not installed
     
+    # Register Markdown handler
+    try:
+        from . import markdown
+        for handler in markdown.get_handlers():
+            _registry.register(handler)
+    except ImportError:
+        pass
+
+    # Register lenient JSON handler (JSON5 / JSONC)
+    try:
+        from . import json_lenient
+        for handler in json_lenient.get_handlers():
+            _registry.register(handler)
+    except ImportError:
+        pass
+
+    # Register Translator++ handler
+    try:
+        from . import translator_plus
+        for handler in translator_plus.get_handlers():
+            _registry.register(handler)
+    except ImportError:
+        pass
+
     # Future: register rpgmaker and document handlers
     # from . import rpgmaker, document
 

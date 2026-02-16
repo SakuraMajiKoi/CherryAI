@@ -266,12 +266,16 @@ class ProjectConfig:
 @dataclass
 class APIProfile:
     """API configuration profile for translation or glossary enrichment.
-    
+
     Multiple profiles can be stored in api_profiles.ini to allow:
     - Different models for different purposes (fast/cheap for glossary, powerful for translation)
     - Different API keys for different providers
     - Separate rate limits per purpose
+
+    TASK 17.3: Added display_name for human-readable labelling and
+    system_prompt_tweak for per-profile prompt adjustments.
     """
+
     name: str
     provider: str = "openai"
     api_key: str = ""
@@ -282,7 +286,14 @@ class APIProfile:
     retries: int = 3
     rate_limit_requests: int = 60
     chunk_size: int = 50
-    
+    display_name: str = ""
+    system_prompt_tweak: str = ""
+
+    @property
+    def label(self) -> str:
+        """Human-readable label (display_name if set, otherwise name)."""
+        return self.display_name or self.name
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for INI storage."""
         return {
@@ -295,8 +306,10 @@ class APIProfile:
             "retries": str(self.retries),
             "rate_limit_requests": str(self.rate_limit_requests),
             "chunk_size": str(self.chunk_size),
+            "display_name": self.display_name,
+            "system_prompt_tweak": self.system_prompt_tweak,
         }
-    
+
     @classmethod
     def from_dict(cls, name: str, data: Dict[str, Any]) -> "APIProfile":
         """Create from dictionary."""
@@ -311,6 +324,8 @@ class APIProfile:
             retries=int(data.get("retries", 3)),
             rate_limit_requests=int(data.get("rate_limit_requests", 60)),
             chunk_size=int(data.get("chunk_size", 50)),
+            display_name=data.get("display_name", ""),
+            system_prompt_tweak=data.get("system_prompt_tweak", ""),
         )
 
 
@@ -601,3 +616,101 @@ def delete_api_profile(profile_name: str) -> bool:
     except Exception as e:
         logging.error(f"Failed to delete API profile: {e}")
         return False
+
+
+# =============================================================================
+# TASK 17.3: Named API Profile Utilities
+# =============================================================================
+
+
+def list_api_profile_names() -> List[str]:
+    """List all available API profile names from api_profiles.ini.
+
+    Returns:
+        Sorted list of profile section names.
+    """
+    profiles = load_api_profiles()
+    return sorted(profiles.keys())
+
+
+def rename_api_profile(old_name: str, new_name: str) -> bool:
+    """Rename an API profile (copy to new name then delete old).
+
+    Args:
+        old_name: Current profile section name.
+        new_name: Desired profile section name.
+
+    Returns:
+        True if renamed successfully; False if old_name not found or
+        new_name already exists.
+    """
+    if old_name == new_name:
+        return True
+
+    profiles = load_api_profiles()
+
+    if old_name not in profiles:
+        logging.warning("Cannot rename profile '%s': not found", old_name)
+        return False
+
+    if new_name in profiles:
+        logging.warning(
+            "Cannot rename to '%s': profile already exists", new_name,
+        )
+        return False
+
+    profile = profiles[old_name]
+    profile.name = new_name
+    save_api_profile(profile)
+    delete_api_profile(old_name)
+    return True
+
+
+def duplicate_api_profile(
+    source_name: str,
+    new_name: str,
+    new_display_name: str = "",
+) -> Optional[APIProfile]:
+    """Duplicate an existing API profile under a new name.
+
+    Args:
+        source_name: Profile to copy from.
+        new_name: Section name for the duplicate.
+        new_display_name: Optional display_name for the copy.
+
+    Returns:
+        The newly created APIProfile, or None on failure.
+    """
+    profiles = load_api_profiles()
+
+    if source_name not in profiles:
+        logging.warning(
+            "Cannot duplicate profile '%s': not found", source_name,
+        )
+        return None
+
+    if new_name in profiles:
+        logging.warning(
+            "Cannot duplicate to '%s': profile already exists", new_name,
+        )
+        return None
+
+    source = profiles[source_name]
+    data = source.to_dict()
+    copy = APIProfile.from_dict(new_name, data)
+    if new_display_name:
+        copy.display_name = new_display_name
+    save_api_profile(copy)
+    return copy
+
+
+def get_profile_display_map() -> Dict[str, str]:
+    """Return a mapping of profile name → display label.
+
+    Uses the profile's ``label`` property (display_name if set, else name).
+
+    Returns:
+        Ordered dict {section_name: label} for all profiles.
+    """
+    profiles = load_api_profiles()
+    return {name: p.label for name, p in sorted(profiles.items())}
