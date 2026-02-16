@@ -4,6 +4,15 @@ Minor Tasks
 	Rename Select File(s) button to input and instead of selecting files and folders with separate commands to choose from, have the button open a window that can do both load (multiple) files and (multiple) folders.
 	Increase the size of New Translation Project Window (Create New Translation Project) since the buttons are partially hidden
 	Adjust Loaded Files to always have folders above all files in the same folder and when loaded the files hidden instead of expanded 
+	When loading files and creating a manifest run several script after each other:
+		Step 1: Create Manifest file (Dialogue that is currently after Step 2. Input fill must out the project name. Remove auto-suggestion. Skipped when manifest already exists) 
+		Step 2: Load Lines into the Manifest
+		Step 3: Load default values into the Manifest
+		Step 4: Run Analysis Script and record the results in the Manifest
+		Step 5: Populate Glossary, Code Database and Point of View based on inference (optional, several options)
+		Step 6: Run the first Estimation Script and record the results in the Manifest (Original Input Tokens)
+		Step 7: Run default preprocessing and record the results in the Manifest
+		Step 8: Run the second Estimation Script for preprocessed lines and record the results in the Manifest
 -Analysis Step
 	Improve Language Detection to treat Chinese as Japanese when Chinese content is lower than 30%. Translation Step also must not skip them when the option to not translate non-source language is enabled (see specs.md about the existing global option)
 	Add a new statistic (below Duplicate Lines:) and fucntion analyse and find lines that can be aggressively deduplicated (see specs.md about the existing method)

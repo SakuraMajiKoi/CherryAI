@@ -24,7 +24,7 @@ MODULE AWARENESS (Always check these when implementing features):
 - formats/      : 5 format handlers - file I/O for CSV, TXT, JSON, etc.
 - gui/steps/    : 10 workflow tabs - display and user interaction only
 - gui/components/: Reusable UI widgets (1 module: table.py)
-- gui/dialogs/  : Modal dialogs and forms (2 modules: global_options.py, project_dialog.py)
+- gui/dialogs/  : Modal dialogs and forms (3 modules: global_options.py, project_dialog.py, input_dialog.py)
 - gui/helpers/  : 6 adapter modules bridging GUI config to processing (mode, analysis, glossary, chunker, prompt, manifest_binding)
 - gui/state/    : Application state management (1 module: store.py)
 
@@ -57,7 +57,7 @@ TABLE OF CONTENTS
    2.3 prepro_ops Field - Pre-processing operation tracking
    2.4 Processor Class - Core text processing engine
 
-3. FUNCTIONS/ MODULES (38 files - Core Shared Logic)
+3. FUNCTIONS/ MODULES (39 files - Core Shared Logic)
    ✅ = Verified exists | ⚠️ = Needs documentation | 🔗 = GUI integrated
    
    3.1  analysis.py ✅ - File analysis, metrics, glossary extraction
@@ -98,8 +98,9 @@ TABLE OF CONTENTS
    3.36 preset_manager.py ✅ - Preset save/load/delete operations (TASK 30.1)
    3.37 mock_translator.py ✅ - Mock translation engine with flaw injection (Phase 56)
    3.38 consistency.py ✅ - Consistency system for term translation tracking (Phase 55)
+   3.39 auto_pipeline.py ✅🔗 - Automatic pipeline orchestrator (Phase 58)
    
-   3.38 glossaries/ (subfolder - 5 files)
+   3.40 glossaries/ (subfolder - 5 files)
         - __init__.py - Package exports
         - code_glossary_constants.py - Code pattern definitions
         - code_glossary_functions.py - Code detection/classification
@@ -156,9 +157,9 @@ TABLE OF CONTENTS
    
    6.5 gui/components/ (2 files)
        - __init__.py - Component exports
-       - table.py - SharedTable, ColumnDef, TableRow (Phase 43: batch insertion for large datasets)
+       - table.py - SharedTable, ColumnDef, TableRow (Phase 43: batch insertion for large datasets; Phase 17: version tracking to cancel stale batches)
    
-   6.6 gui/dialogs/ (3 files - 2 dialog modules)
+   6.6 gui/dialogs/ (4 files - 3 dialog modules)
        - __init__.py - Dialog exports
        - global_options.py - GlobalOptionsDialog with section panels:
          - OptionSection enum: API, REQUEST, CACHING, LOGGING, SESSION, SAFETY, FILE_IO, PROMPTS
@@ -177,9 +178,15 @@ TABLE OF CONTENTS
            - Supports {source_lang} and {target_lang} placeholders
            - Stored in [prompts] section of config/defaults.ini
        - project_dialog.py - Project management dialogs (TASK 19, TASK 21.4):
-         - ProjectNameDialog: Prompt for project name on new project creation
+         - ProjectNameDialog: Prompt for project name on new project creation (500x280, empty name field)
          - LoadManifestDialog: File browser for loading existing manifests
          - WelcomeDialog: First launch dialog with Resume/New/Load/Fresh options
+       - input_dialog.py - Unified Input Dialog (Phase 58.1):
+         - UnifiedInputDialog: Dual-pane file/folder selection
+         - Left pane: File browser with multi-select
+         - Right pane: Folder browser with multi-select
+         - Path list display for selected items
+         - Returns list of selected file/folder paths
    
    6.7 gui/helpers/ (7 files - 6 adapter modules)
        - __init__.py - Helper exports
@@ -341,6 +348,7 @@ TABLE OF CONTENTS
          - Language Skip: detect_line_script() in analysis.py, _LANG_SCRIPT_MAP, _apply_language_skip()
          - Tab Caching: BaseStep._compute_cache_hash/_is_cache_valid/_update_cache/_invalidate_cache/_force_refresh
          - Performance: SharedTable batch insertion (500-row batches), _refresh_lines() batch manifest dict read
+         - Bug Fix (Phase 17): Added _batch_insert_version counter to cancel stale batch insertions when _refresh_display() called multiple times
          - Modified: gui/steps/translate.py, gui/steps/base.py, gui/steps/costs.py, gui/components/table.py
          - Modified: gui/dialogs/global_options.py, functions/analysis.py
        - **Phase 44 Integration:** QA Step Placeholder & Shared Validation:

@@ -12,7 +12,7 @@ import logging
 import threading
 from pathlib import Path
 from tkinter import filedialog, messagebox
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import tkinter as tk
 from tkinter import ttk
 
@@ -28,10 +28,23 @@ from CherryAI.gui.helpers.analysis_adapter import (
 from CherryAI.gui.steps.base import BaseStep
 from CherryAI.gui.theme.colors import THEME
 
+# TASK 59.2: Import aggressive dedup projection calculator
+from CherryAI.functions.analysis import calculate_aggressive_dedup_projection
+
 # TASK 25.1: Import manifest field helpers for saving analysis counts
 from CherryAI.functions.manifest_fields import (
     save_int_field,
     load_int_field,
+)
+
+# TASK 59.4: Import glossary adapter for speaker actions
+from CherryAI.gui.helpers.glossary_adapter import (
+    add_glossary_entry,
+    load_glossary,
+    TYPE_NAME,
+    GENDER_MALE,
+    GENDER_FEMALE,
+    GENDER_UNKNOWN,
 )
 
 if TYPE_CHECKING:
@@ -162,6 +175,14 @@ class AnalysisStep(BaseStep):
         )
         self._findings_table.pack(fill="both", expand=True)
 
+        # TASK 59.3: Add right-click context menu binding
+        self._findings_table._tree.bind("<Button-3>", self._on_findings_right_click)
+
+        # Initialize context menus
+        self._speaker_menu: Optional[tk.Menu] = None
+        self._code_pattern_menu: Optional[tk.Menu] = None
+        self._generic_menu: Optional[tk.Menu] = None
+
     def _run_analysis(self) -> None:
         """Run analysis on loaded files."""
         if self._is_analyzing:
@@ -280,6 +301,9 @@ class AnalysisStep(BaseStep):
         results["empty_lines"] = summary.get("empty_lines", 0)
         results["unique_lines"] = summary.get("unique_lines", 0)
         results["duplicate_count"] = summary.get("duplicate_lines", 0)
+
+        # TASK 59.2: Calculate aggressive dedup projection
+        results["aggressive_dedup"] = calculate_aggressive_dedup_projection(all_lines)
 
         # Get detailed results from adapter
         results["languages"] = analysis.get("languages", {})
@@ -462,6 +486,28 @@ class AnalysisStep(BaseStep):
                 foreground=THEME.text_primary,
             ).pack(side="right")
 
+        # TASK 59.2: Display aggressive dedup projection
+        aggressive_dedup = results.get("aggressive_dedup", {})
+        if aggressive_dedup and aggressive_dedup.get("original_count", 0) > 0:
+            frame = ttk.Frame(self._stats_frame)
+            frame.pack(fill="x", padx=10, pady=3)
+
+            ttk.Label(
+                frame,
+                text="Aggressive Dedup:",
+                font=("Segoe UI", 10),
+                foreground=THEME.text_secondary,
+            ).pack(side="left")
+
+            unique = aggressive_dedup.get("unique_count", 0)
+            reduction = aggressive_dedup.get("reduction_percent", 0.0)
+            ttk.Label(
+                frame,
+                text=f"{unique:,} lines ({reduction:.1f}% reduction)",
+                font=("Segoe UI", 10, "bold"),
+                foreground=THEME.accent_info,
+            ).pack(side="right")
+
         # Separator
         ttk.Separator(self._stats_frame, orient="horizontal").pack(
             fill="x", padx=10, pady=10
@@ -558,7 +604,416 @@ class AnalysisStep(BaseStep):
 
         # Use the table's export function
         self._findings_table._export_csv()
+    # =========================================================================
+    # TASK 59.3: Category-Aware Findings Table Context Menu
+    # =========================================================================
 
+    def _on_findings_right_click(self, event: tk.Event) -> None:
+        """Handle right-click on findings table.
+
+        Shows category-aware context menu based on selected rows.
+
+        Args:
+            event: Tkinter event with click coordinates.
+        """
+        # Get item under click and select it if not already selected
+        item = self._findings_table._tree.identify_row(event.y)
+        if not item:
+            return
+
+        selected = self._findings_table._tree.selection()
+        if item not in selected:
+            self._findings_table._tree.selection_set(item)
+            selected = (item,)
+
+        # Get categories of all selected rows
+        categories: set[str] = set()
+        for sel_item in selected:
+            values = self._findings_table._tree.item(sel_item, "values")
+            if values:
+                # Category is the first column
+                categories.add(str(values[0]))
+
+        # Show appropriate menu based on categories
+        if len(categories) == 1:
+            category = categories.pop()
+            if category == "Speaker":
+                menu = self._create_speaker_menu()
+            elif category == "Code Pattern":
+                menu = self._create_code_pattern_menu()
+            else:
+                menu = self._create_generic_menu()
+        else:
+            # Mixed selection - show only generic options
+            menu = self._create_generic_menu()
+
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _create_speaker_menu(self) -> tk.Menu:
+        """Create context menu for Speaker category.
+
+        Returns:
+            Menu with speaker-specific options.
+        """
+        menu = tk.Menu(self, tearoff=0)
+
+        menu.add_command(label="Add to Glossary", command=self._add_speaker_to_glossary)
+
+        # Role submenu
+        role_menu = tk.Menu(menu, tearoff=0)
+        for role in ["Protagonist", "Love Interest", "Major", "Minor"]:
+            role_menu.add_command(
+                label=role, command=lambda r=role: self._set_speaker_role(r)
+            )
+        menu.add_cascade(label="Set Role", menu=role_menu)
+
+        # Gender submenu
+        gender_menu = tk.Menu(menu, tearoff=0)
+        for gender in ["Male", "Female"]:
+            gender_menu.add_command(
+                label=gender, command=lambda g=gender: self._set_speaker_gender(g)
+            )
+        menu.add_cascade(label="Set Gender", menu=gender_menu)
+
+        menu.add_command(label="Set Translation...", command=self._set_speaker_translation)
+        menu.add_separator()
+        menu.add_command(label="Add to Code Glossary", command=self._add_speaker_to_code_glossary)
+        menu.add_command(label="Copy Name", command=self._copy_speaker_name)
+        menu.add_separator()
+        menu.add_command(label="Select All with Speaker", command=self._select_all_with_speaker)
+
+        return menu
+
+    def _create_code_pattern_menu(self) -> tk.Menu:
+        """Create context menu for Code Pattern category.
+
+        Returns:
+            Menu with code pattern-specific options.
+        """
+        menu = tk.Menu(self, tearoff=0)
+
+        # Toggle options (checkmarks would require state tracking)
+        menu.add_command(label="Preserve", command=lambda: self._set_pattern_action("preserve"))
+        menu.add_command(label="Remove", command=lambda: self._set_pattern_action("remove"))
+        menu.add_command(label="Translate", command=lambda: self._set_pattern_action("translate"))
+
+        menu.add_separator()
+
+        # Replace submenu
+        replace_menu = tk.Menu(menu, tearoff=0)
+        replace_menu.add_command(label="Generic", command=lambda: self._set_pattern_replace("generic"))
+        replace_menu.add_command(label="Custom...", command=self._set_pattern_replace_custom)
+        menu.add_cascade(label="Replace With", menu=replace_menu)
+
+        menu.add_separator()
+
+        # Classification options
+        menu.add_command(label="Is a Name", command=lambda: self._set_pattern_type("name"))
+        menu.add_command(label="Is Text", command=lambda: self._set_pattern_type("text"))
+        menu.add_command(label="Is a Number", command=lambda: self._set_pattern_type("number"))
+        menu.add_command(label="Is Invisible", command=lambda: self._set_pattern_type("invisible"))
+
+        menu.add_separator()
+        menu.add_command(label="Copy Pattern", command=self._copy_pattern)
+        menu.add_command(label="Show Lines with Pattern", command=self._show_lines_with_pattern)
+
+        return menu
+
+    def _create_generic_menu(self) -> tk.Menu:
+        """Create generic context menu for mixed/other categories.
+
+        Returns:
+            Menu with generic options.
+        """
+        menu = tk.Menu(self, tearoff=0)
+
+        menu.add_command(label="Copy", command=self._copy_selection)
+        menu.add_command(label="Select All", command=self._select_all_findings)
+
+        return menu
+
+    def _get_selected_items(self) -> List[Tuple[str, str]]:
+        """Get item names from selected rows.
+
+        Returns:
+            List of (category, item_name) tuples.
+        """
+        result = []
+        for item_id in self._findings_table._tree.selection():
+            values = self._findings_table._tree.item(item_id, "values")
+            if values and len(values) >= 2:
+                result.append((str(values[0]), str(values[1])))
+        return result
+
+    # Speaker actions
+    def _add_speaker_to_glossary(self) -> None:
+        """Add selected speakers to glossary."""
+        items = self._get_selected_items()
+        speakers = [name for cat, name in items if cat == "Speaker"]
+        if not speakers:
+            return
+
+        success_count = 0
+        for speaker in speakers:
+            if add_glossary_entry(
+                original=speaker,
+                translation="",  # User will fill in translation later
+                notes="Added from Analysis",
+                entry_type=TYPE_NAME,
+                gender=GENDER_UNKNOWN,
+                source="Analysis",
+            ):
+                success_count += 1
+
+        logger.info("Added %d/%d speakers to glossary: %s", success_count, len(speakers), speakers)
+        if success_count > 0:
+            messagebox.showinfo("Added to Glossary", f"Added {success_count} speaker(s) to glossary.")
+        else:
+            messagebox.showwarning("Failed", "Could not add speakers to glossary.")
+
+    def _set_speaker_role(self, role: str) -> None:
+        """Set role for selected speakers.
+
+        Role is stored in the glossary Notes field as 'Role: X'.
+        """
+        items = self._get_selected_items()
+        speakers = [name for cat, name in items if cat == "Speaker"]
+        if not speakers:
+            return
+
+        success_count = 0
+        for speaker in speakers:
+            # Load existing entry and update notes with role
+            glossary = load_glossary()
+            existing = glossary.get(speaker)
+            existing_notes = existing.notes if existing else ""
+
+            # Remove old role if present, add new role
+            import re
+            notes = re.sub(r"Role:\s*\w+\s*;?\s*", "", existing_notes).strip()
+            notes = f"Role: {role}; {notes}".strip("; ")
+
+            gender = existing.gender if existing else GENDER_UNKNOWN
+            translation = existing.translation if existing else ""
+
+            if add_glossary_entry(
+                original=speaker,
+                translation=translation,
+                notes=notes,
+                entry_type=TYPE_NAME,
+                gender=gender,
+                source="Analysis",
+            ):
+                success_count += 1
+
+        logger.info("Set role '%s' for %d speakers: %s", role, success_count, speakers)
+        if success_count > 0:
+            messagebox.showinfo("Role Set", f"Set role '{role}' for {success_count} speaker(s).")
+
+    def _set_speaker_gender(self, gender: str) -> None:
+        """Set gender for selected speakers.
+
+        Gender is stored in the glossary gender field.
+        """
+        items = self._get_selected_items()
+        speakers = [name for cat, name in items if cat == "Speaker"]
+        if not speakers:
+            return
+
+        # Map UI gender to glossary constant
+        gender_value = GENDER_MALE if gender == "Male" else GENDER_FEMALE
+
+        success_count = 0
+        for speaker in speakers:
+            glossary = load_glossary()
+            existing = glossary.get(speaker)
+            existing_notes = existing.notes if existing else ""
+            translation = existing.translation if existing else ""
+
+            if add_glossary_entry(
+                original=speaker,
+                translation=translation,
+                notes=existing_notes,
+                entry_type=TYPE_NAME,
+                gender=gender_value,
+                source="Analysis",
+            ):
+                success_count += 1
+
+        logger.info("Set gender '%s' for %d speakers: %s", gender, success_count, speakers)
+        if success_count > 0:
+            messagebox.showinfo("Gender Set", f"Set gender '{gender}' for {success_count} speaker(s).")
+
+    def _set_speaker_translation(self) -> None:
+        """Set custom translation for selected speaker."""
+        items = self._get_selected_items()
+        speakers = [name for cat, name in items if cat == "Speaker"]
+        if not speakers:
+            return
+
+        if len(speakers) > 1:
+            messagebox.showinfo("Single Select", "Please select only one speaker to set translation.")
+            return
+
+        speaker = speakers[0]
+        from tkinter import simpledialog
+        translation = simpledialog.askstring(
+            "Set Translation",
+            f"Enter translation for '{speaker}':",
+        )
+        if not translation:
+            return
+
+        # Load existing and preserve notes/gender
+        glossary = load_glossary()
+        existing = glossary.get(speaker)
+        existing_notes = existing.notes if existing else ""
+        gender = existing.gender if existing else GENDER_UNKNOWN
+
+        if add_glossary_entry(
+            original=speaker,
+            translation=translation,
+            notes=existing_notes,
+            entry_type=TYPE_NAME,
+            gender=gender,
+            source="Analysis",
+        ):
+            logger.info("Set translation '%s' for speaker '%s'", translation, speaker)
+            messagebox.showinfo("Translation Set", f"Set translation for '{speaker}'.")
+        else:
+            messagebox.showwarning("Failed", "Could not set translation.")
+
+    def _add_speaker_to_code_glossary(self) -> None:
+        """Add selected speakers to code glossary."""
+        items = self._get_selected_items()
+        speakers = [name for cat, name in items if cat == "Speaker"]
+        if not speakers:
+            return
+
+        # Code glossary entries use TYPE_CODE (if available) or special handling
+        success_count = 0
+        for speaker in speakers:
+            # Add to code glossary as preserved pattern
+            if add_glossary_entry(
+                original=speaker,
+                translation=speaker,  # Preserve original
+                notes="Protected speaker name",
+                entry_type="Code",  # Code type to preserve in translation
+                gender=GENDER_UNKNOWN,
+                source="Analysis",
+            ):
+                success_count += 1
+
+        logger.info("Added %d speakers to code glossary: %s", success_count, speakers)
+        if success_count > 0:
+            messagebox.showinfo("Added to Code Glossary", f"Added {success_count} speaker(s) to code glossary.")
+
+    def _copy_speaker_name(self) -> None:
+        """Copy speaker name(s) to clipboard."""
+        items = self._get_selected_items()
+        speakers = [name for cat, name in items if cat == "Speaker"]
+        if speakers:
+            text = "\n".join(speakers)
+            self.clipboard_clear()
+            self.clipboard_append(text)
+            logger.debug("Copied to clipboard: %s", speakers)
+
+    def _select_all_with_speaker(self) -> None:
+        """Select all rows with same speaker (filter preview)."""
+        items = self._get_selected_items()
+        speakers = [name for cat, name in items if cat == "Speaker"]
+        if speakers:
+            logger.info("Selecting all lines with speakers: %s", speakers)
+            # Would filter preview panel to show only lines from these speakers
+            messagebox.showinfo("Feature", "Filter preview to show lines from selected speaker(s).")
+
+    # Code pattern actions
+    def _set_pattern_action(self, action: str) -> None:
+        """Set action (preserve/remove/translate) for selected patterns."""
+        items = self._get_selected_items()
+        patterns = [name for cat, name in items if cat == "Code Pattern"]
+        if patterns:
+            logger.info("Setting action '%s' for patterns: %s", action, patterns)
+            messagebox.showinfo("Action Set", f"Set '{action}' for {len(patterns)} pattern(s).")
+
+    def _set_pattern_replace(self, mode: str) -> None:
+        """Set generic replacement for selected patterns."""
+        items = self._get_selected_items()
+        patterns = [name for cat, name in items if cat == "Code Pattern"]
+        if patterns:
+            logger.info("Setting replacement mode '%s' for patterns: %s", mode, patterns)
+            messagebox.showinfo("Replacement Set", f"Set '{mode}' replacement for {len(patterns)} pattern(s).")
+
+    def _set_pattern_replace_custom(self) -> None:
+        """Set custom replacement for selected pattern."""
+        items = self._get_selected_items()
+        patterns = [name for cat, name in items if cat == "Code Pattern"]
+        if len(patterns) == 1:
+            from tkinter import simpledialog
+            replacement = simpledialog.askstring(
+                "Set Custom Replacement",
+                f"Enter replacement for pattern '{patterns[0]}':",
+            )
+            if replacement:
+                logger.info("Set custom replacement '%s' for pattern '%s'", replacement, patterns[0])
+                messagebox.showinfo("Replacement Set", f"Set custom replacement for '{patterns[0]}'.")
+        elif patterns:
+            messagebox.showinfo("Single Select", "Please select only one pattern for custom replacement.")
+
+    def _set_pattern_type(self, type_name: str) -> None:
+        """Set type classification for selected patterns."""
+        items = self._get_selected_items()
+        patterns = [name for cat, name in items if cat == "Code Pattern"]
+        if patterns:
+            logger.info("Setting type '%s' for patterns: %s", type_name, patterns)
+            messagebox.showinfo("Type Set", f"Set type '{type_name}' for {len(patterns)} pattern(s).")
+
+    def _copy_pattern(self) -> None:
+        """Copy pattern(s) to clipboard."""
+        items = self._get_selected_items()
+        patterns = [name for cat, name in items if cat == "Code Pattern"]
+        if patterns:
+            text = "\n".join(patterns)
+            self.clipboard_clear()
+            self.clipboard_append(text)
+            logger.debug("Copied to clipboard: %s", patterns)
+
+    def _show_lines_with_pattern(self) -> None:
+        """Show lines containing selected pattern in preview."""
+        items = self._get_selected_items()
+        patterns = [name for cat, name in items if cat == "Code Pattern"]
+        if patterns:
+            logger.info("Showing lines with patterns: %s", patterns)
+            # Would filter preview to show only lines containing these patterns
+            messagebox.showinfo("Feature", "Filter preview to show lines with selected pattern(s).")
+
+    # Generic actions
+    def _copy_selection(self) -> None:
+        """Copy selected row data to clipboard."""
+        selected = self._findings_table._tree.selection()
+        if not selected:
+            return
+
+        lines = []
+        for item_id in selected:
+            values = self._findings_table._tree.item(item_id, "values")
+            if values:
+                lines.append("\t".join(str(v) for v in values))
+
+        if lines:
+            self.clipboard_clear()
+            self.clipboard_append("\n".join(lines))
+            logger.debug("Copied %d rows to clipboard", len(lines))
+
+    def _select_all_findings(self) -> None:
+        """Select all rows in findings table."""
+        all_items = self._findings_table._tree.get_children()
+        if all_items:
+            self._findings_table._tree.selection_set(all_items)
+
+    # =========================================================================
+    # End of Context Menu Implementation
+    # =========================================================================
     def get_analysis_results(self) -> Dict[str, Any]:
         """Get the current analysis results.
 

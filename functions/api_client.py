@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     # For type checking only; avoids import errors at runtime when package is missing.
     from openai import OpenAI, APIError, RateLimitError, APITimeoutError
     import openai
+    from .batch_tracker import BatchJob
 else:
     # Try to import openai at runtime; if it's not installed, provide safe fallbacks.
     try:

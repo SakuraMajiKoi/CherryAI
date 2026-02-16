@@ -9410,13 +9410,13 @@ python -m pytest CherryAI/dev/test_pov_inference.py -v --timeout=10
 python -m pytest CherryAI/dev/test_consistency.py -v --timeout=10
 ```
 
-### Phase 17: New Infrastructure (331 tests)
+### Phase 17: New Infrastructure (339 tests)
 
-Phase 17 adds 8 new test files covering batch API support, multi-key management,
+Phase 17 adds 9 new test files covering batch API support, multi-key management,
 named API profiles, additional file formats, usage analytics, agent-assisted modes,
 estimation engine, and i18n/tooltips.
 
-**Baseline after Phase 17:** 5611 passed, 25 skipped
+**Baseline after Phase 17:** 5619 passed, 25 skipped
 
 #### test_batch_api.py (41 tests)
 
@@ -9565,4 +9565,98 @@ python -m pytest CherryAI/dev/test_i18n.py -v --timeout=10
 
 ```bash
 python -m pytest CherryAI/dev/test_session_persistence.py -v --timeout=10
+```
+
+#### Table Batch Insertion (test_table_batch_insert.py, 8 tests)
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestBatchInsertVersionTracking | 5 | Version initialization, refresh increments version, stale batch skipped, current version proceeds, multiple refresh cancels previous |
+| TestBatchInsertSignature | 1 | Version parameter in method signature |
+| TestTableRowDeduplication | 2 | Row IDs unique, Tcl/Tk duplicate detection |
+
+```bash
+python -m pytest CherryAI/dev/test_table_batch_insert.py -v --timeout=10
+```
+
+---
+
+### Phase 58-59 Test Files
+
+#### test_auto_pipeline.py (35 tests) - Phase 58
+
+Tests for automatic pipeline orchestration.
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestPipelineLevel | 2 | Level values, level comparison |
+| TestPipelineResult | 2 | Default values, error result |
+| TestPipelineContext | 2 | Context creation, context with options |
+| TestAutoPipeline | 6 | Manual level, analyze level, step sequence, level cutoff, error handling, skip existing |
+| TestPipelineError | 2 | Error properties, error formatting |
+| TestConvenienceFunctions | 3 | Run auto pipeline, level descriptions, unknown level |
+| TestInferencePopulation | 2 | Infer speakers, no duplicates |
+| TestMockTranslationLevel | 4 | Level value, runs all steps, copies source, preserves existing |
+| TestQAValidation | 2 | Empty translations, identical source/target |
+| TestPipelineSummary | 3 | Summary includes level, counts lines, result has summary field |
+| TestManifestPipelineRecording | 7 | Execution time field, time recorded, manifest recording, level, steps, success, error |
+
+```bash
+python -m pytest CherryAI/dev/test_auto_pipeline.py -v --timeout=10
+```
+
+#### test_analysis_language.py (37 tests) - Phase 59.1, 59.2, 59.7
+
+Tests for project language detection, aggressive dedup projection, and ignored patterns.
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestHiraganaKatakanaDetection | 4 | Hiragana detected, katakana detected, kanji not kana, latin not kana |
+| TestCJKCharacterDetection | 3 | Kanji is CJK, kana not CJK, hangul not CJK |
+| TestHangulDetection | 3 | Hangul detected, kanji not hangul, kana not hangul |
+| TestClassifyCJKLine | 6 | Japanese has kana, Chinese-only no kana, Korean classified, Korean excluded from threshold, latin returns none, empty returns none |
+| TestProjectLanguageDetection | 8 | Below threshold is Japanese, above threshold is Chinese, threshold flag, pure Japanese, mixed project, Korean excluded, English unknown, Korean dominant |
+| TestProjectLanguageResultFields | 1 | Result has all fields |
+| TestAggressiveDedupProjection | 6 | Empty lines zeros, all unique, all duplicates, numeric normalization, display text format, mixed content |
+| TestIgnoredPatterns | 6 | Set ignored patterns, add pattern, remove pattern, filter removes matches, filter with no ignored, empty patterns list |
+
+```bash
+python -m pytest CherryAI/dev/test_analysis_language.py -v --timeout=10
+```
+
+#### test_analysis_context_menu.py (19 tests) - Phase 59.3
+
+Tests for category-aware context menu on Findings Table.
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestContextMenuCategoryDetection | 4 | Speaker category, code pattern category, mixed categories, single category not mixed |
+| TestContextMenuOptions | 3 | Speaker menu glossary option, code pattern preserve option, generic menu basic options |
+| TestSpeakerRoles | 2 | All roles available, role storage format |
+| TestGenderOptions | 2 | Gender options available, gender storage format |
+| TestPatternActions | 2 | Pattern actions available, pattern types available |
+| TestMixedSelectionBehavior | 2 | Mixed selection shows generic, single overview shows generic |
+| TestSpeakerTruncation | 4 | Truncation threshold, truncation applies when exceeded, no truncation under limit, truncation message format |
+
+```bash
+python -m pytest CherryAI/dev/test_analysis_context_menu.py -v --timeout=10
+```
+
+#### test_analysis_actions.py (16 tests) - Phase 59.4, 59.5
+
+Tests for speaker and code pattern context menu actions.
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestAddSpeakerToGlossary | 2 | Add single speaker, add multiple speakers |
+| TestSetSpeakerRole | 3 | Role note format, role with existing notes, role replaces old role |
+| TestSetSpeakerGender | 2 | Gender male value, gender female value |
+| TestSetSpeakerTranslation | 1 | Translation stored |
+| TestSpeakerMultiSelect | 2 | Bulk role assignment, bulk gender assignment |
+| TestAddToCodeGlossary | 1 | Speaker protected in code glossary |
+| TestPatternActions | 3 | Preserve action default, action options, type options |
+| TestPatternMultiSelect | 2 | Bulk action assignment, bulk type assignment |
+
+```bash
+python -m pytest CherryAI/dev/test_analysis_actions.py -v --timeout=10
 ```

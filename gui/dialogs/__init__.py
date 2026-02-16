@@ -35,6 +35,10 @@ from CherryAI.gui.dialogs.project_dialog import (
     LoadManifestDialog,
 )
 
+from CherryAI.gui.dialogs.input_dialog import (
+    UnifiedInputDialog,
+)
+
 __all__ = [
     "GlobalOptionsDialog",
     "OptionSection",
@@ -60,4 +64,6 @@ __all__ = [
     # TASK 19: Project dialogs
     "ProjectNameDialog",
     "LoadManifestDialog",
+    # PHASE 58.1: Unified input dialog
+    "UnifiedInputDialog",
 ]

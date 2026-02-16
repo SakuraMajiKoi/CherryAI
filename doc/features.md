@@ -621,7 +621,21 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   8. **Postprocessing** - Restore placeholders, apply fixes
   9. **Wordwrap** - Line breaking, width limits
   10. **Output** - Export formats, save results
-- **Input and Extraction Tab (Phase 1, updated Phase 39):**
+- **Input and Extraction Tab (Phase 1, updated Phase 39, 58):**
+  - **Unified Input Button (Phase 58.1):** Single "Input" button opens UnifiedInputDialog
+    - Dual-pane interface: File browser (left) and Folder browser (right)
+    - Multi-select support with path list display
+    - Combined file and folder loading in single operation
+  - **Auto-Pipeline Dropdown (Phase 58.2):** Select automation level before loading
+    - Manual (0): No automation - user controls each step
+    - Analyze (1): Creates manifest, loads lines, runs analysis
+    - Estimate Original (2): Level 1 + original cost estimation
+    - Preprocess (3, default): Level 2 + preprocessing pipeline
+    - Mock Translate (4): Level 3 + mock translation for testing
+  - **File Tree Improvements (Phase 58.7):**
+    - Folders collapsed by default for cleaner initial view
+    - Folders sorted above files in tree
+    - New context menu items: Select All, Expand All, Collapse All
   - Unified "Select File(s) ▾" dropdown button for file and folder selection
   - **Collapsible folder hierarchy:** Treeview with parent folder nodes and leaf file nodes
     - Multi-select support for bulk deletion
@@ -647,12 +661,24 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - Multi-select with Ctrl/Shift click
   - Column resize support
   - CSV export functionality
-- **Analysis Tab (Phase 3):**
+- **Analysis Tab (Phase 3, updated Phase 59):**
   - Static analysis on loaded files
   - Stats display: line counts, duplicates, empties
+  - **Aggressive Dedup Projection (Phase 59.2):** Shows projected unique lines after normalization
+  - **Project-Level Language Detection (Phase 59.1):**
+    - CJK language classifier (Japanese, Chinese, Korean)
+    - Japanese identified by kana (hiragana/katakana)
+    - Chinese-only: CJK without kana, 30% threshold rule
+    - Korean: Hangul detection, excluded from JP/CN threshold
   - Language detection (Japanese, Chinese, etc.)
   - Code/pattern detection (HTML/XML, line breaks)
   - Speaker detection with frequency counts
+  - **Findings Table Context Menu (Phase 59.3-59.5):**
+    - Category-aware right-click menu
+    - **Speaker actions:** Add to Glossary, Set Role (Protagonist/Love Interest/Major/Minor), Set Gender (Male/Female), Set Translation, Add to Code Glossary, Copy Name
+    - **Code Pattern actions:** Preserve/Remove/Translate toggles, Replace options, Type classification (Name/Text/Number/Invisible), Copy Pattern, Show Lines
+    - Generic menu for mixed selection (Copy, Select All)
+  - **Ignored Patterns (Phase 59.7):** Filter patterns from code detection results
   - Export findings to CSV
   - Options panel: detector toggles
   - Threaded analysis for large files

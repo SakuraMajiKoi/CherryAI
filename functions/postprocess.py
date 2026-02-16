@@ -1053,6 +1053,64 @@ def create_postprocess_manager(
     )
 
 
+def postprocess_manifest(manifest: Any) -> None:
+    """Apply postprocessing to manifest lines using default settings.
+
+    The function is deliberately defensive: it skips work when lines are
+    missing and tolerates partial manifest implementations used in tests.
+    """
+    lines = getattr(manifest, "lines", None)
+    if not lines:
+        return
+
+    originals: List[str] = []
+    translations: List[str] = []
+    for line in lines:
+        originals.append(
+            getattr(line, "source", None)
+            or getattr(line, "text", "")
+            or ""
+        )
+        translations.append(
+            getattr(line, "target", None)
+            or getattr(line, "translation", "")
+            or ""
+        )
+
+    manager = create_postprocess_manager()
+    batch_result = manager.process_batch(originals, translations)
+
+    postprocessed_lines = []
+    for line, result in zip(lines, batch_result.results):
+        recovered = result.recovered
+        postprocessed_lines.append(recovered)
+
+        if hasattr(line, "target"):
+            line.target = recovered
+        elif hasattr(line, "translation"):
+            line.translation = recovered
+        else:
+            setattr(line, "translation", recovered)
+
+        setattr(line, "postprocess_issues", result.issues)
+
+    try:
+        manifest.postprocessed_lines = postprocessed_lines
+    except Exception:
+        setattr(manifest, "postprocessed_lines", postprocessed_lines)
+
+    try:
+        manager.save_to_manifest(manifest)
+    except Exception:
+        pass
+
+    summary = manager.get_recovery_summary()
+    try:
+        manifest.postprocess_summary = summary
+    except Exception:
+        setattr(manifest, "postprocess_summary", summary)
+
+
 def get_recovery_type_description(recovery_type: RecoveryType) -> str:
     """Get a human-readable description of a recovery type.
     

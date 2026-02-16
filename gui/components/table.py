@@ -152,6 +152,7 @@ class SharedTable(ttk.Frame):
         self._checked_rows: set = set()
         self._filter_var = tk.StringVar()
         self._current_filter = ""
+        self._batch_insert_version = 0  # Track batch insertion version to cancel stale batches
 
         self._build_ui()
 
@@ -365,7 +366,14 @@ class SharedTable(ttk.Frame):
         TASK 43.2: Uses batch insertion for large datasets (>1000 rows).
         Rows are inserted in chunks of ``_BATCH_SIZE`` with periodic
         ``update_idletasks()`` to keep the UI responsive.
+        
+        Uses version tracking to cancel stale batch insertions when a new
+        refresh starts before a previous one completes.
         """
+        # Increment version to invalidate any pending batch insertions
+        self._batch_insert_version += 1
+        current_version = self._batch_insert_version
+        
         # Clear existing items
         for item in self._tree.get_children():
             self._tree.delete(item)
@@ -380,8 +388,8 @@ class SharedTable(ttk.Frame):
             # Small dataset: insert synchronously
             self._insert_rows(rows, visible_cols, 0)
         else:
-            # Large dataset: batch insert
-            self._batch_insert(rows, visible_cols, 0, batch_size)
+            # Large dataset: batch insert with version tracking
+            self._batch_insert(rows, visible_cols, 0, batch_size, current_version)
 
         self._update_status()
 
@@ -413,15 +421,28 @@ class SharedTable(ttk.Frame):
         visible_cols: list,
         offset: int,
         batch_size: int,
+        version: int,
     ) -> None:
-        """Insert a batch of rows and schedule the next batch (Task 43.2)."""
+        """Insert a batch of rows and schedule the next batch (Task 43.2).
+        
+        Args:
+            rows: All rows to insert.
+            visible_cols: Visible column definitions.
+            offset: Current offset in rows list.
+            batch_size: Number of rows per batch.
+            version: Batch insertion version for cancellation tracking.
+        """
+        # Check if this batch is stale (a newer refresh has started)
+        if version != self._batch_insert_version:
+            return  # Cancel this stale batch
+            
         end = min(offset + batch_size, len(rows))
         self._insert_rows(rows[offset:end], visible_cols, offset)
 
         if end < len(rows):
-            # Schedule next batch (non-blocking)
+            # Schedule next batch (non-blocking) with version check
             self.after(1, lambda: self._batch_insert(
-                rows, visible_cols, end, batch_size,
+                rows, visible_cols, end, batch_size, version,
             ))
             self._status_label.configure(
                 text=f"Loading {end}/{len(rows)} rows..."

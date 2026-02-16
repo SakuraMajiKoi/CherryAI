@@ -53,6 +53,67 @@ import difflib
 from dataclasses import dataclass, field
 import os
 
+logger = logging.getLogger(__name__)
+
+# TASK 59.7: Module-level storage for ignored patterns during analysis
+# These patterns will be excluded from code pattern detection results
+_ignored_patterns: set[str] = set()
+
+
+def set_ignored_patterns(patterns: List[str]) -> None:
+    """Set patterns to ignore during analysis.
+
+    Args:
+        patterns: List of pattern strings to ignore.
+    """
+    global _ignored_patterns
+    _ignored_patterns = set(patterns) if patterns else set()
+    logger.debug("Set %d ignored patterns for analysis", len(_ignored_patterns))
+
+
+def get_ignored_patterns() -> List[str]:
+    """Get the current list of ignored patterns.
+
+    Returns:
+        List of pattern strings currently being ignored.
+    """
+    return list(_ignored_patterns)
+
+
+def add_ignored_pattern(pattern: str) -> None:
+    """Add a single pattern to the ignore list.
+
+    Args:
+        pattern: Pattern string to ignore.
+    """
+    _ignored_patterns.add(pattern)
+    logger.debug("Added ignored pattern: %s", pattern)
+
+
+def remove_ignored_pattern(pattern: str) -> None:
+    """Remove a pattern from the ignore list.
+
+    Args:
+        pattern: Pattern string to remove from ignore list.
+    """
+    _ignored_patterns.discard(pattern)
+    logger.debug("Removed ignored pattern: %s", pattern)
+
+
+def filter_ignored_patterns(code_items: Dict[str, int]) -> Dict[str, int]:
+    """Filter out ignored patterns from code items.
+
+    Args:
+        code_items: Dictionary of code pattern -> count.
+
+    Returns:
+        Filtered dictionary without ignored patterns.
+    """
+    if not _ignored_patterns:
+        return code_items
+    return {k: v for k, v in code_items.items() if k not in _ignored_patterns}
+
+
 # Centralized aggressive dedup normalization from dedup module (fallback if unavailable)
 aggressive_normalize_line: Optional[Callable[[str], str]] = None
 try:
@@ -535,6 +596,182 @@ def _try_load_encoder() -> Optional[Any]:
         return None
 
 
+# =============================================================================
+# PHASE 59.1: PROJECT-LEVEL LANGUAGE DETECTION
+# =============================================================================
+
+
+def is_hiragana_or_katakana(char: str) -> bool:
+    """Check if a character is hiragana or katakana (Japanese kana).
+
+    PHASE 59.1: Used for project-level Japanese/Chinese classification.
+    Japanese has unique kana; Chinese does not.
+
+    Args:
+        char: Single character to check.
+
+    Returns:
+        True if character is hiragana or katakana.
+    """
+    o = ord(char)
+    # Hiragana: U+3040-U+309F
+    # Katakana: U+30A0-U+30FF
+    return (0x3040 <= o <= 0x309F) or (0x30A0 <= o <= 0x30FF)
+
+
+def is_cjk_character(char: str) -> bool:
+    """Check if a character is CJK unified ideograph (kanji/hanzi).
+
+    Args:
+        char: Single character to check.
+
+    Returns:
+        True if character is CJK unified ideograph.
+    """
+    o = ord(char)
+    # CJK Unified Ideographs: U+4E00-U+9FFF
+    # CJK Unified Ideographs Extension A: U+3400-U+4DBF
+    return (0x4E00 <= o <= 0x9FFF) or (0x3400 <= o <= 0x4DBF)
+
+
+def is_hangul(char: str) -> bool:
+    """Check if a character is Korean Hangul.
+
+    Args:
+        char: Single character to check.
+
+    Returns:
+        True if character is Hangul.
+    """
+    o = ord(char)
+    # Hangul Syllables: U+AC00-U+D7AF
+    # Hangul Jamo: U+1100-U+11FF
+    return (0xAC00 <= o <= 0xD7AF) or (0x1100 <= o <= 0x11FF)
+
+
+def classify_cjk_line(line: str) -> Optional[str]:
+    """Classify a line as Japanese, Chinese-only, Korean, or None.
+
+    PHASE 59.1: Project-level classification logic.
+    - Japanese: Contains ANY hiragana or katakana (regardless of kanji)
+    - Chinese-only: Contains CJK but NO hiragana or katakana
+    - Korean: Contains Hangul only (handled separately)
+    - None: No CJK characters
+
+    Args:
+        line: Line of text to classify.
+
+    Returns:
+        'japanese', 'chinese_only', 'korean', or None.
+    """
+    has_kana = False
+    has_cjk = False
+    has_hangul = False
+
+    for char in line:
+        if is_hiragana_or_katakana(char):
+            has_kana = True
+        elif is_cjk_character(char):
+            has_cjk = True
+        elif is_hangul(char):
+            has_hangul = True
+
+    # Classification priority
+    if has_kana:
+        return "japanese"
+    if has_hangul:
+        return "korean"
+    if has_cjk:
+        return "chinese_only"
+    return None
+
+
+@dataclass
+class ProjectLanguageResult:
+    """Result of project-level language detection.
+
+    PHASE 59.1: Contains classification details and threshold information.
+    """
+
+    dominant_language: str  # "Japanese", "Chinese", "Korean", or "Unknown"
+    threshold_applied: bool  # Whether Chinese lines were reclassified
+    chinese_percentage: float  # Percentage of CJK lines that are Chinese-only
+    japanese_lines: int  # Count of lines with kana
+    chinese_only_lines: int  # Count of CJK lines without kana
+    korean_lines: int  # Count of Hangul lines
+    total_cjk_lines: int  # Total CJK lines analyzed
+
+
+def detect_project_language(
+    lines: List[str],
+    threshold: float = 0.30,
+) -> ProjectLanguageResult:
+    """Detect the dominant language of a project using threshold rule.
+
+    PHASE 59.1: Project-level language detection.
+    - Classifies each CJK line as Japanese, Chinese-only, or Korean
+    - Applies 30% threshold: if chinese_percentage < 0.30, project is Japanese
+
+    Args:
+        lines: List of text lines to analyze.
+        threshold: Chinese percentage threshold (default 0.30).
+
+    Returns:
+        ProjectLanguageResult with classification details.
+    """
+    japanese_lines = 0
+    chinese_only_lines = 0
+    korean_lines = 0
+
+    for line in lines:
+        classification = classify_cjk_line(line)
+        if classification == "japanese":
+            japanese_lines += 1
+        elif classification == "chinese_only":
+            chinese_only_lines += 1
+        elif classification == "korean":
+            korean_lines += 1
+
+    total_cjk = japanese_lines + chinese_only_lines
+    # Note: Korean is handled separately, not included in CJK threshold
+
+    # Calculate Chinese percentage (excluding Korean)
+    if total_cjk > 0:
+        chinese_percentage = chinese_only_lines / total_cjk
+    else:
+        chinese_percentage = 0.0
+
+    # Determine dominant language
+    threshold_applied = False
+    if total_cjk == 0 and korean_lines == 0:
+        dominant_language = "Unknown"
+    elif korean_lines > total_cjk:
+        dominant_language = "Korean"
+    elif chinese_percentage < threshold:
+        # Below threshold: project is Japanese (even if some Chinese-only lines exist)
+        dominant_language = "Japanese"
+        if chinese_only_lines > 0:
+            threshold_applied = True
+            logger.info(
+                "Project classified as Japanese (%.1f%% Chinese-only < %.0f%% threshold)",
+                chinese_percentage * 100,
+                threshold * 100,
+            )
+    else:
+        # Above threshold: project is Chinese
+        dominant_language = "Chinese"
+
+    return ProjectLanguageResult(
+        dominant_language=dominant_language,
+        threshold_applied=threshold_applied,
+        chinese_percentage=chinese_percentage,
+        japanese_lines=japanese_lines,
+        chinese_only_lines=chinese_only_lines,
+        korean_lines=korean_lines,
+        total_cjk_lines=total_cjk,
+    )
+
+
 def _has_japanese(text: str) -> bool:
     # Hiragana, Katakana, CJK Unified Ideographs, CJK Ext-A
     for ch in text:
@@ -619,6 +856,55 @@ def _normalize_for_dedup(line: str) -> str:
     s = re.sub(r"[0-9０-９]+", " <NUM> ", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
+
+
+def calculate_aggressive_dedup_projection(
+    lines: List[str],
+) -> Dict[str, Any]:
+    """Calculate projected line count after aggressive deduplication.
+
+    Args:
+        lines: List of text lines to analyze.
+
+    Returns:
+        Dictionary with keys:
+            - original_count: Total number of lines
+            - unique_count: Number of unique lines after normalization
+            - reduction_percent: Percentage reduction (0-100)
+            - display_text: Formatted display string
+    """
+    if not lines:
+        return {
+            "original_count": 0,
+            "unique_count": 0,
+            "reduction_percent": 0.0,
+            "display_text": "Aggressive Dedup: 0 lines → 0 unique (0% reduction)",
+        }
+
+    original_count = len(lines)
+    normalized_set: set[str] = set()
+    for line in lines:
+        normalized = _normalize_for_dedup(line)
+        if normalized:
+            normalized_set.add(normalized)
+
+    unique_count = len(normalized_set)
+    if original_count > 0:
+        reduction_percent = ((original_count - unique_count) / original_count) * 100
+    else:
+        reduction_percent = 0.0
+
+    display_text = (
+        f"Aggressive Dedup: {original_count:,} lines → "
+        f"{unique_count:,} unique ({reduction_percent:.1f}% reduction)"
+    )
+
+    return {
+        "original_count": original_count,
+        "unique_count": unique_count,
+        "reduction_percent": round(reduction_percent, 1),
+        "display_text": display_text,
+    }
 
 
 def count_tokens(text: str) -> Tuple[int, str]:
@@ -1572,7 +1858,8 @@ def analyze_file(input_path: Path, logs_dir: Path) -> Dict[str, Any]:
     # Add pronoun and honorific data to summary for glossary update
     summary["speaker_pronoun_counts"] = speaker_pronoun_counts
     summary["speaker_suffix_counts"] = speaker_suffix_counts
-    summary["code_items"] = code_items  # Add code segments with counts for glossary
+    # TASK 59.7: Filter out ignored patterns from code_items
+    summary["code_items"] = filter_ignored_patterns(code_items)
 
     # Create or update a manifest to persist original lines as part of analysis
     try:

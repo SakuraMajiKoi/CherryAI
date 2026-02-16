@@ -800,22 +800,27 @@ Each step is a tab in the main notebook. Steps can be navigated freely but follo
 
 ### Step 0: Input
 
-**Purpose**: Load source files and extract translatable text. This is where a project begins. Loading files can trigger the entire pipeline automatically based on configured settings.
+**Purpose**: Load source files and extract translatable text. This is where a project begins. Loading files triggers a configurable automatic pipeline that can run the entire workflow through to mock translation and estimation.
+
+**Implementation Status:** 🔲 Phase 58 PLANNED — Automatic Pipeline on File Load
 
 **Design Goal**: Extract only visible text from any unencrypted text file that a user can theoretically read. Code not part of the text and any other non-translatable content should be excluded. In the final step (Output), translated text is injected into copies of the original files to replace the original text (non-destructive).
+
+**Note**: This step was previously named "Input and Extraction" — renamed to simply "Input" for clarity.
 
 #### Widgets
 
 | Widget | Type | Function |
 |--------|------|----------|
 | **Toolbar** | | |
-| Select File(s) Button | Button | Unified file/folder selector (replaces Load Files and Load Folder) |
+| Input Button | Button | Unified file/folder selector — opens a single window supporting both file and folder selection |
 | Import Translations Button | Button | Import translations from another manifest (exact line matching) |
-| **Options Panel** | LabelFrame | Contains Encoding and Format dropdowns |
+| **Options Panel** | LabelFrame | Contains Encoding, Format, and Auto-Pipeline settings |
 | Encoding Dropdown | Combobox | Select file encoding (auto, utf-8, shift_jis, etc.). Default: auto |
 | Format Dropdown | Combobox | Override format detection (auto, txt, csv, json, rpgmaker, image, etc.). Default: auto |
+| Auto-Pipeline Dropdown | Combobox | Pipeline automation level (see Automatic Pipeline section) |
 | **Loaded Files Panel** | LabelFrame | Shows loaded files in a tree structure |
-| File Tree | Treeview | Collapsible folder hierarchy with files. Supports multi-select for bulk operations |
+| File Tree | Treeview | Collapsible folder hierarchy with files. Folders always appear above files within the same directory. Loaded files are collapsed (not expanded) by default. Supports multi-select for bulk operations |
 | **Preview Panel** | LabelFrame | Shows content of selected file |
 | Preview Tree | Treeview | Line numbers and content. Must properly render newlines (multi-line content) |
 
@@ -823,6 +828,7 @@ Each step is a tab in the main notebook. Steps can be navigated freely but follo
 - Load Manifest button → Use File → Open Project... menu instead
 - Clear All button → Use File → New Project menu instead
 - Manifest Label (below Preview) → Removed; manifest status shown in title bar
+- "Select File(s)" naming → Renamed to simply "Input"
 
 #### Options Panel Details
 
@@ -838,84 +844,133 @@ Each step is a tab in the main notebook. Steps can be navigated freely but follo
 - Game Engine Support: `rpgmaker` parses RPG Maker MV/MZ custom `.json` and `.js` files
 - Image Support: `image` triggers OCR pipeline (see image_translation_workflow.md)
 
-#### Select File(s) Button Behavior
+#### Input Button Behavior
 
-The unified selector replaces separate Load Files and Load Folder buttons:
+The Input button opens a **unified file and folder selection window** that combines both file and folder selection into a single interface:
 
-1. Opens a file dialog that accepts:
-   - Single file selection
-   - Multi-file selection (Ctrl+Click)
-   - Single folder selection
-   - Multi-folder selection
+**Window Design**:
+- Single modal window with dual-pane or tabbed interface
+- Left/top section: Folder tree browser for selecting directories
+- Right/bottom section: File list for selecting individual files
+- Both sections support multi-select (Ctrl+Click, Shift+Click)
+- "Add Selection" button adds current selection to the load queue without closing
+- "Load" button finalizes all selections and begins the loading pipeline
+- "Clear" button removes all pending selections
 
-2. Processing:
-   - For files: Load directly
-   - For folders: Recursively collect all supported files
-   - Respects Format filter (if not `auto`)
-   
-3. Displays a **progress window** during loading to show:
+**Selection Types**:
+- **Files**: Select one or more individual files
+- **Folders**: Select one or more folders (recursively loads all supported files within)
+- **Mixed**: Combine file and folder selections in a single load operation
+
+**Processing**:
+1. For files: Load directly
+2. For folders: Recursively collect all supported files
+3. Respects Format filter (if not `auto`)
+4. Shows a **progress window** during loading with:
    - Current file being loaded
    - Progress bar (files loaded / total files)
    - Cancel button to abort
 
-4. After loading:
-   - The containing folder is stored in the manifest as `source_root`
-   - All selected files/folders and their lines are saved to manifest
+**After Loading**:
+- The containing folder is stored in the manifest as `source_root`
+- All selected files/folders and their lines are saved to manifest
+- The Automatic Pipeline begins (based on Auto-Pipeline setting)
 
-#### Import Translations Button Behavior
+---
 
-**Purpose**: Import translations and processing results from another manifest into the current project. This enables reusing translations when source files are updated or when migrating between projects.
+#### Create New Translation Project Dialog
 
-**Workflow**:
-1. User clicks "Import Translations" button.
-2. File dialog opens to select a `.CherryAI.json` manifest file.
-3. The import function loads the target manifest and walks the current project's lines sequentially.
-4. For each line index (`idx`) in the current manifest:
-   a. Take the `orig` content of that line.
-   b. Search sequentially through the target manifest's `lines[]` for an **exact string match** on `orig`.
-   c. If found: copy **all other fields** from the matched target line entry and append them to the current line entry.
-   d. If not found: skip (line remains unchanged).
-5. Display a summary: "Imported X of Y lines. Z lines had no match."
+**Purpose**: Dialog shown when loading files into a new project (no existing manifest).
 
-**Matching Rules**:
-- Match is based on **exact content** of `lines[].orig` — character-for-character equality.
-- **Not concerned with line numbers**: Line 50 in the current project can match Line 200 in the target manifest.
-- **Not concerned with files**: Lines from `file_a.txt` can match lines originally from `file_b.txt`.
-- Sequential search: for each current line, the target manifest is searched from the beginning.
-- First match wins: if the target has duplicate lines, the first occurrence is used.
+**Size Requirement**: The dialog window must be sized large enough to display all buttons without truncation. Minimum dimensions: 500x300 pixels.
 
-**Fields Copied on Match**:
-All processing-related fields are copied to preserve the complete pipeline state:
-- `prepro` (preprocessed text)
-- `tl` (translation)
-- `edit{N}` (edit rounds)
-- `tlc{N}` (TLC rounds)
-- `preedit` (pre-edit result)
-- `postpro` (postprocessed text)
-- `wordwr` (wordwrapped text)
-- `overwrite` (overwrite text)
-- Any other per-line metadata present in the target entry
+**Fields**:
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| Project Name | Entry | Yes | User must provide the project name. No auto-suggestion — field starts empty |
+| Source Files | Label | Display | Shows the list of files/folders being loaded (read-only) |
+| Auto-Pipeline | Combobox | No | Select automation level for this load |
 
-**Use Cases**:
-- **Game patch update**: Source files changed slightly; most lines are identical. Import preserves existing translations for unchanged lines.
-- **Project migration**: Moving translations from one project structure to another.
-- **Translation merge**: Combining translations from multiple partial projects.
+**Behavior**:
+- Dialog blocks file loading until project name is provided
+- If Cancel is clicked, the entire load operation is aborted
+- If a manifest already exists for these files (`source_root`), this dialog is skipped
+- Project name validation: non-empty, valid filename characters only
 
-**Manifest Key**: Import action is logged in `step_state.Input.last_import` with `{source_manifest, lines_matched, lines_total, timestamp}`.
+---
+
+#### Automatic Pipeline on File Load
+
+**Purpose**: When files are loaded and a manifest is created, automatically execute a sequence of processing steps up to a configurable endpoint. This enables a "load and show me results" workflow where the user immediately sees analysis, costs, and can begin translation.
+
+**Pipeline Levels** (Auto-Pipeline Dropdown):
+
+| Level | Name | Description | Stops After |
+|-------|------|-------------|-------------|
+| 0 | Manual | No automation — only load files | Step 1 (lines loaded) |
+| 1 | Analyze | Run analysis only | Step 2 (analysis results) |
+| 2 | Estimate Original | Run analysis + estimate original tokens | Step 3 (original estimation) |
+| 3 | Preprocess (Default) | Full preprocessing with defaults | Step 4 (preprocessed, estimated) |
+| 4 | Mock Translate | Full pipeline with mock translation | Step 5 (mock translated, validated) |
+
+**Default**: Level 3 (Preprocess) — provides full cost estimation before any API calls.
+
+**Pipeline Sequence** (Steps 1-8):
+
+When files are loaded and a project is created, the following steps execute automatically up to the configured level:
+
+| Step | Name | Action | Skipped When |
+|------|------|--------|--------------|
+| 1 | Create Manifest | Show Project Name dialog. User must provide name. No auto-suggestion. Save manifest file. | Manifest already exists for `source_root` |
+| 2 | Load Lines | Extract lines from all loaded files. Store in manifest `lines[].orig`. | Lines already loaded |
+| 3 | Load Defaults | Apply default values from `config/defaults.ini` to manifest fields. | Defaults already applied |
+| 4 | Run Analysis | Execute `functions/analysis.py`. Store results in manifest (`Analysis.*` fields). | Auto-Pipeline Level < 1 |
+| 5 | Populate Inferences | (Optional) Populate Glossary, Code Database, and Point of View based on analysis inference. See Options below. | `auto_inference` disabled |
+| 6 | Run Original Estimation | Calculate input/output tokens for original lines. Record in manifest. Mark Costs Step first tick. | Auto-Pipeline Level < 2 |
+| 7 | Run Default Preprocessing | Apply default-enabled preprocessing rules (Deduplication, Ellipsis, Symbol, PROT compression). | Auto-Pipeline Level < 3 |
+| 8 | Run Preprocessed Estimation | Calculate input/output tokens for preprocessed lines. Record in manifest. Mark Costs Step second tick. | Auto-Pipeline Level < 3 |
+
+**Mock Translation (Level 4 Extension)**:
+
+When Auto-Pipeline Level is 4, additional steps execute after Step 8:
+
+| Step | Name | Action |
+|------|------|--------|
+| 9 | Mock Translation | Run translation using Mock Translation engine (no API calls) |
+| 10 | Run QA Validation | Execute validation rules on mock-translated output |
+| 11 | Run Postprocessing | Apply postprocessing restoration to mock output |
+| 12 | Summary | Display pipeline completion summary with timing and statistics |
+
+**Purpose of Mock Level**: Enables full pipeline testing without API costs. Users can verify that preprocessing, postprocessing, and validation work correctly before committing to real translation.
+
+---
+
+#### Inference Population Options (Step 5)
+
+When `auto_inference` is enabled (Global Option), the pipeline offers several inference sub-options:
+
+| Option | Source | Target | Description |
+|--------|--------|--------|-------------|
+| `infer_speakers_to_glossary` | Analysis speakers | Glossary.project_entries[] | Add detected speakers as glossary entries with empty Translation |
+| `infer_codes_to_database` | Analysis code_patterns | CodeGlossary[] | Add detected code patterns to Code Database with default "Preserve" action |
+| `infer_pov` | Analysis non-dialogue | POVResult | Detect Point of View (1st/2nd/3rd person) for prompt context |
+| `infer_gender` | Glossary entries | CharacterNotes[].gender | Use heuristics or LLM to infer character gender from names/context |
+
+**Manifest Keys**: Each inference option has a corresponding boolean in `Options.AutoInference.*`.
+
+**Future Enhancement**: Additional inference options may include `infer_style` (detect appropriate style preset from sample text) and `infer_tone` (detect appropriate tone preset).
+
+---
 
 #### Loaded Files Panel Details
 
 **File Tree Structure**:
 - Files organized by folder hierarchy
-- Folders are collapsible nodes
+- **Folders always appear above files** within the same directory level
+- **Collapsed by default**: When files are loaded, the tree shows folders collapsed, not expanded
 - Files show: filename, line count, format icon
 - Multi-select enabled for bulk delete operations
-- Context menu (right-click): Remove Selected, Select All in Folder
-
-**Missing Features to Implement**:
-- Collapsible folder groups
-- Multi-select support (currently single-select only)
-- Folder-level delete (delete all files in a folder at once)
+- Context menu (right-click): Remove Selected, Select All in Folder, Expand All, Collapse All
 
 #### Preview Panel Details
 
@@ -988,9 +1043,17 @@ All processing-related fields are copied to preserve the complete pipeline state
 
 ---
 
-### Step 1: Analysis
+### Step 1: Analysis - Phase 59 PLANNED
 
-**Purpose**: Analyze loaded content for translation planning. This step primarily infers information and displays it to users to support decisions about preprocessing, glossary, and translation settings.
+**Purpose**: Analyze loaded content for translation planning. This step primarily infers information and displays it to users to support decisions about preprocessing, glossary, and translation settings. With the Phase 59 enhancements, Analysis provides actionable contextual controls that allow users to populate glossaries and configure preprocessing directly from the Findings Table via category-aware right-click menus.
+
+**Implementation Status**:
+- Core analysis: ✓ Implemented
+- Statistics panel: ✓ Implemented, Phase 59 enhances
+- Findings table: ✓ Implemented, Phase 59 adds contextual right-click actions
+- Language detection: ✓ Implemented, Phase 59 adds project-level Chinese threshold
+- Speaker detection: ✓ Implemented
+- Code pattern detection: ✓ Implemented
 
 #### Widgets
 
@@ -998,8 +1061,259 @@ All processing-related fields are copied to preserve the complete pipeline state
 |--------|------|----------|
 | Run Analysis Button | Button | Executes full analysis |
 | Export Button | Button | Exports findings to CSV |
-| Statistics Panel | Frame | Shows line counts, percentages |
-| Findings Table | SharedTable | Lists categorized findings |
+| Statistics Panel | Frame | Shows line counts, percentages, dedup projections |
+| View Selector | Combobox | (Optional) Switch between General/Speakers/Code views |
+| Findings Table | SharedTable | Lists all findings with category-aware right-click menu |
+
+#### Statistics Panel Details
+
+The Statistics Panel displays a summary of the analyzed content:
+
+| Statistic | Description |
+|-----------|-------------|
+| Total Lines | Count of all loaded lines |
+| Empty Lines | Lines with no content (whitespace only) |
+| Unique Lines | Count of distinct line contents |
+| Duplicate Lines | Lines that appear more than once |
+| **Projected Deduplication** | Lines remaining after aggressive deduplication |
+| Language Distribution | Detected languages with percentages |
+| **Dominant Language** | Project-level detected language (with threshold indicator) |
+
+**Projected Deduplication** (NEW - Phase 59):
+- Shows the projected line count if aggressive deduplication were applied
+- Format: "Aggressive Dedup: X lines → Y unique (Z% reduction)"
+- This is a **preview** — aggressive deduplication is applied optionally during Preprocessing (Step 4)
+- Helps users decide whether to enable aggressive deduplication
+
+---
+
+#### Language Detection Enhancement (Phase 59)
+
+**Project-Level Chinese/Japanese Classification**:
+
+Japanese and Chinese share many characters (kanji/hanzi), but Japanese uniquely has **hiragana** (ひらがな) and **katakana** (カタカナ) — collectively called "kana". Chinese has NO kana characters. Korean uses a distinct script (Hangul) and is handled separately.
+
+**Classification Logic** (Project-Level, NOT Per-Line):
+
+1. **Identify CJK Lines**: Find all lines containing CJK characters (Chinese hanzi, Japanese kanji/kana, or both)
+2. **Classify Each CJK Line**:
+   - **Japanese Line**: Contains ANY hiragana or katakana characters (regardless of kanji)
+   - **Chinese-Only Line**: Contains CJK characters but NO hiragana or katakana
+3. **Korean Exclusion**: Lines containing only Korean Hangul are classified separately and excluded from this threshold
+4. **Apply Threshold Rule**: If Chinese-only lines are **less than 30%** of total CJK lines:
+   - Mark the project's dominant language as "Japanese"
+   - Record that threshold reclassification was applied
+5. **Rationale**: Japanese text frequently uses kanji (Chinese characters) for vocabulary. A project with mostly Japanese text may have some lines that happen to contain only kanji with no kana — these should not cause the project to be misclassified as Chinese.
+
+**Implementation**:
+```python
+# In functions/analysis.py
+import unicodedata
+
+def is_hiragana_or_katakana(char: str) -> bool:
+    """Returns True if character is Japanese hiragana or katakana."""
+    name = unicodedata.name(char, '')
+    return 'HIRAGANA' in name or 'KATAKANA' in name
+
+def is_cjk_character(char: str) -> bool:
+    """Returns True if character is CJK unified ideograph."""
+    return '\u4e00' <= char <= '\u9fff'  # CJK Unified Ideographs block
+
+def classify_cjk_line(line: str) -> str | None:
+    """Classify a line as 'japanese', 'chinese_only', 'korean', or None."""
+    has_cjk = any(is_cjk_character(c) for c in line)
+    has_kana = any(is_hiragana_or_katakana(c) for c in line)
+    has_hangul = any('\uac00' <= c <= '\ud7af' for c in line)
+    
+    if has_hangul and not has_cjk and not has_kana:
+        return 'korean'
+    if has_kana:
+        return 'japanese'  # Any kana = definitely Japanese
+    if has_cjk:
+        return 'chinese_only'  # CJK with no kana = ambiguous, might be Chinese
+    return None
+
+def detect_project_language(lines: List[str]) -> Dict[str, Any]:
+    """Project-level language detection with Japanese/Chinese threshold."""
+    japanese_lines = 0
+    chinese_only_lines = 0
+    korean_lines = 0
+    
+    for line in lines:
+        classification = classify_cjk_line(line)
+        if classification == 'japanese':
+            japanese_lines += 1
+        elif classification == 'chinese_only':
+            chinese_only_lines += 1
+        elif classification == 'korean':
+            korean_lines += 1
+    
+    total_cjk_lines = japanese_lines + chinese_only_lines  # Exclude Korean
+    
+    # Apply threshold: if Chinese-only < 30% of CJK lines, treat as Japanese project
+    threshold_applied = False
+    dominant_language = "Unknown"
+    chinese_percentage = 0.0
+    
+    if total_cjk_lines > 0:
+        chinese_percentage = chinese_only_lines / total_cjk_lines
+        if chinese_percentage < 0.30:
+            # Project is Japanese (Chinese-only lines are just kanji-heavy Japanese)
+            dominant_language = "Japanese"
+            threshold_applied = chinese_only_lines > 0  # Only true if we reclassified some
+        else:
+            dominant_language = "Chinese"
+    
+    return {
+        'dominant_language': dominant_language,
+        'threshold_applied': threshold_applied,
+        'chinese_percentage': chinese_percentage,
+        'japanese_lines': japanese_lines,
+        'chinese_only_lines': chinese_only_lines,
+        'korean_lines': korean_lines,
+        'total_cjk_lines': total_cjk_lines
+    }
+```
+
+**Key Distinction**:
+- This is **project-level** classification, not per-line
+- A single line with only kanji and no kana is NOT automatically Chinese — it's "ambiguous"
+- The 30% threshold determines the **project's** dominant language
+- Once dominant language is determined, the Translation Step respects it for all lines
+
+**Manifest Storage**:
+- `Analysis.dominant_language: str` — "Japanese", "Chinese", or "Unknown"
+- `Analysis.threshold_applied: bool` — Whether Chinese-only lines were reclassified as Japanese
+- `Analysis.chinese_percentage: float` — Percentage of Chinese-only lines (before reclassification)
+- `Analysis.japanese_lines: int` — Lines with kana (definitely Japanese)
+- `Analysis.chinese_only_lines: int` — Lines with CJK but no kana
+- `Analysis.korean_lines: int` — Lines with Korean Hangul only
+
+**Translation Step Integration**:
+When `skip_non_source_language` is enabled in Global Options:
+- If `dominant_language` is "Japanese" and `threshold_applied` is True:
+  - Do NOT skip Chinese-only lines (they are part of the Japanese project)
+  - Only skip truly non-source language lines (e.g., English-only lines)
+- Korean lines are always handled separately based on source language setting
+
+---
+
+#### Findings Table Design (Phase 59)
+
+**Approach**: Keep the existing Findings Table and enhance it with category-aware contextual right-click functionality. If UI complexity makes this impractical, implement switchable table views.
+
+**Option A: Enhanced Existing Table (Preferred)**
+
+The existing Findings Table is retained with all current columns and functionality, plus:
+
+1. **Category-Aware Right-Click Menu**: When user right-clicks rows, the menu dynamically shows options based on the **Category** column of the selected row(s):
+   - If selected rows are **Speakers** → Show speaker-specific options
+   - If selected rows are **Code Patterns** → Show code pattern-specific options
+   - If selected rows are **Mixed** → Show only generic options (Copy, Select All)
+
+2. **Speaker Truncation**: If more than 20 speakers are detected, only the top 20 by count are shown in the table with a note: "Showing top 20 of N speakers. Switch to Speakers view for full list."
+
+3. **Multi-Select Support**: Ctrl+Click, Shift+Click to select multiple rows. Right-click menu applies to all selected rows of the same category.
+
+**Option B: Switchable Table Views (Fallback)**
+
+If the category-aware context menu proves too complex to implement cleanly, use a **View Selector** dropdown above the table:
+
+| View | Contents | Features |
+|------|----------|----------|
+| **General Analysis** | All findings (current behavior) | Speaker truncation (top 20), read-only display, no new features |
+| **Speakers** | Speaker findings only | Full speaker list, speaker-specific right-click menu |
+| **Code Patterns** | Code pattern findings only | Full pattern list, code pattern-specific right-click menu |
+
+**Implementation Recommendation**: Start with Option A. Only fall back to Option B if testing reveals usability issues with mixed-category selection.
+
+---
+
+#### Findings Table Columns (Existing)
+
+| Column | Width | Description |
+|--------|-------|-------------|
+| Category | 100px | Finding type: Speaker, Code Pattern, Duplicate, Language, etc. |
+| Finding | 200px | The detected item (speaker name, pattern, etc.) |
+| Count | 80px | Number of occurrences |
+| Sample | stretch | Example line containing this finding |
+
+---
+
+#### Speaker Right-Click Menu (Phase 59)
+
+When user right-clicks on rows where Category = "Speaker":
+
+| Menu Item | Action | Description |
+|-----------|--------|-------------|
+| Add to Glossary | `add_speaker_to_glossary(name)` | Creates Glossary entry with speaker name as Source, empty Translation |
+| Set Role → | Submenu | Protagonist, Love Interest, Major, Minor — adds to Glossary Notes field |
+| Set Gender → | Submenu | Male, Female — adds to Glossary Notes field |
+| Set Translation | `prompt_translation(name)` | Opens dialog to input custom translation, fills Glossary Translation field |
+| Add to Code Glossary | `add_speaker_to_code_glossary(name)` | Creates Code Glossary entry to protect speaker name |
+| Copy Name | `copy_to_clipboard(name)` | Copies speaker name to clipboard |
+| Select All with Speaker | `filter_preview_by_speaker(name)` | Filters preview panel to show only lines from this speaker |
+
+**Role/Gender Behavior**:
+- Role and Gender are stored in the Glossary `Notes` field
+- Setting Role overwrites any existing Role but preserves Gender
+- Setting Gender overwrites any existing Gender but preserves Role
+- Format in Notes: "Role: Major, Gender: Female"
+- Character Notes in Information Step (Step 3) gets populated from these entries
+
+**Multi-Select Support**:
+- Select multiple speaker rows (Ctrl+Click, Shift+Click)
+- Menu shows "Add X speakers to Glossary" for bulk operations
+- Role/Gender submenu applies to all selected speakers
+
+**Inference Details** (Add to Glossary with Inference — future enhancement):
+1. Speaker name is sent to configured LLM with prompt: "Provide a likely English translation/romanization for this Japanese name: {name}"
+2. Response is parsed and placed in Translation field
+3. Entry is marked with `source: "analysis_inference"` for tracking
+4. If inference fails, falls back to standard Add to Glossary (empty Translation)
+
+---
+
+#### Code Pattern Right-Click Menu (Phase 59)
+
+When user right-clicks on rows where Category = "Code Pattern":
+
+| Menu Item | Action | Description |
+|-----------|--------|-------------|
+| Preserve | `set_pattern_action(pattern, 'preserve')` | Checkmark. Pattern kept unchanged. Default. Mutually exclusive. |
+| Remove | `set_pattern_action(pattern, 'remove')` | Checkmark. Pattern removed from output. Mutually exclusive. |
+| Translate | `set_pattern_action(pattern, 'translate')` | Checkmark. Pattern translated as text. Mutually exclusive. |
+| Replace → | Submenu | Generic (placeholder), Custom Input (dialog). Mutually exclusive with above. |
+| Is a Name | `set_pattern_type(pattern, 'name')` | Checkmark. Identifies pattern as a name. Mutually exclusive with other "Is" options. |
+| Is Text | `set_pattern_type(pattern, 'text')` | Checkmark. Identifies pattern as text content. Mutually exclusive. |
+| Is a Number | `set_pattern_type(pattern, 'number')` | Checkmark. Identifies pattern as numeric. Mutually exclusive. |
+| Is Invisible | `set_pattern_type(pattern, 'invisible')` | Checkmark. Pattern is control code, not visible. Default. Mutually exclusive. |
+| Copy Pattern | `copy_to_clipboard(pattern)` | Copies pattern to clipboard |
+| Show Lines with Pattern | `filter_preview_by_pattern(pattern)` | Filters preview to show only lines containing this pattern |
+
+**Action Behavior** (Preserve/Remove/Translate/Replace):
+- Checkmarks indicate current selection
+- Only one action can be active at a time
+- Selection updates the Code Database in manifest (populates Information Step and Preprocessing Step)
+- Default action is "Preserve" with "Is Invisible" type
+
+**Type Behavior** (Is a Name/Text/Number/Invisible):
+- Identifies what the code pattern represents
+- Informs the LLM about appropriate handling
+- "Is Invisible" is the default (most code patterns are control sequences)
+- Only one type can be active at a time
+
+**Multi-Select Support**:
+- Select multiple code pattern rows (Ctrl+Click, Shift+Click)
+- Bulk operations: "Set X patterns to Preserve"
+- Action and Type changes apply to all selected patterns
+
+**Code Database Population**:
+- Selections are stored in `CodeGlossary[]` manifest section
+- Automatically populates Code Database in Information Step (Step 3)
+- Automatically populates Preprocessing options (Step 4)
+
+---
 
 #### Data Flow
 
@@ -1010,25 +1324,33 @@ All processing-related fields are copied to preserve the complete pipeline state
 **Processing** (via `gui/helpers/analysis_adapter.py` → `functions/analysis.py`):
 1. Count total lines, empty lines, unique lines
 2. Detect duplicate lines and frequency
-3. Detect language distribution per line
-4. Detect speaker patterns (Name: "dialogue")
-5. Detect code patterns (variables, tags, escapes)
-6. Build findings table rows
+3. Calculate aggressive deduplication projection
+4. Detect project-level language using Japanese/Chinese threshold logic:
+   - Classify each line as Japanese (has kana), Chinese-only (CJK but no kana), or Korean
+   - Apply 30% threshold to determine project dominant language
+5. Detect speaker patterns (Name: "dialogue")
+6. Detect code patterns (variables, tags, escapes)
+7. Build unified Findings table rows with category column
 
 **Outputs**:
 - `total_lines: int`
 - `empty_lines: int`
 - `unique_lines: int`
 - `duplicate_count: int`
+- `aggressive_dedup_projection: int` — Lines after aggressive dedup
 - `duplicates: Dict[str, int]` - Line text to count
-- `languages: Dict[str, int]` - Language to line count
+- `dominant_language: str` - Project-level detected language
+- `threshold_applied: bool` - Whether Chinese-only lines were reclassified
+- `chinese_percentage: float` - Percentage of Chinese-only lines
+- `japanese_lines: int` - Lines with kana (definitely Japanese)
+- `chinese_only_lines: int` - Lines with CJK but no kana
+- `korean_lines: int` - Lines with Korean Hangul only
 - `speakers: Dict[str, int]` - Speaker to occurrence count
 - `code_patterns: Dict[str, int]` - Pattern type to count
-- `findings: List[TableRow]` - UI display rows
 
 **Stored In**:
 - Manifest step data (step_id=1)
-- Fields: `Analysis.total_lines`, `Analysis.unique_lines`, etc.
+- Fields: `Analysis.total_lines`, `Analysis.unique_lines`, `Analysis.aggressive_dedup_projection`, `Analysis.dominant_language`, `Analysis.threshold_applied`, `Analysis.chinese_percentage`, etc.
 
 #### User Actions
 
@@ -1036,20 +1358,33 @@ All processing-related fields are copied to preserve the complete pipeline state
 |--------|--------|
 | Click Run Analysis | Runs analysis in background thread |
 | Click Export | Saves findings to CSV file |
-| Filter findings table | Filters by category column |
-| Select finding row | No additional action (display only) |
+| Switch View (if implemented) | Changes between General/Speakers/Code views |
+| Right-click Findings row | Category-aware context menu (different options for Speaker vs Code Pattern) |
+| Multi-select + Right-click | Bulk actions on selected items of same category |
+| Double-click Speaker finding | Opens Add to Glossary dialog pre-filled |
+| Double-click Code Pattern finding | Opens Code Database dialog pre-filled |
 
 #### Current State
 
-The Analysis step is functional and provides valuable information. No immediate priority improvements are planned for the Statistics and Findings widgets.
+The Analysis step is functional and provides valuable information. Phase 59 adds category-aware contextual right-click actions to the Findings Table and enhanced project-level language detection.
 
-#### Future Quality of Life Improvements (Low Priority)
+#### Phase 59 Implementation Checklist
 
-- **Auto-populate glossary**: Use detected speakers and code patterns to pre-fill glossary entries
-- **Pattern suggestions**: Recommend protection rules based on detected code patterns
-- **Export formats**: Support additional export formats (JSON, XLSX)
-- **Visual improvements**: Charts/graphs for language distribution
-- **Diff analysis**: Compare against previous analysis when files change
+- [ ] Add Projected Deduplication to Statistics Panel
+- [ ] Add Dominant Language to Statistics Panel (with threshold indicator)
+- [ ] Implement project-level Japanese/Chinese threshold detection (30% of Chinese-only lines)
+- [ ] Add category-aware right-click menu to Findings Table
+- [ ] Implement Speaker right-click menu (Add to Glossary, Set Role, Set Gender, Set Translation)
+- [ ] Implement Code Pattern right-click menu (Preserve/Remove/Translate/Replace, Is Name/Text/Number/Invisible)
+- [ ] Add multi-select support with same-category validation
+- [ ] Implement speaker truncation in General view (top 20 with note)
+- [ ] (Optional) Implement View Selector for switchable views if category-aware menu is too complex
+- [ ] Ensure Character Notes in Information Step gets populated from Speaker actions
+- [ ] Ensure Code Database in Information/Preprocessing Steps gets populated from Code Pattern actions
+- [ ] Add manifest fields for new analysis data
+- [ ] Update analysis_adapter.py to route context menu actions
+- [ ] Write tests for project-level language threshold logic
+- [ ] Write tests for context menu actions
 
 ---
 
@@ -3405,6 +3740,165 @@ Resolution methods:
 - `get_input_for_postprocessing()`: Latest in TLC/Edit chain → tl → prepro → orig
 - `get_final_output()`: overwrite → wordwr → postpro
 
+### 8.4 Options Structure (Phase 58/59 Additions)
+
+```json
+{
+  "Options": {
+    "AutoPipeline": {
+      "level": 3,
+      "level_name": "Preprocess",
+      "auto_inference": true,
+      "infer_speakers_to_glossary": true,
+      "infer_codes_to_database": true,
+      "infer_pov": true,
+      "infer_gender": false
+    },
+    "PROT": {
+      "enabled": true,
+      "patterns": [
+        {"pattern": "\\\\V\\[\\d+\\]", "type": "regex", "source": "analysis"},
+        {"pattern": "<<n>>", "type": "literal", "source": "user"}
+      ]
+    }
+  }
+}
+```
+
+**AutoPipeline Fields** (Phase 58):
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `level` | int | 3 | Pipeline automation level (0-4) |
+| `level_name` | string | "Preprocess" | Human-readable level name |
+| `auto_inference` | bool | true | Master toggle for inference population |
+| `infer_speakers_to_glossary` | bool | true | Add detected speakers to Glossary |
+| `infer_codes_to_database` | bool | true | Add detected code patterns to Code Glossary |
+| `infer_pov` | bool | true | Detect Point of View for prompt context |
+| `infer_gender` | bool | false | Use LLM to infer character gender |
+
+**PROT Patterns Structure**:
+| Field | Type | Description |
+|-------|------|-------------|
+| `pattern` | string | Regex or literal pattern to protect |
+| `type` | string | "regex" or "literal" |
+| `source` | string | "analysis" (from Step 1) or "user" (manually added) |
+
+### 8.5 Analysis Structure (Phase 59 Additions)
+
+```json
+{
+  "Analysis": {
+    "total_lines": 5000,
+    "empty_lines": 150,
+    "unique_lines": 4200,
+    "duplicate_count": 800,
+    "aggressive_dedup_projection": 3800,
+    "dominant_language": "Japanese",
+    "threshold_applied": true,
+    "chinese_percentage": 0.12,
+    "japanese_lines": 4200,
+    "chinese_only_lines": 550,
+    "korean_lines": 0,
+    "total_cjk_lines": 4750,
+    "speakers": {
+      "アリス": 120,
+      "ボブ": 85,
+      "??": 45
+    },
+    "code_patterns": {
+      "\\\\V[N]": 230,
+      "<<n>>": 180,
+      "<color>": 95
+    }
+  }
+}
+```
+
+**Analysis Fields** (Phase 59 Additions):
+| Field | Type | Description |
+|-------|------|-------------|
+| `aggressive_dedup_projection` | int | Projected line count after aggressive deduplication |
+| `dominant_language` | string | Project-level detected language ("Japanese", "Chinese", "Korean", "Unknown") |
+| `threshold_applied` | bool | Whether Chinese-only lines were reclassified as Japanese due to threshold |
+| `chinese_percentage` | float | Percentage of Chinese-only lines (no kana) among all CJK lines |
+| `japanese_lines` | int | Lines containing hiragana or katakana (definitively Japanese) |
+| `chinese_only_lines` | int | Lines with CJK characters but no kana (ambiguous, may be Japanese kanji-heavy) |
+| `korean_lines` | int | Lines containing only Korean Hangul |
+| `total_cjk_lines` | int | Sum of japanese_lines + chinese_only_lines (excludes Korean) |
+
+**Threshold Logic**:
+- If `chinese_only_lines / total_cjk_lines < 0.30`, the project is classified as Japanese
+- `threshold_applied` is `true` only when there were some `chinese_only_lines` that got reclassified
+- Korean lines are not included in the threshold calculation — they are separate
+
+### 8.6 Step State Structure (Input Step)
+
+```json
+{
+  "step_state": {
+    "Input": {
+      "file_count": 15,
+      "total_lines": 5000,
+      "formats": ["json", "txt"],
+      "last_import": {
+        "source_manifest": "C:/path/to/other.CherryAI.json",
+        "lines_matched": 4200,
+        "lines_total": 5000,
+        "timestamp": "2026-02-15T10:30:00Z"
+      },
+      "pipeline_executed": {
+        "level": 3,
+        "steps_completed": [1, 2, 3, 4, 5, 6, 7, 8],
+        "steps_skipped": [],
+        "execution_time_ms": 12500,
+        "timestamp": "2026-02-15T10:30:00Z"
+      }
+    }
+  }
+}
+```
+
+**Pipeline Execution Record**:
+| Field | Type | Description |
+|-------|------|-------------|
+| `level` | int | AutoPipeline level that was executed |
+| `steps_completed` | int[] | Pipeline steps that completed successfully |
+| `steps_skipped` | int[] | Pipeline steps that were skipped |
+| `execution_time_ms` | int | Total pipeline execution time |
+| `timestamp` | string | ISO 8601 timestamp of execution |
+
+### 8.7 CodeGlossary Structure
+
+```json
+{
+  "CodeGlossary": [
+    {
+      "pattern": "\\\\V[\\d+]",
+      "type": "regex",
+      "action": "Preserve",
+      "description": "RPG Maker variable",
+      "source": "analysis"
+    },
+    {
+      "pattern": "<<n>>",
+      "type": "literal",
+      "action": "Remove",
+      "description": "Newline marker",
+      "source": "user"
+    }
+  ]
+}
+```
+
+**CodeGlossary Entry Fields**:
+| Field | Type | Description |
+|-------|------|-------------|
+| `pattern` | string | Code pattern to match |
+| `type` | string | "regex" or "literal" |
+| `action` | string | "Preserve", "Transform", "Remove", or "Replace" |
+| `description` | string | User-facing description |
+| `source` | string | "analysis" (from Step 1 right-click) or "user" (manually added) |
+
 ---
 
 ## 9. Processing Modules Reference
@@ -4192,7 +4686,7 @@ This catalog lists every existing function that participates in recovery, valida
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 3.0 | 2026-02-10 | Phase 17 Infrastructure: Added Batch API support (batch_tracker.py — JSONL builder, job persistence, submit/poll/cancel), Multi-Key Management (key_manager.py — key pools with sequential/even/priority rotation), Named API Profiles (project_config.py — display_name, system_prompt_tweak, rename/duplicate), Additional File Formats (markdown.py, json_lenient.py, translator_plus.py), Usage Analytics (usage_tracker.py — SQLite-backed token/cost tracking with CSV export), Agent-Assisted Modes (agent_modes.py — mode registry, sandboxed writes, audit logging), Estimation Engine (estimation.py — itemized billing, model comparison, persistence), i18n & Tooltips (i18n.py — JSON language files with fallback, tooltip.py — configurable Tk tooltips). Session persistence (app.py saves/restores last step). Bug fix: estimate_rate_limit_time() missing concurrent_requests/total_output_tokens/token_speed params. Added 331 new tests (5611 total). |
+| 3.0 | 2026-02-10 | Phase 17 Infrastructure: Added Batch API support (batch_tracker.py — JSONL builder, job persistence, submit/poll/cancel), Multi-Key Management (key_manager.py — key pools with sequential/even/priority rotation), Named API Profiles (project_config.py — display_name, system_prompt_tweak, rename/duplicate), Additional File Formats (markdown.py, json_lenient.py, translator_plus.py), Usage Analytics (usage_tracker.py — SQLite-backed token/cost tracking with CSV export), Agent-Assisted Modes (agent_modes.py — mode registry, sandboxed writes, audit logging), Estimation Engine (estimation.py — itemized billing, model comparison, persistence), i18n & Tooltips (i18n.py — JSON language files with fallback, tooltip.py — configurable Tk tooltips). Session persistence (app.py saves/restores last step). Bug fixes: estimate_rate_limit_time() missing params; SharedTable batch insertion duplicate item IDs (added _batch_insert_version counter). Added 339 new tests (5619 total). |
 | 2.8 | 2026-02-08 | Comprehensive rewrite of Step 9 (Output): Defined injection priority chain (9-level: overwrite → wordwrap → postprocessed → edit{N} → tlc{N} → translation → preedit → preprocessed → original). Added Dirty Flags system (Process flag set by preprocessing/cleared by postprocessing 100%, Wordwrap flag cleared when applied) with pre-export validation dialog. Non-destructive default (subfolder naming, no overwrite). Failure logging with per-file error tracking. Complete widget specifications with destination, format, naming, safety, and export extras sections. Settings received from Input (source_root, file_dir, encoding, format). Step 0 (Input): Added Import Translations button — imports translations from another manifest via exact `orig` line matching (sequential search, file/line-number agnostic, copies all processing fields). Step 5 (Translation): Added Skip Already Translated checkbox — skips lines with existing `tl` field for incremental translation workflows. Bug fixes: QA mousewheel TclError (try/except wrapper for race condition), output_inject `get_section` → `get_output_options()`, preprocess warning demoted to debug. |
 | 2.7 | 2026-02-08 | Comprehensive rewrite of Step 8 (Wordwrap): Redefined purpose (auto from parser or manual settings). Pretty wrap is now standard — removed Prevent Orphans and Prefer Punctuation Breaks checkboxes (always active). Mode changed from radio buttons to dropdown, removed RPG Maker (→ its own parser) and Disabled options. Width changed from Spinbox to Dropdown with Character/Pixel modes. Break Character linked to Preprocessing and Translation Prompt with cost-optimization note. Speaker Handling reduced to Ignore + Count (renamed from Sameline), removed Samelineindent and Newline. Ignore Patterns replaced with read-only Code Database table (no checkboxes). Removed Typography widget entirely. Removed Overwrite Strategy widget — Overwrite becomes a column in the Lines Table with diff filtering. Added table filters (All/Changed/Exceeding/Overwrite Differs). Added Standard Wrapping Rules table documenting always-active `pretty_wrap()` behavior. Added comprehensive Future Improvements for parser-driven wrap, font commands, pixel-accurate width, New Textboxes, and break char removal before translation. |
 | 2.6 | 2026-02-08 | Comprehensive rewrite of Step 7 (Postprocessing): Complete mirror-symmetry spec with Step 4 Preprocessing — reverse priority ordering, automatic restorations (Placeholder/Code/BR always-on, no GUI toggle), post-exclusive recovery processes (Bracket Balance, Quote Balance, Whitespace Normalization with toggles). Renamed "Postprocessed Lines" to "Processed Lines" with new filters (Changed/Written/Flagged/By Process). Removed Refresh and Revert All buttons (overwrite semantics with confirmation dialog). Added Postprocess Options widget (bidirectional Symbol Conversion: Fullwidth↔Halfwidth). Redesigned Failure Handling (Write=default, Flag for Review=no-write, Queue for Retry=hidden/future). Added Diff View manual editing with Mark-as-Fixed. Added Postprocessing Summary with live updates and 100% completion popup. Fixed MouseWheel `bind_all` bug across all step files (qa.py, postprocess.py, translate.py, wordwrap_overwrite.py, output_inject.py). |

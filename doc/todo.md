@@ -546,6 +546,16 @@ TASK: Performance Optimization
 
 KNOWN ISSUES / BUGS
 
+ISSUE: SharedTable "Item N already exists" TclError ✅ FIXED
+   Status: FIXED (Phase 17)
+   Description: Batch insertion callbacks continued after _refresh_display() was called again,
+                causing duplicate item IDs when loading large files and rapidly switching tabs.
+   Solution: Added _batch_insert_version counter. Batch callbacks check if version matches
+             current before inserting. If stale, batch is silently cancelled.
+   Files: gui/components/table.py, dev/test_table_batch_insert.py (8 tests)
+
+---
+
 ISSUE: Placeholders resolved in wrong order (Pre/Post mismatch)
    Status: OPEN (HIGH PRIORITY)
    Impact: Can corrupt restored text with overlapping placeholders
@@ -960,6 +970,472 @@ Instead, use the bridge methods to sync processing results into ManifestManager.
 | Export Manifest | `OutputFormat.ExportManifestFile` | boolean | false | output |
 | Export Logs | `OutputFormat.ExportProcessingLogs` | boolean | false | output |
 | Export Glossary | `OutputFormat.ExportGlossaryEntries` | boolean | false | output |
+
+=============================================================================
+
+PHASE 58: INPUT AUTOMATION (Step 0 Enhancement)
+-----------------------------------------------
+
+**Status:** 🔲 PLANNED | **Effort:** 16-24 hours | **Priority:** HIGH
+
+Goal: Implement automatic pipeline execution when files are loaded, providing
+users with a "load and see results" workflow. When files are loaded into a 
+new project, the pipeline automatically runs up to a configurable endpoint.
+
+**Reference:** See `doc/specs.md` Section 2.2 → Step 0: Input for full spec.
+
+### TASK 58.1: Input Button Unified Window
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Replace separate Load Files/Load Folder buttons with a unified Input
+button that opens a combined file/folder selection window.
+
+**Requirements:**
+- Single button opens a modal window with dual-pane interface
+- Left pane: Folder tree browser for directory selection
+- Right pane: File list for individual file selection
+- Both support multi-select (Ctrl+Click, Shift+Click)
+- "Add Selection" button queues items without closing
+- "Load" button finalizes and begins pipeline
+
+**Files to Modify:**
+- `gui/steps/input.py` - Replace buttons with unified Input button
+- `gui/dialogs/` - Create new `input_dialog.py` for combined selection
+
+**Tests to Add:**
+- `dev/test_input_dialog.py`:
+  - `test_file_selection`
+  - `test_folder_selection`
+  - `test_mixed_selection`
+  - `test_add_selection_queue`
+
+---
+
+### TASK 58.2: Auto-Pipeline Dropdown
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Add dropdown to Options Panel for selecting automation level (0-4).
+
+**Levels:**
+- 0: Manual (load only)
+- 1: Analyze
+- 2: Estimate Original
+- 3: Preprocess (Default)
+- 4: Mock Translate
+
+**Files to Modify:**
+- `gui/steps/input.py` - Add Auto-Pipeline Dropdown to Options Panel
+- `config/defaults.ini` - Add `auto_pipeline_level = 3`
+
+**Tests to Add:**
+- `dev/test_auto_pipeline.py`:
+  - `test_pipeline_level_0_load_only`
+  - `test_pipeline_level_3_default`
+  - `test_pipeline_level_persistence`
+
+---
+
+### TASK 58.3: Project Name Dialog Enhancement
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 1 hour
+
+Goal: Resize Create New Translation Project dialog to show all buttons.
+Remove auto-suggestion for project name - field starts empty.
+
+**Files to Modify:**
+- `gui/dialogs/project_dialog.py` - Resize window, clear name field
+
+**Tests to Add:**
+- `dev/test_project_dialog.py`:
+  - `test_dialog_minimum_size`
+  - `test_name_field_empty_on_open`
+
+---
+
+### TASK 58.4: Automatic Pipeline Orchestrator
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 4 hours
+
+Goal: Implement the 8-step automatic pipeline that executes on file load.
+
+**Pipeline Steps:**
+1. Create Manifest (Project Name Dialog)
+2. Load Lines (extract from files)
+3. Load Defaults (apply defaults.ini)
+4. Run Analysis (functions/analysis.py)
+5. Populate Inferences (optional, based on settings)
+6. Run Original Estimation
+7. Run Default Preprocessing
+8. Run Preprocessed Estimation
+
+**Files to Create:**
+- `functions/auto_pipeline.py` - Pipeline orchestrator
+
+**Files to Modify:**
+- `gui/steps/input.py` - Trigger pipeline after load
+- `gui/helpers/analysis_adapter.py` - Support programmatic run
+
+**Tests to Add:**
+- `dev/test_auto_pipeline.py`:
+  - `test_pipeline_step_sequence`
+  - `test_pipeline_skip_existing_manifest`
+  - `test_pipeline_level_cutoff`
+  - `test_pipeline_error_handling`
+
+---
+
+### TASK 58.5: Inference Population
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Implement optional inference population from analysis results.
+
+**Inference Options:**
+- `infer_speakers_to_glossary`: Add detected speakers to Glossary
+- `infer_codes_to_database`: Add code patterns to Code Glossary
+- `infer_pov`: Detect Point of View
+- `infer_gender`: Use LLM to infer character gender
+
+**Files to Modify:**
+- `functions/auto_pipeline.py` - Inference step
+- `functions/glossary.py` - Add entries from analysis
+- `functions/options.py` - Add inference option fields
+
+**Tests to Add:**
+- `dev/test_inference.py`:
+  - `test_speakers_to_glossary`
+  - `test_codes_to_database`
+  - `test_pov_detection`
+  - `test_all_inference_disabled`
+
+---
+
+### TASK 58.6: Mock Translation Level
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Extend pipeline to Level 4 with mock translation and full validation.
+
+**Additional Steps:**
+9. Mock Translation (no API calls)
+10. Run QA Validation
+11. Run Postprocessing
+12. Summary display
+
+**Files to Modify:**
+- `functions/auto_pipeline.py` - Level 4 extension
+- `functions/mock_translation.py` - Mock engine integration
+
+**Tests to Add:**
+- `dev/test_auto_pipeline.py`:
+  - `test_mock_translation_level`
+  - `test_mock_pipeline_complete`
+  - `test_mock_validation_runs`
+
+---
+
+### TASK 58.7: File Tree Improvements
+**Priority:** LOW | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Improve Loaded Files Panel tree behavior.
+
+**Requirements:**
+- Folders always appear above files in same directory
+- Tree collapsed by default on load
+- Context menu: Remove Selected, Select All, Expand All, Collapse All
+
+**Files to Modify:**
+- `gui/steps/input.py` - Tree sorting and collapse behavior
+
+**Tests to Add:**
+- `dev/test_file_tree.py`:
+  - `test_folders_above_files`
+  - `test_collapsed_by_default`
+
+---
+
+### TASK 58.8: Manifest Pipeline Recording
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 1 hour
+
+Goal: Record pipeline execution details in manifest for tracking.
+
+**Manifest Fields:**
+- `step_state.Input.pipeline_executed.level`
+- `step_state.Input.pipeline_executed.steps_completed`
+- `step_state.Input.pipeline_executed.execution_time_ms`
+
+**Files to Modify:**
+- `functions/auto_pipeline.py` - Write execution record
+- `functions/manifest_manager.py` - Add pipeline state fields
+
+**Tests to Add:**
+- `dev/test_auto_pipeline.py`:
+  - `test_pipeline_recording`
+  - `test_execution_time_recorded`
+
+=============================================================================
+
+PHASE 59: ANALYSIS ENHANCEMENT (Step 1 Enhancement)
+----------------------------------------------------
+
+**Status:** 🔲 PLANNED | **Effort:** 14-18 hours | **Priority:** HIGH
+
+Goal: Enhance Analysis step with project-level language detection and actionable 
+contextual controls. Add category-aware right-click functionality to the existing
+Findings Table that allows direct population of Glossary and Code Database based
+on whether the selected rows are Speakers or Code Patterns.
+
+**Key Changes from Original Design:**
+- Language detection is PROJECT-LEVEL, not per-line
+- Japanese has unique kana (hiragana/katakana); Chinese does not
+- Korean is separate and excluded from Japanese/Chinese threshold
+- Existing Findings Table is ENHANCED, not replaced with separate tables
+- Right-click menu is category-aware (different options for Speaker vs Code Pattern)
+
+**Reference:** See `doc/specs.md` Section 2.2 → Step 1: Analysis for full spec.
+
+### TASK 59.1: Project-Level Language Detection
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Implement project-level Japanese/Chinese classification using the 30%
+threshold rule. Japanese has unique kana (hiragana/katakana); Chinese does not.
+
+**Classification Logic:**
+1. Identify all lines containing CJK characters
+2. Classify each CJK line:
+   - Japanese: Contains ANY hiragana or katakana (regardless of kanji)
+   - Chinese-only: Contains CJK but NO hiragana or katakana
+   - Korean: Contains Hangul only (handled separately)
+3. Calculate: chinese_percentage = chinese_only_lines / total_cjk_lines
+4. If chinese_percentage < 0.30 → project dominant_language = "Japanese"
+5. Store threshold_applied = True if any Chinese-only reclassified
+
+**Key Point:** This is PROJECT-LEVEL, not per-line classification.
+
+**Files to Modify:**
+- `functions/analysis.py` - Add project-level language detection
+  - `is_hiragana_or_katakana(char)` - Check for Japanese kana
+  - `classify_cjk_line(line)` - Returns 'japanese', 'chinese_only', 'korean', or None
+  - `detect_project_language(lines)` - Apply threshold, return dominant language
+
+**Manifest Fields:**
+- `Analysis.dominant_language` - "Japanese", "Chinese", or "Unknown"
+- `Analysis.threshold_applied` - Whether reclassification occurred
+- `Analysis.chinese_percentage` - Percentage before threshold
+- `Analysis.japanese_lines` - Lines with kana
+- `Analysis.chinese_only_lines` - Lines with CJK but no kana
+- `Analysis.korean_lines` - Lines with Hangul only
+
+**Translation Step Integration:**
+- When `skip_non_source_language` is enabled:
+  - If dominant_language is "Japanese" and threshold_applied:
+    - Do NOT skip Chinese-only lines (they're part of Japanese project)
+
+**Tests to Add:**
+- `dev/test_analysis.py`:
+  - `test_japanese_line_has_kana`
+  - `test_chinese_only_line_no_kana`
+  - `test_korean_line_excluded_from_threshold`
+  - `test_project_below_threshold_is_japanese`
+  - `test_project_above_threshold_is_chinese`
+  - `test_threshold_applied_flag`
+  - `test_mixed_project_classification`
+
+---
+
+### TASK 59.2: Aggressive Deduplication Projection
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 1 hour
+
+Goal: Show projected line count after aggressive deduplication in Statistics.
+
+**Display:**
+Format: "Aggressive Dedup: X lines → Y unique (Z% reduction)"
+
+**Files to Modify:**
+- `functions/analysis.py` - Calculate aggressive dedup projection
+- `gui/steps/analysis.py` - Display projection in Statistics Panel
+
+**Tests to Add:**
+- `dev/test_analysis.py`:
+  - `test_aggressive_dedup_projection`
+
+---
+
+### TASK 59.3: Category-Aware Findings Table Context Menu
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Add category-aware right-click menu to the existing Findings Table. The
+menu dynamically shows options based on the Category of selected row(s).
+
+**Approach:**
+- Keep existing Findings Table (do NOT split into separate tables)
+- Add right-click context menu that inspects the Category column
+- Show Speaker-specific options when Category = "Speaker"
+- Show Code Pattern-specific options when Category = "Code Pattern"
+- Show only generic options (Copy, Select All) when mixed categories selected
+
+**Speaker Options:**
+- Add to Glossary
+- Set Role → (Protagonist | Love Interest | Major | Minor)
+- Set Gender → (Male | Female)
+- Set Translation → Custom Input dialog
+- Add to Code Glossary
+- Copy Name
+- Select All with Speaker
+
+**Code Pattern Options:**
+- Preserve (checkmark, default)
+- Remove (checkmark)
+- Translate (checkmark)
+- Replace → (Generic | Custom Input)
+- Is a Name / Is Text / Is a Number / Is Invisible (checkmarks)
+- Copy Pattern
+- Show Lines with Pattern
+
+**Speaker Truncation:**
+- If > 20 speakers detected, show only top 20 in General view
+- Display note: "Showing top 20 of N speakers"
+- (Optional) View Selector to switch to full Speakers-only view
+
+**Files to Modify:**
+- `gui/steps/analysis.py` - Add right-click binding and dynamic menu
+- `gui/helpers/analysis_adapter.py` - Route actions to manifest/functions
+
+**Tests to Add:**
+- `dev/test_analysis.py`:
+  - `test_speaker_context_menu_shown`
+  - `test_code_pattern_context_menu_shown`
+  - `test_mixed_selection_generic_only`
+  - `test_speaker_truncation_at_20`
+
+---
+
+### TASK 59.4: Speaker Context Menu Actions
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Implement the Speaker-specific actions for the Findings Table context menu.
+When user right-clicks on rows with Category = "Speaker", these options appear.
+
+**Menu Actions to Implement:**
+- Add to Glossary: Creates Glossary entry, Source = speaker name, Translation empty
+- Set Role → Protagonist | Love Interest | Major | Minor
+  - Stored in Glossary Notes field as "Role: X"
+  - Also populates Character Notes in Information Step (Step 3)
+- Set Gender → Male | Female
+  - Stored in Glossary Notes field as "Gender: X"
+  - Overwrites existing Gender but preserves Role
+- Set Translation → Dialog prompt
+  - User enters custom translation
+  - Fills Glossary Translation field
+- Add to Code Glossary: Creates Code Glossary entry to protect speaker name
+- Copy Name: Copies speaker name to clipboard
+- Select All with Speaker: Filters preview panel to show lines from this speaker
+
+**Multi-Select:**
+- Support bulk operations: "Add X speakers to Glossary"
+- Role/Gender apply to all selected
+
+**Files to Modify:**
+- `gui/steps/analysis.py` - Menu handler for speaker actions
+- `gui/helpers/analysis_adapter.py` - Route to glossary functions
+- `functions/glossary.py` - Add/update entry from analysis
+
+**Tests to Add:**
+- `dev/test_analysis_actions.py`:
+  - `test_add_speaker_to_glossary`
+  - `test_set_speaker_role`
+  - `test_set_speaker_gender`
+  - `test_set_speaker_translation`
+  - `test_speaker_multi_select_bulk`
+  - `test_character_notes_populated`
+
+---
+
+### TASK 59.5: Code Pattern Context Menu Actions
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Implement the Code Pattern-specific actions for the Findings Table context 
+menu. When user right-clicks on rows with Category = "Code Pattern", these options
+appear.
+
+**Action Options (mutually exclusive checkmarks):**
+- Preserve: Keep pattern unchanged in translation (default, checked)
+- Remove: Remove pattern from output
+- Translate: Translate pattern as regular text
+- Replace → Generic (placeholder) | Custom Input (dialog)
+
+**Type Options (mutually exclusive checkmarks):**
+- Is a Name: Pattern represents a character name
+- Is Text: Pattern represents visible text content
+- Is a Number: Pattern represents numeric values
+- Is Invisible: Pattern is control code (default, checked)
+
+**Utility Options:**
+- Copy Pattern: Copy to clipboard
+- Show Lines with Pattern: Filter preview to lines containing pattern
+
+**Code Database Integration:**
+- Selections are stored in `CodeGlossary[]` manifest section
+- Populates Code Database in Information Step (Step 3)
+- Populates Preprocessing options (Step 4)
+- LLM prompt includes action/type info for special handling
+
+**Multi-Select:**
+- Support bulk operations: "Set X patterns to Preserve"
+- Action and Type apply to all selected
+
+**Files to Modify:**
+- `gui/steps/analysis.py` - Menu handler for code pattern actions
+- `gui/helpers/analysis_adapter.py` - Route to code glossary functions
+- `functions/manifest_fields.py` - Update CodeGlossary helpers
+
+**Tests to Add:**
+- `dev/test_analysis_actions.py`:
+  - `test_set_pattern_preserve`
+  - `test_set_pattern_remove`
+  - `test_set_pattern_translate`
+  - `test_set_pattern_replace_custom`
+  - `test_set_pattern_type_invisible`
+  - `test_pattern_multi_select_bulk`
+  - `test_code_database_populated`
+
+---
+
+### TASK 59.6: LLM Speaker Inference
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+Goal: Implement "Add to Glossary with Inference" LLM call for speakers.
+
+**Workflow:**
+1. Send speaker name to LLM with inference prompt
+2. Parse response for English translation/romanization
+3. Create glossary entry with suggested translation
+4. Mark entry with `source: "analysis_inference"`
+
+**Files to Modify:**
+- `gui/helpers/analysis_adapter.py` - LLM inference call
+- `functions/api_client.py` - Inference request support
+
+**Tests to Add:**
+- `dev/test_analysis_actions.py`:
+  - `test_speaker_inference_success`
+  - `test_speaker_inference_fallback`
+
+---
+
+### TASK 59.7: Ignore Pattern Storage
+**Priority:** LOW | **Status:** ✅ COMPLETE | **Effort:** 1 hour
+
+Goal: Store ignored patterns in manifest and filter from future analysis.
+
+**Storage:**
+- `Analysis.ignored_patterns[]` in manifest
+- Patterns in this list are excluded from Code Patterns table
+
+**Files to Modify:**
+- `functions/analysis.py` - Filter ignored patterns
+- `functions/manifest_manager.py` - Ignored patterns field
+
+**Tests to Add:**
+- `dev/test_analysis.py`:
+  - `test_ignored_pattern_filtered`
+  - `test_ignore_pattern_persists`
 
 =============================================================================
 

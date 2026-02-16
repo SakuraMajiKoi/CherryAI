@@ -221,11 +221,11 @@ class ProjectNameDialog(tk.Toplevel):
         self.grab_set()
         self.resizable(False, False)
         
-        # Center dialog
-        self.geometry("450x250")
+        # Center dialog - PHASE 58.3: Larger window to show all buttons
+        self.geometry("500x280")
         self.update_idletasks()
-        x = parent.winfo_x() + (parent.winfo_width() // 2) - 225
-        y = parent.winfo_y() + (parent.winfo_height() // 2) - 125
+        x = parent.winfo_x() + (parent.winfo_width() // 2) - 250
+        y = parent.winfo_y() + (parent.winfo_height() // 2) - 140
         self.geometry(f"+{x}+{y}")
         
         # Apply theme
@@ -290,16 +290,11 @@ class ProjectNameDialog(tk.Toplevel):
         
         self._name_var = tk.StringVar()
         
-        # Suggest a default name from suggested_name or first file
-        if self._suggested_name:
-            self._name_var.set(self._suggested_name)
-        elif self._source_files:
-            default_name = self._source_files[0].stem
-            self._name_var.set(default_name)
+        # PHASE 58.3: Name field starts empty - no auto-suggestion
+        # User must explicitly enter a project name
         
-        self._name_entry = ttk.Entry(name_frame, textvariable=self._name_var, width=30)
+        self._name_entry = ttk.Entry(name_frame, textvariable=self._name_var, width=35)
         self._name_entry.pack(side="left", fill="x", expand=True)
-        self._name_entry.select_range(0, "end")
         
         # Buttons
         button_frame = ttk.Frame(main_frame)

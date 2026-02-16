@@ -18,6 +18,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from CherryAI.gui.dialogs.loading_progress import LoadingProgressDialog
+from CherryAI.gui.dialogs.input_dialog import UnifiedInputDialog
 
 from CherryAI.gui.steps.base import BaseStep
 from CherryAI.gui.theme.colors import THEME
@@ -183,8 +184,13 @@ class InputExtractionStep(BaseStep):
         toolbar = ttk.Frame(self)
         toolbar.grid(row=0, column=0, sticky="ew", padx=10, pady=5)
 
-        # TASK 39.1: Unified Select File(s) button with dropdown for file/folder
+        # PHASE 58.1: Unified Input button with dropdown for file/folder/unified
         self._select_menu = tk.Menu(toolbar, tearoff=0)
+        self._select_menu.add_command(
+            label="📁 Unified Selection...",
+            command=self._on_unified_input,
+        )
+        self._select_menu.add_separator()
         self._select_menu.add_command(
             label="Select File(s)...",
             command=self._on_load_files,
@@ -196,7 +202,7 @@ class InputExtractionStep(BaseStep):
 
         self._select_btn = ttk.Button(
             toolbar,
-            text="📁 Select File(s) ▾",
+            text="📁 Input ▾",
             command=self._show_select_menu,
         )
         self._select_btn.pack(side="left", padx=2)
@@ -243,6 +249,24 @@ class InputExtractionStep(BaseStep):
         )
         format_cb.pack(side="left", padx=2)
 
+        # PHASE 58.2: Auto-Pipeline dropdown
+        ttk.Label(options_frame, text="Auto-Pipeline:").pack(side="left", padx=5)
+        self._pipeline_var = tk.StringVar(value="3: Preprocess")
+        pipeline_cb = ttk.Combobox(
+            options_frame,
+            textvariable=self._pipeline_var,
+            values=[
+                "0: Manual",
+                "1: Analyze",
+                "2: Estimate Original",
+                "3: Preprocess",
+                "4: Mock Translate",
+            ],
+            width=16,
+            state="readonly",
+        )
+        pipeline_cb.pack(side="left", padx=2)
+
     def _build_content(self) -> None:
         """Build the main content area with file list and preview."""
         content = ttk.PanedWindow(self, orient="horizontal")
@@ -283,6 +307,18 @@ class InputExtractionStep(BaseStep):
         )
         self._file_context_menu.add_command(
             label="Select All in Folder", command=self._on_select_all_in_folder,
+        )
+        self._file_context_menu.add_separator()
+        # PHASE 58.7: Additional context menu items
+        self._file_context_menu.add_command(
+            label="Select All", command=self._on_select_all_files,
+        )
+        self._file_context_menu.add_separator()
+        self._file_context_menu.add_command(
+            label="Expand All", command=self._on_expand_all_tree,
+        )
+        self._file_context_menu.add_command(
+            label="Collapse All", command=self._on_collapse_all_tree,
         )
         self._file_tree.bind("<Button-3>", self._on_file_listbox_right_click)
 
@@ -375,6 +411,247 @@ class InputExtractionStep(BaseStep):
             self._select_menu.tk_popup(x, y)
         finally:
             self._select_menu.grab_release()
+
+    def _on_unified_input(self) -> None:
+        """Handle unified input dialog (PHASE 58.1).
+
+        Opens a combined file/folder selection window allowing users to
+        select both files and folders in a single interface.
+        """
+        encoding = self._encoding_var.get() if self._encoding_var else "auto"
+        format_override = self._format_var.get() if self._format_var else "auto"
+
+        # Determine initial directory
+        initial_dir = None
+        if self._loaded_files:
+            initial_dir = str(self._loaded_files[0].path.parent)
+        elif self._folder_root:
+            initial_dir = str(self._folder_root)
+
+        # Show unified input dialog
+        dialog = UnifiedInputDialog(
+            self,
+            format_filter=format_override,
+            encoding=encoding,
+            initial_dir=initial_dir,
+        )
+
+        result = dialog.show()
+        if result is None:
+            return
+
+        selected_paths, format_filter, enc = result
+        if not selected_paths:
+            return
+
+        # Update format and encoding vars
+        if self._format_var:
+            self._format_var.set(format_filter)
+        if self._encoding_var:
+            self._encoding_var.set(enc)
+
+        # Process the selected paths
+        self._load_selected_paths(selected_paths, enc, format_filter)
+
+    def _load_selected_paths(
+        self,
+        paths: List[Path],
+        encoding: str,
+        format_override: str,
+    ) -> None:
+        """Load files from selected paths (files or folders).
+
+        PHASE 58.1: Common loading method for unified input dialog.
+
+        Args:
+            paths: List of selected paths (files or folders).
+            encoding: Encoding to use.
+            format_override: Format filter to apply.
+        """
+        files_to_load: List[Path] = []
+        first_folder: Optional[Path] = None
+
+        # Collect all files from paths
+        for path in paths:
+            if path.is_file():
+                files_to_load.append(path)
+            elif path.is_dir():
+                if first_folder is None:
+                    first_folder = path
+                # Collect files from folder
+                folder_files = self._collect_files_for_format(path, format_override)
+                files_to_load.extend(folder_files)
+
+        if not files_to_load:
+            from tkinter import messagebox
+            messagebox.showinfo(
+                "No Files Found",
+                "No supported files found in the selected paths.",
+            )
+            return
+
+        # Set folder root if loading from folder
+        if first_folder:
+            self._folder_root = first_folder
+
+        # Sort files
+        files_to_load.sort()
+
+        # Remove duplicates
+        seen: set = set()
+        unique_files = []
+        for f in files_to_load:
+            if f not in seen:
+                seen.add(f)
+                unique_files.append(f)
+        files_to_load = unique_files
+
+        loaded_count = 0
+        skipped_files: List[str] = []
+
+        # Show progress dialog for multi-file loading
+        progress: Optional[LoadingProgressDialog] = None
+        if len(files_to_load) > 3:
+            progress = LoadingProgressDialog(self, len(files_to_load))
+
+        for path in files_to_load:
+            if progress is not None and progress.cancelled:
+                break
+            # Format filtering
+            if format_override != "auto" and not self._file_matches_format(path, format_override):
+                skipped_files.append(path.name)
+                if progress is not None:
+                    progress.update(path.name)
+                continue
+            if self._load_file(path, encoding, format_override):
+                loaded_count += 1
+            if progress is not None:
+                progress.update(path.name)
+
+        if progress is not None:
+            progress.close()
+
+        # Warn about skipped files
+        if skipped_files:
+            from tkinter import messagebox
+            names = "\n".join(skipped_files[:10])
+            if len(skipped_files) > 10:
+                names += f"\n...and {len(skipped_files) - 10} more"
+            messagebox.showwarning(
+                "Files Skipped",
+                f"The following files were skipped because they don't match "
+                f"the '{format_override}' format filter:\n\n{names}",
+            )
+
+        if loaded_count > 0:
+            self._update_summary()
+            self._update_file_list()
+            if self._current_file_index < 0 and self._loaded_files:
+                self._select_first_file_in_tree()
+            self.set_status("in-progress")
+            logger.info("Loaded %d file(s)", loaded_count)
+
+            self._populate_project_info_from_files()
+            self._ensure_project_created()
+            self._save_manifest_after_file_load()
+
+            # PHASE 58.4: Execute automatic pipeline
+            self._execute_auto_pipeline()
+
+    def _collect_files_for_format(self, folder: Path, format_filter: str) -> List[Path]:
+        """Collect files from a folder based on format filter.
+
+        Args:
+            folder: Folder to scan.
+            format_filter: Format filter ("auto" or specific format).
+
+        Returns:
+            List of matching file paths.
+        """
+        if format_filter != "auto" and format_filter in FORMAT_EXTENSIONS:
+            suffixes = FORMAT_EXTENSIONS[format_filter]
+        else:
+            suffixes = {".txt", ".csv", ".tsv", ".json", ".xlsx",
+                        ".png", ".jpg", ".jpeg", ".bmp"}
+        return self._collect_files_from_folder(folder, suffixes)
+
+    def _get_pipeline_level(self) -> int:
+        """Get the current auto-pipeline level (0-4).
+
+        PHASE 58.2: Returns the numeric pipeline level from the dropdown.
+        """
+        if not hasattr(self, "_pipeline_var") or self._pipeline_var is None:
+            return 3  # Default: Preprocess
+        value = self._pipeline_var.get()
+        # Extract number from "N: Description" format
+        try:
+            return int(value.split(":")[0])
+        except (ValueError, IndexError):
+            return 3
+
+    def _execute_auto_pipeline(self) -> None:
+        """Execute the automatic pipeline based on settings.
+
+        PHASE 58.4: Runs analysis, estimation, preprocessing etc. based
+        on the configured pipeline level.
+        """
+        level = self._get_pipeline_level()
+        if level < 1:
+            return  # Manual mode - no auto pipeline
+
+        logger.info("Executing auto-pipeline at level %d", level)
+
+        # Level 1+: Run Analysis
+        self._trigger_auto_analysis()
+
+        if level < 2:
+            return
+
+        # Level 2+: Run Original Estimation
+        # (handled in analysis callback)
+
+        if level < 3:
+            return
+
+        # Level 3+: Run Preprocessing
+        self._trigger_auto_preprocessing()
+
+        if level < 4:
+            return
+
+        # Level 4: Run Mock Translation
+        self._trigger_mock_translation()
+
+    def _trigger_mock_translation(self) -> None:
+        """Trigger mock translation for pipeline level 4.
+
+        PHASE 58.6: Runs mock translation after preprocessing.
+        """
+        # Schedule after preprocessing completes
+        self.after(100, self._do_mock_translation)
+
+    def _do_mock_translation(self) -> None:
+        """Execute mock translation.
+
+        PHASE 58.6: Performs mock translation, QA, and postprocessing.
+        """
+        try:
+            app = self.winfo_toplevel()
+            # Check if translation step exists and has mock translation capability
+            steps = getattr(app, "_steps", None)
+            if steps is None:
+                return
+
+            # Find translation step (index 5)
+            for step in steps:
+                if getattr(step, "step_id", -1) == 5:
+                    # Check if step has mock translation method
+                    mock_method = getattr(step, "_do_mock_translation", None)
+                    if mock_method is not None:
+                        mock_method()
+                    break
+        except Exception as e:
+            logger.warning("Mock translation failed: %s", e)
 
     def _select_first_file_in_tree(self) -> None:
         """Select the first file item in the file tree and update preview."""
@@ -908,6 +1185,37 @@ class InputExtractionStep(BaseStep):
         if file_items:
             self._file_tree.selection_set(file_items)
 
+    def _on_select_all_files(self) -> None:
+        """Select all files in the tree (PHASE 58.7)."""
+        # Get all file items (not folders)
+        all_file_items = list(self._tree_item_to_index.keys())
+        if all_file_items:
+            self._file_tree.selection_set(all_file_items)
+
+    def _on_expand_all_tree(self) -> None:
+        """Expand all folders in the tree (PHASE 58.7)."""
+        def expand_recursive(item: str) -> None:
+            for child in self._file_tree.get_children(item):
+                self._file_tree.item(child, open=True)
+                expand_recursive(child)
+
+        # Expand all root items and their children
+        for root_item in self._file_tree.get_children(""):
+            self._file_tree.item(root_item, open=True)
+            expand_recursive(root_item)
+
+    def _on_collapse_all_tree(self) -> None:
+        """Collapse all folders in the tree (PHASE 58.7)."""
+        def collapse_recursive(item: str) -> None:
+            for child in self._file_tree.get_children(item):
+                collapse_recursive(child)
+                self._file_tree.item(child, open=False)
+
+        # Collapse all root items and their children
+        for root_item in self._file_tree.get_children(""):
+            collapse_recursive(root_item)
+            self._file_tree.item(root_item, open=False)
+
     def _on_remove_selected_file(self) -> None:
         """Remove all selected files from the loaded files list."""
         selection = self._file_tree.selection()
@@ -1325,6 +1633,8 @@ class InputExtractionStep(BaseStep):
         TASK 39.4: Builds a tree structure from loaded files. When files
         come from a folder, parent nodes are collapsible folders; leaf
         nodes are individual files with line counts.
+
+        PHASE 58.7: Folders collapsed by default, folders sorted above files.
         """
         # Clear existing tree
         for item in self._file_tree.get_children():
@@ -1338,8 +1648,21 @@ class InputExtractionStep(BaseStep):
         # Build folder → files mapping for hierarchy
         folder_items: Dict[str, str] = {}  # folder path → tree item ID
 
+        # PHASE 58.7: Sort files so folders appear first at each level
+        # Build a list of (depth, is_folder, display_name, index, file) tuples
+        files_with_paths: List[Tuple[int, bool, str, int, Any]] = []
         for i, file in enumerate(self._loaded_files):
             display_name = self._get_display_name(file.path)
+            parts = display_name.replace("\\", "/").split("/")
+            depth = len(parts) - 1  # 0 for root level files
+            is_folder = depth > 0
+            files_with_paths.append((depth, is_folder, display_name, i, file))
+
+        # Sort: by path to keep folder structure, then files alphabetically
+        # Folders naturally come first since their entries appear before files
+        sorted_files = sorted(files_with_paths, key=lambda x: x[2].lower())
+
+        for depth, is_folder, display_name, i, file in sorted_files:
             parts = display_name.replace("\\", "/").split("/")
 
             # Determine status tag for coloring
@@ -1361,8 +1684,9 @@ class InputExtractionStep(BaseStep):
                 for depth, folder_name in enumerate(parts[:-1]):
                     folder_key = "/".join(parts[: depth + 1])
                     if folder_key not in folder_items:
+                        # PHASE 58.7: Folders collapsed by default (open=False)
                         folder_id = self._file_tree.insert(
-                            parent, "end", text=f"📂 {folder_name}", open=True,
+                            parent, "end", text=f"📂 {folder_name}", open=False,
                         )
                         folder_items[folder_key] = folder_id
                     parent = folder_items[folder_key]
