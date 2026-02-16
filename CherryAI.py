@@ -66,28 +66,16 @@ from collections import deque
 if __package__:
 	# running as a module/package
 	from .modi import load_modes, MODE_REGISTRY
-	from .functions.mainhelper import setup_logger as setup_app_logger
 	from .functions.modehelper import EMPTY_LINE_PLACEHOLDER
-	from .functions.mainhelper import Operation, Manifest
-	from .functions.mainhelper import Processor
-	from .functions.mainhelper import MANIFEST_VERSION
+	from .functions.mainhelper import Operation, Manifest, Processor, MANIFEST_VERSION
 	# Analysis module
 	from .functions.analysis import analyze_file
-	# Centralized IO helpers
+	# App state helpers (IO consolidated in mainhelper)
 	from .functions.mainhelper import (
-		read_text as _read_text,
-		write_text as _write_text,
-		read_table as _read_table,
-		write_table as _write_table,
-		read_json_pairs as _read_json_pairs,
-		write_json_pairs as _write_json_pairs,
-		read_xlsx_pairs as _read_xlsx_pairs,
-		write_xlsx_pairs as _write_xlsx_pairs,
-		detect_delimiter as _detect_delimiter,
-		load_app_state as load_app_state,
-		save_app_state as save_app_state,
-		select_input_files as select_input_files,
-		remember_last_selection as remember_last_selection,
+		load_app_state,
+		save_app_state,
+		select_input_files,
+		remember_last_selection,
 	)
 else:
 	# running as a script: ensure parent dir is on sys.path and use absolute imports
@@ -96,28 +84,16 @@ else:
 	if _root not in sys.path:
 		sys.path.insert(0, _root)
 	from CherryAI.modi import load_modes, MODE_REGISTRY
-	from CherryAI.functions.mainhelper import setup_logger as setup_app_logger
 	from CherryAI.functions.modehelper import EMPTY_LINE_PLACEHOLDER
-	from CherryAI.functions.mainhelper import Operation, Manifest
-	from CherryAI.functions.mainhelper import Processor
-	from CherryAI.functions.mainhelper import MANIFEST_VERSION
+	from CherryAI.functions.mainhelper import Operation, Manifest, Processor, MANIFEST_VERSION
 	# Analysis module
 	from CherryAI.functions.analysis import analyze_file
-	# Centralized IO helpers
+	# App state helpers (IO consolidated in mainhelper)
 	from CherryAI.functions.mainhelper import (
-		read_text as _read_text,
-		write_text as _write_text,
-		read_table as _read_table,
-		write_table as _write_table,
-		read_json_pairs as _read_json_pairs,
-		write_json_pairs as _write_json_pairs,
-		read_xlsx_pairs as _read_xlsx_pairs,
-		write_xlsx_pairs as _write_xlsx_pairs,
-		detect_delimiter as _detect_delimiter,
-		load_app_state as load_app_state,
-		save_app_state as save_app_state,
-		select_input_files as select_input_files,
-		remember_last_selection as remember_last_selection,
+		load_app_state,
+		save_app_state,
+		select_input_files,
+		remember_last_selection,
 	)
 	# Provide lowercase alias modules to avoid third-party or stale 'CherryAI' imports breaking
 	import types as _types
@@ -172,11 +148,6 @@ MODES = [
 ]
 
 # ----------------------------- Utilities ---------------------------------- #
-
-
-def setup_logger(log_path: Path) -> None:
-	"""Initialize application logging via shared helper in functions/mainhelper."""
-	setup_app_logger(log_path, LOGS_DIR)
 
 
 def derive_manifest_path(input_path: Path) -> Path:
@@ -242,14 +213,6 @@ def now_iso() -> str:
 	return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def read_text(path: Path) -> str:
-	return path.read_text(encoding="utf-8")
-
-
-def write_text(path: Path, content: str) -> None:
-	path.write_text(content, encoding="utf-8", newline="")
-
-
 def detect_delimiter(path: Path) -> str:
 	if path.suffix.lower() == ".tsv":
 		return "\t"
@@ -285,38 +248,8 @@ def generate_token(prefix: str, index: int) -> str:
 
 # ----------------------------- File IO ------------------------------------- #
 
-
-def read_table(path: Path) -> Tuple[List[List[str]], str]:
-	"""Read csv/tsv into a list of rows. Returns rows and delimiter.
-
-	Delegates to functions.mainhelper for the implementation.
-	"""
-	return _read_table(path)
-
-
-def write_table(path: Path, rows: List[List[str]], delim: str) -> None:
-	"""Delegate to centralized helper in functions.mainhelper."""
-	return _write_table(path, rows, delim)
-
-
-def read_json_pairs(path: Path) -> List[Tuple[str, str]]:
-	"""Delegate to centralized helper in functions.mainhelper."""
-	return _read_json_pairs(path)
-
-
-def write_json_pairs(path: Path, pairs: List[Tuple[str, str]]) -> None:
-	"""Delegate to centralized helper in functions.mainhelper."""
-	return _write_json_pairs(path, pairs)
-
-
-def read_xlsx_pairs(path: Path) -> Optional[List[Tuple[str, str]]]:
-	"""Delegate to centralized helper in functions.mainhelper."""
-	return _read_xlsx_pairs(path)
-
-
-def write_xlsx_pairs(path: Path, pairs: List[Tuple[str, str]]) -> None:
-	"""Delegate to centralized helper in functions.mainhelper."""
-	return _write_xlsx_pairs(path, pairs)
+# IO helpers (read_table, write_table, read_json_pairs, etc.) consolidated
+# in functions/mainhelper.py - import directly from there when needed.
 
 
 # ----------------------------- GUI launcher -------------------------------- #
@@ -442,9 +375,13 @@ def run_analysis_cli(input_path: Optional[str]) -> int:
 		return 2
 	try:
 		from pathlib import Path
-		# Ensure logging is initialized
+		# Ensure logging is initialized via mainhelper
+		if __package__:
+			from .functions.mainhelper import setup_logger
+		else:
+			from CherryAI.functions.mainhelper import setup_logger
 		log_path = LOGS_DIR / f"{Path(input_path).stem}.analysis.log"
-		setup_logger(log_path)
+		setup_logger(log_path, LOGS_DIR)
 		analyze_file(Path(input_path), LOGS_DIR)
 		print("Analysis completed. See logs folder for details.")
 		return 0

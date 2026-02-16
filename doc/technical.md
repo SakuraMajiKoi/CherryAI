@@ -19,13 +19,13 @@ GUI CODE RULES:
 - Formats handlers manage all file I/O operations
 
 MODULE AWARENESS (Always check these when implementing features):
-- functions/    : 36 modules - core shared functionality (+ glossaries/ subfolder with 5 files)
+- functions/    : 46 modules - core shared functionality (+ glossaries/ subfolder with 5 files)
 - modi/         : 12 processing modes - pre/post-processing plugins
-- formats/      : 5 format handlers - file I/O for CSV, TXT, JSON, etc.
+- formats/      : 8 format handlers - file I/O for CSV, TXT, JSON, etc.
 - gui/steps/    : 10 workflow tabs - display and user interaction only
 - gui/components/: Reusable UI widgets (1 module: table.py)
-- gui/dialogs/  : Modal dialogs and forms (3 modules: global_options.py, project_dialog.py, input_dialog.py)
-- gui/helpers/  : 6 adapter modules bridging GUI config to processing (mode, analysis, glossary, chunker, prompt, manifest_binding)
+- gui/dialogs/  : Modal dialogs and forms (4 modules: global_options.py, project_dialog.py, input_dialog.py, loading_progress.py)
+- gui/helpers/  : 7 adapter modules bridging GUI config to processing (mode, analysis, glossary, chunker, prompt, manifest_binding, tooltip)
 - gui/state/    : Application state management (1 module: store.py)
 
 BEFORE MAKING CHANGES:
@@ -57,7 +57,7 @@ TABLE OF CONTENTS
    2.3 prepro_ops Field - Pre-processing operation tracking
    2.4 Processor Class - Core text processing engine
 
-3. FUNCTIONS/ MODULES (39 files - Core Shared Logic)
+3. FUNCTIONS/ MODULES (46 files - Core Shared Logic)
    ✅ = Verified exists | ⚠️ = Needs documentation | 🔗 = GUI integrated
    
    3.1  analysis.py ✅ - File analysis, metrics, glossary extraction
@@ -99,8 +99,15 @@ TABLE OF CONTENTS
    3.37 mock_translator.py ✅ - Mock translation engine with flaw injection (Phase 56)
    3.38 consistency.py ✅ - Consistency system for term translation tracking (Phase 55)
    3.39 auto_pipeline.py ✅🔗 - Automatic pipeline orchestrator (Phase 58)
+   3.40 agent_modes.py ✅ - Agent-assisted processing modes (Phase 17.8)
+   3.41 batch_tracker.py ✅ - Batch API job tracking (Phase 17.1)
+   3.42 key_manager.py ✅ - Multi-key rotation for API load distribution (Phase 17.2)
+   3.43 output.py ✅🔗 - Output generation utilities (Phase 31, Step 8)
+   3.44 process_order.py ✅🔗 - Pre/post processing order management (Phase 26)
+   3.45 usage_tracker.py ✅ - API usage analytics and tracking (Phase 17.5)
+   3.46 estimation.py ✅ - Token estimation utilities (legacy CLI support)
    
-   3.40 glossaries/ (subfolder - 5 files)
+   3.47 glossaries/ (subfolder - 5 files)
         - __init__.py - Package exports
         - code_glossary_constants.py - Code pattern definitions
         - code_glossary_functions.py - Code detection/classification
@@ -108,22 +115,22 @@ TABLE OF CONTENTS
         - name_glossary_functions.py - Speaker detection, gender inference
 
 4. MODI/ MODULES (12 modes - Pre/Post Processing Plugins)
-   ✅ = Verified exists | ❌ = Not integrated with GUI v2
+   ✅ = Verified exists | 🔗 = GUI integrated via mode_adapter | ❌ = Not integrated with GUI v2
    
    4.1  __init__.py ✅ - Mode loader, get_modi(), MODE_REGISTRY
    4.2  anchor.py ✅❌ - Anchor-based text protection
    4.3  custom_placeholder.py ✅❌ - User-defined placeholder replacement
    4.4  free.py ✅❌ - Free-form processing mode
    4.5  only_remove.py ✅❌ - Remove-only pattern mode
-   4.6  protect_code.py ✅❌ - Code protection → __PROT__ placeholders
+   4.6  protect_code.py ✅🔗 - Code protection → __PROT__ placeholders (via mode_adapter)
    4.7  replace_after.py ✅❌ - Post-translation replacement
    4.8  replace_before.py ✅❌ - Pre-translation replacement
    4.9  sabotage.py ✅❌ - Sabotage/corruption detection
-   4.10 standard_mode.py ✅❌ - Standard preprocessing (ellipsis, dedup)
+   4.10 standard_mode.py ✅🔗 - Standard preprocessing (ellipsis, symbols via mode_adapter)
    4.11 template_mode.py ✅❌ - Template-based processing
    4.12 temporary_replacement.py ✅❌ - Temp replacement with restore
 
-5. FORMATS/ MODULES (7 handlers - File I/O)
+5. FORMATS/ MODULES (8 handlers - File I/O)
    ✅ = Verified exists | 🔗 = GUI integrated
    
    5.1 __init__.py ✅🔗 - FormatHandler base, FormatRegistry, ParserRegistry (Step 0)
@@ -133,6 +140,7 @@ TABLE OF CONTENTS
    5.5 rpgmaker.py ✅ - RPG Maker MV/MZ (placeholder)
    5.6 parser_base.py ✅ - ParserScript ABC, WordwrapConfig, ForbiddenChars, ContextMarkerRules
    5.7 parser_rpgmaker.py ✅ - RpgMakerMVParser, RpgMakerMZParser implementations
+   5.8 json_lenient.py ✅ - Lenient JSON parsing with error recovery
 
 6. GUI V2 ARCHITECTURE (gui/ - 7 packages)
    
@@ -140,13 +148,12 @@ TABLE OF CONTENTS
    6.2 gui/app.py - Main application window, step orchestration
    6.3 gui/progress.py - ProgressTracker, ProgressPanel
    
-   6.4 gui/steps/ (11 files - 10 workflow tabs)
+   6.4 gui/steps/ (10 files - 10 workflow tabs)
        - __init__.py - Step exports
        - base.py - BaseStep abstract class (TASK 43.14: tab caching infra)
        - input_extract.py - Step 0: Input/Extraction 🔗formats/
        - analysis.py - Step 1: Analysis ❌NO shared imports
        - costs.py - Step 2: Costs (renamed from estimate.py in Phase 40)
-       - estimate.py - Backward-compat redirect to costs.py
        - information.py - Step 3: Information ❌NO shared imports (moved from Step 2)
        - preprocess.py - Step 4: Preprocessing ❌NO shared imports (moved from Step 3)
        - translate.py - Step 5: Translation 🔗api_client, mock_translator (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching)
@@ -159,7 +166,7 @@ TABLE OF CONTENTS
        - __init__.py - Component exports
        - table.py - SharedTable, ColumnDef, TableRow (Phase 43: batch insertion for large datasets; Phase 17: version tracking to cancel stale batches)
    
-   6.6 gui/dialogs/ (4 files - 3 dialog modules)
+   6.6 gui/dialogs/ (5 files - 4 dialog modules)
        - __init__.py - Dialog exports
        - global_options.py - GlobalOptionsDialog with section panels:
          - OptionSection enum: API, REQUEST, CACHING, LOGGING, SESSION, SAFETY, FILE_IO, PROMPTS
@@ -187,8 +194,9 @@ TABLE OF CONTENTS
          - Right pane: Folder browser with multi-select
          - Path list display for selected items
          - Returns list of selected file/folder paths
+       - loading_progress.py - Progress dialog for long-running operations
    
-   6.7 gui/helpers/ (7 files - 6 adapter modules)
+   6.7 gui/helpers/ (8 files - 7 adapter modules)
        - __init__.py - Helper exports
        - mode_adapter.py - Bridge between GUI config and modi/ modules (TASK 16.5)
        - analysis_adapter.py - Bridge between GUI and functions/analysis.py (TASK 16.6)
@@ -196,6 +204,7 @@ TABLE OF CONTENTS
        - chunker_adapter.py - Bridge between GUI and functions/chunker.py
        - prompt_adapter.py - Bridge between GUI and functions/prompt_builder.py
        - manifest_binding.py - Widget-to-Manifest binding system (TASK 22.3)
+       - tooltip.py - Tooltip display utilities for widgets
    
    6.8 gui/state/ (2 files)
        - __init__.py - State exports
@@ -3726,38 +3735,25 @@ Notes:
 - Pure stdlib, no CherryAI dependencies
 - Auto-initializes missing config sections on first access
 
-OPTIONS.PY (Session 4 → Session 13 - Options Dialog)
+OPTIONS.PY (Session 4 → Session 13 - API Providers)
 
-Purpose: Tkinter tabbed dialog for comprehensive API and application options
+Purpose: API provider definitions (single source of truth) and helper functions.
 
-Classes:
-- OptionsDialog(tk.Toplevel): Modal tabbed dialog with Save/Cancel/Reset
-  - _init_variables(): Initialize all tkinter variables
-  - _build_ui(): Creates notebook with 3 tabs
-  - _build_general_tab(): Debug, autosave toggles
-  - _build_api_tab(): Provider, key, model, temperature
-  - _build_translation_tab(): Languages, timeouts, batch settings
-  - _on_provider_change(): Updates base_url and model list
-  - _test_connection(): Live API connectivity test
-  - _validate_settings(): Validates all ranges before save
-  - get_ui_state() → Dict of UI settings
-  - get_api_state() → Dict of API settings
-
-Functions:
-- open_options_dialog(parent, on_save) → OptionsDialog
-- get_api_settings_summary() → str (brief status for display)
+Note: OptionsDialog was deprecated and removed. The GUI now uses 
+gui/dialogs/global_options.py → GlobalOptionsDialog for option management.
 
 Constants:
 - API_PROVIDERS: Dict mapping provider ID to {name, base_url, models}
-  - openai, gemini, anthropic, local
-- SUPPORTED_LANGUAGES: List of 14 translation languages
+  - openai, gemini, anthropic, local, ollama, lmstudio
+- SUPPORTED_LANGUAGES: List of translation languages (from languages.py)
 
-Validation Ranges:
-- Temperature: 0.0 - 2.0
-- Timeout: 10 - 600 seconds
-- Chunk size: 10 - 200 lines
-- Retries: 0 - 10
-- Rate limit: 1 - 1000 req/min
+Functions:
+- get_api_urls() → Dict[str, str] - Provider to base URL mapping
+- get_provider_models(provider) → List[str] - Models for a provider
+- get_all_provider_models() → Dict[str, List[str]] - All providers' models
+- get_provider_names() → List[str] - All provider keys
+- get_provider_display_name(provider) → str - Human-readable name
+- get_api_settings_summary() → str - Brief status for display
 
 Dependencies:
 - tkinter, tkinter.ttk, tkinter.messagebox, logging, typing
@@ -4637,14 +4633,18 @@ save_config(config)
 OPTIONS API
 
 ```python
-from CherryAI.functions.options import OptionsDialog, open_options_dialog
+# API provider definitions (single source of truth)
+from CherryAI.functions.options import API_PROVIDERS, get_provider_models
 
-# Open dialog
-dialog = OptionsDialog(parent_window)
-state = dialog.get_state()  # Returns Dict of selected options
+# Get available models for a provider
+models = get_provider_models("openai")  # ["gpt-4o", "gpt-4o-mini", ...]
 
-# Or use convenience function
-open_options_dialog(parent_window, on_save_callback)
+# Get current API status summary
+from CherryAI.functions.options import get_api_settings_summary
+status = get_api_settings_summary()  # "openai/gpt-4o (Key: configured)"
+
+# For options dialog, use GlobalOptionsDialog from gui/dialogs/global_options.py
+from CherryAI.gui.dialogs.global_options import GlobalOptionsDialog
 ```
 
 DEPENDENCIES API

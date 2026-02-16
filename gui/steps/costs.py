@@ -41,9 +41,10 @@ from CherryAI.functions.config import (
 )
 
 # Import chunker adapter functions (TASK 16.8)
+# count_tokens is the authoritative implementation - no wrapper needed
 from CherryAI.gui.helpers.chunker_adapter import (
-    count_tokens as chunker_count_tokens,
-    count_tokens_batch as chunker_count_tokens_batch,
+    count_tokens,
+    count_tokens_batch,
     is_tiktoken_available,
     estimate_rate_limit_time as chunker_estimate_rate_limit_time,
     get_model_rate_limits,
@@ -94,20 +95,7 @@ class ComparisonResult:
     savings_percent: float
 
 
-def count_tokens(text: str, model: str = DEFAULT_MODEL) -> Tuple[int, str]:
-    """Count tokens in text.
-
-    Uses chunker_adapter which wraps functions/chunker.py for accurate
-    token counting via tiktoken, with heuristic fallback.
-
-    Args:
-        text: Text to count tokens for.
-        model: Model name for encoding selection.
-
-    Returns:
-        Tuple of (token_count, method_used).
-    """
-    return chunker_count_tokens(text, model=model)
+# count_tokens imported directly from chunker_adapter - no wrapper needed
 
 
 def estimate_cost(
