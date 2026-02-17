@@ -23,8 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Modernized packaging with pyproject.toml
 - Improved error handling and validation
 - Enhanced placeholder system
+- Input button now directly opens Unified Selection dialog (no dropdown menu)
+- Estimation step renamed to Costs step (Phase 40)
 
 ### Fixed
+- Manifest v3.2 filedir loading: lines now properly restored when reopening projects
+- File tree ordering: folders now appear above files and are collapsed by default
+- Test imports updated from `estimate` to `costs` module
 - Various edge cases in text processing
 - Unicode handling improvements
 

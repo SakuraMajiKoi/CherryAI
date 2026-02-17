@@ -294,6 +294,12 @@ Global Options are application-wide settings accessed via Tools → Options. The
 | Auto-analyze on Load | bool | true | Run analysis after file load |
 | Auto-preprocess on Load | bool | true | Run preprocessing after analysis |
 
+**Restore on Launch (Phase 58.11):**
+- Accessible via GlobalOptions (Session section) and WelcomeDialog checkbox
+- WelcomeDialog shows "Automatically load last project on startup" when Resume option available
+- Setting stored in `[recent].restore_on_launch` for app startup behavior
+- GlobalOptions reads from and writes to `[recent]` section for sync
+
 #### Safety Settings
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
@@ -856,6 +862,12 @@ The Input button opens a **unified file and folder selection window** that combi
 - "Add Selection" button adds current selection to the load queue without closing
 - "Load" button finalizes all selections and begins the loading pipeline
 - "Clear" button removes all pending selections
+
+**Phase 58.12 Enhancements**:
+- **Last Directory Memory**: Dialog opens to last used directory (stored in `[recent].last_input_dir`)
+- **Project Name Integration**: When creating a new project (no manifest), Options panel includes Project Name field
+- Project name field appears left of Format and Encoding dropdowns
+- Eliminates separate ProjectNameDialog for streamlined workflow
 
 **Selection Types**:
 - **Files**: Select one or more individual files

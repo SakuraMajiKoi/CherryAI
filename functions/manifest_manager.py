@@ -1327,6 +1327,9 @@ class ManifestManager:
     def save(self) -> bool:
         """Save the manifest to disk.
         
+        PHASE 58.11: Uses deepcopy to prevent "dictionary changed size during
+        iteration" error when autosave runs while main thread modifies data.
+        
         Returns:
             True if saved successfully
         """
@@ -1337,8 +1340,11 @@ class ManifestManager:
         try:
             self._manifest_path.parent.mkdir(parents=True, exist_ok=True)
             
+            # PHASE 58.11: Create snapshot to prevent concurrent modification error
+            data_snapshot = deepcopy(self._manifest_data)
+            
             with open(self._manifest_path, "w", encoding="utf-8") as f:
-                json.dump(self._manifest_data, f, ensure_ascii=False, indent=2)
+                json.dump(data_snapshot, f, ensure_ascii=False, indent=2)
             
             self._dirty = False
             logger.debug("Saved manifest: %s", self._manifest_path)

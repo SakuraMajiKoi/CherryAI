@@ -537,6 +537,9 @@ class App(tk.Tk):
         saved_step = self._manifest_manager.current_step
         if 0 <= saved_step < len(self._step_tabs):
             self._notebook.select(saved_step)
+            # PHASE 58.11: Explicitly call on_enter after loading manifest
+            # This ensures files are populated even if tab didn't change
+            self._step_tabs[saved_step].on_enter()
 
         # Add to recent manifests
         ini_manager.add_to_recent_manifests(manifest_path)
@@ -591,29 +594,14 @@ class App(tk.Tk):
         """Handle Load Manifest menu item.
         
         TASK 19: Opens LoadManifestDialog to select and load an existing project.
+        PHASE 58.11: Uses _load_manifest_from_path for consistent loading behavior.
         """
         def on_load(manifest_path: Path) -> None:
             """Callback when manifest is selected."""
-            if self._manifest_manager.load(manifest_path):
-                # Update session with manifest path for legacy compatibility
-                self.session.manifest_path = manifest_path
-                
-                # Update all steps with new manifest manager
-                for tab in self._step_tabs:
-                    tab._manifest_manager = self._manifest_manager
-                
-                # Navigate to saved step position
-                saved_step = self._manifest_manager.current_step
-                if 0 <= saved_step < len(self._step_tabs):
-                    self._notebook.select(saved_step)
-                
-                # Refresh UI
-                self._progress_tracker.refresh()
+            if self._load_manifest_from_path(manifest_path):
                 project_name = self._manifest_manager.project_name or manifest_path.stem
                 self._set_status(f"Loaded project: {project_name}")
-                logger.info("Loaded manifest: %s", manifest_path)
-            else:
-                messagebox.showerror("Error", f"Failed to load manifest: {manifest_path}")
+            # Error messaging handled in _load_manifest_from_path
         
         LoadManifestDialog(self, on_load=on_load)
 

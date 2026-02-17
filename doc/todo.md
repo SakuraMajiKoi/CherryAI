@@ -1169,6 +1169,84 @@ Goal: Record pipeline execution details in manifest for tracking.
   - `test_pipeline_recording`
   - `test_execution_time_recorded`
 
+---
+
+### TASK 58.11: Manifest Loading & Startup Fixes
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Fix manifest lines not loading from resume, add auto-load checkbox to 
+WelcomeDialog, sync GlobalOptions with startup setting, order manifest list
+by date, and fix dictionary iteration error during autosave.
+
+**Fixes Implemented:**
+1. **Manifest Lines Not Loading:** When loading manifest via App menu or WelcomeDialog 
+   Resume, lines now populate correctly in InputExtractionStep via `_populate_from_manifest()`
+2. **Auto-Load Checkbox:** WelcomeDialog shows "Automatically load last project on startup"
+   checkbox (only when Resume option available), persisted via `set_restore_on_launch()`
+3. **GlobalOptions Sync:** `restore_on_launch` in GlobalOptions now reads from and writes
+   to `[recent]` section to match startup behavior
+4. **Manifest List Sorting:** LoadManifestDialog sorts manifests by modification date 
+   (latest first) instead of alphabetically
+5. **Dictionary Iteration Error:** ManifestManager.save() now uses deepcopy to prevent
+   "dictionary changed size during iteration" error during autosave
+
+**Files Modified:**
+- `gui/steps/input_extract.py` - Added manifest data check in `on_enter()`
+- `gui/app.py` - Added explicit `on_enter()` call after manifest load
+- `gui/dialogs/project_dialog.py` - Added auto-load checkbox, sorted manifest list
+- `gui/dialogs/global_options.py` - Sync restore_on_launch with [recent] section
+- `functions/manifest_manager.py` - Use deepcopy in save() method
+
+**Tests to Add:**
+- `dev/test_app_startup.py`:
+  - `test_manifest_lines_load_on_resume`
+  - `test_auto_load_checkbox_saves_setting`
+  - `test_manifest_list_sorted_by_date`
+  - `test_global_options_syncs_restore_setting`
+- `dev/test_manifest_manager.py`:
+  - `test_save_concurrent_modification_safe`
+
+---
+
+### TASK 58.12: Input Dialog UX Improvements
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Improve UnifiedInputDialog to remember last directory and integrate 
+project name input to reduce dialog steps for new projects.
+
+**Features Implemented:**
+1. **Last Directory Persistence:** UnifiedInputDialog remembers the last used 
+   input directory across sessions, stored in `[recent].last_input_dir`
+2. **Project Name Field Integration:** When creating a new project (no manifest 
+   loaded), the dialog shows a "Project Name" field in the Options panel, 
+   eliminating the separate ProjectNameDialog
+
+**Files Modified:**
+- `functions/ini_manager.py` - Added `get_last_input_dir()` and `set_last_input_dir()`
+- `gui/dialogs/input_dialog.py` - Added `show_project_name` parameter, project name 
+  field in options panel, last directory integration
+- `gui/steps/input_extract.py` - Updated to use new dialog parameters and bypass 
+  ProjectNameDialog when project name provided via dialog
+
+**Test Files Created:**
+- `doc/test_game/` - Comprehensive test game files for feature testing:
+  - test_dialogue.txt - Speaker:Dialogue format, quotes, rolling context
+  - test_code_patterns.txt - Code protection, placeholders, anchoring
+  - test_deduplication.txt - Duplicate handling, aggressive dedup
+  - test_menu_choice.txt - Context markers, menu/choice formats
+  - test_pov.txt - Point of view inference, pronouns
+  - test_wordwrap.txt - Overflow, line length, width calculation
+  - test_glossary.txt - Term matching, consistency, character names
+  - test_edge_cases.txt - Unicode, empty lines, special characters
+  - TEST_GAME_GUIDE.md - Documentation of test file coverage
+
+**Tests to Add:**
+- `dev/test_input_dialog.py`:
+  - `test_last_dir_remembered`
+  - `test_project_name_field_shown_when_no_manifest`
+  - `test_project_name_validated`
+  - `test_result_tuple_includes_project_name`
+
 =============================================================================
 
 PHASE 59: ANALYSIS ENHANCEMENT (Step 1 Enhancement)

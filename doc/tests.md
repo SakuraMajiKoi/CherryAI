@@ -767,6 +767,25 @@ Application startup manifest loading tests (Task 21.4).
 | `test_handles_missing_manifest_file` | When last manifest file is missing, returns path |
 | `test_first_launch_has_no_last_manifest` | On first launch, no last manifest should be set |
 
+#### TestPhase58_11_ManifestFixes (5 tests) - Phase 58.11
+
+| Test | Purpose |
+|------|---------|
+| `test_manifest_lines_load_on_resume` | Resume loads manifest lines into InputExtractionStep |
+| `test_auto_load_checkbox_saves_setting` | WelcomeDialog checkbox persists restore_on_launch |
+| `test_manifest_list_sorted_by_date` | LoadManifestDialog shows newest manifests first |
+| `test_global_options_syncs_restore_setting` | GlobalOptions read/write syncs with [recent] section |
+| `test_save_concurrent_modification_safe` | ManifestManager.save() uses deepcopy for thread safety |
+
+#### TestPhase58_12_InputDialogUX (4 tests) - Phase 58.12
+
+| Test | Purpose |
+|------|---------|
+| `test_last_dir_remembered` | UnifiedInputDialog remembers last used directory |
+| `test_project_name_field_shown_when_no_manifest` | Project Name field appears when show_project_name=True |
+| `test_project_name_validated` | Empty project name triggers validation error |
+| `test_result_tuple_includes_project_name` | Dialog result includes project_name as 4th element |
+
 ---
 
 ### dev/test_manifest_filedir.py (51 tests) - TASK 35

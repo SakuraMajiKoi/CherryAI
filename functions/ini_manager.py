@@ -689,6 +689,44 @@ def set_restore_on_launch(enabled: bool) -> bool:
     return set_default("recent", "restore_on_launch", enabled)
 
 
+def get_last_input_dir() -> Optional[Path]:
+    """Get the last used input directory from INI.
+
+    PHASE 58.12: Reads [recent] last_input_dir from INI file.
+
+    Returns:
+        Path to last input directory if it exists, None otherwise.
+    """
+    path_str = get_str("recent", "last_input_dir", "")
+    if not path_str:
+        return None
+    
+    path = Path(path_str)
+    # Return only if directory exists
+    if path.exists() and path.is_dir():
+        return path
+    return None
+
+
+def set_last_input_dir(dir_path: Optional[Path]) -> bool:
+    """Set the last used input directory in INI.
+
+    PHASE 58.12: Stores as absolute path in [recent] last_input_dir.
+
+    Args:
+        dir_path: Path to directory, or None to clear.
+
+    Returns:
+        True if successful.
+    """
+    if dir_path is None:
+        return set_default("recent", "last_input_dir", "")
+    
+    # Store as absolute path
+    abs_path = dir_path.resolve()
+    return set_default("recent", "last_input_dir", str(abs_path))
+
+
 # =============================================================================
 # User Defaults Management (TASK 31.2)
 # =============================================================================

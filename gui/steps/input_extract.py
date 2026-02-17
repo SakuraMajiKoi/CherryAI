@@ -200,10 +200,11 @@ class InputExtractionStep(BaseStep):
             command=self._on_load_folder,
         )
 
+        # Input button directly opens the unified selection dialog per specs
         self._select_btn = ttk.Button(
             toolbar,
-            text="📁 Input ▾",
-            command=self._show_select_menu,
+            text="📁 Input",
+            command=self._on_unified_input,
         )
         self._select_btn.pack(side="left", padx=2)
 
@@ -413,20 +414,27 @@ class InputExtractionStep(BaseStep):
             self._select_menu.grab_release()
 
     def _on_unified_input(self) -> None:
-        """Handle unified input dialog (PHASE 58.1).
+        """Handle unified input dialog (PHASE 58.1, PHASE 58.12).
 
         Opens a combined file/folder selection window allowing users to
         select both files and folders in a single interface.
+        
+        PHASE 58.12: Dialog now includes project name field when creating new project.
         """
         encoding = self._encoding_var.get() if self._encoding_var else "auto"
         format_override = self._format_var.get() if self._format_var else "auto"
 
-        # Determine initial directory
+        # Determine initial directory - PHASE 58.12: Uses ini_manager if no other dir
         initial_dir = None
         if self._loaded_files:
             initial_dir = str(self._loaded_files[0].path.parent)
         elif self._folder_root:
             initial_dir = str(self._folder_root)
+        # If no initial_dir, dialog will use ini_manager.get_last_input_dir()
+
+        # PHASE 58.12: Show project name field if no manifest is loaded
+        mgr = self.manifest_manager
+        show_project_name = (mgr is None or not mgr.is_loaded)
 
         # Show unified input dialog
         dialog = UnifiedInputDialog(
@@ -434,13 +442,15 @@ class InputExtractionStep(BaseStep):
             format_filter=format_override,
             encoding=encoding,
             initial_dir=initial_dir,
+            show_project_name=show_project_name,
         )
 
         result = dialog.show()
         if result is None:
             return
 
-        selected_paths, format_filter, enc = result
+        # PHASE 58.12: Unpack 4-tuple result
+        selected_paths, format_filter, enc, project_name = result
         if not selected_paths:
             return
 
@@ -450,24 +460,30 @@ class InputExtractionStep(BaseStep):
         if self._encoding_var:
             self._encoding_var.set(enc)
 
-        # Process the selected paths
-        self._load_selected_paths(selected_paths, enc, format_filter)
+        # PHASE 58.12: Process with optional project name
+        self._load_selected_paths(selected_paths, enc, format_filter, project_name)
 
     def _load_selected_paths(
         self,
         paths: List[Path],
         encoding: str,
         format_override: str,
+        project_name: str = "",
     ) -> None:
         """Load files from selected paths (files or folders).
 
         PHASE 58.1: Common loading method for unified input dialog.
+        PHASE 58.12: Added project_name parameter.
 
         Args:
             paths: List of selected paths (files or folders).
             encoding: Encoding to use.
             format_override: Format filter to apply.
+            project_name: Project name for new projects (bypasses dialog).
         """
+        # PHASE 58.12: Store project name for later use
+        self._pending_project_name = project_name
+        
         files_to_load: List[Path] = []
         first_folder: Optional[Path] = None
 
@@ -917,14 +933,23 @@ class InputExtractionStep(BaseStep):
     def _ensure_project_created(self) -> None:
         """Ensure a project is created for loaded files (TASK 19 Phase 5).
         
+        PHASE 58.12: Uses pending project name from unified dialog if available,
+        bypassing the separate ProjectNameDialog.
+        
         If ManifestManager has no loaded project, prompts user for project name
         and creates a new project. Called after files are loaded.
         """
         mgr = self.manifest_manager
         if mgr is not None and not mgr.is_loaded and self._loaded_files:
-            # Get suggested name from step data
-            step_data = self.get_step_data()
-            suggested_name = step_data.get("suggested_project_name", "")
+            # PHASE 58.12: Check for pending project name from unified dialog
+            pending_name = getattr(self, "_pending_project_name", "")
+            
+            # Get suggested name from step data if no pending name
+            if not pending_name:
+                step_data = self.get_step_data()
+                suggested_name = step_data.get("suggested_project_name", "")
+            else:
+                suggested_name = pending_name
             
             # If no suggested name, use first file's parent folder or stem
             if not suggested_name and self._loaded_files:
@@ -937,7 +962,31 @@ class InputExtractionStep(BaseStep):
             # Get source file paths
             source_files = [f.path for f in self._loaded_files]
             
-            # Call App.create_new_project via toplevel
+            # PHASE 58.12: If we have a pending name, create project directly
+            if pending_name:
+                # Create project directly without showing dialog
+                try:
+                    manifest_path = mgr.create_new(pending_name, source_files)
+                    if manifest_path:
+                        # Update session for legacy compatibility
+                        app = self.winfo_toplevel()
+                        if hasattr(app, "session"):
+                            app.session.manifest_path = manifest_path
+                        # Update all steps with manifest manager
+                        if hasattr(app, "_step_tabs"):
+                            for tab in app._step_tabs:
+                                tab._manifest_manager = mgr
+                        logger.info("Project created directly: %s at %s", pending_name, manifest_path)
+                        # Update manifest with lines from loaded files
+                        if mgr.is_loaded:
+                            self._sync_lines_to_manifest()
+                except Exception as e:
+                    logger.warning("Could not create project directly: %s", e)
+                # Clear pending name
+                self._pending_project_name = ""
+                return
+            
+            # Call App.create_new_project via toplevel (shows dialog)
             try:
                 app = self.winfo_toplevel()
                 create_project_method = getattr(app, "create_new_project", None)
@@ -1563,57 +1612,104 @@ class InputExtractionStep(BaseStep):
             data: Manifest data dictionary.
         
         TASK 32.1: Uses relocated files if available.
+        TASK 38: Uses filedir with source_root for v3.2 format (lines no longer have source_file).
         """
         # Clear existing loaded files
         self._loaded_files.clear()
         self._current_file_index = -1
         
-        source_files = data.get("source_files", [])
-        if not source_files:
-            source_file = data.get("source_file")
-            if source_file:
-                source_files = [source_file]
-        
-        file_format = data.get("format", "txt")
         lines_data = data.get("lines", [])
+        filedir = data.get("filedir", [])
+        source_root = data.get("source_root", "")
         
         # Get relocated files (TASK 32.1)
         relocated = getattr(self, "_relocated_files", {})
         
-        # Group lines by source file
-        lines_by_file: Dict[str, List[str]] = {}
-        for line in lines_data:
-            source = line.get("source_file", source_files[0] if source_files else "unknown")
-            if source not in lines_by_file:
-                lines_by_file[source] = []
-            lines_by_file[source].append(line.get("orig", ""))
-        
-        # Create LoadedFile entries
-        for source_file in source_files:
-            # Check if file was relocated (TASK 32.1)
-            actual_path = Path(relocated.get(source_file, source_file))
-            path = Path(source_file)
-            lines = lines_by_file.get(source_file, [])
+        # v3.2 format: use filedir to map lines to files
+        if filedir:
+            # Set folder root for relative path display
+            if source_root:
+                self._folder_root = Path(source_root)
             
-            # If we have no lines from manifest but file exists, try loading it
-            # Use actual_path which may be relocated (TASK 32.1)
-            if not lines and actual_path.exists():
-                try:
-                    encoding = self._encoding_var.get() if self._encoding_var else "utf-8"
-                    format_override = self._format_var.get() if self._format_var else "auto"
-                    self._load_file(actual_path, encoding, format_override)
-                    continue
-                except Exception as e:
-                    logger.warning("Could not load source file %s: %s", actual_path, e)
+            for file_entry in filedir:
+                first_idx = file_entry.get("first_idx", 0)
+                last_idx = file_entry.get("last_idx", first_idx)
+                rel_path = file_entry.get("rel_path", "unknown")
+                file_format = file_entry.get("format", "txt")
+                
+                # Build absolute path from source_root + rel_path
+                if source_root:
+                    file_path = Path(source_root) / rel_path
+                else:
+                    file_path = Path(rel_path)
+                
+                # Check if file was relocated (TASK 32.1)
+                actual_path = Path(relocated.get(str(file_path), str(file_path)))
+                
+                # Extract lines for this file from lines_data using index range
+                file_lines = []
+                for idx in range(first_idx, last_idx + 1):
+                    if idx < len(lines_data):
+                        line_entry = lines_data[idx]
+                        # Get the original text from the line entry
+                        if isinstance(line_entry, dict):
+                            file_lines.append(line_entry.get("orig", ""))
+                        else:
+                            file_lines.append(str(line_entry))
+                
+                # Create LoadedFile
+                loaded = LoadedFile(
+                    path=actual_path if actual_path.exists() else file_path,
+                    format_id=file_format,
+                    lines=file_lines,
+                    manifest_path=self.session.manifest_path if self.session else None,
+                )
+                self._loaded_files.append(loaded)
+        else:
+            # Legacy format: fall back to source_files approach
+            source_files = data.get("source_files", [])
+            if not source_files:
+                source_file = data.get("source_file")
+                if source_file:
+                    source_files = [source_file]
             
-            # Create LoadedFile from manifest data (use actual_path for relocated files)
-            loaded = LoadedFile(
-                path=actual_path if actual_path.exists() else path,
-                format_id=file_format,
-                lines=lines,
-                manifest_path=self.session.manifest_path if self.session else None,
-            )
-            self._loaded_files.append(loaded)
+            file_format = data.get("format", "txt")
+            
+            # Group lines by source file (legacy format where lines have source_file)
+            lines_by_file: Dict[str, List[str]] = {}
+            for line in lines_data:
+                if isinstance(line, dict):
+                    source = line.get("source_file", source_files[0] if source_files else "unknown")
+                    if source not in lines_by_file:
+                        lines_by_file[source] = []
+                    lines_by_file[source].append(line.get("orig", ""))
+            
+            # Create LoadedFile entries
+            for source_file in source_files:
+                # Check if file was relocated (TASK 32.1)
+                actual_path = Path(relocated.get(source_file, source_file))
+                path = Path(source_file)
+                lines = lines_by_file.get(source_file, [])
+                
+                # If we have no lines from manifest but file exists, try loading it
+                # Use actual_path which may be relocated (TASK 32.1)
+                if not lines and actual_path.exists():
+                    try:
+                        encoding = self._encoding_var.get() if self._encoding_var else "utf-8"
+                        format_override = self._format_var.get() if self._format_var else "auto"
+                        self._load_file(actual_path, encoding, format_override)
+                        continue
+                    except Exception as e:
+                        logger.warning("Could not load source file %s: %s", actual_path, e)
+                
+                # Create LoadedFile from manifest data (use actual_path for relocated files)
+                loaded = LoadedFile(
+                    path=actual_path if actual_path.exists() else path,
+                    format_id=file_format,
+                    lines=lines,
+                    manifest_path=self.session.manifest_path if self.session else None,
+                )
+                self._loaded_files.append(loaded)
         
         # Update UI
         self._update_file_list()
@@ -1635,6 +1731,11 @@ class InputExtractionStep(BaseStep):
         nodes are individual files with line counts.
 
         PHASE 58.7: Folders collapsed by default, folders sorted above files.
+        
+        Folders appear ABOVE files at the same directory level. This is achieved
+        by a two-phase approach:
+        1. First, collect all unique folder paths and create folder nodes
+        2. Then, insert files under their respective parent nodes
         """
         # Clear existing tree
         for item in self._file_tree.get_children():
@@ -1645,26 +1746,47 @@ class InputExtractionStep(BaseStep):
         step_data = self.get_step_data()
         source_status = step_data.get("source_files_status", {})
 
-        # Build folder → files mapping for hierarchy
-        folder_items: Dict[str, str] = {}  # folder path → tree item ID
+        # Build folder → tree item ID mapping for hierarchy
+        folder_items: Dict[str, str] = {}
 
-        # PHASE 58.7: Sort files so folders appear first at each level
-        # Build a list of (depth, is_folder, display_name, index, file) tuples
-        files_with_paths: List[Tuple[int, bool, str, int, Any]] = []
+        # PHASE 58.7: Two-phase approach to ensure folders appear before files
+        # Phase 1: Collect all unique folder paths from all files
+        all_folders: set = set()
+        file_display_data: List[Tuple[str, int, 'LoadedFile']] = []  # (display_name, index, file)
+        
         for i, file in enumerate(self._loaded_files):
             display_name = self._get_display_name(file.path)
             parts = display_name.replace("\\", "/").split("/")
-            depth = len(parts) - 1  # 0 for root level files
-            is_folder = depth > 0
-            files_with_paths.append((depth, is_folder, display_name, i, file))
-
-        # Sort: by path to keep folder structure, then files alphabetically
-        # Folders naturally come first since their entries appear before files
-        sorted_files = sorted(files_with_paths, key=lambda x: x[2].lower())
-
-        for depth, is_folder, display_name, i, file in sorted_files:
+            
+            # Collect all parent folder paths
+            for depth in range(1, len(parts)):
+                folder_path = "/".join(parts[:depth])
+                all_folders.add(folder_path)
+            
+            file_display_data.append((display_name, i, file))
+        
+        # Phase 2: Create all folder nodes first (sorted alphabetically)
+        # This ensures folders appear before files at each level
+        sorted_folders = sorted(all_folders, key=str.lower)
+        for folder_path in sorted_folders:
+            parts = folder_path.split("/")
+            parent = ""
+            for depth, folder_name in enumerate(parts):
+                folder_key = "/".join(parts[:depth + 1])
+                if folder_key not in folder_items:
+                    # Create folder node - collapsed by default (open=False)
+                    folder_id = self._file_tree.insert(
+                        parent, "end", text=f"📂 {folder_name}", open=False,
+                    )
+                    folder_items[folder_key] = folder_id
+                parent = folder_items[folder_key]
+        
+        # Phase 3: Insert all files under their parent folders (sorted alphabetically)
+        sorted_files = sorted(file_display_data, key=lambda x: x[0].lower())
+        
+        for display_name, i, file in sorted_files:
             parts = display_name.replace("\\", "/").split("/")
-
+            
             # Determine status tag for coloring
             file_path_str = str(file.path)
             status = source_status.get(
@@ -1677,20 +1799,12 @@ class InputExtractionStep(BaseStep):
                 tags = ("recoverable",)
             elif status == "missing":
                 tags = ("missing",)
-
+            
+            # Determine parent based on folder path
             if len(parts) > 1:
-                # File is inside subfolder(s): create folder nodes
-                parent = ""
-                for depth, folder_name in enumerate(parts[:-1]):
-                    folder_key = "/".join(parts[: depth + 1])
-                    if folder_key not in folder_items:
-                        # PHASE 58.7: Folders collapsed by default (open=False)
-                        folder_id = self._file_tree.insert(
-                            parent, "end", text=f"📂 {folder_name}", open=False,
-                        )
-                        folder_items[folder_key] = folder_id
-                    parent = folder_items[folder_key]
-                # Insert file under deepest folder
+                # File is inside subfolder(s): find parent folder node
+                parent_folder_path = "/".join(parts[:-1])
+                parent = folder_items.get(parent_folder_path, "")
                 item_id = self._file_tree.insert(
                     parent, "end", text=f"📄 {parts[-1]}",
                     values=(file.line_count,), tags=tags,
@@ -1701,7 +1815,7 @@ class InputExtractionStep(BaseStep):
                     "", "end", text=f"📄 {display_name}",
                     values=(file.line_count,), tags=tags,
                 )
-
+            
             self._tree_item_to_index[item_id] = i
 
         # Configure tag colors
@@ -1810,6 +1924,21 @@ class InputExtractionStep(BaseStep):
         # Restore LoadedFile objects from session data if not already loaded
         if not self._loaded_files and step_data.get("files"):
             self._restore_files_from_session(step_data)
+        
+        # PHASE 58.11: If no loaded files but manifest has filedir/lines data,
+        # populate from manifest (happens when loading manifest via App menu)
+        if not self._loaded_files:
+            mgr = self.manifest_manager
+            if mgr is not None and mgr.is_loaded:
+                raw_data = mgr.get_raw_data()
+                filedir = raw_data.get("filedir", [])
+                lines = raw_data.get("lines", [])
+                if filedir and lines:
+                    logger.debug(
+                        "Populating from manifest: %d files, %d lines",
+                        len(filedir), len(lines),
+                    )
+                    self._populate_from_manifest(raw_data)
         
         if self._loaded_files:
             # Files already loaded, refresh UI

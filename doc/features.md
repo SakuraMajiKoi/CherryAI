@@ -153,9 +153,9 @@ THE BASIC WORKFLOW (Batch Processing)
 CherryAI is built on **batch processing**: you can load one or multiple files and apply the same rules to all of them at once.
 
 1. Load Files (Single, Multiple, or Folder)
-   - Click "Select File(s) ▾" dropdown for unified file/folder selection
+   - Click "Input" button to open unified file/folder selection dialog
    - Select one or more files: .txt, .csv, .tsv, .json, .xlsx, .rpgmaker, or image files
-   - Folder loading shows collapsible folder hierarchy in a Treeview
+   - Folder loading shows collapsible folder hierarchy in a Treeview (folders above files, collapsed by default)
    - Auto-encoding detection (BOM → utf-8 → shift_jis → fallback)
    - Format filtering: when format is forced, non-matching files are refused
    - Progress dialog shown when loading >3 files
@@ -636,7 +636,11 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Folders collapsed by default for cleaner initial view
     - Folders sorted above files in tree
     - New context menu items: Select All, Expand All, Collapse All
-  - Unified "Select File(s) ▾" dropdown button for file and folder selection
+  - **Input Dialog UX Improvements (Phase 58.12):**
+    - UnifiedInputDialog remembers last used directory across sessions
+    - Project Name field integrated into Options panel (avoids separate dialog)
+    - Directory persisted in `[recent].last_input_dir` in CherryAI.ini
+  - Unified "Input" button opens UnifiedInputDialog directly (no dropdown)
   - **Collapsible folder hierarchy:** Treeview with parent folder nodes and leaf file nodes
     - Multi-select support for bulk deletion
     - Context menu: Remove Selected, Select All in Folder
@@ -772,14 +776,18 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
       - **Prompt (Task 23.4):** Renamed from "Additional Notes", moved to left column
     - Changes auto-save to manifest on widget interaction
     - Values auto-load on step entry via `_load_from_manifest_bindings()`
-  - **Application Startup (Task 21.4):**
+  - **Application Startup (Task 21.4, Phase 58.11):**
     - On launch, reads last manifest path from INI [recent] section
     - Auto-loads last project if restore_on_launch enabled (default)
     - Shows WelcomeDialog if no last manifest or file missing:
       - Resume: Load last project
       - New Project: Start fresh with file loading
-      - Load Existing: Open project browser
+      - Load Existing: Open project browser (sorted by date, latest first)
       - Start Fresh: Begin without loading project
+      - **Auto-load checkbox:** "Automatically load last project on startup" (Phase 58.11)
+        - Only shown when Resume option is available
+        - Persists via ini_manager.set_restore_on_launch()
+        - GlobalOptions syncs with this setting in [recent] section
     - Saves last manifest path on app close for next launch
     - Recent manifests list maintained (up to 10)
   - **Global vs Project Glossary**: Toggle in Information step to use global glossary.json or project-specific glossary stored in manifest

@@ -2,6 +2,7 @@
 
 Dialog for unified file/folder selection when loading files.
 PHASE 58.1: Replaces separate Load Files/Load Folder buttons with a combined interface.
+PHASE 58.12: Remembers last directory, includes Project Name field.
 """
 
 from __future__ import annotations
@@ -47,6 +48,8 @@ class UnifiedInputDialog(tk.Toplevel):
     - Add Selection button queues items without closing
     - Load button finalizes and begins pipeline
     - Format filtering based on selected format
+    - Project Name field for new projects (PHASE 58.12)
+    - Remembers last used directory (PHASE 58.12)
 
     PHASE 58.1: Input Button Unified Window implementation.
     """
@@ -58,6 +61,8 @@ class UnifiedInputDialog(tk.Toplevel):
         encoding: str = "auto",
         initial_dir: Optional[str] = None,
         on_load: Optional[Callable[[List[Path], str, str], None]] = None,
+        show_project_name: bool = False,
+        suggested_project_name: str = "",
     ) -> None:
         """Initialize the unified input dialog.
 
@@ -65,20 +70,34 @@ class UnifiedInputDialog(tk.Toplevel):
             parent: Parent window.
             format_filter: Format filter to apply (auto = all formats).
             encoding: Encoding to use for loading.
-            initial_dir: Initial directory to show.
+            initial_dir: Initial directory to show. If None, uses last used or home.
             on_load: Callback when Load is clicked with (paths, format, encoding).
+            show_project_name: Whether to show project name field (PHASE 58.12).
+            suggested_project_name: Suggested project name (PHASE 58.12).
         """
         super().__init__(parent)
         self._format_filter = format_filter
         self._encoding = encoding
         self._on_load_callback = on_load
-        self._initial_dir = initial_dir or str(Path.home())
+        self._show_project_name = show_project_name
+        
+        # PHASE 58.12: Get initial directory from ini_manager if not provided
+        if initial_dir:
+            self._initial_dir = initial_dir
+        else:
+            from CherryAI.functions import ini_manager
+            last_dir = ini_manager.get_last_input_dir()
+            self._initial_dir = str(last_dir) if last_dir else str(Path.home())
         
         # Selection queue
         self._selected_paths: List[Path] = []
         
-        # Result
-        self.result: Optional[Tuple[List[Path], str, str]] = None
+        # Project name (PHASE 58.12)
+        self._suggested_project_name = suggested_project_name
+        self._project_name: str = ""
+        
+        # Result - now includes project_name
+        self.result: Optional[Tuple[List[Path], str, str, str]] = None
         
         self.title("Select Files or Folders")
         self.transient(parent)
@@ -247,9 +266,26 @@ class UnifiedInputDialog(tk.Toplevel):
         return frame
 
     def _build_options_panel(self, parent: ttk.Frame) -> None:
-        """Build the options panel."""
+        """Build the options panel.
+        
+        PHASE 58.12: Added Project Name field (left of Format/Encoding).
+        """
         options_frame = ttk.LabelFrame(parent, text="Options", padding=5)
         options_frame.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+
+        # PHASE 58.12: Project Name field (only if show_project_name is True)
+        if self._show_project_name:
+            ttk.Label(options_frame, text="Project Name:").pack(side="left", padx=(0, 5))
+            self._project_name_var = tk.StringVar(value=self._suggested_project_name)
+            project_entry = ttk.Entry(
+                options_frame,
+                textvariable=self._project_name_var,
+                width=20,
+            )
+            project_entry.pack(side="left")
+            
+            # Separator
+            ttk.Separator(options_frame, orient="vertical").pack(side="left", fill="y", padx=15)
 
         # Format filter
         ttk.Label(options_frame, text="Format:").pack(side="left", padx=(0, 5))
@@ -507,14 +543,36 @@ class UnifiedInputDialog(tk.Toplevel):
     # ----------------------------- Dialog Actions ----------------------------- #
 
     def _on_load(self) -> None:
-        """Handle Load button click."""
+        """Handle Load button click.
+        
+        PHASE 58.12: Validates project name, saves last directory.
+        """
         if not self._selected_paths:
             return
 
         format_filter = self._format_var.get()
         encoding = self._encoding_var.get()
+        
+        # PHASE 58.12: Get project name if shown
+        project_name = ""
+        if self._show_project_name:
+            project_name = self._project_name_var.get().strip()
+            if not project_name:
+                from tkinter import messagebox
+                messagebox.showwarning(
+                    "Project Name Required",
+                    "Please enter a project name.",
+                    parent=self,
+                )
+                return
+        
+        # PHASE 58.12: Save last used directory
+        current_dir = Path(self._path_var.get())
+        if current_dir.exists() and current_dir.is_dir():
+            from CherryAI.functions import ini_manager
+            ini_manager.set_last_input_dir(current_dir)
 
-        self.result = (list(self._selected_paths), format_filter, encoding)
+        self.result = (list(self._selected_paths), format_filter, encoding, project_name)
 
         if self._on_load_callback:
             self._on_load_callback(self._selected_paths, format_filter, encoding)
@@ -526,11 +584,13 @@ class UnifiedInputDialog(tk.Toplevel):
         self.result = None
         self.destroy()
 
-    def show(self) -> Optional[Tuple[List[Path], str, str]]:
+    def show(self) -> Optional[Tuple[List[Path], str, str, str]]:
         """Show the dialog and wait for result.
 
+        PHASE 58.12: Result now includes project name.
+
         Returns:
-            Tuple of (paths, format, encoding) or None if cancelled.
+            Tuple of (paths, format, encoding, project_name) or None if cancelled.
         """
         self.wait_window()
         return self.result

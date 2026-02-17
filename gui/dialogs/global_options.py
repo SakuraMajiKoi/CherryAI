@@ -768,6 +768,8 @@ class GlobalOptionsDialog(tk.Toplevel):
 
     def _init_variables(self) -> None:
         """Initialize all tkinter variables for form controls."""
+        from CherryAI.functions import ini_manager  # PHASE 58.11: For restore_on_launch
+        
         # API settings
         self.provider_var = tk.StringVar(value=self.options.api.provider)
         self.api_key_var = tk.StringVar(value=self.options.api.api_key)
@@ -816,7 +818,8 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.autosave_enabled_var = tk.BooleanVar(value=self.options.session.autosave_enabled)
         self.autosave_interval_var = tk.IntVar(value=self.options.session.autosave_interval)
         self.theme_var = tk.StringVar(value=self.options.session.theme)
-        self.restore_on_launch_var = tk.BooleanVar(value=self.options.session.restore_on_launch)
+        # PHASE 58.11: Read from [recent] section which controls actual startup behavior
+        self.restore_on_launch_var = tk.BooleanVar(value=ini_manager.get_restore_on_launch())
         self.confirm_on_exit_var = tk.BooleanVar(value=self.options.session.confirm_on_exit)
         self.auto_analyze_on_load_var = tk.BooleanVar(value=self.options.session.auto_analyze_on_load)
         self.auto_preprocess_on_load_var = tk.BooleanVar(value=self.options.session.auto_preprocess_on_load)
@@ -1932,6 +1935,9 @@ class GlobalOptionsDialog(tk.Toplevel):
                 "auto_preprocess_on_load": "true" if self.auto_preprocess_on_load_var.get() else "false",
             }
             ini_manager.save_as_user_defaults("session", session_defaults)
+            
+            # PHASE 58.11: Also sync restore_on_launch to [recent] section for startup
+            ini_manager.set_restore_on_launch(self.restore_on_launch_var.get())
 
             # Safety settings
             safety_defaults = {

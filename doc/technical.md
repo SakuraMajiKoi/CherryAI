@@ -184,16 +184,20 @@ TABLE OF CONTENTS
            - tlc_prompt: str - Custom prompt for TLC steps  
            - Supports {source_lang} and {target_lang} placeholders
            - Stored in [prompts] section of config/defaults.ini
-       - project_dialog.py - Project management dialogs (TASK 19, TASK 21.4):
+       - project_dialog.py - Project management dialogs (TASK 19, TASK 21.4, Phase 58.11):
          - ProjectNameDialog: Prompt for project name on new project creation (500x280, empty name field)
-         - LoadManifestDialog: File browser for loading existing manifests
+         - LoadManifestDialog: File browser for loading existing manifests (sorted by date, latest first)
          - WelcomeDialog: First launch dialog with Resume/New/Load/Fresh options
-       - input_dialog.py - Unified Input Dialog (Phase 58.1):
+           - Auto-load checkbox: "Automatically load last project on startup" (Phase 58.11)
+           - Persists setting to [recent].restore_on_launch via ini_manager
+       - input_dialog.py - Unified Input Dialog (Phase 58.1, Phase 58.12):
          - UnifiedInputDialog: Dual-pane file/folder selection
          - Left pane: File browser with multi-select
          - Right pane: Folder browser with multi-select
          - Path list display for selected items
-         - Returns list of selected file/folder paths
+         - **Phase 58.12:** Last directory persistence via ini_manager
+         - **Phase 58.12:** Project Name field in Options panel (show_project_name parameter)
+         - Returns 4-tuple: (paths, format, encoding, project_name)
        - loading_progress.py - Progress dialog for long-running operations
    
    6.7 gui/helpers/ (8 files - 7 adapter modules)
@@ -230,6 +234,9 @@ TABLE OF CONTENTS
          - get_last_manifest() / set_last_manifest() - Last used manifest path
          - get_recent_manifests() / add_to_recent_manifests() - Recent list
          - get_restore_on_launch() / set_restore_on_launch() - Auto-restore toggle
+       - **Phase 58.12:** Last input directory persistence:
+         - get_last_input_dir() - Get last used input directory (returns Path or None)
+         - set_last_input_dir() - Store last used input directory in [recent] section
        - TASK 31.2: User defaults management:
          - get_initial_default() - Load from config/defaults.ini
          - get_user_default() / set_user_default() / has_user_default() - User defaults in [user_defaults]
@@ -876,6 +883,14 @@ Projects/
       chapter1.txt
       data/items.csv
 ```
+
+**GUI Session Restore with Filedir (v3.2 Format):**
+When loading a manifest, the Input step's `_populate_from_manifest()` method uses
+the v3.2 filedir format to reconstruct the file tree:
+1. Reads `filedir` array with `first_idx`, `last_idx`, `rel_path` per file
+2. Combines `source_root` + `rel_path` to reconstruct full file paths
+3. Extracts lines for each file using the index range from `lines[]` array
+4. Builds folder hierarchy with folders appearing above files (collapsed by default)
 ```
 
 MANIFESTMANAGER CLASS

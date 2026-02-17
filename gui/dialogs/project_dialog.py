@@ -27,6 +27,7 @@ class WelcomeDialog(tk.Toplevel):
     - Skip and start with empty session
 
     TASK 21.4: Part of Application Startup Manifest Loading.
+    PHASE 58.11: Added auto-load last manifest checkbox option.
     """
 
     # Result types
@@ -52,6 +53,9 @@ class WelcomeDialog(tk.Toplevel):
         self._show_skip = show_skip
         self._last_manifest_name = last_manifest_name
         self._result: str = self.RESULT_CANCEL
+        
+        # PHASE 58.11: Auto-load setting variable
+        self._auto_load_var = tk.BooleanVar(value=False)
 
         self.title("Welcome to CherryAI")
         self.transient(parent)
@@ -59,10 +63,10 @@ class WelcomeDialog(tk.Toplevel):
         self.resizable(False, False)
 
         # Size and position
-        self.geometry("500x320")
+        self.geometry("500x360")  # Increased height for checkbox
         self.update_idletasks()
         x = parent.winfo_x() + (parent.winfo_width() // 2) - 250
-        y = parent.winfo_y() + (parent.winfo_height() // 2) - 160
+        y = parent.winfo_y() + (parent.winfo_height() // 2) - 180
         self.geometry(f"+{x}+{y}")
 
         # Apply theme
@@ -141,6 +145,18 @@ class WelcomeDialog(tk.Toplevel):
             )
             skip_btn.pack(fill="x", pady=5, ipady=8)
 
+        # PHASE 58.11: Auto-load checkbox (only show if resume option available)
+        if self._last_manifest_name:
+            auto_load_frame = ttk.Frame(main_frame)
+            auto_load_frame.pack(fill="x", pady=(10, 5))
+            
+            auto_load_check = ttk.Checkbutton(
+                auto_load_frame,
+                text="Automatically load last project on startup",
+                variable=self._auto_load_var,
+            )
+            auto_load_check.pack(anchor="center")
+
         # Footer
         footer_label = ttk.Label(
             main_frame,
@@ -151,12 +167,30 @@ class WelcomeDialog(tk.Toplevel):
         footer_label.pack(side="bottom")
 
     def _on_resume(self) -> None:
-        """Handle Resume button click."""
+        """Handle Resume button click.
+        
+        PHASE 58.11: Also saves auto-load preference if checkbox is checked.
+        """
+        # Save auto-load preference
+        try:
+            from CherryAI.functions import ini_manager
+            ini_manager.set_restore_on_launch(self._auto_load_var.get())
+        except Exception as e:
+            logger.warning("Failed to save auto-load preference: %s", e)
+        
         self._result = "resume"
         self.destroy()
 
     def _on_new(self) -> None:
-        """Handle New Project button click."""
+        """Handle New Project button click.
+        
+        PHASE 58.11: Disables auto-load since user chose to create new project.
+        """
+        try:
+            from CherryAI.functions import ini_manager
+            ini_manager.set_restore_on_launch(False)
+        except Exception:
+            pass
         self._result = self.RESULT_NEW
         self.destroy()
 
@@ -166,7 +200,15 @@ class WelcomeDialog(tk.Toplevel):
         self.destroy()
 
     def _on_skip(self) -> None:
-        """Handle Start Fresh button click."""
+        """Handle Start Fresh button click.
+        
+        PHASE 58.11: Disables auto-load since user chose to start fresh.
+        """
+        try:
+            from CherryAI.functions import ini_manager
+            ini_manager.set_restore_on_launch(False)
+        except Exception:
+            pass
         self._result = self.RESULT_SKIP
         self.destroy()
 
@@ -480,7 +522,9 @@ class LoadManifestDialog(tk.Toplevel):
         if not manifest_dir.exists():
             return
         
-        for manifest_path in sorted(manifest_dir.glob(f"*{MANIFEST_EXT}")):
+        # PHASE 58.11: Collect manifests with their data for sorting by date
+        manifest_entries = []
+        for manifest_path in manifest_dir.glob(f"*{MANIFEST_EXT}"):
             try:
                 with open(manifest_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
@@ -492,17 +536,36 @@ class LoadManifestDialog(tk.Toplevel):
                     files_str += f" +{len(files) - 3} more"
                 
                 modified = data.get("updated_at", "")
+                modified_display = ""
+                modified_sort = ""  # For sorting (ISO format or empty)
                 if modified:
                     try:
                         dt = datetime.fromisoformat(modified.replace("Z", "+00:00"))
-                        modified = dt.strftime("%Y-%m-%d %H:%M")
+                        modified_display = dt.strftime("%Y-%m-%d %H:%M")
+                        modified_sort = modified  # Keep original ISO for sorting
                     except Exception:
-                        pass
+                        modified_display = modified
+                        modified_sort = modified
                 
-                self._tree.insert("", "end", iid=str(manifest_path), values=(name, files_str, modified))
+                manifest_entries.append({
+                    "path": manifest_path,
+                    "name": name,
+                    "files_str": files_str,
+                    "modified_display": modified_display,
+                    "modified_sort": modified_sort,
+                })
                 
             except Exception as e:
                 logger.warning("Failed to read manifest %s: %s", manifest_path, e)
+        
+        # Sort by modification date descending (latest first)
+        manifest_entries.sort(key=lambda x: x["modified_sort"], reverse=True)
+        
+        # Insert into tree
+        for entry in manifest_entries:
+            self._tree.insert("", "end", iid=str(entry["path"]), values=(
+                entry["name"], entry["files_str"], entry["modified_display"]
+            ))
     
     def _on_load_click(self) -> None:
         """Handle Load button click."""
