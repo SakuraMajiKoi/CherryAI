@@ -82,7 +82,7 @@ TABLE OF CONTENTS
    3.20 One_Click_Test.py ✅ - 7-stage integration test
    3.21 options.py ✅ - Option management
    3.22 postanalysis.py ✅ - Post-translation analysis
-   3.23 postprocess.py ✅🔗 - Post-processing utilities (Step 7)
+   3.23 postprocess.py ✅🔗 - Post-processing utilities (Step 6, moved from Step 7)
    3.24 project_config.py ✅ - Per-project configuration
    3.25 prompt_builder.py ✅ - Build system prompts for API
    3.26 rate_limiter.py ✅ - API rate limiting
@@ -90,8 +90,8 @@ TABLE OF CONTENTS
    3.28 request_cache.py ✅ - Cache API requests
    3.29 retry_handler.py ✅ - Retry logic for API calls
    3.30 style_presets.py ✅ - Translation style presets
-   3.31 validation.py ✅🔗 - Translation validation (Step 6)
-   3.32 wordwrap.py ✅🔗 - Word wrapping (Step 8)
+   3.31 validation.py ✅🔗 - Translation validation (Step 8, moved from Step 6)
+   3.32 wordwrap.py ✅🔗 - Word wrapping (Step 7, moved from Step 8)
    3.33 ini_manager.py ✅ - INI path resolution and typed access (TASK 21.1)
    3.34 manifest_manager.py ✅🔗 - Unified manifest state management (TASK 19)
    3.35 manifest_fields.py ✅ - Manifest field type helpers (TASK 22.1) + special format helpers (TASK 22.2)
@@ -157,9 +157,9 @@ TABLE OF CONTENTS
        - information.py - Step 3: Information ❌NO shared imports (moved from Step 2)
        - preprocess.py - Step 4: Preprocessing ❌NO shared imports (moved from Step 3)
        - translate.py - Step 5: Translation 🔗api_client, mock_translator (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching)
-       - qa.py - Step 6: QA 🔗validation
-       - postprocess.py - Step 7: Postprocess 🔗postprocess
-       - wordwrap_overwrite.py - Step 8: Wordwrap 🔗wordwrap
+       - postprocess.py - Step 6: Postprocess 🔗postprocess (moved from Step 7)
+       - wordwrap_overwrite.py - Step 7: Wordwrap 🔗wordwrap (moved from Step 8)
+       - qa.py - Step 8: QA 🔗validation (moved from Step 6)
        - output_inject.py - Step 9: Output/Inject ❌NO shared imports
    
    6.5 gui/components/ (2 files)
@@ -690,9 +690,9 @@ CherryAI/
 │   │   ├── costs.py        CostsStep (step 2, renamed Phase 40)
 │   │   ├── estimate.py     Backward-compat redirect
 │   │   ├── translate.py    TranslationStep (step 5)
-│   │   ├── qa.py           QAStep (step 6)
-│   │   ├── postprocess.py  PostprocessingStep (step 7)
-│   │   ├── wordwrap_overwrite.py WordwrapOverwriteStep (step 8)
+│   │   ├── postprocess.py  PostprocessingStep (step 6, moved from Step 7)
+│   │   ├── wordwrap_overwrite.py WordwrapOverwriteStep (step 7, moved from Step 8)
+│   │   ├── qa.py           QAStep (step 8, moved from Step 6)
 │   │   └── output_inject.py OutputInjectStep (step 9)
 │   └── theme/              UI theming
 │       ├── __init__.py     Theme exports (colors, icons)

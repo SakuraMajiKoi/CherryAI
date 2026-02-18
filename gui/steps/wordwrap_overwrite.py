@@ -1,4 +1,4 @@
-"""CherryAI GUI v2 Wordwrap and Overwrite Step.
+"""CherryAI GUI v2 Wordwrap Step.
 
 Ninth workflow tab for text formatting and merge strategies.
 Provides wordwrap configuration, preview with line indicators, and overwrite options.
@@ -193,7 +193,7 @@ SPEAKER_MODE_DESCRIPTIONS: Dict[SpeakerMode, str] = {
 
 
 class WordwrapOverwriteStep(BaseStep):
-    """Wordwrap and overwrite step for text formatting.
+    """Wordwrap step for text formatting.
 
     Features:
     - Wrap width per format (RPG Maker, Ren'Py, etc.)
@@ -204,8 +204,8 @@ class WordwrapOverwriteStep(BaseStep):
     - Real-time preview updates
     """
 
-    step_id = 8
-    step_name = "Wordwrap and Overwrite"
+    step_id = 7  # Moved from position 8
+    step_name = "Wordwrap"
     # Test visibility for explicit import expectation
     _IMPORT_EXPECTATION = "from functions.wordwrap import"
 
@@ -215,7 +215,7 @@ class WordwrapOverwriteStep(BaseStep):
         session: "SessionState",
         manifest_manager: Optional["ManifestManager"] = None,
     ) -> None:
-        """Initialize wordwrap and overwrite step.
+        """Initialize Wordwrap step.
 
         Args:
             parent: Parent widget.

@@ -258,7 +258,7 @@ class PostprocessingStep(BaseStep):
     - Batch operations
     """
 
-    step_id = 7
+    step_id = 6  # Moved from position 7
     step_name = "Postprocessing"
     # Test visibility for explicit import expectation
     _IMPORT_EXPECTATION = "from functions.postprocess import"

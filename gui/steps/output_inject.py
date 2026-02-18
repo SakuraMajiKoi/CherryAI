@@ -1,4 +1,4 @@
-"""CherryAI GUI v2 Output and Injection Step.
+"""CherryAI GUI v2 Output Step.
 
 Tenth workflow tab for final output generation and file writing.
 Provides format selection, naming options, and export functionality.
@@ -240,7 +240,7 @@ NAMING_EXAMPLES: Dict[NamingStrategy, str] = {
 
 
 class OutputInjectStep(BaseStep):
-    """Output and injection step for file writing.
+    """Output step for file writing.
 
     Features:
     - Inject format selection (TXT, CSV, TSV, JSON, XLSX)
@@ -253,7 +253,7 @@ class OutputInjectStep(BaseStep):
     """
 
     step_id = 9
-    step_name = "Output and Injection"
+    step_name = "Output"
 
     def __init__(
         self,
@@ -261,7 +261,7 @@ class OutputInjectStep(BaseStep):
         session: "SessionState",
         manifest_manager: Optional["ManifestManager"] = None,
     ) -> None:
-        """Initialize output and injection step.
+        """Initialize Output step.
 
         Args:
             parent: Parent widget.

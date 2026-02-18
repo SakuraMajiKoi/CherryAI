@@ -291,7 +291,7 @@ Core shared processing logic used by both GUI and CLI.
 
 ### consistency.py
 **Purpose:** Translation consistency tracking for recurring terms.  
-**Step Integration:** Step 6 (QA)  
+**Step Integration:** Step 8 (QA)  
 **Classes:**
 - `ConsistencyTerm` - Tracked term
 - `ConsistencyStore` - Term collection
@@ -560,7 +560,7 @@ Core shared processing logic used by both GUI and CLI.
 
 ### postprocess.py
 **Purpose:** Recovery mechanisms for translations with structural issues.  
-**Step Integration:** Step 7 (Postprocess)  
+**Step Integration:** Step 6 (Postprocess)  
 **Classes:**
 - `RecoveryType` - Recovery type enum
 - `RecoveryAction` - Action enum
@@ -594,7 +594,7 @@ Core shared processing logic used by both GUI and CLI.
 
 ### process_order.py
 **Purpose:** Priority ordering for preprocessing and postprocessing operations.  
-**Step Integration:** Step 4 (Preprocessing), Step 7 (Postprocess)  
+**Step Integration:** Step 4 (Preprocessing), Step 6 (Postprocess)  
 **Functions:**
 - `get_pre_order()` - Get preprocessing order
 - `get_post_order()` - Get postprocessing order
@@ -732,7 +732,7 @@ Core shared processing logic used by both GUI and CLI.
 
 ### validation.py
 **Purpose:** Pre/post-translation validation including skip detection and speaker format preservation.  
-**Step Integration:** Step 6 (QA)  
+**Step Integration:** Step 8 (QA)  
 **Classes:**
 - `SkipReason` - Skip reason enum
 - `ValidationResult` - Result
@@ -751,7 +751,7 @@ Core shared processing logic used by both GUI and CLI.
 
 ### wordwrap.py
 **Purpose:** Wordwrap utilities with smart wrapping and code-aware line breaking.  
-**Step Integration:** Step 8 (Wordwrap)  
+**Step Integration:** Step 7 (Wordwrap)  
 **Classes:**
 - `WordwrapConfig` - Configuration
 
@@ -1190,7 +1190,7 @@ GUI v2 with 10 workflow steps and supporting infrastructure.
 ---
 
 ### gui/steps/qa.py
-**Purpose:** Step 6 - QA checks, issue flagging, validation, batch accept/reject.  
+**Purpose:** Step 8 - QA checks, issue flagging, validation, batch accept/reject.  
 **Step:** QA  
 **Classes:**
 - `IssueType` - Issue type enum
@@ -1205,7 +1205,7 @@ GUI v2 with 10 workflow steps and supporting infrastructure.
 ---
 
 ### gui/steps/postprocess.py
-**Purpose:** Step 7 - Placeholder/anchor restore, symbol conversion, recovery.  
+**Purpose:** Step 6 - Placeholder/anchor restore, symbol conversion, recovery.  
 **Step:** Postprocess  
 **Classes:**
 - `RecoveryType` - Recovery type enum
@@ -1221,7 +1221,7 @@ GUI v2 with 10 workflow steps and supporting infrastructure.
 ---
 
 ### gui/steps/wordwrap_overwrite.py
-**Purpose:** Step 8 - Wordwrap configuration, preview, overwrite/merge options.  
+**Purpose:** Step 7 - Wordwrap configuration, preview, overwrite/merge options.  
 **Step:** Wordwrap  
 **Classes:**
 - `WrapMode` - Wrap mode enum
@@ -1647,24 +1647,24 @@ These features span multiple workflow steps:
 - `functions/batch_tracker.py` - Batch API
 - `gui/helpers/prompt_adapter.py` - Bridge
 
-### Step 6: QA
-**GUI Module:** `gui/steps/qa.py`  
-**Functions Used:**
-- `functions/validation.py` - Validation
-- `functions/consistency.py` - Term consistency
-- `functions/postanalysis.py` - Analysis
-
-### Step 7: Postprocessing
+### Step 6: Postprocessing
 **GUI Module:** `gui/steps/postprocess.py`  
 **Functions Used:**
 - `functions/postprocess.py` - Recovery
 - `functions/mainhelper.py` - Processor
 - `modi/*.py` - All postprocessing modes
 
-### Step 8: Wordwrap
+### Step 7: Wordwrap
 **GUI Module:** `gui/steps/wordwrap_overwrite.py`  
 **Functions Used:**
 - `functions/wordwrap.py` - Wordwrap engine
+
+### Step 8: QA
+**GUI Module:** `gui/steps/qa.py`  
+**Functions Used:**
+- `functions/validation.py` - Validation
+- `functions/consistency.py` - Term consistency
+- `functions/postanalysis.py` - Analysis
 
 ### Step 9: Output/Inject
 **GUI Module:** `gui/steps/output_inject.py`  
@@ -1766,7 +1766,7 @@ Protect Code: apply_protect_code(), save/load_protect_code_patterns()
 - Config-driven enable/disable for each preprocessing option
 - Changes stored in manifest prepro_ops field
 
-**Postprocessing (Step 7) Integration:**
+**Postprocessing (Step 6) Integration:**
 - Uses functions/postprocess.py recover_line(), NOT direct modi/ imports
 - Restores PROT tokens, ellipses, symbols from prepro_ops
 - Status tracking per-line with recovery issues

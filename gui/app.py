@@ -293,7 +293,7 @@ class App(tk.Tk):
         for step_id, step_name in STEP_DEFINITIONS:
             tab: BaseStep
             if step_id == 0:
-                # Input and Extraction - fully implemented
+                # Input - fully implemented
                 tab = InputExtractionStep(
                     self._notebook,
                     self.session,
@@ -335,22 +335,22 @@ class App(tk.Tk):
                     manifest_manager=self._manifest_manager,
                 )
             elif step_id == 6:
-                # Quality Assurance - fully implemented
-                tab = QAStep(
-                    self._notebook,
-                    self.session,
-                    manifest_manager=self._manifest_manager,
-                )
-            elif step_id == 7:
-                # Postprocessing - fully implemented
+                # Postprocessing - fully implemented (moved from step 7)
                 tab = PostprocessingStep(
                     self._notebook,
                     self.session,
                     manifest_manager=self._manifest_manager,
                 )
-            elif step_id == 8:
-                # Wordwrap & Overwrite - fully implemented
+            elif step_id == 7:
+                # Wordwrap & Overwrite - fully implemented (moved from step 8)
                 tab = WordwrapOverwriteStep(
+                    self._notebook,
+                    self.session,
+                    manifest_manager=self._manifest_manager,
+                )
+            elif step_id == 8:
+                # Quality Assurance - fully implemented (moved from step 6)
+                tab = QAStep(
                     self._notebook,
                     self.session,
                     manifest_manager=self._manifest_manager,

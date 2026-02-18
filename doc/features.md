@@ -61,9 +61,9 @@ TABLE OF CONTENTS
    - Step 4: Preprocessing
    - Step 5: Costs
    - Step 6: Translation
-   - Step 7: Quality Assurance
-   - Step 8: Postprocessing
-   - Step 9: Wordwrap & Overwrite
+   - Step 7: Postprocessing
+   - Step 8: Wordwrap & Overwrite
+   - Step 9: Quality Assurance
    - Step 10: Output & Injection
    - Global Options Dialog
    - Theme & Icons System
@@ -617,11 +617,11 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   4. **Preprocessing** - Apply protection rules, dedupe ✅ Implemented
   5. **Costs** - Token counts, cost estimates, time projection ✅ Implemented
   6. **Translation** - API configuration, batch translation ✅ Implemented
-  7. **QA** - Quality checks, auto-tagging ✅ Implemented
-  8. **Postprocessing** - Restore placeholders, apply fixes
-  9. **Wordwrap** - Line breaking, width limits
+  7. **Postprocessing** - Restore placeholders, apply fixes ✅ Implemented
+  8. **Wordwrap** - Line breaking, width limits ✅ Implemented
+  9. **QA** - Quality checks, auto-tagging ✅ Implemented
   10. **Output** - Export formats, save results
-- **Input and Extraction Tab (Phase 1, updated Phase 39, 58):**
+- **Input Tab (Phase 1, updated Phase 39, 58):**
   - **Unified Input Button (Phase 58.1):** Single "Input" button opens UnifiedInputDialog
     - Dual-pane interface: File browser (left) and Folder browser (right)
     - Multi-select support with path list display
@@ -815,7 +815,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - Helper functions: get_step_icon(), get_status_icon(), get_log_level_icon()
 - **Implementation Status:**
   - Phase 0: Foundation skeleton ✅ Complete
-  - Phase 1: Input and Extraction ✅ Complete (with session serialization fix)
+  - Phase 1: Input ✅ Complete (with session serialization fix)
   - Phase 2: Shared Table Component ✅ Complete (with TableRow serialization)
   - Phase 3: Analysis Tab ✅ Complete (with data flow fix)
   - Phase 4: Progress Tracker & State ✅ Complete (with recursive serialization)
@@ -933,7 +933,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
       - ContextLines, Thinking, ThinkingBudget
     - All options persist to manifest and load on step enter
 - **Quality Assurance Tab (Phase 8):**
-  - QAStep class (step_id=6) with ~1100 lines
+  - QAStep class (step_id=8) with ~1100 lines
   - Lines table with QA status tracking:
     - Filter modes: All, Errors Only, Warnings Only, Unfixed, Accepted, Rejected
     - Status icons: ✓ Accepted, ✗ Rejected, ⚠ Error, ○ Warning, ✓ OK
@@ -987,7 +987,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Accepted count (green)
     - Rejected count (orange)
 - **Postprocessing Tab (Phase 9):**
-  - PostprocessingStep class (step_id=7) with ~1100 lines
+  - PostprocessingStep class (step_id=6) with ~1100 lines
   - Lines table with postprocessing status tracking:
     - Filter modes: All, Changed, Needs Retry, Skipped
     - Status icons: ✓ Changed, ⚠ Retry, ○ Skipped, – Same
@@ -1067,7 +1067,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - All options persist to manifest and load on step enter
     - 35 tests in dev/test_postprocess_manifest.py
 - **Wordwrap & Overwrite Tab (Phase 10):**
-  - WordwrapOverwriteStep class (step_id=8, ~950 lines)
+  - WordwrapOverwriteStep class (step_id=7, ~950 lines)
   - Preview table with line length indicators:
     - Columns: #, Status, Chars, Lines, Original, Wrapped Preview
     - Status icons: ✓ Wrapped, ⚠ Exceeds, — No change
@@ -1581,7 +1581,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - gui/state/store.py - Session state management
   - gui/dialogs/global_options.py - Global options dialog
   - gui/steps/base.py - Abstract step base class
-  - gui/steps/input_extract.py - Input and Extraction tab
+  - gui/steps/input_extract.py - Input tab
   - gui/steps/analysis.py - Analysis tab
   - gui/steps/information.py - Information tab (metadata & inference)
   - gui/steps/preprocess.py - Preprocessing tab

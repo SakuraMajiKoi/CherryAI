@@ -336,7 +336,7 @@ class PlaceholderStep(BaseStep):
         """
         # NOTE: Step order changed - 2=Estimation, 3=Information, 4=Preprocessing
         phase_map = {
-            0: 1,   # Input and Extraction
+            0: 1,   # Input
             1: 3,   # Analysis
             2: 6,   # Estimation (moved from position 4)
             3: 12,  # Information (moved from position 2)
@@ -344,8 +344,8 @@ class PlaceholderStep(BaseStep):
             5: 7,   # Translation
             6: 8,   # Quality Assurance
             7: 9,   # Postprocessing
-            8: 10,  # Wordwrap and Overwrite
-            9: 11,  # Output and Injection
+            8: 10,  # Wordwrap
+            9: 11,  # Output
         }
         return phase_map.get(self.step_id, 0)
 

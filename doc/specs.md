@@ -62,9 +62,9 @@ CherryAI features terms that may not be clear at first glance or slightly differ
    - [Step 3: Information](#step-3-information)
    - [Step 4: Preprocessing](#step-4-preprocessing)
    - [Step 5: Translation](#step-5-translation)
-   - [Step 6: Quality Assurance](#step-6-quality-assurance)
-   - [Step 7: Postprocessing](#step-7-postprocessing)
-   - [Step 8: Wordwrap](#step-8-wordwrap)
+   - [Step 6: Postprocessing](#step-6-postprocessing)
+   - [Step 7: Wordwrap](#step-7-wordwrap)
+   - [Step 8: Quality Assurance](#step-8-quality-assurance)
    - [Step 9: Output](#step-9-output)
 7. [CLI Mode: Automatic Pipeline](#7-cli-mode-automatic-pipeline)
 8. [Manifest Structure](#8-manifest-structure)
@@ -165,23 +165,23 @@ User Files (TXT/CSV/JSON/XLSX/RPG Maker/Images)
          │
          ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Step 6: QA             │ Validate placeholders, anchors    │
-│  Produces: issues[],    │ accepted[], rejected[]            │
-│  suggestions            │                                   │
-└─────────────────────────┴───────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Step 7: Postprocessing │ Restore placeholders, symbols     │
+│  Step 6: Postprocessing │ Restore placeholders, symbols     │
 │  Produces: postpro[],   │ recovery_stats, retry_list        │
 │  validation_result      │                                   │
 └─────────────────────────┴───────────────────────────────────┘
          │
          ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Step 8: Wordwrap       │ Line breaking, typography         │
+│  Step 7: Wordwrap       │ Line breaking, typography         │
 │  Produces: wordwr[],    │ wrap_stats, break_positions       │
 │  merge_preview          │                                   │
+└─────────────────────────┴───────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Step 8: QA             │ Validate placeholders, anchors    │
+│  Produces: issues[],    │ accepted[], rejected[]            │
+│  suggestions            │                                   │
 └─────────────────────────┴───────────────────────────────────┘
          │
          ▼
@@ -331,7 +331,7 @@ The following systems span multiple pipeline steps. They are documented here as 
 
 **Implementation Status:** ✅ Phase 51 DONE — All 4 tasks implemented (47 tests passing, 5100 total suite)
 
-**Affects**: Analysis (Step 1), Preprocessing (Step 4), Translation (Step 5), Postprocessing (Step 7), Wordwrap (Step 8)
+**Affects**: Analysis (Step 1), Preprocessing (Step 4), Translation (Step 5), Postprocessing (Step 6), Wordwrap (Step 7), QA (Step 8)
 
 **Purpose**: CherryAI uses the `Speaker: "Dialogue"` and `Speaker: Dialogue` formats throughout the pipeline as a structural indicator. Speaker detection is performed during Analysis and the format is preserved or leveraged in every subsequent step.
 
@@ -812,7 +812,7 @@ Each step is a tab in the main notebook. Steps can be navigated freely but follo
 
 **Design Goal**: Extract only visible text from any unencrypted text file that a user can theoretically read. Code not part of the text and any other non-translatable content should be excluded. In the final step (Output), translated text is injected into copies of the original files to replace the original text (non-destructive).
 
-**Note**: This step was previously named "Input and Extraction" — renamed to simply "Input" for clarity.
+**Note**: This step was previously named "Input" — renamed to simply "Input" for clarity.
 
 #### Widgets
 

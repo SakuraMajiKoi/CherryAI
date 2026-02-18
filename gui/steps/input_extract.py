@@ -1,4 +1,4 @@
-"""CherryAI GUI v2 Input and Extraction Step.
+"""CherryAI GUI v2 Input Step.
 
 First workflow tab for loading files, previewing content, and detecting manifests.
 
@@ -122,7 +122,7 @@ class LoadedFile:
 
 
 class InputExtractionStep(BaseStep):
-    """Input and Extraction workflow step.
+    """Input workflow step.
 
     Features:
     - File browser with multi-select
@@ -134,7 +134,7 @@ class InputExtractionStep(BaseStep):
     """
 
     step_id = 0
-    step_name = "Input and Extraction"
+    step_name = "Input"
 
     def __init__(
         self,
@@ -142,7 +142,7 @@ class InputExtractionStep(BaseStep):
         session: "SessionState",
         **kwargs: Any,
     ) -> None:
-        """Initialize the Input and Extraction step.
+        """Initialize the Input step.
 
         Args:
             parent: Parent widget.
@@ -166,7 +166,7 @@ class InputExtractionStep(BaseStep):
         super().__init__(parent, session, **kwargs)
 
     def _build_ui(self) -> None:
-        """Build the Input and Extraction UI."""
+        """Build the Input UI."""
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
 
@@ -1947,7 +1947,7 @@ class InputExtractionStep(BaseStep):
             # Select first file if none selected
             if self._current_file_index < 0:
                 self._select_first_file_in_tree()
-        logger.debug("Entered Input and Extraction step")
+        logger.debug("Entered Input step")
 
     def _restore_files_from_session(self, step_data: Dict[str, Any]) -> None:
         """Restore LoadedFile objects from session step data.
@@ -2009,7 +2009,7 @@ class InputExtractionStep(BaseStep):
         """Called when leaving this step tab."""
         # Ensure state is saved
         self._update_step_data()
-        logger.debug("Left Input and Extraction step")
+        logger.debug("Left Input step")
 
     def get_loaded_files(self) -> List[LoadedFile]:
         """Get the list of loaded files.

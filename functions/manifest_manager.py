@@ -44,7 +44,7 @@ MANIFEST_VERSION = "3.2"  # TASK 38: Optimized format - removed redundant per-li
 
 # Step definitions matching GUI step order
 STEP_NAMES = [
-    "Input and Extraction",
+    "Input",
     "Analysis",
     "Estimation",
     "Information",
@@ -52,8 +52,8 @@ STEP_NAMES = [
     "Translation",
     "Quality Assurance",
     "Postprocessing",
-    "Wordwrap and Overwrite",
-    "Output and Injection",
+    "Wordwrap",
+    "Output",
 ]
 
 

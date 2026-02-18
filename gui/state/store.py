@@ -92,16 +92,16 @@ class StepState:
 # Step definitions with their IDs and names
 # NOTE: Estimation moved to Step 2 (after Analysis) per release stabilization task
 STEP_DEFINITIONS: List[tuple] = [
-    (0, "Input and Extraction"),
+    (0, "Input"),
     (1, "Analysis"),
     (2, "Costs"),            # Renamed from Estimation in Phase 40
     (3, "Information"),      # Moved from position 2
     (4, "Preprocessing"),    # Moved from position 3
     (5, "Translation"),
-    (6, "Quality Assurance"),
-    (7, "Postprocessing"),
-    (8, "Wordwrap and Overwrite"),
-    (9, "Output and Injection"),
+    (6, "Postprocessing"),   # Moved from position 7
+    (7, "Wordwrap"),         # Moved from position 8
+    (8, "Quality Assurance"),# Moved from position 6
+    (9, "Output"),
 ]
 
 # Preset definitions: name -> list of step indices to mark as done automatically

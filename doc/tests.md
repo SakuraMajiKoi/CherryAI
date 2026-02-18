@@ -6225,9 +6225,9 @@ Extended in January 2025 with file restoration and auto-numbered save tests.
 | `test_information_step_data_persistence` | Step 3: Information data persists |
 | `test_preprocessing_step_data_persistence` | Step 4: Preprocessing data persists |
 | `test_translation_step_data_persistence` | Step 5: Translation data persists |
-| `test_qa_step_data_persistence` | Step 6: QA data persists |
-| `test_postprocessing_step_data_persistence` | Step 7: Postprocessing data persists |
-| `test_wordwrap_step_data_persistence` | Step 8: Wordwrap data persists |
+| `test_postprocessing_step_data_persistence` | Step 6: Postprocessing data persists |
+| `test_wordwrap_step_data_persistence` | Step 7: Wordwrap data persists |
+| `test_qa_step_data_persistence` | Step 8: QA data persists |
 | `test_output_step_data_persistence` | Step 9: Output data persists |
 
 #### TestManifestAssociation (2 tests)
@@ -6867,7 +6867,7 @@ Phase 11 (Output), Phase 12 (Information), Phase 13 (Global Options), Phase 14 (
 | Test | Purpose |
 |------|---------|
 | `test_qa_step_exists` | QAStep class exists and is importable |
-| `test_qa_step_id` | QAStep has correct step_id (6) |
+| `test_qa_step_id` | QAStep has correct step_id (8) |
 | `test_qa_step_name` | QAStep has correct step_name |
 | `test_qa_step_default_rules` | QAStep has DEFAULT_RULES list (6 rules) |
 
@@ -9152,7 +9152,7 @@ python -m pytest CherryAI/dev/test_translation_phase43.py -v --timeout=10
 | TestPostprocessingUsesValidation | 4 | Postprocess imports recover_line, validation |
 | TestTranslationUsesRetryRecovery | 3 | Translation imports prompt_adapter retry |
 | TestValidationConsistency | 7 | Placeholder validation, extract, pre/post, recovery types |
-| TestQAPlaceholder | 3 | QA step placeholder mode, toggle, dataclasses preserved |
+| TestQAPlaceholder | 3 | QA step full UI always shown (placeholder mode removed), dataclasses preserved |
 
 ```bash
 # Run Phase 44 tests
