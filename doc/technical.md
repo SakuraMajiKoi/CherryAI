@@ -204,6 +204,9 @@ TABLE OF CONTENTS
        - __init__.py - Helper exports
        - mode_adapter.py - Bridge between GUI config and modi/ modules (TASK 16.5)
        - analysis_adapter.py - Bridge between GUI and functions/analysis.py (TASK 16.6)
+         - detect_individual_codes_batch(): Individual code patterns with counts, types, samples
+         - analyze_lines(): Full analysis with speaker_samples and individual_codes
+         - _friendly_code_type(): Internal type constant → display name mapping
        - glossary_adapter.py - Bridge between GUI and glossary/config/style modules (TASK 16.7)
        - chunker_adapter.py - Bridge between GUI and functions/chunker.py
        - prompt_adapter.py - Bridge between GUI and functions/prompt_builder.py
@@ -1574,11 +1577,12 @@ Key methods:
 - Processor.run_full_auto_translate(input_text, callback) → Optional[str]: Orchestrates full pipeline
 
 Pipeline (Pre-TL):
-1. Custom Placeholder (mode)
-2. Remove and Restore at Anchor (mode)
-3. Protect Code (mode)
-4. Standard Helpers (mode) - ellipses, empty lines
-5. Other operations in UI order
+1. Deduplication (deduplicate_pre, runs first)
+2. Custom Placeholder (priority 10)
+3. Remove and Restore at Anchor (priority 15)
+4. Protect Code (priority 20)
+5. Standard Helpers (priority 50) - ellipsis, empty lines, PROT compression
+6. Other operations in UI order
 
 Pipeline (Post-TL):
 1. Protect Code restore (mode)
@@ -2384,7 +2388,7 @@ API VALIDATION (functions/validation.py) ✓ Enhanced Session 14+
 Purpose: Multi-layer validation of lines before and after API translation.
 
 Classes:
-- SkipReason: Enum for why a line is skipped (EMPTY, COMMENT, DEDUP_ONLY, etc.)
+- SkipReason: Enum for why a line is skipped (EMPTY, COMMENT, CONTEXT_MARKER, DEDUP_ONLY, etc.)
 - ValidationResult: Dataclass for single-line validation outcome
 - BatchValidationResult: Dataclass for batch processing results
 - PlaceholderValidationResult: Dataclass for placeholder preservation (NEW - TASK 4)
@@ -2394,11 +2398,13 @@ Classes:
 
 Key Features:
 1. PRE-TRANSLATION VALIDATION (validate_line_pre, validate_batch_pre):
-   - Skip empty lines, comments (#), section markers (=)
+   - Skip empty lines, __COMMENT__-prefixed lines
+   - Skip context marker lines (__DIALOGUE__, __MENU__, __CHOICE__, __FILE__)
    - Skip __DEDUP__ and __PROT__ only lines
    - Skip lines without Japanese characters
    - Skip already translated lines
    - Auto-translate symbol-only lines (normalize fullwidth → halfwidth)
+   - Note: # and = lines are treated as normal text (not skipped)
 
 2. POST-TRANSLATION VALIDATION (validate_line_post, validate_batch_post):
    - Japanese character count check (max 4 chars in translation)

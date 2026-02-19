@@ -151,7 +151,9 @@ class SharedTable(ttk.Frame):
         self._on_edit = on_edit
         self._checked_rows: set = set()
         self._filter_var = tk.StringVar()
+        self._count_filter_var = tk.StringVar()
         self._current_filter = ""
+        self._current_count_filter = ""
         self._batch_insert_version = 0  # Track batch insertion version to cancel stale batches
 
         self._build_ui()
@@ -169,7 +171,7 @@ class SharedTable(ttk.Frame):
         self._build_status_bar()
 
     def _build_filter_bar(self) -> None:
-        """Build the filter/search bar."""
+        """Build the filter/search bar with text and count filters."""
         filter_frame = ttk.Frame(self)
         filter_frame.pack(fill="x", padx=5, pady=(5, 2))
 
@@ -182,6 +184,19 @@ class SharedTable(ttk.Frame):
         )
         self._filter_entry.pack(side="left", fill="x", expand=True)
         self._filter_entry.bind("<KeyRelease>", self._on_filter_change)
+
+        # Count filter (supports <X, >X, <=X, >=X, =X syntax)
+        ttk.Label(filter_frame, text="Count:").pack(
+            side="left", padx=(10, 5),
+        )
+
+        self._count_filter_entry = ttk.Entry(
+            filter_frame,
+            textvariable=self._count_filter_var,
+            width=8,
+        )
+        self._count_filter_entry.pack(side="left")
+        self._count_filter_entry.bind("<KeyRelease>", self._on_filter_change)
 
         clear_btn = ttk.Button(
             filter_frame,
@@ -332,32 +347,96 @@ class SharedTable(ttk.Frame):
         self._refresh_display()
 
     def _on_filter_change(self, event: Optional[tk.Event] = None) -> None:
-        """Handle filter text change."""
+        """Handle filter text or count filter change."""
         filter_text = self._filter_var.get().lower().strip()
-        if filter_text == self._current_filter:
+        count_text = self._count_filter_var.get().strip()
+        if (
+            filter_text == self._current_filter
+            and count_text == self._current_count_filter
+        ):
             return
 
         self._current_filter = filter_text
+        self._current_count_filter = count_text
         self._apply_filter()
 
     def _clear_filter(self) -> None:
-        """Clear the filter."""
+        """Clear both text and count filters."""
         self._filter_var.set("")
+        self._count_filter_var.set("")
         self._current_filter = ""
+        self._current_count_filter = ""
         self._apply_filter()
 
+    @staticmethod
+    def _parse_count_filter(expr: str) -> Optional[Callable[[int], bool]]:
+        """Parse a count filter expression into a predicate.
+
+        Supported syntax:
+            >X   — count greater than X
+            <X   — count less than X
+            >=X  — count greater than or equal to X
+            <=X  — count less than or equal to X
+            =X   — count equal to X
+            X    — count equal to X (bare number)
+
+        Args:
+            expr: Filter expression string.
+
+        Returns:
+            Predicate function or None if invalid.
+        """
+        import re as _re
+
+        expr = expr.strip()
+        if not expr:
+            return None
+
+        match = _re.match(r"^(>=|<=|>|<|=)?(\d+)$", expr)
+        if not match:
+            return None
+
+        op = match.group(1) or "="
+        value = int(match.group(2))
+
+        if op == ">":
+            return lambda c: c > value
+        if op == "<":
+            return lambda c: c < value
+        if op == ">=":
+            return lambda c: c >= value
+        if op == "<=":
+            return lambda c: c <= value
+        return lambda c: c == value
+
     def _apply_filter(self) -> None:
-        """Apply the current filter to rows."""
-        if not self._current_filter:
+        """Apply text and count filters to rows."""
+        count_pred = self._parse_count_filter(self._current_count_filter)
+
+        if not self._current_filter and count_pred is None:
             self._filtered_rows = self._rows.copy()
         else:
-            self._filtered_rows = [
-                row for row in self._rows
-                if any(
-                    self._current_filter in str(v).lower()
-                    for v in row.values.values()
-                )
-            ]
+            filtered: List[TableRow] = []
+            for row in self._rows:
+                # Text filter: substring match across all column values
+                if self._current_filter:
+                    if not any(
+                        self._current_filter in str(v).lower()
+                        for v in row.values.values()
+                    ):
+                        continue
+
+                # Count filter: compare the "count" column value
+                if count_pred is not None:
+                    try:
+                        count_val = int(row.values.get("count", 0))
+                    except (ValueError, TypeError):
+                        count_val = 0
+                    if not count_pred(count_val):
+                        continue
+
+                filtered.append(row)
+            self._filtered_rows = filtered
         self._refresh_display()
 
     def _refresh_display(self) -> None:

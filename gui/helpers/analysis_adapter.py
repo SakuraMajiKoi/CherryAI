@@ -260,6 +260,112 @@ def detect_code_patterns_batch(
     return counts, lines_with_code
 
 
+# Import normalization function lazily
+_normalize_code_fn = None
+
+try:
+    from CherryAI.functions.glossaries.code_glossary_functions import (
+        _normalize_code_segment,
+        classify_code_type,
+    )
+    _normalize_code_fn = _normalize_code_segment
+except ImportError:
+    logger.debug("Could not import _normalize_code_segment")
+
+
+# Friendly type name mapping for code types
+_CODE_TYPE_FRIENDLY: Dict[str, str] = {
+    "LINEBREAK": "Line Break",
+    "VARIABLENAME": "Variable Name",
+    "VARIABLENUMBER": "Variable Number",
+    "VISIBLEVARIABLE": "Visible Variable",
+    "COLOR": "Color Code",
+    "FONT": "Font Formatting",
+    "RUBY": "Ruby/Furigana",
+    "UNKNOWN": "Unknown",
+}
+
+
+def _friendly_code_type(raw_type: str) -> str:
+    """Convert internal code type to user-friendly name.
+
+    Args:
+        raw_type: Internal type constant (e.g., 'VARIABLENAME').
+
+    Returns:
+        Friendly display name.
+    """
+    return _CODE_TYPE_FRIENDLY.get(raw_type, raw_type)
+
+
+def detect_individual_codes_batch(
+    lines: List[str],
+) -> Dict[str, Dict[str, Any]]:
+    """Detect individual code patterns with counts, types, and sample lines.
+
+    Instead of grouping by type category, this returns each unique normalized
+    code pattern with its occurrence count, type classification, and a sample
+    line for context.
+
+    Args:
+        lines: Lines to analyze.
+
+    Returns:
+        Dict mapping normalized_code -> {
+            'count': int,
+            'type': str (friendly name),
+            'raw_type': str (internal type constant),
+            'sample': str (first line containing this code, truncated),
+            'examples': List[str] (actual raw code instances, max 5),
+        }
+    """
+    codes: Dict[str, Dict[str, Any]] = {}
+
+    if _detect_code_fn is None:
+        # Fallback: use regex-based detection with no normalization
+        for line in lines:
+            patterns = detect_code_patterns(line)
+            for pat in patterns:
+                if pat not in codes:
+                    codes[pat] = {
+                        "count": 0,
+                        "type": pat,
+                        "raw_type": "UNKNOWN",
+                        "sample": line.strip()[:80],
+                        "examples": [],
+                    }
+                codes[pat]["count"] += 1
+        return codes
+
+    normalize = _normalize_code_fn if _normalize_code_fn is not None else (lambda x: x)
+
+    for line in lines:
+        try:
+            result = _detect_code_fn(line)
+            if not result.get("has_code"):
+                continue
+            for _start, _end, raw_code, raw_type in result.get("spans", []):
+                normalized = normalize(raw_code)
+                if normalized not in codes:
+                    codes[normalized] = {
+                        "count": 0,
+                        "type": _friendly_code_type(raw_type),
+                        "raw_type": raw_type,
+                        "sample": line.strip()[:80],
+                        "examples": [],
+                    }
+                codes[normalized]["count"] += 1
+                if (
+                    raw_code not in codes[normalized]["examples"]
+                    and len(codes[normalized]["examples"]) < 5
+                ):
+                    codes[normalized]["examples"].append(raw_code)
+        except Exception as e:
+            logger.debug("detect_code failed for line: %s", e)
+
+    return codes
+
+
 # ---------------- Speaker Detection ---------------- #
 
 def detect_speaker_in_line(line: str) -> Optional[str]:
@@ -481,12 +587,21 @@ def analyze_lines(
     # Speaker detection
     if include_speakers:
         results["speakers"] = detect_speakers_batch(lines)
+        # Build speaker sample lines for details column
+        speaker_samples: Dict[str, str] = {}
+        for line in lines:
+            speaker = detect_speaker_in_line(line)
+            if speaker and speaker not in speaker_samples:
+                speaker_samples[speaker] = line.strip()[:80]
+        results["speaker_samples"] = speaker_samples
 
     # Code pattern detection
     if include_code_patterns:
         code_counts, lines_with_code = detect_code_patterns_batch(lines)
         results["code_patterns"] = code_counts
         results["lines_with_code"] = len(lines_with_code)
+        # Individual code patterns with full details
+        results["individual_codes"] = detect_individual_codes_batch(lines)
 
     # Token counting
     if include_tokens:
@@ -509,6 +624,7 @@ __all__ = [
     # Code pattern detection
     "detect_code_patterns",
     "detect_code_patterns_batch",
+    "detect_individual_codes_batch",
     # Speaker detection
     "detect_speaker_in_line",
     "detect_speakers_batch",

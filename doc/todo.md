@@ -1229,16 +1229,20 @@ project name input to reduce dialog steps for new projects.
   ProjectNameDialog when project name provided via dialog
 
 **Test Files Created:**
-- `doc/test_game/` - Comprehensive test game files for feature testing:
-  - test_dialogue.txt - Speaker:Dialogue format, quotes, rolling context
-  - test_code_patterns.txt - Code protection, placeholders, anchoring
-  - test_deduplication.txt - Duplicate handling, aggressive dedup
-  - test_menu_choice.txt - Context markers, menu/choice formats
+- `dev/test_game/` - Comprehensive test game files for feature testing:
+  - test_dialogue.txt - Speaker:Dialogue format, quotes, rolling context (uses __DIALOGUE__ markers)
+  - test_code_patterns.txt - Code protection, placeholders, anchoring (uses __FILE__ markers)
+  - test_deduplication.txt - Duplicate handling, aggressive dedup (uses __FILE__ markers)
+  - test_menu_choice.txt - Context markers (__MENU__, __CHOICE__, __DIALOGUE__)
   - test_pov.txt - Point of view inference, pronouns
-  - test_wordwrap.txt - Overflow, line length, width calculation
-  - test_glossary.txt - Term matching, consistency, character names
-  - test_edge_cases.txt - Unicode, empty lines, special characters
+  - test_wordwrap.txt - Overflow, line length, width calculation (uses __FILE__ markers)
+  - test_glossary.txt - Term matching, consistency, character names (uses __FILE__, __DIALOGUE__)
+  - test_edge_cases.txt - Unicode, empty lines, special characters (uses __FILE__ markers)
   - TEST_GAME_GUIDE.md - Documentation of test file coverage
+  - All files use __COMMENT__ for inline annotations (not # comments)
+  - Context markers: __DIALOGUE__, __MENU__, __CHOICE__, __FILE__
+
+- `dev/test_game_pipeline.py` - 133 tests validating manifest creation, __COMMENT__/marker system, preprocessing pipeline (dedup, protect code, standard helpers), request building (build_line_infos, build_requests, PromptBuilder), mock translation with flaw injection, postprocessing recovery, wordwrap (smart_wrap, pretty_wrap, apply_wordwrap, normalize_break_char, ignore codes, fixture data), game update detection (change detection, comparison results, update manifest generation), and import translations (idx-based merge, content-based import, full workflow)
 
 **Tests to Add:**
 - `dev/test_input_dialog.py`:
@@ -1344,8 +1348,8 @@ menu dynamically shows options based on the Category of selected row(s).
 **Approach:**
 - Keep existing Findings Table (do NOT split into separate tables)
 - Add right-click context menu that inspects the Category column
-- Show Speaker-specific options when Category = "Speaker"
-- Show Code Pattern-specific options when Category = "Code Pattern"
+- Show Speaker-specific options when Category = "Speakers"
+- Show Code Pattern-specific options when Category = "Code Patterns"
 - Show only generic options (Copy, Select All) when mixed categories selected
 
 **Speaker Options:**
@@ -1355,32 +1359,34 @@ menu dynamically shows options based on the Category of selected row(s).
 - Set Translation → Custom Input dialog
 - Add to Code Glossary
 - Copy Name
-- Select All with Speaker
+- Select All with Speaker (sets filter)
 
 **Code Pattern Options:**
-- Preserve (checkmark, default)
-- Remove (checkmark)
-- Translate (checkmark)
+- Preserve / Remove / Translate (persisted to Code Database)
 - Replace → (Generic | Custom Input)
-- Is a Name / Is Text / Is a Number / Is Invisible (checkmarks)
+- Is a Name / Is Text / Is a Number / Is Invisible (type classification)
+- Set as Protagonist (assigns John/Jane Smith temp replacement)
 - Copy Pattern
-- Show Lines with Pattern
+- Show Lines with Pattern (sets filter)
 
-**Speaker Truncation:**
-- If > 20 speakers detected, show only top 20 in General view
-- Display note: "Showing top 20 of N speakers"
-- (Optional) View Selector to switch to full Speakers-only view
+**Enhancements Implemented:**
+- All speakers shown (no truncation), ordered by count descending
+- Individual code patterns shown instead of type summaries
+- Details column auto-populated: sample lines for speakers, type + examples for codes
+- Count Filter field: supports `<X`, `>X`, `<=X`, `>=X`, `=X` syntax
+- All code pattern actions persist to manifest via `save_code_glossary()`
+- "Is a Name" adds to glossary with temp replacement
+- "Set as Protagonist" provides gender picker and assigns John/Jane Smith
 
-**Files to Modify:**
-- `gui/steps/analysis.py` - Add right-click binding and dynamic menu
-- `gui/helpers/analysis_adapter.py` - Route actions to manifest/functions
+**Files Modified:**
+- `gui/steps/analysis.py` - Right-click binding, dynamic menu, pattern actions, protagonist feature
+- `gui/helpers/analysis_adapter.py` - `detect_individual_codes_batch()`, speaker samples
+- `gui/components/table.py` - Count filter entry, `_parse_count_filter()`, updated `_apply_filter()`
 
-**Tests to Add:**
-- `dev/test_analysis.py`:
-  - `test_speaker_context_menu_shown`
-  - `test_code_pattern_context_menu_shown`
-  - `test_mixed_selection_generic_only`
-  - `test_speaker_truncation_at_20`
+**Tests:**
+- `dev/test_analysis_context_menu.py` - Category detection, menu options, no-truncation
+- `dev/test_analysis_actions.py` - Glossary integration, role/gender persistence
+- `dev/test_analysis_findings.py` - Individual codes, count filter, protagonist, details population
 
 ---
 
@@ -1429,27 +1435,34 @@ When user right-clicks on rows with Category = "Speaker", these options appear.
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
 
 Goal: Implement the Code Pattern-specific actions for the Findings Table context 
-menu. When user right-clicks on rows with Category = "Code Pattern", these options
+menu. When user right-clicks on rows with Category = "Code Patterns", these options
 appear.
 
-**Action Options (mutually exclusive checkmarks):**
-- Preserve: Keep pattern unchanged in translation (default, checked)
+**Action Options (persisted to Code Database via `save_code_glossary()`):**
+- Preserve: Keep pattern unchanged in translation (default)
 - Remove: Remove pattern from output
 - Translate: Translate pattern as regular text
 - Replace → Generic (placeholder) | Custom Input (dialog)
 
-**Type Options (mutually exclusive checkmarks):**
-- Is a Name: Pattern represents a character name
+**Type Options (stored in notes field):**
+- Is a Name: Pattern represents a character name — also adds to glossary with temp replacement
 - Is Text: Pattern represents visible text content
 - Is a Number: Pattern represents numeric values
-- Is Invisible: Pattern is control code (default, checked)
+- Is Invisible: Pattern is control code (default)
+
+**Protagonist Variable Support:**
+- Set as Protagonist: Marks code as protagonist's name variable
+- Prompts for gender (Male/Female), assigns John/Jane Smith
+- Stored in both Code Database (action=replace) and Glossary (entry_type=Code)
+- Single-token temp names for LLM-friendly preprocessing
 
 **Utility Options:**
 - Copy Pattern: Copy to clipboard
-- Show Lines with Pattern: Filter preview to lines containing pattern
+- Show Lines with Pattern: Sets findings table filter to show pattern
 
 **Code Database Integration:**
-- Selections are stored in `CodeGlossary[]` manifest section
+- All actions persisted via `_upsert_code_pattern()` → `save_code_glossary()`
+- Stored as `code_patterns[]` in manifest data
 - Populates Code Database in Information Step (Step 3)
 - Populates Preprocessing options (Step 4)
 - LLM prompt includes action/type info for special handling
@@ -1458,20 +1471,13 @@ appear.
 - Support bulk operations: "Set X patterns to Preserve"
 - Action and Type apply to all selected
 
-**Files to Modify:**
-- `gui/steps/analysis.py` - Menu handler for code pattern actions
-- `gui/helpers/analysis_adapter.py` - Route to code glossary functions
-- `functions/manifest_fields.py` - Update CodeGlossary helpers
+**Files Modified:**
+- `gui/steps/analysis.py` - Pattern action handlers with persistence, protagonist feature
+- `functions/manifest_fields.py` - `save_code_glossary()`, `load_code_glossary()`
 
-**Tests to Add:**
-- `dev/test_analysis_actions.py`:
-  - `test_set_pattern_preserve`
-  - `test_set_pattern_remove`
-  - `test_set_pattern_translate`
-  - `test_set_pattern_replace_custom`
-  - `test_set_pattern_type_invisible`
-  - `test_pattern_multi_select_bulk`
-  - `test_code_database_populated`
+**Tests:**
+- `dev/test_analysis_actions.py` - Pattern action options, multi-select, code glossary
+- `dev/test_analysis_findings.py` - Persistence logic, protagonist names, type mapping
 
 ---
 

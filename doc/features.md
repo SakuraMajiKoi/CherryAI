@@ -370,11 +370,13 @@ CONDITIONAL PROMPT INSTRUCTIONS ✓ (Enhanced - Session 14+)
 API RESPONSE VALIDATION ✓ (Enhanced - Session 14+)
 - Multi-layer validation of AI translation responses
 - **Pre-Translation Validation**:
-  - Skip empty lines, comments (#), section markers (=)
+  - Skip empty lines, __COMMENT__-prefixed lines
+  - Skip context markers (__DIALOGUE__, __MENU__, __CHOICE__, __FILE__)
   - Skip __DEDUP__ and __PROT__ only lines
   - Skip lines without Japanese characters
   - Skip already translated lines
   - Auto-translate symbol-only lines (…→..., 。→., etc.)
+  - Note: # and = lines are treated as normal text (not skipped)
 - **Post-Translation Validation**:
   - Japanese character count check (max 4 allowed in output)
   - Anchor character preservation verification
@@ -675,12 +677,17 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Chinese-only: CJK without kana, 30% threshold rule
     - Korean: Hangul detection, excluded from JP/CN threshold
   - Language detection (Japanese, Chinese, etc.)
-  - Code/pattern detection (HTML/XML, line breaks)
-  - Speaker detection with frequency counts
+  - Code/pattern detection: individual normalized patterns with count, type, and examples
+  - Speaker detection: ALL speakers listed with frequency counts (no truncation)
+  - **Findings Table Enhancements:**
+    - Individual code patterns shown with normalized form, occurrence count, type, and examples in Details
+    - Speaker rows include sample dialogue line in Details column
+    - **Count Filter:** Filter bar includes Count field supporting `<X`, `>X`, `<=X`, `>=X`, `=X` syntax
   - **Findings Table Context Menu (Phase 59.3-59.5):**
-    - Category-aware right-click menu
-    - **Speaker actions:** Add to Glossary, Set Role (Protagonist/Love Interest/Major/Minor), Set Gender (Male/Female), Set Translation, Add to Code Glossary, Copy Name
-    - **Code Pattern actions:** Preserve/Remove/Translate toggles, Replace options, Type classification (Name/Text/Number/Invisible), Copy Pattern, Show Lines
+    - Category-aware right-click menu (categories: "Speakers", "Code Patterns")
+    - **Speaker actions:** Add to Glossary, Set Role (Protagonist/Love Interest/Major/Minor), Set Gender (Male/Female), Set Translation, Add to Code Glossary, Copy Name, Select All with Speaker (filter)
+    - **Code Pattern actions:** Preserve/Remove/Translate toggles (persisted to Code Database), Replace options (Generic/Custom), Type classification (Name/Text/Number/Invisible), Set as Protagonist (assigns temp replacement name), Copy Pattern, Show Lines with Pattern (filter)
+    - **Protagonist Variable Support:** Code patterns marked "Is a Name" get added to glossary with temporary replacement; "Set as Protagonist" assigns single-token names (John/Jane Smith)
     - Generic menu for mixed selection (Copy, Select All)
   - **Ignored Patterns (Phase 59.7):** Filter patterns from code detection results
   - Export findings to CSV
@@ -2426,9 +2433,21 @@ Basic Stats:
 
 Content Detection:
 - Detected code lines (HTML, escape sequences, brackets)
-- Code segment count and classification
-- Detected speaker names (if dialogue file)
-- How many times each speaker appears
+- Individual code patterns with occurrence count, type classification, and examples
+- Detected speaker names (ALL speakers listed, ordered by frequency)
+- Sample dialogue line for each speaker in the Details column
+
+Findings Table:
+- All detected speakers, code patterns, languages, and duplicates in one table
+- Right-click speakers: Add to Glossary, Set Role/Gender, Set Translation
+- Right-click code patterns: Preserve/Remove/Translate, Set Type, Set as Protagonist
+- Count Filter: type `>10` or `<5` in the Count field to filter by occurrence count
+- Text Filter: search across all columns with substring matching
+
+Protagonist Variable Support:
+- Code patterns like `{{主人公}}` can be marked "Is a Name" or "Set as Protagonist"
+- Protagonist gets a single-token temporary replacement (John/Jane Smith)
+- Replacement is stored in glossary for use in preprocessing
 
 Automatic Glossary Suggestions:
 - Speaker names with detected gender and pronouns

@@ -3371,13 +3371,14 @@ and symbol normalization.
 | `test_mixed_content` | Mixed content normalizes |
 | `test_preserve_normal` | Already-normal unchanged |
 
-#### TestValidateLinePre (12 tests)
+#### TestValidateLinePre (13 tests)
 
 | Test | Purpose |
 |------|---------|
 | `test_empty_line` | Skip empty lines |
-| `test_comment_line` | Skip # prefixed lines |
-| `test_equals_line` | Skip = prefixed lines |
+| `test_comment_line` | Skip __COMMENT__-prefixed lines |
+| `test_hash_lines_not_comments` | # lines treated as normal text |
+| `test_equals_line` | = lines treated as normal text |
 | `test_dedup_only` | Skip __DEDUP__ only lines |
 | `test_prot_only` | Skip __PROT__ only lines |
 | `test_already_translated` | Skip lines with translation |
@@ -3435,7 +3436,7 @@ and symbol normalization.
 | Test | Purpose |
 |------|---------|
 | `test_basic_reassembly` | Reassemble in correct order |
-| `test_preserve_comments` | Preserve comment lines |
+| `test_preserve_comments` | Preserve __COMMENT__ and context marker lines |
 | `test_no_preserve` | Don't preserve when disabled |
 
 #### TestValidationIntegration (1 test)
@@ -4598,6 +4599,304 @@ Integration tests for リリィ (Lily) character edge case.
 |------|---------|
 | `test_lily_with_all_signals` | Explicit marker overrides 俺様 pronoun |
 | `test_lily_without_explicit_fallback_to_others` | Falls back to ちゃん from others |
+
+---
+
+### dev/test_game_pipeline.py (133 tests)
+
+Test suite for the test_game folder pipeline. Creates manifests from test_game files and validates
+the __COMMENT__ / context marker system end-to-end, then exercises the preprocessing pipeline
+(deduplication, protect code, standard helpers) with direct mode calls, tests request
+building (build_line_infos, build_requests, PromptBuilder), mock translation with flaw injection,
+postprocessing recovery, wordwrap, game update detection, and import translations.
+
+#### TestTask1_ManifestCreation (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_create_manifest_1_1` | Create manifest from test_game files, verify contents |
+
+#### TestTask1_ValidationChanges (15 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_comment_marker_skipped` | __COMMENT__ lines skipped |
+| `test_comment_marker_with_leading_space` | Indented __COMMENT__ skipped |
+| `test_hash_lines_are_normal_text` | # lines are valid text (not comments) |
+| `test_hash_only_no_japanese` | # without Japanese → NO_JAPANESE |
+| `test_equals_lines_are_normal_text` | = lines are valid text |
+| `test_context_marker_dialogue` | __DIALOGUE__ → CONTEXT_MARKER |
+| `test_context_marker_menu` | __MENU__ → CONTEXT_MARKER |
+| `test_context_marker_choice` | __CHOICE__ → CONTEXT_MARKER |
+| `test_context_marker_file` | __FILE__ → CONTEXT_MARKER |
+| `test_context_marker_case_insensitive` | Case-insensitive matching |
+| `test_context_marker_with_whitespace` | Whitespace around markers |
+| `test_context_marker_in_text_not_matched` | Embedded markers not caught |
+| `test_dedup_still_skipped` | __DEDUP__ unchanged |
+| `test_prot_still_skipped` | __PROT__ unchanged |
+| `test_empty_still_skipped` | Empty lines unchanged |
+| `test_batch_validation_new_markers` | Batch categorizes new types |
+
+#### TestTask1_LineEntry (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_context_marker_field` | LineEntry context_marker field |
+| `test_file_end_marker` | __FILE__ → file_end |
+| `test_no_marker` | Regular lines have no marker |
+| `test_marker_serialization` | to_dict/from_dict roundtrip |
+| `test_no_marker_not_in_dict` | Sparse serialization |
+
+#### TestTask1_FileFormat (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_txt_handler_reads_all` | TxtHandler reads __COMMENT__ and markers |
+| `test_txt_handler_no_hash_filtering` | TxtHandler does not filter # |
+
+#### TestTask2_Deduplication (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_dedup_pre_basic` | Exact duplicates collapsed to __DEDUP__ |
+| `test_dedup_pre_comment_lines_not_deduped` | __COMMENT__ lines not deduped against each other |
+| `test_dedup_from_test_file` | Dedup on actual test_deduplication.txt content |
+
+#### TestTask2_ProtectCode (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_protect_code_rpg_maker` | RPG Maker codes replaced with __PROT__ |
+| `test_protect_code_records_prepro_ops` | Captured values recorded in prepro_ops |
+| `test_protect_code_from_test_file` | Code protection on test_code_patterns.txt |
+
+#### TestTask2_StandardHelpers (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_ellipsis_compression` | Ellipsis processing via standard_mode.apply_pre |
+| `test_symbol_conversion` | Fullwidth symbol processing via standard_mode.apply_pre |
+
+#### TestTask2_FullPipeline (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_pipeline_dedup_then_protect` | Dedup runs first, then protect code |
+| `test_pipeline_preserves_comment_lines` | __COMMENT__ and markers survive preprocessing |
+| `test_pipeline_on_full_test_game` | Full pipeline on all test_game files |
+
+#### TestTask5_BuildLineInfos (9 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_basic_conversion` | Normal lines become valid LineInfo |
+| `test_comment_lines_not_filtered` | __COMMENT__ not filtered by build_line_infos |
+| `test_context_markers_invalid` | Context marker lines marked is_invalid=True |
+| `test_context_type_propagation` | Context type propagates to subsequent lines |
+| `test_placeholder_lines_invalid` | __PROT__ and __DEDUP__ lines marked invalid |
+| `test_empty_lines_invalid` | Empty/whitespace lines marked invalid |
+| `test_prepro_preferred_over_orig` | prepro field takes priority over orig |
+| `test_file_end_does_not_propagate` | file_end resets context to unknown |
+| `test_from_test_game_files` | LineInfos from actual test_game content |
+
+#### TestTask5_BuildRequests (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_basic_request_formation` | Valid lines form translation requests |
+| `test_menu_choice_split` | Menu/choice blocks get separate requests |
+| `test_file_boundary_split` | File boundaries split into sections |
+| `test_invalid_lines_excluded` | __PROT__, __DEDUP__, empty excluded |
+| `test_from_test_game_files` | Requests from actual test_game content |
+
+#### TestTask5_PromptAssembly (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_prompt_builder_init` | PromptBuilder initializes from config dir |
+| `test_construct_system_prompt` | System prompt contains base template |
+| `test_context_type_prompt_injection` | Context types add specific instructions |
+
+#### TestTask6_MockTranslatorBasic (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_basic_translation` | MockTranslator replaces Japanese with NATO-phonetic words |
+| `test_preserves_prot_tokens` | __PROT__ tokens preserved through translation |
+| `test_empty_and_whitespace` | Empty/whitespace lines pass through unchanged |
+| `test_deterministic_output` | Same input produces same output each time |
+| `test_batch_translate` | translate_batch processes list of lines |
+
+#### TestTask6_FlawInjection (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_placeholder_malformation` | FlawConfig injects placeholder corruption |
+| `test_anchor_manipulation` | FlawConfig injects anchor tag errors |
+| `test_code_intrusion` | FlawConfig injects random code into output |
+| `test_character_surgery` | FlawConfig injects character-level corruption |
+| `test_flaw_report_tracking` | FlawReport tracks all injected flaws |
+
+#### TestTask7_RecoveryBasic (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_recover_strips_leading_trailing` | recover_line strips whitespace |
+| `test_recover_fixes_quotes` | recover_line normalizes quote issues |
+| `test_recover_empty_passthrough` | Empty lines pass through recovery |
+| `test_recover_preserves_content` | Clean lines pass through unchanged |
+
+#### TestTask7_PostProcessManager (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_manager_init` | PostProcessManager initializes with ops and manifest |
+| `test_manager_process_line` | Manager processes line through recovery pipeline |
+| `test_manager_stats_tracking` | RecoveryStats tracks applied operations |
+| `test_manager_batch_processing` | Manager processes multiple lines |
+
+#### TestTask7_ProtectCodeRestore (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_prot_token_restore` | __PROT__ tokens restored to original values |
+| `test_prot_restore_multiple` | Multiple __PROT__ tokens restored correctly |
+
+#### TestTask7_DedupRestore (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_dedup_pre_post_roundtrip` | Deduped lines restored from first-occurrence translation |
+
+#### TestTask8_SmartWrap (9 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_short_line_unchanged` | Lines shorter than width pass through unchanged |
+| `test_wrap_at_word_boundary` | Long line breaks at word boundary |
+| `test_hard_break_unbreakable_word` | Single word exceeding width is hard-broken |
+| `test_existing_newlines_preserved` | Existing newlines treated as segment boundaries |
+| `test_max_lines_truncation` | Output truncated to max_lines |
+| `test_zero_width_returns_unchanged` | Width <= 0 returns text unchanged |
+| `test_empty_input` | Empty string returns empty string |
+| `test_custom_break_char` | Break character can be customized |
+| `test_ignore_patterns_zero_width` | Ignore patterns contribute zero width |
+
+#### TestTask8_ManualWrapLine (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_basic_wrap` | Manual wrap delegates to smart_wrap via speaker pipeline |
+| `test_short_line_unchanged` | Short line passes through unchanged |
+
+#### TestTask8_PrettyWrap (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_punctuation_preferred_break` | Pretty wrap prefers breaking after punctuation |
+| `test_anti_orphan` | Anti-orphan moves word to prevent tiny last line |
+| `test_no_orphan_prevention_when_disabled` | Orphan prevention can be disabled |
+| `test_hanging_indent` | Continuation lines prefixed with hanging indent spaces |
+
+#### TestTask8_ApplyWordwrap (8 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_manual_mode_basic` | Manual mode wraps each line to specified width |
+| `test_dict_config` | Config can be passed as a plain dict |
+| `test_none_config_noop` | None config returns input unchanged |
+| `test_zero_width_noop` | Width <= 0 returns input unchanged |
+| `test_unknown_mode_noop` | Unknown mode returns input unchanged |
+| `test_max_lines_via_config` | Max lines limits output line count |
+| `test_ignore_codes_angle` | Ignore codes make HTML-like tags zero-width |
+| `test_rpgmaker_mode` | RPGMaker mode uses pretty_wrap |
+
+#### TestTask8_NormalizeBreakChar (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_backslash_n_string` | '\\n' normalizes to actual newline |
+| `test_newline_word` | 'newline' normalizes to actual newline |
+| `test_linebreak_word` | 'linebreak' normalizes to actual newline |
+| `test_none_defaults_newline` | None input defaults to newline |
+| `test_custom_char_preserved` | Custom separator passed through unchanged |
+
+#### TestTask8_TestGameWordwrap (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_short_lines_unchanged` | Short fixture lines pass through unchanged |
+| `test_long_lines_wrapped` | Long fixture lines get wrapped |
+| `test_unbreakable_word_hard_broken` | Unbreakable words hard-broken |
+| `test_batch_apply_on_fixture` | apply_wordwrap processes all fixture lines |
+
+#### TestTask8_GetWordwrapModes (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_modes_structure` | Modes dict contains manual and rpgmaker with required keys |
+
+#### TestTask9_UpdateFolderExists (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_updates_folder_exists` | test_game_updates directory exists |
+| `test_updated_dialogue_exists` | Updated dialogue file exists |
+| `test_updated_menu_choice_exists` | Updated menu_choice file exists |
+
+#### TestTask9_ChangeDetection (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_dialogue_modified_lines_detected` | Identical text shows no changes |
+| `test_dialogue_changes_detected` | Changes between original and updated detected |
+| `test_change_types_present` | Modified change type present in comparison |
+| `test_menu_choice_changes_detected` | Menu update changes detected |
+| `test_unchanged_lines_counted` | Unchanged lines properly counted |
+
+#### TestTask9_ComparisonResult (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_to_dict_structure` | ComparisonResult.to_dict() has expected structure |
+| `test_has_translation_flag` | Modified lines have has_translation=True |
+
+#### TestTask9_UpdateManifestGeneration (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_generate_update_manifest` | Update manifest generated from comparison |
+| `test_update_manifest_has_changed_lines` | Update manifest contains changed lines |
+| `test_update_text_generation` | Update text output generated |
+
+#### TestTask10_MergeUpdateIntoManifest (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_merge_preserves_original` | Merge does not modify original manifest |
+| `test_merge_unchanged_lines_preserved` | Unchanged lines preserved in merge |
+| `test_merge_new_line_appended` | New lines appended to merged manifest |
+| `test_merge_deleted_flag` | Deleted flag propagated through merge |
+| `test_merge_metadata_last_update` | Metadata records last_update |
+| `test_merge_sorted_by_idx` | Merged lines sorted by idx |
+
+#### TestTask10_ContentBasedImport (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_exact_match_import` | Lines with identical orig get translations |
+| `test_partial_match` | Only matching lines get imports |
+| `test_no_match` | No matching lines yields zero imports |
+| `test_numbered_fields_imported` | edit/tlc fields imported correctly |
+| `test_first_match_wins` | Duplicate origs: first occurrence used |
+| `test_multi_field_copy` | All copyable fields transferred |
+
+#### TestTask10_FullWorkflow (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_roundtrip_update_workflow` | Full workflow: compare, generate, merge |
+| `test_unchanged_translations_preserved_through_workflow` | Unchanged lines keep translations after merge |
 
 ---
 
@@ -9643,19 +9942,20 @@ Tests for project language detection, aggressive dedup projection, and ignored p
 python -m pytest CherryAI/dev/test_analysis_language.py -v --timeout=10
 ```
 
-#### test_analysis_context_menu.py (19 tests) - Phase 59.3
+#### test_analysis_context_menu.py (15 tests) - Phase 59.3
 
 Tests for category-aware context menu on Findings Table.
+Categories use plural forms: "Speakers", "Code Patterns".
 
 | Test Class | Count | Coverage |
 |-----------|-------|----------|
-| TestContextMenuCategoryDetection | 4 | Speaker category, code pattern category, mixed categories, single category not mixed |
+| TestContextMenuCategoryDetection | 4 | Speakers category, Code Patterns category, mixed categories, single category not mixed |
 | TestContextMenuOptions | 3 | Speaker menu glossary option, code pattern preserve option, generic menu basic options |
 | TestSpeakerRoles | 2 | All roles available, role storage format |
 | TestGenderOptions | 2 | Gender options available, gender storage format |
 | TestPatternActions | 2 | Pattern actions available, pattern types available |
 | TestMixedSelectionBehavior | 2 | Mixed selection shows generic, single overview shows generic |
-| TestSpeakerTruncation | 4 | Truncation threshold, truncation applies when exceeded, no truncation under limit, truncation message format |
+| TestSpeakerNoTruncation | 3 | All speakers shown, small list unchanged, ordering by count |
 
 ```bash
 python -m pytest CherryAI/dev/test_analysis_context_menu.py -v --timeout=10
@@ -9678,4 +9978,25 @@ Tests for speaker and code pattern context menu actions.
 
 ```bash
 python -m pytest CherryAI/dev/test_analysis_actions.py -v --timeout=10
+```
+
+#### test_analysis_findings.py (34 tests) - Findings Enhancements
+
+Tests for individual code detection, count filtering, code pattern action persistence,
+protagonist variable handling, no-truncation, details population, and category consistency.
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestDetectIndividualCodesBatch | 6 | Returns dict, empty lines, br tag, count accumulation, examples, sample line |
+| TestCountFilterParsing | 10 | Empty, bare number, >X, <X, >=X, <=X, =X, invalid, whitespace, zero |
+| TestCodePatternActionPersistence | 5 | New entry, update existing, valid actions, type in notes, replacement in notes |
+| TestProtagonistNames | 6 | Male name, female name, single-token first, single-token surname, glossary format, code pattern entry |
+| TestNoSpeakerTruncation | 3 | 50 speakers, 100 speakers, ordering preserved |
+| TestDetailsPopulation | 3 | Speaker sample line, code type, code examples |
+| TestCategoryStringConsistency | 4 | Plural speaker, plural code pattern, matches builder, matches handler |
+| TestFriendlyCodeType | 3 | Known types mapped, unknown passthrough, variable number |
+| TestCodePatternMenuOptions | 3 | Has protagonist option, action options exclusive, type options exclusive |
+
+```bash
+python -m pytest CherryAI/dev/test_analysis_findings.py -v --timeout=10
 ```

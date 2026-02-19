@@ -21,6 +21,7 @@ from CherryAI.gui.helpers.analysis_adapter import (
     analyze_lines,
     count_duplicates,
     detect_code_patterns,
+    detect_individual_codes_batch,
     detect_language,
     detect_speakers_batch,
     summarize_lines,
@@ -35,6 +36,8 @@ from CherryAI.functions.analysis import calculate_aggressive_dedup_projection
 from CherryAI.functions.manifest_fields import (
     save_int_field,
     load_int_field,
+    save_code_glossary,
+    load_code_glossary,
 )
 
 # TASK 59.4: Import glossary adapter for speaker actions
@@ -42,6 +45,7 @@ from CherryAI.gui.helpers.glossary_adapter import (
     add_glossary_entry,
     load_glossary,
     TYPE_NAME,
+    TYPE_CODE,
     GENDER_MALE,
     GENDER_FEMALE,
     GENDER_UNKNOWN,
@@ -322,6 +326,10 @@ class AnalysisStep(BaseStep):
     def _build_findings(self, results: Dict[str, Any]) -> List[TableRow]:
         """Build findings table rows from results.
 
+        Shows ALL speakers and individual code patterns, ordered by count
+        descending. Details column is populated with sample lines for speakers
+        and type classification for code patterns.
+
         Args:
             results: Analysis results.
 
@@ -402,32 +410,67 @@ class AnalysisStep(BaseStep):
             ))
             row_id += 1
 
-        # Speakers (top 20)
-        speakers_sorted = sorted(results["speakers"].items(), key=lambda x: x[1], reverse=True)[:20]
+        # ALL Speakers ordered by count descending (no truncation)
+        speaker_samples = results.get("speaker_samples", {})
+        speakers_sorted = sorted(
+            results["speakers"].items(), key=lambda x: x[1], reverse=True
+        )
         for speaker, count in speakers_sorted:
+            sample = speaker_samples.get(speaker, "")
             findings.append(TableRow(
                 id=row_id,
                 values={
                     "category": "Speakers",
                     "item": speaker,
                     "count": count,
-                    "details": "",
+                    "details": sample,
                 },
             ))
             row_id += 1
 
-        # Code patterns
-        for pattern_type, count in sorted(results["code_patterns"].items(), key=lambda x: x[1], reverse=True):
-            findings.append(TableRow(
-                id=row_id,
-                values={
-                    "category": "Code Patterns",
-                    "item": pattern_type,
-                    "count": count,
-                    "details": "",
-                },
-            ))
-            row_id += 1
+        # Individual code patterns ordered by count descending
+        individual_codes = results.get("individual_codes", {})
+        if individual_codes:
+            codes_sorted = sorted(
+                individual_codes.items(), key=lambda x: x[1]["count"], reverse=True
+            )
+            for code_key, code_info in codes_sorted:
+                friendly_type = code_info.get("type", "Unknown")
+                examples = code_info.get("examples", [])
+                example_str = ", ".join(examples[:3])
+                details = friendly_type
+                if example_str and example_str != code_key:
+                    details = f"{friendly_type} — {example_str}"
+                findings.append(TableRow(
+                    id=row_id,
+                    values={
+                        "category": "Code Patterns",
+                        "item": code_key,
+                        "count": code_info["count"],
+                        "details": details,
+                    },
+                    meta={
+                        "raw_type": code_info.get("raw_type", "UNKNOWN"),
+                        "examples": examples,
+                        "sample_line": code_info.get("sample", ""),
+                    },
+                ))
+                row_id += 1
+        else:
+            # Fallback: use grouped code patterns if individual detection unavailable
+            for pattern_type, count in sorted(
+                results["code_patterns"].items(), key=lambda x: x[1], reverse=True
+            ):
+                findings.append(TableRow(
+                    id=row_id,
+                    values={
+                        "category": "Code Patterns",
+                        "item": pattern_type,
+                        "count": count,
+                        "details": "",
+                    },
+                ))
+                row_id += 1
 
         # Top duplicates
         for line, count in list(results["duplicates"].items())[:10]:
@@ -637,9 +680,9 @@ class AnalysisStep(BaseStep):
         # Show appropriate menu based on categories
         if len(categories) == 1:
             category = categories.pop()
-            if category == "Speaker":
+            if category == "Speakers":
                 menu = self._create_speaker_menu()
-            elif category == "Code Pattern":
+            elif category == "Code Patterns":
                 menu = self._create_code_pattern_menu()
             else:
                 menu = self._create_generic_menu()
@@ -692,30 +735,67 @@ class AnalysisStep(BaseStep):
         """
         menu = tk.Menu(self, tearoff=0)
 
-        # Toggle options (checkmarks would require state tracking)
-        menu.add_command(label="Preserve", command=lambda: self._set_pattern_action("preserve"))
-        menu.add_command(label="Remove", command=lambda: self._set_pattern_action("remove"))
-        menu.add_command(label="Translate", command=lambda: self._set_pattern_action("translate"))
+        # Action options
+        menu.add_command(
+            label="Preserve",
+            command=lambda: self._set_pattern_action("preserve"),
+        )
+        menu.add_command(
+            label="Remove",
+            command=lambda: self._set_pattern_action("remove"),
+        )
+        menu.add_command(
+            label="Translate",
+            command=lambda: self._set_pattern_action("translate"),
+        )
 
         menu.add_separator()
 
         # Replace submenu
         replace_menu = tk.Menu(menu, tearoff=0)
-        replace_menu.add_command(label="Generic", command=lambda: self._set_pattern_replace("generic"))
-        replace_menu.add_command(label="Custom...", command=self._set_pattern_replace_custom)
+        replace_menu.add_command(
+            label="Generic",
+            command=lambda: self._set_pattern_replace("generic"),
+        )
+        replace_menu.add_command(
+            label="Custom...", command=self._set_pattern_replace_custom,
+        )
         menu.add_cascade(label="Replace With", menu=replace_menu)
 
         menu.add_separator()
 
         # Classification options
-        menu.add_command(label="Is a Name", command=lambda: self._set_pattern_type("name"))
-        menu.add_command(label="Is Text", command=lambda: self._set_pattern_type("text"))
-        menu.add_command(label="Is a Number", command=lambda: self._set_pattern_type("number"))
-        menu.add_command(label="Is Invisible", command=lambda: self._set_pattern_type("invisible"))
+        menu.add_command(
+            label="Is a Name",
+            command=lambda: self._set_pattern_type("name"),
+        )
+        menu.add_command(
+            label="Is Text",
+            command=lambda: self._set_pattern_type("text"),
+        )
+        menu.add_command(
+            label="Is a Number",
+            command=lambda: self._set_pattern_type("number"),
+        )
+        menu.add_command(
+            label="Is Invisible",
+            command=lambda: self._set_pattern_type("invisible"),
+        )
+
+        menu.add_separator()
+
+        # Protagonist shortcut for name-type variables
+        menu.add_command(
+            label="Set as Protagonist",
+            command=self._set_pattern_as_protagonist,
+        )
 
         menu.add_separator()
         menu.add_command(label="Copy Pattern", command=self._copy_pattern)
-        menu.add_command(label="Show Lines with Pattern", command=self._show_lines_with_pattern)
+        menu.add_command(
+            label="Show Lines with Pattern",
+            command=self._show_lines_with_pattern,
+        )
 
         return menu
 
@@ -749,7 +829,7 @@ class AnalysisStep(BaseStep):
     def _add_speaker_to_glossary(self) -> None:
         """Add selected speakers to glossary."""
         items = self._get_selected_items()
-        speakers = [name for cat, name in items if cat == "Speaker"]
+        speakers = [name for cat, name in items if cat == "Speakers"]
         if not speakers:
             return
 
@@ -777,7 +857,7 @@ class AnalysisStep(BaseStep):
         Role is stored in the glossary Notes field as 'Role: X'.
         """
         items = self._get_selected_items()
-        speakers = [name for cat, name in items if cat == "Speaker"]
+        speakers = [name for cat, name in items if cat == "Speakers"]
         if not speakers:
             return
 
@@ -816,7 +896,7 @@ class AnalysisStep(BaseStep):
         Gender is stored in the glossary gender field.
         """
         items = self._get_selected_items()
-        speakers = [name for cat, name in items if cat == "Speaker"]
+        speakers = [name for cat, name in items if cat == "Speakers"]
         if not speakers:
             return
 
@@ -847,7 +927,7 @@ class AnalysisStep(BaseStep):
     def _set_speaker_translation(self) -> None:
         """Set custom translation for selected speaker."""
         items = self._get_selected_items()
-        speakers = [name for cat, name in items if cat == "Speaker"]
+        speakers = [name for cat, name in items if cat == "Speakers"]
         if not speakers:
             return
 
@@ -886,7 +966,7 @@ class AnalysisStep(BaseStep):
     def _add_speaker_to_code_glossary(self) -> None:
         """Add selected speakers to code glossary."""
         items = self._get_selected_items()
-        speakers = [name for cat, name in items if cat == "Speaker"]
+        speakers = [name for cat, name in items if cat == "Speakers"]
         if not speakers:
             return
 
@@ -911,7 +991,7 @@ class AnalysisStep(BaseStep):
     def _copy_speaker_name(self) -> None:
         """Copy speaker name(s) to clipboard."""
         items = self._get_selected_items()
-        speakers = [name for cat, name in items if cat == "Speaker"]
+        speakers = [name for cat, name in items if cat == "Speakers"]
         if speakers:
             text = "\n".join(speakers)
             self.clipboard_clear()
@@ -919,35 +999,158 @@ class AnalysisStep(BaseStep):
             logger.debug("Copied to clipboard: %s", speakers)
 
     def _select_all_with_speaker(self) -> None:
-        """Select all rows with same speaker (filter preview)."""
+        """Select all rows with same speaker by setting filter."""
         items = self._get_selected_items()
-        speakers = [name for cat, name in items if cat == "Speaker"]
+        speakers = [name for cat, name in items if cat == "Speakers"]
         if speakers:
-            logger.info("Selecting all lines with speakers: %s", speakers)
-            # Would filter preview panel to show only lines from these speakers
-            messagebox.showinfo("Feature", "Filter preview to show lines from selected speaker(s).")
+            logger.info("Filtering to show speaker: %s", speakers)
+            self._findings_table._filter_var.set(speakers[0])
+            self._findings_table._on_filter_change()
+
+    # Code pattern actions — persistence helpers
+    def _load_code_patterns(self) -> List[Dict[str, Any]]:
+        """Load existing code patterns from manifest.
+
+        Returns:
+            List of code pattern dicts.
+        """
+        if self.manifest_manager is None:
+            return []
+        return load_code_glossary(self.manifest_manager)
+
+    def _save_code_patterns(self, patterns: List[Dict[str, Any]]) -> None:
+        """Save code patterns to manifest.
+
+        Args:
+            patterns: List of code pattern dicts.
+        """
+        if self.manifest_manager is None:
+            logger.debug("No manifest manager, skipping code pattern save")
+            return
+        save_code_glossary(self.manifest_manager, patterns)
+
+    def _upsert_code_pattern(
+        self,
+        pattern: str,
+        *,
+        action: Optional[str] = None,
+        category: Optional[str] = None,
+        notes: Optional[str] = None,
+        example: Optional[str] = None,
+    ) -> None:
+        """Insert or update a single code pattern in the manifest.
+
+        Only non-None keyword arguments overwrite existing fields.
+
+        Args:
+            pattern: Normalized code pattern string.
+            action: Action to set (preserve/remove/translate/replace).
+            category: Pattern category (Line Break, Variable Name, etc.).
+            notes: User notes (e.g. "Type: name").
+            example: Example occurrence from source text.
+        """
+        existing = self._load_code_patterns()
+        found = False
+        for entry in existing:
+            if entry.get("pattern") == pattern:
+                if action is not None:
+                    entry["action"] = action
+                if category is not None:
+                    entry["category"] = category
+                if notes is not None:
+                    entry["notes"] = notes
+                if example is not None:
+                    entry["example"] = example
+                found = True
+                break
+
+        if not found:
+            # Look up meta from findings for category/example fallback
+            meta_info = self._get_pattern_meta(pattern)
+            existing.append({
+                "pattern": pattern,
+                "category": category or meta_info.get("type", ""),
+                "action": action or "preserve",
+                "example": example or meta_info.get("sample_line", ""),
+                "notes": notes or "",
+            })
+
+        self._save_code_patterns(existing)
+
+    def _get_pattern_meta(self, pattern: str) -> Dict[str, Any]:
+        """Get meta information for a pattern from analysis results.
+
+        Args:
+            pattern: Normalized code pattern string.
+
+        Returns:
+            Dict with type, sample_line, examples from analysis results.
+        """
+        individual_codes = self._analysis_results.get("individual_codes", {})
+        info = individual_codes.get(pattern, {})
+        return {
+            "type": info.get("type", "Unknown"),
+            "raw_type": info.get("raw_type", "UNKNOWN"),
+            "sample_line": info.get("sample", ""),
+            "examples": info.get("examples", []),
+        }
 
     # Code pattern actions
     def _set_pattern_action(self, action: str) -> None:
-        """Set action (preserve/remove/translate) for selected patterns."""
+        """Set action (preserve/remove/translate) for selected patterns.
+
+        Persists to Code Database in manifest.
+        """
         items = self._get_selected_items()
-        patterns = [name for cat, name in items if cat == "Code Pattern"]
-        if patterns:
-            logger.info("Setting action '%s' for patterns: %s", action, patterns)
-            messagebox.showinfo("Action Set", f"Set '{action}' for {len(patterns)} pattern(s).")
+        patterns = [name for cat, name in items if cat == "Code Patterns"]
+        if not patterns:
+            return
+
+        for pattern in patterns:
+            self._upsert_code_pattern(pattern, action=action)
+
+        logger.info(
+            "Set action '%s' for %d patterns: %s",
+            action, len(patterns), patterns,
+        )
+        messagebox.showinfo(
+            "Action Set",
+            f"Set '{action}' for {len(patterns)} pattern(s).",
+        )
 
     def _set_pattern_replace(self, mode: str) -> None:
-        """Set generic replacement for selected patterns."""
+        """Set generic replacement for selected patterns.
+
+        Persists to Code Database in manifest with action='replace'.
+        """
         items = self._get_selected_items()
-        patterns = [name for cat, name in items if cat == "Code Pattern"]
-        if patterns:
-            logger.info("Setting replacement mode '%s' for patterns: %s", mode, patterns)
-            messagebox.showinfo("Replacement Set", f"Set '{mode}' replacement for {len(patterns)} pattern(s).")
+        patterns = [name for cat, name in items if cat == "Code Patterns"]
+        if not patterns:
+            return
+
+        for pattern in patterns:
+            self._upsert_code_pattern(
+                pattern,
+                action="replace",
+                notes=f"Replacement: {mode}",
+            )
+
+        logger.info(
+            "Set replacement mode '%s' for %d patterns: %s",
+            mode, len(patterns), patterns,
+        )
+        messagebox.showinfo(
+            "Replacement Set",
+            f"Set '{mode}' replacement for {len(patterns)} pattern(s).",
+        )
 
     def _set_pattern_replace_custom(self) -> None:
-        """Set custom replacement for selected pattern."""
+        """Set custom replacement for selected pattern.
+
+        Opens dialog, then persists to Code Database with action='replace'.
+        """
         items = self._get_selected_items()
-        patterns = [name for cat, name in items if cat == "Code Pattern"]
+        patterns = [name for cat, name in items if cat == "Code Patterns"]
         if len(patterns) == 1:
             from tkinter import simpledialog
             replacement = simpledialog.askstring(
@@ -955,23 +1158,186 @@ class AnalysisStep(BaseStep):
                 f"Enter replacement for pattern '{patterns[0]}':",
             )
             if replacement:
-                logger.info("Set custom replacement '%s' for pattern '%s'", replacement, patterns[0])
-                messagebox.showinfo("Replacement Set", f"Set custom replacement for '{patterns[0]}'.")
+                self._upsert_code_pattern(
+                    patterns[0],
+                    action="replace",
+                    notes=f"Replacement: {replacement}",
+                )
+                logger.info(
+                    "Set custom replacement '%s' for pattern '%s'",
+                    replacement, patterns[0],
+                )
+                messagebox.showinfo(
+                    "Replacement Set",
+                    f"Set custom replacement for '{patterns[0]}'.",
+                )
         elif patterns:
-            messagebox.showinfo("Single Select", "Please select only one pattern for custom replacement.")
+            messagebox.showinfo(
+                "Single Select",
+                "Please select only one pattern for custom replacement.",
+            )
+
+    # Default protagonist replacement names (single-token, LLM-friendly)
+    _PROTAGONIST_NAMES = {
+        "Male": ("John", "Smith"),
+        "Female": ("Jane", "Smith"),
+    }
 
     def _set_pattern_type(self, type_name: str) -> None:
-        """Set type classification for selected patterns."""
+        """Set type classification for selected patterns.
+
+        When type is 'name', the pattern is also added to the glossary with
+        a temporary replacement for use in preprocessing.
+
+        Persists to Code Database in manifest notes field.
+        """
         items = self._get_selected_items()
-        patterns = [name for cat, name in items if cat == "Code Pattern"]
-        if patterns:
-            logger.info("Setting type '%s' for patterns: %s", type_name, patterns)
-            messagebox.showinfo("Type Set", f"Set type '{type_name}' for {len(patterns)} pattern(s).")
+        patterns = [name for cat, name in items if cat == "Code Patterns"]
+        if not patterns:
+            return
+
+        for pattern in patterns:
+            self._upsert_code_pattern(pattern, notes=f"Type: {type_name}")
+
+        # When marked as a name, also add to glossary with temp replacement
+        if type_name == "name":
+            self._add_name_patterns_to_glossary(patterns)
+
+        logger.info(
+            "Set type '%s' for %d patterns: %s",
+            type_name, len(patterns), patterns,
+        )
+        messagebox.showinfo(
+            "Type Set",
+            f"Set type '{type_name}' for {len(patterns)} pattern(s).",
+        )
+
+    def _add_name_patterns_to_glossary(
+        self, patterns: List[str],
+    ) -> None:
+        """Add name-type code patterns to glossary with temp replacements.
+
+        Args:
+            patterns: List of normalized code pattern strings.
+        """
+        from tkinter import simpledialog
+
+        for pattern in patterns:
+            replacement = simpledialog.askstring(
+                "Name Replacement",
+                f"Enter temporary replacement name for '{pattern}'\n"
+                "(leave blank for auto-generated, e.g. 'John'):",
+            )
+            if replacement is None:
+                # User cancelled
+                continue
+            if not replacement:
+                replacement = "John"  # Default male protagonist name
+
+            add_glossary_entry(
+                original=pattern,
+                translation=replacement,
+                notes="Type: name; Source: Code Pattern",
+                entry_type=TYPE_CODE,
+                gender=GENDER_UNKNOWN,
+                source="Analysis",
+            )
+            logger.info(
+                "Added name pattern '%s' → '%s' to glossary",
+                pattern, replacement,
+            )
+
+    def _set_pattern_as_protagonist(self) -> None:
+        """Mark selected code pattern as protagonist variable.
+
+        Sets type to 'name', action to 'replace', and assigns a single-token
+        protagonist replacement name (John/Jane + Smith) to the glossary.
+        """
+        items = self._get_selected_items()
+        patterns = [name for cat, name in items if cat == "Code Patterns"]
+        if not patterns:
+            return
+
+        if len(patterns) > 1:
+            messagebox.showinfo(
+                "Single Select",
+                "Please select one pattern to set as protagonist.",
+            )
+            return
+
+        pattern = patterns[0]
+
+        # Ask for gender to determine replacement name
+        gender_dialog = tk.Toplevel(self)
+        gender_dialog.title("Protagonist Gender")
+        gender_dialog.geometry("300x120")
+        gender_dialog.resizable(False, False)
+        gender_dialog.transient(self)
+        gender_dialog.grab_set()
+
+        ttk.Label(
+            gender_dialog,
+            text=f"Set gender for protagonist '{pattern}':",
+            wraplength=280,
+        ).pack(pady=(10, 5))
+
+        result: Dict[str, str] = {}
+
+        def _select(gender: str) -> None:
+            result["gender"] = gender
+            gender_dialog.destroy()
+
+        btn_frame = ttk.Frame(gender_dialog)
+        btn_frame.pack(pady=10)
+        ttk.Button(
+            btn_frame, text="Male (John Smith)",
+            command=lambda: _select("Male"),
+        ).pack(side="left", padx=10)
+        ttk.Button(
+            btn_frame, text="Female (Jane Smith)",
+            command=lambda: _select("Female"),
+        ).pack(side="left", padx=10)
+
+        gender_dialog.wait_window()
+
+        gender = result.get("gender")
+        if not gender:
+            return
+
+        first_name, surname = self._PROTAGONIST_NAMES[gender]
+        gender_const = GENDER_MALE if gender == "Male" else GENDER_FEMALE
+
+        # Save to code glossary with action=replace
+        self._upsert_code_pattern(
+            pattern,
+            action="replace",
+            notes=f"Type: name; Role: Protagonist; Replacement: {first_name}",
+        )
+
+        # Add to glossary with the temporary replacement
+        add_glossary_entry(
+            original=pattern,
+            translation=first_name,
+            notes=f"Role: Protagonist; Surname: {surname}",
+            entry_type=TYPE_CODE,
+            gender=gender_const,
+            source="Analysis",
+        )
+
+        logger.info(
+            "Set pattern '%s' as %s protagonist → '%s %s'",
+            pattern, gender, first_name, surname,
+        )
+        messagebox.showinfo(
+            "Protagonist Set",
+            f"'{pattern}' set as {gender} protagonist.\n"
+            f"Replacement: {first_name} {surname}",
+        )
 
     def _copy_pattern(self) -> None:
         """Copy pattern(s) to clipboard."""
         items = self._get_selected_items()
-        patterns = [name for cat, name in items if cat == "Code Pattern"]
+        patterns = [name for cat, name in items if cat == "Code Patterns"]
         if patterns:
             text = "\n".join(patterns)
             self.clipboard_clear()
@@ -979,13 +1345,14 @@ class AnalysisStep(BaseStep):
             logger.debug("Copied to clipboard: %s", patterns)
 
     def _show_lines_with_pattern(self) -> None:
-        """Show lines containing selected pattern in preview."""
+        """Show lines containing selected pattern by setting filter."""
         items = self._get_selected_items()
-        patterns = [name for cat, name in items if cat == "Code Pattern"]
+        patterns = [name for cat, name in items if cat == "Code Patterns"]
         if patterns:
-            logger.info("Showing lines with patterns: %s", patterns)
-            # Would filter preview to show only lines containing these patterns
-            messagebox.showinfo("Feature", "Filter preview to show lines with selected pattern(s).")
+            logger.info("Filtering to show lines with patterns: %s", patterns)
+            # Set the findings table filter to show the selected pattern
+            self._findings_table._filter_var.set(patterns[0])
+            self._findings_table._on_filter_change()
 
     # Generic actions
     def _copy_selection(self) -> None:

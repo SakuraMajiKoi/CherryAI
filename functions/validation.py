@@ -30,12 +30,14 @@ class SkipReason(Enum):
     
     EMPTY = "empty"
     COMMENT = "comment"
-    EQUALS_PREFIX = "equals_prefix"
+    CONTEXT_MARKER = "context_marker"
     DEDUP_ONLY = "dedup_only"
     PROT_ONLY = "prot_only"
     NO_JAPANESE = "no_japanese"
     ALREADY_TRANSLATED = "already_translated"
     SYMBOL_ONLY = "symbol_only"
+    # Legacy alias kept for backward compatibility
+    EQUALS_PREFIX = "equals_prefix"
 
 
 @dataclass
@@ -123,8 +125,10 @@ SYMBOL_NORMALIZATION: Dict[str, str] = {
 # Patterns for lines that should be skipped
 DEDUP_PATTERN = re.compile(r"^\s*_{1,2}DEDUP_{1,2}\s*$", re.IGNORECASE)
 PROT_PATTERN = re.compile(r"^\s*__\s*PROT\s*__\s*$", re.IGNORECASE)
-COMMENT_PATTERN = re.compile(r"^\s*#")
-EQUALS_PATTERN = re.compile(r"^\s*=")
+COMMENT_PATTERN = re.compile(r"^\s*__COMMENT__")
+CONTEXT_MARKER_PATTERN = re.compile(
+    r"^\s*__(DIALOGUE|MENU|CHOICE|FILE)__\s*$", re.IGNORECASE
+)
 
 # Pattern to find __PROT__ placeholders in text (with optional index)
 PROT_PLACEHOLDER_PATTERN = re.compile(r"__\s*PROT(?:_\d+)?\s*__", re.IGNORECASE)
@@ -746,11 +750,15 @@ def validate_line_pre(
     - Auto-translated (symbol normalization only)
     - Sent to API for translation
     
+    Comment lines start with ``__COMMENT__`` (not ``#``).
+    Context markers (``__DIALOGUE__``, ``__MENU__``, ``__CHOICE__``,
+    ``__FILE__``) are metadata-only and skipped from translation.
+    
     Args:
         line: The preprocessed line to validate
         existing_translation: If the line already has a translation
-        skip_comments: Skip lines starting with #
-        skip_equals: Skip lines starting with =
+        skip_comments: Skip lines starting with __COMMENT__
+        skip_equals: Kept for API compatibility (no longer used)
     
     Returns:
         ValidationResult with skip_reason or auto_translation if applicable
@@ -764,18 +772,18 @@ def validate_line_pre(
             skip_reason=SkipReason.EMPTY,
         )
     
-    # 2. Comment lines (start with #)
+    # 2. Comment lines (start with __COMMENT__)
     if skip_comments and COMMENT_PATTERN.match(line):
         return ValidationResult(
             is_valid=False,
             skip_reason=SkipReason.COMMENT,
         )
     
-    # 3. Lines starting with =
-    if skip_equals and EQUALS_PATTERN.match(line):
+    # 3. Context marker lines (__DIALOGUE__, __MENU__, __CHOICE__, __FILE__)
+    if CONTEXT_MARKER_PATTERN.match(stripped):
         return ValidationResult(
             is_valid=False,
-            skip_reason=SkipReason.EQUALS_PREFIX,
+            skip_reason=SkipReason.CONTEXT_MARKER,
         )
     
     # 4. Lines containing only __DEDUP__ placeholder
@@ -835,8 +843,8 @@ def validate_batch_pre(
     Args:
         lines: List of preprocessed lines
         existing_translations: Optional list of existing translations (parallel to lines)
-        skip_comments: Skip lines starting with #
-        skip_equals: Skip lines starting with =
+        skip_comments: Skip lines starting with __COMMENT__
+        skip_equals: Kept for API compatibility (no longer used)
     
     Returns:
         BatchValidationResult with categorized lines
@@ -1041,7 +1049,7 @@ def reassemble_translations(
         for idx, line, reason in skipped_lines:
             if idx not in auto_translations:
                 # For comments and special lines, preserve original
-                if reason in (SkipReason.COMMENT, SkipReason.EQUALS_PREFIX,
+                if reason in (SkipReason.COMMENT, SkipReason.CONTEXT_MARKER,
                               SkipReason.DEDUP_ONLY, SkipReason.PROT_ONLY):
                     result[idx] = line
                 # For empty lines, keep empty

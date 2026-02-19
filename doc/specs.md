@@ -1245,16 +1245,22 @@ If the category-aware context menu proves too complex to implement cleanly, use 
 
 | Column | Width | Description |
 |--------|-------|-------------|
-| Category | 100px | Finding type: Speaker, Code Pattern, Duplicate, Language, etc. |
-| Finding | 200px | The detected item (speaker name, pattern, etc.) |
+| Category | 100px | Finding type: Speakers, Code Patterns, Top Duplicates, Language |
+| Finding | 200px | The detected item (speaker name, normalized code pattern, etc.) |
 | Count | 80px | Number of occurrences |
-| Sample | stretch | Example line containing this finding |
+| Details | stretch | Auto-populated: sample line for speakers, type + examples for code patterns |
+
+**Enhancements (Implemented)**:
+- All speakers shown without truncation, ordered by count descending
+- Individual code patterns shown (normalized) instead of type summaries
+- Details column auto-populated with speaker sample lines and code type/examples
+- Count Filter field in filter bar: supports `<X`, `>X`, `<=X`, `>=X`, `=X` syntax
 
 ---
 
 #### Speaker Right-Click Menu (Phase 59)
 
-When user right-clicks on rows where Category = "Speaker":
+When user right-clicks on rows where Category = "Speakers":
 
 | Menu Item | Action | Description |
 |-----------|--------|-------------|
@@ -1288,32 +1294,41 @@ When user right-clicks on rows where Category = "Speaker":
 
 #### Code Pattern Right-Click Menu (Phase 59)
 
-When user right-clicks on rows where Category = "Code Pattern":
+When user right-clicks on rows where Category = "Code Patterns":
 
 | Menu Item | Action | Description |
 |-----------|--------|-------------|
-| Preserve | `set_pattern_action(pattern, 'preserve')` | Checkmark. Pattern kept unchanged. Default. Mutually exclusive. |
-| Remove | `set_pattern_action(pattern, 'remove')` | Checkmark. Pattern removed from output. Mutually exclusive. |
-| Translate | `set_pattern_action(pattern, 'translate')` | Checkmark. Pattern translated as text. Mutually exclusive. |
-| Replace → | Submenu | Generic (placeholder), Custom Input (dialog). Mutually exclusive with above. |
-| Is a Name | `set_pattern_type(pattern, 'name')` | Checkmark. Identifies pattern as a name. Mutually exclusive with other "Is" options. |
-| Is Text | `set_pattern_type(pattern, 'text')` | Checkmark. Identifies pattern as text content. Mutually exclusive. |
-| Is a Number | `set_pattern_type(pattern, 'number')` | Checkmark. Identifies pattern as numeric. Mutually exclusive. |
-| Is Invisible | `set_pattern_type(pattern, 'invisible')` | Checkmark. Pattern is control code, not visible. Default. Mutually exclusive. |
+| Preserve | `set_pattern_action(pattern, 'preserve')` | Pattern kept unchanged. Default. Persisted to Code Database. |
+| Remove | `set_pattern_action(pattern, 'remove')` | Pattern removed from output. Persisted to Code Database. |
+| Translate | `set_pattern_action(pattern, 'translate')` | Pattern translated as text. Persisted to Code Database. |
+| Replace → | Submenu | Generic (placeholder), Custom Input (dialog). Persisted to Code Database. |
+| Is a Name | `set_pattern_type(pattern, 'name')` | Identifies pattern as a name. Also adds to glossary with temp replacement. |
+| Is Text | `set_pattern_type(pattern, 'text')` | Identifies pattern as text content. |
+| Is a Number | `set_pattern_type(pattern, 'number')` | Identifies pattern as numeric. |
+| Is Invisible | `set_pattern_type(pattern, 'invisible')` | Pattern is control code, not visible. Default. |
+| Set as Protagonist | `set_pattern_as_protagonist(pattern)` | Marks as protagonist variable. Assigns temp name (John/Jane Smith). |
 | Copy Pattern | `copy_to_clipboard(pattern)` | Copies pattern to clipboard |
-| Show Lines with Pattern | `filter_preview_by_pattern(pattern)` | Filters preview to show only lines containing this pattern |
+| Show Lines with Pattern | `filter_findings_by_pattern(pattern)` | Sets findings filter to show pattern |
 
 **Action Behavior** (Preserve/Remove/Translate/Replace):
-- Checkmarks indicate current selection
 - Only one action can be active at a time
-- Selection updates the Code Database in manifest (populates Information Step and Preprocessing Step)
+- Selection persisted to Code Database in manifest via `save_code_glossary()`
 - Default action is "Preserve" with "Is Invisible" type
+- All actions stored as `code_patterns[]` in manifest data
 
 **Type Behavior** (Is a Name/Text/Number/Invisible):
 - Identifies what the code pattern represents
 - Informs the LLM about appropriate handling
 - "Is Invisible" is the default (most code patterns are control sequences)
 - Only one type can be active at a time
+- "Is a Name" additionally adds the pattern to the glossary with a temporary replacement name
+
+**Protagonist Variable Behavior** (Set as Protagonist):
+- For nameable protagonist variables (e.g., `{{主人公}}`)
+- Prompts for gender selection (Male/Female)
+- Assigns single-token temporary replacement: John Smith (Male) or Jane Smith (Female)
+- Stores in both Code Database (action=replace, type=name) and Glossary (entry_type=Code)
+- Temporary name used during preprocessing so the LLM handles surrounding text naturally
 
 **Multi-Select Support**:
 - Select multiple code pattern rows (Ctrl+Click, Shift+Click)
@@ -1321,7 +1336,7 @@ When user right-clicks on rows where Category = "Code Pattern":
 - Action and Type changes apply to all selected patterns
 
 **Code Database Population**:
-- Selections are stored in `CodeGlossary[]` manifest section
+- Selections are stored in `code_patterns[]` manifest section via `save_code_glossary()`
 - Automatically populates Code Database in Information Step (Step 3)
 - Automatically populates Preprocessing options (Step 4)
 
@@ -4506,7 +4521,7 @@ This catalog lists every existing function that participates in recovery, valida
 **Validation** (`functions/validation.py`):
 | Function / Class | Purpose |
 |------------------|---------|
-| `SkipReason` (enum) | Why a line was skipped |
+| `SkipReason` (enum) | Why a line was skipped (EMPTY, COMMENT, CONTEXT_MARKER, DEDUP_ONLY, PROT_ONLY, NO_JAPANESE, ALREADY_TRANSLATED, SYMBOL_ONLY) |
 | `ValidationResult` | Single validation finding |
 | `BatchValidationResult` | Aggregate validation for a batch |
 | `PlaceholderValidationResult` | Placeholder-specific validation |
