@@ -45,6 +45,9 @@ try:
         GENDER_MALE,
         GENDER_FEMALE,
         GENDER_NEUTRAL,
+        GENDER_NONBINARY,
+        GENDER_TRANSWOMAN,
+        GENDER_TRANSMAN,
         GENDER_UNKNOWN,
     )
     _read_unified_glossary_fn = read_unified_glossary
@@ -67,6 +70,9 @@ except ImportError:
             GENDER_MALE,
             GENDER_FEMALE,
             GENDER_NEUTRAL,
+            GENDER_NONBINARY,
+            GENDER_TRANSWOMAN,
+            GENDER_TRANSMAN,
             GENDER_UNKNOWN,
         )
         _read_unified_glossary_fn = read_unified_glossary
@@ -84,6 +90,9 @@ except ImportError:
         GENDER_MALE = "Male"
         GENDER_FEMALE = "Female"
         GENDER_NEUTRAL = "Neutral"
+        GENDER_NONBINARY = "Non-Binary"
+        GENDER_TRANSWOMAN = "Transwoman"
+        GENDER_TRANSMAN = "Transman"
         GENDER_UNKNOWN = "Unknown"
 
 # ---------------- Imports from functions/project_config.py ---------------- #

@@ -152,6 +152,7 @@ class SharedTable(ttk.Frame):
         self._checked_rows: set = set()
         self._filter_var = tk.StringVar()
         self._count_filter_var = tk.StringVar()
+        self._count_mode_var = tk.StringVar(value="≥")  # ≥ or ≤ toggle
         self._current_filter = ""
         self._current_count_filter = ""
         self._batch_insert_version = 0  # Track batch insertion version to cancel stale batches
@@ -189,6 +190,15 @@ class SharedTable(ttk.Frame):
         ttk.Label(filter_frame, text="Count:").pack(
             side="left", padx=(10, 5),
         )
+
+        # Toggle button for ≥ / ≤ default operator
+        self._count_mode_btn = ttk.Button(
+            filter_frame,
+            textvariable=self._count_mode_var,
+            width=2,
+            command=self._toggle_count_mode,
+        )
+        self._count_mode_btn.pack(side="left")
 
         self._count_filter_entry = ttk.Entry(
             filter_frame,
@@ -368,8 +378,19 @@ class SharedTable(ttk.Frame):
         self._current_count_filter = ""
         self._apply_filter()
 
+    def _toggle_count_mode(self) -> None:
+        """Toggle the default count filter operator between ≥ and ≤."""
+        current = self._count_mode_var.get()
+        self._count_mode_var.set("≤" if current == "≥" else "≥")
+        # Re-apply filter with the new default operator
+        self._current_count_filter = ""  # force re-evaluation
+        self._on_filter_change()
+
     @staticmethod
-    def _parse_count_filter(expr: str) -> Optional[Callable[[int], bool]]:
+    def _parse_count_filter(
+        expr: str,
+        default_op: str = ">=",
+    ) -> Optional[Callable[[int], bool]]:
         """Parse a count filter expression into a predicate.
 
         Supported syntax:
@@ -378,10 +399,11 @@ class SharedTable(ttk.Frame):
             >=X  — count greater than or equal to X
             <=X  — count less than or equal to X
             =X   — count equal to X
-            X    — count equal to X (bare number)
+            X    — bare number uses *default_op*
 
         Args:
             expr: Filter expression string.
+            default_op: Operator to use for bare numbers (``>=`` or ``<=``).
 
         Returns:
             Predicate function or None if invalid.
@@ -396,7 +418,7 @@ class SharedTable(ttk.Frame):
         if not match:
             return None
 
-        op = match.group(1) or "="
+        op = match.group(1) or default_op
         value = int(match.group(2))
 
         if op == ">":
@@ -411,7 +433,12 @@ class SharedTable(ttk.Frame):
 
     def _apply_filter(self) -> None:
         """Apply text and count filters to rows."""
-        count_pred = self._parse_count_filter(self._current_count_filter)
+        # Map toggle symbol to operator string
+        mode_sym = self._count_mode_var.get()
+        default_op = "<=" if mode_sym == "≤" else ">="
+        count_pred = self._parse_count_filter(
+            self._current_count_filter, default_op=default_op,
+        )
 
         if not self._current_filter and count_pred is None:
             self._filtered_rows = self._rows.copy()

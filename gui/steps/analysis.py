@@ -38,18 +38,14 @@ from CherryAI.functions.manifest_fields import (
     load_int_field,
     save_code_glossary,
     load_code_glossary,
+    save_character_notes,
+    load_character_notes,
+    save_custom_placeholders,
+    load_custom_placeholders,
+    save_glossary_entries,
+    load_glossary_entries,
 )
 
-# TASK 59.4: Import glossary adapter for speaker actions
-from CherryAI.gui.helpers.glossary_adapter import (
-    add_glossary_entry,
-    load_glossary,
-    TYPE_NAME,
-    TYPE_CODE,
-    GENDER_MALE,
-    GENDER_FEMALE,
-    GENDER_UNKNOWN,
-)
 
 if TYPE_CHECKING:
     from CherryAI.gui.state.store import SessionState
@@ -314,6 +310,8 @@ class AnalysisStep(BaseStep):
         results["speakers"] = analysis.get("speakers", {})
         results["code_patterns"] = analysis.get("code_patterns", {})
         results["duplicates"] = analysis.get("duplicates", {})
+        results["speaker_samples"] = analysis.get("speaker_samples", {})
+        results["individual_codes"] = analysis.get("individual_codes", {})
 
         # Build findings list
         results["findings"] = self._build_findings(results)
@@ -411,19 +409,18 @@ class AnalysisStep(BaseStep):
             row_id += 1
 
         # ALL Speakers ordered by count descending (no truncation)
-        speaker_samples = results.get("speaker_samples", {})
         speakers_sorted = sorted(
             results["speakers"].items(), key=lambda x: x[1], reverse=True
         )
         for speaker, count in speakers_sorted:
-            sample = speaker_samples.get(speaker, "")
+            details = self._get_character_details(speaker)
             findings.append(TableRow(
                 id=row_id,
                 values={
                     "category": "Speakers",
                     "item": speaker,
                     "count": count,
-                    "details": sample,
+                    "details": details,
                 },
             ))
             row_id += 1
@@ -716,6 +713,13 @@ class AnalysisStep(BaseStep):
             gender_menu.add_command(
                 label=gender, command=lambda g=gender: self._set_speaker_gender(g)
             )
+        # Other submenu with Non-Binary, Transwoman, Transman
+        other_gender_menu = tk.Menu(gender_menu, tearoff=0)
+        for gender in ["Non-Binary", "Transwoman", "Transman"]:
+            other_gender_menu.add_command(
+                label=gender, command=lambda g=gender: self._set_speaker_gender(g)
+            )
+        gender_menu.add_cascade(label="Other", menu=other_gender_menu)
         menu.add_cascade(label="Set Gender", menu=gender_menu)
 
         menu.add_command(label="Set Translation...", command=self._set_speaker_translation)
@@ -784,10 +788,10 @@ class AnalysisStep(BaseStep):
 
         menu.add_separator()
 
-        # Protagonist shortcut for name-type variables
+        # Nameable dialog for name-type variables
         menu.add_command(
-            label="Set as Protagonist",
-            command=self._set_pattern_as_protagonist,
+            label="Nameable...",
+            command=self._show_nameable_dialog,
         )
 
         menu.add_separator()
@@ -825,9 +829,152 @@ class AnalysisStep(BaseStep):
                 result.append((str(values[0]), str(values[1])))
         return result
 
+    # Character glossary helpers — read/write character notes in manifest
+    def _load_characters(self) -> List[Dict[str, Any]]:
+        """Load character entries from manifest.
+
+        Returns:
+            List of character dicts with name, original_name, gender, role,
+            notes, speaking_style.
+        """
+        try:
+            if self.manifest_manager is None:
+                return []
+        except AttributeError:
+            return []
+        return load_character_notes(self.manifest_manager)
+
+    def _save_characters(
+        self, characters: List[Dict[str, Any]]
+    ) -> None:
+        """Save character entries to manifest.
+
+        Args:
+            characters: List of character dicts.
+        """
+        try:
+            if self.manifest_manager is None:
+                logger.debug("No manifest manager, skipping character save")
+                return
+        except AttributeError:
+            logger.debug("No manifest manager, skipping character save")
+            return
+        save_character_notes(self.manifest_manager, characters)
+
+    def _upsert_character_entry(
+        self,
+        original_name: str,
+        *,
+        translation: str = "",
+        gender: str = "",
+        role: str = "",
+        notes: str = "",
+    ) -> bool:
+        """Add or update a character entry by original_name key.
+
+        If an entry with the same original_name already exists, its
+        fields are updated (only non-empty values overwrite).  Otherwise
+        a new entry is appended.
+
+        Args:
+            original_name: Source-language name (lookup key).
+            translation: Translated name.
+            gender: Gender string (Male, Female, etc.).
+            role: Role string (Protagonist, etc.).
+            notes: Freeform notes.
+
+        Returns:
+            True on success.
+        """
+        characters = self._load_characters()
+        existing = next(
+            (c for c in characters if c["original_name"] == original_name),
+            None,
+        )
+
+        if existing:
+            if translation:
+                existing["name"] = translation
+            if gender:
+                existing["gender"] = gender
+            if role:
+                existing["role"] = role
+            if notes:
+                existing["notes"] = notes
+        else:
+            characters.append({
+                "name": translation,
+                "original_name": original_name,
+                "gender": gender,
+                "role": role,
+                "notes": notes,
+                "speaking_style": "",
+            })
+
+        self._save_characters(characters)
+        return True
+
+    def _get_character_details(self, original_name: str) -> str:
+        """Return a display string for a character's glossary info.
+
+        Used by the Findings table Details column to show the current
+        translation and notes for a speaker.
+
+        Args:
+            original_name: The speaker's source-language name.
+
+        Returns:
+            Summary string like 'John — Male, Protagonist' or empty.
+        """
+        characters = self._load_characters()
+        char = next(
+            (c for c in characters if c["original_name"] == original_name),
+            None,
+        )
+        if not char:
+            return ""
+        parts: list[str] = []
+        if char.get("name"):
+            parts.append(char["name"])
+        detail_parts: list[str] = []
+        if char.get("gender"):
+            detail_parts.append(char["gender"])
+        if char.get("role"):
+            detail_parts.append(char["role"])
+        if char.get("notes"):
+            detail_parts.append(char["notes"])
+        if detail_parts:
+            parts.append(", ".join(detail_parts))
+        return " — ".join(parts) if parts else ""
+
+    def _refresh_details_for_speakers(
+        self, speakers: List[str]
+    ) -> None:
+        """Update the Details column in the findings table for speakers.
+
+        Called after a glossary action so the table reflects the new
+        character data without a full rebuild.
+
+        Args:
+            speakers: List of speaker names to refresh.
+        """
+        if not hasattr(self, "_findings_table") or self._findings_table is None:
+            return
+        tree = self._findings_table._tree
+        for item_id in tree.get_children():
+            vals = tree.item(item_id, "values")
+            if not vals:
+                continue
+            # vals order: category, item, count, details
+            category = vals[0] if len(vals) > 0 else ""
+            item_name = vals[1] if len(vals) > 1 else ""
+            if category == "Speakers" and item_name in speakers:
+                new_details = self._get_character_details(item_name)
+                tree.set(item_id, "details", new_details)
+
     # Speaker actions
     def _add_speaker_to_glossary(self) -> None:
-        """Add selected speakers to glossary."""
+        """Add selected speakers to character glossary."""
         items = self._get_selected_items()
         speakers = [name for cat, name in items if cat == "Speakers"]
         if not speakers:
@@ -835,27 +982,24 @@ class AnalysisStep(BaseStep):
 
         success_count = 0
         for speaker in speakers:
-            if add_glossary_entry(
-                original=speaker,
-                translation="",  # User will fill in translation later
-                notes="Added from Analysis",
-                entry_type=TYPE_NAME,
-                gender=GENDER_UNKNOWN,
-                source="Analysis",
-            ):
+            if self._upsert_character_entry(speaker):
                 success_count += 1
 
-        logger.info("Added %d/%d speakers to glossary: %s", success_count, len(speakers), speakers)
+        logger.info(
+            "Added %d/%d speakers to character glossary: %s",
+            success_count, len(speakers), speakers,
+        )
         if success_count > 0:
-            messagebox.showinfo("Added to Glossary", f"Added {success_count} speaker(s) to glossary.")
+            messagebox.showinfo(
+                "Added to Glossary",
+                f"Added {success_count} speaker(s) to glossary.",
+            )
+            self._refresh_details_for_speakers(speakers)
         else:
-            messagebox.showwarning("Failed", "Could not add speakers to glossary.")
+            messagebox.showwarning("Failed", "Could not add speakers.")
 
     def _set_speaker_role(self, role: str) -> None:
-        """Set role for selected speakers.
-
-        Role is stored in the glossary Notes field as 'Role: X'.
-        """
+        """Set role for selected speakers in the character glossary."""
         items = self._get_selected_items()
         speakers = [name for cat, name in items if cat == "Speakers"]
         if not speakers:
@@ -863,66 +1007,42 @@ class AnalysisStep(BaseStep):
 
         success_count = 0
         for speaker in speakers:
-            # Load existing entry and update notes with role
-            glossary = load_glossary()
-            existing = glossary.get(speaker)
-            existing_notes = existing.notes if existing else ""
-
-            # Remove old role if present, add new role
-            import re
-            notes = re.sub(r"Role:\s*\w+\s*;?\s*", "", existing_notes).strip()
-            notes = f"Role: {role}; {notes}".strip("; ")
-
-            gender = existing.gender if existing else GENDER_UNKNOWN
-            translation = existing.translation if existing else ""
-
-            if add_glossary_entry(
-                original=speaker,
-                translation=translation,
-                notes=notes,
-                entry_type=TYPE_NAME,
-                gender=gender,
-                source="Analysis",
-            ):
+            if self._upsert_character_entry(speaker, role=role):
                 success_count += 1
 
-        logger.info("Set role '%s' for %d speakers: %s", role, success_count, speakers)
+        logger.info(
+            "Set role '%s' for %d speakers: %s",
+            role, success_count, speakers,
+        )
         if success_count > 0:
-            messagebox.showinfo("Role Set", f"Set role '{role}' for {success_count} speaker(s).")
+            messagebox.showinfo(
+                "Role Set",
+                f"Set role '{role}' for {success_count} speaker(s).",
+            )
+            self._refresh_details_for_speakers(speakers)
 
     def _set_speaker_gender(self, gender: str) -> None:
-        """Set gender for selected speakers.
-
-        Gender is stored in the glossary gender field.
-        """
+        """Set gender for selected speakers in the character glossary."""
         items = self._get_selected_items()
         speakers = [name for cat, name in items if cat == "Speakers"]
         if not speakers:
             return
 
-        # Map UI gender to glossary constant
-        gender_value = GENDER_MALE if gender == "Male" else GENDER_FEMALE
-
         success_count = 0
         for speaker in speakers:
-            glossary = load_glossary()
-            existing = glossary.get(speaker)
-            existing_notes = existing.notes if existing else ""
-            translation = existing.translation if existing else ""
-
-            if add_glossary_entry(
-                original=speaker,
-                translation=translation,
-                notes=existing_notes,
-                entry_type=TYPE_NAME,
-                gender=gender_value,
-                source="Analysis",
-            ):
+            if self._upsert_character_entry(speaker, gender=gender):
                 success_count += 1
 
-        logger.info("Set gender '%s' for %d speakers: %s", gender, success_count, speakers)
+        logger.info(
+            "Set gender '%s' for %d speakers: %s",
+            gender, success_count, speakers,
+        )
         if success_count > 0:
-            messagebox.showinfo("Gender Set", f"Set gender '{gender}' for {success_count} speaker(s).")
+            messagebox.showinfo(
+                "Gender Set",
+                f"Set gender '{gender}' for {success_count} speaker(s).",
+            )
+            self._refresh_details_for_speakers(speakers)
 
     def _set_speaker_translation(self) -> None:
         """Set custom translation for selected speaker."""
@@ -932,7 +1052,10 @@ class AnalysisStep(BaseStep):
             return
 
         if len(speakers) > 1:
-            messagebox.showinfo("Single Select", "Please select only one speaker to set translation.")
+            messagebox.showinfo(
+                "Single Select",
+                "Please select only one speaker to set translation.",
+            )
             return
 
         speaker = speakers[0]
@@ -944,49 +1067,56 @@ class AnalysisStep(BaseStep):
         if not translation:
             return
 
-        # Load existing and preserve notes/gender
-        glossary = load_glossary()
-        existing = glossary.get(speaker)
-        existing_notes = existing.notes if existing else ""
-        gender = existing.gender if existing else GENDER_UNKNOWN
-
-        if add_glossary_entry(
-            original=speaker,
-            translation=translation,
-            notes=existing_notes,
-            entry_type=TYPE_NAME,
-            gender=gender,
-            source="Analysis",
+        if self._upsert_character_entry(
+            speaker, translation=translation,
         ):
-            logger.info("Set translation '%s' for speaker '%s'", translation, speaker)
-            messagebox.showinfo("Translation Set", f"Set translation for '{speaker}'.")
+            logger.info(
+                "Set translation '%s' for speaker '%s'",
+                translation, speaker,
+            )
+            messagebox.showinfo(
+                "Translation Set",
+                f"Set translation for '{speaker}'.",
+            )
+            self._refresh_details_for_speakers([speaker])
         else:
             messagebox.showwarning("Failed", "Could not set translation.")
 
     def _add_speaker_to_code_glossary(self) -> None:
-        """Add selected speakers to code glossary."""
+        """Add selected speakers to code glossary (manifest)."""
         items = self._get_selected_items()
         speakers = [name for cat, name in items if cat == "Speakers"]
         if not speakers:
             return
 
-        # Code glossary entries use TYPE_CODE (if available) or special handling
         success_count = 0
-        for speaker in speakers:
-            # Add to code glossary as preserved pattern
-            if add_glossary_entry(
-                original=speaker,
-                translation=speaker,  # Preserve original
-                notes="Protected speaker name",
-                entry_type="Code",  # Code type to preserve in translation
-                gender=GENDER_UNKNOWN,
-                source="Analysis",
-            ):
-                success_count += 1
+        existing = self._load_code_patterns()
+        existing_set = {p.get("pattern", "") for p in existing}
 
-        logger.info("Added %d speakers to code glossary: %s", success_count, speakers)
+        for speaker in speakers:
+            if speaker in existing_set:
+                continue
+            existing.append({
+                "pattern": speaker,
+                "category": "Speaker",
+                "action": "preserve",
+                "notes": "Protected speaker name",
+            })
+            existing_set.add(speaker)
+            success_count += 1
+
+        if success_count:
+            self._save_code_patterns(existing)
+
+        logger.info(
+            "Added %d speakers to code glossary: %s",
+            success_count, speakers,
+        )
         if success_count > 0:
-            messagebox.showinfo("Added to Code Glossary", f"Added {success_count} speaker(s) to code glossary.")
+            messagebox.showinfo(
+                "Added to Code Glossary",
+                f"Added {success_count} speaker(s) to code glossary.",
+            )
 
     def _copy_speaker_name(self) -> None:
         """Copy speaker name(s) to clipboard."""
@@ -1177,11 +1307,14 @@ class AnalysisStep(BaseStep):
                 "Please select only one pattern for custom replacement.",
             )
 
-    # Default protagonist replacement names (single-token, LLM-friendly)
+    # Default replacement names by category & gender
     _PROTAGONIST_NAMES = {
         "Male": ("John", "Smith"),
         "Female": ("Jane", "Smith"),
+        "Non-Binary": ("Alex", "Smith"),
     }
+    _COMPANY_NAMES = ["Acme Corp", "Globex", "Initech", "Umbrella"]
+    _LOCATION_NAMES = ["Greenville", "Lakewood", "Oakmont", "Riverside"]
 
     def _set_pattern_type(self, type_name: str) -> None:
         """Set type classification for selected patterns.
@@ -1217,6 +1350,10 @@ class AnalysisStep(BaseStep):
     ) -> None:
         """Add name-type code patterns to glossary with temp replacements.
 
+        Creates a character glossary entry for the replacement name and
+        a Custom Placeholder so the code pattern is protected during
+        translation.
+
         Args:
             patterns: List of normalized code pattern strings.
         """
@@ -1234,24 +1371,43 @@ class AnalysisStep(BaseStep):
             if not replacement:
                 replacement = "John"  # Default male protagonist name
 
-            add_glossary_entry(
-                original=pattern,
-                translation=replacement,
-                notes="Type: name; Source: Code Pattern",
-                entry_type=TYPE_CODE,
-                gender=GENDER_UNKNOWN,
-                source="Analysis",
-            )
+            # Character entry — Original = replacement name
+            self._upsert_character_entry(replacement)
+
+            # Custom Placeholder — pattern→replacement during translation
+            cur_ph = load_custom_placeholders(
+                self.manifest_manager
+            ) if self.manifest_manager else []
+            cur_ph = [
+                p for p in cur_ph if p.get("pattern") != pattern
+            ]
+            cur_ph.append({
+                "pattern": pattern,
+                "placeholder": replacement,
+                "is_regex": False,
+                "restore_after": True,
+            })
+            if self.manifest_manager:
+                save_custom_placeholders(self.manifest_manager, cur_ph)
+
             logger.info(
-                "Added name pattern '%s' → '%s' to glossary",
+                "Added name pattern '%s' → '%s' to character glossary "
+                "and custom placeholders",
                 pattern, replacement,
             )
 
-    def _set_pattern_as_protagonist(self) -> None:
-        """Mark selected code pattern as protagonist variable.
+    def _show_nameable_dialog(self) -> None:
+        """Show the Nameable dialog for assigning a replacement to a code
+        pattern.
 
-        Sets type to 'name', action to 'replace', and assigns a single-token
-        protagonist replacement name (John/Jane + Smith) to the glossary.
+        The dialog offers three mode buttons — Character, Company, Location
+        — each pre-filling suitable defaults.  All fields (Custom
+        Replacement, Role, Gender, Custom Notes) are fully editable.
+
+        On OK/Apply the replacement name becomes a character glossary entry
+        (Original = replacement, e.g. "John") and the code pattern is
+        written to Preprocessing Custom Placeholders so it is protected
+        during translation and replaced with the name.
         """
         items = self._get_selected_items()
         patterns = [name for cat, name in items if cat == "Code Patterns"]
@@ -1261,78 +1417,239 @@ class AnalysisStep(BaseStep):
         if len(patterns) > 1:
             messagebox.showinfo(
                 "Single Select",
-                "Please select one pattern to set as protagonist.",
+                "Please select one pattern for the Nameable dialog.",
             )
             return
 
         pattern = patterns[0]
 
-        # Ask for gender to determine replacement name
-        gender_dialog = tk.Toplevel(self)
-        gender_dialog.title("Protagonist Gender")
-        gender_dialog.geometry("300x120")
-        gender_dialog.resizable(False, False)
-        gender_dialog.transient(self)
-        gender_dialog.grab_set()
+        # Check if a character entry already exists for this pattern
+        characters = self._load_characters()
+        # Look for an existing character whose notes reference this pattern
+        existing_char: Dict[str, Any] | None = None
+        for ch in characters:
+            if ch.get("notes", "").find(pattern) != -1:
+                existing_char = ch
+                break
+        # Also check existing custom placeholders
+        existing_placeholders = load_custom_placeholders(
+            self.manifest_manager
+        ) if self.manifest_manager else []
+        existing_ph = next(
+            (p for p in existing_placeholders if p.get("pattern") == pattern),
+            None,
+        )
 
-        ttk.Label(
-            gender_dialog,
-            text=f"Set gender for protagonist '{pattern}':",
-            wraplength=280,
-        ).pack(pady=(10, 5))
+        dlg = tk.Toplevel(self)
+        dlg.title(f"Nameable — {pattern}")
+        dlg.geometry("420x360")
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        dlg.grab_set()
 
-        result: Dict[str, str] = {}
+        # --- Mode buttons ---
+        mode_frame = ttk.LabelFrame(dlg, text="Type")
+        mode_frame.pack(fill="x", padx=10, pady=(10, 5))
 
-        def _select(gender: str) -> None:
-            result["gender"] = gender
-            gender_dialog.destroy()
+        mode_var = tk.StringVar(value="Character")
 
-        btn_frame = ttk.Frame(gender_dialog)
-        btn_frame.pack(pady=10)
+        # Helper to pre-fill fields based on mode
+        def _prefill(mode: str) -> None:
+            mode_var.set(mode)
+            if mode == "Character":
+                gender_combo.configure(state="readonly")
+                role_combo.configure(state="readonly")
+                gender_var.set("Male")
+                role_var.set("Protagonist")
+                first, surname = self._PROTAGONIST_NAMES.get("Male", ("John", "Smith"))
+                replacement_var.set(first)
+                notes_var.set(f"Surname: {surname}")
+            elif mode == "Company":
+                gender_combo.configure(state="disabled")
+                role_combo.configure(state="readonly")
+                gender_var.set("")
+                role_var.set("Organization")
+                replacement_var.set(self._COMPANY_NAMES[0])
+                notes_var.set("")
+            elif mode == "Location":
+                gender_combo.configure(state="disabled")
+                role_combo.configure(state="readonly")
+                gender_var.set("")
+                role_var.set("Location")
+                replacement_var.set(self._LOCATION_NAMES[0])
+                notes_var.set("")
+
+        for mode in ("Character", "Company", "Location"):
+            ttk.Radiobutton(
+                mode_frame, text=mode, variable=mode_var, value=mode,
+                command=lambda m=mode: _prefill(m),
+            ).pack(side="left", padx=10, pady=5)
+
+        # --- Fields ---
+        fields_frame = ttk.Frame(dlg)
+        fields_frame.pack(fill="x", padx=10, pady=5)
+
+        ttk.Label(fields_frame, text="Custom Replacement:").grid(
+            row=0, column=0, sticky="w", pady=3,
+        )
+        replacement_var = tk.StringVar()
+        ttk.Entry(
+            fields_frame, textvariable=replacement_var, width=30,
+        ).grid(row=0, column=1, sticky="ew", pady=3, padx=(5, 0))
+
+        ttk.Label(fields_frame, text="Role:").grid(
+            row=1, column=0, sticky="w", pady=3,
+        )
+        role_var = tk.StringVar()
+        role_combo = ttk.Combobox(
+            fields_frame, textvariable=role_var, width=28,
+            values=[
+                "Protagonist", "Love Interest", "Major", "Minor",
+                "Organization", "Location", "Other",
+            ],
+            state="readonly",
+        )
+        role_combo.grid(row=1, column=1, sticky="ew", pady=3, padx=(5, 0))
+
+        ttk.Label(fields_frame, text="Gender:").grid(
+            row=2, column=0, sticky="w", pady=3,
+        )
+        gender_var = tk.StringVar()
+        gender_combo = ttk.Combobox(
+            fields_frame, textvariable=gender_var, width=28,
+            values=[
+                "", "Male", "Female", "Non-Binary",
+                "Transwoman", "Transman", "Unknown",
+            ],
+            state="readonly",
+        )
+        gender_combo.grid(row=2, column=1, sticky="ew", pady=3, padx=(5, 0))
+
+        ttk.Label(fields_frame, text="Custom Notes:").grid(
+            row=3, column=0, sticky="nw", pady=3,
+        )
+        notes_var = tk.StringVar()
+        ttk.Entry(
+            fields_frame, textvariable=notes_var, width=30,
+        ).grid(row=3, column=1, sticky="ew", pady=3, padx=(5, 0))
+
+        fields_frame.columnconfigure(1, weight=1)
+
+        # Warn if entry already exists
+        if existing_char or existing_ph:
+            ttk.Label(
+                dlg,
+                text="⚠ An entry for this pattern already exists and will be overwritten.",
+                foreground="orange",
+                font=("Segoe UI", 8),
+                wraplength=380,
+            ).pack(padx=10, pady=(5, 0))
+
+        # Pre-fill with existing data or defaults
+        if existing_char:
+            replacement_var.set(existing_char.get("original_name", ""))
+            gender_var.set(existing_char.get("gender", ""))
+            role_var.set(existing_char.get("role", ""))
+            notes_var.set(existing_char.get("notes", ""))
+        else:
+            _prefill("Character")
+
+        # --- Buttons ---
+        def _apply() -> None:
+            repl = replacement_var.get().strip()
+            if not repl:
+                messagebox.showwarning(
+                    "Required", "Please enter a replacement value.",
+                )
+                return
+
+            role = role_var.get().strip()
+            gender = gender_var.get().strip()
+            notes = notes_var.get().strip()
+
+            # 1. Update code pattern database (Analysis tracking)
+            self._upsert_code_pattern(
+                pattern,
+                action="replace",
+                notes=f"Type: name; Role: {role}; Replacement: {repl}",
+            )
+
+            # 2. Create character glossary entry —
+            #    Original = replacement name (e.g. "John")
+            self._upsert_character_entry(
+                repl,
+                gender=gender,
+                role=role,
+                notes=notes,
+            )
+
+            # 3. Add to Custom Placeholders in Preprocessing —
+            #    pattern = code pattern, placeholder = replacement name
+            cur_ph = load_custom_placeholders(
+                self.manifest_manager
+            ) if self.manifest_manager else []
+            # Remove existing placeholder for this pattern if any
+            cur_ph = [
+                p for p in cur_ph if p.get("pattern") != pattern
+            ]
+            cur_ph.append({
+                "pattern": pattern,
+                "placeholder": repl,
+                "is_regex": False,
+                "restore_after": True,
+            })
+            if self.manifest_manager:
+                save_custom_placeholders(self.manifest_manager, cur_ph)
+
+            # 4. Add glossary entry with replacement name as source
+            #    and role/gender/notes in the notes field
+            if self.manifest_manager:
+                glossary_entries = load_glossary_entries(self.manifest_manager)
+                # Remove existing entry for this replacement name
+                glossary_entries = [
+                    e for e in glossary_entries
+                    if e.get("source") != repl
+                ]
+                # Build notes string from gender, role, and custom notes
+                note_parts: list[str] = []
+                if gender:
+                    note_parts.append(f"Gender: {gender}")
+                if role:
+                    note_parts.append(f"Role: {role}")
+                if notes:
+                    note_parts.append(notes)
+                glossary_notes = "; ".join(note_parts)
+                glossary_entries.append({
+                    "source": repl,
+                    "target": "",
+                    "notes": glossary_notes,
+                    "category": "",
+                    "context": "",
+                    "active": True,
+                })
+                save_glossary_entries(self.manifest_manager, glossary_entries)
+
+            logger.info(
+                "Nameable: '%s' → '%s' (role=%s, gender=%s); "
+                "added custom placeholder",
+                pattern, repl, role, gender,
+            )
+
+        def _ok() -> None:
+            _apply()
+            dlg.destroy()
+
+        btn_row = ttk.Frame(dlg)
+        btn_row.pack(pady=15)
+        ttk.Button(btn_row, text="OK", command=_ok, width=8).pack(
+            side="left", padx=5,
+        )
         ttk.Button(
-            btn_frame, text="Male (John Smith)",
-            command=lambda: _select("Male"),
-        ).pack(side="left", padx=10)
+            btn_row, text="Cancel", command=dlg.destroy, width=8,
+        ).pack(side="left", padx=5)
         ttk.Button(
-            btn_frame, text="Female (Jane Smith)",
-            command=lambda: _select("Female"),
-        ).pack(side="left", padx=10)
-
-        gender_dialog.wait_window()
-
-        gender = result.get("gender")
-        if not gender:
-            return
-
-        first_name, surname = self._PROTAGONIST_NAMES[gender]
-        gender_const = GENDER_MALE if gender == "Male" else GENDER_FEMALE
-
-        # Save to code glossary with action=replace
-        self._upsert_code_pattern(
-            pattern,
-            action="replace",
-            notes=f"Type: name; Role: Protagonist; Replacement: {first_name}",
-        )
-
-        # Add to glossary with the temporary replacement
-        add_glossary_entry(
-            original=pattern,
-            translation=first_name,
-            notes=f"Role: Protagonist; Surname: {surname}",
-            entry_type=TYPE_CODE,
-            gender=gender_const,
-            source="Analysis",
-        )
-
-        logger.info(
-            "Set pattern '%s' as %s protagonist → '%s %s'",
-            pattern, gender, first_name, surname,
-        )
-        messagebox.showinfo(
-            "Protagonist Set",
-            f"'{pattern}' set as {gender} protagonist.\n"
-            f"Replacement: {first_name} {surname}",
-        )
+            btn_row, text="Apply", command=_apply, width=8,
+        ).pack(side="left", padx=5)
 
     def _copy_pattern(self) -> None:
         """Copy pattern(s) to clipboard."""

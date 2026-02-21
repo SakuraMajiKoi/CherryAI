@@ -505,7 +505,7 @@ Core shared processing logic used by both GUI and CLI.
 ---
 
 ### modehelper.py
-**Purpose:** Shared helpers for modes (PROT placeholder, anchor equivalence).  
+**Purpose:** Shared helpers for modes (PROTECTED placeholder, anchor equivalence).  
 **How it fits:** Utility functions for modi/ modules.  
 **Functions:**
 - `get_equivs()` - Get equivalent characters
@@ -867,11 +867,11 @@ Pre/post-processing mode plugins.
 ---
 
 ### protect_code.py
-**Purpose:** Code protection → __PROT__ placeholders.  
+**Purpose:** Code protection → __PROTECTED__ placeholders.  
 **How it fits:** Main code protection mode using unified placeholder.  
 **Functions:**
-- `apply_pre()` - Replace code with __PROT__
-- `apply_post()` - Restore from __PROT__
+- `apply_pre()` - Replace code with __PROTECTED__
+- `apply_post()` - Restore from __PROTECTED__
 **Mode Metadata:** NAME="Protect Code", PHASE="Both", PRIORITY=10
 
 ---
@@ -1338,7 +1338,7 @@ GUI v2 with 10 workflow steps and supporting infrastructure.
 - `apply_ellipsis_compression()` / `apply_ellipsis_batch()` - Ellipsis
 - `get_symbol_table()` - Get symbol table
 - `apply_symbol_conversion()` / `apply_symbol_batch()` - Symbols
-- `apply_prot_compression()` - PROT compression
+- `apply_prot_compression()` - PROTECTED compression
 - `apply_protect_code()` - Apply protect code
 - `apply_custom_placeholder()` - Custom placeholders
 - `apply_preprocessing()` - Full preprocessing
@@ -1768,7 +1768,7 @@ Protect Code: apply_protect_code(), save/load_protect_code_patterns()
 
 **Postprocessing (Step 6) Integration:**
 - Uses functions/postprocess.py recover_line(), NOT direct modi/ imports
-- Restores PROT tokens, ellipses, symbols from prepro_ops
+- Restores PROTECTED tokens, ellipses, symbols from prepro_ops
 - Status tracking per-line with recovery issues
 
 **Note:** technical.md marks most modi as "❌ Not integrated with GUI v2" but 

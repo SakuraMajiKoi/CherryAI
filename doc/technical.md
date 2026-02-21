@@ -122,7 +122,7 @@ TABLE OF CONTENTS
    4.3  custom_placeholder.py ✅❌ - User-defined placeholder replacement
    4.4  free.py ✅❌ - Free-form processing mode
    4.5  only_remove.py ✅❌ - Remove-only pattern mode
-   4.6  protect_code.py ✅🔗 - Code protection → __PROT__ placeholders (via mode_adapter)
+   4.6  protect_code.py ✅🔗 - Code protection → __PROTECTED__ placeholders (via mode_adapter)
    4.7  replace_after.py ✅❌ - Post-translation replacement
    4.8  replace_before.py ✅❌ - Pre-translation replacement
    4.9  sabotage.py ✅❌ - Sabotage/corruption detection
@@ -200,7 +200,7 @@ TABLE OF CONTENTS
          - Returns 4-tuple: (paths, format, encoding, project_name)
        - loading_progress.py - Progress dialog for long-running operations
    
-   6.7 gui/helpers/ (8 files - 7 adapter modules)
+   6.7 gui/helpers/ (9 files - 7 adapter modules + 1 confirmation module)
        - __init__.py - Helper exports
        - mode_adapter.py - Bridge between GUI config and modi/ modules (TASK 16.5)
        - analysis_adapter.py - Bridge between GUI and functions/analysis.py (TASK 16.6)
@@ -208,10 +208,16 @@ TABLE OF CONTENTS
          - analyze_lines(): Full analysis with speaker_samples and individual_codes
          - _friendly_code_type(): Internal type constant → display name mapping
        - glossary_adapter.py - Bridge between GUI and glossary/config/style modules (TASK 16.7)
+         - Note: Speaker actions in analysis.py write to character glossary (`characters` key)
+           via `_upsert_character_entry()`, not to project glossary entries
        - chunker_adapter.py - Bridge between GUI and functions/chunker.py
        - prompt_adapter.py - Bridge between GUI and functions/prompt_builder.py
        - manifest_binding.py - Widget-to-Manifest binding system (TASK 22.3)
        - tooltip.py - Tooltip display utilities for widgets
+       - confirmations.py - Confirmation dialog with "Don't ask again" opt-out (Phase 60)
+         - confirm_action(parent, key, title, message): custom Toplevel with checkbox
+         - is_suppressed(key) / suppress(key): INI-backed suppression state
+         - reset_all_suppressions(): removes entire [confirmations] section
    
    6.8 gui/state/ (2 files)
        - __init__.py - State exports
@@ -237,6 +243,8 @@ TABLE OF CONTENTS
          - get_last_manifest() / set_last_manifest() - Last used manifest path
          - get_recent_manifests() / add_to_recent_manifests() - Recent list
          - get_restore_on_launch() / set_restore_on_launch() - Auto-restore toggle
+       - Phase 60: Section management:
+         - remove_section(section) - Remove entire INI section (used by reset_all_suppressions)
        - **Phase 58.12:** Last input directory persistence:
          - get_last_input_dir() - Get last used input directory (returns Path or None)
          - set_last_input_dir() - Store last used input directory in [recent] section
@@ -282,13 +290,14 @@ TABLE OF CONTENTS
          - bind_float_spinbox_to_field() - Float values with DoubleVar
        - **BindingInfo class:** Tracks save/load operations for testing
        - **load_all_bindings():** Batch load all registered bindings
-       - **Phase 23 Integration:** InformationStep uses 11 bindings:
+       - **Phase 23 Integration:** InformationStep uses 12 bindings:
          - ProjectName, Title, Genre (text entries)
          - SourceLanguage, TargetLanguage (language comboboxes)
          - Summary (multiline text)
-         - StylePreset, TonePreset (preset comboboxes)
-         - CustomStyle, CustomTone (custom text entries)
+         - StylePreset, TonePreset (preset comboboxes, string-based since Phase 60)
+         - CustomStyle, CustomTone (ScrolledText fields, saved on FocusOut since Phase 60)
          - Prompt (multiline text, renamed from Additional Notes)
+         - SIPreset (System Instructions preset combobox, string-based)
        - **Phase 24 Integration:** PreprocessingStep uses 7 bindings + special format helpers:
          - Standard toggles: Deduplication, DeduplicationThreshold, EllipsisCompression,
            SymbolConversion, ProtCompression, SpeakerNameReplacement, CodeSpacingRules
@@ -333,14 +342,42 @@ TABLE OF CONTENTS
          - Widget renames: Summary, System Instructions, Code Database
          - Genre dialog merges selected genres with existing (non_common preserved)
          - "Other" language triggers simpledialog; reverts on cancel via _prev_source_lang/_prev_target_lang
-         - Style/Tone preset combos disabled when custom field has content (trace_add callback)
+         - Style/Tone preset system (Phase 60): replaced trace-based graying with full preset management
+           - Dropdown (combobox) + ScrolledText prompt field + Save/Delete buttons for Style and Tone
+           - DEFAULT_STYLE_PRESETS / DEFAULT_TONE_PRESETS dicts with LLM prompt text
+           - User presets in `user/presets/` as JSON files
+           - `_unique_preset_name()` appends ascending numbers for duplicates
+           - `confirm_action()` for preset deletion with opt-out
          - Glossary table: 4-column Treeview (Active ✓/✗, Original, Translation, Notes)
+         - Speaker multi-select removal: selectmode="extended" with reverse-index batch deletion
+         - Gender inference progress dialog: Toplevel with progress bar, "Checking 'name'" label, X/Y count
          - Inline editing via double-click with Entry overlay; Delete key removes entries
-         - Import from Analysis: code patterns → category="Detected"; speakers → glossary entries with Notes
+         - Import from Analysis: choice dialog (Top N / All) with spinbox; code patterns → category="Detected"; speakers → character glossary entries; non-destructive merge; uses `_get_analysis_step_data()` (ManifestManager first, session fallback)
          - Code Database actions in prompt_builder: Preserve="Do not translate", Translate="Translate as", Remove=filtered out
+         - Code Database multi-select removal with reverse-index batch deletion (Phase 60)
+         - Code Database auto-populate: prefers `individual_codes` over grouped `code_patterns` (Phase 60)
          - Global Glossary/Database widget: mode switch, search filter, import/export JSON/CSV
          - Files: user/global_glossary.json, user/global_codes.json
          - Selective glossary: active field (bool) in manifest GlossaryEntries, defaults True
+         - **Collapsible right-column widgets:** `_collapsible_state`, `_collapsible_content`, `_collapsible_buttons` dicts track collapse state; `_toggle_collapsible(widget_name)` toggles `grid()`/`grid_remove()` on content frames; `_reconfigure_right_column_weights()` sets row weight=1 for expanded, weight=0 for collapsed; applies to Glossary (row 0), Glossary Settings (row 1), Code Database (row 2), Global Database (row 3)
+         - **Glossary moved to right column:** `_build_character_section()` now builds into `self._right_column` (grid row 0) instead of `self._left_column`; uses grid layout with sticky="nsew" for expansion
+         - **Taller tables:** All right-column Treeview widgets use height=8 (up from 4-5); parent frames use `rowconfigure(weight=1)` and `sticky="nsew"`; canvas `<Configure>` binding stretches inner frame to viewport height
+         - **Style/Tone text display:** `_ensure_style_tone_text()` called at end of `on_enter()` populates empty text fields from preset; `_populate_form()` falls back to preset text when metadata style/tone is empty
+         - **Style/Tone compact display:** ScrolledText height=1 (down from 3); Delete button width=10 (up from 8)
+         - **Summary defaults & restore:** `DEFAULT_SUMMARY_TEXT` constant; height=2; "🔄 Restore Default" button; `_ensure_default_texts()` populates on step entry when empty
+         - **System Instructions preset system:** mirrors Style/Tone pattern — `_SI_PRESETS_FILE` in `user/presets/`, `DEFAULT_SI_PRESETS` dict, `_load_si_presets()`, Combobox (Default/Custom/user), Save/Delete buttons, `_on_si_preset_changed()`, `_save_si_preset()`, `_delete_si_preset()` methods; manifest key `SIPreset` for preset name, `Prompt` for text content; `DEFAULT_SYSTEM_INSTRUCTIONS` loaded from `temp/example.txt`
+         - **Hint labels removed:** Description labels removed from Summary and System Instructions widgets
+         - **Project Name source fix:** `_apply_suggested_project_name()` now prefers manifest `ProjectName` (set during Input step) over step data `suggested_project_name` (folder name)
+         - **Style/Tone translation integration:** translate.py `_build_system_prompt_from_manifest()` reads `CustomStyle`, `CustomTone`, `Summary`, `Prompt`, and glossary entries from manifest; replaces legacy config file reads; appends `Style: ...` and `Tone: ...` to system prompt
+         - **Analysis→Glossary data flow:** `_show_nameable_dialog._apply()` in analysis.py now creates glossary entry with source=replacement_name and notes="Gender: X; Role: Y; custom_notes" when assigning variable codes to characters
+       - **Phase 60 Integration:** Confirmation opt-out, File menu fixes, WelcomeDialog update:
+         - `gui/helpers/confirmations.py`: confirm_action(), is_suppressed(), suppress(), reset_all_suppressions()
+         - INI `[confirmations]` section stores suppressed dialog keys
+         - `ini_manager.remove_section()`: removes entire INI section
+         - App._on_new_session(): calls on_enter() on tab 0 after reset
+         - App._on_load_manifest(): unsaved-changes check (askyesnocancel) before loading
+         - WelcomeDialog: auto-load checkbox always visible, saves on toggle
+         - Global Options Session: reset buttons for confirmations and presets
        - **Phase 42 Integration:** Preprocessing & Postprocessing complete implementation:
          - Anchoring Treeview: 5-column (Pattern, Action, Anchor Spec, RegEx, Description), _AnchorDialog, _sync_anchor_tree_to_manifest
          - Custom Placeholders RegEx: _RuleDialog.show_regex param, regex_result attr, checkbox in dialog
@@ -1581,7 +1618,7 @@ Pipeline (Pre-TL):
 2. Custom Placeholder (priority 10)
 3. Remove and Restore at Anchor (priority 15)
 4. Protect Code (priority 20)
-5. Standard Helpers (priority 50) - ellipsis, empty lines, PROT compression
+5. Standard Helpers (priority 50) - ellipsis, empty lines, PROTECTED compression
 6. Other operations in UI order
 
 Pipeline (Post-TL):
@@ -2183,13 +2220,13 @@ Key Features:
 1. STANDARD MOCK TRANSLATION:
    - Replaces Japanese text segments with NATO phonetic words (alpha, bravo, ...)
    - Reverses non-Japanese text words as fallback
-   - Preserves all `__PROT__`, `__DEDUP__`, `__CUSTOM__` placeholders
+   - Preserves all `__PROTECTED__`, `__DEDUP__`, `__CUSTOM__` placeholders
    - Preserves speaker:dialogue format (speaker names kept intact)
    - Preserves anchor characters (`[]{}()<>「」『』【】`) via tokenization
    - Deterministic output via seed-based `random.Random`
 
 2. DELIBERATE FLAW INJECTION (Phase 56):
-   - Placeholder malformation: removes/adds chars in `__PROT__` tokens
+   - Placeholder malformation: removes/adds chars in `__PROTECTED__` tokens
    - Anchor manipulation: removes existing anchors, inserts random ones
    - Code intrusion: replaces content inside code patterns (`[font]`, etc.)
    - Character surgery: random character insertion/deletion
@@ -2341,12 +2378,12 @@ Helper Functions:
 
 Conditional Prompt System (functions/conditional_prompts.py) ✓ Enhanced Session 14+:
 - Pattern-triggered instructions appended to system prompt
-- Detects tokens like __PROT__, __DEDUP__, __TEMPREPL_X_Y__ in batch text
+- Detects tokens like __PROTECTED__, __DEDUP__, __TEMPREPL_X_Y__ in batch text
 - Injects handling instructions only when relevant patterns present
 - Configuration via config/conditional_prompts.json for customization
 - 15 built-in conditions with priority ordering
 - **Dynamic instructions with pattern-specific examples (TASK 5)**
-- **Separate handling for <br> vs \\n, __PROT__ vs __COLOR__ vs __FONT__**
+- **Separate handling for <br> vs \\n, __PROTECTED__ vs __COLOR__ vs __FONT__**
 - **Bracket differentiation: [] vs {} vs <>**
 
 Classes:
@@ -2362,7 +2399,7 @@ Key Methods:
 Built-in Conditional Prompts (with dynamic examples):
 | Pattern | Purpose | Priority | Example When Matched |
 |---------|---------|----------|---------------------|
-| `__PROT__`, `__PROT_\d+__` | Code protection tokens | 100 | __PROT__, __PROT_1__ |
+| `__PROTECTED__`, `__PROTECTED_\d+__` | Code protection tokens | 100 | __PROTECTED__, __PROTECTED_1__ |
 | `__COLOR__`, `__COLOR_\d+__` | Color placeholders | 100 | __COLOR__, __COLOR_2__ |
 | `__FONT__`, `__FONT_\d+__` | Font placeholders | 100 | __FONT__, __FONT_1__ |
 | `__DEDUP__` | Deduplication markers | 95 | __DEDUP__ |
@@ -2400,7 +2437,7 @@ Key Features:
 1. PRE-TRANSLATION VALIDATION (validate_line_pre, validate_batch_pre):
    - Skip empty lines, __COMMENT__-prefixed lines
    - Skip context marker lines (__DIALOGUE__, __MENU__, __CHOICE__, __FILE__)
-   - Skip __DEDUP__ and __PROT__ only lines
+   - Skip __DEDUP__ and __PROTECTED__ only lines
    - Skip lines without Japanese characters
    - Skip already translated lines
    - Auto-translate symbol-only lines (normalize fullwidth → halfwidth)
@@ -2412,7 +2449,7 @@ Key Features:
    - Uses ANCHOR_EQUIVS from modehelper.py for equivalence
 
 3. PLACEHOLDER PRESERVATION (NEW - TASK 4):
-   - extract_placeholders(text): Find __PROT__, __PROT_1__, __NAME__, etc.
+   - extract_placeholders(text): Find __PROTECTED__, __PROTECTED_1__, __NAME__, etc.
    - count_placeholder(text, placeholder): Count with case/whitespace tolerance
    - validate_placeholder_preserved(original, translated): Check preservation
    - Detects: missing, extra, mangled placeholders
@@ -3058,9 +3095,9 @@ Classes (Planned):
 Recovery Types:
 | Type | Pattern | Fix |
 |------|---------|-----|
-| PLACEHOLDER_CASE | `__prot__`, `__Prot__` | Uppercase to `__PROT__` |
-| PLACEHOLDER_WHITESPACE | `__ PROT __` | Remove spaces |
-| PLACEHOLDER_MANGLED | `_PROT_`, `__PROT_` | Fix underscore count |
+| PLACEHOLDER_CASE | `__PROTECTED__`, `__PROTECTED__` | Uppercase to `__PROTECTED__` |
+| PLACEHOLDER_WHITESPACE | `__ PROTECTED __` | Remove spaces |
+| PLACEHOLDER_MANGLED | `_PROT_`, `__PROTECTED_` | Fix underscore count |
 | QUOTE_UNBALANCED | `"Hello` | Add closing quote |
 | BRACKET_UNMATCHED | `[name` | Add closing bracket |
 | SPEAKER_FORMAT | `Speaker Hello` | Add colon after speaker |
@@ -3146,7 +3183,7 @@ def build_contextual_prompt(failed_line: int,
 Isolated Retry Implementation:
 ```python
 MINIMAL_PROMPT = """Translate to {language}.
-Preserve all placeholders exactly: __PROT__, [brackets], {braces}.
+Preserve all placeholders exactly: __PROTECTED__, [brackets], {braces}.
 Keep numbers and formatting unchanged.
 
 Input: {source}
@@ -3822,7 +3859,7 @@ Key modes:
 
 1. protect_code.py
    - Finds regex matches
-   - Replaces with __PROT__ (Pre)
+   - Replaces with __PROTECTED__ (Pre)
    - Restores from manifest (Post)
 
 2. custom_placeholder.py

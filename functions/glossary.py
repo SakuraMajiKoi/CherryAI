@@ -69,6 +69,9 @@ TYPE_CODE = "Code"
 GENDER_MALE = "Male"
 GENDER_FEMALE = "Female"
 GENDER_NEUTRAL = "Neutral"
+GENDER_NONBINARY = "Non-Binary"
+GENDER_TRANSWOMAN = "Transwoman"
+GENDER_TRANSMAN = "Transman"
 GENDER_UNKNOWN = "Unknown"
 
 # Glossary update modes

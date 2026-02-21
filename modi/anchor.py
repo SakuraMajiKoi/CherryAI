@@ -19,13 +19,13 @@ Normal flow (Pre):
 
 Normal flow (Post):
  - load and deduplicate recorded `anchor_lines` and (if present)
-     decompress any PROT clusters logged at Pre.
+     decompress any PROTECTED clusters logged at Pre.
  - for each recorded removal, recompute concrete insertion indices on
      the current line using equivalence-aware position search and the
      stored anchor spec. Insert removed items in the recorded order.
  - if a robust anchor position cannot be found, the algorithm prefers
      conservative fallbacks (place at line start or try alternative anchors
-     from the spec) and, only as a last resort, inserts a `__PROT__` token
+     from the spec) and, only as a last resort, inserts a `__PROTECTED__` token
      and records the original value under `protected_lines` so protect-mode
      restoration can later replace it.
 
@@ -41,7 +41,7 @@ Safeguards:
  - Safe-only Pre: skip removals when anchors are insufficient to avoid
      unsafe deletions.
  - Avoid anchoring into placeholders: Post computes placeholder spans
-     (EMPTY_LINE_PLACEHOLDER, PROT tokens, and any custom placeholder
+     (EMPTY_LINE_PLACEHOLDER, PROTECTED tokens, and any custom placeholder
      tokens) and ignores positions that fall inside these spans.
  - Minimal invasiveness: the mode is silent (does not log). It uses
      `processor.trace_op` only when tracing is enabled for diagnostics.
@@ -73,7 +73,7 @@ from CherryAI.functions.modehelper import (
     find_all_equiv_positions,
 )
 
-# Local alias for PROT detection
+# Local alias for PROTECTED detection
 PROT_REGEX = _PROT_REGEX_PLACEHOLDER
 
 
@@ -623,7 +623,7 @@ def apply_post(processor, lines: List[str], op, stats: Dict[str, int]) -> int:
 
     Policy: recompute insertion positions from current line content using
     equivalences; prefer boundary anchors when specific anchors are unavailable;
-    fall back to inserting a PROT token while recording the value for protected
+    fall back to inserting a PROTECTED token while recording the value for protected
     restore. The mode stays silent (no logging); diagnostics occur elsewhere.
     """
     changes = 0
@@ -714,11 +714,11 @@ def apply_post(processor, lines: List[str], op, stats: Dict[str, int]) -> int:
         new_anch.append(rec)
     anch_lines[:] = new_anch
 
-    # Helper regex for tolerant PROT compression (detection only). Actual
+    # Helper regex for tolerant PROTECTED compression (detection only). Actual
     # compression/decompression and prot_clusters recording is performed by
     # the Standard Helpers module at the end of Pre and the start of Post.
-    # NOTE: PROT compression and PROT-token handling removed from this Post
-    # implementation. Per request, do not insert or write any __PROT__ tokens
+    # NOTE: PROTECTED compression and PROT-token handling removed from this Post
+    # implementation. Per request, do not insert or write any __PROTECTED__ tokens
     # during Post; instead record failures where restoration could not be
     # performed and skip insertion.
 
@@ -750,7 +750,7 @@ def apply_post(processor, lines: List[str], op, stats: Dict[str, int]) -> int:
         placeholder_spans: List[Tuple[int, int]] = []
         for m in re.finditer(re.escape(EMPTY_LINE_PLACEHOLDER), line):
             placeholder_spans.append((m.start(), m.end()))
-        # Also avoid anchoring onto PROT tokens (they'll be restored later by protect_code)
+        # Also avoid anchoring onto PROTECTED tokens (they'll be restored later by protect_code)
         try:
             for m in PROT_REGEX.finditer(line):
                 placeholder_spans.append((m.start(), m.end()))
@@ -987,6 +987,6 @@ def apply_post(processor, lines: List[str], op, stats: Dict[str, int]) -> int:
             if rec["removed"]:
                 residuals.append((idx, len(rec["removed"])))
 
-    # No PROT compression: per updated policy do not insert or manipulate __PROT__ tokens here.
+    # No PROTECTED compression: per updated policy do not insert or manipulate __PROTECTED__ tokens here.
 
     return changes

@@ -346,7 +346,7 @@ class RetryHandler:
             # Minimal prompt for isolated translation
             minimal_prompt = (
                 "Translate this single line. "
-                "Preserve all __PROT__ and similar tokens exactly."
+                "Preserve all __PROTECTED__ and similar tokens exactly."
             )
             
             try:

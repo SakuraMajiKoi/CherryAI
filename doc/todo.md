@@ -673,7 +673,7 @@ FUTURE IDEAS (No Phase Commitment)
 
 ### Information Step Future Enhancements
 - **Summary Generation via API**: Button to auto-generate summary using LLM analysis of loaded content
-- **Save/Load System Instructions**: Buttons to save current System Instructions to file and load from templates
+- ~~**Save/Load System Instructions**: Buttons to save current System Instructions to file and load from templates~~ ✅ DONE (preset system with Default/Custom/user presets)
 - **Expanded Genre List**: Add more genre options, potentially with subcategories
 - **Glossary Inference via API**: Use LLM to suggest glossary entries based on content analysis
 - **Style/Tone Inference**: Auto-detect appropriate style/tone from sample text
@@ -904,12 +904,13 @@ Instead, use the bridge methods to sync processing results into ManifestManager.
 | Genre | `Genre` | text | "fictional, nonfictional" | prompt |
 | Source Language | `SourceLanguage` | text | "Japanese" | api_client |
 | Target Language | `TargetLanguage` | text | "English" | api_client |
-| Summary | `Summary` | text | "[Summary of the Content]" | prompt |
-| Style Preset | `StylePreset` | text | "neutral" | prompt |
-| Tone Preset | `TonePreset` | text | "natural" | prompt |
-| Character Notes | `CharacterNotes` | special | [] | prompt |
-| Code Glossary | `CodeGlossary` | special | [] | prompt |
-| Prompt | `Prompt` | text | "" | prompt |
+| Summary | `Summary` | text | "[DEFAULT_SUMMARY_TEXT]" | prompt |
+| Style Preset | `StylePreset` | text | "Natural" | prompt |
+| Tone Preset | `TonePreset` | text | "Neutral" | prompt |
+| Glossary (Characters) | `CharacterNotes` | special | [] | prompt |
+| Code Database | `CodeGlossary` | special | [] | prompt |
+| Prompt | `Prompt` | text | "[DEFAULT_SYSTEM_INSTRUCTIONS]" | prompt |
+| SI Preset | `SIPreset` | text | "Default" | - |
 | Deduplication | `Deduplication` | boolean | true | dedup mode |
 | Dedup Threshold | `DeduplicationThreshold` | int | 1 | dedup mode |
 | Ellipsis Compression | `EllipsisCompression` | boolean | true | ellipsis mode |
@@ -1089,7 +1090,7 @@ Goal: Implement optional inference population from analysis results.
 
 **Inference Options:**
 - `infer_speakers_to_glossary`: Add detected speakers to Glossary
-- `infer_codes_to_database`: Add code patterns to Code Glossary
+- `infer_codes_to_database`: Add code patterns to Code Database
 - `infer_pov`: Detect Point of View
 - `infer_gender`: Use LLM to infer character gender
 
@@ -1182,7 +1183,8 @@ by date, and fix dictionary iteration error during autosave.
 1. **Manifest Lines Not Loading:** When loading manifest via App menu or WelcomeDialog 
    Resume, lines now populate correctly in InputExtractionStep via `_populate_from_manifest()`
 2. **Auto-Load Checkbox:** WelcomeDialog shows "Automatically load last project on startup"
-   checkbox (only when Resume option available), persisted via `set_restore_on_launch()`
+   checkbox (always visible, not conditional on Resume availability), persisted via `set_restore_on_launch()`.
+   Loads current INI setting on display; saves immediately on toggle (updated Phase 60).
 3. **GlobalOptions Sync:** `restore_on_launch` in GlobalOptions now reads from and writes
    to `[recent]` section to match startup behavior
 4. **Manifest List Sorting:** LoadManifestDialog sorts manifests by modification date 
@@ -1353,11 +1355,11 @@ menu dynamically shows options based on the Category of selected row(s).
 - Show only generic options (Copy, Select All) when mixed categories selected
 
 **Speaker Options:**
-- Add to Glossary
+- Add to Glossary (writes to character glossary in manifest `characters` key)
 - Set Role → (Protagonist | Love Interest | Major | Minor)
-- Set Gender → (Male | Female)
+- Set Gender → (Male | Female | Other → Non-Binary | Transwoman | Transman)
 - Set Translation → Custom Input dialog
-- Add to Code Glossary
+- Add to Code Database (writes to manifest code database)
 - Copy Name
 - Select All with Speaker (sets filter)
 
@@ -1365,7 +1367,8 @@ menu dynamically shows options based on the Category of selected row(s).
 - Preserve / Remove / Translate (persisted to Code Database)
 - Replace → (Generic | Custom Input)
 - Is a Name / Is Text / Is a Number / Is Invisible (type classification)
-- Set as Protagonist (assigns John/Jane Smith temp replacement)
+- Nameable... (expanded dialog with Character/Company/Location modes,
+  Custom Replacement, Role, Gender, Notes, OK/Cancel/Apply)
 - Copy Pattern
 - Show Lines with Pattern (sets filter)
 
@@ -1374,14 +1377,21 @@ menu dynamically shows options based on the Category of selected row(s).
 - Individual code patterns shown instead of type summaries
 - Details column auto-populated: sample lines for speakers, type + examples for codes
 - Count Filter field: supports `<X`, `>X`, `<=X`, `>=X`, `=X` syntax
+- Count Filter toggle button: switches between ≥ (default) and ≤ for bare numbers
 - All code pattern actions persist to manifest via `save_code_glossary()`
 - "Is a Name" adds to glossary with temp replacement
-- "Set as Protagonist" provides gender picker and assigns John/Jane Smith
+- "Nameable..." opens expanded dialog for character/company/location assignment
+- Speaker actions write to character glossary (manifest `characters` key) via `_upsert_character_entry()`
+- Gender support expanded: Male, Female, Non-Binary, Transwoman, Transman
+- Import from Analysis dialogs offer choice of how many to import (non-destructive)
 
 **Files Modified:**
-- `gui/steps/analysis.py` - Right-click binding, dynamic menu, pattern actions, protagonist feature
+- `gui/steps/analysis.py` - Right-click binding, dynamic menu, pattern actions, Nameable dialog
 - `gui/helpers/analysis_adapter.py` - `detect_individual_codes_batch()`, speaker samples
-- `gui/components/table.py` - Count filter entry, `_parse_count_filter()`, updated `_apply_filter()`
+- `gui/components/table.py` - Count filter entry with ≥/≤ toggle, `_parse_count_filter()`, updated `_apply_filter()`
+- `functions/glossary.py` - Added GENDER_NONBINARY, GENDER_TRANSWOMAN, GENDER_TRANSMAN
+- `gui/helpers/glossary_adapter.py` - New gender constant exports
+- `functions/manifest_fields.py` - Added gender field to glossary entry schema
 
 **Tests:**
 - `dev/test_analysis_context_menu.py` - Category detection, menu options, no-truncation
@@ -1397,17 +1407,15 @@ Goal: Implement the Speaker-specific actions for the Findings Table context menu
 When user right-clicks on rows with Category = "Speaker", these options appear.
 
 **Menu Actions to Implement:**
-- Add to Glossary: Creates Glossary entry, Source = speaker name, Translation empty
+- Add to Glossary: Creates character glossary entry, original_name = speaker name, Translation empty
 - Set Role → Protagonist | Love Interest | Major | Minor
-  - Stored in Glossary Notes field as "Role: X"
-  - Also populates Character Notes in Information Step (Step 3)
-- Set Gender → Male | Female
-  - Stored in Glossary Notes field as "Gender: X"
-  - Overwrites existing Gender but preserves Role
+  - Stored in character glossary entry's role field
+- Set Gender → Male | Female | Other → (Non-Binary | Transwoman | Transman)
+  - Stored in character glossary entry's gender field
 - Set Translation → Dialog prompt
   - User enters custom translation
-  - Fills Glossary Translation field
-- Add to Code Glossary: Creates Code Glossary entry to protect speaker name
+  - Fills character glossary entry's name (translation) field
+- Add to Code Database: Creates manifest Code Database entry to protect speaker name
 - Copy Name: Copies speaker name to clipboard
 - Select All with Speaker: Filters preview panel to show lines from this speaker
 
@@ -1416,9 +1424,8 @@ When user right-clicks on rows with Category = "Speaker", these options appear.
 - Role/Gender apply to all selected
 
 **Files to Modify:**
-- `gui/steps/analysis.py` - Menu handler for speaker actions
-- `gui/helpers/analysis_adapter.py` - Route to glossary functions
-- `functions/glossary.py` - Add/update entry from analysis
+- `gui/steps/analysis.py` - Menu handler for speaker actions, character glossary helpers (`_upsert_character_entry`, `_load_characters`, `_save_characters`)
+- `functions/manifest_fields.py` - `save_character_notes()`, `load_character_notes()` for character glossary
 
 **Tests to Add:**
 - `dev/test_analysis_actions.py`:
@@ -1450,11 +1457,13 @@ appear.
 - Is a Number: Pattern represents numeric values
 - Is Invisible: Pattern is control code (default)
 
-**Protagonist Variable Support:**
-- Set as Protagonist: Marks code as protagonist's name variable
-- Prompts for gender (Male/Female), assigns John/Jane Smith
-- Stored in both Code Database (action=replace) and Glossary (entry_type=Code)
-- Single-token temp names for LLM-friendly preprocessing
+**Protagonist Variable Support → Nameable Dialog:**
+- Nameable...: Opens expanded dialog for assigning replacement to code pattern
+- Three modes: Character, Company, Location — each pre-fills suitable defaults
+- Fields: Custom Replacement, Role dropdown, Gender dropdown, Custom Notes
+- OK / Cancel / Apply buttons for persistence control
+- Warns if entry already exists (overwrite confirmation)
+- Replacement name stored in character glossary (manifest `characters` key) and code pattern stored in Custom Placeholders (manifest `CustomPlaceholders` key, restore_after=True)
 
 **Utility Options:**
 - Copy Pattern: Copy to clipboard
@@ -1523,6 +1532,143 @@ Goal: Store ignored patterns in manifest and filter from future analysis.
 
 =============================================================================
 
+PHASE 60: UX POLISH & PRESET REWORK (Information Step Enhancement)
+-------------------------------------------------------------------
+
+**Status:** ✅ COMPLETE | **Effort:** 10 hours | **Priority:** HIGH
+
+Goal: Improve usability of Information step with preset management, mass
+operations, progress feedback, confirmation opt-out, and File menu fixes.
+
+### TASK 60.1: Gender Inference Progress Bar
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 1 hour
+
+- Added progress dialog during `_infer_character_genders()` with:
+  - "Checking 'name'" label, progress bar, and "X / Y" count
+  - Pre-filters characters needing checking for accurate progress
+- Prevents appearance of freezing during inference
+
+### TASK 60.2: Speaker Mass Removal
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 30 min
+
+- Changed char_tree `selectmode` from "browse" to "extended"
+- Rewrote `_remove_character()` to handle multiple selections with reverse-index deletion
+
+### TASK 60.3: Style/Tone Preset Rework
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 4 hours
+
+- Replaced enum-based system with string-based preset management:
+  - DEFAULT_STYLE_PRESETS / DEFAULT_TONE_PRESETS: built-in presets with full LLM prompt text
+  - User presets stored in `user/presets/style_presets.json` and `tone_presets.json`
+  - Dropdown (combobox) + ScrolledText prompt field + Save/Delete buttons
+  - "Custom" preset always available, cannot be overwritten or deleted
+  - `_unique_preset_name()` auto-appends numbers for duplicate names
+  - Legacy migration: `from_dict` capitalizes old lowercase enum values
+- ProjectMetadata changed: `style_preset: str = "Natural"`, `tone_preset: str = "Neutral"`
+
+### TASK 60.4: Code Database Auto-Populate
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 30 min
+
+- `_auto_import_code_patterns()` now prefers `individual_codes` (per-code detail) over grouped `code_patterns`
+
+### TASK 60.5: Code Database Mass Removal
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 30 min
+
+- Added `selectmode="extended"` to code_tree
+- Rewrote `_remove_code_pattern()` for multi-select with reverse-index batch deletion
+
+### TASK 60.6: File → New Project
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 30 min
+
+- `_on_new_session()` now calls `on_enter()` on tab 0 after reset, sets `_current_tab_index = 0`
+- Ensures window is fully cleared when starting a new project
+
+### TASK 60.7: File → Open Project
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 30 min
+
+- `_on_load_manifest()` checks for unsaved changes (askyesnocancel) before loading a different project
+
+### TASK 60.8: Welcome Dialog Auto-Load Checkbox
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 30 min
+
+- Auto-load checkbox now always visible (not conditional on Resume availability)
+- Loads current INI setting on display; saves immediately on toggle via `_on_auto_load_toggled()`
+
+### TASK 60.9: Confirmation Dialog Opt-Out
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+- Created `gui/helpers/confirmations.py`:
+  - `confirm_action(parent, key, title, message)`: custom Toplevel with "Don't ask again" checkbox
+  - `is_suppressed(key)` / `suppress(key)`: INI `[confirmations]` section
+  - `reset_all_suppressions()`: removes entire `[confirmations]` section
+- Added `remove_section(section)` to `functions/ini_manager.py`
+- Applied to: character removal, code pattern removal, preset deletion
+- Global Options → Session: "Reset All Confirmation Dialogs" and "Reset Style & Tone Presets" buttons
+
+**Files Modified:**
+- `gui/steps/information.py` - Tasks 60.1-60.5, 60.9 (progress bar, mass removal, preset system, confirmations)
+- `gui/app.py` - Tasks 60.6-60.7 (New/Open project fixes)
+- `gui/dialogs/project_dialog.py` - Task 60.8 (auto-load tickbox)
+- `gui/dialogs/global_options.py` - Task 60.9 (reset buttons)
+- `gui/helpers/confirmations.py` - Task 60.9 (NEW FILE)
+- `functions/ini_manager.py` - Task 60.9 (remove_section method)
+- `dev/test_gui_v2.py` - Task 60.3 (metadata defaults, custom values)
+- `dev/test_information_manifest.py` - Task 60.3 (preset tests updated to capitalized names)
+- `dev/test_information_step_phase41.py` - Task 60.3 (TestStyleTonePresets replacing TestStyleToneGraying)
+
+=============================================================================
+
+COMPLETED - INFORMATION STEP UI IMPROVEMENTS
+---------------------------------------------
+
+### Style/Tone Text Display Fix
+**Status:** ✅ DONE
+
+- `_ensure_style_tone_text()` method added: populates ScrolledText from preset when empty on step entry
+- `_populate_form()` falls back to preset text when metadata style/tone is empty
+- Called at end of `on_enter()` after all loading completes
+
+### Style/Tone Delete Button Width
+**Status:** ✅ DONE
+
+- Delete button width increased from 8 to 10 to prevent emoji/text clipping
+
+### Style/Tone Single-Line Height
+**Status:** ✅ DONE
+
+- ScrolledText height reduced from 3 to 1 for compact display
+
+### Collapsible Right-Column Widgets
+**Status:** ✅ DONE
+
+- Glossary, Glossary Settings, Code Database, Global Database each have Collapse/Display toggle
+- `_collapsible_state`, `_collapsible_content`, `_collapsible_buttons` dicts track state
+- `_toggle_collapsible(widget_name)` uses `grid_remove()`/`grid()` for show/hide
+- `_reconfigure_right_column_weights()` sets weight=1 for expanded, weight=0 for collapsed
+
+### Glossary Moved to Right Column
+**Status:** ✅ DONE
+
+- `_build_character_section()` builds into `self._right_column` (grid row 0) instead of `self._left_column`
+- Groups all table-based widgets together: Glossary (row 0), Glossary Settings (row 1), Code Database (row 2), Global Database (row 3)
+
+### Taller Tables with Viewport Fill
+**Status:** ✅ DONE
+
+- All right-column Treeview widgets use height=8 (up from 4-5)
+- Grid layout with `sticky="nsew"` and parent `rowconfigure(weight=1)` for expansion
+- Canvas `<Configure>` binding stretches inner frame to viewport height
+- When CherryAI window is maximized and other widgets collapsed, tables fill available space without needing to scroll
+
+**Files Modified:**
+- `gui/steps/information.py` - All 6 UI improvements
+- `doc/features.md` - Updated Style & Tone, Glossary, UI Enhancements sections
+- `doc/technical.md` - Updated Phase 41 Integration section
+- `doc/tests.md` - Updated test count (56→57), added collapsible test coverage notes
+- `doc/specs.md` - Updated Step 3 spec (layout, collapsible, style/tone, known issues)
+
+=============================================================================
+
 TYPE SAFETY & CODE CLEANLINESS ROADMAP
 --------------------------------------
 
@@ -1569,6 +1715,61 @@ Status Tracking:
 **Type safety and code cleanliness are CRITICAL and must be addressed before new features.**
 
 Last updated: February 2026
+
+=============================================================================
+
+COMPLETED - INFORMATION STEP FUNCTIONAL ENHANCEMENTS (Post Phase 60)
+----------------------------------------------------------------------
+
+### Style/Tone Translation Integration
+**Status:** ✅ DONE
+
+- translate.py `_build_system_prompt_from_manifest()` reads `CustomStyle`, `CustomTone`, `Summary`, `Prompt`, and glossary from manifest
+- Replaces legacy config file reads (`config/translation_style.txt`, `config/game_summary.txt`)
+- Style/Tone appended as `Style: ...` and `Tone: ...` lines in system prompt
+- `_load_prompt_data()` now reads from manifest first, falls back to config files
+
+### Summary Widget Enhancements
+**Status:** ✅ DONE
+
+- Height reduced from 5 to 2 rows
+- `DEFAULT_SUMMARY_TEXT` constant added
+- "🔄 Restore Default" button resets text to default
+- `_ensure_default_texts()` populates with default when empty on step entry
+- Hint label (description) removed
+
+### System Instructions Preset System
+**Status:** ✅ DONE
+
+- Preset dropdown: Default / Custom / user-saved presets (mirrors Style/Tone pattern)
+- `DEFAULT_SYSTEM_INSTRUCTIONS` loaded from `default/example.txt` at import time
+- `_SI_PRESETS_FILE` = `user/presets/system_instructions_presets.json`
+- Save/Delete buttons for managing user presets
+- `_on_si_preset_changed()`, `_save_si_preset()`, `_delete_si_preset()` methods
+- Manifest keys: `Prompt` (text), `SIPreset` (preset name)
+- Hint label (description) removed
+
+### Project Name Source Fix
+**Status:** ✅ DONE
+
+- `_apply_suggested_project_name()` now prefers manifest `ProjectName` (set during Input step) over step data `suggested_project_name` (folder name)
+
+### Analysis→Glossary Character Data
+**Status:** ✅ DONE
+
+- `_show_nameable_dialog._apply()` in analysis.py now creates glossary entry when assigning variable codes to characters
+- Glossary entry: source=replacement_name, notes="Gender: X; Role: Y; custom_notes"
+- Uses `save_glossary_entries` / `load_glossary_entries` from manifest_fields
+
+**Files Modified:**
+- `gui/steps/information.py` - Default texts, summary restore, SI presets, hint removal, project name fix
+- `gui/steps/translate.py` - `_build_system_prompt_from_manifest()`, manifest-first prompt loading
+- `gui/steps/analysis.py` - Glossary entry creation in nameable dialog
+- `doc/specs.md` - Updated Summary, Style/Tone, System Instructions widget specs
+- `doc/features.md` - Updated Game Summary, Translation Style, added System Instructions
+- `doc/technical.md` - Added SIPreset binding, new Phase 41+ integration notes
+- `doc/tests.md` - Added Phase 41+ coverage table, updated binding count note
+- `doc/todo.md` - Marked SI presets done, added SIPreset to manifest table
 
 =============================================================================
 END OF ROADMAP

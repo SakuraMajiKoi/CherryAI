@@ -294,9 +294,10 @@ Global Options are application-wide settings accessed via Tools → Options. The
 | Auto-analyze on Load | bool | true | Run analysis after file load |
 | Auto-preprocess on Load | bool | true | Run preprocessing after analysis |
 
-**Restore on Launch (Phase 58.11):**
+**Restore on Launch (Phase 58.11, updated Phase 60):**
 - Accessible via GlobalOptions (Session section) and WelcomeDialog checkbox
-- WelcomeDialog shows "Automatically load last project on startup" when Resume option available
+- WelcomeDialog checkbox always visible (not conditional on Resume option availability)
+- Loads current INI setting on display; saves immediately on toggle
 - Setting stored in `[recent].restore_on_launch` for app startup behavior
 - GlobalOptions reads from and writes to `[recent]` section for sync
 
@@ -457,7 +458,7 @@ This ensures cost estimates are never out of sync with translation behaviour.
 |------|------|---------|-------------|
 | Skip already translated | Global Option | On | Lines with a non-empty `tl` field are not re-translated |
 | Skip non-source language | Global Option | On | Lines detected as not being in the configured source language are skipped |
-| No Placeholders | Mandatory | Always | Lines consisting entirely of `__PROT__`, `__DEDUP__`, `__CUSTOM__` tokens are skipped |
+| No Placeholders | Mandatory | Always | Lines consisting entirely of `__PROTECTED__`, `__DEDUP__`, `__CUSTOM__` tokens are skipped |
 | No Deduplicated | Mandatory | Always | Lines marked as deduplicated (`__DEDUP_{idx}__`) are skipped |
 | No Context Markers | Mandatory | Always | Context Marker lines are metadata and are never translated |
 
@@ -542,9 +543,9 @@ Only matching entries appear — the LLM never sees the full glossary.
 | Action | Translation Behaviour | Postprocessing Behaviour |
 |--------|----------------------|-------------------------|
 | **Translate** | Added to prompt with notes for contextual translation | No special handling |
-| **Protect** | Optionally replaced with `__PROT__` token during Preproccessing, checks translation and tries to recover or retry when missing | Restored from `prepro_ops` |
+| **Protect** | Optionally replaced with `__PROTECTED__` token during Preproccessing, checks translation and tries to recover or retry when missing | Restored from `prepro_ops` |
 | **Custom Placeholder** | Replaced with custom named token during Preproccessing, checks translation and tries to recover or retry when missing | Restored from `prepro_ops` |
-| **Placeholder** | Generic `__PROT__` / `__PROT_X__` replacement during Preproccessing, checks translation and tries to recover or retry when missing | Restored from `prepro_ops` |
+| **Placeholder** | Generic `__PROTECTED__` / `__PROTECTED_X__` replacement during Preproccessing, checks translation and tries to recover or retry when missing | Restored from `prepro_ops` |
 | **Anchor** | Entirely removed; position stored relative to anchors during Preproccessing | Restored at anchor positions |
 
 #### Extended Properties
@@ -634,8 +635,8 @@ The following table lists all processes in their execution order. Preprocessing 
 | 4 | Bracket Balance | — | P110 (Post-exclusive) | Post-exclusive: fixes unmatched brackets |
 | 5 | Quote Balance | — | P100 (Post-exclusive) | Post-exclusive: fixes unmatched quotes |
 | 6 | Custom Placeholder | P70 | P30 | Custom named replacement tokens for variables |
-| 7 | Placeholder | P80 | P20 | Generic `__PROT__` / `__PROT_X__` protection |
-| 8 | PROT Compression | P60 | P40 | Adjacent `__PROT__` → `__PROT_N__` |
+| 7 | Placeholder | P80 | P20 | Generic `__PROTECTED__` / `__PROTECTED_X__` protection |
+| 8 | PROTECTED Compression | P60 | P40 | Adjacent `__PROTECTED__` → `__PROTECTED_N__` |
 | 9 | Ellipsis Compression | P20 | P80 | Normalize ellipsis length |
 | 10 | Symbol Conversion | P30 (Pre only) | P70 | JP→EN symbols; Post optionally converts back |
 | 11 | Width Conversion | P35 (Pre only) | — | Fullwidth↔Halfwidth character width; Pre only |
@@ -719,7 +720,7 @@ PrettyWrap is the standard wrapping algorithm. Its priority rules:
 |---------------|------------|-------|
 | **1st Person** | I, my, mine; Japanese equivalents (私, 僕, 俺, わたし, ぼく, おれ — both furigana and kanji); extensible per language | High confidence when multiple 1st-person pronouns appear consistently |
 | **2nd Person** | You, yours; Japanese equivalents (あなた, 君, きみ, お前, おまえ); extensible per language | Less common as primary narrative perspective |
-| **3rd Person** | Frequent use of the protagonist's name (from Character Notes); absence of 1st/2nd person markers | Requires protagonist name to be configured in Character Notes or detected by Analysis |
+| **3rd Person** | Frequent use of the protagonist's name (from Glossary); absence of 1st/2nd person markers | Requires protagonist name to be configured in Glossary or detected by Analysis |
 
 #### Output
 
@@ -773,7 +774,7 @@ Tests: `dev/test_mock_translation.py` (59 tests). Fixture: `dev/example/example.
 - Always available and the only Model option when no API providers are configured
 - Produces deterministic nonsense output (swift random word replacement from a limited list)
 - Languages like Japanese have custom replacement settings
-- Preserves all `__PROT__`, `__DEDUP__`, `__CUSTOM__` tokens in output
+- Preserves all `__PROTECTED__`, `__DEDUP__`, `__CUSTOM__` tokens in output
 - Preserves speaker:dialogue format and anchor characters
 - Does NOT require API key or network connectivity
 
@@ -783,7 +784,7 @@ Mock Translation intentionally introduces flaws to test the recovery pipeline:
 
 | Flaw Type | Description |
 |-----------|-------------|
-| **Malformed Placeholders** | Surgically remove and add characters to placeholder tokens (e.g., `__PROT__` → `__PRT__`, or `__PRO T__`) |
+| **Malformed Placeholders** | Surgically remove and add characters to placeholder tokens (e.g., `__PROTECTED__` → `__PRT__`, or `__PRO T__`) |
 | **Anchor Manipulation** | Remove existing anchors and add anchors where they do not belong |
 | **Code Intrusion** | No respect for text within code boundaries — random word replacement occurs inside code patterns as well |
 | **Character Surgery** | Add and remove characters at random positions to stress-test character-level recovery |
@@ -939,7 +940,7 @@ When files are loaded and a project is created, the following steps execute auto
 | 4 | Run Analysis | Execute `functions/analysis.py`. Store results in manifest (`Analysis.*` fields). | Auto-Pipeline Level < 1 |
 | 5 | Populate Inferences | (Optional) Populate Glossary, Code Database, and Point of View based on analysis inference. See Options below. | `auto_inference` disabled |
 | 6 | Run Original Estimation | Calculate input/output tokens for original lines. Record in manifest. Mark Costs Step first tick. | Auto-Pipeline Level < 2 |
-| 7 | Run Default Preprocessing | Apply default-enabled preprocessing rules (Deduplication, Ellipsis, Symbol, PROT compression). | Auto-Pipeline Level < 3 |
+| 7 | Run Default Preprocessing | Apply default-enabled preprocessing rules (Deduplication, Ellipsis, Symbol, PROTECTED compression). | Auto-Pipeline Level < 3 |
 | 8 | Run Preprocessed Estimation | Calculate input/output tokens for preprocessed lines. Record in manifest. Mark Costs Step second tick. | Auto-Pipeline Level < 3 |
 
 **Mock Translation (Level 4 Extension)**:
@@ -963,10 +964,10 @@ When `auto_inference` is enabled (Global Option), the pipeline offers several in
 
 | Option | Source | Target | Description |
 |--------|--------|--------|-------------|
-| `infer_speakers_to_glossary` | Analysis speakers | Glossary.project_entries[] | Add detected speakers as glossary entries with empty Translation |
-| `infer_codes_to_database` | Analysis code_patterns | CodeGlossary[] | Add detected code patterns to Code Database with default "Preserve" action |
+| `infer_speakers_to_glossary` | Analysis speakers | characters[] | Add detected speakers as character glossary entries with empty Translation |
+| `infer_codes_to_database` | Analysis code_patterns | CodeGlossary[] | Add detected code patterns to Code Database with default "Preserve" action; prefers `individual_codes` (per-code detail) over grouped `code_patterns` when available |
 | `infer_pov` | Analysis non-dialogue | POVResult | Detect Point of View (1st/2nd/3rd person) for prompt context |
-| `infer_gender` | Glossary entries | CharacterNotes[].gender | Use heuristics or LLM to infer character gender from names/context |
+| `infer_gender` | Input step text + Analysis speaker counts | characters[].gender | Use `infer_gender_comprehensive()` heuristics to infer character gender from full text context |
 
 **Manifest Keys**: Each inference option has a corresponding boolean in `Options.AutoInference.*`.
 
@@ -1253,8 +1254,8 @@ If the category-aware context menu proves too complex to implement cleanly, use 
 **Enhancements (Implemented)**:
 - All speakers shown without truncation, ordered by count descending
 - Individual code patterns shown (normalized) instead of type summaries
-- Details column auto-populated with speaker sample lines and code type/examples
-- Count Filter field in filter bar: supports `<X`, `>X`, `<=X`, `>=X`, `=X` syntax
+- Details column shows character glossary info (translation + notes) for speakers, and code type/examples for code patterns
+- Count Filter field in filter bar: supports `<X`, `>X`, `<=X`, `>=X`, `=X` syntax; toggle button (≥/≤) switches default bare-number comparison mode
 
 ---
 
@@ -1264,20 +1265,22 @@ When user right-clicks on rows where Category = "Speakers":
 
 | Menu Item | Action | Description |
 |-----------|--------|-------------|
-| Add to Glossary | `add_speaker_to_glossary(name)` | Creates Glossary entry with speaker name as Source, empty Translation |
-| Set Role → | Submenu | Protagonist, Love Interest, Major, Minor — adds to Glossary Notes field |
-| Set Gender → | Submenu | Male, Female — adds to Glossary Notes field |
-| Set Translation | `prompt_translation(name)` | Opens dialog to input custom translation, fills Glossary Translation field |
-| Add to Code Glossary | `add_speaker_to_code_glossary(name)` | Creates Code Glossary entry to protect speaker name |
+| Add to Glossary | `add_speaker_to_glossary(name)` | Creates character glossary entry with speaker as original_name |
+| Set Role → | Submenu | Protagonist, Love Interest, Major, Minor — stored in character glossary role field |
+| Set Gender → | Submenu | Male, Female, Non-Binary, Transwoman, Transman, Other, Unknown — stored in character glossary gender field |
+| Set Translation | `prompt_translation(name)` | Opens dialog to input custom translation, fills character glossary name (translation) field |
+| Add to Code Database | `add_speaker_to_code_glossary(name)` | Creates Code Database entry to protect speaker name |
 | Copy Name | `copy_to_clipboard(name)` | Copies speaker name to clipboard |
 | Select All with Speaker | `filter_preview_by_speaker(name)` | Filters preview panel to show only lines from this speaker |
 
 **Role/Gender Behavior**:
-- Role and Gender are stored in the Glossary `Notes` field
-- Setting Role overwrites any existing Role but preserves Gender
-- Setting Gender overwrites any existing Gender but preserves Role
-- Format in Notes: "Role: Major, Gender: Female"
-- Character Notes in Information Step (Step 3) gets populated from these entries
+- Role is stored in the character glossary entry’s `role` field
+- Gender is stored in the character glossary entry’s `gender` field
+- All speaker actions write to **character glossary** (manifest `characters` key) via `_upsert_character_entry()`, not to project glossary entries
+- Setting Role overwrites any existing Role; Gender overwrites existing Gender
+- Setting Gender overwrites the `gender` field directly with the selected value
+- Glossary panel in Information Step (Step 3) displays these entries with Gender/Role merged into Notes column
+- Details column in Findings table is refreshed after each action to reflect current glossary state
 
 **Multi-Select Support**:
 - Select multiple speaker rows (Ctrl+Click, Shift+Click)
@@ -1306,7 +1309,7 @@ When user right-clicks on rows where Category = "Code Patterns":
 | Is Text | `set_pattern_type(pattern, 'text')` | Identifies pattern as text content. |
 | Is a Number | `set_pattern_type(pattern, 'number')` | Identifies pattern as numeric. |
 | Is Invisible | `set_pattern_type(pattern, 'invisible')` | Pattern is control code, not visible. Default. |
-| Set as Protagonist | `set_pattern_as_protagonist(pattern)` | Marks as protagonist variable. Assigns temp name (John/Jane Smith). |
+| Nameable... | `_show_nameable_dialog(pattern)` | Opens dialog with Character/Company/Location modes and gender-aware name assignment. |
 | Copy Pattern | `copy_to_clipboard(pattern)` | Copies pattern to clipboard |
 | Show Lines with Pattern | `filter_findings_by_pattern(pattern)` | Sets findings filter to show pattern |
 
@@ -1323,11 +1326,13 @@ When user right-clicks on rows where Category = "Code Patterns":
 - Only one type can be active at a time
 - "Is a Name" additionally adds the pattern to the glossary with a temporary replacement name
 
-**Protagonist Variable Behavior** (Set as Protagonist):
-- For nameable protagonist variables (e.g., `{{主人公}}`)
-- Prompts for gender selection (Male/Female)
-- Assigns single-token temporary replacement: John Smith (Male) or Jane Smith (Female)
-- Stores in both Code Database (action=replace, type=name) and Glossary (entry_type=Code)
+**Nameable Dialog** (Nameable...):
+- For nameable variables (e.g., `{{主人公}}`) — characters, companies, or locations
+- Opens a Toplevel dialog with three modes:
+  - **Character**: Gender selection (Male/Female/Non-Binary) → John Smith / Jane Smith / Alex Smith
+  - **Company**: Assigns generic company name (Acme Corp, Globex Inc, Initech Ltd)
+  - **Location**: Assigns generic place name (Millfield, Oakville, Riverside)
+- Stores replacement name in **character glossary** (manifest `characters` key) and code pattern in **Custom Placeholders** (manifest `CustomPlaceholders` key, restore_after=True)
 - Temporary name used during preprocessing so the LLM handles surrounding text naturally
 
 **Multi-Select Support**:
@@ -1401,13 +1406,13 @@ The Analysis step is functional and provides valuable information. Phase 59 adds
 - [ ] Add Dominant Language to Statistics Panel (with threshold indicator)
 - [ ] Implement project-level Japanese/Chinese threshold detection (30% of Chinese-only lines)
 - [ ] Add category-aware right-click menu to Findings Table
-- [ ] Implement Speaker right-click menu (Add to Glossary, Set Role, Set Gender, Set Translation)
-- [ ] Implement Code Pattern right-click menu (Preserve/Remove/Translate/Replace, Is Name/Text/Number/Invisible)
-- [ ] Add multi-select support with same-category validation
-- [ ] Implement speaker truncation in General view (top 20 with note)
+- [x] Implement Speaker right-click menu (Add to Glossary, Set Role, Set Gender, Set Translation)
+- [x] Implement Code Pattern right-click menu (Preserve/Remove/Translate/Replace, Is Name/Text/Number/Invisible)
+- [x] Add multi-select support with same-category validation
+- [x] Implement speaker truncation in General view (top 20 with note)
 - [ ] (Optional) Implement View Selector for switchable views if category-aware menu is too complex
-- [ ] Ensure Character Notes in Information Step gets populated from Speaker actions
-- [ ] Ensure Code Database in Information/Preprocessing Steps gets populated from Code Pattern actions
+- [x] Ensure Glossary in Information Step gets populated from Speaker actions
+- [x] Ensure Code Database in Information/Preprocessing Steps gets populated from Code Pattern actions
 - [ ] Add manifest fields for new analysis data
 - [ ] Update analysis_adapter.py to route context menu actions
 - [ ] Write tests for project-level language threshold logic
@@ -1652,7 +1657,7 @@ The Costs step has **two distinct estimation states** tracked separately:
 
 **Purpose**: Configure project metadata and translation context. All fields contribute to building the final translation prompt. Every entry is saved in the manifest for persistence.
 
-**Implementation Status:** ✅ Phase 41 DONE — All 10 tasks implemented (56 tests passing)
+**Implementation Status:** ✅ Phase 41 DONE — All 10 tasks implemented (57 tests passing)
 
 #### Design Goals
 
@@ -1669,7 +1674,7 @@ The Costs step has **two distinct estimation states** tracked separately:
 
 | Field | Type | Behavior | Prompt Format |
 |-------|------|----------|---------------|
-| Project Name | Entry | Auto-populated from first file load; user-editable | Not included in prompt |
+| Project Name | Entry | Auto-populated from manifest `ProjectName` (set during Input step); falls back to folder name suggestion | Not included in prompt |
 | Title | Entry | Full name of the work (game, novel, etc.) | `Title: [value]` |
 | Genre | Entry + Dialog | Comma-separated genres; `...` button opens multi-select | `Genre: [value]` |
 
@@ -1707,14 +1712,18 @@ The Costs step has **two distinct estimation states** tracked separately:
 
 | Component | Type | Behavior |
 |-----------|------|----------|
-| Summary Text | ScrolledText | Multi-line input, 5 rows default height |
-| Description | Label | "Provide a brief summary for translation context" |
+| Summary Text | ScrolledText | Multi-line input, 2 rows height |
+| Restore Default | Button | "🔄 Restore Default" resets to DEFAULT_SUMMARY_TEXT |
+
+**Default Text**: `DEFAULT_SUMMARY_TEXT` constant — "Write a short summary of the work here. Mentioning protagonist(s) and Point of View is not necessary and will be automatically provided."
 
 **Prompt Format**: `Summary: [contents]`
 
 **Required Behavior**:
 - Widget title rename: "Summary / Description" → "Summary"
 - Contents included in system prompt when non-empty
+- `_ensure_default_texts()` populates with DEFAULT_SUMMARY_TEXT when empty on step entry
+- "🔄 Restore Default" button replaces current text with DEFAULT_SUMMARY_TEXT
 
 **Manifest Key**: `Summary`
 
@@ -1752,15 +1761,19 @@ The Costs step has **two distinct estimation states** tracked separately:
 | custom | Custom - User-defined tone |
 
 **Custom Override Behavior**:
-- Each preset has a Custom Text entry below it
+- Each preset has a Custom Text entry below it (ScrolledText, height=1, Consolas 9pt)
+- Text field auto-populates with preset prompt text on step entry via `_ensure_style_tone_text()`
 - If Custom Text is filled: Dropdown becomes visually grayed (disabled appearance), only Custom used in prompt
 - If Custom Text is empty/deleted: Dropdown becomes active, preset used in prompt
+- Delete button width=10 to prevent emoji/text clipping
 
 **Prompt Format**:
 - Style: `Style: [Full Display Text or Custom Value]`
 - Tone: `Tone: [Full Display Text or Custom Value]`
 
 **Manifest Keys**: `StylePreset`, `CustomStyle`, `TonePreset`, `CustomTone`
+
+**Data Flow**: translate.py `_build_system_prompt_from_manifest()` reads `CustomStyle` and `CustomTone` from manifest. If non-empty, they are appended to the system prompt as `Style: ...` and `Tone: ...` lines. Values are saved/loaded via manifest bindings (`bind_text_to_field` for CustomStyle/CustomTone, `bind_combobox_to_field` for StylePreset/TonePreset).
 
 ---
 
@@ -1770,16 +1783,32 @@ The Costs step has **two distinct estimation states** tracked separately:
 
 | Component | Type | Behavior |
 |-----------|------|----------|
+| Preset Dropdown | Combobox | Default / Custom / user-saved presets |
+| Save Preset | Button | "💾 Save" prompts for name, saves text + name |
+| Delete Preset | Button | "🗑 Delete" removes selected user preset |
 | Instructions Text | ScrolledText | Multi-line input, 6 rows default |
-| Description | Label | "Additional instructions for the translation AI" |
+
+**Default Text**: `DEFAULT_SYSTEM_INSTRUCTIONS` loaded from `default/example.txt` at import time.
+
+**Preset System** (mirrors Style/Tone preset pattern):
+- `_SI_PRESETS_FILE` = `user/presets/system_instructions_presets.json`
+- `DEFAULT_SI_PRESETS` dict: `{"Default": DEFAULT_SYSTEM_INSTRUCTIONS}`
+- `_load_si_presets()` merges built-in defaults with user-saved presets
+- Selecting "Default" populates text from `DEFAULT_SYSTEM_INSTRUCTIONS`
+- Selecting "Custom" clears text for free-form input
+- Selecting a user preset populates text from saved content
+- Save button: uses `simpledialog.askstring()` for name, `_unique_preset_name()` for dedup
+- Delete button: removes from presets dict and JSON file; reverts to "Default"
+- `_on_si_preset_changed()` populates text when preset selection changes
+- `_ensure_default_texts()` populates with DEFAULT_SYSTEM_INSTRUCTIONS when empty on step entry
 
 **Required Rename**: "Prompt" → "System Instructions"
 
 **Prompt Format**: `System Instructions: [contents]`
 
-**Manifest Key**: `SystemInstructions` (rename from `Prompt`)
+**Manifest Keys**: `Prompt` (text content), `SIPreset` (selected preset name)
 
-**Future Enhancement**: Save/Load buttons for instruction templates
+**Data Flow**: translate.py `_build_system_prompt_from_manifest()` reads `Prompt` from manifest and includes it in the system prompt sent to the LLM.
 
 ---
 
@@ -1893,26 +1922,58 @@ The Costs step has **two distinct estimation states** tracked separately:
 
 ---
 
-#### Character Notes Widget
+#### Glossary Widget (formerly Character Notes) — Right Column
 
-**Purpose**: Track characters for consistent translation.
+**Purpose**: Track characters for consistent translation. Analysis speaker actions write to this store.
+
+**Layout**: Right column, grid row 0. Collapsible via Collapse/Display toggle button. Treeview height=8 with sticky="nsew" for vertical expansion.
 
 | Component | Type | Function |
 |-----------|------|----------|
-| Character Table | Treeview | Columns: Original, Translation, Gender, Role |
+| Character Table | Treeview | Columns: Original, Translation, Notes (Gender/Role merged into Notes for parity with Glossary Settings) |
 | Add Character | Button | Add new character entry |
-| Edit | Button | Edit selected character |
+| Edit | Button | Edit selected character via CharacterDialog (Notes field) |
 | Remove | Button | Remove selected character(s) |
-| Infer Gender | Button | LLM-based gender inference |
-| Import from Analysis | Button | Import detected speakers |
+| Infer Gender | Button | Heuristic gender inference using loaded text data |
+| Import from Analysis | Button | Import detected speakers using `_get_analysis_step_data()` helper |
 
 **Prompt Format**: Character entries included as context:
 ```
 Characters:
-- [Original] ([Translation]): [Gender], [Role]
+- [Original] ([Translation]): [Notes]
 ```
 
-**Manifest Key**: `CharacterNotes[]`
+**Manifest Key**: `characters[]` (via `save_character_notes()` / `load_character_notes()`)
+
+---
+
+#### Right Column Layout & Collapsible Widgets
+
+**Purpose**: All table-based widgets (Glossary, Glossary Settings, Code Database, Global Database) are in the right column with collapsible behavior and taller tables that fill available vertical space.
+
+**Grid Layout** (right column):
+| Row | Widget | Default State |
+|-----|--------|---------------|
+| 0 | Glossary (Characters) | Expanded |
+| 1 | Glossary Settings | Expanded |
+| 2 | Code Database | Expanded |
+| 3 | Global Glossary/Database | Expanded |
+| 4 | JSON View (hidden by default) | Hidden |
+
+**Collapsible Behavior**:
+- Each widget has a Collapse/Display toggle button in its LabelFrame header
+- Collapse hides content via `grid_remove()`, Display restores via `grid()`
+- Button text toggles between "Collapse" and "Display"
+- State tracked in `_collapsible_state` dict (bool per widget name)
+- `_reconfigure_right_column_weights()` sets row weight=1 for expanded, weight=0 for collapsed
+- Collapsed widgets show only their LabelFrame title bar
+- Expanded widgets share available vertical space evenly
+
+**Taller Tables**:
+- All Treeview widgets use height=8 (previously 4-5)
+- Tables use `grid` layout with `sticky="nsew"` for both horizontal and vertical expansion
+- Parent frames use `rowconfigure(weight=1)` to allow table growth
+- Canvas `<Configure>` binding stretches inner frame to viewport height so tables fill the window when maximized
 
 ---
 
@@ -1952,16 +2013,18 @@ Characters:
 | Double-click table cell | Enables inline editing |
 | Import from Analysis | Populates Characters or Code Database from Analysis findings |
 | Toggle Use Global Glossary | Includes/excludes global entries during translation |
+| Click Collapse (right column) | Hides widget content, button changes to "Display", collapsed row weight=0 |
+| Click Display (right column) | Shows widget content, button changes to "Collapse", expanded row weight=1 |
 
 ---
 
 #### Known Issues to Fix
 
 1. **Genre Dialog Overwrites**: Currently replaces field content instead of appending
-2. **Import from Analysis (Code)**: Button not functional - needs implementation
-3. **Import from Analysis (Glossary)**: Button not functional - needs implementation
+2. ~~**Import from Analysis (Code)**: Button not functional - needs implementation~~ — FIXED: uses `_get_analysis_step_data()` (ManifestManager first, session fallback)
+3. ~~**Import from Analysis (Glossary)**: Button not functional - needs implementation~~ — FIXED: uses `_get_analysis_step_data()` (ManifestManager first, session fallback)
 4. **"Other" Language**: Does not prompt for custom input
-5. **Custom Style/Tone Graying**: Visual feedback not implemented
+5. ~~**Custom Style/Tone Graying**: Visual feedback not implemented~~ — FIXED: Replaced by full preset system (Phase 60); text fields auto-populate from preset via `_ensure_style_tone_text()`
 
 ---
 
@@ -2000,7 +2063,7 @@ The Preprocessing tab is organized into three sections:
 | Ellipsis Compression | Checkbox | ✓ | Compress ellipsis sequences to save tokens |
 | Symbol Conversion | Checkbox | ✓ | Convert JP→EN punctuation before translation |
 | Width Conversion | Checkbox | ✓ | Convert fullwidth↔halfwidth characters based on language pair |
-| PROT Token Compression | Checkbox | ✓ | Compress adjacent `__PROT__` tokens |
+| PROTECTED Token Compression | Checkbox | ✓ | Compress adjacent `__PROTECTED__` tokens |
 | Speaker Name Replacement | Checkbox | ✗ | Replace speaker names with glossary translations |
 | Code Spacing Rules | Checkbox | ✓ | Apply code-aware spacing normalization |
 | Quote Stripping | Checkbox | ✗ | Strip quotes at dialogue boundaries to save tokens |
@@ -2086,19 +2149,19 @@ The Preprocessing tab is organized into three sections:
 
 ---
 
-#### Process: PROT Token Compression
+#### Process: PROTECTED Token Compression
 
-**Priority**: 60 (Runs AFTER Protect Code Patterns creates `__PROT__` tokens)
+**Priority**: 60 (Runs AFTER Protect Code Patterns creates `__PROTECTED__` tokens)
 
-**Purpose**: Compress adjacent `__PROT__` tokens into a single numbered token to reduce token count.
+**Purpose**: Compress adjacent `__PROTECTED__` tokens into a single numbered token to reduce token count.
 
 **Behavior**:
-- `__PROT____PROT__` → `__PROT_2__`
-- `__PROT____PROT____PROT__` → `__PROT_3__`
+- `__PROTECTED____PROTECTED__` → `__PROTECTED_2__`
+- `__PROTECTED____PROTECTED____PROTECTED__` → `__PROTECTED_3__`
 - Only compresses tokens that are directly adjacent (no whitespace between)
 - Records compression mapping for restoration
 
-**Postprocessing**: Decompress `__PROT_N__` back to N individual `__PROT__` tokens BEFORE replacing with originals
+**Postprocessing**: Decompress `__PROTECTED_N__` back to N individual `__PROTECTED__` tokens BEFORE replacing with originals
 
 **Manifest Key**: `ProtCompression`
 
@@ -2228,7 +2291,7 @@ The Preprocessing tab is organized into three sections:
 
 #### Widget: Protect Code Patterns
 
-**Purpose**: Define patterns that should be protected with standard `__PROT__` tokens.
+**Purpose**: Define patterns that should be protected with standard `__PROTECTED__` tokens.
 
 **UI Components**:
 | Component | Type | Function |
@@ -2242,16 +2305,16 @@ The Preprocessing tab is organized into three sections:
 **Priority**: 80 (After Custom Placeholders)
 
 **Behavior**:
-- Replaces matched patterns with `__PROT__` token
+- Replaces matched patterns with `__PROTECTED__` token
 - Default: RegEx enabled (patterns are regular expressions)
 - If RegEx disabled: Pattern is literal string match
-- Each match gets same `__PROT__` token (compression handles duplicates)
+- Each match gets same `__PROTECTED__` token (compression handles duplicates)
 - Original text stored in `prepro_ops[]` for restoration
 
-**Postprocessing Priority**: 20 (Restored after PROT decompression)
+**Postprocessing Priority**: 20 (Restored after PROTECTED decompression)
 
 **Validation (QA Step)**:
-- Checks that all `__PROT__` tokens exist in translation
+- Checks that all `__PROTECTED__` tokens exist in translation
 - Flags missing/extra tokens for manual review
 - Attempts recovery if tokens are mangled
 
@@ -2323,7 +2386,7 @@ The Preprocessing tab is organized into three sections:
 | All | All lines |
 | Changed | Only lines with modifications |
 | Deduplicated | Only lines that were deduplicated |
-| Protected | Only lines with `__PROT__` tokens |
+| Protected | Only lines with `__PROTECTED__` tokens |
 | Anchored | Only lines with anchor removals |
 | Errors | Only lines with processing errors |
 
@@ -2345,7 +2408,7 @@ The Preprocessing tab is organized into three sections:
 | 35 | Width Conversion | Convert fullwidth↔halfwidth characters (Pre only) |
 | 40 | Speaker Name Replacement | Replace speaker names |
 | 50 | Code Spacing Rules | Normalize code spacing |
-| 60 | PROT Token Compression | Compress adjacent PROTs (runs after patterns create them) |
+| 60 | PROTECTED Token Compression | Compress adjacent PROTs (runs after patterns create them) |
 | 70 | Custom Placeholders | Apply user-defined patterns |
 | 75 | Anchoring | Remove anchored content |
 | 76 | Quote Stripping | Strip quotes at dialogue/line boundaries to save tokens |
@@ -2358,9 +2421,9 @@ The Preprocessing tab is organized into three sections:
 | 5 | Aggressive Deduplication | Restore variant-deduplicated lines FIRST |
 | 9 | Quote Stripping | Restore stripped quotes before anchoring restoration |
 | 10 | Anchoring | Restore anchored content |
-| 20 | Protect Code Patterns | Restore `__PROT__` tokens |
+| 20 | Protect Code Patterns | Restore `__PROTECTED__` tokens |
 | 30 | Custom Placeholders | Restore custom tokens |
-| 40 | PROT Token Decompression | Decompress `__PROT_N__` |
+| 40 | PROTECTED Token Decompression | Decompress `__PROTECTED_N__` |
 | 50 | Code Spacing Rules | Restore code spacing |
 | 60 | Speaker Name Replacement | (No restoration needed) |
 | 70 | Symbol Conversion | Optionally restore JP symbols |
@@ -2395,7 +2458,7 @@ The Preprocessing tab is organized into three sections:
 - `prepro_ops: List[List[Dict]]` - Restoration metadata per line, per process
 - `dedup_map: Dict[str, List[int]]` - Line text → list of duplicate indices
 - `change_count: int` - Total lines modified
-- `protected_count: int` - Lines with `__PROT__` tokens
+- `protected_count: int` - Lines with `__PROTECTED__` tokens
 - `anchored_count: int` - Lines with anchor removals
 
 **Stored In**:
@@ -2421,7 +2484,7 @@ The Preprocessing tab is organized into three sections:
 #### Validation and Recovery
 
 **QA Step Checks** (Step 6):
-- All `__PROT__` tokens present in translation
+- All `__PROTECTED__` tokens present in translation
 - All `__CUSTOM__` tokens present in translation
 - Anchor points exist for restoration
 - No extra/duplicate tokens introduced
@@ -2429,8 +2492,8 @@ The Preprocessing tab is organized into three sections:
 
 **Recovery Strategies** (applied in Postprocessing):
 1. **Exact Match**: Token found at expected position
-2. **Case Recovery**: `__prot__` → `__PROT__` (fix and proceed)
-3. **Mangled Recovery**: `__PRO T__` or `__PROT _` (pattern match and fix)
+2. **Case Recovery**: `__PROTECTED__` → `__PROTECTED__` (fix and proceed)
+3. **Mangled Recovery**: `__PRO T__` or `__PROTECTED _` (pattern match and fix)
 4. **Position Shift**: Token present but at different position (adjust and restore)
 5. **Missing Token**: Token not found (flag for manual review, attempt fuzzy match)
 6. **Extra Token**: More tokens than expected (flag, may indicate duplicate insertion)
@@ -2641,7 +2704,7 @@ The Translation tab contains four widget sections:
 **Behavior**:
 - Available as the only Model option when no providers exist in Global Options
 - Produces deterministic nonsense output (word reversal, character substitution, or lorem ipsum insertion)
-- Preserves all `__PROT__`, `__DEDUP__`, `__CUSTOM__` tokens in output
+- Preserves all `__PROTECTED__`, `__DEDUP__`, `__CUSTOM__` tokens in output
 - Simulates realistic timing (configurable delay per chunk / total time)
 - Tracks mock token counts for cost estimation testing
 - Does NOT require API key or network connectivity
@@ -2815,7 +2878,7 @@ The following widgets will be activated once the Translation/Edit/TLC mode toggl
 - From Step 5: `tl[]` (translation results), `edit{N}[]`, `tlc{N}[]` (when Edit/TLC modes exist)
 
 **Processing** (via `functions/validation.py`):
-1. **Placeholder Check**: Verify all `__PROT__` tokens preserved
+1. **Placeholder Check**: Verify all `__PROTECTED__` tokens preserved
 2. **Anchor Check**: Verify `<>[]{}` characters preserved
 3. **Japanese Check**: Flag remaining Japanese characters
 4. **Speaker Format**: Verify `Name: "Dialogue"` preserved
@@ -2970,11 +3033,11 @@ The Postprocessing tab is organized into four sections:
 - Matches indentation of translated lines to their originals
 - Detects speaker indent patterns (e.g., `　太郎：` uses fullwidth space indent)
 - Preserves leading whitespace count and type (spaces vs tabs vs fullwidth spaces)
-- Normalizes errant spacing around placeholders (`__ PROT __` → `__PROT__`)
+- Normalizes errant spacing around placeholders (`__ PROTECTED __` → `__PROTECTED__`)
 - Does NOT alter intentional whitespace within dialogue text
 
 **Removed from GUI** (automatic from manifest — no user toggle):
-- ~~Placeholder Recovery~~ — Always runs automatically; recovery of `__PROT__`, `__CUSTOM__`, `__DEDUP__` tokens is mandatory and not optional
+- ~~Placeholder Recovery~~ — Always runs automatically; recovery of `__PROTECTED__`, `__CUSTOM__`, `__DEDUP__` tokens is mandatory and not optional
 - ~~Restore Code Characters~~ — Always runs automatically as part of the Protect Code Patterns restoration
 - ~~Restore `<br>` Tags~~ — Always runs automatically as part of line break restoration from manifest `prepro_ops`
 
@@ -3120,9 +3183,9 @@ Postprocessing reverses the Preprocessing order. Highest priority runs first (op
 | Priority | Process | Description |
 |----------|---------|-------------|
 | 10 | Anchoring Restoration | Restore anchored content FIRST (matches Anchoring P75 pre) |
-| 20 | Protect Code Patterns | Restore `__PROT__` tokens to original code |
+| 20 | Protect Code Patterns | Restore `__PROTECTED__` tokens to original code |
 | 30 | Custom Placeholders | Restore `__CUSTOM__` tokens to original strings |
-| 40 | PROT Token Decompression | Decompress `__PROT_N__` → N individual `__PROT__` tokens |
+| 40 | PROTECTED Token Decompression | Decompress `__PROTECTED_N__` → N individual `__PROTECTED__` tokens |
 | 50 | Code Spacing Restoration | Restore original code spacing |
 | 60 | Speaker Name Restoration | (No restoration needed — names stay translated) |
 | 70 | Symbol Conversion | Optionally restore JP symbols based on Postprocess Options direction |
@@ -3746,7 +3809,7 @@ The manifest (`.CherryAI.json`) is the single source of truth for project state.
 {
   "idx": 0,
   "orig": "Original Japanese text",
-  "prepro": "Preprocessed text with __PROT__",
+  "prepro": "Preprocessed text with __PROTECTED__",
   "prepro_ops": [{"type": "protect", "original": "\\V[1]", "pos": 15}],
   "tl": "Translated English text",
   "postpro": "Restored translated text with \\V[1]",
@@ -3799,11 +3862,11 @@ Resolution methods:
 | `level_name` | string | "Preprocess" | Human-readable level name |
 | `auto_inference` | bool | true | Master toggle for inference population |
 | `infer_speakers_to_glossary` | bool | true | Add detected speakers to Glossary |
-| `infer_codes_to_database` | bool | true | Add detected code patterns to Code Glossary |
+| `infer_codes_to_database` | bool | true | Add detected code patterns to Code Database |
 | `infer_pov` | bool | true | Detect Point of View for prompt context |
 | `infer_gender` | bool | false | Use LLM to infer character gender |
 
-**PROT Patterns Structure**:
+**PROTECTED Patterns Structure**:
 | Field | Type | Description |
 |-------|------|-------------|
 | `pattern` | string | Regex or literal pattern to protect |
@@ -3954,7 +4017,7 @@ Resolution methods:
 
 | Module | Purpose |
 |--------|---------|
-| `standard_mode.py` | Ellipsis, symbols, PROT compression |
+| `standard_mode.py` | Ellipsis, symbols, PROTECTED compression |
 | `protect_code.py` | Code pattern protection |
 | `custom_placeholder.py` | Custom pattern→token replacement |
 | `temporary_replacement.py` | Temp replacement with restore |
@@ -4365,7 +4428,7 @@ The step-level status is derived from the worst per-line status:
 
 | RecoveryType | Applicable Steps | Description |
 |-------------|-----------------|-------------|
-| `PLACEHOLDER_CASE` | Translation, Postprocessing | Placeholder token case corrected (e.g., `__prot__` → `__PROT__`) |
+| `PLACEHOLDER_CASE` | Translation, Postprocessing | Placeholder token case corrected (e.g., `__PROTECTED__` → `__PROTECTED__`) |
 | `MANGLED_PLACEHOLDER` | Translation, Postprocessing | Split or corrupted placeholder token reconstructed |
 | `MISSING_PLACEHOLDER` | Translation, Postprocessing | Placeholder missing from output, recovered from original |
 | `PLACEHOLDER_WHITESPACE` | Postprocessing | Errant spaces in placeholder token normalized |
@@ -4556,10 +4619,10 @@ This catalog lists every existing function that participates in recovery, valida
 | `RecoveryResult` | Recovery outcome for one line |
 | `BatchRecoveryResult` | Aggregate recovery for a batch |
 | `RecoveryStats` | Per-type success/failure counts |
-| `recover_placeholder_case()` | Fix `__prot__` → `__PROT__` |
+| `recover_placeholder_case()` | Fix `__PROTECTED__` → `__PROTECTED__` |
 | `recover_mangled_placeholders()` | Reconstruct split/corrupted tokens |
 | `recover_missing_placeholders()` | Restore missing placeholders from original |
-| `normalize_placeholder_whitespace()` | Fix `__ PROT __` → `__PROT__` |
+| `normalize_placeholder_whitespace()` | Fix `__ PROTECTED __` → `__PROTECTED__` |
 | `check_bracket_balance()` | Detect unmatched brackets |
 | `recover_bracket_balance()` | Fix brackets using original as reference |
 | `check_quote_balance()` | Detect unmatched quotes |

@@ -554,8 +554,10 @@ class App(tk.Tk):
 
     def _on_new_session(self) -> None:
         """Handle New Project menu item.
-        
+
         TASK 19 Phase 3: Creates a new project (no session system).
+        Clears the entire window and resets all step tabs so the UI
+        is in a clean state ready for a fresh project.
         """
         if self._manifest_manager.dirty:
             response = messagebox.askyesnocancel(
@@ -571,18 +573,21 @@ class App(tk.Tk):
         # Reset manifest manager (TASK 19)
         self._manifest_manager.close()
         self._manifest_manager = reset_manifest_manager()
-        
+
         # Reset session for legacy compatibility (no autosave)
         self.session = reset_session()
         self._session_path = None
-        
+
         # Update all components with new state
         self._progress_tracker.session = self.session
         for tab in self._step_tabs:
             tab.session = self.session
             tab._manifest_manager = self._manifest_manager
-        
+
+        # Select first tab and refresh its widgets
         self._notebook.select(0)
+        self._current_tab_index = 0
+        self._step_tabs[0].on_enter()
         self._progress_tracker.refresh()
         self._set_status("New project - load files to begin")
 
@@ -592,17 +597,31 @@ class App(tk.Tk):
 
     def _on_load_manifest(self) -> None:
         """Handle Load Manifest menu item.
-        
+
         TASK 19: Opens LoadManifestDialog to select and load an existing project.
         PHASE 58.11: Uses _load_manifest_from_path for consistent loading behavior.
+        Checks for unsaved changes before loading a different project.
         """
+        if self._manifest_manager.dirty:
+            response = messagebox.askyesnocancel(
+                "Unsaved Changes",
+                "Save changes before loading another project?",
+            )
+            if response is None:  # Cancel
+                return
+            if response:  # Yes - save first
+                if self._manifest_manager.is_loaded:
+                    self._manifest_manager.save()
+
         def on_load(manifest_path: Path) -> None:
             """Callback when manifest is selected."""
             if self._load_manifest_from_path(manifest_path):
-                project_name = self._manifest_manager.project_name or manifest_path.stem
+                project_name = (
+                    self._manifest_manager.project_name or manifest_path.stem
+                )
                 self._set_status(f"Loaded project: {project_name}")
             # Error messaging handled in _load_manifest_from_path
-        
+
         LoadManifestDialog(self, on_load=on_load)
 
     def _on_manual_save(self) -> None:

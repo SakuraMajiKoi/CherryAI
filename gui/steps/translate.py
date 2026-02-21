@@ -1547,6 +1547,82 @@ class TranslationStep(BaseStep):
             "conditional": conditional,
         }
 
+    def _build_system_prompt_from_manifest(self) -> str:
+        """Build the system prompt from manifest data (Information step).
+
+        Reads System Instructions, Summary, Style, and Tone from the
+        manifest so that the translation uses the same data the user
+        configured in the Information step.
+
+        Returns:
+            Assembled system prompt string.
+        """
+        parts: list[str] = []
+
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            # System Instructions (base prompt)
+            system_instructions = mgr._manifest_data.get("Prompt", "")
+            if system_instructions and system_instructions.strip():
+                parts.append(system_instructions.strip())
+
+            # Game Summary
+            summary = mgr._manifest_data.get("Summary", "")
+            if summary and summary.strip():
+                parts.append(f"# Game Context\n{summary.strip()}")
+
+            # Translation Style
+            style = mgr._manifest_data.get("CustomStyle", "")
+            if style and style.strip():
+                parts.append(
+                    f"# Translation Style Guidelines\n{style.strip()}"
+                )
+
+            # Translation Tone
+            tone = mgr._manifest_data.get("CustomTone", "")
+            if tone and tone.strip():
+                parts.append(f"# Translation Tone\n{tone.strip()}")
+
+            # Glossary entries from manifest
+            from CherryAI.functions.manifest_fields import load_glossary_entries
+            glossary_entries = load_glossary_entries(mgr)
+            active_entries = [
+                e for e in glossary_entries if e.get("active", True)
+            ]
+            if active_entries:
+                glossary_lines = []
+                for entry in active_entries:
+                    src = entry.get("source", "")
+                    tgt = entry.get("target", "")
+                    notes = entry.get("notes", "")
+                    if src:
+                        line = f"{src} → {tgt}" if tgt else src
+                        if notes:
+                            line += f" ({notes})"
+                        glossary_lines.append(line)
+                if glossary_lines:
+                    parts.append(
+                        "# Glossary\n" + "\n".join(glossary_lines)
+                    )
+
+        # Fallback to legacy prompt parts if manifest is not available
+        if not parts:
+            prompt_parts = self._get_prompt_parts()
+            if prompt_parts["summary"]:
+                parts.append(
+                    f"Game Context:\n{prompt_parts['summary']}"
+                )
+            if prompt_parts["glossary"]:
+                parts.append(
+                    f"Glossary:\n{prompt_parts['glossary']}"
+                )
+            if prompt_parts["conditional"]:
+                parts.append(
+                    f"Special Instructions:\n{prompt_parts['conditional']}"
+                )
+
+        return "\n\n".join(parts)
+
     def _start_translation(self) -> None:
         """Start the translation process."""
         if self._translation_state == TranslationState.RUNNING:
@@ -1976,18 +2052,8 @@ class TranslationStep(BaseStep):
                 for line in chunk
             ]
 
-        # Build prompt from prompt editor
-        prompt_parts = self._get_prompt_parts()
-        system_prompt = ""
-
-        if prompt_parts["summary"]:
-            system_prompt += f"Game Context:\n{prompt_parts['summary']}\n\n"
-
-        if prompt_parts["glossary"]:
-            system_prompt += f"Glossary:\n{prompt_parts['glossary']}\n\n"
-
-        if prompt_parts["conditional"]:
-            system_prompt += f"Special Instructions:\n{prompt_parts['conditional']}\n\n"
+        # Build system prompt from manifest (Information step data)
+        system_prompt = self._build_system_prompt_from_manifest()
 
         # Get text for translation - use edited_prepro if available (Task 33.1)
         lines_to_translate = [
@@ -2262,46 +2328,64 @@ class TranslationStep(BaseStep):
         }
 
     def _load_prompt_data(self) -> None:
-        """Load prompt data from config files using prompt_adapter."""
+        """Load prompt data from manifest (Information step).
+
+        Reads Summary and Style from the manifest keys set by the
+        Information step.  Falls back to config files for backward
+        compatibility.
+        """
         try:
+            mgr = self.manifest_manager
+            if mgr is not None and mgr.is_loaded:
+                # Read summary from manifest
+                summary = mgr._manifest_data.get("Summary", "")
+                if summary:
+                    self._summary_text.delete("1.0", "end")
+                    self._summary_text.insert("1.0", summary)
+
+                # Read style from manifest
+                style = mgr._manifest_data.get("CustomStyle", "")
+                if style:
+                    self._style_var.set(style[:100])
+                return
+
+            # Fallback: load from config files (legacy)
             from pathlib import Path
             config_dir = Path(__file__).parent.parent.parent / "config"
 
-            # Load game summary via adapter
             summary, _ = get_game_summary(str(config_dir / "game_summary.txt"))
             if summary:
                 self._summary_text.delete("1.0", "end")
                 self._summary_text.insert("1.0", summary)
 
-            # Load translation style via adapter
             style, _ = get_translation_style(
                 str(config_dir / "translation_style.txt"),
                 config_dir,
             )
             if style:
-                self._style_var.set(style[:100])  # Truncate for entry field
+                self._style_var.set(style[:100])
 
         except Exception as e:
             logger.debug("Error loading prompt data: %s", e)
 
     def _show_prompt_preview(self) -> None:
-        """Show prompt preview dialog with complete system prompt."""
-        # Get sample lines for conditional prompt detection
-        sample_lines = []
-        if self._lines:
-            sample_lines = [l.preprocessed for l in self._lines[:10]]
+        """Show prompt preview dialog with complete system prompt.
 
-        # Get glossary text (may be None if moved to Information step)
-        glossary = ""
-        if self._glossary_text is not None:
-            glossary = self._glossary_text.get("1.0", "end-1c").strip()
+        Uses manifest data from the Information step for style, tone,
+        summary, and system instructions.
+        """
+        # Build the actual system prompt from manifest
+        system_prompt = self._build_system_prompt_from_manifest()
 
-        # Build preview
-        preview, _ = build_prompt_preview(
-            lines=sample_lines,
-            game_summary=self._summary_text.get("1.0", "end-1c").strip(),
-            glossary_text=glossary,
-            style_text=self._style_var.get(),
+        # Create a simple preview view
+        preview = PromptPreviewView(
+            system_prompt=system_prompt,
+            game_summary="",
+            glossary_section="",
+            style_section="",
+            conditional_section="",
+            total_tokens=len(system_prompt.split()),
+            breakdown={},
         )
 
         # Show in a dialog

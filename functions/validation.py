@@ -130,7 +130,7 @@ CONTEXT_MARKER_PATTERN = re.compile(
     r"^\s*__(DIALOGUE|MENU|CHOICE|FILE)__\s*$", re.IGNORECASE
 )
 
-# Pattern to find __PROT__ placeholders in text (with optional index)
+# Pattern to find __PROTECTED__ placeholders in text (with optional index)
 PROT_PLACEHOLDER_PATTERN = re.compile(r"__\s*PROT(?:_\d+)?\s*__", re.IGNORECASE)
 
 # Pattern to find custom placeholders like __NAME__, __CODE__, etc.
@@ -157,7 +157,7 @@ def extract_placeholders(text: str) -> List[str]:
     """Extract all placeholder tokens from text.
     
     Finds patterns like:
-    - __PROT__, __PROT_1__, __PROT_23__
+    - __PROTECTED__, __PROTECTED_1__, __PROTECTED_23__
     - __NAME__, __CODE__, __VAR_5__
     
     Args:
@@ -166,7 +166,7 @@ def extract_placeholders(text: str) -> List[str]:
     Returns:
         List of placeholder tokens found (preserves order and duplicates).
     """
-    # Find all __PROT__ style placeholders
+    # Find all __PROTECTED__ style placeholders
     prot_matches = PROT_PLACEHOLDER_PATTERN.findall(text)
     
     # Find all __CUSTOM__ style placeholders
@@ -192,7 +192,7 @@ def count_placeholder(text: str, placeholder: str) -> int:
     
     Args:
         text: Text to search.
-        placeholder: Placeholder to count (e.g., "__PROT__").
+        placeholder: Placeholder to count (e.g., "__PROTECTED__").
         
     Returns:
         Number of occurrences.
@@ -201,11 +201,11 @@ def count_placeholder(text: str, placeholder: str) -> int:
     normalized = placeholder.upper().replace(" ", "")
     
     # Create pattern that allows whitespace variations
-    if "_" in normalized[2:-2]:  # Has index like __PROT_1__
+    if "_" in normalized[2:-2]:  # Has index like __PROTECTED_1__
         parts = normalized[2:-2].split("_")
         pattern_str = r"__\s*" + r"\s*_\s*".join(parts) + r"\s*__"
     else:
-        inner = normalized[2:-2]  # e.g., "PROT" from "__PROT__"
+        inner = normalized[2:-2]  # e.g., "PROT" from "__PROTECTED__"
         pattern_str = r"__\s*" + inner + r"\s*__"
     
     pattern = re.compile(pattern_str, re.IGNORECASE)
@@ -793,7 +793,7 @@ def validate_line_pre(
             skip_reason=SkipReason.DEDUP_ONLY,
         )
     
-    # 5. Lines containing only __PROT__ placeholder
+    # 5. Lines containing only __PROTECTED__ placeholder
     if PROT_PATTERN.match(stripped):
         return ValidationResult(
             is_valid=False,

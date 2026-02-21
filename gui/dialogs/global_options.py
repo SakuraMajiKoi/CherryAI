@@ -1448,6 +1448,46 @@ class GlobalOptionsDialog(tk.Toplevel):
         auto_preprocess_check = ttk.Checkbutton(panel, text="Auto-apply preprocessing rules on load", variable=self.auto_preprocess_on_load_var)
         auto_preprocess_check.pack(anchor=tk.W, pady=5)
 
+        # Confirmation dialogs reset
+        confirm_frame = ttk.LabelFrame(panel, text="Confirmation Dialogs", padding=10)
+        confirm_frame.pack(fill=tk.X, pady=(10, 0))
+
+        ttk.Label(
+            confirm_frame,
+            text=(
+                "Some dialogs have a 'Don't ask again' option.\n"
+                "Click below to re-enable all suppressed dialogs."
+            ),
+            justify="left",
+            foreground="gray",
+        ).pack(anchor=tk.W, pady=(0, 5))
+
+        ttk.Button(
+            confirm_frame,
+            text="Reset All Confirmation Dialogs",
+            command=self._on_reset_confirmations,
+        ).pack(anchor=tk.W)
+
+        # Style/Tone presets reset
+        preset_frame = ttk.LabelFrame(panel, text="Translation Presets", padding=10)
+        preset_frame.pack(fill=tk.X, pady=(10, 0))
+
+        ttk.Label(
+            preset_frame,
+            text=(
+                "Reset style and tone presets to factory defaults.\n"
+                "This removes all user-saved presets."
+            ),
+            justify="left",
+            foreground="gray",
+        ).pack(anchor=tk.W, pady=(0, 5))
+
+        ttk.Button(
+            preset_frame,
+            text="Reset Style & Tone Presets",
+            command=self._on_reset_presets,
+        ).pack(anchor=tk.W)
+
     def _build_safety_section(self) -> None:
         """Build the safety settings section."""
         panel = ttk.Frame(self._content_frame, padding=15)
@@ -1969,6 +2009,40 @@ class GlobalOptionsDialog(tk.Toplevel):
         except Exception as e:
             logger.error("Failed to save user defaults: %s", e)
             messagebox.showerror("Error", f"Failed to save defaults: {e}")
+
+    def _on_reset_confirmations(self) -> None:
+        """Re-enable all suppressed confirmation dialogs."""
+        from CherryAI.gui.helpers.confirmations import reset_all_suppressions
+
+        reset_all_suppressions()
+        messagebox.showinfo(
+            "Confirmations Reset",
+            "All confirmation dialogs have been re-enabled.",
+        )
+        logger.info("All confirmation dialog suppressions reset")
+
+    def _on_reset_presets(self) -> None:
+        """Delete user preset files to restore factory defaults."""
+        from CherryAI.gui.steps.information import (
+            _STYLE_PRESETS_FILE,
+            _TONE_PRESETS_FILE,
+            _delete_user_presets_file,
+        )
+
+        if not messagebox.askyesno(
+            "Reset Presets",
+            "Reset style and tone presets to factory defaults?\n\n"
+            "All user-saved presets will be removed.",
+        ):
+            return
+        _delete_user_presets_file(_STYLE_PRESETS_FILE)
+        _delete_user_presets_file(_TONE_PRESETS_FILE)
+        messagebox.showinfo(
+            "Presets Reset",
+            "Style and tone presets have been restored to defaults.\n"
+            "Reload the Information step to see the change.",
+        )
+        logger.info("Style/tone presets reset to factory defaults")
 
     def _on_restore_initial_defaults(self) -> None:
         """Handle Restore Initial Defaults button - restore factory settings."""

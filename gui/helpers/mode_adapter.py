@@ -208,16 +208,16 @@ def apply_symbol_batch(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PROT Token Compression (from modi/standard_mode.py)
+# PROTECTED Token Compression (from modi/standard_mode.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
-PROT_PATTERN = re.compile(r"(__PROT__)+")
+PROT_PATTERN = re.compile(r"(__PROTECTED__)+")
 
 
 def apply_prot_compression(line: str) -> Tuple[str, bool]:
-    """Compress adjacent __PROT__ tokens into indexed form.
+    """Compress adjacent __PROTECTED__ tokens into indexed form.
 
-    __PROT____PROT__ → __PROT_2__
+    __PROTECTED____PROTECTED__ → __PROTECTED_2__
 
     Args:
         line: Line to process.
@@ -229,9 +229,9 @@ def apply_prot_compression(line: str) -> Tuple[str, bool]:
 
     def replace_prot_run(match: re.Match[str]) -> str:
         run = match.group(0)
-        count = run.count("__PROT__")
+        count = run.count("__PROTECTED__")
         if count > 1:
-            return f"__PROT_{count}__"
+            return f"__PROTECTED_{count}__"
         return run
 
     line = PROT_PATTERN.sub(replace_prot_run, line)
@@ -239,7 +239,7 @@ def apply_prot_compression(line: str) -> Tuple[str, bool]:
 
 
 def apply_prot_batch(lines: List[str]) -> Tuple[List[str], int, List[int]]:
-    """Apply PROT compression to multiple lines.
+    """Apply PROTECTED compression to multiple lines.
 
     Args:
         lines: Lines to process.
@@ -270,7 +270,7 @@ def apply_protect_code(
     line: str,
     patterns: List[str],
 ) -> Tuple[str, bool, List[str]]:
-    """Apply protect code patterns to replace matches with __PROT__.
+    """Apply protect code patterns to replace matches with __PROTECTED__.
 
     Args:
         line: Line to process.
@@ -292,7 +292,7 @@ def apply_protect_code(
                 val = m.group(0)
                 if val:
                     captured.insert(0, val)
-                    line = line[: m.start()] + "__PROT__" + line[m.end() :]
+                    line = line[: m.start()] + "__PROTECTED__" + line[m.end() :]
         except re.error as e:
             logger.warning("Invalid protect code pattern %r: %s", pattern_str, e)
 
@@ -492,7 +492,7 @@ def apply_preprocessing(
             stats["changed_lines"].update(indices)
             stats["placeholder_captured"] = captured
 
-    # 5. PROT compression (should happen last after PROT tokens are created)
+    # 5. PROTECTED compression (should happen last after PROTECTED tokens are created)
     if config.get("prot_compression_enabled", True):
         result, count, indices = apply_prot_batch(result)
         if count:

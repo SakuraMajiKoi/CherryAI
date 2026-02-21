@@ -172,7 +172,7 @@ class QAStep(BaseStep):
             enabled=True,
             issue_type=IssueType.PLACEHOLDER_MISSING,
             severity=IssueSeverity.ERROR,
-            description="Check that __PROT__ and similar placeholders are preserved",
+            description="Check that __PROTECTED__ and similar placeholders are preserved",
         ),
         ValidationRule(
             name="Anchor Preservation",

@@ -360,6 +360,23 @@ def has_option(section: str, key: str) -> bool:
     return config.has_option(section, key)
 
 
+def remove_section(section: str) -> bool:
+    """Remove an entire section from the INI file.
+
+    Args:
+        section: Section name to remove.
+
+    Returns:
+        True if the section existed and was removed.
+    """
+    config = _load_ini()
+    if not config.has_section(section):
+        return False
+    config.remove_section(section)
+    _save_ini(config)
+    return True
+
+
 # =============================================================================
 # Manifest Defaults Section Helpers
 # =============================================================================

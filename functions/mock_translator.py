@@ -39,7 +39,7 @@ MOCK_KATAKANA: List[str] = [
     "キロ", "リマ", "メトロ", "ノヴァ", "オスカー",
 ]
 
-# Placeholder regex: matches __PROT__, __PROT_1__, __DEDUP__, __CUSTOM__, etc.
+# Placeholder regex: matches __PROTECTED__, __PROTECTED_1__, __DEDUP__, __CUSTOM__, etc.
 _PLACEHOLDER_RE = re.compile(r"(__[A-Za-z][A-Za-z0-9]*(?:_\d+)?__)")
 
 # Speaker:dialogue pattern
@@ -134,7 +134,7 @@ class MockTranslator:
     Standard behaviour:
         - Replaces Japanese text with random English-style words.
         - Replaces non-Japanese text with word-reversed variants.
-        - Preserves all ``__PROT__``, ``__DEDUP__``, ``__CUSTOM__`` tokens.
+        - Preserves all ``__PROTECTED__``, ``__DEDUP__``, ``__CUSTOM__`` tokens.
         - Preserves speaker format (``Speaker: "Dialogue"``).
 
     Flaw testing (Phase 56):
@@ -334,9 +334,9 @@ class MockTranslator:
         """Surgically corrupt placeholder tokens.
 
         Corruption types:
-        - Remove a character from the token name (``__PROT__`` → ``__PRT__``)
-        - Add a character into the token name (``__PROT__`` → ``__PROTT__``)
-        - Insert a space into the token (``__PROT__`` → ``__PRO T__``)
+        - Remove a character from the token name (``__PROTECTED__`` → ``__PRT__``)
+        - Add a character into the token name (``__PROTECTED__`` → ``__PROTT__``)
+        - Insert a space into the token (``__PROTECTED__`` → ``__PRO T__``)
         """
         placeholders = list(_PLACEHOLDER_RE.finditer(line))
         if not placeholders:

@@ -127,10 +127,10 @@ class ConditionalPrompt:
 # Code Protection Tokens
 CONDITION_PROT_TOKEN = ConditionalPrompt(
     name="prot_token",
-    description="Protected code tokens (__PROT__, __COLOR__, __FONT__)",
+    description="Protected code tokens (__PROTECTED__, __COLOR__, __FONT__)",
     patterns=[
-        r"__PROT__",
-        r"__PROT_\d+__",
+        r"__PROTECTED__",
+        r"__PROTECTED_\d+__",
         r"__CODE_PROTECTED_\d+__",
         r"__COLOR__",
         r"__COLOR_\d+__",
@@ -141,8 +141,8 @@ CONDITION_PROT_TOKEN = ConditionalPrompt(
     priority=100,
     category="code",
     pattern_examples={
-        r"__PROT__": "__PROT__",
-        r"__PROT_\d+__": "__PROT_1__",
+        r"__PROTECTED__": "__PROTECTED__",
+        r"__PROTECTED_\d+__": "__PROTECTED_1__",
         r"__CODE_PROTECTED_\d+__": "__CODE_PROTECTED_5__",
         r"__COLOR__": "__COLOR__",
         r"__COLOR_\d+__": "__COLOR_2__",

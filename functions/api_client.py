@@ -1399,13 +1399,13 @@ class APIClient:
         if minimal_prompt:
             system_prompt = (
                 f"Translate the following text from {self.config.source_lang} to {self.config.target_lang}.\n"
-                "Preserve all placeholders (like __PROT__, __CODE__) exactly.\n"
+                "Preserve all placeholders (like __PROTECTED__, __CODE__) exactly.\n"
                 "Output only the translation, no explanations or markdown."
             )
         else:
             system_prompt = (
                 f"You are a professional translator translating from {self.config.source_lang} to {self.config.target_lang}.\n"
-                "Preserve all special tokens like __PROT__ exactly.\n"
+                "Preserve all special tokens like __PROTECTED__ exactly.\n"
                 "Output only the translation, no explanations."
             )
         
@@ -1552,7 +1552,7 @@ class APIClient:
             f"You are a professional translator translating from {self.config.source_lang} to {self.config.target_lang}.\n"
             "Output must be a valid JSON object with a single key 'translations' containing an array of strings.\n"
             "The array must have exactly the same number of elements as the input 'lines' array.\n"
-            "Preserve all special tokens like __PROT__ exactly.\n"
+            "Preserve all special tokens like __PROTECTED__ exactly.\n"
             "Do not translate proper names if you are unsure, or follow the glossary if provided."
         )
         

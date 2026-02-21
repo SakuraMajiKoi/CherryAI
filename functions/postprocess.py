@@ -30,8 +30,8 @@ from .modehelper import ANCHOR_EQUIVS, get_equivs
 class RecoveryType(Enum):
     """Types of recovery operations that can be performed."""
     
-    PLACEHOLDER_CASE = "placeholder_case"  # __prot__ -> __PROT__
-    PLACEHOLDER_MANGLED = "placeholder_mangled"  # __PR OT__ -> __PROT__
+    PLACEHOLDER_CASE = "placeholder_case"  # __PROTECTED__ -> __PROTECTED__
+    PLACEHOLDER_MANGLED = "placeholder_mangled"  # __PR OT__ -> __PROTECTED__
     PLACEHOLDER_MISSING = "placeholder_missing"  # Placeholder removed by LLM
     PLACEHOLDER_POSITION_SHIFT = "placeholder_position_shift"  # TASK 42.10
     PLACEHOLDER_EXTRA = "placeholder_extra"  # TASK 42.10
@@ -132,7 +132,7 @@ class RecoveryStats:
 # ============================================================================
 
 
-# Standard placeholder pattern: __PROT__, __PROT_1__, __NAME__, etc.
+# Standard placeholder pattern: __PROTECTED__, __PROTECTED_1__, __NAME__, etc.
 PLACEHOLDER_PATTERN = re.compile(r"__([A-Za-z][A-Za-z0-9]*)(?:_(\d+))?__")
 
 # Pattern for placeholders with internal whitespace (clearly mangled)
@@ -141,8 +141,8 @@ WHITESPACE_PLACEHOLDER_PATTERN = re.compile(r"__\s+([A-Za-z][A-Za-z0-9]*)\s*(?:_
 # Translated placeholder patterns (only match specific known translations)
 TRANSLATED_PLACEHOLDER_PATTERNS = [
     # Protection -> PROT
-    (re.compile(r"__\s*PROTECTION\s*(?:_\s*(\d+))?\s*__", re.IGNORECASE), "__PROT__"),
-    (re.compile(r"__\s*PROTECTED\s*(?:_\s*(\d+))?\s*__", re.IGNORECASE), "__PROT__"),
+    (re.compile(r"__\s*PROTECTION\s*(?:_\s*(\d+))?\s*__", re.IGNORECASE), "__PROTECTED__"),
+    (re.compile(r"__\s*PROTECTED\s*(?:_\s*(\d+))?\s*__", re.IGNORECASE), "__PROTECTED__"),
 ]
 
 # Known placeholder types (for recovery hinting)
@@ -239,7 +239,7 @@ def extract_placeholders_ordered(text: str) -> List[Tuple[str, int, int]]:
 
 
 def recover_placeholder_case(text: str, original_placeholders: List[str]) -> Tuple[str, List[RecoveryIssue]]:
-    """Fix placeholder case issues (e.g., __prot__ -> __PROT__).
+    """Fix placeholder case issues (e.g., __PROTECTED__ -> __PROTECTED__).
     
     Args:
         text: The translated text to fix.
@@ -285,7 +285,7 @@ def recover_placeholder_case(text: str, original_placeholders: List[str]) -> Tup
 
 
 def recover_mangled_placeholders(text: str, original_placeholders: List[str]) -> Tuple[str, List[RecoveryIssue]]:
-    """Fix mangled placeholder patterns (e.g., __ PROT __ -> __PROT__).
+    """Fix mangled placeholder patterns (e.g., __ PROTECTED __ -> __PROTECTED__).
     
     Only fixes placeholders with internal whitespace that clearly match
     known original placeholders.
@@ -1121,8 +1121,8 @@ def get_recovery_type_description(recovery_type: RecoveryType) -> str:
         Human-readable description string.
     """
     descriptions = {
-        RecoveryType.PLACEHOLDER_CASE: "Fix placeholder case (e.g., __prot__ → __PROT__)",
-        RecoveryType.PLACEHOLDER_MANGLED: "Fix mangled placeholders (e.g., __PR OT__ → __PROT__)",
+        RecoveryType.PLACEHOLDER_CASE: "Fix placeholder case (e.g., __PROTECTED__ → __PROTECTED__)",
+        RecoveryType.PLACEHOLDER_MANGLED: "Fix mangled placeholders (e.g., __PR OT__ → __PROTECTED__)",
         RecoveryType.PLACEHOLDER_MISSING: "Recover missing placeholders",
         RecoveryType.PLACEHOLDER_POSITION_SHIFT: "Placeholder position shifted significantly",
         RecoveryType.PLACEHOLDER_EXTRA: "Extra placeholder tokens detected",

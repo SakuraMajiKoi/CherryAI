@@ -1266,6 +1266,7 @@ def save_glossary_entries(
     - source: str (original text)
     - target: str (translated text)
     - category: str (name, term, place, etc.)
+    - gender: str (Male, Female, Non-Binary, etc.)
     - context: str (usage context)
     - notes: str (additional notes)
     - active: bool (TASK 41.10 — whether entry is used in prompt)
@@ -1284,6 +1285,7 @@ def save_glossary_entries(
                 "source": str(entry.get("source", "")),
                 "target": str(entry.get("target", "")),
                 "category": str(entry.get("category", "")),
+                "gender": str(entry.get("gender", "")),
                 "context": str(entry.get("context", "")),
                 "notes": str(entry.get("notes", "")),
                 "active": bool(entry.get("active", True)),
@@ -1326,6 +1328,7 @@ def load_glossary_entries(
                 "source": str(entry.get("source", "")),
                 "target": str(entry.get("target", "")),
                 "category": str(entry.get("category", "")),
+                "gender": str(entry.get("gender", "")),
                 "context": str(entry.get("context", "")),
                 "notes": str(entry.get("notes", "")),
                 "active": bool(entry.get("active", True)),

@@ -234,7 +234,7 @@ def literal_replace(text: str, old: str, new: str) -> Tuple[str, int]:
 def generate_token(prefix: str, index: int) -> str:
 	# For compatibility with new spec, return unified placeholder name
 	# Without numeric identifier. Index is unused but kept for signature stability.
-	return "__PROT__"
+	return "__PROTECTED__"
 
 
 # State persistence and multi-file picker moved to functions.mainhelper

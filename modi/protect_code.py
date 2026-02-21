@@ -4,9 +4,9 @@ import re
 import logging
 from typing import Any, Dict, List, Optional
 
-# PROT compression/decompression and clustering is centralized in Standard Helpers
+# PROTECTED compression/decompression and clustering is centralized in Standard Helpers
 # (modi/standard_mode.py). This module only replaces matched segments with
-# the literal '__PROT__' token and records captured values per-line.
+# the literal '__PROTECTED__' token and records captured values per-line.
 
 NAME = "Protect Code"
 
@@ -25,9 +25,9 @@ def _get_prepro_ops(processor, idx: int, mode: str) -> List[Dict[str, Any]]:
     """Get preprocessing operations for a line filtered by mode."""
     return processor.manifest.get_prepro_ops(idx, mode) or []
 # PHASE rationale:
-# - This mode temporarily replaces matched code-like segments with the unified __PROT__ token during Pre.
+# - This mode temporarily replaces matched code-like segments with the unified __PROTECTED__ token during Pre.
 # - Restoration is performed in Post by this mode's apply_post to give the mode full lifecycle ownership.
-# - PROT compression/decompression (clustering adjacent tokens) is centralized in Standard Helpers.
+# - PROTECTED compression/decompression (clustering adjacent tokens) is centralized in Standard Helpers.
 PHASE = "Both"
 PRIORITY = 20
 USES_REGEX = True
@@ -73,7 +73,7 @@ def apply_pre(processor, lines: List[str], op, stats: Dict[str, int]) -> int:
         if not captured:
             continue
 
-        # Replace all matches with generic __PROT__ (process in reverse to maintain positions)
+        # Replace all matches with generic __PROTECTED__ (process in reverse to maintain positions)
         new_line = line
         for match_idx in range(len(matches) - 1, -1, -1):
             m = matches[match_idx]
@@ -82,7 +82,7 @@ def apply_pre(processor, lines: List[str], op, stats: Dict[str, int]) -> int:
                 continue
             start = m.start()
             end = m.end()
-            new_line = new_line[:start] + "__PROT__" + new_line[end:]
+            new_line = new_line[:start] + "__PROTECTED__" + new_line[end:]
 
         # Write to prepro_ops (primary storage)
         op_data = {
@@ -108,10 +108,10 @@ def apply_pre(processor, lines: List[str], op, stats: Dict[str, int]) -> int:
 
 
 def apply_post(processor, lines: List[str], op, stats: Dict[str, int]) -> int:
-    """Restore protected segments recorded during Pre by matching context around __PROT__.
+    """Restore protected segments recorded during Pre by matching context around __PROTECTED__.
 
     Uses surrounding text context to identify which recorded value corresponds to each
-    __PROT__ placeholder, eliminating positional ambiguity without polluting translation
+    __PROTECTED__ placeholder, eliminating positional ambiguity without polluting translation
     with numbered tokens.
     """
     changes = 0
@@ -127,7 +127,7 @@ def apply_post(processor, lines: List[str], op, stats: Dict[str, int]) -> int:
                 if items:
                     prot_map.setdefault(idx, []).extend(items)
         
-        # Restore each line by matching context around __PROT__ tokens
+        # Restore each line by matching context around __PROTECTED__ tokens
         MAX_WARN = 50
         warned = 0
         suppressed = 0
@@ -140,14 +140,14 @@ def apply_post(processor, lines: List[str], op, stats: Dict[str, int]) -> int:
             if not items:
                 continue
             
-            # Find all __PROT__ positions in current line
-            prot_pattern = re.compile(r"__PROT__")
+            # Find all __PROTECTED__ positions in current line
+            prot_pattern = re.compile(r"__PROTECTED__")
             prot_matches = list(prot_pattern.finditer(line))
             
             if not prot_matches:
                 continue
             
-            # Match each __PROT__ to a recorded item using context
+            # Match each __PROTECTED__ to a recorded item using context
             new_line = line
             offset = 0  # Track cumulative length change
             matched_items = set()  # Track which items we've used
@@ -156,7 +156,7 @@ def apply_post(processor, lines: List[str], op, stats: Dict[str, int]) -> int:
                 prot_start = prot_match.start() + offset
                 prot_end = prot_match.end() + offset
                 
-                # Get context around this __PROT__ in current line
+                # Get context around this __PROTECTED__ in current line
                 current_before = new_line[max(0, prot_start - 10):prot_start]
                 current_after = new_line[prot_end:min(len(new_line), prot_end + 10)]
                 
@@ -205,7 +205,7 @@ def apply_post(processor, lines: List[str], op, stats: Dict[str, int]) -> int:
                     matched_items.add(item_idx)
                     value = item.get("value", "")
                     
-                    # Replace this specific __PROT__ with the value
+                    # Replace this specific __PROTECTED__ with the value
                     new_line = new_line[:prot_start] + value + new_line[prot_end:]
                     offset += len(value) - (prot_end - prot_start)
                     changes += 1

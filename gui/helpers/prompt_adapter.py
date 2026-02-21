@@ -622,9 +622,9 @@ def get_builtin_conditions() -> Tuple[List[ConditionalPromptView], str]:
     fallback = [
         ConditionalPromptView(
             name="protected_tokens",
-            description="Protection tokens (__PROT_N__)",
-            patterns=[r"__PROT_\d+__"],
-            instruction="Preserve __PROT_N__ tokens exactly.",
+            description="Protection tokens (__PROTECTED_N__)",
+            patterns=[r"__PROTECTED_\d+__"],
+            instruction="Preserve __PROTECTED_N__ tokens exactly.",
             priority=100,
             enabled=True,
             category="code",

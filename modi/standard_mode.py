@@ -1,7 +1,7 @@
 # Includes many small operations deemed as standard:
 # -Ellipsis compression/decompression
 # -Empty-line placeholder insertion/restoration
-# -De/compression of PROT runs
+# -De/compression of PROTECTED runs
 # -Deduplication of repeated lines
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ def get_standard_config(processor) -> Dict[str, Any]:
         # deduplication controls
         "dedup_enabled": True,
         "dedup_threshold": getattr(processor, "DEDUP_THRESHOLD_DEFAULT", 1),
-        # placeholder for future toggles (ellipsis, prot compression etc.)
+        # placeholder for future toggles (ellipsis, PROTECTED compression etc.)
         "ellipsis_enabled": True,
         "prot_enabled": True,
         # New toggles
@@ -754,7 +754,7 @@ def _line_is_candidate(text: str) -> bool:
         return False
     t = text.strip()
     # Skip internal placeholders and pure punctuation lines
-    if t == EMPTY_LINE_PLACEHOLDER or t == getattr(__import__(__name__), 'PROT_TOKEN', '__PROT__'):
+    if t == EMPTY_LINE_PLACEHOLDER or t == getattr(__import__(__name__), 'PROT_TOKEN', '__PROTECTED__'):
         return False
     # If after removing common punctuation and all Cc,Cf, and spaces nothing remains, skip
     def _is_meaningful(ch: str) -> bool:
@@ -946,9 +946,9 @@ def decompress_ellipsis_line(line: str, counts: List[int]) -> str:
     return new_line
 
 
-# ---------------------------- PROT helpers (moved here) ---------------------------- #
+# ---------------------------- PROTECTED helpers (moved here) ---------------------------- #
 PROT_PATTERN = re.compile(r"__\s*PROT\s*__")
-PROT_TOKEN = "__PROT__"
+PROT_TOKEN = "__PROTECTED__"
 
 
 def compress_prot_line(line: str) -> Tuple[str, List[Tuple[int, int]]]:
@@ -995,7 +995,7 @@ def decompress_prot_line(line: str, clusters: List[Tuple[int, int]]) -> str:
 
 
 def compress_all_prot_lines(processor, lines: List[str]) -> int:
-    """Compress PROT runs on all lines and record prot_clusters in manifest."""
+    """Compress PROTECTED runs on all lines and record prot_clusters in manifest."""
     # Respect runtime config
     try:
         cfg = get_standard_config(processor)
@@ -1015,7 +1015,7 @@ def compress_all_prot_lines(processor, lines: List[str]) -> int:
 
 
 def decompress_all_prot_lines(processor, lines: List[str]) -> int:
-    """Decompress recorded PROT clusters into the current lines using manifest data."""
+    """Decompress recorded PROTECTED clusters into the current lines using manifest data."""
     # Respect runtime config
     try:
         cfg = get_standard_config(processor)

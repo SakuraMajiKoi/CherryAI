@@ -145,17 +145,24 @@ class WelcomeDialog(tk.Toplevel):
             )
             skip_btn.pack(fill="x", pady=5, ipady=8)
 
-        # PHASE 58.11: Auto-load checkbox (only show if resume option available)
-        if self._last_manifest_name:
-            auto_load_frame = ttk.Frame(main_frame)
-            auto_load_frame.pack(fill="x", pady=(10, 5))
-            
-            auto_load_check = ttk.Checkbutton(
-                auto_load_frame,
-                text="Automatically load last project on startup",
-                variable=self._auto_load_var,
-            )
-            auto_load_check.pack(anchor="center")
+        # Auto-load tickbox — always visible so users can opt in/out
+        auto_load_frame = ttk.Frame(main_frame)
+        auto_load_frame.pack(fill="x", pady=(10, 5))
+
+        # Load current setting from INI
+        try:
+            from CherryAI.functions import ini_manager
+            self._auto_load_var.set(ini_manager.get_restore_on_launch())
+        except Exception:
+            pass
+
+        auto_load_check = ttk.Checkbutton(
+            auto_load_frame,
+            text="Automatically load last project on startup",
+            variable=self._auto_load_var,
+            command=self._on_auto_load_toggled,
+        )
+        auto_load_check.pack(anchor="center")
 
         # Footer
         footer_label = ttk.Label(
@@ -165,6 +172,14 @@ class WelcomeDialog(tk.Toplevel):
             font=("Segoe UI", 9),
         )
         footer_label.pack(side="bottom")
+
+    def _on_auto_load_toggled(self) -> None:
+        """Save auto-load preference immediately when tickbox is toggled."""
+        try:
+            from CherryAI.functions import ini_manager
+            ini_manager.set_restore_on_launch(self._auto_load_var.get())
+        except Exception as e:
+            logger.warning("Failed to save auto-load preference: %s", e)
 
     def _on_resume(self) -> None:
         """Handle Resume button click.

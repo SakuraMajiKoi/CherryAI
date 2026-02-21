@@ -24,6 +24,7 @@ from tkinter import ttk, messagebox, scrolledtext, simpledialog
 
 from CherryAI.gui.steps.base import BaseStep
 from CherryAI.gui.theme.colors import THEME
+from CherryAI.gui.helpers.confirmations import confirm_action
 from CherryAI.gui.helpers.manifest_binding import (
     BindingInfo,
     bind_entry_to_field,
@@ -195,9 +196,9 @@ class ProjectMetadata:
     target_language: str = "English"
     summary: str = ""
     style: str = ""
-    style_preset: StylePreset = StylePreset.NATURAL
+    style_preset: str = "Natural"
     tone: str = ""
-    tone_preset: TonePreset = TonePreset.NEUTRAL
+    tone_preset: str = "Neutral"
     genre: str = ""
     characters: List[CharacterInfo] = field(default_factory=list)
     code_patterns: List[CodePattern] = field(default_factory=list)  # TASK 18.5
@@ -214,9 +215,9 @@ class ProjectMetadata:
             "target_language": self.target_language,
             "summary": self.summary,
             "style": self.style,
-            "style_preset": self.style_preset.value,
+            "style_preset": self.style_preset,
             "tone": self.tone,
-            "tone_preset": self.tone_preset.value,
+            "tone_preset": self.tone_preset,
             "genre": self.genre,
             "characters": [c.to_dict() for c in self.characters],
             "code_patterns": [p.to_dict() for p in self.code_patterns],
@@ -234,18 +235,15 @@ class ProjectMetadata:
         code_patterns = [
             CodePattern.from_dict(p) for p in data.get("code_patterns", [])
         ]
-        style_preset = StylePreset.NATURAL
-        if "style_preset" in data:
-            try:
-                style_preset = StylePreset(data["style_preset"])
-            except ValueError:
-                pass
-        tone_preset = TonePreset.NEUTRAL
-        if "tone_preset" in data:
-            try:
-                tone_preset = TonePreset(data["tone_preset"])
-            except ValueError:
-                pass
+        style_preset = data.get("style_preset", "Natural")
+        # Legacy enum value migration
+        if style_preset in ("natural", "literal", "creative", "formal",
+                            "casual", "technical", "literary"):
+            style_preset = style_preset.capitalize()
+        tone_preset = data.get("tone_preset", "Neutral")
+        if tone_preset in ("neutral", "serious", "humorous", "dramatic",
+                           "lighthearted", "dark", "romantic", "action"):
+            tone_preset = tone_preset.capitalize()
         return cls(
             project_name=data.get("project_name", ""),
             game_title=data.get("game_title", ""),
@@ -308,30 +306,277 @@ class InferenceResult:
 # ============================================================================
 # Constants
 # ============================================================================
+# Preset System — Style and Tone
+# ============================================================================
+
+# Default style presets: name → prompt text that gets sent to the LLM.
+DEFAULT_STYLE_PRESETS: Dict[str, str] = {
+    "Literal": (
+        "Translate as literally as possible. Preserve the original sentence "
+        "structure, word order, and phrasing. Prioritize accuracy over "
+        "natural flow in the target language."
+    ),
+    "Natural": (
+        "Translate naturally and fluently. Adapt sentence structure and "
+        "phrasing to feel native in the target language while preserving "
+        "the original meaning. Prioritize readability."
+    ),
+    "Creative": (
+        "Translate with creative liberty. Adapt idioms, humor, and cultural "
+        "references for the target audience. You may rephrase freely to "
+        "capture the spirit of the original rather than the exact words."
+    ),
+    "Formal": (
+        "Use a formal, professional register. Choose polished vocabulary "
+        "and structured phrasing. Avoid colloquialisms, contractions, and "
+        "slang."
+    ),
+    "Casual": (
+        "Use an informal, conversational tone. Employ natural contractions, "
+        "colloquial expressions, and relaxed phrasing as spoken language."
+    ),
+    "Technical": (
+        "Use precise, technical language. Maintain exact terminology and "
+        "avoid ambiguity. Prefer established translations for domain-specific "
+        "terms."
+    ),
+    "Literary": (
+        "Translate with literary finesse. Use rich vocabulary, varied "
+        "sentence rhythm, and artistic phrasing. Preserve poetic devices "
+        "and narrative voice."
+    ),
+}
+
+# Default tone presets: name → prompt text.
+DEFAULT_TONE_PRESETS: Dict[str, str] = {
+    "Neutral": (
+        "Maintain a balanced, neutral tone throughout the translation. "
+        "Do not add emotional emphasis or dramatic flair beyond what is "
+        "present in the source."
+    ),
+    "Serious": (
+        "Convey a grave, solemn atmosphere. Use measured, weighty phrasing "
+        "appropriate for serious subject matter."
+    ),
+    "Humorous": (
+        "Preserve and enhance comedic timing and humor. Adapt jokes and "
+        "wordplay for the target language while keeping the light-hearted "
+        "spirit."
+    ),
+    "Dramatic": (
+        "Emphasize dramatic tension and intensity. Use impactful phrasing, "
+        "strong verbs, and theatrical delivery to heighten emotional moments."
+    ),
+    "Lighthearted": (
+        "Keep the mood cheerful and upbeat. Use bright, positive language "
+        "and breezy phrasing that feels warm and inviting."
+    ),
+    "Dark": (
+        "Convey a grim, ominous atmosphere. Use foreboding language, "
+        "heavy imagery, and tense phrasing appropriate for dark themes."
+    ),
+    "Romantic": (
+        "Use warm, emotionally resonant language. Convey tenderness, "
+        "affection, and intimacy through gentle phrasing and evocative "
+        "word choices."
+    ),
+    "Action": (
+        "Use punchy, fast-paced language. Keep sentences short and energetic. "
+        "Emphasize motion, impact, and urgency to match action sequences."
+    ),
+}
+
+# "Custom" is the sentinel name — always present, never deletable.
+CUSTOM_PRESET_NAME = "Custom"
+
+# Default text for the Summary widget.
+DEFAULT_SUMMARY_TEXT = (
+    "Write a short summary of the work here. Mentioning protagonist(s) "
+    "and Point of View is not necessary and will be automatically provided."
+)
+
+# Default text for the System Instructions widget.
+# Loaded from default/example.txt at runtime; inline fallback below.
+_SI_FALLBACK = (
+    "You are an expert translator and localizer.\n"
+    "You will be translating any content provided. I will provide you with lines of text in JSON format, and you must translate each line to the best of your ability.\n"
+    "\n"
+    "Guidelines:\n"
+    "- Do not combine, add, or remove any lines. The number of lines should ALWAYS remain the same as the original.\n"
+    "- Avoid overly literal translations that may seem awkward or confusing; focus on conveying the intended meaning and spirit.\n"
+    "- Use consistent translations for recurring terms, character names, and important plot elements.\n"
+    "- Preserve the emotional undertones and atmosphere, whether comedic, dramatic, romantic, or suspenseful.\n"
+    "- '# Glossary' lists terms including locations and the names, nicknames, and genders of the game characters. Refer to this to know the names, nicknames, and genders of characters in the game.\n"
+    "- ALWAYS read the translation history BEFORE to figure out the best context for your translation. This will help you make less mistakes with genders and subjects.\n"
+    "- Translate all text to English no exceptions. Double check that everything is translated.\n"
+    "- Avoid using romaji or including any Japanese text in your response.\n"
+    "- Always translate the speaker in the line to English.\n"
+    "- Maintain any spacing or newlines such as '\\n' or '\\\\n' in the translation.\n"
+    "- Never include any notes, explanations, disclaimers, or anything similar in your response.\n"
+    "\n"
+    "Output Examples\n"
+    "\n"
+    "Input (with protected placeholders):\n"
+    "{\n"
+    '    "Line1": "「音楽が__PROTECTED_0__流れています」",\n'
+    '    "Line2": "「そして__PROTECTED_1__効果音も鳴ります"\n'
+    "}\n"
+    "Output (placeholders preserved exactly):\n"
+    "{\n"
+    '    "Line1": "\"The music __PROTECTED_0__ is playing.\"",\n'
+    '    "Line2": "\"And the __PROTECTED_1__ sound effect is also playing.\""\n'
+    "}\n"
+    "\n"
+    "Input:\n"
+    "{\n"
+    '    "Line1": "Defense Member E: ...",\n'
+    '    "Line2": "Kurone: ...\\i[100]",\n'
+    '    "Line3": "Kurone: あのさ",\n'
+    '    "Line4": "Kurone: \\v[0]がお前に手を焼いてるみたいだったよ",\n'
+    '    "Line5": "Kurone: 他はどうでも良いけど、\\n\"\\c[10]私の標的\\c\"に余計な事 しないでくれない？",\n'
+    '    "Line6": "Kurone: 殺すよ",\n'
+    '    "Line7": "Defense Member E: ひっ...!も...申し訳ごザいまセん",\n'
+    '    "Line8": "Defense Member E: \\SE[ライター]クロネ様に永久ニ服従しまスから...\\n\\c[18]どウかお許シを"\n'
+    "}\n"
+    "Output:\n"
+    "{\n"
+    '    "Line1": "Defense Member E: ...",\n'
+    '    "Line2": "Kurone: ...\\i[100]",\n'
+    '    "Line3": "Kurone: Hey.",\n'
+    '    "Line4": "Kurone: It seems like \\v[0] is having a hard time with you.",\n'
+    '    "Line5": "Kurone: I don\'t care about the others,\\nbut could you not interfere with \"\\c[10]my target\\c\"?",\n'
+    '    "Line6": "Kurone: I\'ll kill you.",\n'
+    '    "Line7": "Defense Member E: Eek...! I-\'m so sorry.",\n'
+    '    "Line8": "Defense Member E: \\SE[ライター]I will serve you forever, Kurone-sama...\\n\\c[18]please forgive me."\n'
+    "}"
+)
 
 
-STYLE_DESCRIPTIONS: Dict[StylePreset, str] = {
-    StylePreset.LITERAL: "Word-for-word translation preserving original structure",
-    StylePreset.NATURAL: "Fluent translation adapted to target language conventions",
-    StylePreset.CREATIVE: "Liberal adaptation with creative interpretation",
-    StylePreset.FORMAL: "Professional, formal language register",
-    StylePreset.CASUAL: "Informal, conversational language",
-    StylePreset.TECHNICAL: "Precise technical terminology",
-    StylePreset.LITERARY: "Literary prose style with artistic flourishes",
-    StylePreset.CUSTOM: "User-defined custom style",
+def _load_default_system_instructions() -> str:
+    """Load default System Instructions from default/example.txt.
+
+    Falls back to a short inline default if the file is missing.
+    """
+    example_path = (
+        Path(__file__).resolve().parent.parent.parent / "default" / "example.txt"
+    )
+    try:
+        if example_path.exists():
+            return example_path.read_text(encoding="utf-8").strip()
+    except Exception:
+        pass
+    return _SI_FALLBACK
+
+
+DEFAULT_SYSTEM_INSTRUCTIONS = _load_default_system_instructions()
+
+# Paths for user preset persistence
+_USER_PRESETS_DIR = Path(__file__).resolve().parent.parent.parent / "user" / "presets"
+_STYLE_PRESETS_FILE = _USER_PRESETS_DIR / "style_presets.json"
+_TONE_PRESETS_FILE = _USER_PRESETS_DIR / "tone_presets.json"
+_SI_PRESETS_FILE = _USER_PRESETS_DIR / "system_instructions_presets.json"
+
+# Default System Instructions presets: name → prompt text.
+DEFAULT_SI_PRESETS: Dict[str, str] = {
+    "Default": DEFAULT_SYSTEM_INSTRUCTIONS,
 }
 
 
+def _load_presets(defaults: Dict[str, str], user_file: Path) -> Dict[str, str]:
+    """Merge default presets with any user-saved overrides.
+
+    Returns an ordered dict: Custom first, then alphabetical.
+    User presets can override defaults and add new ones.
+    """
+    merged: Dict[str, str] = dict(defaults)
+    if user_file.exists():
+        try:
+            data = json.loads(user_file.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                merged.update(data)
+        except Exception:
+            pass
+    # Build ordered result: Custom first, then sorted
+    result: Dict[str, str] = {CUSTOM_PRESET_NAME: ""}
+    for name in sorted(merged):
+        if name.lower() != "custom":
+            result[name] = merged[name]
+    return result
+
+
+def _save_user_presets(presets: Dict[str, str], user_file: Path) -> None:
+    """Persist user presets to JSON (excludes 'Custom')."""
+    user_file.parent.mkdir(parents=True, exist_ok=True)
+    to_save = {k: v for k, v in presets.items() if k != CUSTOM_PRESET_NAME}
+    user_file.write_text(
+        json.dumps(to_save, indent=2, ensure_ascii=False), encoding="utf-8",
+    )
+
+
+def _delete_user_presets_file(user_file: Path) -> None:
+    """Remove user preset file to restore defaults."""
+    if user_file.exists():
+        user_file.unlink()
+
+
+def _unique_preset_name(name: str, existing: Dict[str, str]) -> str:
+    """Return *name* if unique, otherwise append the lowest free number."""
+    if name not in existing:
+        return name
+    n = 1
+    while f"{name}{n}" in existing:
+        n += 1
+    return f"{name}{n}"
+
+
+def _load_si_presets() -> Dict[str, str]:
+    """Load System Instructions presets.
+
+    Returns ordered dict: Custom first, Default second, then alphabetical
+    user presets.  Default can be overwritten by user presets.
+    """
+    merged: Dict[str, str] = dict(DEFAULT_SI_PRESETS)
+    if _SI_PRESETS_FILE.exists():
+        try:
+            data = json.loads(
+                _SI_PRESETS_FILE.read_text(encoding="utf-8"),
+            )
+            if isinstance(data, dict):
+                merged.update(data)
+        except Exception:
+            pass
+    # Build ordered result: Custom first, Default second, then sorted
+    result: Dict[str, str] = {CUSTOM_PRESET_NAME: ""}
+    if "Default" in merged:
+        result["Default"] = merged["Default"]
+    for name in sorted(merged):
+        if name.lower() != "custom" and name != "Default":
+            result[name] = merged[name]
+    return result
+
+
+# Legacy compat: keep old dicts so existing code that references them doesn't crash.
+STYLE_DESCRIPTIONS: Dict[StylePreset, str] = {
+    StylePreset.LITERAL: DEFAULT_STYLE_PRESETS["Literal"],
+    StylePreset.NATURAL: DEFAULT_STYLE_PRESETS["Natural"],
+    StylePreset.CREATIVE: DEFAULT_STYLE_PRESETS["Creative"],
+    StylePreset.FORMAL: DEFAULT_STYLE_PRESETS["Formal"],
+    StylePreset.CASUAL: DEFAULT_STYLE_PRESETS["Casual"],
+    StylePreset.TECHNICAL: DEFAULT_STYLE_PRESETS["Technical"],
+    StylePreset.LITERARY: DEFAULT_STYLE_PRESETS["Literary"],
+    StylePreset.CUSTOM: "",
+}
+
 TONE_DESCRIPTIONS: Dict[TonePreset, str] = {
-    TonePreset.NEUTRAL: "Balanced, neutral tone without strong emotion",
-    TonePreset.SERIOUS: "Grave, solemn atmosphere",
-    TonePreset.HUMOROUS: "Light-hearted, comedic elements",
-    TonePreset.DRAMATIC: "Intense, theatrical presentation",
-    TonePreset.LIGHTHEARTED: "Cheerful, upbeat mood",
-    TonePreset.DARK: "Grim, ominous atmosphere",
-    TonePreset.ROMANTIC: "Warm, emotional romantic context",
-    TonePreset.ACTION: "Fast-paced, energetic action sequences",
-    TonePreset.CUSTOM: "User-defined custom tone",
+    TonePreset.NEUTRAL: DEFAULT_TONE_PRESETS["Neutral"],
+    TonePreset.SERIOUS: DEFAULT_TONE_PRESETS["Serious"],
+    TonePreset.HUMOROUS: DEFAULT_TONE_PRESETS["Humorous"],
+    TonePreset.DRAMATIC: DEFAULT_TONE_PRESETS["Dramatic"],
+    TonePreset.LIGHTHEARTED: DEFAULT_TONE_PRESETS["Lighthearted"],
+    TonePreset.DARK: DEFAULT_TONE_PRESETS["Dark"],
+    TonePreset.ROMANTIC: DEFAULT_TONE_PRESETS["Romantic"],
+    TonePreset.ACTION: DEFAULT_TONE_PRESETS["Action"],
+    TonePreset.CUSTOM: "",
 }
 
 
@@ -424,7 +669,17 @@ class InformationStep(BaseStep):
         self._inference_result = InferenceResult()
         self._is_inferring = False
         self._json_mode = False
-        
+
+        # Collapsible widget state (right column widgets)
+        self._collapsible_state: Dict[str, bool] = {
+            "glossary": True,
+            "glossary_settings": True,
+            "code_database": True,
+            "global_database": True,
+        }
+        self._collapsible_content: Dict[str, ttk.Frame] = {}
+        self._collapsible_buttons: Dict[str, ttk.Button] = {}
+
         # TASK 23: Manifest bindings for auto-save/load
         self._manifest_bindings: List[BindingInfo] = []
 
@@ -464,14 +719,18 @@ class InformationStep(BaseStep):
 
     def _build_content(self) -> None:
         """Build the main content area with 2-column layout.
-        
+
         Layout:
         - Left column: Project Details, Languages, Summary, Style & Tone,
-          System Instructions, Characters
-        - Right column: Glossary Settings, Code Database, Global Glossary/Database,
-          JSON View
-        
-        TASK 23.4: Prompt field moved from right column to left column before Characters.
+          System Instructions
+        - Right column: Glossary, Glossary Settings, Code Database,
+          Global Glossary/Database (all collapsible), JSON View
+
+        TASK 23.4: Prompt field moved from right column to left column
+                   before Characters.
+        Glossary (characters) moved to right column with other
+        glossary/database widgets.  All right-column widgets are
+        collapsible and expand to fill the window height when maximized.
         """
         # Main container with scrolling
         canvas = tk.Canvas(self, highlightthickness=0)
@@ -483,11 +742,24 @@ class InformationStep(BaseStep):
             lambda e: canvas.configure(scrollregion=canvas.bbox("all")),
         )
 
-        canvas.create_window((0, 0), window=self._scrollable_frame, anchor="nw")
+        self._canvas_window = canvas.create_window(
+            (0, 0), window=self._scrollable_frame, anchor="nw",
+        )
         canvas.configure(yscrollcommand=scrollbar.set)
 
         canvas.pack(side="left", fill="both", expand=True, padx=10, pady=5)
         scrollbar.pack(side="right", fill="y")
+        self._canvas = canvas
+
+        # Stretch inner frame to fill viewport height so right-column
+        # collapsible widgets can expand vertically when maximized.
+        def _on_canvas_configure(event: tk.Event) -> None:
+            canvas.itemconfig(self._canvas_window, width=event.width)
+            req_height = self._scrollable_frame.winfo_reqheight()
+            if req_height < event.height:
+                canvas.itemconfig(self._canvas_window, height=event.height)
+
+        canvas.bind("<Configure>", _on_canvas_configure)
 
         # Bind mousewheel
         canvas.bind_all(
@@ -502,14 +774,18 @@ class InformationStep(BaseStep):
         # Configure grid columns with equal weight for responsive resizing
         columns_frame.columnconfigure(0, weight=1, minsize=350)
         columns_frame.columnconfigure(1, weight=1, minsize=300)
+        columns_frame.rowconfigure(0, weight=1)
 
         # Left column: Primary content
         self._left_column = ttk.Frame(columns_frame)
         self._left_column.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
 
-        # Right column: Secondary content
+        # Right column: Collapsible glossary/database widgets
         self._right_column = ttk.Frame(columns_frame)
         self._right_column.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
+        self._right_column.columnconfigure(0, weight=1)
+        for i in range(4):
+            self._right_column.rowconfigure(i, weight=1)
 
         # Build sections in their respective columns
         # Left column sections:
@@ -517,14 +793,67 @@ class InformationStep(BaseStep):
         self._build_language_section()
         self._build_summary_section()
         self._build_style_section()
-        self._build_notes_section()  # TASK 23.4: Moved before Characters, renamed to Prompt
+        self._build_notes_section()
+        # Right column sections (all collapsible):
         self._build_character_section()
-        # Right column sections:
-        self._build_glossary_settings_section()  # TASK 19 Phase 4
-        self._build_code_glossary_section()  # TASK 18.5
-        self._build_global_database_section()  # TASK 41.9
-        self._build_inference_section()  # Variables only, UI removed (deprecated)
+        self._build_glossary_settings_section()
+        self._build_code_glossary_section()
+        self._build_global_database_section()
+        self._build_inference_section()  # Variables only, UI removed
         self._build_json_section()
+
+    # ------------------------------------------------------------------
+    # Collapsible Widget Helpers
+    # ------------------------------------------------------------------
+
+    def _toggle_collapsible(self, widget_name: str) -> None:
+        """Toggle collapsed/expanded state of a right-column widget.
+
+        When collapsed, the content frame is hidden and only the
+        LabelFrame title with a 'Display' button remains visible.
+        When expanded, the content is shown and the button reads
+        'Collapse'.  Row weights are reconfigured so expanded widgets
+        share available vertical space.
+
+        Args:
+            widget_name: Key in ``_collapsible_state`` dict.
+        """
+        expanded = not self._collapsible_state.get(widget_name, True)
+        self._collapsible_state[widget_name] = expanded
+
+        content = self._collapsible_content.get(widget_name)
+        button = self._collapsible_buttons.get(widget_name)
+
+        if content is not None:
+            if expanded:
+                content.grid()
+                if button:
+                    button.config(text="Collapse")
+            else:
+                content.grid_remove()
+                if button:
+                    button.config(text="Display")
+
+        self._reconfigure_right_column_weights()
+
+    def _reconfigure_right_column_weights(self) -> None:
+        """Reconfigure right-column grid row weights based on collapse state.
+
+        Expanded widgets get ``weight=1`` so they share extra vertical
+        space evenly.  Collapsed widgets get ``weight=0`` so they only
+        take the height of their header bar.
+        """
+        name_to_row = {
+            "glossary": 0,
+            "glossary_settings": 1,
+            "code_database": 2,
+            "global_database": 3,
+        }
+        for name, row in name_to_row.items():
+            expanded = self._collapsible_state.get(name, True)
+            self._right_column.rowconfigure(
+                row, weight=1 if expanded else 0,
+            )
 
     def _build_project_section(self) -> None:
         """Build project name and title section.
@@ -696,7 +1025,7 @@ class InformationStep(BaseStep):
         # Summary text area
         self._summary_text = scrolledtext.ScrolledText(
             frame,
-            height=5,
+            height=2,
             wrap="word",
             font=("Consolas", 10),
         )
@@ -712,162 +1041,189 @@ class InformationStep(BaseStep):
             )
         )
 
-        # Hint
-        ttk.Label(
-            frame,
-            text="Provide a brief summary of the game/story for translation context.",
-            font=("Segoe UI", 8),
-            foreground="gray",
-        ).pack(anchor="w", padx=10, pady=(0, 5))
+        # Restore default button
+        btn_row = ttk.Frame(frame)
+        btn_row.pack(fill="x", padx=10, pady=(0, 5))
+        ttk.Button(
+            btn_row, text="🔄 Restore Default", width=16,
+            command=self._restore_summary_default,
+        ).pack(side="right")
 
     def _build_style_section(self) -> None:
-        """Build style and tone section.
-        
-        TASK 23.2: Style/Tone fields bound to manifest for auto-save/load.
-        TASK 41.4: Custom field content disables corresponding dropdown.
+        """Build style and tone section with preset management.
+
+        Each widget has:
+        - A dropdown listing all preset names (Custom always first)
+        - A writable Text field showing the prompt text
+        - Save and Delete buttons for preset management
+
+        Manifest stores: ``StylePreset`` (name) + ``CustomStyle`` (prompt text),
+        ``TonePreset`` (name) + ``CustomTone`` (prompt text).
         """
         frame = ttk.LabelFrame(self._left_column, text="Translation Style & Tone")
         frame.pack(fill="x", padx=5, pady=5)
 
-        # Style row
-        style_row = ttk.Frame(frame)
-        style_row.pack(fill="x", padx=10, pady=5)
-
-        ttk.Label(style_row, text="Style Preset:").pack(side="left", padx=(0, 5))
-        self._style_preset_var = tk.StringVar(value=StylePreset.NATURAL.value)
-        self._style_preset_combo = ttk.Combobox(
-            style_row,
-            textvariable=self._style_preset_var,
-            values=[s.value for s in StylePreset],
-            state="readonly",
-            width=15,
+        # --- Load presets ---
+        self._style_presets = _load_presets(
+            DEFAULT_STYLE_PRESETS, _STYLE_PRESETS_FILE,
         )
-        self._style_preset_combo.pack(side="left", padx=(0, 20))
-        self._style_preset_combo.bind("<<ComboboxSelected>>", self._on_style_changed)
-        
-        # TASK 23.2: Bind to manifest
+        self._tone_presets = _load_presets(
+            DEFAULT_TONE_PRESETS, _TONE_PRESETS_FILE,
+        )
+
+        # ---- Style ----
+        style_header = ttk.Frame(frame)
+        style_header.pack(fill="x", padx=10, pady=(5, 0))
+
+        ttk.Label(style_header, text="Style Preset:").pack(side="left", padx=(0, 5))
+        self._style_preset_var = tk.StringVar(value="Natural")
+        self._style_preset_combo = ttk.Combobox(
+            style_header,
+            textvariable=self._style_preset_var,
+            values=list(self._style_presets.keys()),
+            state="readonly",
+            width=18,
+        )
+        self._style_preset_combo.pack(side="left", padx=(0, 5))
+        self._style_preset_combo.bind(
+            "<<ComboboxSelected>>", self._on_style_changed,
+        )
+
+        # TASK 23.2: Bind preset name to manifest
         self._manifest_bindings.append(
             bind_combobox_to_field(
                 combobox=self._style_preset_combo,
                 var=self._style_preset_var,
                 manager_getter=lambda: self.manifest_manager,
                 field_key="StylePreset",
-                options=[s.value for s in StylePreset],
-                default=StylePreset.NATURAL.value,
+                options=list(self._style_presets.keys()),
+                default="Natural",
             )
         )
 
-        # Style description
-        self._style_desc_label = ttk.Label(
-            style_row,
-            text=STYLE_DESCRIPTIONS[StylePreset.NATURAL],
-            font=("Segoe UI", 8),
-            foreground="gray",
-        )
-        self._style_desc_label.pack(side="left")
+        ttk.Button(
+            style_header, text="💾 Save", width=7,
+            command=self._save_style_preset,
+        ).pack(side="left", padx=2)
+        ttk.Button(
+            style_header, text="🗑 Delete", width=10,
+            command=self._delete_style_preset,
+        ).pack(side="left", padx=2)
 
-        # Custom style entry
-        style_custom_row = ttk.Frame(frame)
-        style_custom_row.pack(fill="x", padx=10, pady=5)
-
-        ttk.Label(style_custom_row, text="Custom Style:").pack(side="left", padx=(0, 5))
+        # Prompt text field (writable) — this is what goes into the prompt
         self._style_var = tk.StringVar()
-        self._style_entry = ttk.Entry(style_custom_row, textvariable=self._style_var)
-        self._style_entry.pack(side="left", fill="x", expand=True)
-        
-        # TASK 23.2: Bind to manifest
+        self._style_text = scrolledtext.ScrolledText(
+            frame, height=1, wrap="word", font=("Consolas", 9),
+        )
+        self._style_text.pack(fill="x", padx=10, pady=(2, 5))
+
+        # Bind prompt text to manifest (auto-saves on focus out)
         self._manifest_bindings.append(
-            bind_entry_to_field(
-                entry=self._style_entry,
-                var=self._style_var,
+            bind_text_to_field(
+                text_widget=self._style_text,
                 manager_getter=lambda: self.manifest_manager,
                 field_key="CustomStyle",
                 default="",
             )
         )
 
-        # Separator
-        ttk.Separator(frame, orient="horizontal").pack(fill="x", padx=10, pady=5)
+        # Populate on first build
+        self._on_style_changed()
 
-        # Tone row
-        tone_row = ttk.Frame(frame)
-        tone_row.pack(fill="x", padx=10, pady=5)
+        # ---- Separator ----
+        ttk.Separator(frame, orient="horizontal").pack(fill="x", padx=10, pady=3)
 
-        ttk.Label(tone_row, text="Tone Preset:").pack(side="left", padx=(0, 5))
-        self._tone_preset_var = tk.StringVar(value=TonePreset.NEUTRAL.value)
+        # ---- Tone ----
+        tone_header = ttk.Frame(frame)
+        tone_header.pack(fill="x", padx=10, pady=(5, 0))
+
+        ttk.Label(tone_header, text="Tone Preset:").pack(side="left", padx=(0, 5))
+        self._tone_preset_var = tk.StringVar(value="Neutral")
         self._tone_preset_combo = ttk.Combobox(
-            tone_row,
+            tone_header,
             textvariable=self._tone_preset_var,
-            values=[t.value for t in TonePreset],
+            values=list(self._tone_presets.keys()),
             state="readonly",
-            width=15,
+            width=18,
         )
-        self._tone_preset_combo.pack(side="left", padx=(0, 20))
-        self._tone_preset_combo.bind("<<ComboboxSelected>>", self._on_tone_changed)
-        
-        # TASK 23.2: Bind to manifest
+        self._tone_preset_combo.pack(side="left", padx=(0, 5))
+        self._tone_preset_combo.bind(
+            "<<ComboboxSelected>>", self._on_tone_changed,
+        )
+
+        # TASK 23.2: Bind preset name to manifest
         self._manifest_bindings.append(
             bind_combobox_to_field(
                 combobox=self._tone_preset_combo,
                 var=self._tone_preset_var,
                 manager_getter=lambda: self.manifest_manager,
                 field_key="TonePreset",
-                options=[t.value for t in TonePreset],
-                default=TonePreset.NEUTRAL.value,
+                options=list(self._tone_presets.keys()),
+                default="Neutral",
             )
         )
 
-        # Tone description
-        self._tone_desc_label = ttk.Label(
-            tone_row,
-            text=TONE_DESCRIPTIONS[TonePreset.NEUTRAL],
-            font=("Segoe UI", 8),
-            foreground="gray",
-        )
-        self._tone_desc_label.pack(side="left")
+        ttk.Button(
+            tone_header, text="💾 Save", width=7,
+            command=self._save_tone_preset,
+        ).pack(side="left", padx=2)
+        ttk.Button(
+            tone_header, text="🗑 Delete", width=10,
+            command=self._delete_tone_preset,
+        ).pack(side="left", padx=2)
 
-        # Custom tone entry
-        tone_custom_row = ttk.Frame(frame)
-        tone_custom_row.pack(fill="x", padx=10, pady=5)
-
-        ttk.Label(tone_custom_row, text="Custom Tone:").pack(side="left", padx=(0, 5))
+        # Prompt text field (writable)
         self._tone_var = tk.StringVar()
-        self._tone_entry = ttk.Entry(tone_custom_row, textvariable=self._tone_var)
-        self._tone_entry.pack(side="left", fill="x", expand=True)
-        
-        # TASK 23.2: Bind to manifest
+        self._tone_text = scrolledtext.ScrolledText(
+            frame, height=1, wrap="word", font=("Consolas", 9),
+        )
+        self._tone_text.pack(fill="x", padx=10, pady=(2, 5))
+
+        # Bind prompt text to manifest
         self._manifest_bindings.append(
-            bind_entry_to_field(
-                entry=self._tone_entry,
-                var=self._tone_var,
+            bind_text_to_field(
+                text_widget=self._tone_text,
                 manager_getter=lambda: self.manifest_manager,
                 field_key="CustomTone",
                 default="",
             )
         )
 
-        # TASK 41.4: Gray out dropdowns when custom fields have content
-        self._style_var.trace_add(
-            "write",
-            lambda *_a: self._toggle_preset_state(
-                self._style_var, self._style_preset_combo,
-            ),
-        )
-        self._tone_var.trace_add(
-            "write",
-            lambda *_a: self._toggle_preset_state(
-                self._tone_var, self._tone_preset_combo,
-            ),
-        )
+        # Populate on first build
+        self._on_tone_changed()
 
     def _build_character_section(self) -> None:
-        """Build character notes section."""
-        frame = ttk.LabelFrame(self._left_column, text="Character Notes")
-        frame.pack(fill="x", padx=5, pady=5)
+        """Build Glossary section (character glossary for the project).
+
+        Placed in right column (row 0) with collapse/expand support.
+        Table expands vertically to fill available space.
+        """
+        frame = ttk.LabelFrame(self._right_column, text="Glossary")
+        frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        frame.rowconfigure(1, weight=1)
+        frame.columnconfigure(0, weight=1)
+
+        # Collapse/expand toggle bar
+        toggle_bar = ttk.Frame(frame)
+        toggle_bar.grid(row=0, column=0, sticky="ew", padx=5, pady=(2, 0))
+
+        collapse_btn = ttk.Button(
+            toggle_bar, text="Collapse", width=8,
+            command=lambda: self._toggle_collapsible("glossary"),
+        )
+        collapse_btn.pack(side="right")
+        self._collapsible_buttons["glossary"] = collapse_btn
+
+        # Content frame (collapsible)
+        content = ttk.Frame(frame)
+        content.grid(row=1, column=0, sticky="nsew")
+        content.rowconfigure(1, weight=1)
+        content.columnconfigure(0, weight=1)
+        self._collapsible_content["glossary"] = content
 
         # Toolbar
-        toolbar = ttk.Frame(frame)
-        toolbar.pack(fill="x", padx=10, pady=5)
+        toolbar = ttk.Frame(content)
+        toolbar.grid(row=0, column=0, sticky="ew", padx=10, pady=5)
 
         ttk.Button(
             toolbar,
@@ -887,7 +1243,7 @@ class InformationStep(BaseStep):
             command=self._remove_character,
         ).pack(side="left")
 
-        # Infer Gender button (Task: Link Gender Inference to Character Notes)
+        # Infer Gender button
         ttk.Button(
             toolbar,
             text="🔍 Infer Gender",
@@ -901,27 +1257,28 @@ class InformationStep(BaseStep):
             command=self._on_import_from_analysis,
         ).pack(side="right")
 
-        # Character list
-        list_frame = ttk.Frame(frame)
-        list_frame.pack(fill="x", padx=10, pady=5)
+        # Character list (expanded table)
+        list_frame = ttk.Frame(content)
+        list_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
+        list_frame.rowconfigure(0, weight=1)
+        list_frame.columnconfigure(0, weight=1)
 
-        # Column order: Original first, then Translation (formerly Name)
-        columns = ("original", "translation", "gender", "role")
+        # Column order: Original, Translation, Notes
+        columns = ("original", "translation", "notes")
         self._char_tree = ttk.Treeview(
             list_frame,
             columns=columns,
             show="headings",
-            height=5,
+            height=8,
+            selectmode="extended",
         )
         self._char_tree.heading("original", text="Original")
         self._char_tree.heading("translation", text="Translation")
-        self._char_tree.heading("gender", text="Gender")
-        self._char_tree.heading("role", text="Role")
+        self._char_tree.heading("notes", text="Notes")
 
         self._char_tree.column("original", width=120)
         self._char_tree.column("translation", width=120)
-        self._char_tree.column("gender", width=80)
-        self._char_tree.column("role", width=150)
+        self._char_tree.column("notes", width=230)
 
         char_scroll = ttk.Scrollbar(
             list_frame,
@@ -930,8 +1287,8 @@ class InformationStep(BaseStep):
         )
         self._char_tree.configure(yscrollcommand=char_scroll.set)
 
-        self._char_tree.pack(side="left", fill="x", expand=True)
-        char_scroll.pack(side="right", fill="y")
+        self._char_tree.grid(row=0, column=0, sticky="nsew")
+        char_scroll.grid(row=0, column=1, sticky="ns")
 
         # Bind double-click for inline editing
         self._char_tree.bind("<Double-1>", self._on_char_double_click)
@@ -940,41 +1297,60 @@ class InformationStep(BaseStep):
 
     def _build_glossary_settings_section(self) -> None:
         """Build Glossary Settings section (TASK 19 Phase 4).
-        
+
         TASK 41.5: Added editable 3-column Treeview for project glossary
         entries with inline editing, Add/Remove buttons.
-
-        Controls glossary source:
-        - Use Global Glossary checkbox (user/glossary.csv)
-        - Copy from Global button (copies global entries to project)
-        - Editable table of project glossary entries
+        Placed in right column (row 1) with collapse/expand support.
+        Table expands vertically to fill available space.
         """
         frame = ttk.LabelFrame(self._right_column, text="Glossary Settings")
-        frame.pack(fill="x", padx=5, pady=5)
-        
+        frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
+        frame.rowconfigure(1, weight=1)
+        frame.columnconfigure(0, weight=1)
+
+        # Collapse/expand toggle bar
+        toggle_bar = ttk.Frame(frame)
+        toggle_bar.grid(row=0, column=0, sticky="ew", padx=5, pady=(2, 0))
+
+        collapse_btn = ttk.Button(
+            toggle_bar, text="Collapse", width=8,
+            command=lambda: self._toggle_collapsible("glossary_settings"),
+        )
+        collapse_btn.pack(side="right")
+        self._collapsible_buttons["glossary_settings"] = collapse_btn
+
+        # Content frame (collapsible)
+        content = ttk.Frame(frame)
+        content.grid(row=1, column=0, sticky="nsew")
+        content.rowconfigure(2, weight=1)  # table row expands
+        content.columnconfigure(0, weight=1)
+        self._collapsible_content["glossary_settings"] = content
+
         # Use Global Glossary checkbox
         self._use_global_glossary_var = tk.BooleanVar(value=True)
         use_global_cb = ttk.Checkbutton(
-            frame,
+            content,
             text="Use Global Glossary (user/glossary.csv)",
             variable=self._use_global_glossary_var,
             command=self._on_use_global_glossary_changed,
         )
-        use_global_cb.pack(anchor="w", padx=10, pady=5)
-        
+        use_global_cb.grid(row=0, column=0, sticky="w", padx=10, pady=5)
+
         # Info text
         self._glossary_info_label = ttk.Label(
-            frame,
+            content,
             text="Global glossary entries will be applied during translation.",
             font=("Segoe UI", 8),
             foreground="gray",
         )
-        self._glossary_info_label.pack(anchor="w", padx=10, pady=(0, 5))
-        
+        self._glossary_info_label.grid(
+            row=0, column=0, sticky="w", padx=10, pady=(25, 0),
+        )
+
         # Button row
-        btn_frame = ttk.Frame(frame)
-        btn_frame.pack(fill="x", padx=10, pady=(0, 5))
-        
+        btn_frame = ttk.Frame(content)
+        btn_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 5))
+
         # Copy from Global button
         ttk.Button(
             btn_frame,
@@ -998,16 +1374,18 @@ class InformationStep(BaseStep):
             foreground="gray",
         ).pack(side="right")
 
-        # TASK 41.5 / 41.10: Editable glossary entries table with Active column
-        table_frame = ttk.Frame(frame)
-        table_frame.pack(fill="x", padx=10, pady=(0, 5))
+        # Editable glossary entries table with Active column
+        table_frame = ttk.Frame(content)
+        table_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 5))
+        table_frame.rowconfigure(0, weight=1)
+        table_frame.columnconfigure(0, weight=1)
 
         gloss_cols = ("active", "original", "translation", "notes")
         self._glossary_tree = ttk.Treeview(
             table_frame,
             columns=gloss_cols,
             show="headings",
-            height=5,
+            height=8,
         )
         self._glossary_tree.heading("active", text="Active")
         self._glossary_tree.heading("original", text="Original")
@@ -1026,8 +1404,8 @@ class InformationStep(BaseStep):
         )
         self._glossary_tree.configure(yscrollcommand=gloss_scroll.set)
 
-        self._glossary_tree.pack(side="left", fill="x", expand=True)
-        gloss_scroll.pack(side="right", fill="y")
+        self._glossary_tree.grid(row=0, column=0, sticky="nsew")
+        gloss_scroll.grid(row=0, column=1, sticky="ns")
 
         # Inline editing on double-click
         self._glossary_tree.bind(
@@ -1042,8 +1420,8 @@ class InformationStep(BaseStep):
         )
 
         # Add / Remove buttons for glossary entries
-        gloss_btn_frame = ttk.Frame(frame)
-        gloss_btn_frame.pack(fill="x", padx=10, pady=(0, 5))
+        gloss_btn_frame = ttk.Frame(content)
+        gloss_btn_frame.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 5))
 
         ttk.Button(
             gloss_btn_frame,
@@ -1059,17 +1437,37 @@ class InformationStep(BaseStep):
 
     def _build_code_glossary_section(self) -> None:
         """Build Code Database section in right column (TASK 18.5).
-        
+
         TASK 41.1: Renamed from 'Code Glossary' to 'Code Database'.
-        Displays code patterns detected during Analysis that should be
-        preserved during translation (e.g., variables, control codes).
+        Placed in right column (row 2) with collapse/expand support.
+        Table expands vertically to fill available space.
         """
         frame = ttk.LabelFrame(self._right_column, text="Code Database")
-        frame.pack(fill="x", padx=5, pady=5)
+        frame.grid(row=2, column=0, sticky="nsew", padx=5, pady=5)
+        frame.rowconfigure(1, weight=1)
+        frame.columnconfigure(0, weight=1)
+
+        # Collapse/expand toggle bar
+        toggle_bar = ttk.Frame(frame)
+        toggle_bar.grid(row=0, column=0, sticky="ew", padx=5, pady=(2, 0))
+
+        collapse_btn = ttk.Button(
+            toggle_bar, text="Collapse", width=8,
+            command=lambda: self._toggle_collapsible("code_database"),
+        )
+        collapse_btn.pack(side="right")
+        self._collapsible_buttons["code_database"] = collapse_btn
+
+        # Content frame (collapsible)
+        content = ttk.Frame(frame)
+        content.grid(row=1, column=0, sticky="nsew")
+        content.rowconfigure(1, weight=1)  # table row expands
+        content.columnconfigure(0, weight=1)
+        self._collapsible_content["code_database"] = content
 
         # Toolbar
-        toolbar = ttk.Frame(frame)
-        toolbar.pack(fill="x", padx=10, pady=5)
+        toolbar = ttk.Frame(content)
+        toolbar.grid(row=0, column=0, sticky="ew", padx=10, pady=5)
 
         ttk.Button(
             toolbar,
@@ -1096,16 +1494,19 @@ class InformationStep(BaseStep):
             command=self._on_import_code_patterns,
         ).pack(side="right")
 
-        # Code pattern list
-        list_frame = ttk.Frame(frame)
-        list_frame.pack(fill="x", padx=10, pady=5)
+        # Code pattern list (expanded table)
+        list_frame = ttk.Frame(content)
+        list_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
+        list_frame.rowconfigure(0, weight=1)
+        list_frame.columnconfigure(0, weight=1)
 
         columns = ("pattern", "category", "action")
         self._code_tree = ttk.Treeview(
             list_frame,
             columns=columns,
             show="headings",
-            height=4,
+            height=8,
+            selectmode="extended",
         )
         self._code_tree.heading("pattern", text="Pattern")
         self._code_tree.heading("category", text="Category")
@@ -1122,8 +1523,8 @@ class InformationStep(BaseStep):
         )
         self._code_tree.configure(yscrollcommand=code_scroll.set)
 
-        self._code_tree.pack(side="left", fill="x", expand=True)
-        code_scroll.pack(side="right", fill="y")
+        self._code_tree.grid(row=0, column=0, sticky="nsew")
+        code_scroll.grid(row=0, column=1, sticky="ns")
 
         # Bind double-click for inline editing
         self._code_tree.bind("<Double-1>", self._on_code_double_click)
@@ -1132,27 +1533,52 @@ class InformationStep(BaseStep):
 
         # Hint
         ttk.Label(
-            frame,
-            text="Code patterns to preserve during translation.",
+            content,
+            text=(
+                "Code patterns to preserve during translation.\n"
+                "Temporary Replacement and Removal options are in "
+                "Preprocessing → Custom Placeholders."
+            ),
             font=("Segoe UI", 8),
             foreground="gray",
-        ).pack(anchor="w", padx=10, pady=(0, 5))
+            wraplength=350,
+            justify="left",
+        ).grid(row=2, column=0, sticky="w", padx=10, pady=(0, 5))
 
     def _build_global_database_section(self) -> None:
         """Build Global Glossary and Database widget (TASK 41.9).
 
-        Provides a mode-switchable widget for managing cross-project
-        glossary and code pattern entries.  Data is persisted to
-        ``user/global_glossary.json`` and ``user/global_codes.json``.
+        Placed in right column (row 3) with collapse/expand support.
+        Table expands vertically to fill available space.
         """
         frame = ttk.LabelFrame(
-            self._right_column, text="Global Glossary and Database"
+            self._right_column, text="Global Glossary and Database",
         )
-        frame.pack(fill="x", padx=5, pady=5)
+        frame.grid(row=3, column=0, sticky="nsew", padx=5, pady=5)
+        frame.rowconfigure(1, weight=1)
+        frame.columnconfigure(0, weight=1)
+
+        # Collapse/expand toggle bar
+        toggle_bar = ttk.Frame(frame)
+        toggle_bar.grid(row=0, column=0, sticky="ew", padx=5, pady=(2, 0))
+
+        collapse_btn = ttk.Button(
+            toggle_bar, text="Collapse", width=8,
+            command=lambda: self._toggle_collapsible("global_database"),
+        )
+        collapse_btn.pack(side="right")
+        self._collapsible_buttons["global_database"] = collapse_btn
+
+        # Content frame (collapsible)
+        content = ttk.Frame(frame)
+        content.grid(row=1, column=0, sticky="nsew")
+        content.rowconfigure(1, weight=1)  # table row expands
+        content.columnconfigure(0, weight=1)
+        self._collapsible_content["global_database"] = content
 
         # Top row: Mode switch, search, import/export
-        top_row = ttk.Frame(frame)
-        top_row.pack(fill="x", padx=10, pady=5)
+        top_row = ttk.Frame(content)
+        top_row.grid(row=0, column=0, sticky="ew", padx=10, pady=5)
 
         ttk.Label(top_row, text="Mode:").pack(side="left", padx=(0, 5))
         self._global_db_mode_var = tk.StringVar(value="Glossary")
@@ -1186,13 +1612,15 @@ class InformationStep(BaseStep):
             top_row, text="Export", command=self._export_global_database,
         ).pack(side="right", padx=2)
 
-        # Treeview — columns vary by mode but we build the superset
-        table_frame = ttk.Frame(frame)
-        table_frame.pack(fill="x", padx=10, pady=(0, 5))
+        # Treeview (expanded table)
+        table_frame = ttk.Frame(content)
+        table_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 5))
+        table_frame.rowconfigure(0, weight=1)
+        table_frame.columnconfigure(0, weight=1)
 
         gdb_cols = ("col1", "col2", "col3")
         self._global_db_tree = ttk.Treeview(
-            table_frame, columns=gdb_cols, show="headings", height=5,
+            table_frame, columns=gdb_cols, show="headings", height=8,
         )
         self._global_db_tree.heading("col1", text="Original")
         self._global_db_tree.heading("col2", text="Translation")
@@ -1206,8 +1634,8 @@ class InformationStep(BaseStep):
             command=self._global_db_tree.yview,
         )
         self._global_db_tree.configure(yscrollcommand=gdb_scroll.set)
-        self._global_db_tree.pack(side="left", fill="x", expand=True)
-        gdb_scroll.pack(side="right", fill="y")
+        self._global_db_tree.grid(row=0, column=0, sticky="nsew")
+        gdb_scroll.grid(row=0, column=1, sticky="ns")
 
         self._global_db_tree.bind(
             "<Double-1>", self._on_global_db_double_click,
@@ -1217,8 +1645,8 @@ class InformationStep(BaseStep):
         )
 
         # Button row
-        btn_row = ttk.Frame(frame)
-        btn_row.pack(fill="x", padx=10, pady=(0, 5))
+        btn_row = ttk.Frame(content)
+        btn_row.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 5))
 
         ttk.Button(
             btn_row, text="+ Add Entry",
@@ -1234,25 +1662,70 @@ class InformationStep(BaseStep):
         ).pack(side="left")
 
     def _build_notes_section(self) -> None:
-        """Build System Instructions section (left column, before Characters).
-        
-        TASK 23.4: Renamed from 'Additional Notes' to 'Prompt'.
-        TASK 41.1: Renamed from 'Prompt' to 'System Instructions'.
-        Moved from right column to left column before Character Notes.
-        Bound to manifest for persistence.
+        """Build System Instructions section with preset management.
+
+        Provides a dropdown listing all presets (Default + Custom + user
+        presets), a writable Text field showing the prompt text, and
+        Save/Delete buttons.  Default always populates the instructions.
+        Custom prompts the user for a name before saving.
+
+        Manifest stores: ``SIPreset`` (name) + ``Prompt`` (text).
         """
         frame = ttk.LabelFrame(self._left_column, text="System Instructions")
         frame.pack(fill="x", padx=5, pady=5)
 
+        # --- Load presets ---
+        self._si_presets = _load_si_presets()
+
+        # ---- Header with preset dropdown and buttons ----
+        si_header = ttk.Frame(frame)
+        si_header.pack(fill="x", padx=10, pady=(5, 0))
+
+        ttk.Label(si_header, text="Preset:").pack(side="left", padx=(0, 5))
+        self._si_preset_var = tk.StringVar(value="Default")
+        self._si_preset_combo = ttk.Combobox(
+            si_header,
+            textvariable=self._si_preset_var,
+            values=list(self._si_presets.keys()),
+            state="readonly",
+            width=18,
+        )
+        self._si_preset_combo.pack(side="left", padx=(0, 5))
+        self._si_preset_combo.bind(
+            "<<ComboboxSelected>>", self._on_si_preset_changed,
+        )
+
+        # Bind preset name to manifest
+        self._manifest_bindings.append(
+            bind_combobox_to_field(
+                combobox=self._si_preset_combo,
+                var=self._si_preset_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="SIPreset",
+                options=list(self._si_presets.keys()),
+                default="Default",
+            )
+        )
+
+        ttk.Button(
+            si_header, text="💾 Save", width=7,
+            command=self._save_si_preset,
+        ).pack(side="left", padx=2)
+        ttk.Button(
+            si_header, text="🗑 Delete", width=10,
+            command=self._delete_si_preset,
+        ).pack(side="left", padx=2)
+
+        # Prompt text field (writable)
         self._notes_text = scrolledtext.ScrolledText(
             frame,
             height=4,
             wrap="word",
             font=("Consolas", 10),
         )
-        self._notes_text.pack(fill="x", padx=10, pady=5)
-        
-        # TASK 23.4: Bind to manifest
+        self._notes_text.pack(fill="x", padx=10, pady=(2, 5))
+
+        # Bind prompt text to manifest
         self._manifest_bindings.append(
             bind_text_to_field(
                 text_widget=self._notes_text,
@@ -1262,12 +1735,8 @@ class InformationStep(BaseStep):
             )
         )
 
-        ttk.Label(
-            frame,
-            text="Custom instructions for the LLM during translation.",
-            font=("Segoe UI", 8),
-            foreground="gray",
-        ).pack(anchor="w", padx=10, pady=(0, 5))
+        # Populate on first build
+        self._on_si_preset_changed()
 
     def _build_inference_section(self) -> None:
         """Initialize LLM inference variables (UI section removed - deprecated).
@@ -1285,12 +1754,16 @@ class InformationStep(BaseStep):
         # Note: UI has been removed, variables kept for serialization
 
     def _build_json_section(self) -> None:
-        """Build JSON view section (right column, initially hidden)."""
+        """Build JSON view section (right column, initially hidden).
+
+        Uses grid row 4 in the right column.  Shown/hidden via
+        ``grid``/``grid_remove`` to coexist with the grid layout.
+        """
         self._json_frame = ttk.LabelFrame(
             self._right_column,
             text="JSON View (Editable)",
         )
-        # Initially hidden, will be shown when toggled
+        # Initially hidden — do NOT grid it yet
 
         self._json_text = scrolledtext.ScrolledText(
             self._json_frame,
@@ -1350,51 +1823,200 @@ class InformationStep(BaseStep):
                 return
         setattr(self, prev_attr, var.get())
 
+    def _restore_summary_default(self) -> None:
+        """Restore the Summary field to its default text."""
+        self._summary_text.delete("1.0", "end")
+        self._summary_text.insert("1.0", DEFAULT_SUMMARY_TEXT)
+
     def _toggle_preset_state(
         self,
         custom_var: tk.StringVar,
         preset_combo: ttk.Combobox,
     ) -> None:
-        """Enable or disable a preset dropdown based on custom field content.
+        """Legacy stub — no longer needed with new preset layout.
 
-        TASK 41.4: When the custom override entry contains text the
-        corresponding preset combobox is grayed out.  Clearing the
-        custom field re-enables it.
-
-        Args:
-            custom_var: StringVar for the custom override entry.
-            preset_combo: Combobox to toggle.
+        Kept so old code paths referencing it don't crash.
         """
-        if custom_var.get().strip():
-            preset_combo.configure(state="disabled")
-        else:
-            preset_combo.configure(state="readonly")
+        pass  # pragma: no cover
 
     def _on_style_changed(self, event: Optional[tk.Event] = None) -> None:
-        """Handle style preset change."""
-        try:
-            preset = StylePreset(self._style_preset_var.get())
-            self._style_desc_label.config(text=STYLE_DESCRIPTIONS[preset])
-        except (ValueError, KeyError):
-            pass
+        """Handle style preset selection — populate the prompt text field."""
+        name = self._style_preset_var.get()
+        prompt_text = self._style_presets.get(name, "")
+        self._style_text.delete("1.0", "end")
+        self._style_text.insert("1.0", prompt_text)
 
     def _on_tone_changed(self, event: Optional[tk.Event] = None) -> None:
-        """Handle tone preset change."""
-        try:
-            preset = TonePreset(self._tone_preset_var.get())
-            self._tone_desc_label.config(text=TONE_DESCRIPTIONS[preset])
-        except (ValueError, KeyError):
-            pass
+        """Handle tone preset selection — populate the prompt text field."""
+        name = self._tone_preset_var.get()
+        prompt_text = self._tone_presets.get(name, "")
+        self._tone_text.delete("1.0", "end")
+        self._tone_text.insert("1.0", prompt_text)
+
+    # ---- Preset save / delete helpers ----
+
+    def _save_style_preset(self) -> None:
+        """Save the current style prompt text as a preset."""
+        name = self._style_preset_var.get()
+        text = self._style_text.get("1.0", "end-1c").strip()
+        if not text:
+            messagebox.showwarning("Empty", "Enter prompt text before saving.")
+            return
+        if name == CUSTOM_PRESET_NAME:
+            new_name = simpledialog.askstring(
+                "Save Style Preset", "Enter a name for this preset:",
+            )
+            if not new_name or not new_name.strip():
+                return
+            name = _unique_preset_name(new_name.strip(), self._style_presets)
+        self._style_presets[name] = text
+        _save_user_presets(self._style_presets, _STYLE_PRESETS_FILE)
+        self._style_preset_combo["values"] = list(self._style_presets.keys())
+        self._style_preset_var.set(name)
+        logger.info("Saved style preset: %s", name)
+
+    def _delete_style_preset(self) -> None:
+        """Delete the currently selected style preset."""
+        name = self._style_preset_var.get()
+        if name == CUSTOM_PRESET_NAME:
+            messagebox.showinfo(
+                "Cannot Delete", "The 'Custom' preset cannot be deleted.",
+            )
+            return
+        if not confirm_action(
+            self, "delete_preset", "Confirm",
+            f"Delete style preset '{name}'?",
+        ):
+            return
+        self._style_presets.pop(name, None)
+        _save_user_presets(self._style_presets, _STYLE_PRESETS_FILE)
+        self._style_preset_combo["values"] = list(self._style_presets.keys())
+        self._style_preset_var.set(CUSTOM_PRESET_NAME)
+        self._on_style_changed()
+        logger.info("Deleted style preset: %s", name)
+
+    def _save_tone_preset(self) -> None:
+        """Save the current tone prompt text as a preset."""
+        name = self._tone_preset_var.get()
+        text = self._tone_text.get("1.0", "end-1c").strip()
+        if not text:
+            messagebox.showwarning("Empty", "Enter prompt text before saving.")
+            return
+        if name == CUSTOM_PRESET_NAME:
+            new_name = simpledialog.askstring(
+                "Save Tone Preset", "Enter a name for this preset:",
+            )
+            if not new_name or not new_name.strip():
+                return
+            name = _unique_preset_name(new_name.strip(), self._tone_presets)
+        self._tone_presets[name] = text
+        _save_user_presets(self._tone_presets, _TONE_PRESETS_FILE)
+        self._tone_preset_combo["values"] = list(self._tone_presets.keys())
+        self._tone_preset_var.set(name)
+        logger.info("Saved tone preset: %s", name)
+
+    def _delete_tone_preset(self) -> None:
+        """Delete the currently selected tone preset."""
+        name = self._tone_preset_var.get()
+        if name == CUSTOM_PRESET_NAME:
+            messagebox.showinfo(
+                "Cannot Delete", "The 'Custom' preset cannot be deleted.",
+            )
+            return
+        if not confirm_action(
+            self, "delete_preset", "Confirm",
+            f"Delete tone preset '{name}'?",
+        ):
+            return
+        self._tone_presets.pop(name, None)
+        _save_user_presets(self._tone_presets, _TONE_PRESETS_FILE)
+        self._tone_preset_combo["values"] = list(self._tone_presets.keys())
+        self._tone_preset_var.set(CUSTOM_PRESET_NAME)
+        self._on_tone_changed()
+        logger.info("Deleted tone preset: %s", name)
+
+    # ---- System Instructions preset save / delete helpers ----
+
+    def _on_si_preset_changed(
+        self, event: Optional[tk.Event] = None,
+    ) -> None:
+        """Handle System Instructions preset selection.
+
+        Populates the text field with the preset content.
+        """
+        name = self._si_preset_var.get()
+        prompt_text = self._si_presets.get(name, "")
+        self._notes_text.delete("1.0", "end")
+        self._notes_text.insert("1.0", prompt_text)
+
+    def _save_si_preset(self) -> None:
+        """Save current System Instructions text as a preset.
+
+        Default can be overwritten directly.  Custom prompts the user
+        for a name.
+        """
+        name = self._si_preset_var.get()
+        text = self._notes_text.get("1.0", "end-1c").strip()
+        if not text:
+            messagebox.showwarning(
+                "Empty", "Enter instructions text before saving.",
+            )
+            return
+        if name == CUSTOM_PRESET_NAME:
+            new_name = simpledialog.askstring(
+                "Save SI Preset",
+                "Enter a name for this preset:",
+            )
+            if not new_name or not new_name.strip():
+                return
+            name = _unique_preset_name(
+                new_name.strip(), self._si_presets,
+            )
+        self._si_presets[name] = text
+        _save_user_presets(self._si_presets, _SI_PRESETS_FILE)
+        self._si_preset_combo["values"] = list(self._si_presets.keys())
+        self._si_preset_var.set(name)
+        logger.info("Saved SI preset: %s", name)
+
+    def _delete_si_preset(self) -> None:
+        """Delete the currently selected System Instructions preset.
+
+        Custom and Default cannot be deleted.
+        """
+        name = self._si_preset_var.get()
+        if name == CUSTOM_PRESET_NAME:
+            messagebox.showinfo(
+                "Cannot Delete", "The 'Custom' preset cannot be deleted.",
+            )
+            return
+        if name == "Default":
+            messagebox.showinfo(
+                "Cannot Delete", "The 'Default' preset cannot be deleted.",
+            )
+            return
+        if not confirm_action(
+            self, "delete_preset", "Confirm",
+            f"Delete SI preset '{name}'?",
+        ):
+            return
+        self._si_presets.pop(name, None)
+        _save_user_presets(self._si_presets, _SI_PRESETS_FILE)
+        self._si_preset_combo["values"] = list(self._si_presets.keys())
+        self._si_preset_var.set("Default")
+        self._on_si_preset_changed()
+        logger.info("Deleted SI preset: %s", name)
 
     def _toggle_json_view(self) -> None:
-        """Toggle JSON view visibility."""
+        """Toggle JSON view visibility (grid-based)."""
         self._json_mode = not self._json_mode
         if self._json_mode:
             self._update_json_view()
-            self._json_frame.pack(fill="x", padx=5, pady=5)
+            self._json_frame.grid(
+                row=4, column=0, sticky="nsew", padx=5, pady=5,
+            )
             self._json_btn.config(text="Form View")
         else:
-            self._json_frame.pack_forget()
+            self._json_frame.grid_remove()
             self._json_btn.config(text="JSON View")
 
     def _update_json_view(self) -> None:
@@ -1446,25 +2068,48 @@ class InformationStep(BaseStep):
                 self._save_characters_to_manifest()  # TASK 23.3
 
     def _remove_character(self) -> None:
-        """Remove selected character."""
+        """Remove selected character(s).
+
+        Supports multi-select: when multiple rows are selected via
+        Ctrl+Click or Shift+Click, all selected characters are removed
+        at once after a single confirmation.
+        """
         selection = self._char_tree.selection()
         if not selection:
             messagebox.showwarning("No Selection", "Please select a character to remove.")
             return
 
-        if messagebox.askyesno("Confirm", "Remove selected character?"):
-            idx = self._char_tree.index(selection[0])
+        count = len(selection)
+        msg = (
+            "Remove selected character?"
+            if count == 1
+            else f"Remove {count} selected characters?"
+        )
+        if not confirm_action(
+            self, "remove_character", "Confirm", msg,
+        ):
+            return
+        # Collect indices in reverse order to avoid index shifting
+        indices = sorted(
+            [self._char_tree.index(item) for item in selection],
+            reverse=True,
+        )
+        for idx in indices:
             if idx < len(self._metadata.characters):
                 del self._metadata.characters[idx]
-                self._refresh_character_list()
-                self._save_characters_to_manifest()  # TASK 23.3
+        self._refresh_character_list()
+        self._save_characters_to_manifest()
 
     def _infer_character_genders(self) -> None:
-        """Infer gender for characters based on their original names.
-        
-        Uses name-based heuristics from the gender inference module to
-        populate the gender field for characters that don't have one set.
-        Only updates if inference confidence is >= 50%.
+        """Infer gender for characters using analysis context.
+
+        Gathers speaker dialogue lines from the loaded project files
+        and Analysis results so the inference engine has actual text
+        signals (explicit markers, honorifics by others, self-pronouns)
+        rather than just bare names.
+
+        Only updates characters whose gender is empty or 'Unknown'.
+        Shows a progress dialog for visibility during long operations.
         """
         if not self._metadata.characters:
             messagebox.showinfo(
@@ -1485,37 +2130,119 @@ class InformationStep(BaseStep):
             )
             return
 
-        # Infer genders for characters without one set
-        updated_count = 0
+        # --- Gather context data ---
+        # 1. Get loaded lines from Input step for full_text + lines
+        all_lines: List[str] = []
+        try:
+            mgr = self.manifest_manager
+            if mgr is not None and mgr.is_loaded:
+                input_data = mgr.get_step_data(0)
+            elif self.session is not None:
+                input_data = self.session.get_step(0).data
+            else:
+                input_data = {}
+            all_lines = input_data.get("all_lines", [])
+        except Exception:
+            pass
+
+        full_text = "\n".join(all_lines) if all_lines else ""
+
+        # 2. Get speaker counts from Analysis for the others-honorific tier
+        speaker_counts: Dict[str, int] = {}
+        try:
+            analysis_data = self._get_analysis_step_data()
+            analysis_results = analysis_data.get("analysis_results", {})
+            speaker_counts = analysis_results.get("speakers", {})
+        except Exception:
+            pass
+
+        # --- Build list of characters to check ---
+        chars_to_check = []
         for char in self._metadata.characters:
-            # Skip if gender already set
             if char.gender and char.gender != "Unknown":
                 continue
-
-            # Use original_name for inference
             name_to_check = char.original_name or char.name
-            if not name_to_check:
-                continue
+            if name_to_check:
+                chars_to_check.append((char, name_to_check))
+
+        if not chars_to_check:
+            messagebox.showinfo(
+                "No Updates",
+                "All characters already have genders set.",
+            )
+            return
+
+        # --- Create progress dialog ---
+        total = len(chars_to_check)
+        progress_dialog = tk.Toplevel(self)
+        progress_dialog.title("Inferring Gender...")
+        progress_dialog.transient(self.winfo_toplevel())
+        progress_dialog.grab_set()
+        progress_dialog.resizable(False, False)
+        progress_dialog.geometry("420x130")
+        progress_dialog.update_idletasks()
+        px = self.winfo_rootx() + (self.winfo_width() - 420) // 2
+        py = self.winfo_rooty() + (self.winfo_height() - 130) // 2
+        progress_dialog.geometry(f"+{max(px, 0)}+{max(py, 0)}")
+        progress_dialog.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        pframe = ttk.Frame(progress_dialog, padding=15)
+        pframe.pack(fill="both", expand=True)
+
+        progress_label = ttk.Label(
+            pframe, text="Preparing...", wraplength=390, anchor="w",
+        )
+        progress_label.pack(fill="x", pady=(0, 5))
+
+        progress_bar = ttk.Progressbar(
+            pframe, orient="horizontal", length=390, mode="determinate",
+        )
+        progress_bar["maximum"] = total
+        progress_bar.pack(fill="x", pady=(0, 5))
+
+        count_label = ttk.Label(pframe, text=f"0 / {total}")
+        count_label.pack(anchor="w")
+
+        progress_dialog.update_idletasks()
+
+        # --- Run inference for each character with progress ---
+        updated_count = 0
+        for i, (char, name_to_check) in enumerate(chars_to_check):
+            # Update progress
+            progress_label.configure(
+                text=f"Checking '{name_to_check}'",
+            )
+            progress_bar["value"] = i
+            count_label.configure(text=f"{i} / {total}")
+            progress_dialog.update_idletasks()
 
             try:
-                # Use name-based heuristics
                 inferred, confidence, _, _, _ = infer_gender_comprehensive(
                     name=name_to_check,
                     pronouns={},
                     honorifics={},
-                    full_text="",
+                    full_text=full_text,
+                    lines=all_lines if all_lines else None,
+                    speaker_counts=speaker_counts if speaker_counts else None,
                     confidence_threshold=0.5,
                 )
                 if inferred and inferred != "Unknown" and confidence >= 50:
                     char.gender = inferred
                     updated_count += 1
             except Exception as e:
-                logger.debug(f"Gender inference failed for {name_to_check}: {e}")
+                logger.debug("Gender inference failed for %s: %s", name_to_check, e)
+
+        # Close progress dialog
+        try:
+            progress_dialog.grab_release()
+            progress_dialog.destroy()
+        except tk.TclError:
+            pass
 
         # Refresh display
         self._refresh_character_list()
-        
-        # TASK 23.3: Save to manifest if any were updated
+
+        # Save to manifest if any were updated
         if updated_count > 0:
             self._save_characters_to_manifest()
 
@@ -1528,7 +2255,8 @@ class InformationStep(BaseStep):
             messagebox.showinfo(
                 "No Updates",
                 "Could not infer gender for any characters.\n"
-                "Characters either already have genders set or names are ambiguous.",
+                "Characters either already have genders set or names "
+                "are ambiguous.",
             )
 
     def _on_char_double_click(self, event: tk.Event) -> None:
@@ -1544,11 +2272,11 @@ class InformationStep(BaseStep):
 
         # Get column index (1-based from identify_column)
         col_idx = int(column.replace("#", "")) - 1
-        # Column order: original, translation, gender, role
-        columns = ("original", "translation", "gender", "role")
+        # Column order: original, translation, notes
+        columns = ("original", "translation", "notes")
         # Map column names to dataclass fields
         field_map = {"original": "original_name", "translation": "name",
-                     "gender": "gender", "role": "role"}
+                     "notes": "notes"}
         if col_idx < 0 or col_idx >= len(columns):
             return
 
@@ -1568,13 +2296,13 @@ class InformationStep(BaseStep):
         
         Args:
             item: Treeview item ID.
-            col_key: Column key (original, translation, gender, role).
-            field_key: Dataclass field key (original_name, name, gender, role).
+            col_key: Column key (original, translation, notes).
+            field_key: Dataclass field key (original_name, name, notes).
             col_idx: Column index.
             char: Character being edited.
         """
-        # Column order: original, translation, gender, role
-        columns = ("original", "translation", "gender", "role")
+        # Column order: original, translation, notes
+        columns = ("original", "translation", "notes")
         try:
             bbox = self._char_tree.bbox(item, columns[col_idx])
             if not bbox:
@@ -1583,82 +2311,49 @@ class InformationStep(BaseStep):
             return
 
         x, y, width, height = bbox
-        current_value = getattr(char, field_key, "")
 
-        # Special handling for gender and role (dropdowns)
-        if col_key == "gender":
-            self._show_char_dropdown(item, field_key, char, x, y, width, height,
-                                     ["", "Male", "Female", "Other", "Unknown"])
-        elif col_key == "role":
-            self._show_char_dropdown(item, field_key, char, x, y, width, height,
-                                     ["", "Main Character", "Major Character", "Minor Character",
-                                      "Side Character", "Villain", "Love Interest", "Mentor",
-                                      "Narrator", "Speaker"])
+        if col_key == "notes":
+            # Notes column: show editable text with combined gender+role+notes
+            notes_parts: list[str] = []
+            if char.gender:
+                notes_parts.append(char.gender)
+            if char.role:
+                notes_parts.append(char.role)
+            if char.notes:
+                notes_parts.append(char.notes)
+            current_value = ", ".join(notes_parts)
         else:
-            # Text entry for original and translation
-            entry = ttk.Entry(self._char_tree)
-            entry.insert(0, str(current_value))
-            entry.select_range(0, "end")
-            entry.place(x=x, y=y, width=width, height=height)
-            entry.focus_set()
+            current_value = getattr(char, field_key, "")
 
-            def on_confirm(event=None):
-                new_value = entry.get()
-                entry.destroy()
+        # All columns use text entry editing
+        entry = ttk.Entry(self._char_tree)
+        entry.insert(0, str(current_value))
+        entry.select_range(0, "end")
+        entry.place(x=x, y=y, width=width, height=height)
+        entry.focus_set()
+
+        def on_confirm(event=None):
+            new_value = entry.get()
+            entry.destroy()
+            if col_key == "notes":
+                # Parse combined notes back: store as single notes field,
+                # clear gender/role so there's no duplication
+                char.gender = ""
+                char.role = ""
+                char.notes = new_value
+            else:
                 if new_value != str(current_value):
                     setattr(char, field_key, new_value)
-                    self._refresh_character_list()
-                    self._save_characters_to_manifest()  # TASK 23.3
-
-            def on_cancel(event=None):
-                entry.destroy()
-
-            entry.bind("<Return>", on_confirm)
-            entry.bind("<Tab>", on_confirm)
-            entry.bind("<Escape>", on_cancel)
-            entry.bind("<FocusOut>", on_confirm)
-
-    def _show_char_dropdown(
-        self,
-        item: str,
-        col_key: str,
-        char: "CharacterInfo",
-        x: int,
-        y: int,
-        width: int,
-        height: int,
-        options: list,
-    ) -> None:
-        """Show a dropdown for selecting gender or role.
-        
-        Args:
-            item: Treeview item ID.
-            col_key: Column key.
-            char: Character being edited.
-            x, y, width, height: Cell coordinates.
-            options: List of dropdown options.
-        """
-        current_value = getattr(char, col_key, "")
-        combo = ttk.Combobox(self._char_tree, values=options, state="readonly")
-        combo.set(current_value)
-        combo.place(x=x, y=y, width=width, height=height)
-        combo.focus_set()
-
-        def on_select(event=None):
-            new_value = combo.get()
-            combo.destroy()
-            if new_value != current_value:
-                setattr(char, col_key, new_value)
-                self._refresh_character_list()
-                self._save_characters_to_manifest()  # TASK 23.3
+            self._refresh_character_list()
+            self._save_characters_to_manifest()
 
         def on_cancel(event=None):
-            combo.destroy()
+            entry.destroy()
 
-        combo.bind("<<ComboboxSelected>>", on_select)
-        combo.bind("<Return>", on_select)
-        combo.bind("<Escape>", on_cancel)
-        combo.bind("<FocusOut>", on_select)
+        entry.bind("<Return>", on_confirm)
+        entry.bind("<Tab>", on_confirm)
+        entry.bind("<Escape>", on_cancel)
+        entry.bind("<FocusOut>", on_confirm)
 
     def _open_genre_dialog(self) -> None:
         """Open a dialog for multi-selecting genres.
@@ -1758,25 +2453,65 @@ class InformationStep(BaseStep):
             self._char_tree.delete(item)
 
         for char in self._metadata.characters:
-            # Column order: original, translation (name field), gender, role
+            # Build combined notes from gender, role, and notes
+            notes_parts: list[str] = []
+            if char.gender:
+                notes_parts.append(char.gender)
+            if char.role:
+                notes_parts.append(char.role)
+            if char.notes:
+                notes_parts.append(char.notes)
+            combined_notes = ", ".join(notes_parts)
+            # Column order: original, translation, notes
             self._char_tree.insert(
                 "",
                 "end",
-                values=(char.original_name, char.name, char.gender, char.role),
+                values=(char.original_name, char.name, combined_notes),
             )
+
+    # ------------------------------------------------------------------
+    # Analysis data access helper
+    # ------------------------------------------------------------------
+
+    def _get_analysis_step_data(self) -> Dict[str, Any]:
+        """Read the Analysis step's stored data.
+
+        Prefers ManifestManager (new system), falls back to session
+        state (legacy).  Returns an empty dict on failure.
+
+        Returns:
+            Analysis step data dictionary.
+        """
+        # Try manifest manager first (same path Analysis uses to save)
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            try:
+                return mgr.get_step_data(1)
+            except Exception:
+                pass
+
+        # Fall back to session state
+        if self.session is not None:
+            try:
+                return self.session.get_step(1).data
+            except (AttributeError, KeyError, IndexError):
+                pass
+
+        return {}
 
     def _on_import_from_analysis(self) -> None:
         """Handle Import from Analysis button click.
-        
+
         Imports speakers detected in Analysis step as characters.
-        Unlike auto-import, this forces import even if characters exist.
+        Shows a dialog letting the user choose how many of the most
+        common speakers to import (non-destructive: existing entries
+        are never overwritten).
         """
         try:
-            # Get analysis results from session (stored under 'analysis_results')
-            analysis_step_data = self.session.get_step(1).data
+            analysis_step_data = self._get_analysis_step_data()
             analysis_results = analysis_step_data.get("analysis_results", {})
             speakers = analysis_results.get("speakers", {})
-            
+
             if not speakers:
                 messagebox.showinfo(
                     "No Speakers",
@@ -1784,49 +2519,88 @@ class InformationStep(BaseStep):
                     "Run Analysis first to detect speakers.",
                 )
                 return
-            
-            # Confirm import
-            existing_count = len(self._metadata.characters)
+
             speaker_count = len(speakers)
-            
-            if existing_count > 0:
-                response = messagebox.askyesno(
-                    "Import Speakers",
-                    f"Found {speaker_count} speakers in Analysis.\n\n"
-                    f"You already have {existing_count} characters.\n\n"
-                    "Add new speakers to existing characters?",
-                )
-                if not response:
-                    return
-            
-            # Import speakers
+
+            # --- choice dialog ---
+            dlg = tk.Toplevel(self)
+            dlg.title("Import Speakers")
+            dlg.resizable(False, False)
+            dlg.transient(self)
+            dlg.grab_set()
+
+            ttk.Label(
+                dlg,
+                text=f"{speaker_count} speakers found. Import how many?",
+                wraplength=300,
+            ).pack(padx=15, pady=(10, 5))
+
+            choice_var = tk.StringVar(value="top")
+            top_frame = ttk.Frame(dlg)
+            top_frame.pack(fill="x", padx=15, pady=2)
+            ttk.Radiobutton(
+                top_frame, text="Top", variable=choice_var, value="top",
+            ).pack(side="left")
+            spin_var = tk.IntVar(value=min(20, speaker_count))
+            spin = ttk.Spinbox(
+                top_frame, from_=1, to=speaker_count,
+                textvariable=spin_var, width=5,
+            )
+            spin.pack(side="left", padx=5)
+            ttk.Label(top_frame, text="most common").pack(side="left")
+
+            ttk.Radiobutton(
+                dlg, text="All speakers", variable=choice_var, value="all",
+            ).pack(anchor="w", padx=15, pady=2)
+
+            result: Dict[str, Any] = {}
+
+            def _ok() -> None:
+                if choice_var.get() == "all":
+                    result["n"] = speaker_count
+                else:
+                    result["n"] = spin_var.get()
+                dlg.destroy()
+
+            btn_row = ttk.Frame(dlg)
+            btn_row.pack(pady=10)
+            ttk.Button(btn_row, text="Import", command=_ok).pack(
+                side="left", padx=5,
+            )
+            ttk.Button(
+                btn_row, text="Cancel", command=dlg.destroy,
+            ).pack(side="left", padx=5)
+
+            dlg.wait_window()
+            if "n" not in result:
+                return
+            # --- end dialog ---
+
+            n = result["n"]
             imported_count = 0
-            existing_originals = {c.original_name for c in self._metadata.characters}
-            
-            # Sort by count, take top 20
-            sorted_speakers = sorted(speakers.items(), key=lambda x: x[1], reverse=True)[:20]
-            
+            existing_originals = {
+                c.original_name for c in self._metadata.characters
+            }
+            sorted_speakers = sorted(
+                speakers.items(), key=lambda x: x[1], reverse=True,
+            )[:n]
+
             for speaker_name, count in sorted_speakers:
                 if speaker_name in existing_originals:
                     continue
-                    
+
                 char = CharacterInfo(
-                    name="",  # Translation left empty by default
+                    name="",
                     original_name=speaker_name,
-                    role="Speaker",
-                    notes=f"Imported from Analysis ({count} occurrences)",
                 )
                 self._metadata.characters.append(char)
                 existing_originals.add(speaker_name)
                 imported_count += 1
-            
+
             self._refresh_character_list()
-            
-            # TASK 23.3: Save to manifest
+
             if imported_count > 0:
                 self._save_characters_to_manifest()
-            
-            if imported_count > 0:
                 messagebox.showinfo(
                     "Import Complete",
                     f"Imported {imported_count} new characters from Analysis.",
@@ -1834,16 +2608,16 @@ class InformationStep(BaseStep):
             else:
                 messagebox.showinfo(
                     "No New Characters",
-                    "All detected speakers already exist in the character list.",
+                    "All selected speakers already exist in the character list.",
                 )
-                
+
         except (AttributeError, KeyError, IndexError):
             messagebox.showwarning(
                 "Analysis Required",
                 "Run Analysis first to detect speakers.",
             )
         except Exception as e:
-            logger.error(f"Failed to import from analysis: {e}")
+            logger.error("Failed to import from analysis: %s", e)
             messagebox.showerror("Import Error", f"Failed to import: {e}")
 
     # ========================================================================
@@ -1877,20 +2651,35 @@ class InformationStep(BaseStep):
                 self._save_code_patterns_to_manifest()  # TASK 23.3
 
     def _remove_code_pattern(self) -> None:
-        """Remove selected code pattern."""
+        """Remove selected code pattern(s).
+
+        Supports multi-select via Ctrl/Shift click.  Deletes in
+        reverse index order to avoid index shifting.
+        """
         selection = self._code_tree.selection()
         if not selection:
             messagebox.showwarning(
-                "No Selection", "Please select a pattern to remove."
+                "No Selection", "Please select a pattern to remove.",
             )
             return
 
-        if messagebox.askyesno("Confirm", "Remove selected pattern?"):
-            idx = self._code_tree.index(selection[0])
+        count = len(selection)
+        msg = (
+            f"Remove {count} selected patterns?"
+            if count > 1
+            else "Remove selected pattern?"
+        )
+        if not confirm_action(self, "remove_code_pattern", "Confirm", msg):
+            return
+
+        indices = sorted(
+            (self._code_tree.index(s) for s in selection), reverse=True,
+        )
+        for idx in indices:
             if idx < len(self._metadata.code_patterns):
                 del self._metadata.code_patterns[idx]
-                self._refresh_code_pattern_list()
-                self._save_code_patterns_to_manifest()  # TASK 23.3
+        self._refresh_code_pattern_list()
+        self._save_code_patterns_to_manifest()  # TASK 23.3
 
     def _on_code_double_click(self, event: tk.Event) -> None:
         """Handle double-click on code pattern tree for inline editing."""
@@ -2025,13 +2814,32 @@ class InformationStep(BaseStep):
             )
 
     def _on_import_code_patterns(self) -> None:
-        """Import code patterns from Analysis step."""
+        """Import individual code patterns from Analysis step.
+
+        Prefers ``individual_codes`` for per-code detail; falls back to
+        grouped ``code_patterns``.  Shows a choice dialog for how many
+        to import (non-destructive).
+        """
         try:
-            analysis_step_data = self.session.get_step(1).data
+            analysis_step_data = self._get_analysis_step_data()
             analysis_results = analysis_step_data.get("analysis_results", {})
+            individual_codes = analysis_results.get("individual_codes", {})
             code_patterns = analysis_results.get("code_patterns", {})
 
-            if not code_patterns:
+            # Build a unified list: [(pattern_text, count, type_label)]
+            items_list: list = []
+            if individual_codes:
+                for code_key, info in individual_codes.items():
+                    items_list.append((
+                        code_key,
+                        info.get("count", 0),
+                        info.get("type", "Detected"),
+                    ))
+            elif code_patterns:
+                for cat, cnt in code_patterns.items():
+                    items_list.append((cat, cnt, "Detected"))
+
+            if not items_list:
                 messagebox.showinfo(
                     "No Patterns",
                     "No code patterns were detected in Analysis.\n\n"
@@ -2039,47 +2847,85 @@ class InformationStep(BaseStep):
                 )
                 return
 
-            # Confirm import
-            existing_count = len(self._metadata.code_patterns)
-            pattern_count = len(code_patterns)
+            items_list.sort(key=lambda x: x[1], reverse=True)
+            total = len(items_list)
 
-            if existing_count > 0:
-                response = messagebox.askyesno(
-                    "Import Patterns",
-                    f"Found {pattern_count} code patterns in Analysis.\n\n"
-                    f"You already have {existing_count} patterns.\n\n"
-                    "Add new patterns to existing list?",
+            # --- choice dialog ---
+            dlg = tk.Toplevel(self)
+            dlg.title("Import Code Patterns")
+            dlg.resizable(False, False)
+            dlg.transient(self)
+            dlg.grab_set()
+
+            ttk.Label(
+                dlg,
+                text=f"{total} code patterns found. Import how many?",
+                wraplength=300,
+            ).pack(padx=15, pady=(10, 5))
+
+            choice_var = tk.StringVar(value="top")
+            top_frame = ttk.Frame(dlg)
+            top_frame.pack(fill="x", padx=15, pady=2)
+            ttk.Radiobutton(
+                top_frame, text="Top", variable=choice_var, value="top",
+            ).pack(side="left")
+            spin_var = tk.IntVar(value=min(20, total))
+            ttk.Spinbox(
+                top_frame, from_=1, to=total,
+                textvariable=spin_var, width=5,
+            ).pack(side="left", padx=5)
+            ttk.Label(top_frame, text="most common").pack(side="left")
+
+            ttk.Radiobutton(
+                dlg, text="All patterns", variable=choice_var, value="all",
+            ).pack(anchor="w", padx=15, pady=2)
+
+            result: Dict[str, Any] = {}
+
+            def _ok() -> None:
+                result["n"] = (
+                    total if choice_var.get() == "all" else spin_var.get()
                 )
-                if not response:
-                    return
+                dlg.destroy()
 
-            # Import patterns
+            btn_row = ttk.Frame(dlg)
+            btn_row.pack(pady=10)
+            ttk.Button(btn_row, text="Import", command=_ok).pack(
+                side="left", padx=5,
+            )
+            ttk.Button(
+                btn_row, text="Cancel", command=dlg.destroy,
+            ).pack(side="left", padx=5)
+
+            dlg.wait_window()
+            if "n" not in result:
+                return
+            # --- end dialog ---
+
+            n = result["n"]
             imported_count = 0
-            existing_patterns = {p.pattern for p in self._metadata.code_patterns}
+            existing_patterns = {
+                p.pattern for p in self._metadata.code_patterns
+            }
 
-            for category, count in code_patterns.items():
-                # Create a generic pattern for each category
-                if category in existing_patterns:
+            for pat_text, count, type_label in items_list[:n]:
+                if pat_text in existing_patterns:
                     continue
 
-                # TASK 41.6: Category="Detected", Action="Preserve"
                 pattern = CodePattern(
-                    pattern=category,
-                    category="Detected",
+                    pattern=pat_text,
+                    category=type_label,
                     action="preserve",
                     notes=f"Imported from Analysis ({count} occurrences)",
                 )
                 self._metadata.code_patterns.append(pattern)
-                existing_patterns.add(category)
+                existing_patterns.add(pat_text)
                 imported_count += 1
 
             self._refresh_code_pattern_list()
-            
-            # TASK 23.3: Save to manifest
-            if imported_count > 0:
-                self._save_code_patterns_to_manifest()
 
             if imported_count > 0:
+                self._save_code_patterns_to_manifest()
                 messagebox.showinfo(
                     "Import Complete",
                     f"Imported {imported_count} new patterns from Analysis.",
@@ -2087,7 +2933,7 @@ class InformationStep(BaseStep):
             else:
                 messagebox.showinfo(
                     "No New Patterns",
-                    "All detected patterns already exist in the list.",
+                    "All selected patterns already exist in the list.",
                 )
 
         except (AttributeError, KeyError, IndexError):
@@ -2096,7 +2942,7 @@ class InformationStep(BaseStep):
                 "Run Analysis first to detect code patterns.",
             )
         except Exception as e:
-            logger.error(f"Failed to import code patterns: {e}")
+            logger.error("Failed to import code patterns: %s", e)
             messagebox.showerror("Import Error", f"Failed to import: {e}")
 
     def _on_use_global_glossary_changed(self) -> None:
@@ -2375,11 +3221,12 @@ class InformationStep(BaseStep):
     def _on_import_glossary_from_analysis(self) -> None:
         """Import detected speakers from Analysis as glossary entries.
 
-        TASK 41.7: Fetches speakers from Analysis step data and converts
-        them to glossary entries with Notes="Speaker".
+        Shows a dialog letting the user choose how many of the most
+        common speakers to import.  Existing entries (matched by source
+        column) are never overwritten.
         """
         try:
-            analysis_step_data = self.session.get_step(1).data
+            analysis_step_data = self._get_analysis_step_data()
             analysis_results = analysis_step_data.get("analysis_results", {})
             speakers = analysis_results.get("speakers", {})
 
@@ -2391,6 +3238,64 @@ class InformationStep(BaseStep):
                 )
                 return
 
+            speaker_count = len(speakers)
+
+            # --- choice dialog ---
+            dlg = tk.Toplevel(self)
+            dlg.title("Import Speakers to Glossary")
+            dlg.resizable(False, False)
+            dlg.transient(self)
+            dlg.grab_set()
+
+            ttk.Label(
+                dlg,
+                text=f"{speaker_count} speakers found. Import how many?",
+                wraplength=300,
+            ).pack(padx=15, pady=(10, 5))
+
+            choice_var = tk.StringVar(value="top")
+            top_frame = ttk.Frame(dlg)
+            top_frame.pack(fill="x", padx=15, pady=2)
+            ttk.Radiobutton(
+                top_frame, text="Top", variable=choice_var, value="top",
+            ).pack(side="left")
+            spin_var = tk.IntVar(value=min(20, speaker_count))
+            ttk.Spinbox(
+                top_frame, from_=1, to=speaker_count,
+                textvariable=spin_var, width=5,
+            ).pack(side="left", padx=5)
+            ttk.Label(top_frame, text="most common").pack(side="left")
+
+            ttk.Radiobutton(
+                dlg, text="All speakers", variable=choice_var, value="all",
+            ).pack(anchor="w", padx=15, pady=2)
+
+            result: Dict[str, Any] = {}
+
+            def _ok() -> None:
+                result["n"] = (
+                    speaker_count
+                    if choice_var.get() == "all"
+                    else spin_var.get()
+                )
+                dlg.destroy()
+
+            btn_row = ttk.Frame(dlg)
+            btn_row.pack(pady=10)
+            ttk.Button(btn_row, text="Import", command=_ok).pack(
+                side="left", padx=5,
+            )
+            ttk.Button(
+                btn_row, text="Cancel", command=dlg.destroy,
+            ).pack(side="left", padx=5)
+
+            dlg.wait_window()
+            if "n" not in result:
+                return
+            # --- end dialog ---
+
+            n = result["n"]
+
             # Collect existing source terms to avoid dupes
             existing: set[str] = set()
             for child in self._glossary_tree.get_children():
@@ -2400,13 +3305,14 @@ class InformationStep(BaseStep):
 
             imported_count = 0
             sorted_speakers = sorted(
-                speakers.items(), key=lambda x: x[1], reverse=True
-            )
+                speakers.items(), key=lambda x: x[1], reverse=True,
+            )[:n]
+
             for name, count in sorted_speakers:
                 if name in existing:
                     continue
                 self._glossary_tree.insert("", "end", values=(
-                    "✓", name, "", f"Speaker ({count} occurrences)"
+                    "✓", name, "", f"Speaker ({count} occurrences)",
                 ))
                 existing.add(name)
                 imported_count += 1
@@ -2421,7 +3327,7 @@ class InformationStep(BaseStep):
             else:
                 messagebox.showinfo(
                     "No New Entries",
-                    "All detected speakers already exist in the glossary.",
+                    "All selected speakers already exist in the glossary.",
                 )
 
         except (AttributeError, KeyError, IndexError):
@@ -2717,16 +3623,10 @@ class InformationStep(BaseStep):
         self._metadata.source_language = self._source_lang_var.get()
         self._metadata.target_language = self._target_lang_var.get()
         self._metadata.summary = self._summary_text.get("1.0", "end-1c")
-        self._metadata.style = self._style_var.get()
-        try:
-            self._metadata.style_preset = StylePreset(self._style_preset_var.get())
-        except ValueError:
-            self._metadata.style_preset = StylePreset.NATURAL
-        self._metadata.tone = self._tone_var.get()
-        try:
-            self._metadata.tone_preset = TonePreset(self._tone_preset_var.get())
-        except ValueError:
-            self._metadata.tone_preset = TonePreset.NEUTRAL
+        self._metadata.style = self._style_text.get("1.0", "end-1c")
+        self._metadata.style_preset = self._style_preset_var.get()
+        self._metadata.tone = self._tone_text.get("1.0", "end-1c")
+        self._metadata.tone_preset = self._tone_preset_var.get()
         self._metadata.custom_notes = self._notes_text.get("1.0", "end-1c")
         self._metadata.updated_at = datetime.now().isoformat()
         if not self._metadata.created_at:
@@ -2743,13 +3643,29 @@ class InformationStep(BaseStep):
         self._summary_text.delete("1.0", "end")
         self._summary_text.insert("1.0", self._metadata.summary)
 
-        self._style_preset_var.set(self._metadata.style_preset.value)
-        self._style_var.set(self._metadata.style)
-        self._on_style_changed()
+        # Populate style preset name and prompt text
+        preset_name = self._metadata.style_preset
+        if preset_name in self._style_presets:
+            self._style_preset_var.set(preset_name)
+        else:
+            self._style_preset_var.set(CUSTOM_PRESET_NAME)
+        self._style_text.delete("1.0", "end")
+        style_text = self._metadata.style
+        if not style_text and preset_name != CUSTOM_PRESET_NAME:
+            style_text = self._style_presets.get(preset_name, "")
+        self._style_text.insert("1.0", style_text)
 
-        self._tone_preset_var.set(self._metadata.tone_preset.value)
-        self._tone_var.set(self._metadata.tone)
-        self._on_tone_changed()
+        # Populate tone preset name and prompt text
+        tone_name = self._metadata.tone_preset
+        if tone_name in self._tone_presets:
+            self._tone_preset_var.set(tone_name)
+        else:
+            self._tone_preset_var.set(CUSTOM_PRESET_NAME)
+        self._tone_text.delete("1.0", "end")
+        tone_text = self._metadata.tone
+        if not tone_text and tone_name != CUSTOM_PRESET_NAME:
+            tone_text = self._tone_presets.get(tone_name, "")
+        self._tone_text.insert("1.0", tone_text)
 
         self._notes_text.delete("1.0", "end")
         self._notes_text.insert("1.0", self._metadata.custom_notes)
@@ -2987,6 +3903,10 @@ class InformationStep(BaseStep):
         self._apply_suggested_project_name()
         # Auto-import code patterns from Analysis if none exist
         self._auto_import_code_patterns()
+        # Ensure style/tone text fields show preset content if empty
+        self._ensure_style_tone_text()
+        # Ensure summary and system instructions show defaults if empty
+        self._ensure_default_texts()
     
     def _load_from_manifest_bindings(self) -> None:
         """Load all manifest-bound fields from manifest.
@@ -2999,6 +3919,59 @@ class InformationStep(BaseStep):
         
         load_all_bindings(self._manifest_bindings)
         logger.debug("Loaded %d manifest bindings", len(self._manifest_bindings))
+
+    def _ensure_style_tone_text(self) -> None:
+        """Ensure style, tone, and SI text fields show preset content if empty.
+
+        After loading from manifest or session state, the text fields
+        may be empty even though a non-Custom preset is selected.
+        This method populates them with the preset prompt text so the
+        user always sees what will be included in the translation prompt.
+        """
+        style_text = self._style_text.get("1.0", "end-1c").strip()
+        if not style_text:
+            name = self._style_preset_var.get()
+            if name and name != CUSTOM_PRESET_NAME:
+                prompt_text = self._style_presets.get(name, "")
+                if prompt_text:
+                    self._style_text.delete("1.0", "end")
+                    self._style_text.insert("1.0", prompt_text)
+
+        tone_text = self._tone_text.get("1.0", "end-1c").strip()
+        if not tone_text:
+            name = self._tone_preset_var.get()
+            if name and name != CUSTOM_PRESET_NAME:
+                prompt_text = self._tone_presets.get(name, "")
+                if prompt_text:
+                    self._tone_text.delete("1.0", "end")
+                    self._tone_text.insert("1.0", prompt_text)
+
+        # System Instructions preset
+        si_text = self._notes_text.get("1.0", "end-1c").strip()
+        if not si_text:
+            name = self._si_preset_var.get()
+            if name and name != CUSTOM_PRESET_NAME:
+                prompt_text = self._si_presets.get(name, "")
+                if prompt_text:
+                    self._notes_text.delete("1.0", "end")
+                    self._notes_text.insert("1.0", prompt_text)
+
+    def _ensure_default_texts(self) -> None:
+        """Populate Summary and System Instructions with defaults if empty.
+
+        Called from ``on_enter`` after all loading is complete.
+        """
+        # Summary default
+        summary_text = self._summary_text.get("1.0", "end-1c").strip()
+        if not summary_text:
+            self._summary_text.delete("1.0", "end")
+            self._summary_text.insert("1.0", DEFAULT_SUMMARY_TEXT)
+
+        # System Instructions default
+        notes_text = self._notes_text.get("1.0", "end-1c").strip()
+        if not notes_text:
+            self._notes_text.delete("1.0", "end")
+            self._notes_text.insert("1.0", DEFAULT_SYSTEM_INSTRUCTIONS)
     
     def _save_characters_to_manifest(self) -> None:
         """Save character notes to manifest.
@@ -3064,8 +4037,8 @@ class InformationStep(BaseStep):
         including gender inference based on speaker names.
         """
         try:
-            # Get analysis results from session (stored under 'analysis_results')
-            analysis_step_data = self.session.get_step(1).data
+            # Get analysis results (prefers manifest, falls back to session)
+            analysis_step_data = self._get_analysis_step_data()
             analysis_results = analysis_step_data.get("analysis_results", {})
             speakers = analysis_results.get("speakers", {})
             
@@ -3119,11 +4092,9 @@ class InformationStep(BaseStep):
                 # Create CharacterInfo from speaker
                 # Translation (name) left empty by default
                 char = CharacterInfo(
-                    name="",  # Translation left empty by default
+                    name="",
                     original_name=speaker_name,
-                    role="Speaker",
                     gender=gender,
-                    notes=f"Auto-imported from Analysis ({count} occurrences)",
                 )
                 self._metadata.characters.append(char)
                 existing_originals.add(speaker_name)
@@ -3140,69 +4111,96 @@ class InformationStep(BaseStep):
             logger.warning(f"Failed to import analysis speakers: {e}")
 
     def _apply_suggested_project_name(self) -> None:
-        """Apply suggested project name from Input step if field is empty.
-        
-        Checks the Input step's step_data for a suggested_project_name and
-        applies it to the project name field if the user hasn't entered one.
+        """Apply project name from manifest or Input step if field is empty.
+
+        Prefers the ``ProjectName`` field in the manifest (set during
+        project creation) over the folder-name-based suggestion from
+        Input step data.
         """
         # Only apply if project name is empty
         if self._project_name_var.get().strip():
             return
-            
+
         try:
-            # Get suggested name from Input step (step 0)
+            # Prefer manifest ProjectName (set during project creation)
+            mgr = self.manifest_manager
+            if mgr is not None and mgr.is_loaded:
+                manifest_name = mgr._manifest_data.get("ProjectName", "")
+                if manifest_name and manifest_name.strip():
+                    self._project_name_var.set(manifest_name.strip())
+                    logger.debug(
+                        "Applied manifest project name: %s", manifest_name,
+                    )
+                    return
+
+            # Fallback: use suggested name from Input step (step 0)
             input_step_data = self.session.get_step(0).data
             suggested_name = input_step_data.get("suggested_project_name", "")
-            
+
             if suggested_name:
                 self._project_name_var.set(suggested_name)
-                logger.debug(f"Applied suggested project name: {suggested_name}")
+                logger.debug(
+                    "Applied suggested project name: %s", suggested_name,
+                )
         except (AttributeError, KeyError, IndexError):
-            # Input step data not available
             pass
         except Exception as e:
             logger.debug(f"Could not apply suggested project name: {e}")
 
     def _auto_import_code_patterns(self) -> None:
         """Auto-import code patterns from Analysis if none exist.
-        
-        Silently imports code patterns detected during Analysis to the
-        Code Database if no patterns are currently defined.
+
+        Silently imports individual code patterns detected during
+        Analysis to the Code Database when no patterns are currently
+        defined.  Prefers ``individual_codes`` for per-code detail;
+        falls back to grouped ``code_patterns``.
         """
         # Only auto-import if no patterns exist
         if self._metadata.code_patterns:
             return
-            
+
         try:
             # Get code patterns from Analysis step (step 1)
-            analysis_step_data = self.session.get_step(1).data
+            analysis_step_data = self._get_analysis_step_data()
             analysis_results = analysis_step_data.get("analysis_results", {})
+            individual_codes = analysis_results.get("individual_codes", {})
             code_patterns = analysis_results.get("code_patterns", {})
-            
-            if not code_patterns:
-                return
-            
-            # Import patterns silently
+
+            # Prefer individual codes for per-pattern detail
             imported_count = 0
-            for category, count in code_patterns.items():
-                pattern = CodePattern(
-                    pattern=category,
-                    category=category,
-                    action="preserve",
-                    notes=f"Auto-imported from Analysis ({count} occurrences)",
-                )
-                self._metadata.code_patterns.append(pattern)
-                imported_count += 1
-            
+            if individual_codes:
+                for code_key, info in individual_codes.items():
+                    pattern = CodePattern(
+                        pattern=code_key,
+                        category=info.get("type", "Detected"),
+                        action="preserve",
+                        notes="",
+                    )
+                    self._metadata.code_patterns.append(pattern)
+                    imported_count += 1
+            elif code_patterns:
+                for category, count in code_patterns.items():
+                    pattern = CodePattern(
+                        pattern=category,
+                        category=category,
+                        action="preserve",
+                        notes="",
+                    )
+                    self._metadata.code_patterns.append(pattern)
+                    imported_count += 1
+
             if imported_count > 0:
                 self._refresh_code_pattern_list()
-                logger.info(f"Auto-imported {imported_count} code patterns from Analysis")
-                
+                logger.info(
+                    "Auto-imported %d code patterns from Analysis",
+                    imported_count,
+                )
+
         except (AttributeError, KeyError, IndexError):
             # Analysis step data not available
             pass
         except Exception as e:
-            logger.debug(f"Could not auto-import code patterns: {e}")
+            logger.debug("Could not auto-import code patterns: %s", e)
 
     def on_leave(self) -> None:
         """Called when leaving step."""
@@ -3304,53 +4302,10 @@ class CharacterDialog(tk.Toplevel):
         self._name_var = tk.StringVar()
         ttk.Entry(row2, textvariable=self._name_var).pack(side="left", fill="x", expand=True)
 
-        # Gender
-        row3 = ttk.Frame(main)
-        row3.pack(fill="x", pady=5)
-        ttk.Label(row3, text="Gender:", width=15).pack(side="left")
-        self._gender_var = tk.StringVar()
-        gender_combo = ttk.Combobox(
-            row3,
-            textvariable=self._gender_var,
-            values=["Male", "Female", "Non-binary", "Unknown"],
-            state="normal",
+        # Notes (combined: gender, role, freeform)
+        ttk.Label(main, text="Notes (gender, role, other info):").pack(
+            anchor="w", pady=(10, 0),
         )
-        gender_combo.pack(side="left", fill="x", expand=True)
-
-        # Role
-        row4 = ttk.Frame(main)
-        row4.pack(fill="x", pady=5)
-        ttk.Label(row4, text="Role:", width=15).pack(side="left")
-        self._role_var = tk.StringVar()
-        role_combo = ttk.Combobox(
-            row4,
-            textvariable=self._role_var,
-            values=[
-                "Main Character",
-                "Major Character",
-                "Minor Character",
-                "Side Character",
-                "Villain",
-                "Love Interest",
-                "Mentor",
-                "Narrator",
-                "Speaker",
-            ],
-            state="normal",
-        )
-        role_combo.pack(side="left", fill="x", expand=True)
-
-        # Speaking Style
-        row5 = ttk.Frame(main)
-        row5.pack(fill="x", pady=5)
-        ttk.Label(row5, text="Speaking Style:", width=15).pack(side="left")
-        self._style_var = tk.StringVar()
-        ttk.Entry(row5, textvariable=self._style_var).pack(
-            side="left", fill="x", expand=True
-        )
-
-        # Notes
-        ttk.Label(main, text="Notes:").pack(anchor="w", pady=(10, 0))
         self._notes_text = scrolledtext.ScrolledText(main, height=4, wrap="word")
         self._notes_text.pack(fill="x", pady=5)
 
@@ -3364,10 +4319,15 @@ class CharacterDialog(tk.Toplevel):
         """Populate fields from character."""
         self._name_var.set(self._character.name)
         self._orig_var.set(self._character.original_name)
-        self._gender_var.set(self._character.gender)
-        self._role_var.set(self._character.role)
-        self._style_var.set(self._character.speaking_style)
-        self._notes_text.insert("1.0", self._character.notes)
+        # Build combined notes from gender, role, and notes
+        notes_parts: list[str] = []
+        if self._character.gender:
+            notes_parts.append(self._character.gender)
+        if self._character.role:
+            notes_parts.append(self._character.role)
+        if self._character.notes:
+            notes_parts.append(self._character.notes)
+        self._notes_text.insert("1.0", ", ".join(notes_parts))
 
     def _on_ok(self) -> None:
         """Handle OK button."""
@@ -3379,9 +4339,9 @@ class CharacterDialog(tk.Toplevel):
         self.result = CharacterInfo(
             name=self._name_var.get().strip(),  # Translation (may be empty)
             original_name=original_name,
-            gender=self._gender_var.get().strip(),
-            role=self._role_var.get().strip(),
-            speaking_style=self._style_var.get().strip(),
+            gender="",   # Stored inside notes
+            role="",     # Stored inside notes
+            speaking_style="",
             notes=self._notes_text.get("1.0", "end-1c").strip(),
         )
         self.destroy()

@@ -221,7 +221,7 @@ def build_batch_jsonl(
         "containing an array of strings.\n"
         "The array must have exactly the same number of elements as the "
         "input 'lines' array.\n"
-        "Preserve all special tokens like __PROT__ exactly.\n"
+        "Preserve all special tokens like __PROTECTED__ exactly.\n"
         "Do not translate proper names if you are unsure, or follow the "
         "glossary if provided."
     )

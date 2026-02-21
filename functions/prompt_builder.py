@@ -530,7 +530,7 @@ def build_line_infos(
     For each entry the function determines:
 
     * **is_invalid** — ``True`` for context-marker lines, placeholder-only
-      lines (``__PROT__``, ``__DEDUP__``, ``__CUSTOM__``), or entries whose
+      lines (``__PROTECTED__``, ``__DEDUP__``, ``__CUSTOM__``), or entries whose
       ``orig`` is empty.
     * **context_marker** — propagated from the ``LineEntry.context_marker``
       field first; if that is ``None``, the ``detected_markers`` list is
@@ -551,7 +551,7 @@ def build_line_infos(
     import re as _re
 
     _PLACEHOLDER_RE = _re.compile(
-        r"^(?:__PROT__\d*|__DEDUP_\d+__|__CUSTOM__\d*)$"
+        r"^(?:__PROTECTED__\d*|__DEDUP_\d+__|__CUSTOM__\d*)$"
     )
 
     n = len(entries)

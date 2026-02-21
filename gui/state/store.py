@@ -143,7 +143,7 @@ DEFAULT_PREPROCESS_CONFIG: Dict[str, Any] = {
     "symbol_conversion_enabled": True,
     "symbol_src_lang": "ja",
     "symbol_tgt_lang": "en",
-    # PROT compression (via modi/standard_mode.py)
+    # PROTECTED compression (via modi/standard_mode.py)
     "prot_compression_enabled": True,
     # Speaker replacement (via modi/standard_mode.py)
     "speaker_replacement_enabled": False,

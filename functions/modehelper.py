@@ -15,7 +15,7 @@ The anchor-specific helpers were moved into the anchor mode module
 # Empty-line sentinel used by Pre/Post pipelines to mark lines that became empty
 EMPTY_LINE_PLACEHOLDER = "__EMPTY__"
 
-# PROT placeholder regex (detection-only helper)
+# PROTECTED placeholder regex (detection-only helper)
 PROT_REGEX = re.compile(r"__\s*PROT\s*__")
 
 

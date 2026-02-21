@@ -97,8 +97,8 @@ RULE_TOOLTIPS = {
         "  - Fullwidth → Halfwidth punctuation"
     ),
     "prot_compression": (
-        "Compresses adjacent __PROT__ tokens into indexed form:\n"
-        "  __PROT____PROT__ → __PROT_2__\n"
+        "Compresses adjacent __PROTECTED__ tokens into indexed form:\n"
+        "  __PROTECTED____PROTECTED__ → __PROTECTED_2__\n"
         "Reduces token count and improves AI handling."
     ),
     "speaker_replacement": (
@@ -115,7 +115,7 @@ RULE_TOOLTIPS = {
         "Token: Replacement placeholder (e.g., __NAME__)"
     ),
     "protect_code": (
-        "Protect Code: Replace code patterns with __PROT__.\n"
+        "Protect Code: Replace code patterns with __PROTECTED__.\n"
         "Pattern: Regex matching code to protect\n"
         "Preserved exactly and restored after translation."
     ),
@@ -411,14 +411,14 @@ class PreprocessingStep(BaseStep):
             )
         )
 
-        # PROT Compression
+        # PROTECTED Compression
         prot_frame = ttk.Frame(section)
         prot_frame.pack(fill="x", padx=10, pady=5)
 
         self._prot_var = tk.BooleanVar(value=self._config["prot_compression_enabled"])
         prot_cb = ttk.Checkbutton(
             prot_frame,
-            text="PROT Token Compression",
+            text="PROTECTED Token Compression",
             variable=self._prot_var,
             command=self._on_config_changed,
         )
@@ -567,7 +567,7 @@ class PreprocessingStep(BaseStep):
         # Info label
         info_label = ttk.Label(
             section,
-            text="Patterns to protect from translation (replaced with __PROT__).",
+            text="Patterns to protect from translation (replaced with __PROTECTED__).",
             foreground=THEME.text_secondary,
         )
         info_label.pack(anchor="w", padx=10, pady=(5, 0))
@@ -1068,7 +1068,7 @@ class PreprocessingStep(BaseStep):
                     continue
                 if active_filter == "Deduplicated" and "__DEDUP__" not in processed:
                     continue
-                if active_filter == "Protected" and "__PROT__" not in processed:
+                if active_filter == "Protected" and "__PROTECTED__" not in processed:
                     continue
                 if active_filter == "Anchored" and "anchor" not in (changes or "").lower():
                     continue
@@ -1558,14 +1558,14 @@ class PreprocessingStep(BaseStep):
             if isinstance(entry, dict):
                 manifest_patterns.append({
                     "pattern": entry.get("pattern", ""),
-                    "replacement": "__PROT__",
+                    "replacement": "__PROTECTED__",
                     "is_regex": entry.get("is_regex", True),
                     "description": entry.get("description", ""),
                 })
             else:
                 manifest_patterns.append({
                     "pattern": str(entry),
-                    "replacement": "__PROT__",
+                    "replacement": "__PROTECTED__",
                     "is_regex": True,
                     "description": "",
                 })

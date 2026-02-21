@@ -215,7 +215,7 @@ The tool has several ways to protect content:
    Examples:
    - Regex patterns: <tag.*?> (HTML tags)
    - Code snippets: `const x = 10;`
-   The tool replaces these with __PROT__ during translation
+   The tool replaces these with __PROTECTED__ during translation
    After translation, they're restored unchanged
 
 3. TEMPORARY REPLACEMENT
@@ -342,7 +342,7 @@ CONDITIONAL PROMPT INSTRUCTIONS ✓ (Enhanced - Session 14+)
   - Only shows relevant examples (reduces token usage)
   - Separate handling for related patterns (e.g., <br> vs \n)
 - Built-in conditions (15 total):
-  - **__PROT__/__COLOR__/__FONT__**: Protected placeholders with indexed variants
+  - **__PROTECTED__/__COLOR__/__FONT__**: Protected placeholders with indexed variants
   - **__DEDUP__**: AI instructed to output unchanged
   - **__TEMPREPL_X_Y__**: AI instructed to preserve format
   - **Brackets**: Preserves [name], {variable}, <tag> structures (shows only used types)
@@ -364,7 +364,7 @@ CONDITIONAL PROMPT INSTRUCTIONS ✓ (Enhanced - Session 14+)
   - Each pattern has its own human-readable example
   - Examples only shown when that specific pattern matches
   - e.g., "[name]" shown only when square brackets detected
-  - e.g., "__PROT_1__" shown only when indexed PROT detected
+  - e.g., "__PROTECTED_1__" shown only when indexed PROTECTED detected
 - Reduces placeholder corruption from ~5% to <0.1%
 
 API RESPONSE VALIDATION ✓ (Enhanced - Session 14+)
@@ -372,7 +372,7 @@ API RESPONSE VALIDATION ✓ (Enhanced - Session 14+)
 - **Pre-Translation Validation**:
   - Skip empty lines, __COMMENT__-prefixed lines
   - Skip context markers (__DIALOGUE__, __MENU__, __CHOICE__, __FILE__)
-  - Skip __DEDUP__ and __PROT__ only lines
+  - Skip __DEDUP__ and __PROTECTED__ only lines
   - Skip lines without Japanese characters
   - Skip already translated lines
   - Auto-translate symbol-only lines (…→..., 。→., etc.)
@@ -382,10 +382,10 @@ API RESPONSE VALIDATION ✓ (Enhanced - Session 14+)
   - Anchor character preservation verification
   - Uses ANCHOR_EQUIVS for fullwidth/halfwidth equivalence
 - **Placeholder Preservation** ✓ (NEW - TASK 4):
-  - Validates __PROT__, __PROT_1__, custom placeholders preserved
+  - Validates __PROTECTED__, __PROTECTED_1__, custom placeholders preserved
   - Detects missing, mangled, and extra placeholders
   - Per-line validation with targeted retry recommendations
-  - Supports indexed placeholders: __PROT_1__, __NAME_2__, etc.
+  - Supports indexed placeholders: __PROTECTED_1__, __NAME_2__, etc.
 - **Comprehensive Validation** ✓ (NEW - TASK 4):
   - Combines all checks: empty, placeholder, speaker, Japanese, anchors
   - Per-line retry reasons: EMPTY_TRANSLATION, PLACEHOLDER_MISSING,
@@ -451,17 +451,15 @@ GLOSSARY & AUTOMATIC DETECTION
 - Optional LLM-based enhancement: Get AI-suggested translations and gender for names
 - Helps AI translator maintain consistency across files
 
-GAME SUMMARY & PROJECT CONTEXT (NEW)
+GAME SUMMARY & PROJECT CONTEXT
 - Provide story context to help the AI understand your game/story
-- Edit `config/game_summary.txt` with:
-  - Title and setting information
-  - Main character descriptions and relationships
-  - Plot summary (avoid spoilers for later sections)
-  - Tone and style notes (comedic, dramatic, formal, etc.)
-- Summary is automatically injected into the system prompt
+- Summary widget in Information Step (Step 3), height=2, with "🔄 Restore Default" button
+- Default text: "Write a short summary of the work here. Mentioning protagonist(s) and Point of View is not necessary and will be automatically provided."
+- Summary stored in manifest key `Summary`, auto-saved/loaded via manifest binding
+- Summary is automatically injected into the system prompt by translate.py
 - Helps AI maintain consistent characterization and tone
 - Project configuration stored per-project in manifest:
-  - Project name, genre, tone
+  - Project name (from Input step, not folder name), genre, tone
   - Custom style instructions
   - API profile selection (different models for different purposes)
 - Multiple API profiles supported:
@@ -469,19 +467,24 @@ GAME SUMMARY & PROJECT CONTEXT (NEW)
   - Use powerful models for actual translation
   - Keep API keys secure (never stored in manifest)
 
-TRANSLATION STYLE GUIDE (NEW - TASK 6)
-- Customize translation style preferences via `config/translation_style.txt`
-- Style sections include:
-  - **Formality Level**: formal, casual, or mixed (match source)
-  - **Honorifics Handling**: keep (-san, -chan), remove, or localize (Mr., Ms.)
-  - **Cultural References**: preserve, localize, or explain inline
-  - **Dialogue Style**: maintain distinct speech patterns, preserve verbal tics
-  - **Specific Rules**: project-specific terminology choices
-  - **Things to Avoid**: what the translator should NOT do
-- Comment lines (starting with #) are ignored
-- Automatically injected into system prompt after game summary
-- Truncated at 2000 characters with warning if too long
+TRANSLATION STYLE GUIDE
+- Customize translation style and tone via Information Step preset system
+- Style and Tone each have:
+  - Dropdown with built-in presets (Natural, Formal, Casual, etc.) and user-saved presets
+  - Custom text field (ScrolledText, height=1) for free-form override
+  - Save/Delete buttons for managing user presets
+  - User presets stored in `user/presets/style_presets.json` and `tone_presets.json`
+- Style/Tone values stored in manifest keys `CustomStyle`, `CustomTone`, `StylePreset`, `TonePreset`
+- translate.py `_build_system_prompt_from_manifest()` reads from manifest and appends to system prompt as `Style: ...` and `Tone: ...`
 - Helps maintain consistent translation style across the project
+
+SYSTEM INSTRUCTIONS
+- Provide custom LLM instructions via Information Step preset system
+- Preset dropdown: Default (loads from `default/example.txt`), Custom (free-form), or user-saved presets
+- Save/Delete buttons for managing user presets stored in `user/presets/system_instructions_presets.json`
+- Default text automatically populated when empty on step entry
+- Instructions stored in manifest key `Prompt`, preset name in `SIPreset`
+- translate.py `_build_system_prompt_from_manifest()` reads `Prompt` from manifest and includes in system prompt
 
 ROLLING CONTEXT (NEW - TASK 7)
 - Provides previous lines as context for each translation batch
@@ -681,13 +684,13 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - Speaker detection: ALL speakers listed with frequency counts (no truncation)
   - **Findings Table Enhancements:**
     - Individual code patterns shown with normalized form, occurrence count, type, and examples in Details
-    - Speaker rows include sample dialogue line in Details column
-    - **Count Filter:** Filter bar includes Count field supporting `<X`, `>X`, `<=X`, `>=X`, `=X` syntax
+    - Speaker rows show character glossary info (translation, notes) in Details column
+    - **Count Filter:** Filter bar includes Count field supporting `<X`, `>X`, `<=X`, `>=X`, `=X` syntax; toggle button (≥/≤) switches default bare-number comparison mode
   - **Findings Table Context Menu (Phase 59.3-59.5):**
     - Category-aware right-click menu (categories: "Speakers", "Code Patterns")
-    - **Speaker actions:** Add to Glossary, Set Role (Protagonist/Love Interest/Major/Minor), Set Gender (Male/Female), Set Translation, Add to Code Glossary, Copy Name, Select All with Speaker (filter)
-    - **Code Pattern actions:** Preserve/Remove/Translate toggles (persisted to Code Database), Replace options (Generic/Custom), Type classification (Name/Text/Number/Invisible), Set as Protagonist (assigns temp replacement name), Copy Pattern, Show Lines with Pattern (filter)
-    - **Protagonist Variable Support:** Code patterns marked "Is a Name" get added to glossary with temporary replacement; "Set as Protagonist" assigns single-token names (John/Jane Smith)
+    - **Speaker actions:** Add to Glossary, Set Role (Protagonist/Love Interest/Major/Minor), Set Gender (Male/Female/Non-Binary/Transwoman/Transman/Other/Unknown), Set Translation, Add to Code Glossary, Copy Name, Select All with Speaker (filter); all actions write to **character glossary** (manifest `characters` key) not project glossary entries
+    - **Code Pattern actions:** Preserve/Remove/Translate toggles (persisted to Code Database), Replace options (Generic/Custom), Type classification (Name/Text/Number/Invisible), Nameable... (assigns temp replacement name for Character/Company/Location), Copy Pattern, Show Lines with Pattern (filter)
+    - **Nameable Dialog:** Code patterns marked "Is a Name" get the replacement name added to character glossary and the code pattern to Custom Placeholders in Preprocessing; "Nameable..." opens a dialog with Character (John/Jane/Alex Smith), Company (Acme/Globex/Initech Corp), and Location (Millfield/Oakville/Riverside) modes with gender-aware name selection
     - Generic menu for mixed selection (Copy, Select All)
   - **Ignored Patterns (Phase 59.7):** Filter patterns from code detection results
   - Export findings to CSV
@@ -747,9 +750,10 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - All helpers mark manifest dirty on save, return defaults on missing
   - **Special Format Helpers (Task 22.2):**
     - Complex data structure helpers in `functions/manifest_fields.py`
-    - Character Notes: `save_character_notes()` / `load_character_notes()`
+    - Glossary (Characters): `save_character_notes()` / `load_character_notes()`
       - Fields: name, original_name, gender, role, notes, speaking_style
       - Supports CharacterInfo dataclass or plain dicts
+      - Gender/Role merged into Notes column in UI for parity with Glossary Settings
     - Code Glossary: `save_code_glossary()` / `load_code_glossary()`
       - Fields: pattern, category, action (preserve/translate/remove), example, notes
       - Supports CodePattern dataclass or plain dicts
@@ -777,9 +781,9 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - **Information Tab Manifest Integration (Phase 23):**
     - All Information tab fields bound to manifest for persistence:
       - **Basic Metadata (Task 23.1):** ProjectName, Title, Genre, SourceLanguage, TargetLanguage, Summary
-      - **Style and Tone (Task 23.2):** StylePreset, CustomStyle, TonePreset, CustomTone
-      - **Character Notes (Task 23.3):** Save/load via special format helpers
-      - **Code Glossary (Task 23.3):** Save/load via special format helpers
+      - **Style and Tone (Task 23.2, updated Phase 60):** StylePreset (combobox → manifest), CustomStyle (ScrolledText → manifest), TonePreset, CustomTone
+      - **Glossary / Characters (Task 23.3):** Save/load via special format helpers
+      - **Code Database (Task 23.3):** Save/load via special format helpers
       - **Prompt (Task 23.4):** Renamed from "Additional Notes", moved to left column
     - Changes auto-save to manifest on widget interaction
     - Values auto-load on step entry via `_load_from_manifest_bindings()`
@@ -791,8 +795,9 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
       - New Project: Start fresh with file loading
       - Load Existing: Open project browser (sorted by date, latest first)
       - Start Fresh: Begin without loading project
-      - **Auto-load checkbox:** "Automatically load last project on startup" (Phase 58.11)
-        - Only shown when Resume option is available
+      - **Auto-load checkbox:** "Automatically load last project on startup" (Phase 58.11, updated Phase 60)
+        - Always visible regardless of whether Resume option is available
+        - Loads current INI setting on display; saves immediately on toggle
         - Persists via ini_manager.set_restore_on_launch()
         - GlobalOptions syncs with this setting in [recent] section
     - Saves last manifest path on app close for next launch
@@ -838,7 +843,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - Phase 14: Polish & Integration ✅ Complete
   - **🎉 GUI v2 COMPLETE! All 15 phases implemented.**
 - **Preprocessing Tab (Phase 5):**
-  - Standard rules with toggles: Deduplication, Ellipsis, Symbol Conversion, PROT Compression
+  - Standard rules with toggles: Deduplication, Ellipsis, Symbol Conversion, PROTECTED Compression
   - Deduplication threshold control (0=off, 1=all repeats, N=N+ consecutive)
   - Custom Placeholder section with add/edit/remove and pattern→token mapping
   - Protect Code Patterns section with regex patterns
@@ -947,7 +952,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Issue count display per line
   - **Validation Rules Panel:**
     - 6 default rules with enable/disable toggles:
-      1. Placeholder Preservation (ERROR) - Check __PROT__ preserved
+      1. Placeholder Preservation (ERROR) - Check __PROTECTED__ preserved
       2. Anchor Preservation (WARNING) - Check < > [ ] { } chars
       3. Japanese Character Detection (WARNING) - Flag remaining Japanese
       4. Speaker Format (ERROR) - Check Name: "Dialogue" preserved
@@ -1019,8 +1024,8 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Flag for review - Issues marked for manual inspection
     - Queue for retry - Failed lines added to retry queue
   - **Recovery Types (RecoveryType enum - 10 types):**
-    - PLACEHOLDER_CASE - Fix __prot__ → __PROT__
-    - PLACEHOLDER_MANGLED - Fix __PR OT__ → __PROT__
+    - PLACEHOLDER_CASE - Fix __PROTECTED__ → __PROTECTED__
+    - PLACEHOLDER_MANGLED - Fix __PR OT__ → __PROTECTED__
     - PLACEHOLDER_MISSING - Restore missing placeholders
     - BRACKET_BALANCE - Fix unbalanced brackets
     - QUOTE_BALANCE - Fix unbalanced quotes
@@ -1326,16 +1331,21 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - **Enums:**
     - InferenceStatus: IDLE, RUNNING, SUCCESS, FAILED
     - MetadataField: PROJECT_NAME, SUMMARY, GENRE, STYLE, TONE, NOTES, SOURCE_LANG, TARGET_LANG
-    - StylePreset: NATURAL, LITERAL, LOCALIZING, FORMAL, CASUAL, TECHNICAL, POETIC, CUSTOM
-    - TonePreset: NEUTRAL, CASUAL, FORMAL, DRAMATIC, COMEDIC, SERIOUS, WHIMSICAL, DARK, CUSTOM
+  - **Style/Tone Preset System (Phase 60):**
+    - DEFAULT_STYLE_PRESETS: Built-in presets (Natural, Literal, Localizing, Formal, Casual, Technical, Poetic) with full LLM prompt text
+    - DEFAULT_TONE_PRESETS: Built-in presets (Neutral, Casual, Formal, Dramatic, Comedic, Serious, Whimsical, Dark) with full LLM prompt text
+    - CUSTOM_PRESET_NAME: "Custom" sentinel — cannot be overwritten or deleted
+    - User presets stored in `user/presets/style_presets.json` and `user/presets/tone_presets.json`
+    - `_load_presets()` / `_save_user_presets()` / `_delete_user_presets_file()` for JSON persistence
+    - `_unique_preset_name()` auto-appends numbers for duplicate names (e.g. "My Style", "My Style 2")
+    - Presets are string-based (not enums); `style_preset: str = "Natural"`, `tone_preset: str = "Neutral"`
+    - Legacy migration: `from_dict` capitalizes old lowercase enum values
   - **Data Classes:**
     - CharacterInfo: name, gender, role, notes (with to_dict/from_dict)
-    - ProjectMetadata: project_name, summary, genre, style, tone, notes, source_lang, target_lang, characters list
+    - ProjectMetadata: project_name, summary, genre, style_preset (str), tone_preset (str), notes, source_lang, target_lang, characters list
     - InferenceOptions: infer_summary, infer_characters, infer_style, sample_size, api_profile
     - InferenceResult: success, metadata, error, duration
   - **Helper Constants:**
-    - STYLE_DESCRIPTIONS: Detailed descriptions for each StylePreset
-    - TONE_DESCRIPTIONS: Detailed descriptions for each TonePreset
     - COMMON_GENRES: List of common translation project genres
     - SOURCE_LANGUAGES: Japanese, Chinese, Korean, etc.
     - TARGET_LANGUAGES: English, Spanish, German, French, etc.
@@ -1345,16 +1355,27 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Genre dropdown with common options
     - Custom notes field
     - Source/target language dropdowns
-  - **Character Notes Panel:**
-    - Table with columns: Name, Gender, Role, Notes
-    - Add/Edit/Remove character buttons
+  - **Glossary Panel (formerly Character Notes) — right column:**
+    - Moved from left column to right column for grouping with other glossary/database widgets
+    - Table with columns: Original, Translation, Notes (Gender/Role merged into Notes for parity with Glossary Settings)
+    - Treeview height=8 for taller tables; grid layout with sticky="nsew" for viewport filling
+    - Collapsible: Collapse/Display toggle button hides content while keeping header visible
+    - CharacterDialog with Notes field combining gender, role, other info
+    - Add/Edit/Remove character buttons with multi-select support (selectmode="extended")
+    - Confirmation dialog with "Don't ask again" option for removal
     - Import from glossary functionality
     - Export character list support
-  - **Style & Tone Panel:**
-    - Style preset dropdown with descriptions
-    - Tone preset dropdown with descriptions
-    - Custom style/tone text areas when "Custom" selected
-    - Live preview of combined style prompt
+    - Gender inference progress dialog: shows "Checking 'name'" label, progress bar, and count (X / Y)
+  - **Style & Tone Panel (Phase 60):**
+    - Style preset dropdown (combobox) with full list of built-in + user presets
+    - Editable ScrolledText field (height=1) showing the preset's LLM prompt text
+    - On step entry, text fields auto-populate from preset if empty (`_ensure_style_tone_text()`)
+    - Save button: saves current text as a new or updated user preset (auto-numbers duplicates)
+    - Delete button (width=10): removes user presets (built-in presets cannot be deleted)
+    - Tone preset dropdown + ScrolledText (height=1) + Save/Delete buttons (same pattern as Style)
+    - "Custom" preset always available, cannot be overwritten or deleted
+    - Confirmation dialog with "Don't ask again" for preset deletion
+    - Presets reset button in Global Options → Session section
   - **JSON View Panel:**
     - Collapsible raw JSON editor
     - Syntax highlighting (optional)
@@ -1376,12 +1397,28 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Widget renames: "Summary / Description" → "Summary", "Prompt" → "System Instructions", "Code Glossary" → "Code Database"
     - Genre dialog ADD behavior: appends to existing genres instead of replacing
     - "Other" language custom input via simpledialog when "Other" selected in Source/Target Language
-    - Style/Tone dropdown graying: preset dropdown disabled when custom field has content
+    - Style/Tone preset system (Phase 60): replaced graying with full preset management (see Style & Tone Panel above)
     - Glossary table inline editing: 4-column Treeview (Active, Original, Translation, Notes) with double-click editing
-    - Import from Analysis: code patterns import as "Detected" category; speakers import as glossary entries
+    - Import from Analysis: choice dialog (Top N with spinbox / All) for each import; code patterns import as "Detected" category; speakers import as character entries; non-destructive merge (skips duplicates); reads data from manifest via `_get_analysis_step_data()` helper
     - Code Database actions: Preserve ("Do not translate"), Translate ("Translate as"), Remove (filtered from prompt)
+    - Code Database mass removal: multi-select (selectmode="extended") with batch reverse-index deletion
+    - Code Database auto-populate: prefers `individual_codes` (per-code detail) over grouped `code_patterns` when available
     - Global Glossary and Database widget: mode switch, search/filter, import/export JSON/CSV, stored in user/ directory
     - Selective glossary: Active column with ✓/✗ toggle, only active entries included in prompt
+    - **Collapsible right-column widgets**: Glossary, Glossary Settings, Code Database, and Global Glossary/Database each have a Collapse/Display toggle button; collapsed widgets hide content via `grid_remove()`, expanded widgets share space via row weight=1; `_reconfigure_right_column_weights()` dynamically adjusts grid weights
+    - **Taller tables**: All right-column Treeview widgets use height=8 (up from 4-5) with `sticky="nsew"` and parent `rowconfigure(weight=1)` for vertical expansion; canvas `<Configure>` binding stretches inner frame to viewport height so tables fill available space when window is maximized
+    - **Glossary moved to right column**: Glossary (formerly Character Notes) relocated from left column to right column row 0, grouped with Glossary Settings (row 1), Code Database (row 2), and Global Database (row 3)
+    - **Style/Tone text display fix**: `_ensure_style_tone_text()` populates text fields from preset when empty on step entry; `_populate_form()` also falls back to preset text
+    - **Style/Tone single-line height**: ScrolledText height reduced from 3 to 1 for compact display
+    - **Delete button width**: Style/Tone Delete buttons widened from width=8 to width=10 to prevent text clipping
+  - **Confirmation Opt-Out System (Phase 60):**
+    - `gui/helpers/confirmations.py`: reusable confirmation dialog with "Don't ask again" checkbox
+    - `confirm_action(parent, key, title, message)`: custom Toplevel dialog returning True/False
+    - Suppressed confirmations stored in INI `[confirmations]` section via `is_suppressed()` / `suppress()`
+    - `reset_all_suppressions()`: clears all suppression keys (removes `[confirmations]` section)
+    - Used for: character removal, code pattern removal, preset deletion
+    - Recovery: Global Options → Session → "Reset All Confirmation Dialogs" button
+    - Also in Global Options → Session: "Reset Style & Tone Presets" button (deletes user preset JSON files)
   - **Preprocessing & Postprocessing (Phase 42):**
     - Anchoring Widget Redesign: 5-column Treeview (Pattern, Action, Anchor Spec, RegEx, Description) replacing old simple fields
     - Custom Placeholders RegEx: _RuleDialog `show_regex` parameter, `regex_result` attribute, regex checkbox UI
@@ -1546,6 +1583,8 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Theme dropdown (light, dark, system)
     - Restore on launch toggle
     - Confirm on exit toggle
+    - Confirmation Dialogs: "Reset All Confirmation Dialogs" button (Phase 60)
+    - Translation Presets: "Reset Style & Tone Presets" button (Phase 60)
   - **Safety Section:**
     - Ban tokens entry (comma-separated)
     - Common tokens quick-add buttons
@@ -1763,8 +1802,8 @@ PERSISTENT API LOGGING (Implemented)
 AUTOMATIC LINE RECOVERY (Planned)
 - Fix malformed translations without retrying when possible
 - **Recovery Strategies (No LLM Required):**
-  - **Placeholder Case Fix**: `__prot__` → `__PROT__`
-  - **Placeholder Whitespace Fix**: `__ PROT __` → `__PROT__`
+  - **Placeholder Case Fix**: `__PROTECTED__` → `__PROTECTED__`
+  - **Placeholder Whitespace Fix**: `__ PROTECTED __` → `__PROTECTED__`
   - **Quote Balancing**: Add missing closing quotes
   - **Bracket Matching**: Restore missing [], {}, <> pairs
   - **Speaker Format Fix**: Add missing colon or quotes
@@ -1921,7 +1960,7 @@ MOCK TRANSLATION — FLAW TESTING (Implemented)
 - Standalone module: `functions/mock_translator.py`
 - Integrated via mock routing in `functions/api_client.py` (model == "mock")
 - **Deliberate flaw injection** to validate recovery (Phase 56):
-  - Malformed placeholders (missing/added characters in `__PROT__` tokens)
+  - Malformed placeholders (missing/added characters in `__PROTECTED__` tokens)
   - Anchor manipulation (removed/added at wrong positions)
   - Code intrusion (replacements inside code boundaries)
   - Character surgery (random character insertion/deletion)
@@ -1985,7 +2024,7 @@ THE WORKFLOW STAGES
 
 2. PRE-PROCESSING (prepro)
    - Text after protection rules are applied
-   - Code replaced with placeholders like __PROT_0__
+   - Code replaced with placeholders like __PROTECTED_0__
    - Special characters normalized
 
 3. TRANSLATION (tl)
@@ -2051,8 +2090,8 @@ The v3.0 manifest format extends v2.0 with GUI state management:
 - `code_patterns`: Protected regex patterns and custom placeholders
 
 **File Menu Operations:**
-- **New Project**: Creates fresh manifest, clears all state
-- **Open Project**: Loads existing manifest.json, restores all step states
+- **New Project**: Creates fresh manifest, clears all state, resets to Information tab via `on_enter()` (Phase 60)
+- **Open Project**: Checks for unsaved changes ("Save?"/"Don't Save"/"Cancel" dialog) before loading a different manifest; restores all step states (Phase 60)
 - **Open Files**: Load source files into current project
 - **Save (Ctrl+S)**: Manually save current manifest state
 
@@ -2435,19 +2474,20 @@ Content Detection:
 - Detected code lines (HTML, escape sequences, brackets)
 - Individual code patterns with occurrence count, type classification, and examples
 - Detected speaker names (ALL speakers listed, ordered by frequency)
-- Sample dialogue line for each speaker in the Details column
+- Character glossary info (translation, notes) for each speaker in the Details column
 
 Findings Table:
 - All detected speakers, code patterns, languages, and duplicates in one table
-- Right-click speakers: Add to Glossary, Set Role/Gender, Set Translation
-- Right-click code patterns: Preserve/Remove/Translate, Set Type, Set as Protagonist
-- Count Filter: type `>10` or `<5` in the Count field to filter by occurrence count
+- Right-click speakers: Add to Glossary, Set Role/Gender (expanded: Non-Binary/Transwoman/Transman), Set Translation — writes to character glossary (manifest `characters` key)
+- Right-click code patterns: Preserve/Remove/Translate, Set Type, Nameable... (Character/Company/Location)
+- Count Filter: type `>10` or `<5` in the Count field, or use ≥/≤ toggle button for bare numbers
 - Text Filter: search across all columns with substring matching
 
-Protagonist Variable Support:
-- Code patterns like `{{主人公}}` can be marked "Is a Name" or "Set as Protagonist"
-- Protagonist gets a single-token temporary replacement (John/Jane Smith)
-- Replacement is stored in glossary for use in preprocessing
+Nameable Dialog:
+- Code patterns like `{{主人公}}` can be marked "Is a Name" or opened via "Nameable..." dialog
+- Three modes: Character (John/Jane/Alex Smith), Company (Acme/Globex/Initech Corp), Location (Millfield/Oakville/Riverside)
+- Gender-aware name selection for Character mode (Male/Female/Non-Binary)
+- Replacement name is stored in character glossary; code pattern is written to Custom Placeholders in Preprocessing for pattern protection and replacement
 
 Automatic Glossary Suggestions:
 - Speaker names with detected gender and pronouns
@@ -2827,7 +2867,7 @@ CherryAI can be run from the command line for automation or headless operation.
    System prompts are automatically optimized to reduce token usage:
    - Empty sections (game summary, glossary, etc.) are skipped
    - Conditional instructions are concise (1-2 lines each)
-   - Protected code uses short `__PROT__` placeholder
+   - Protected code uses short `__PROTECTED__` placeholder
    - Modular prompt structure: base_instructions.txt, output_examples.txt
 
 3. Diagnostic Test

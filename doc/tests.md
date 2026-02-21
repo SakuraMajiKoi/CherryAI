@@ -1878,7 +1878,7 @@ Phase 23 tests for InformationStep manifest integration. Tests all fields bound 
 
 | Test | Purpose |
 |------|---------|
-| `test_binding_count_after_task_232` | 10 bindings after Tasks 23.1+23.2 |
+| `test_binding_count_after_task_232` | ≥10 bindings after Tasks 23.1+23.2 (now 12 with SIPreset) |
 
 #### TestCharacterNotesManifest (6 tests)
 
@@ -1979,8 +1979,8 @@ Phase 24 tests for PreprocessingStep manifest integration. Tests all preprocessi
 
 | Test | Purpose |
 |------|---------|
-| `test_prot_binding_created` | PROT binding exists |
-| `test_prot_saves_to_manifest` | PROT saves when changed |
+| `test_prot_binding_created` | PROTECTED binding exists |
+| `test_prot_saves_to_manifest` | PROTECTED saves when changed |
 
 #### TestSpeakerReplacementField (3 tests)
 
@@ -2185,7 +2185,7 @@ Comprehensive tests for all modi modules verifying attributes, functions, and op
 | Test | Purpose |
 |------|---------|
 | `test_attributes` | Protect Code has NAME, PHASE, PRIORITY=20 |
-| `test_apply_pre_replaces_with_prot` | Replaces with __PROT__ |
+| `test_apply_pre_replaces_with_prot` | Replaces with __PROTECTED__ |
 | `test_apply_post_restores_values` | Restores protected values |
 
 #### TestCustomPlaceholderMode (3 tests)
@@ -2659,7 +2659,7 @@ Thank you.
 | test_gui_layout.py | 12 | 2-column layout tests (TASK 18.2) |
 | test_subtask_tracking.py | 14 | Subtask progress tracking (TASK 18.3) |
 | test_code_glossary_display.py | 12 | Code glossary widget (TASK 18.5) |
-| test_information_step_phase41.py | 56 | Information step Phase 41 UI enhancements |
+| test_information_step_phase41.py | 57 | Information step Phase 41 UI enhancements |
 | test_preprocess_phase42.py | 80 | Preprocessing & Postprocessing Phase 42 |
 | test_translation_phase43.py | 48 | Translation Tab Overhaul Phase 43 |
 | test_validation_shared.py | 24 | Shared Validation Phase 44 |
@@ -2754,7 +2754,7 @@ The formatting (dividers, headers) is LOG-ONLY and not part of the actual API re
 | G | Log-Only Formatting Verified | ✅ Documented |
 | H | Output Examples Section | ✅ Separate file |
 | I | Section Ordering Updated | ✅ Summary before examples |
-| J | Shorter __PROT__ Placeholder | ✅ Already using __PROT__ |
+| J | Shorter __PROTECTED__ Placeholder | ✅ Already using __PROTECTED__ |
 | K | Content Warning System | ✅ check_content_warning() |
 
 **Tests Passing:**
@@ -3380,7 +3380,7 @@ and symbol normalization.
 | `test_hash_lines_not_comments` | # lines treated as normal text |
 | `test_equals_line` | = lines treated as normal text |
 | `test_dedup_only` | Skip __DEDUP__ only lines |
-| `test_prot_only` | Skip __PROT__ only lines |
+| `test_prot_only` | Skip __PROTECTED__ only lines |
 | `test_already_translated` | Skip lines with translation |
 | `test_no_japanese` | Skip lines without Japanese |
 | `test_symbol_only_auto_translate` | Auto-translate symbols |
@@ -3469,7 +3469,7 @@ Conditional prompt system tests for pattern-triggered LLM instruction injection 
 | Test | Purpose |
 |------|---------|
 | `test_builtin_conditions_exist` | All 15 builtin conditions present |
-| `test_prot_token_matches` | __PROT__, __PROT_1__, __COLOR__, __FONT__ detection |
+| `test_prot_token_matches` | __PROTECTED__, __PROTECTED_1__, __COLOR__, __FONT__ detection |
 | `test_prot_token_no_match` | No match without valid placeholders |
 | `test_dedup_token_matches` | __DEDUP__ pattern detection |
 | `test_brackets_matches` | [], {}, <tag> bracket detection |
@@ -3484,7 +3484,7 @@ Conditional prompt system tests for pattern-triggered LLM instruction injection 
 |------|---------|
 | `test_init_loads_builtins` | Manager loads all builtins on init |
 | `test_evaluate_batch_empty` | Empty batch returns empty list |
-| `test_evaluate_batch_with_prot` | Batch with PROT triggers condition |
+| `test_evaluate_batch_with_prot` | Batch with PROTECTED triggers condition |
 | `test_evaluate_batch_multiple_conditions` | Multiple conditions in batch |
 | `test_evaluate_batch_sorted_by_priority` | Results sorted by priority (high first) |
 | `test_build_conditional_instructions_empty` | No conditions = empty string |
@@ -3517,20 +3517,20 @@ Conditional prompt system tests for pattern-triggered LLM instruction injection 
 
 | Test | Purpose |
 |------|---------|
-| `test_prot_only_shows_matched_types` | __PROT__ shows only matched placeholder types |
+| `test_prot_only_shows_matched_types` | __PROTECTED__ shows only matched placeholder types |
 | `test_brackets_only_shows_used_types` | Brackets shows only detected bracket types |
 | `test_brackets_shows_multiple_types` | Multiple bracket types show all examples |
 | `test_br_vs_newline_distinction` | <br> and \\n have separate conditions |
 | `test_newline_escape_detection` | \\n newline escapes detected separately |
-| `test_color_font_prot_differentiated` | __COLOR__, __FONT__, __PROT__ show correct examples |
-| `test_indexed_placeholders_shown` | __PROT_1__, __PROT_2__ show indexed examples |
+| `test_color_font_prot_differentiated` | __COLOR__, __FONT__, __PROTECTED__ show correct examples |
+| `test_indexed_placeholders_shown` | __PROTECTED_1__, __PROTECTED_2__ show indexed examples |
 | `test_jp_brackets_conversion_examples` | Japanese brackets show conversion examples |
 
 ---
 
 ### dev/test_standard_mode.py (37 tests)
 
-Standard mode tests for symbol conversion, ellipsis compression, PROT handling, and integration.
+Standard mode tests for symbol conversion, ellipsis compression, PROTECTED handling, and integration.
 
 #### TestNormalizeLang (4 tests)
 
@@ -3585,10 +3585,10 @@ Standard mode tests for symbol conversion, ellipsis compression, PROT handling, 
 
 | Test | Purpose |
 |------|---------|
-| `test_compress_single_prot` | Single PROT (non-adjacent) |
+| `test_compress_single_prot` | Single PROTECTED (non-adjacent) |
 | `test_compress_adjacent_prots` | Adjacent PROTs cluster |
-| `test_compress_multiple_clusters` | Multiple PROT clusters |
-| `test_no_prot` | No PROT → no change |
+| `test_compress_multiple_clusters` | Multiple PROTECTED clusters |
+| `test_no_prot` | No PROTECTED → no change |
 | `test_decompress_single` | Restore single cluster |
 | `test_roundtrip` | Compress → decompress roundtrip |
 
@@ -4241,7 +4241,7 @@ modi/ modules via mode_adapter instead of hardcoded patterns.
 | TestModeAdapterImports | 8 | Module exports all functions |
 | TestEllipsisCompression | 4 | Ellipsis compression via modi |
 | TestSymbolConversion | 6 | Symbol conversion via modi |
-| TestProtCompression | 4 | PROT compression via modi |
+| TestProtCompression | 4 | PROTECTED compression via modi |
 | TestProtectCode | 4 | Protect code patterns |
 | TestCustomPlaceholder | 4 | Custom placeholders |
 | TestPreprocessingPipeline | 3 | Unified pipeline |
@@ -4633,7 +4633,7 @@ postprocessing recovery, wordwrap, game update detection, and import translation
 | `test_context_marker_with_whitespace` | Whitespace around markers |
 | `test_context_marker_in_text_not_matched` | Embedded markers not caught |
 | `test_dedup_still_skipped` | __DEDUP__ unchanged |
-| `test_prot_still_skipped` | __PROT__ unchanged |
+| `test_prot_still_skipped` | __PROTECTED__ unchanged |
 | `test_empty_still_skipped` | Empty lines unchanged |
 | `test_batch_validation_new_markers` | Batch categorizes new types |
 
@@ -4666,7 +4666,7 @@ postprocessing recovery, wordwrap, game update detection, and import translation
 
 | Test | Purpose |
 |------|---------|
-| `test_protect_code_rpg_maker` | RPG Maker codes replaced with __PROT__ |
+| `test_protect_code_rpg_maker` | RPG Maker codes replaced with __PROTECTED__ |
 | `test_protect_code_records_prepro_ops` | Captured values recorded in prepro_ops |
 | `test_protect_code_from_test_file` | Code protection on test_code_patterns.txt |
 
@@ -4693,7 +4693,7 @@ postprocessing recovery, wordwrap, game update detection, and import translation
 | `test_comment_lines_not_filtered` | __COMMENT__ not filtered by build_line_infos |
 | `test_context_markers_invalid` | Context marker lines marked is_invalid=True |
 | `test_context_type_propagation` | Context type propagates to subsequent lines |
-| `test_placeholder_lines_invalid` | __PROT__ and __DEDUP__ lines marked invalid |
+| `test_placeholder_lines_invalid` | __PROTECTED__ and __DEDUP__ lines marked invalid |
 | `test_empty_lines_invalid` | Empty/whitespace lines marked invalid |
 | `test_prepro_preferred_over_orig` | prepro field takes priority over orig |
 | `test_file_end_does_not_propagate` | file_end resets context to unknown |
@@ -4706,7 +4706,7 @@ postprocessing recovery, wordwrap, game update detection, and import translation
 | `test_basic_request_formation` | Valid lines form translation requests |
 | `test_menu_choice_split` | Menu/choice blocks get separate requests |
 | `test_file_boundary_split` | File boundaries split into sections |
-| `test_invalid_lines_excluded` | __PROT__, __DEDUP__, empty excluded |
+| `test_invalid_lines_excluded` | __PROTECTED__, __DEDUP__, empty excluded |
 | `test_from_test_game_files` | Requests from actual test_game content |
 
 #### TestTask5_PromptAssembly (3 tests)
@@ -4722,7 +4722,7 @@ postprocessing recovery, wordwrap, game update detection, and import translation
 | Test | Purpose |
 |------|---------|
 | `test_basic_translation` | MockTranslator replaces Japanese with NATO-phonetic words |
-| `test_preserves_prot_tokens` | __PROT__ tokens preserved through translation |
+| `test_preserves_prot_tokens` | __PROTECTED__ tokens preserved through translation |
 | `test_empty_and_whitespace` | Empty/whitespace lines pass through unchanged |
 | `test_deterministic_output` | Same input produces same output each time |
 | `test_batch_translate` | translate_batch processes list of lines |
@@ -4759,8 +4759,8 @@ postprocessing recovery, wordwrap, game update detection, and import translation
 
 | Test | Purpose |
 |------|---------|
-| `test_prot_token_restore` | __PROT__ tokens restored to original values |
-| `test_prot_restore_multiple` | Multiple __PROT__ tokens restored correctly |
+| `test_prot_token_restore` | __PROTECTED__ tokens restored to original values |
+| `test_prot_restore_multiple` | Multiple __PROTECTED__ tokens restored correctly |
 
 #### TestTask7_DedupRestore (1 test)
 
@@ -5116,8 +5116,8 @@ The following tests will be needed for upcoming features:
 | | `test_line_count_mismatch_fails` | Count mismatch rejected |
 | | `test_empty_response_fails` | Empty API response rejected |
 | | `test_encoding_validation` | UTF-8 encoding verified |
-| TestPlaceholderValidation | `test_prot_count_match` | __PROT__ count verified |
-| | `test_prot_count_mismatch` | Missing __PROT__ detected |
+| TestPlaceholderValidation | `test_prot_count_match` | __PROTECTED__ count verified |
+| | `test_prot_count_mismatch` | Missing __PROTECTED__ detected |
 | | `test_prot_format_corruption` | __PR OT__ (with space) detected |
 | | `test_dedup_unchanged` | __DEDUP__ lines must be unchanged |
 | | `test_temprepl_preserved` | __TEMPREPL_X_Y__ exact match |
@@ -5378,8 +5378,8 @@ preservation, comprehensive translation validation, and per-line retry logic.
 
 | Test Class | Test | Purpose |
 |------------|------|---------|
-| TestExtractPlaceholders | `test_single_prot` | Extract __PROT__ |
-| | `test_prot_with_index` | Extract __PROT_1__ style |
+| TestExtractPlaceholders | `test_single_prot` | Extract __PROTECTED__ |
+| | `test_prot_with_index` | Extract __PROTECTED_1__ style |
 | | `test_custom_placeholders` | Extract __NAME__ style |
 | | `test_mixed_placeholders` | Mixed placeholder types |
 | | `test_no_placeholders` | Empty for no placeholders |
@@ -9129,7 +9129,7 @@ recovery pipeline. Uses `dev/example/example.txt` as test fixture.
 |------|---------|
 | `test_translate_single_line` | Single line mock translation works |
 | `test_batch_preserves_line_count` | Output count matches input |
-| `test_placeholder_preserved` | `__PROT__` tokens kept intact |
+| `test_placeholder_preserved` | `__PROTECTED__` tokens kept intact |
 | `test_deterministic_with_seed` | Same seed produces same output |
 | `test_empty_line_preserved` | Empty lines pass through unchanged |
 | `test_whitespace_only_preserved` | Whitespace-only lines pass through |
@@ -9138,7 +9138,7 @@ recovery pipeline. Uses `dev/example/example.txt` as test fixture.
 
 | Test | Purpose |
 |------|---------|
-| `test_prot_token_preserved` | `__PROT_0__` survives translation |
+| `test_prot_token_preserved` | `__PROTECTED_0__` survives translation |
 | `test_dedup_token_preserved` | `__DEDUP_1__` survives translation |
 | `test_custom_token_preserved` | `__CUSTOM_2__` survives translation |
 | `test_multiple_tokens_preserved` | Multiple tokens in one line |
@@ -9249,12 +9249,13 @@ python -m pytest CherryAI/dev/test_mock_translation.py -v --timeout=10
 python -m pytest CherryAI/dev/ -v --timeout=10
 ```
 
-### dev/test_information_step_phase41.py (56 tests) - Phase 41 Information Step UI Enhancements
+### dev/test_information_step_phase41.py (57 tests) - Phase 41 Information Step UI Enhancements
 
 Comprehensive tests for Phase 41 Information step UI enhancements including widget
-renames, genre dialog ADD behavior, language custom input, style/tone graying,
+renames, genre dialog ADD behavior, language custom input, style/tone presets,
 glossary inline editing, import from analysis, code database actions, global
-glossary widget, and selective glossary feature.
+glossary widget, selective glossary feature, collapsible right-column widgets,
+taller tables, and style/tone text display fixes.
 
 #### TestWidgetRenames (5 tests) - TASK 41.1
 
@@ -9283,13 +9284,14 @@ glossary widget, and selective glossary feature.
 | `test_prev_lang_attributes_in_source` | _prev_source_lang/_prev_target_lang tracked |
 | `test_combobox_selected_binding_in_source` | <<ComboboxSelected>> binding present |
 
-#### TestStyleToneGraying (3 tests) - TASK 41.4
+#### TestStyleTonePresets (4 tests) - Phase 60 (replaces TestStyleToneGraying)
 
 | Test | Purpose |
 |------|---------|
 | `test_toggle_preset_state_method_exists` | _toggle_preset_state method exists |
-| `test_trace_add_in_style_section` | trace_add callbacks on style/tone vars |
-| `test_disabled_state_logic_in_source` | state='disabled' logic present |
+| `test_style_save_delete_methods_exist` | Save/Delete preset methods exist |
+| `test_preset_helpers_in_style_section` | Preset helper widgets in style section |
+| `test_on_style_changed_populates_text` | Style change populates ScrolledText |
 
 #### TestGlossaryTableInlineEdit (7 tests) - TASK 41.5
 
@@ -9356,7 +9358,12 @@ glossary widget, and selective glossary feature.
 | `test_sync_glossary_includes_active` | Sync reads active from tree values |
 | `test_manifest_active_field_roundtrip` | Full roundtrip with active field |
 
-#### TestPhase41Integrity (6 tests) - Integration
+#### TestPhase41Integrity (7 tests) - Integration
+
+Includes verification that collapsible widget methods (`_toggle_collapsible`,
+`_reconfigure_right_column_weights`, `_ensure_style_tone_text`) exist, Glossary
+uses right column (`_right_column` in `_build_character_section`), and tables
+use height=8 with grid layout.
 
 | Test | Purpose |
 |------|---------|
@@ -9376,6 +9383,23 @@ python -m pytest CherryAI/dev/test_information_step_phase41.py -v --timeout=10
 # Run all tests with timeout protection
 python -m pytest CherryAI/dev/ -v --timeout=10
 ```
+
+### Phase 41+ Additional Coverage (Information Step Enhancements)
+
+The following features added post-Phase 60 are validated through existing test
+infrastructure and source-level assertions:
+
+| Feature | Validated By | Notes |
+|---------|-------------|-------|
+| Summary height=2 | `test_information_step_phase41.py` source checks | ScrolledText height parameter |
+| Summary restore default button | `_restore_summary_default` method existence | Resets to `DEFAULT_SUMMARY_TEXT` |
+| Default texts population | `_ensure_default_texts` in `on_enter()` | Populates Summary and SI when empty |
+| SI preset system | `_load_si_presets`, `_on_si_preset_changed`, `_save_si_preset`, `_delete_si_preset` | Mirrors Style/Tone preset pattern |
+| SI preset manifest binding | `SIPreset` combobox binding | String-based, saved/loaded with manifest |
+| Hint labels removed | Source inspection | No description labels in Summary/SI sections |
+| Project Name from manifest | `_apply_suggested_project_name` | Prefers manifest `ProjectName` over folder |
+| Style/Tone in translation | `_build_system_prompt_from_manifest` in translate.py | Reads `CustomStyle`/`CustomTone` from manifest |
+| Analysis→Glossary entries | `_show_nameable_dialog._apply()` in analysis.py | Creates glossary entry with gender/role/notes |
 
 ### Running Phase 34 Tests
 
@@ -9407,7 +9431,7 @@ python -m mypy CherryAI/functions CherryAI/modi CherryAI/formats
 | TestRoundtrip | 4 | Ellipsis, PROT, aggressive dedup, empty line roundtrips |
 | TestValidationRecovery | 11 | Position shift, extra tokens, recover_line, save_to_manifest |
 | TestProcessOrder | 7 | Module import, pre/post ordering, get_pre/post_order |
-| TestEdgeCases | 7 | Empty input, special chars, long lines, unicode, mixed PROT |
+| TestEdgeCases | 7 | Empty input, special chars, long lines, unicode, mixed PROTECTED |
 
 ```bash
 # Run Phase 42 tests
@@ -9423,7 +9447,7 @@ python -m pytest CherryAI/dev/test_preprocess_phase42.py -v --timeout=10
 | TestManifestAttribute | 1 | No raw self.manifest in translate.py (Task 43.1) |
 | TestMergedColumn | 5 | "To be Translated" column, resolution priority (Task 43.3) |
 | TestNewlineRendering | 3 | ↵ symbol replacement, multiple newlines (Task 43.4) |
-| TestMockTranslation | 4 | MODEL_OPTIONS, MockTranslator, PROT preservation (Task 43.5) |
+| TestMockTranslation | 4 | MODEL_OPTIONS, MockTranslator, PROTECTED preservation (Task 43.5) |
 | TestAPIProviderManagement | 6 | APIProviderEntry roundtrip, providers, presets (Task 43.6) |
 | TestCachingGlobalOptions | 2 | cache_mode default and roundtrip (Task 43.7) |
 | TestThinkingGlobalOptions | 2 | thinking_enabled/budget defaults and roundtrip (Task 43.8) |
@@ -9967,12 +9991,12 @@ Tests for speaker and code pattern context menu actions.
 
 | Test Class | Count | Coverage |
 |-----------|-------|----------|
-| TestAddSpeakerToGlossary | 2 | Add single speaker, add multiple speakers |
-| TestSetSpeakerRole | 3 | Role note format, role with existing notes, role replaces old role |
+| TestAddSpeakerToGlossary | 2 | Add single speaker to character glossary, add multiple speakers |
+| TestSetSpeakerRole | 3 | Role stored in character entry, role with existing entry, role replaces old role |
 | TestSetSpeakerGender | 2 | Gender male value, gender female value |
-| TestSetSpeakerTranslation | 1 | Translation stored |
+| TestSetSpeakerTranslation | 1 | Translation stored in character entry |
 | TestSpeakerMultiSelect | 2 | Bulk role assignment, bulk gender assignment |
-| TestAddToCodeGlossary | 1 | Speaker protected in code glossary |
+| TestAddToCodeGlossary | 1 | Speaker protected in code database |
 | TestPatternActions | 3 | Preserve action default, action options, type options |
 | TestPatternMultiSelect | 2 | Bulk action assignment, bulk type assignment |
 
@@ -9992,7 +10016,7 @@ protagonist variable handling, no-truncation, details population, and category c
 | TestCodePatternActionPersistence | 5 | New entry, update existing, valid actions, type in notes, replacement in notes |
 | TestProtagonistNames | 6 | Male name, female name, single-token first, single-token surname, glossary format, code pattern entry |
 | TestNoSpeakerTruncation | 3 | 50 speakers, 100 speakers, ordering preserved |
-| TestDetailsPopulation | 3 | Speaker sample line, code type, code examples |
+| TestDetailsPopulation | 3 | Speaker details from character glossary, code type, code examples |
 | TestCategoryStringConsistency | 4 | Plural speaker, plural code pattern, matches builder, matches handler |
 | TestFriendlyCodeType | 3 | Known types mapped, unknown passthrough, variable number |
 | TestCodePatternMenuOptions | 3 | Has protagonist option, action options exclusive, type options exclusive |

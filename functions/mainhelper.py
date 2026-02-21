@@ -1483,7 +1483,7 @@ class Processor:
 
         # After all pre-mode plugins ran, let Standard Helpers run once to
         # perform global tasks (ellipsis normalization, empty-line safeguard,
-        # optional dedup) and compress any adjacent PROT runs. We honor the
+        # optional dedup) and compress any adjacent PROTECTED runs. We honor the
         # runtime config in manifest.mappings['standard_mode_config'].
         try:
             try:
@@ -1509,7 +1509,7 @@ class Processor:
                 except Exception:
                     # Tolerate failures in optional helpers
                     pass
-                # Then compress adjacent PROT runs centrally if enabled
+                # Then compress adjacent PROTECTED runs centrally if enabled
                 try:
                     if hasattr(std_mod, "compress_all_prot_lines"):
                         cfg = std_mod.get_standard_config(self) if hasattr(std_mod, "get_standard_config") else {}
@@ -1755,7 +1755,7 @@ class Processor:
         placeholder_patterns: List[Tuple[str, re.Pattern[str]]] = []
         for tok in custom_tokens:
             placeholder_patterns.append((tok, re.compile(re.escape(tok))))
-        placeholder_patterns.append(("__PROT__", re.compile(r"__\s*PROT\s*__")))
+        placeholder_patterns.append(("__PROTECTED__", re.compile(r"__\s*PROT\s*__")))
 
         # Build per-line incident map
         incidents: Dict[int, Dict[str, Any]] = {}
