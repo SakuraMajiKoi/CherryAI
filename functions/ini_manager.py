@@ -1,18 +1,28 @@
 """CherryAI INI Configuration Manager.
 
 Provides centralized INI file path resolution and typed access to configuration values.
-The INI file (CherryAI.ini) must be located next to the main CherryAI.py script.
+The INI file (CherryAI.ini) is located in the user/ subfolder of the application root.
 
 This module is the single source of truth for:
-- INI file path resolution (relative to main module)
+- INI file path resolution (user/ subfolder next to CherryAI.py)
 - Typed access to configuration values with fallbacks
 - Manifest defaults section handling
 - Default paths for manifests and other directories
 - User defaults management (TASK 31.2)
-- Initial defaults from config/defaults.ini
+- Factory defaults (embedded in _FACTORY_DEFAULTS_INI_TEXT — no config/ folder)
+- Style/Tone preset management via [style]/[tone] INI sections
+- Long-text defaults via [defaults] INI section
+
+INI LOCATION: user/CherryAI.ini
+  - Migrated automatically from root CherryAI.ini on first run.
+
+FACTORY DEFAULTS: All factory defaults are embedded in _FACTORY_DEFAULTS_INI_TEXT.
+  config/defaults.ini no longer exists; get_initial_default() reads from the constant.
 
 TASK 21.1: Created as part of Manifest 3.0 Foundation
 TASK 31.2: Added user_defaults and initial_defaults support
+TASK STYLE: Style/Tone presets unified in INI [style]/[tone] sections
+SESSION 25: Removed config/ folder — all defaults embedded in this module.
 """
 
 from __future__ import annotations
@@ -32,60 +42,222 @@ _ini_cache: Optional[configparser.ConfigParser] = None
 _ini_path_cache: Optional[Path] = None
 _defaults_cache: Optional[configparser.ConfigParser] = None
 
+# =============================================================================
+# FACTORY DEFAULTS — embedded so config/defaults.ini is no longer needed.
+# These are the shipping defaults for every setting. User overrides live in
+# user/CherryAI.ini [user_defaults].  Conditional-prompt defaults are in the
+# [conditional_prompts] section; they are seeded into [prompts] on first run.
+# =============================================================================
+_FACTORY_DEFAULTS_INI_TEXT: str = """
+[manifest_defaults]
+project_name = Project1
+title = Title1
+genre = fictional, nonfictional
+source_language = Japanese
+target_language = English
+summary = [Summary of the Content]
+style_preset = neutral
+tone_preset = natural
+deduplication = true
+deduplication_threshold = 1
+ellipsis_compression = true
+symbol_conversion = true
+speaker_name_replacement = false
+code_spacing_rules = true
+validation_placeholder_preservation = true
+validation_anchor_preservation = true
+validation_japanese_character_detection = true
+validation_speaker_format = true
+validation_quote_balance = true
+validation_empty_translation = true
+character_whitelist =
+character_blacklist =
+word_blacklist =
+autofix_map =
+qa_rerun_policy = FailedOnly
+qa_max_japanese_chars = 4
+qa_max_line_length = 0
+request_temperature = 0.2
+request_lines_per_chunk = 30
+request_retry_strategy = Batch
+request_max_retries = 3
+request_enable_caching = true
+request_line_by_line_mode = false
+request_thinking = false
+request_thinking_budget = 1000
+post_placeholder_recovery = true
+post_bracket_balance_recovery = true
+post_quote_balance_recovery = true
+post_whitespace_normalization = true
+post_restore_code_characters = true
+post_restore_linebreaks = true
+post_enable_symbol_conversion = true
+post_fullwidth_to_halfwidth = true
+post_failure_handling = FlagForReview
+wordwrap_mode = Manual
+wordwrap_width = 48
+wordwrap_break_char =
+wordwrap_max_lines = 4
+wordwrap_prevent_orphans = true
+wordwrap_prefer_punctuation_breaks = true
+wordwrap_speaker_handling = Sameline
+wordwrap_ignore_patterns = Angle,Square,Curly,En
+wordwrap_typography = Western
+output_preserve_folder_structure = true
+output_pair_mode = translated_only
+output_file_naming = PutInSubfolder
+output_text_option = translated
+output_overwrite_existing_files = false
+output_backup = Timestamp
+output_backup_extension = .bk
+output_export_manifest_file = false
+output_export_processing_logs = false
+output_export_glossary_entries = false
 
-def get_ini_path() -> Path:
-    """Get the path to CherryAI.ini relative to the main module.
+[api]
+provider = openai
+api_key =
+base_url =
+model = gpt-4o-mini
+temperature = 0.3
+timeout = 60
+retries = 3
+rate_limit_requests = 60
+chunk_size = 50
+source_lang = Japanese
+target_lang = English
+content_warning_enabled = true
+retry_strategy = batch
+cache_enabled = true
 
-    The INI file is always located next to CherryAI.py (or future .exe).
-    This ensures consistent path resolution regardless of working directory.
+[session]
+autosave = true
+interval = 60
+theme = light
+load_last = true
+
+[caching]
+enabled = true
+dir = Cache
+age = 0
+size = 0
+mode = strict
+aggressive_dedup = false
+
+[log]
+level = Error
+location = log/
+debug = false
+api_log = true
+
+[limit]
+banned = \u2014, \u2013
+warnings = true
+output = 4096
+safe = true
+
+[fileio]
+encoding = auto
+lines = auto
+preservebom = true
+backup = true
+
+[prompts]
+edit = Review and improve the translation while maintaining accuracy and natural flow. Fix any grammar issues, awkward phrasing, or inconsistencies. Preserve the original meaning and tone.
+tlc = Perform a Translation/Localization Check (TLC) on the translation. Verify accuracy against the source text, check for natural {target_lang} expression, ensure consistency in terminology and style, and flag any issues or suggest improvements.
+
+[conditional_prompts]
+dialogue = # Content Type: Dialogue\\nThese lines are character dialogue. Pay attention to the speaker names, maintain consistent voice and tone for each character, and preserve emotional nuances in the conversation.
+menu = # Content Type: Menu\\nThese lines are menu items from a game UI. Translate each item concisely and clearly. Preserve formatting, order, and any shortcut indicators. Keep translations brief and action-oriented.
+choice = # Content Type: Choices\\nThese lines are player choices or options. Translate each choice concisely and distinctly so the player can differentiate between options. Preserve numbering or bullet formatting.
+unknown = # Content Type: Mixed\\nThese lines may contain dialogue, menu items, or choices. Translate each line appropriately based on its apparent purpose. Maintain formatting and keep menu/choice items concise.
+"""
+
+
+def _get_app_root() -> Path:
+    """Resolve the application root directory (contains CherryAI.py).
 
     Returns:
-        Path to CherryAI.ini file.
+        Absolute Path of the CherryAI package directory.
+    """
+    import sys
+
+    for module_name in ("CherryAI", "CherryAI.CherryAI"):
+        if module_name in sys.modules:
+            module = sys.modules[module_name]
+            if hasattr(module, "__file__") and module.__file__:
+                return Path(module.__file__).resolve().parent
+
+    # Fallback: this file lives in functions/, parent is the app root.
+    return Path(__file__).resolve().parent.parent
+
+
+def get_ini_path() -> Path:
+    """Get the path to user/CherryAI.ini.
+
+    The INI file lives in the ``user/`` subfolder of the application root.
+    On the first call, if the legacy root-level CherryAI.ini exists and
+    user/CherryAI.ini does not, the file is migrated automatically.
+
+    Returns:
+        Path to user/CherryAI.ini.
 
     Example:
         >>> ini_path = get_ini_path()
-        >>> ini_path.name
-        'CherryAI.ini'
+        >>> ini_path.parts[-2:]
+        ('user', 'CherryAI.ini')
     """
     global _ini_path_cache
 
     if _ini_path_cache is not None:
         return _ini_path_cache
 
-    # Try to find CherryAI.py location
     try:
-        # First, try importing the CherryAI module to get its path
-        import sys
+        app_root = _get_app_root()
+        user_ini = app_root / "user" / "CherryAI.ini"
+        legacy_ini = app_root / "CherryAI.ini"
 
-        # Check for CherryAI module in various forms
-        for module_name in ("CherryAI", "CherryAI.CherryAI"):
-            if module_name in sys.modules:
-                module = sys.modules[module_name]
-                if hasattr(module, "__file__") and module.__file__:
-                    module_path = Path(module.__file__).resolve()
-                    _ini_path_cache = module_path.parent / "CherryAI.ini"
-                    return _ini_path_cache
+        # Auto-migrate legacy INI to user/ on first run.
+        if legacy_ini.exists() and not user_ini.exists():
+            user_ini.parent.mkdir(parents=True, exist_ok=True)
+            import shutil
+            shutil.copy2(legacy_ini, user_ini)
+            logger.info("Migrated CherryAI.ini: %s -> %s", legacy_ini, user_ini)
+            try:
+                legacy_ini.unlink()
+            except Exception as exc:
+                logger.warning("Could not remove legacy INI: %s", exc)
 
-        # Fallback: resolve relative to this file (functions/ is one level below root)
-        this_file = Path(__file__).resolve()
-        package_root = this_file.parent.parent  # functions/ -> CherryAI/
-        _ini_path_cache = package_root / "CherryAI.ini"
+        # Ensure user/ directory exists.
+        user_ini.parent.mkdir(parents=True, exist_ok=True)
+
+        _ini_path_cache = user_ini
         return _ini_path_cache
 
-    except Exception as e:
-        logger.warning("Failed to resolve INI path via module: %s", e)
-        # Ultimate fallback
-        _ini_path_cache = Path(__file__).resolve().parent.parent / "CherryAI.ini"
+    except Exception as exc:
+        logger.warning("Failed to resolve INI path: %s", exc)
+        _ini_path_cache = Path(__file__).resolve().parent.parent / "user" / "CherryAI.ini"
         return _ini_path_cache
 
 
 def get_app_dir() -> Path:
-    """Get the application root directory.
+    """Get the application root directory (parent of user/).
 
     Returns:
-        Path to the CherryAI application directory.
+        Path to the CherryAI application root directory.
     """
-    return get_ini_path().parent
+    return get_ini_path().parent.parent
+
+
+def get_user_dir() -> Path:
+    """Get the user data directory (user/).
+
+    Returns:
+        Path to the user/ directory, created if missing.
+    """
+    user_dir = get_ini_path().parent
+    user_dir.mkdir(parents=True, exist_ok=True)
+    return user_dir
 
 
 def get_manifest_dir() -> Path:
@@ -99,18 +271,155 @@ def get_manifest_dir() -> Path:
     return manifest_dir
 
 
+def ensure_app_dirs() -> None:
+    """Create all required application directories under the CherryAI root.
+
+    Phase 62: Called on every _load_ini() invocation so directories always
+    exist after the first application access. Safe to call multiple times
+    (uses exist_ok=True).
+
+    Directories created:
+        user/       – INI files, glossaries, API config
+        Projects/   – Per-project manifest folders
+        logs/       – Translation and QA log files
+        cache/      – Cached translation data
+    """
+    root = get_app_dir()
+    for dir_name in ("user", "Projects", "logs", "cache"):
+        (root / dir_name).mkdir(parents=True, exist_ok=True)
+
+
+# Sections that must always exist in CherryAI.ini.
+# If any are absent when the file is read, they are added to the in-memory
+# config immediately *and* the file is re-saved so that subsequent reads
+# (including fresh ``reload_ini()`` calls) also see them.  This prevents
+# test helpers or any partial-save operation from silently stripping sections.
+_REQUIRED_SECTIONS: tuple[str, ...] = (
+    "session",            # renamed from 'recent'; stores last_manifest, load_last
+    "ui",                 # window geometry and state
+    "confirmations",      # suppressed confirmation dialog keys
+    "defaults",           # merged defaults (was manifest_defaults + defaults)
+    "style",              # named style presets
+    "tone",               # named tone presets
+    "system_instructions",  # named system instructions presets (was JSON file)
+    "caching",            # request cache settings
+    "limit",              # safety / output-limit settings
+    "prompts",            # edit/TLC prompt settings
+    "log",                # logging settings
+    "fileio",             # file I/O settings
+    "security",           # password / encryption settings
+)
+
+# Legacy section migrations applied once on first load.
+# Keys: old section name → new section name (None = discard/remove).
+_LEGACY_SECTION_RENAMES: Dict[str, Optional[str]] = {
+    "recent": "session",
+    "manifest_defaults": "defaults",
+    "api": None,           # moved to API.ini
+    "api_presets": None,   # moved to API.ini
+    "project": None,       # per-project → manifest files
+    "translation": None,   # per-project → manifest files
+    "rolling_context": None,   # per-project → manifest files
+    "partial_translation": None,  # per-project → manifest files
+    "safety": None,        # renamed to 'limit'
+}
+
+
+def _ensure_required_sections(config: configparser.ConfigParser) -> bool:
+    """Add any missing required sections to *config*.
+
+    Args:
+        config: In-memory ConfigParser to patch.
+
+    Returns:
+        ``True`` if at least one section was added (caller should save).
+    """
+    added = False
+    for section in _REQUIRED_SECTIONS:
+        if not config.has_section(section):
+            config.add_section(section)
+            logger.debug("Initialized missing INI section [%s]", section)
+            added = True
+    return added
+
+
+def _migrate_legacy_sections(config: configparser.ConfigParser) -> bool:
+    """Apply one-time legacy section renames and discards.
+
+    - ``[recent]``          → ``[session]``          (keys copied)
+    - ``[manifest_defaults]`` → ``[defaults]``         (keys merged into)
+    - ``api``, ``api_presets``, ``project``, ``translation``,
+      ``rolling_context``, ``partial_translation``, ``safety`` → removed
+    - Within ``[session]`` (formerly ``[recent]``): key
+      ``restore_on_launch`` is renamed to ``load_last``.
+
+    Args:
+        config: In-memory ConfigParser to patch in place.
+
+    Returns:
+        ``True`` if any change was made (caller should save).
+    """
+    changed = False
+    for old_section, new_section in _LEGACY_SECTION_RENAMES.items():
+        if not config.has_section(old_section):
+            continue
+        if new_section is not None:
+            # Ensure destination exists.
+            if not config.has_section(new_section):
+                config.add_section(new_section)
+            # Copy keys that are not already present in the destination.
+            for key, value in config.items(old_section):
+                if not config.has_option(new_section, key):
+                    config.set(new_section, key, value)
+        # Remove old section.
+        config.remove_section(old_section)
+        logger.info("Migrated INI section [%s] → [%s]", old_section, new_section)
+        changed = True
+
+    # Rename 'restore_on_launch' key to 'load_last' within [session].
+    if config.has_section("session") and config.has_option("session", "restore_on_launch"):
+        val = config.get("session", "restore_on_launch")
+        if not config.has_option("session", "load_last"):
+            config.set("session", "load_last", val)
+        config.remove_option("session", "restore_on_launch")
+        logger.info("Migrated [session] restore_on_launch → load_last")
+        changed = True
+
+    # Remove legacy key 'last_input' from [session] (superceded by last_manifest).
+    if config.has_section("session") and config.has_option("session", "last_input"):
+        config.remove_option("session", "last_input")
+        changed = True
+
+    return changed
+
+
 def _load_ini() -> configparser.ConfigParser:
     """Load and cache the INI file.
 
     Returns:
         ConfigParser with loaded INI data.
+
+    Note:
+        ``optionxform = str`` is set so that key names are stored verbatim
+        (case-preserved).  This is required for preset names like ``Natural``
+        in the ``[style]`` and ``[tone]`` sections.
+
+        All sections listed in ``_REQUIRED_SECTIONS`` are guaranteed to exist
+        in the returned config.  If any were missing from the file on disk,
+        they are added in-memory **and** the file is re-written so that the
+        next cold load also sees them.
     """
     global _ini_cache
 
     if _ini_cache is not None:
         return _ini_cache
 
+    # Ensure required application directories always exist.
+    ensure_app_dirs()
+
     _ini_cache = configparser.ConfigParser()
+    # Preserve option-name case (required for preset names such as "Natural").
+    _ini_cache.optionxform = str  # type: ignore[method-assign]
     ini_path = get_ini_path()
 
     try:
@@ -122,7 +431,89 @@ def _load_ini() -> configparser.ConfigParser:
     except Exception as e:
         logger.error("Failed to load INI file: %s", e)
 
+    # Apply one-time migrations (old section names → new names).
+    dirty = _migrate_legacy_sections(_ini_cache)
+
+    # Guarantee required sections exist; persist if any were missing.
+    sections_added = _ensure_required_sections(_ini_cache)
+
+    # Seed empty sections from factory defaults (embedded in _FACTORY_DEFAULTS_INI_TEXT).
+    populated = _populate_from_defaults(_ini_cache)
+
+    if sections_added or dirty or populated:
+        _save_ini(_ini_cache)
+
     return _ini_cache
+
+
+# Sections in config/defaults.ini that populate CherryAI.ini sections directly.
+# Key = section name in defaults.ini → Value = target section in CherryAI.ini.
+# Sections matching by identical name are included implicitly.
+_DEFAULTS_POPULATE_MAP: Dict[str, str] = {
+    "session": "session",
+    "caching": "caching",
+    "log": "log",
+    "limit": "limit",
+    "fileio": "fileio",
+    "prompts": "prompts",
+}
+
+
+def _populate_from_defaults(config: configparser.ConfigParser) -> bool:
+    """Seed empty CherryAI.ini sections from ``_FACTORY_DEFAULTS_INI_TEXT``.
+
+    For every section listed in ``_DEFAULTS_POPULATE_MAP``, if the
+    corresponding CherryAI.ini section exists but contains **no keys** yet,
+    all key/value pairs from the factory defaults string are written into it.
+
+    The special ``[conditional_prompts]`` section in the factory defaults is
+    written into the ``[prompts]`` section of CherryAI.ini under the same
+    keys (``dialogue``, ``menu``, ``choice``, ``unknown``).
+
+    Args:
+        config: In-memory ConfigParser for CherryAI.ini.
+
+    Returns:
+        ``True`` if any key was written (caller should save).
+    """
+    defaults = _load_defaults_ini()
+    changed = False
+
+    # Populate standard sections.
+    for src_section, dst_section in _DEFAULTS_POPULATE_MAP.items():
+        if not defaults.has_section(src_section):
+            continue
+        if not config.has_section(dst_section):
+            config.add_section(dst_section)
+        # Only populate if the target section currently has no user-set keys.
+        if len(config.options(dst_section)) == 0:
+            for key, value in defaults.items(src_section):
+                config.set(dst_section, key, value)
+                logger.debug(
+                    "Populated [%s].%s from defaults.ini", dst_section, key
+                )
+            changed = True
+            logger.info(
+                "Seeded [%s] from defaults.ini [%s]", dst_section, src_section
+            )
+
+    # Populate conditional prompts into [prompts] section.
+    _COND_KEYS = ("dialogue", "menu", "choice", "unknown")
+    if defaults.has_section("conditional_prompts"):
+        if not config.has_section("prompts"):
+            config.add_section("prompts")
+        for key in _COND_KEYS:
+            if defaults.has_option("conditional_prompts", key) and not config.has_option(
+                "prompts", key
+            ):
+                value = defaults.get("conditional_prompts", key)
+                # Unescape literal \n in INI value to real newline.
+                value = value.replace("\\n", "\n")
+                config.set("prompts", key, value)
+                logger.debug("Populated [prompts].%s from defaults.ini", key)
+                changed = True
+
+    return changed
 
 
 def reload_ini() -> None:
@@ -360,6 +751,21 @@ def has_option(section: str, key: str) -> bool:
     return config.has_option(section, key)
 
 
+def _save_ini(config: configparser.ConfigParser) -> None:
+    """Write the config to the INI file on disk.
+
+    Args:
+        config: ConfigParser instance to persist.
+    """
+    ini_path = get_ini_path()
+    try:
+        ini_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(ini_path, "w", encoding="utf-8") as fh:
+            config.write(fh)
+    except Exception as exc:
+        logger.error("Failed to write INI file %s: %s", ini_path, exc)
+
+
 def remove_section(section: str) -> bool:
     """Remove an entire section from the INI file.
 
@@ -383,9 +789,11 @@ def remove_section(section: str) -> bool:
 
 
 def get_manifest_default(key: str, fallback: ConfigValue = None) -> ConfigValue:
-    """Get a manifest default value from [manifest_defaults] section.
+    """Get a manifest default value from [defaults] section.
 
     Convenience wrapper for manifest-specific defaults.
+    The section was previously named ``manifest_defaults``; it is now
+    ``defaults`` which also holds style/tone/system-instruction defaults.
 
     Args:
         key: Configuration key.
@@ -396,13 +804,13 @@ def get_manifest_default(key: str, fallback: ConfigValue = None) -> ConfigValue:
     """
     # Infer type from fallback
     if isinstance(fallback, bool):
-        return get_bool("manifest_defaults", key, fallback)
+        return get_bool("defaults", key, fallback)
     elif isinstance(fallback, int):
-        return get_int("manifest_defaults", key, fallback)
+        return get_int("defaults", key, fallback)
     elif isinstance(fallback, float):
-        return get_float("manifest_defaults", key, fallback)
+        return get_float("defaults", key, fallback)
     else:
-        return get_str("manifest_defaults", key, str(fallback) if fallback else "")
+        return get_str("defaults", key, str(fallback) if fallback else "")
 
 
 def get_all_manifest_defaults() -> Dict[str, Any]:
@@ -414,7 +822,7 @@ def get_all_manifest_defaults() -> Dict[str, Any]:
     Returns:
         Dictionary with all manifest default values.
     """
-    raw = get_section("manifest_defaults")
+    raw = get_section("defaults")
     if not raw:
         return _get_builtin_manifest_defaults()
 
@@ -581,53 +989,38 @@ def clear_cache() -> None:
 def get_last_manifest() -> Optional[Path]:
     """Get the path to the last used manifest from INI.
 
-    Reads [recent] last_manifest from INI file.
+    Reads [session] last_manifest from INI file.
 
     Returns:
         Path to last manifest if it exists, None otherwise.
-
-    Example:
-        >>> path = get_last_manifest()
-        >>> if path and path.exists():
-        ...     load_manifest(path)
     """
-    path_str = get_str("recent", "last_manifest", "")
+    path_str = get_str("session", "last_manifest", "")
     if not path_str:
         return None
-
-    path = Path(path_str)
-
-    # Return the path even if it doesn't exist - caller should check
-    return path if path_str else None
+    return Path(path_str)
 
 
 def set_last_manifest(manifest_path: Optional[Path]) -> bool:
     """Set the last used manifest path in INI.
 
-    Stores as absolute path in [recent] last_manifest.
+    Stores as absolute path in [session] last_manifest.
 
     Args:
         manifest_path: Path to manifest, or None to clear.
 
     Returns:
         True if successful.
-
-    Example:
-        >>> set_last_manifest(Path("manifests/my_project.cherryproj"))
-        True
     """
     if manifest_path is None:
-        return set_default("recent", "last_manifest", "")
-
-    # Store as absolute path
+        return set_default("session", "last_manifest", "")
     abs_path = manifest_path.resolve()
-    return set_default("recent", "last_manifest", str(abs_path))
+    return set_default("session", "last_manifest", str(abs_path))
 
 
 def get_recent_manifests(max_count: int = 10) -> List[Path]:
     """Get list of recently used manifests from INI.
 
-    Reads [recent] manifest_history as comma-separated paths.
+    Reads [session] manifest_history as pipe-separated paths.
 
     Args:
         max_count: Maximum number of recent manifests to return.
@@ -635,7 +1028,7 @@ def get_recent_manifests(max_count: int = 10) -> List[Path]:
     Returns:
         List of manifest paths (most recent first), filtered to existing files.
     """
-    raw = get_str("recent", "manifest_history", "")
+    raw = get_str("session", "manifest_history", "")
     if not raw:
         return []
 
@@ -648,15 +1041,11 @@ def get_recent_manifests(max_count: int = 10) -> List[Path]:
                 paths.append(path)
                 if len(paths) >= max_count:
                     break
-
     return paths
 
 
 def add_to_recent_manifests(manifest_path: Path) -> bool:
     """Add a manifest to the recent manifests list.
-
-    Moves the path to the front if already in list.
-    Limits list to 10 most recent.
 
     Args:
         manifest_path: Manifest path to add.
@@ -665,61 +1054,49 @@ def add_to_recent_manifests(manifest_path: Path) -> bool:
         True if successful.
     """
     abs_path = manifest_path.resolve()
-
-    # Get current list
     current = get_recent_manifests(max_count=20)
-
-    # Remove if already present
     current = [p for p in current if p.resolve() != abs_path]
-
-    # Add to front
     current.insert(0, abs_path)
-
-    # Limit to 10
     current = current[:10]
-
-    # Save
     history_str = "|".join(str(p) for p in current)
-    return set_default("recent", "manifest_history", history_str)
+    return set_default("session", "manifest_history", history_str)
 
 
 def get_restore_on_launch() -> bool:
-    """Check if session restore on launch is enabled.
+    """Check if 'Load last project' is enabled.
 
-    Reads [recent] restore_on_launch from INI.
+    Reads [session] load_last from INI.
 
     Returns:
         True if restore is enabled (default True).
     """
-    return get_bool("recent", "restore_on_launch", True)
+    return get_bool("session", "load_last", True)
 
 
 def set_restore_on_launch(enabled: bool) -> bool:
-    """Set whether to restore last manifest on launch.
+    """Set whether to load last project on launch.
 
     Args:
-        enabled: True to enable restore on launch.
+        enabled: True to enable loading last project on launch.
 
     Returns:
         True if successful.
     """
-    return set_default("recent", "restore_on_launch", enabled)
+    return set_default("session", "load_last", enabled)
 
 
 def get_last_input_dir() -> Optional[Path]:
     """Get the last used input directory from INI.
 
-    PHASE 58.12: Reads [recent] last_input_dir from INI file.
+    Reads [session] last_input_dir.
 
     Returns:
         Path to last input directory if it exists, None otherwise.
     """
-    path_str = get_str("recent", "last_input_dir", "")
+    path_str = get_str("session", "last_input_dir", "")
     if not path_str:
         return None
-    
     path = Path(path_str)
-    # Return only if directory exists
     if path.exists() and path.is_dir():
         return path
     return None
@@ -728,8 +1105,6 @@ def get_last_input_dir() -> Optional[Path]:
 def set_last_input_dir(dir_path: Optional[Path]) -> bool:
     """Set the last used input directory in INI.
 
-    PHASE 58.12: Stores as absolute path in [recent] last_input_dir.
-
     Args:
         dir_path: Path to directory, or None to clear.
 
@@ -737,11 +1112,9 @@ def set_last_input_dir(dir_path: Optional[Path]) -> bool:
         True if successful.
     """
     if dir_path is None:
-        return set_default("recent", "last_input_dir", "")
-    
-    # Store as absolute path
+        return set_default("session", "last_input_dir", "")
     abs_path = dir_path.resolve()
-    return set_default("recent", "last_input_dir", str(abs_path))
+    return set_default("session", "last_input_dir", str(abs_path))
 
 
 # =============================================================================
@@ -749,20 +1122,27 @@ def set_last_input_dir(dir_path: Optional[Path]) -> bool:
 # =============================================================================
 
 
-def get_defaults_path() -> Path:
-    """Get the path to config/defaults.ini (initial defaults).
+def get_defaults_path() -> Optional[Path]:
+    """Return ``None`` — factory defaults are now embedded in ``_FACTORY_DEFAULTS_INI_TEXT``.
+
+    .. deprecated::
+        config/defaults.ini no longer exists.  All factory defaults are embedded
+        in the ``_FACTORY_DEFAULTS_INI_TEXT`` constant in this module.
 
     Returns:
-        Path to defaults.ini file.
+        ``None`` (kept for backward-compatibility only).
     """
-    return get_app_dir() / "config" / "defaults.ini"
+    return None
 
 
 def _load_defaults_ini() -> configparser.ConfigParser:
-    """Load and cache the initial defaults INI file.
+    """Load and cache the factory defaults from the embedded INI text.
+
+    The defaults are no longer read from ``config/defaults.ini``; they live in
+    the ``_FACTORY_DEFAULTS_INI_TEXT`` string constant in this module.
 
     Returns:
-        ConfigParser with loaded defaults data.
+        ConfigParser populated with factory defaults.
     """
     global _defaults_cache
 
@@ -770,16 +1150,11 @@ def _load_defaults_ini() -> configparser.ConfigParser:
         return _defaults_cache
 
     _defaults_cache = configparser.ConfigParser()
-    defaults_path = get_defaults_path()
-
     try:
-        if defaults_path.exists():
-            _defaults_cache.read(defaults_path, encoding="utf-8")
-            logger.debug("Loaded defaults from: %s", defaults_path)
-        else:
-            logger.warning("Defaults file not found: %s", defaults_path)
+        _defaults_cache.read_string(_FACTORY_DEFAULTS_INI_TEXT)
+        logger.debug("Loaded factory defaults from embedded constant")
     except Exception as e:
-        logger.error("Failed to load defaults file: %s", e)
+        logger.error("Failed to parse embedded factory defaults: %s", e)
 
     return _defaults_cache
 
@@ -790,7 +1165,10 @@ def get_initial_default(
     fallback: ConfigValue = None,
     value_type: type = str,
 ) -> ConfigValue:
-    """Get an initial default value from config/defaults.ini.
+    """Get an initial default value from the embedded factory defaults.
+
+    Factory defaults are stored in ``_FACTORY_DEFAULTS_INI_TEXT``.
+    Previously read from ``config/defaults.ini`` (removed in Session 25).
 
     Args:
         section: INI section name.
@@ -1035,7 +1413,9 @@ def restore_initial_defaults(section: Optional[str] = None) -> bool:
 
 
 def get_all_initial_defaults(section: str) -> Dict[str, str]:
-    """Get all initial defaults for a section from config/defaults.ini.
+    """Get all initial defaults for a section from the embedded factory defaults.
+
+    Previously read from ``config/defaults.ini`` (removed in Session 25).
 
     Args:
         section: Section name.
@@ -1056,3 +1436,637 @@ def reload_defaults_cache() -> None:
     global _defaults_cache
     _defaults_cache = None
     _load_defaults_ini()
+
+
+# =============================================================================
+# Preset Management: [style] and [tone] INI sections
+# =============================================================================
+
+# Built-in fallback text for default style/tone presets used when the
+# [defaults] section of the INI file is absent or incomplete.
+_BUILTIN_STYLE_DEFAULTS: Dict[str, str] = {
+    "Literal": (
+        "Translate as literally as possible. Preserve the original sentence "
+        "structure, word order, and phrasing. Prioritize accuracy over "
+        "natural flow in the target language."
+    ),
+    "Natural": (
+        "Translate naturally and fluently. Adapt sentence structure and "
+        "phrasing to feel native in the target language while preserving "
+        "the original meaning. Prioritize readability."
+    ),
+    "Creative": (
+        "Translate with creative liberty. Adapt idioms, humor, and cultural "
+        "references for the target audience. You may rephrase freely to "
+        "capture the spirit of the original rather than the exact words."
+    ),
+    "Formal": (
+        "Use a formal, professional register. Choose polished vocabulary "
+        "and structured phrasing. Avoid colloquialisms, contractions, and slang."
+    ),
+    "Casual": (
+        "Use an informal, conversational tone. Employ natural contractions, "
+        "colloquial expressions, and relaxed phrasing as spoken language."
+    ),
+    "Technical": (
+        "Use precise, technical language. Maintain exact terminology and "
+        "avoid ambiguity. Prefer established translations for domain-specific terms."
+    ),
+    "Literary": (
+        "Translate with literary finesse. Use rich vocabulary, varied "
+        "sentence rhythm, and artistic phrasing. Preserve poetic devices "
+        "and narrative voice."
+    ),
+}
+
+_BUILTIN_TONE_DEFAULTS: Dict[str, str] = {
+    "Neutral": (
+        "Maintain a balanced, neutral tone throughout the translation. "
+        "Do not add emotional emphasis or dramatic flair beyond what is "
+        "present in the source."
+    ),
+    "Serious": (
+        "Convey a grave, solemn atmosphere. Use measured, weighty phrasing "
+        "appropriate for serious subject matter."
+    ),
+    "Humorous": (
+        "Preserve and enhance comedic timing and humor. Adapt jokes and "
+        "wordplay for the target language while keeping the light-hearted spirit."
+    ),
+    "Dramatic": (
+        "Emphasize dramatic tension and intensity. Use impactful phrasing, "
+        "strong verbs, and theatrical delivery to heighten emotional moments."
+    ),
+    "Lighthearted": (
+        "Keep the mood cheerful and upbeat. Use bright, positive language "
+        "and breezy phrasing that feels warm and inviting."
+    ),
+    "Dark": (
+        "Convey a grim, ominous atmosphere. Use foreboding language, "
+        "heavy imagery, and tense phrasing appropriate for dark themes."
+    ),
+    "Romantic": (
+        "Use warm, emotionally resonant language. Convey tenderness, "
+        "affection, and intimacy through gentle phrasing and evocative word choices."
+    ),
+    "Action": (
+        "Use punchy, fast-paced language. Keep sentences short and energetic. "
+        "Emphasize motion, impact, and urgency to match action sequences."
+    ),
+}
+
+_BUILTIN_SYSTEM_INSTRUCTION = (
+    "You are an expert translator and localizer.\n"
+    "You will be translating any content provided. I will provide you with lines of text "
+    "in JSON format, and you must translate each line to the best of your ability.\n"
+    "\n"
+    "Guidelines:\n"
+    "- Do not combine, add, or remove any lines. The number of lines should ALWAYS remain "
+    "the same as the original.\n"
+    "- Avoid overly literal translations that may seem awkward or confusing; focus on "
+    "conveying the intended meaning and spirit.\n"
+    "- Use consistent translations for recurring terms, character names, and important "
+    "plot elements.\n"
+    "- Preserve the emotional undertones and atmosphere, whether comedic, dramatic, "
+    "romantic, or suspenseful.\n"
+    "- '# Glossary' lists terms including locations and the names, nicknames, and genders "
+    "of the game characters. Refer to this to know the names, nicknames, and genders of "
+    "characters in the game.\n"
+    "- ALWAYS read the translation history BEFORE to figure out the best context for your "
+    "translation.\n"
+    "- Translate all text to English no exceptions.\n"
+    "- Avoid using romaji or including any Japanese text in your response.\n"
+    "- Always translate the speaker in the line to English.\n"
+    "- Maintain any spacing or newlines such as '\\n' or '\\\\n' in the translation.\n"
+    "- Never include any notes, explanations, disclaimers, or anything similar in your "
+    "response.\n"
+)
+
+_BUILTIN_SUMMARY_DEFAULT = (
+    "Write a short summary of the work here. Mentioning protagonist(s) "
+    "and Point of View is not necessary and will be automatically provided."
+)
+
+
+def _get_preset_default(section: str, name: str) -> str:
+    """Get the factory-default text for a named style or tone preset.
+
+    First checks the [defaults] section of CherryAI.ini using the key
+    ``Style<Name>`` or ``Tone<Name>``, then falls back to built-in constants.
+
+    Args:
+        section: ``'style'`` or ``'tone'``.
+        name: Preset name (e.g. ``'Natural'``, ``'Neutral'``).
+
+    Returns:
+        Default prompt text string.
+    """
+    cap = section.capitalize()
+    ini_key = f"{cap}{name}"
+    ini_val = get_str("defaults", ini_key, "")
+    if ini_val:
+        return ini_val
+    if section == "style":
+        return _BUILTIN_STYLE_DEFAULTS.get(name, "")
+    if section == "tone":
+        return _BUILTIN_TONE_DEFAULTS.get(name, "")
+    return ""
+
+
+def get_preset_text(section: str, name: str) -> str:
+    """Get the prompt text for a named preset from its INI section.
+
+    Looks up ``name`` in ``[section]`` of CherryAI.ini.  Falls back to the
+    factory default from ``[defaults]`` or built-in constants.
+
+    Args:
+        section: INI section name — ``'style'`` or ``'tone'``.
+        name: Preset display name (case-sensitive).
+
+    Returns:
+        Prompt text for the preset.
+
+    Example:
+        >>> get_preset_text('style', 'Natural')
+        'Translate naturally and fluently...'
+    """
+    user_val = get_str(section, name, "")
+    if user_val:
+        return user_val
+    return _get_preset_default(section, name)
+
+
+def set_preset_text(section: str, name: str, text: str) -> bool:
+    """Save a preset's prompt text to its INI section.
+
+    Args:
+        section: ``'style'`` or ``'tone'``.
+        name: Preset display name.
+        text: Prompt text to store.
+
+    Returns:
+        True on success.
+
+    Example:
+        >>> set_preset_text('style', 'MyStyle', 'Very creative...')
+        True
+    """
+    return set_default(section, name, text)
+
+
+def delete_preset(section: str, name: str) -> bool:
+    """Remove a user-defined preset from its INI section.
+
+    Factory-default names (e.g. ``Natural``, ``Neutral``) can be deleted
+    from the user INI section; the factory default will then be used again.
+
+    Args:
+        section: ``'style'`` or ``'tone'``.
+        name: Preset name to delete.
+
+    Returns:
+        True if the option existed and was removed.
+    """
+    config = _load_ini()
+    if not config.has_section(section):
+        return False
+    if not config.has_option(section, name):
+        return False
+    config.remove_option(section, name)
+    _save_ini(config)
+    return True
+
+
+def get_all_presets(section: str) -> Dict[str, str]:
+    """Get all available presets for a section, merging defaults and user overrides.
+
+    Factory defaults are listed first (for missing user entries), then any
+    user-added extras.  User INI values override factory defaults for the
+    same name.
+
+    Args:
+        section: ``'style'`` or ``'tone'``.
+
+    Returns:
+        Ordered dict: name -> prompt text.  ``'Custom'`` key is included last
+        with an empty string.
+
+    Example:
+        >>> presets = get_all_presets('style')
+        >>> 'Natural' in presets
+        True
+    """
+    if section == "style":
+        base: Dict[str, str] = dict(_BUILTIN_STYLE_DEFAULTS)
+    elif section == "tone":
+        base = dict(_BUILTIN_TONE_DEFAULTS)
+    else:
+        base = {}
+
+    # Check [defaults] overrides for each built-in name
+    for name in list(base.keys()):
+        cap = section.capitalize()
+        ini_key = f"{cap}{name}"
+        ini_val = get_str("defaults", ini_key, "")
+        if ini_val:
+            base[name] = ini_val
+
+    # Merge [style] / [tone] user overrides
+    user_entries = get_section(section)
+    for name, text in user_entries.items():
+        # Key case is preserved (optionxform = str) so use name directly.
+        base[name] = text
+
+    # Build ordered result: sorted alphabetical, Custom last
+    result: Dict[str, str] = {}
+    for name in sorted(base):
+        if name.lower() != "custom":
+            result[name] = base[name]
+    result["Custom"] = ""
+    return result
+
+
+# =============================================================================
+# Long-text defaults management: [defaults] section
+# =============================================================================
+
+
+def get_default_text(key: str, fallback: str = "") -> str:
+    """Get a long-text default value from the [defaults] section.
+
+    Suitable for multi-line values (system instructions, summary, etc.).
+    Falls back to built-in constants if not found in INI.
+
+    Args:
+        key: Key in [defaults] section (e.g. ``'SystemInstruction'``).
+        fallback: Value returned if key absent in INI and no built-in exists.
+
+    Returns:
+        Text value.
+
+    Example:
+        >>> get_default_text('SystemInstruction')
+        'You are an expert translator...'
+    """
+    val = get_str("defaults", key, "")
+    if val:
+        return val
+    # Built-in constants
+    if key == "SystemInstruction":
+        return _BUILTIN_SYSTEM_INSTRUCTION
+    if key == "Summary":
+        return _BUILTIN_SUMMARY_DEFAULT
+    return fallback
+
+
+def set_default_text(key: str, value: str) -> bool:
+    """Save a long-text default value to the [defaults] section.
+
+    Args:
+        key: Key in [defaults] section.
+        value: Text to store.
+
+    Returns:
+        True on success.
+    """
+    return set_default("defaults", key, value)
+
+
+def restore_preset_defaults(section: str) -> bool:
+    """Remove all user overrides from a preset section to restore factory defaults.
+
+    Args:
+        section: ``'style'`` or ``'tone'``.
+
+    Returns:
+        True on success.
+    """
+    return remove_section(section)
+
+
+# =============================================================================
+# Default tone / style helpers  [defaults] section
+# =============================================================================
+
+
+def get_default_style() -> str:
+    """Get the default style preset name from [defaults].
+
+    Returns:
+        Preset name string (default ``'Natural'``).
+    """
+    return get_str("defaults", "default_style", "Natural")
+
+
+def set_default_style(name: str) -> bool:
+    """Set the default style preset name in [defaults].
+
+    Args:
+        name: Preset name to use as default.
+
+    Returns:
+        True on success.
+    """
+    return set_default("defaults", "default_style", name)
+
+
+def get_default_tone() -> str:
+    """Get the default tone preset name from [defaults].
+
+    Returns:
+        Preset name string (default ``'Neutral'``).
+    """
+    return get_str("defaults", "default_tone", "Neutral")
+
+
+def set_default_tone(name: str) -> bool:
+    """Set the default tone preset name in [defaults].
+
+    Args:
+        name: Preset name to use as default.
+
+    Returns:
+        True on success.
+    """
+    return set_default("defaults", "default_tone", name)
+
+
+# =============================================================================
+# System Instructions Presets  [system_instructions] section
+# =============================================================================
+
+
+def get_si_preset(name: str) -> str:
+    """Get a System Instructions preset from [system_instructions].
+
+    Falls back to the built-in default content for the ``'Default'`` preset.
+
+    Args:
+        name: Preset name (case-sensitive).
+
+    Returns:
+        Preset text, or empty string if not found.
+    """
+    val = get_str("system_instructions", name, "")
+    if val:
+        return val
+    if name == "Default":
+        return _BUILTIN_SYSTEM_INSTRUCTION
+    return ""
+
+
+def set_si_preset(name: str, text: str) -> bool:
+    """Save a System Instructions preset to [system_instructions].
+
+    Args:
+        name: Preset name.
+        text: System instruction text.
+
+    Returns:
+        True on success.
+    """
+    return set_default("system_instructions", name, text)
+
+
+def delete_si_preset(name: str) -> bool:
+    """Remove a user SI preset (cannot delete 'Default').
+
+    Args:
+        name: Preset name to remove.
+
+    Returns:
+        True if it existed and was removed.
+    """
+    if name == "Default":
+        return False
+    config = _load_ini()
+    if not config.has_section("system_instructions"):
+        return False
+    if not config.has_option("system_instructions", name):
+        return False
+    config.remove_option("system_instructions", name)
+    _save_ini(config)
+    return True
+
+
+def get_all_si_presets() -> Dict[str, str]:
+    """Get all System Instructions presets merged with built-in defaults.
+
+    Returns:
+        Ordered dict: ``Custom`` first, then ``Default``, then user presets
+        alphabetically.
+    """
+    merged: Dict[str, str] = {"Default": _BUILTIN_SYSTEM_INSTRUCTION}
+    user_entries = get_section("system_instructions")
+    for name, text in user_entries.items():
+        if text:
+            merged[name] = text
+
+    result: Dict[str, str] = {"Custom": ""}
+    if "Default" in merged:
+        result["Default"] = merged["Default"]
+    for name in sorted(merged):
+        if name.lower() != "custom" and name != "Default":
+            result[name] = merged[name]
+    return result
+
+
+def migrate_si_presets_from_json(json_path: Path) -> bool:
+    """Import System Instructions presets from a legacy JSON file.
+
+    Reads the JSON, writes each entry to [system_instructions], and
+    optionally renames the file to ``*.migrated`` when done.
+
+    Args:
+        json_path: Path to the legacy JSON presets file.
+
+    Returns:
+        True if migration succeeded (or file did not exist).
+    """
+    import json
+
+    if not json_path.exists():
+        return True
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return False
+        for name, text in data.items():
+            if name and isinstance(text, str) and name.lower() != "custom":
+                set_si_preset(name, text)
+        # Mark as migrated so future runs skip it.
+        migrated_path = json_path.with_suffix(".json.migrated")
+        json_path.rename(migrated_path)
+        logger.info("Migrated SI presets from %s \u2192 INI", json_path)
+        return True
+    except Exception as exc:
+        logger.warning("SI presets JSON migration failed: %s", exc)
+        return False
+
+
+# =============================================================================
+# Global Options section helpers (caching / limit / prompts / log / fileio)
+# These thin wrappers give callers a typed API for the new INI sections.
+# =============================================================================
+
+
+def get_caching_setting(key: str, fallback: Any = None) -> Any:
+    """Read a value from the [caching] section."""
+    if isinstance(fallback, bool):
+        return get_bool("caching", key, fallback)
+    if isinstance(fallback, int):
+        return get_int("caching", key, fallback)
+    return get_str("caching", key, str(fallback) if fallback is not None else "")
+
+
+def set_caching_setting(key: str, value: Any) -> bool:
+    """Write a value to the [caching] section."""
+    return set_default("caching", key, value)
+
+
+def get_limit_setting(key: str, fallback: Any = None) -> Any:
+    """Read a value from the [limit] section (was 'safety')."""
+    if isinstance(fallback, bool):
+        return get_bool("limit", key, fallback)
+    if isinstance(fallback, int):
+        return get_int("limit", key, fallback)
+    return get_str("limit", key, str(fallback) if fallback is not None else "")
+
+
+def set_limit_setting(key: str, value: Any) -> bool:
+    """Write a value to the [limit] section."""
+    return set_default("limit", key, value)
+
+
+def get_prompts_setting(key: str, fallback: Any = None) -> Any:
+    """Read a value from the [prompts] section."""
+    if isinstance(fallback, bool):
+        return get_bool("prompts", key, fallback)
+    if isinstance(fallback, int):
+        return get_int("prompts", key, fallback)
+    return get_str("prompts", key, str(fallback) if fallback is not None else "")
+
+
+def set_prompts_setting(key: str, value: Any) -> bool:
+    """Write a value to the [prompts] section."""
+    return set_default("prompts", key, value)
+
+
+def get_log_setting(key: str, fallback: Any = None) -> Any:
+    """Read a value from the [log] section."""
+    if isinstance(fallback, bool):
+        return get_bool("log", key, fallback)
+    if isinstance(fallback, int):
+        return get_int("log", key, fallback)
+    return get_str("log", key, str(fallback) if fallback is not None else "")
+
+
+def set_log_setting(key: str, value: Any) -> bool:
+    """Write a value to the [log] section."""
+    return set_default("log", key, value)
+
+
+def get_fileio_setting(key: str, fallback: Any = None) -> Any:
+    """Read a value from the [fileio] section."""
+    if isinstance(fallback, bool):
+        return get_bool("fileio", key, fallback)
+    if isinstance(fallback, int):
+        return get_int("fileio", key, fallback)
+    return get_str("fileio", key, str(fallback) if fallback is not None else "")
+
+
+def set_fileio_setting(key: str, value: Any) -> bool:
+    """Write a value to the [fileio] section."""
+    return set_default("fileio", key, value)
+
+
+def get_security_setting(key: str, fallback: Any = None) -> Any:
+    """Read a value from the [security] section."""
+    if isinstance(fallback, bool):
+        return get_bool("security", key, fallback)
+    return get_str("security", key, str(fallback) if fallback is not None else "")
+
+
+def set_security_setting(key: str, value: Any) -> bool:
+    """Write a value to the [security] section."""
+    return set_default("security", key, value)
+
+
+def get_session_setting(key: str, fallback: Any = None) -> Any:
+    """Read a value from the [session] section."""
+    if isinstance(fallback, bool):
+        return get_bool("session", key, fallback)
+    if isinstance(fallback, int):
+        return get_int("session", key, fallback)
+    return get_str("session", key, str(fallback) if fallback is not None else "")
+
+
+def set_session_setting(key: str, value: Any) -> bool:
+    """Write a value to the [session] section."""
+    return set_default("session", key, value)
+
+
+# ---------------------------------------------------------------------------
+# Conditional Prompt helpers (Dialogue / Menu / Choice / Unknown)
+# ---------------------------------------------------------------------------
+
+#: Factory-default prompts used when nothing is stored in CherryAI.ini.
+_CONDITIONAL_PROMPT_DEFAULTS: Dict[str, str] = {
+    "dialogue": (
+        "# Content Type: Dialogue\n"
+        "These lines are character dialogue. "
+        "Pay attention to the speaker names, maintain consistent voice and tone "
+        "for each character, and preserve emotional nuances in the conversation."
+    ),
+    "menu": (
+        "# Content Type: Menu\n"
+        "These lines are menu items from a game UI. "
+        "Translate each item concisely and clearly. Preserve formatting, order, "
+        "and any shortcut indicators. Keep translations brief and action-oriented."
+    ),
+    "choice": (
+        "# Content Type: Choices\n"
+        "These lines are player choices or options. "
+        "Translate each choice concisely and distinctly so the player can "
+        "differentiate between options. Preserve numbering or bullet formatting."
+    ),
+    "unknown": (
+        "# Content Type: Mixed\n"
+        "These lines may contain dialogue, menu items, or choices. "
+        "Translate each line appropriately based on its apparent purpose. "
+        "Maintain formatting and keep menu/choice items concise."
+    ),
+}
+
+
+def get_conditional_prompt(context_type: str, fallback: str = "") -> str:
+    """Return the configurable context-type prompt from ``[prompts]``.
+
+    Falls back to the factory default if no override is stored.
+
+    Args:
+        context_type: One of ``"dialogue"``, ``"menu"``, ``"choice"``,
+            ``"unknown"``.
+        fallback: Value returned when context_type is unrecognised **and**
+            no factory default exists.
+
+    Returns:
+        Prompt text (may be empty string if context_type is unknown).
+    """
+    factory = _CONDITIONAL_PROMPT_DEFAULTS.get(context_type, fallback)
+    stored = get_str("prompts", context_type, "")
+    return stored if stored else factory
+
+
+def set_conditional_prompt(context_type: str, value: str) -> bool:
+    """Persist a context-type prompt override to ``[prompts]``.
+
+    Args:
+        context_type: One of ``"dialogue"``, ``"menu"``, ``"choice"``,
+            ``"unknown"``.
+        value: New prompt text.  Pass empty string to revert to factory default.
+
+    Returns:
+        ``True`` if the value was saved successfully.
+    """
+    return set_default("prompts", context_type, value)

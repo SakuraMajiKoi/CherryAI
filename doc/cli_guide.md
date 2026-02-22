@@ -814,8 +814,8 @@ python CherryAI.py translate story.txt -s ja -t fr -n 100
 ### Translation Quality Issues
 
 - Add glossary entries: `python CherryAI.py glossary add ...`
-- Edit `config/game_summary.txt` for context
-- Edit `config/translation_style.txt` for style preferences
+- Set `summary_file` in `CherryAI.ini [project]` for game context
+- Set `style_file` in `CherryAI.ini [translation]` for style preferences
 
 ---
 
@@ -965,15 +965,14 @@ python CherryAI.py translate file.txt --style-preset fantasy_medieval,archaic_en
 | File | Purpose |
 |------|---------|
 | `CherryAI.ini` | Main configuration (API keys, settings) |
-| `config/sample.txt` | Test file for verification |
+| `dev/example/sample.txt` | Test file for verification |
 | `user/glossary.csv` | Character/term translations |
 | `user/rate_limits.json` | Rate limit usage tracking |
 | `cache/request_cache.json` | Cached API responses (planned) |
-| `config/game_summary.txt` | Story context for AI |
-| `config/translation_style.txt` | Style preferences |
-| `config/style_presets/` | Built-in style presets (planned) |
+| `user/CherryAI.ini [project].summary_file` | Path to game context file (optional) |
+| `user/CherryAI.ini [translation].style_file` | Path to style preferences file (optional) |
 | `user/style_presets/` | Custom style presets (planned) |
-| `config/prompt.txt` | Base translation prompt |
+| Base prompt | Embedded in `_DEFAULT_PROMPT_TEMPLATE` constant (prompt_builder.py) |
 | `logs/api_log.txt` | API request/response log |
 | `logs/api_log_YYYYMMDD_HHMMSS.txt` | Timestamped logs (planned) |
 | `logs/api_log_summary.csv` | Log summary file (planned) |

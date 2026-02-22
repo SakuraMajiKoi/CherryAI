@@ -237,27 +237,38 @@ class AutoPipeline:
                 self._notify_complete(step_name, True)
                 return
 
-            # Apply defaults from defaults.ini
-            defaults_path = Path("config/defaults.ini")
-            if not defaults_path.exists():
-                # Try relative to workspace
-                defaults_path = Path(__file__).parent.parent / "config" / "defaults.ini"
-
-            if defaults_path.exists():
-                self._apply_defaults_from_ini(manifest, defaults_path)
-                logger.info("Applied defaults from %s", defaults_path)
-            else:
-                logger.debug("No defaults.ini found, using built-in defaults")
+            # Apply defaults from embedded factory defaults (Session 25: removed config/defaults.ini)
+            from .ini_manager import get_all_initial_defaults
+            defaults = get_all_initial_defaults()
+            if defaults:
+                self._apply_defaults_from_dict(manifest, defaults)
+                logger.info("Applied embedded factory defaults to manifest")
 
             self._notify_complete(step_name, True)
 
         except Exception as e:
             raise PipelineError(step_name, str(e)) from e
 
+    def _apply_defaults_from_dict(
+        self, manifest: "Manifest", defaults: Dict[str, Any]
+    ) -> None:
+        """Apply settings from a defaults dict to manifest.
+
+        Args:
+            manifest: Manifest to update.
+            defaults: Dict of default key/value pairs.
+        """
+        # Update manifest settings if not already set
+        if hasattr(manifest, "settings"):
+            for key, value in defaults.items():
+                if not getattr(manifest.settings, key, None):
+                    if hasattr(manifest.settings, key):
+                        setattr(manifest.settings, key, value)
+
     def _apply_defaults_from_ini(
         self, manifest: "Manifest", defaults_path: Path
     ) -> None:
-        """Apply settings from defaults.ini to manifest.
+        """Apply settings from defaults.ini to manifest (legacy — kept for compat).
 
         Args:
             manifest: Manifest to update.

@@ -751,22 +751,18 @@ def _is_aggressive_enabled() -> bool:
     global _AGGR_DEDUP_FLAG
     if _AGGR_DEDUP_FLAG is not None:
         return _AGGR_DEDUP_FLAG
-    # Default False
+    # Default False — read from user/CherryAI.ini [caching].aggressive_dedup
+    # (Session 25: removed config/config.txt, migrated to CherryAI.ini)
     enabled = False
     try:
-        cfg_path = Path(__file__).resolve().parent.parent / "config" / "config.txt"
-        if cfg_path.exists():
-            txt = cfg_path.read_text(encoding="utf-8", errors="ignore")
-            for raw in txt.splitlines():
-                line = raw.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if "=" in line:
-                    k, v = line.split("=", 1)
-                    if k.strip().lower() == "aggressive_dedup":
-                        val = v.strip().strip().lower()
-                        enabled = val in {"true", "1", "yes", "y"}
-                        break
+        import configparser
+        ini_path = Path(__file__).resolve().parents[1] / "user" / "CherryAI.ini"
+        if ini_path.exists():
+            cfg = configparser.ConfigParser()
+            cfg.read(ini_path, encoding="utf-8")
+            if cfg.has_option("caching", "aggressive_dedup"):
+                val = cfg.get("caching", "aggressive_dedup").strip().lower()
+                enabled = val in {"true", "1", "yes", "y"}
     except Exception:
         enabled = False
     _AGGR_DEDUP_FLAG = enabled

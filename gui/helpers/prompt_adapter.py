@@ -429,7 +429,7 @@ class BatchRetryResultView:
 
 
 def get_translation_style(
-    style_file: str = "config/translation_style.txt",
+    style_file: str = "",
     config_dir: Optional[Path] = None,
 ) -> Tuple[str, str]:
     """Load translation style from file.
@@ -488,7 +488,7 @@ def format_style_section(style: str) -> str:
 
 
 def get_game_summary(
-    summary_file: str = "config/game_summary.txt",
+    summary_file: str = "",
 ) -> Tuple[str, str]:
     """Load game summary from file.
 
@@ -992,7 +992,7 @@ def create_prompt_builder(
     """
     if _PromptBuilder is not None:
         try:
-            builder = _PromptBuilder(config_dir=config_dir or Path("config"))
+            builder = _PromptBuilder(config_dir=config_dir or Path("."))
             return (builder, "core")
         except Exception as e:
             logger.debug(f"Core PromptBuilder failed: {e}")
@@ -1013,7 +1013,7 @@ def get_rolling_context_config(
     """
     if _PromptBuilder is not None and _RollingContextConfig is not None:
         try:
-            builder = _PromptBuilder(config_dir=config_dir or Path("config"))
+            builder = _PromptBuilder(config_dir=config_dir or Path("."))
             rc = builder.rolling_context_config
             view = RollingContextView(
                 enabled=rc.enabled,

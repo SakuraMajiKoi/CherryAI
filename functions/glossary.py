@@ -2,15 +2,17 @@ from __future__ import annotations
 
 """Unified glossary helpers for CherryAI.
 
-This module manages a centralized glossary at CherryAI/user/glossary.csv with:
-- Column 1: Original (mandatory key)
-- Column 2: Translation (optional, language-dependent)
-- Column 3: Notes (optional context)
-- Column 4: Source (what modified it last: Analysis, API, User, etc.)
-- Column 5: Type (Name, Location, Term, Code)
-- Column 6: Gender (for Names: Male, Female, Neutral, Unknown)
-- Column 7: Refers_to_themself_as (for Names: pronoun/style)
-- Column 8: Referred_to_as (for Names: honorifics/title)
+This module manages a centralized glossary at CherryAI/user/globalglossary.tsv with:
+- Column 1: Original  (mandatory key)
+- Column 2: Translation  (optional, language-dependent)
+- Column 3: Notes  (optional context; extended metadata encoded as key=value pairs)
+
+Extended metadata (source, type, gender, pronouns, honorifics) is stored inside
+the Notes column as a semicolon-separated suffix in parentheses, e.g.:
+    "Main character (source=Analysis; type=Name; gender=Female)"
+
+Legacy 8-column CSV files (GlobalGlossary.csv, glossary.csv) are automatically
+migrated to the 3-column TSV format on first access.
 
 Functions preserve existing entries and append new ones without deletion.
 """
@@ -47,8 +49,15 @@ from .glossaries.code_glossary_constants import (
 
 # ---------------- Unified glossary paths and constants ---------------- #
 
-# Header for unified glossary.csv
+# Header for unified glossary TSV (3-column design — Phase 62)
 UNIFIED_HEADER = [
+    "Original",
+    "Translation",
+    "Notes",
+]
+
+# Legacy 8-column CSV header retained for backward-compat migration only
+_LEGACY_CSV_HEADER = [
     "Original",
     "Translation",
     "Notes",
@@ -168,16 +177,20 @@ def diagnose_glossary_path(path: Path) -> Dict[str, Any]:
 
 
 def _unified_glossary_path() -> Path:
-    """Return path to unified glossary.
-    
-    Default: CherryAI/user/glossary.csv
+    """Return path to unified glossary TSV.
+
+    Default: CherryAI/user/globalglossary.tsv  (Phase 62 canonical target)
     Test override: set env var CHERRYAI_TEST_GLOSSARY_PATH to a file path.
+
+    Migration chain (runs once on first access):
+        glossary.csv  →  GlobalGlossary.csv  →  globalglossary.tsv
+    If global_glossary.json exists and globalglossary.tsv is absent, the JSON
+    data is also merged during this call.
     """
     # Allow tests to override glossary location
     override = os.environ.get("CHERRYAI_TEST_GLOSSARY_PATH", "").strip()
     if override:
         p = Path(override)
-        # Ensure parent exists for write operations
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
         except Exception:
@@ -185,20 +198,53 @@ def _unified_glossary_path() -> Path:
         return p
 
     here = Path(__file__).resolve()
-    # Navigate from functions/ to CherryAI/ then to user/
     CherryAI_root = here.parent.parent
     user_dir = CherryAI_root / "user"
     user_dir.mkdir(parents=True, exist_ok=True)
-    return user_dir / "glossary.csv"
+
+    target = user_dir / "globalglossary.tsv"
+
+    # --- Migration chain (runs only when target doesn't exist yet) ---
+    if not target.exists():
+        # Step 1: glossary.csv → GlobalGlossary.csv
+        old_csv1 = user_dir / "glossary.csv"
+        old_csv2 = user_dir / "GlobalGlossary.csv"
+        if old_csv1.exists() and not old_csv2.exists():
+            try:
+                old_csv1.rename(old_csv2)
+            except Exception:
+                pass
+
+        # Step 2: GlobalGlossary.csv → globalglossary.tsv (convert format)
+        if old_csv2.exists():
+            try:
+                _migrate_csv_to_tsv(old_csv2, target)
+                logging.info("Migrated GlobalGlossary.csv → globalglossary.tsv")
+            except Exception as exc:
+                logging.warning("CSV → TSV migration failed: %s", exc)
+                # Fallback: return old csv path so nothing is lost
+                return old_csv2
+
+        # Step 3: merge global_glossary.json into globalglossary.tsv
+        json_legacy = user_dir / "global_glossary.json"
+        if json_legacy.exists():
+            try:
+                _merge_json_glossary_into_tsv(json_legacy, target)
+                logging.info("Merged global_glossary.json → globalglossary.tsv")
+                json_legacy.rename(json_legacy.with_suffix(".json.migrated"))
+            except Exception as exc:
+                logging.warning("JSON glossary merge failed: %s", exc)
+
+    return target
 
 
 def _code_glossary_path() -> Path:
-    """Return path to code glossary: CherryAI/user/codeglossary.csv"""
+    """Return path to global code database: CherryAI/user/codedatabase.tsv"""
     here = Path(__file__).resolve()
     CherryAI_root = here.parent.parent
     user_dir = CherryAI_root / "user"
     user_dir.mkdir(parents=True, exist_ok=True)
-    return user_dir / "codeglossary.csv"
+    return user_dir / "codedatabase.tsv"
 
 
 def _archive_glossary_with_timestamp(glossary_path: Path) -> Optional[Path]:
@@ -225,11 +271,12 @@ def _archive_glossary_with_timestamp(glossary_path: Path) -> Optional[Path]:
         
         # Find next available number for this date
         parent_dir = glossary_path.parent
-        base_name = glossary_path.stem  # "glossary"
+        base_name = glossary_path.stem  # "glossary" or "globalglossary"
+        ext = glossary_path.suffix  # ".tsv" or ".csv"
         
         number = 1
         while True:
-            archive_name = f"{base_name}.{date_prefix}-{number}.csv"
+            archive_name = f"{base_name}.{date_prefix}-{number}{ext}"
             archive_path = parent_dir / archive_name
             if not archive_path.exists():
                 break
@@ -255,6 +302,78 @@ def _read_csv_rows(path: Path) -> List[List[str]]:
         for row in csv.reader(f):
             rows.append(row)
     return rows
+
+
+def _migrate_csv_to_tsv(csv_path: Path, tsv_path: Path) -> None:
+    """Convert a legacy 8-column CSV glossary to 3-column TSV.
+
+    Extra columns (source, type, gender, refers_to_themself_as, referred_to_as)
+    are encoded as key=value pairs in the Notes field if non-empty.
+    """
+    rows = _read_csv_rows(csv_path)
+    tsv_rows: List[List[str]] = [["Original", "Translation", "Notes"]]
+    for i, row in enumerate(rows):
+        if not row or not row[0].strip():
+            continue
+        # Skip header
+        if i == 0 and row[0].strip().lower() == "original":
+            continue
+        while len(row) < 8:
+            row.append("")
+        original, translation, notes = row[0], row[1], row[2]
+        source, etype, gender, refers, referred = row[3], row[4], row[5], row[6], row[7]
+        # Encode non-empty extra fields into Notes parenthetical
+        extras = []
+        if source:
+            extras.append(f"source={source}")
+        if etype:
+            extras.append(f"type={etype}")
+        if gender:
+            extras.append(f"gender={gender}")
+        if refers:
+            extras.append(f"refers_as={refers}")
+        if referred:
+            extras.append(f"referred_as={referred}")
+        if extras:
+            suffix = " (" + "; ".join(extras) + ")"
+            notes = notes + suffix if notes else suffix.strip()
+        tsv_rows.append([original, translation, notes])
+    _write_tsv(tsv_path, tsv_rows)
+
+
+def _merge_json_glossary_into_tsv(json_path: Path, tsv_path: Path) -> None:
+    """Merge a legacy global_glossary.json into globalglossary.tsv.
+
+    JSON format expected: list of {"col1": ..., "col2": ..., "col3": ...} dicts.
+    Entries whose Original is already present in TSV are skipped.
+    """
+    import json
+    try:
+        with json_path.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        return
+    if not isinstance(data, list):
+        return
+
+    # Load existing TSV entries
+    existing = read_unified_glossary()
+
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        original = str(item.get("col1", "")).strip()
+        if not original or original.lower() == "original":
+            continue
+        if original in existing:
+            continue  # don't overwrite
+        existing[original] = GlossaryEntry(
+            original=original,
+            translation=str(item.get("col2", "")),
+            notes=str(item.get("col3", "")),
+        )
+
+    write_unified_glossary(existing)
 
 
 def _write_csv(path: Path, rows: List[List[str]]) -> None:
@@ -285,7 +404,16 @@ def _write_csv(path: Path, rows: List[List[str]]) -> None:
 
 
 class GlossaryEntry:
-    """Represents a single glossary entry."""
+    """Represents a single glossary entry.
+
+    The canonical storage format is a 3-column TSV (Original, Translation, Notes).
+    Extended metadata (source, type, gender, refers_to_themself_as, referred_to_as)
+    is serialised into the Notes field as a parenthetical key=value suffix and
+    parsed back transparently when reading.
+
+    Example Notes value with metadata:
+        "Main heroine (source=Analysis; type=Name; gender=Female)"
+    """
 
     def __init__(
         self,
@@ -307,8 +435,78 @@ class GlossaryEntry:
         self.refers_to_themself_as = refers_to_themself_as
         self.referred_to_as = referred_to_as
 
+    # --- TSV 3-column serialisation (Phase 62 canonical format) ---
+
+    def to_tsv_row(self) -> List[str]:
+        """Encode entry as [Original, Translation, Notes] for TSV storage.
+
+        Non-empty extended fields are appended to Notes as
+        " (source=X; type=Y; gender=Z; refers_as=A; referred_as=B)".
+        """
+        extras = []
+        if self.source:
+            extras.append(f"source={self.source}")
+        if self.entry_type:
+            extras.append(f"type={self.entry_type}")
+        if self.gender:
+            extras.append(f"gender={self.gender}")
+        if self.refers_to_themself_as:
+            extras.append(f"refers_as={self.refers_to_themself_as}")
+        if self.referred_to_as:
+            extras.append(f"referred_as={self.referred_to_as}")
+
+        notes = self.notes
+        if extras:
+            suffix = "(" + "; ".join(extras) + ")"
+            notes = (notes + " " + suffix).strip() if notes else suffix
+        return [self.original, self.translation, notes]
+
+    @staticmethod
+    def from_tsv_row(row: List[str]) -> "GlossaryEntry":
+        """Create entry from a 3-column TSV row; decode embedded metadata."""
+        while len(row) < 3:
+            row.append("")
+        original, translation, raw_notes = row[0], row[1], row[2]
+
+        # Parse optional "(key=value; ...)" metadata suffix
+        source = entry_type = gender = refers = referred = ""
+        notes = raw_notes
+        import re as _re
+        m = _re.search(r"\(([^)]+)\)\s*$", raw_notes)
+        if m:
+            meta_str = m.group(1)
+            # Only treat as metadata if it contains key=value pairs
+            if "=" in meta_str:
+                meta: dict[str, str] = {}
+                for part in meta_str.split(";"):
+                    part = part.strip()
+                    if "=" in part:
+                        k, _, v = part.partition("=")
+                        meta[k.strip()] = v.strip()
+                if any(k in meta for k in ("source", "type", "gender", "refers_as", "referred_as")):
+                    source = meta.get("source", "")
+                    entry_type = meta.get("type", "")
+                    gender = meta.get("gender", "")
+                    refers = meta.get("refers_as", "")
+                    referred = meta.get("referred_as", "")
+                    # Strip the metadata suffix from plain Notes text
+                    notes = raw_notes[: m.start()].rstrip()
+
+        return GlossaryEntry(
+            original=original,
+            translation=translation,
+            notes=notes,
+            source=source,
+            entry_type=entry_type,
+            gender=gender,
+            refers_to_themself_as=refers,
+            referred_to_as=referred,
+        )
+
+    # --- Legacy CSV compatibility (kept for internal migration only) ---
+
     def to_row(self) -> List[str]:
-        """Convert entry to CSV row."""
+        """Legacy: Convert entry to 8-column CSV row (used by migration only)."""
         return [
             self.original,
             self.translation,
@@ -322,7 +520,7 @@ class GlossaryEntry:
 
     @staticmethod
     def from_row(row: List[str]) -> "GlossaryEntry":
-        """Create entry from CSV row (pads missing columns with empty strings)."""
+        """Legacy: Create entry from 8-column CSV row (pads missing columns)."""
         while len(row) < 8:
             row.append("")
         return GlossaryEntry(
@@ -338,89 +536,113 @@ class GlossaryEntry:
 
 
 def read_unified_glossary() -> Dict[str, GlossaryEntry]:
-    """Read unified glossary and return dict mapping Original -> GlossaryEntry.
-    
-    Skips header row if present (first cell = 'Original').
-    Returns empty dict if file doesn't exist.
+    """Read unified glossary TSV and return dict mapping Original -> GlossaryEntry.
+
+    Reads from ``user/globalglossary.tsv`` (3-column TSV, Phase 62 format).
+    Also accepts legacy 8-column CSV files transparently (migration triggers
+    automatically on the first call via ``_unified_glossary_path()``).
+
+    Returns:
+        Ordered dict of Original → GlossaryEntry (empty if file missing).
     """
     path = _unified_glossary_path()
-    rows = _read_csv_rows(path)
     entries: Dict[str, GlossaryEntry] = {}
-    
+
+    if not path.exists():
+        return entries
+
+    # Detect format: TSV vs CSV
+    is_tsv = path.suffix.lower() == ".tsv"
+
+    rows: List[List[str]] = []
+    if is_tsv:
+        rows = _read_tsv_rows(path)
+    else:
+        rows = _read_csv_rows(path)
+
     for i, row in enumerate(rows):
         if not row or not row[0].strip():
             continue
         # Skip header row
         if i == 0 and row[0].strip().lower() == "original":
             continue
-        entry = GlossaryEntry.from_row(row)
+
+        if is_tsv or len(row) <= 3:
+            entry = GlossaryEntry.from_tsv_row(row)
+        else:
+            # Legacy 8-column CSV — use legacy parser
+            entry = GlossaryEntry.from_row(row)
+
         entries[entry.original] = entry
-    
+
     return entries
 
 
 def write_unified_glossary(entries: Dict[str, GlossaryEntry]) -> Path:
-    """Write glossary entries to unified CSV (preserves insertion order from dict).
-    
-    Writes header row followed by all entries.
+    """Write glossary entries to unified TSV (3-column, Phase 62 format).
+
+    Writes header row followed by all entries to ``user/globalglossary.tsv``.
+    Extended metadata fields are encoded into the Notes column.
+
     Performs diagnostics and raises detailed exceptions if write fails.
     """
     path = _unified_glossary_path()
-    
+
     # Perform pre-write diagnostics
     diag = diagnose_glossary_path(path)
     logging.debug("Pre-write diagnostics for %s: %s", path, diag)
-    
-    # Check if we can write
+
     if diag["exists"] and not diag["writable"]:
-        error_msg = f"Glossary file exists but is not writable: {path}\n"
-        error_msg += f"Error: {diag.get('error', 'Unknown')}\n"
-        error_msg += "Check if the file is open in another program or permissions are incorrect."
+        error_msg = (
+            f"Glossary file exists but is not writable: {path}\n"
+            f"Error: {diag.get('error', 'Unknown')}\n"
+            "Check if the file is open in another program or permissions are incorrect."
+        )
         logging.error(error_msg)
         raise PermissionError(error_msg)
-    
+
     if not diag["parent_exists"] or not diag["parent_writable"]:
-        error_msg = f"Cannot write to glossary directory: {path.parent}\n"
-        error_msg += f"Parent exists: {diag['parent_exists']}, Writable: {diag['parent_writable']}\n"
-        error_msg += f"Error: {diag.get('error', 'Unknown')}"
+        error_msg = (
+            f"Cannot write to glossary directory: {path.parent}\n"
+            f"Parent exists: {diag['parent_exists']}, Writable: {diag['parent_writable']}\n"
+            f"Error: {diag.get('error', 'Unknown')}"
+        )
         logging.error(error_msg)
         raise PermissionError(error_msg)
-    
-    # Attempt write
-    rows = [UNIFIED_HEADER]
+
+    # Build TSV rows
+    rows: List[List[str]] = [UNIFIED_HEADER]
     for entry in entries.values():
-        rows.append(entry.to_row())
-    
+        rows.append(entry.to_tsv_row())
+
     try:
-        _write_csv(path, rows)
+        _write_tsv(path, rows)
     except Exception as e:
-        # Post-failure diagnostics
         post_diag = diagnose_glossary_path(path)
-        error_msg = f"Failed to write glossary: {e}\n"
-        error_msg += f"Path: {path}\n"
-        error_msg += f"Post-failure diagnostics:\n"
-        error_msg += f"  Exists: {post_diag['exists']}\n"
-        error_msg += f"  Size: {post_diag['size_bytes']} bytes\n"
-        error_msg += f"  Writable: {post_diag['writable']}\n"
-        error_msg += f"  Error: {post_diag.get('error', 'None')}"
+        error_msg = (
+            f"Failed to write glossary: {e}\n"
+            f"Path: {path}\n"
+            f"Post-failure diagnostics:\n"
+            f"  Exists: {post_diag['exists']}\n"
+            f"  Size: {post_diag['size_bytes']} bytes\n"
+            f"  Writable: {post_diag['writable']}\n"
+            f"  Error: {post_diag.get('error', 'None')}"
+        )
         logging.error(error_msg)
         raise RuntimeError(error_msg) from e
-    
-    # Post-write verification
+
     post_diag = diagnose_glossary_path(path)
     if not post_diag["exists"]:
-        error_msg = f"Glossary was written but file does not exist: {path}\n"
-        error_msg += f"This is unexpected. Post-write diagnostics: {post_diag}"
-        logging.error(error_msg)
-        raise RuntimeError(error_msg)
-    
+        raise RuntimeError(f"Glossary written but file missing: {path}")
     if post_diag["size_bytes"] == 0:
-        error_msg = f"Glossary was written but file is empty: {path}\n"
-        error_msg += f"Attempted to write {len(entries)} entries."
-        logging.error(error_msg)
-        raise RuntimeError(error_msg)
-    
-    logging.info("Wrote unified glossary: %s (%d entries, %d bytes)", path, len(entries), post_diag["size_bytes"])
+        raise RuntimeError(
+            f"Glossary written but file is empty: {path} ({len(entries)} entries attempted)"
+        )
+
+    logging.info(
+        "Wrote unified glossary: %s (%d entries, %d bytes)",
+        path, len(entries), post_diag["size_bytes"],
+    )
     return path
 
 

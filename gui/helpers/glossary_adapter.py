@@ -589,7 +589,7 @@ def get_presets_by_category() -> Dict[str, List[StylePresetView]]:
 
 def create_project_config(
     name: str = "",
-    summary_file: str = "config/game_summary.txt",
+    summary_file: str = "",
     genre: str = "",
     tone: str = "",
     style_notes: str = "",

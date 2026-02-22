@@ -24,7 +24,8 @@ MODULE AWARENESS (Always check these when implementing features):
 - formats/      : 8 format handlers - file I/O for CSV, TXT, JSON, etc.
 - gui/steps/    : 10 workflow tabs - display and user interaction only
 - gui/components/: Reusable UI widgets (1 module: table.py)
-- gui/dialogs/  : Modal dialogs and forms (4 modules: global_options.py, project_dialog.py, input_dialog.py, loading_progress.py)
+- gui/dialogs/  : Modal dialogs and forms (5 modules: global_options.py, project_dialog.py, input_dialog.py, loading_progress.py, password_dialog.py)
+- gui/widgets/  : Reusable standalone widgets (1 module: password_strength.py) [NEW 2026]
 - gui/helpers/  : 7 adapter modules bridging GUI config to processing (mode, analysis, glossary, chunker, prompt, manifest_binding, tooltip)
 - gui/state/    : Application state management (1 module: store.py)
 
@@ -73,7 +74,13 @@ TABLE OF CONTENTS
    3.11 config.py ✅ - Configuration persistence
    3.12 dedup.py ✅ - Deduplication with aggressive mode
    3.13 dependencies.py ✅ - Dependency checks
-   3.14 glossary.py ✅ - Unified glossary system
+   3.14 glossary.py ✅ - Unified glossary system (Phase 62 complete)
+        * Global glossary file: `user/globalglossary.tsv` (3 columns: Original, Translation, Notes)
+        * Auto-migration on first access: glossary.csv → GlobalGlossary.csv → globalglossary.tsv; global_glossary.json merged then renamed .migrated
+        * GlossaryEntry: original, translation, notes, source, entry_type, gender, refers_to_themself_as, referred_to_as
+        * Metadata encoded in Notes as "(source=X; type=Y; gender=Z)" for TSV compatibility
+        * Env var override for tests: CHERRYAI_TEST_GLOSSARY_PATH
+        * ✅ Phase 62: `gui/steps/information.py` widget now reads/writes same `globalglossary.tsv`
    3.15 languages.py ✅ - Language definitions (single source of truth)
    3.16 local_llm.py ✅ - Local LLM integration
    3.17 logit_bias.py ✅ - Token logit bias for API
@@ -92,7 +99,16 @@ TABLE OF CONTENTS
    3.30 style_presets.py ✅ - Translation style presets
    3.31 validation.py ✅🔗 - Translation validation (Step 8, moved from Step 6)
    3.32 wordwrap.py ✅🔗 - Word wrapping (Step 7, moved from Step 8)
-   3.33 ini_manager.py ✅ - INI path resolution and typed access (TASK 21.1)
+   3.33 ini_manager.py ✅ - INI path resolution, typed access, preset management, defaults (TASK 21.1 + 2026)
+        * INI location: user/CherryAI.ini (automigrared from root on first run)
+        * optionxform = str: case-preserving keys (required for preset names like "Natural")
+        * _REQUIRED_SECTIONS: all 10 sections always present; auto-initialised + saved on load
+        * get_all_presets("style"|"tone") — returns built-in + user presets merged
+        * set_preset_text / delete_preset — saves to [style] or [tone] section
+        * get_default_text / set_default_text — long-text defaults from [defaults] section
+        * restore_preset_defaults — clears user overrides from a section
+        * set_last_manifest / get_last_manifest — persist last opened manifest
+        * add_to_recent_manifests / get_recent_manifests — manifest history
    3.34 manifest_manager.py ✅🔗 - Unified manifest state management (TASK 19)
    3.35 manifest_fields.py ✅ - Manifest field type helpers (TASK 22.1) + special format helpers (TASK 22.2)
    3.36 preset_manager.py ✅ - Preset save/load/delete operations (TASK 30.1)
@@ -107,12 +123,27 @@ TABLE OF CONTENTS
    3.45 usage_tracker.py ✅ - API usage analytics and tracking (Phase 17.5)
    3.46 estimation.py ✅ - Token estimation utilities (legacy CLI support)
    
-   3.47 glossaries/ (subfolder - 5 files)
+   3.47 glossaries/ (subfolder - 6 files)
         - __init__.py - Package exports
         - code_glossary_constants.py - Code pattern definitions
-        - code_glossary_functions.py - Code detection/classification
+        - code_glossary_functions.py - Code detection/classification (updated: uses TSV via code_glossary_db)
+        - code_glossary_db.py ✅ — TSV persistence layer (Phase 62: replaced SQLite with `codedatabase.tsv`)
+            * init_db(), read_all_rows() (4-col compat), read_all_rows_extended() (9-col), write_all_rows(), upsert_rows(), delete_row()
+            * 9 columns: Pattern, Type, RegEx, Notes, Visible, IsInvisible, IsCouple, IsNumber, IsWord
+            * Migration on first access: codeglossary.db → codedatabase.tsv; global_codes.json merged then renamed .migrated
+            * Env var override for tests: CHERRYAI_TEST_CODEGLOSSARY_PATH
+            * ✅ Phase 62: `gui/steps/information.py::_global_db_path()` now uses same `codedatabase.tsv`
         - name_glossary_constants.py - Speaker patterns, romanization
         - name_glossary_functions.py - Speaker detection, gender inference
+
+   3.48 api_config.py ✅ — Encrypted API configuration manager (user/API.ini); Phase 62 extended
+        * Single source of ALL API meta information: provider profiles, model, temperature, URL, timeout, rate limits, encrypted keys
+        * ✅ Phase 62: api_profiles.ini consolidated; `[translation]` and `[glossary]` sections added
+        * Key management: set_password(), verify_password(), is_password_set(), set_api_key(), get_api_key(), change_password(), migrate_from_ini()
+        * Profile settings (Phase 62 new): get_profile_setting(profile, key), set_profile_setting(profile, key, value), get_all_profile_settings(profile)
+        * Migration: migrate_profiles_ini(path) — migrates non-secret fields from api_profiles.ini, renames to .migrated
+        * PasswordStrength.assess(pw) / meter_text(pw) — Tiers: Instantly/Weak/Good/Great/Safe
+        * See doc/passwords.md for full security documentation
 
 4. MODI/ MODULES (12 modes - Pre/Post Processing Plugins)
    ✅ = Verified exists | 🔗 = GUI integrated via mode_adapter | ❌ = Not integrated with GUI v2
@@ -166,30 +197,39 @@ TABLE OF CONTENTS
        - __init__.py - Component exports
        - table.py - SharedTable, ColumnDef, TableRow (Phase 43: batch insertion for large datasets; Phase 17: version tracking to cancel stale batches)
    
-   6.6 gui/dialogs/ (5 files - 4 dialog modules)
+   6.6 gui/dialogs/ (6 files - 5 dialog modules)
        - __init__.py - Dialog exports
        - global_options.py - GlobalOptionsDialog with section panels:
-         - OptionSection enum: API, REQUEST, CACHING, LOGGING, SESSION, SAFETY, FILE_IO, PROMPTS
+         - OptionSection enum: API, REQUEST, CACHING, LOGGING, SESSION, LIMIT, FILE_IO, PROMPTS, SECURITY (9 sections)
          - Settings dataclasses: APISettings, RequestSettings, CachingSettings, LoggingSettings,
-           SessionSettings, SafetySettings, FileIOSettings, PromptsSettings
+           SessionSettings, LimitSettings (SafetySettings=alias), FileIOSettings, PromptsSettings
          - APIProviderEntry dataclass: name, provider_type, url, api_key, model (Task 43.6)
          - PROVIDER_PRESETS: 5 provider presets (Task 43.6)
          - _ProviderEditDialog, _PresetPickerDialog helper dialogs (Task 43.6)
-         - GlobalOptions container: all settings + providers list, get_model_list(), get_provider_for_model()
+         - GlobalOptions container: all settings + providers list; `safety` property is alias for `limit`
          - RequestSettings: +thinking_enabled, +thinking_budget, +rolling_context_lines (Tasks 43.8, 43.9)
-         - CachingSettings: +cache_mode (Task 43.7)
+         - CachingSettings: fields renamed — dir, age (days), size (MB), mode; defaults 0=unlimited
          - Sections organized in CATEGORY_ORDER: Connection, Processing, Application
          - TASK 33.2: PromptsSettings for Edit/TLC custom prompts
-           - edit_prompt: str - Custom prompt for Edit steps
-           - tlc_prompt: str - Custom prompt for TLC steps  
+           - edit: str - Custom prompt for Edit steps
+           - tlc: str - Custom prompt for TLC steps  
            - Supports {source_lang} and {target_lang} placeholders
-           - Stored in [prompts] section of config/defaults.ini
+           - Stored in [prompts] section of CherryAI.ini (factory defaults embedded in ini_manager._FACTORY_DEFAULTS_INI_TEXT)
+         - **Session 24+: Conditional Prompts in PromptsSettings (dialogue/menu/choice/unknown):**
+           - PromptsSettings gains 4 new fields: dialogue, menu, choice, unknown
+           - DEFAULT_DIALOGUE_PROMPT / DEFAULT_MENU_PROMPT / DEFAULT_CHOICE_PROMPT / DEFAULT_UNKNOWN_PROMPT constants
+           - Initialized from [conditional_prompts] in defaults.ini; persisted to [prompts] in CherryAI.ini
+           - get/set_conditional_prompt() helpers in ini_manager for typed access
+           - Configurable via Global Options → Prompts section (4-row table: 3-line Text + scrollbar + Reset)
+           - Used by get_context_prompt() in prompt_builder.py for live translation and mock translation
+         - Security Section (2026): Set/Change master password, PasswordStrengthWidget tester,
+           HiveSystems tier legend, bcrypt + AES-256 info, links to doc/passwords.md
        - project_dialog.py - Project management dialogs (TASK 19, TASK 21.4, Phase 58.11):
          - ProjectNameDialog: Prompt for project name on new project creation (500x280, empty name field)
          - LoadManifestDialog: File browser for loading existing manifests (sorted by date, latest first)
          - WelcomeDialog: First launch dialog with Resume/New/Load/Fresh options
            - Auto-load checkbox: "Automatically load last project on startup" (Phase 58.11)
-           - Persists setting to [recent].restore_on_launch via ini_manager
+           - Persists setting to [session].load_last via ini_manager
        - input_dialog.py - Unified Input Dialog (Phase 58.1, Phase 58.12):
          - UnifiedInputDialog: Dual-pane file/folder selection
          - Left pane: File browser with multi-select
@@ -199,6 +239,21 @@ TABLE OF CONTENTS
          - **Phase 58.12:** Project Name field in Options panel (show_project_name parameter)
          - Returns 4-tuple: (paths, format, encoding, project_name)
        - loading_progress.py - Progress dialog for long-running operations
+       - password_dialog.py - Master password dialogs (2026):
+         - SetPasswordDialog: First-time password creation with PasswordStrengthWidget + confirm field
+         - ChangePasswordDialog: Authenticated password change with old/new/confirm fields
+         - VerifyPasswordDialog: Single-entry unlock prompt (used to authenticate API key access)
+         - All dialogs delegate to functions/api_config.py for hashing and encryption
+
+   6.7 gui/widgets/ (2 files - 1 widget module) [NEW 2026]
+       - __init__.py - Widget package
+       - password_strength.py - PasswordStrengthWidget (ttk.Frame subclass):
+         - Entry field with "Show" toggle (bullet / plaintext)
+         - Real-time coloured strength indicator (tk.Label background colour)
+         - Tier text label (e.g. "Safe (16 chars, 3 character types)")
+         - on_change callback for external validation (e.g. enable/disable OK button)
+         - Public API: get(), set(), clear(), focus(), bind_entry(), configure_entry()
+         - strength_var / colour_var: tkinter StringVars exposing current tier + hex
    
    6.7 gui/helpers/ (9 files - 7 adapter modules + 1 confirmation module)
        - __init__.py - Helper exports
@@ -235,27 +290,39 @@ TABLE OF CONTENTS
          - create_new() stores source_files with resolve() for absolute paths
          - set_source_files() stores with resolve() for absolute paths
 
-   6.10 functions/ini_manager.py - INI Configuration (v3.0)
+   6.10 functions/ini_manager.py - INI Configuration (v3.0 + Phase 62)
        - Central INI path resolution relative to main module
        - Typed access: get_str(), get_int(), get_float(), get_bool(), get_list()
        - Manifest defaults: get_all_manifest_defaults(), get_manifest_default()
+       - **Phase 62:** Directory initialisation on startup:
+         - ensure_app_dirs() — creates user/, Projects/, logs/, cache/ under app root; called from _load_ini()
        - TASK 21.4: Recent/Session management:
          - get_last_manifest() / set_last_manifest() - Last used manifest path
          - get_recent_manifests() / add_to_recent_manifests() - Recent list
-         - get_restore_on_launch() / set_restore_on_launch() - Auto-restore toggle
+         - get_load_last() / set_load_last() - Auto-restore toggle (was get/set_restore_on_launch)
        - Phase 60: Section management:
          - remove_section(section) - Remove entire INI section (used by reset_all_suppressions)
        - **Phase 58.12:** Last input directory persistence:
          - get_last_input_dir() - Get last used input directory (returns Path or None)
-         - set_last_input_dir() - Store last used input directory in [recent] section
+         - set_last_input_dir() - Store last used input directory in [session] section
        - TASK 31.2: User defaults management:
-         - get_initial_default() - Load from config/defaults.ini
+         - get_initial_default() - Load from embedded _FACTORY_DEFAULTS_INI_TEXT constant (Session 25)
          - get_user_default() / set_user_default() / has_user_default() - User defaults in [user_defaults]
          - get_effective_default() - Resolves user > initial > fallback chain
          - save_as_user_defaults() - Save multiple values for a section
          - get_all_user_defaults() / get_all_initial_defaults() - Get all for section
          - clear_user_defaults() / restore_initial_defaults() - Reset to factory
          - reload_defaults_cache() - Clear defaults.ini cache
+       - **INI Population (Session 24+, updated Session 25):** Auto-seed CherryAI.ini from embedded factory defaults on first load:
+         - _DEFAULTS_POPULATE_MAP: maps factory-default sections → CherryAI.ini sections
+         - _populate_from_defaults(config): reads embedded _FACTORY_DEFAULTS_INI_TEXT; seeds empty CherryAI.ini
+           sections; special handling routes [conditional_prompts] → [prompts] keys
+           (dialogue/menu/choice/unknown); unescapes `\n` to real newlines
+         - Called by _load_ini() after migration and ensure_required_sections
+       - **Conditional Prompt Helpers (Session 24+):**
+         - _CONDITIONAL_PROMPT_DEFAULTS: hardcoded fallbacks per context type
+         - get_conditional_prompt(context_type, fallback="") → str: reads [prompts] section; falls back to hardcoded defaults
+         - set_conditional_prompt(context_type, value) → bool: writes to [prompts] section via set_default()
    
    6.11 gui/theme/ (3 files)
        - __init__.py - Theme exports
@@ -331,7 +398,7 @@ TABLE OF CONTENTS
          - Only saves when `_dirty` flag is set
          - Settings from INI: enabled, interval_seconds, save_on_close
          - Auto-starts on create_new() and load(), stops on close()
-         - Properties: autosave_enabled, autosave_interval, save_on_close
+         - Properties: autosave, interval, save_on_close
          - Methods: start_autosave(), stop_autosave()
        - **Phase 29 Integration:** Save triggers (TASK 29.2):
          - On close: App._on_close() calls ManifestManager.close()
@@ -356,8 +423,8 @@ TABLE OF CONTENTS
          - Code Database actions in prompt_builder: Preserve="Do not translate", Translate="Translate as", Remove=filtered out
          - Code Database multi-select removal with reverse-index batch deletion (Phase 60)
          - Code Database auto-populate: prefers `individual_codes` over grouped `code_patterns` (Phase 60)
-         - Global Glossary/Database widget: mode switch, search filter, import/export JSON/CSV
-         - Files: user/global_glossary.json, user/global_codes.json
+         - Global Glossary/Database widget: mode switch, search filter, import/export TSV/JSON
+         - Files: user/globalglossary.tsv (3-col TSV) and user/codedatabase.tsv (9-col TSV) ✅ Phase 62 complete
          - Selective glossary: active field (bool) in manifest GlossaryEntries, defaults True
          - **Collapsible right-column widgets:** `_collapsible_state`, `_collapsible_content`, `_collapsible_buttons` dicts track collapse state; `_toggle_collapsible(widget_name)` toggles `grid()`/`grid_remove()` on content frames; `_reconfigure_right_column_weights()` sets row weight=1 for expanded, weight=0 for collapsed; applies to Glossary (row 0), Glossary Settings (row 1), Code Database (row 2), Global Database (row 3)
          - **Glossary moved to right column:** `_build_character_section()` now builds into `self._right_column` (grid row 0) instead of `self._left_column`; uses grid layout with sticky="nsew" for expansion
@@ -396,7 +463,7 @@ TABLE OF CONTENTS
          - Newline Rendering: ↵ symbol in table cells, 200-char truncation
          - Mock Translation: MODEL_OPTIONS[0] = "Mock Translation", routes to MockTranslator(delay_per_chunk=0.1)
          - API Provider Management: APIProviderEntry dataclass, PROVIDER_PRESETS (5), providers Treeview, _ProviderEditDialog, _PresetPickerDialog
-         - Settings Migration: CachingSettings.cache_mode, RequestSettings.thinking_enabled/budget/rolling_context_lines
+         - Settings Migration: CachingSettings.mode, RequestSettings.thinking_enabled/budget/rolling_context_lines
          - _sync_from_global_options() applies Global Options overrides on tab enter
          - Retry Refinement: RETRY_STRATEGIES (2: Batch+Contextual for UI), ALL_RETRY_STRATEGIES (4 for CLI), min retries=0
          - Prompt Editor: Preview-only button, Ban Tokens LabelFrame with _BAN_PRESETS (None/Clean English/Strict)
@@ -532,7 +599,8 @@ TABLE OF CONTENTS
            - CONTEXT_PROMPT_CHOICE: distinct option formatting instructions
            - CONTEXT_PROMPT_UNKNOWN: mixed-content adaptive translation instructions
            - _CONTEXT_PROMPT_MAP: Dict[str, str] mapping context types to templates
-           - get_context_prompt(context_type) → str: template lookup
+           - get_context_prompt(context_type) → str: reads INI first via get_conditional_prompt(),
+             falls back to _CONTEXT_PROMPT_MAP; templates are user-configurable via Global Options
            - _construct_system_prompt(lines, context_type) → str: injects template at slot 2
            - Modified: functions/prompt_builder.py
          - Test file: dev/test_context_markers.py (70 tests)
@@ -693,13 +761,14 @@ PROJECT STRUCTURE
 
 CherryAI/
 ├── CherryAI.py              Entry point (GUI launcher, CLI dispatcher)
-├── requirements.txt         Dependencies (openpyxl>=3.0.0, mostly stdlib)
-├── CherryAI.ini            Config file (paths, UI state, API settings, IO config)
+├── requirements.txt         Dependencies (openpyxl>=3.0.0, bcrypt, cryptography)
 │
-├── config/
-│   ├── config.txt          Default configuration
-│   ├── prompt.txt          Glossary API prompt template
-│   └── game_summary.txt    Game/story context template for translation
+├── user/                    User data directory (excluded from version control)
+│   ├── CherryAI.ini         Main config (UI state, presets, defaults, recent manifests; all non-meta prompt content)
+│   ├── API.ini              All API meta settings: encrypted keys + provider/model/temperature/URL profiles
+│   ├── globalglossary.tsv   Global character/term glossary — Original, Translation, Notes (3 columns; Session 26: renamed/reformatted from GlobalGlossary.csv)
+│   ├── codedatabase.tsv     Global code pattern database — Pattern, Type, RegEx, Notes, Visibility, extended props (Session 26: replaces codeglossary.db SQLite)
+│   └── presets/             System instructions JSON presets
 │
 ├── formats/                File format handlers (NEW)
 │   ├── __init__.py         FormatHandler base, FormatRegistry, IOConfig
@@ -716,7 +785,11 @@ CherryAI/
 │   │   └── table.py        SharedTable, ColumnDef, TableRow
 │   ├── dialogs/            Modal dialogs
 │   │   ├── __init__.py     Dialog exports
-│   │   └── global_options.py GlobalOptionsDialog, settings dataclasses (incl. PromptsSettings)
+│   │   ├── global_options.py GlobalOptionsDialog (9 sections incl. Security)
+│   │   └── password_dialog.py SetPasswordDialog, ChangePasswordDialog, VerifyPasswordDialog
+│   ├── widgets/            Reusable standalone widgets [NEW 2026]
+│   │   ├── __init__.py
+│   │   └── password_strength.py PasswordStrengthWidget (real-time HiveSystems strength meter)
 │   ├── state/              Session state management
 │   │   ├── __init__.py
 │   │   └── store.py        SessionState, StepState, presets, undo/redo
@@ -748,7 +821,7 @@ CherryAI/
 │   ├── modehelper.py       Shared utilities for modes
 │   ├── analysis.py         Deep file analysis with glossary detection
 │   ├── consistency.py      Consistency system (Phase 55)
-│   ├── glossary.py         Unified glossary system (CSV-based)
+│   ├── glossary.py         Unified glossary (globalglossary.tsv path + auto-migration; codedatabase.tsv path)
 │   ├── languages.py        Language definitions (single source of truth) - TASK 16.1
 │   ├── API2Glossary.py     Optional LLM-based name enrichment
 │   ├── dedup.py            Deduplication logic
@@ -756,6 +829,10 @@ CherryAI/
 │   ├── options.py          Options dialog + API_PROVIDERS (single source) - TASK 16.2
 │   ├── dependencies.py     Dependency management (Session 4)
 │   ├── api_client.py       API Client for LLM communication (Session 12)
+│   ├── api_config.py       Encrypted API config manager [NEW 2026]
+│   │                           bcrypt WF-10 + PBKDF2-SHA256 + Fernet AES-256
+│   │                           PasswordStrength class (HiveSystems 2025 tiers)
+│   │                           See doc/passwords.md
 │   ├── mock_translator.py  Mock translation engine with flaw injection (Phase 56)
 │   ├── validation.py       Pre/Post API validation (Session 13)
 │   ├── prompt_builder.py   Dynamic prompt construction with game summary
@@ -767,7 +844,10 @@ CherryAI/
 │   │   ├── name_glossary_constants.py   Speaker patterns and romanization
 │   │   ├── name_glossary_functions.py   Speaker detection and gender inference
 │   │   ├── code_glossary_constants.py   Code pattern definitions
-│   │   └── code_glossary_functions.py   Code detection and classification
+│   │   ├── code_glossary_functions.py   Code detection/classification (uses SQLite)
+│   │   └── code_glossary_db.py          SQLite persistence layer [NEW 2026]
+│   │                                        init_db(), read_all_rows(), write_all_rows()
+│   │                                        upsert_rows(), delete_row(); WAL mode
 │   └── [mode-specific modules]
 │
 ├── modi/                   Processing modes (plugins)
@@ -2182,10 +2262,13 @@ Retry Logic (Improved - TASK 11):
 Model Presets (NEW - TASK 8):
 - `apply_preset(name)` - Apply a named preset configuration
 - `get_available_presets()` - List available preset names
-- Presets defined in [api_presets] section of CherryAI.ini
+- Presets defined in [api_presets] section of **user/API.ini** (moved from CherryAI.ini in 2026)
 - Format: "base_url|model|temperature|timeout|rate_limit"
 - Default presets: gemini_free, gemini_pro, gpt4, gpt4_turbo, local
 - Keeps API key separate (presets only change model settings)
+- **NOTE (2026):** The old [api_presets] section in CherryAI.ini has been removed.
+  Presets and encrypted API keys now live exclusively in user/API.ini.
+  See functions/api_config.py for the encrypted configuration manager.
 
 Preset Examples:
 ```ini
@@ -2296,9 +2379,11 @@ CLI/GUI options
 ```
 
 Security:
-- API keys stored ONLY in CherryAI.ini or api_profiles.ini
+- API keys stored ONLY in **user/API.ini** (encrypted via functions/api_config.py) [updated 2026]
+- Legacy storage in CherryAI.ini [api] section has been removed — non-secret settings remain
 - Manifest stores profile NAME, never the key
 - Safe to share manifests with team
+- See doc/passwords.md for the full bcrypt + AES-256 encryption system
 
 Dependencies:
 - Stdlib: configparser, dataclasses, pathlib, logging
@@ -2338,17 +2423,18 @@ Key Features:
 - Conditional Prompts: Pattern-detected instructions for token handling.
 - Empty Section Skipping: Skips game summary if placeholder text detected (TASK 12)
 
-Prompt Construction Order (TASK 12 - Updated):
-1. Base system prompt template
-2. Game summary with metadata (if not empty/placeholder)
-3. Output examples (from config/output_examples.txt)
-4. Glossary terms (only those present in batch)
-5. Character list (TYPE_NAME entries with gender)
-6. Translation style preferences (if configured)
-7. Conditional instructions (pattern-triggered)
+Prompt Construction Order (Phase 62 — 7-slot design):
+1. Language direction header: "# Translation Direction\nTranslate {source} into {target}."
+2. System Instructions (base prompt template)
+3. Style (from manifest CustomStyle / StylePreset)
+4. Tone (from manifest CustomTone / TonePreset; separate from Style slot)
+5. Summary (game summary, skipped if empty/placeholder)
+6. Conditional block (merged): context-type instructions + POV + pattern-triggered prompts
+7. Glossary (selective: characters inline with gender, only terms present in batch)
+Note: Output examples removed from system prompt in Phase 62.
 
 Previous order (before TASK 12):
-1. Base prompt template (config/prompt.txt)
+1. Base prompt template (embedded in _DEFAULT_PROMPT_TEMPLATE constant, prompt_builder.py)
 2. Additional Instructions (prompt.txt)
 3. Game summary with metadata
 4. Translation style preferences
@@ -2357,9 +2443,9 @@ Previous order (before TASK 12):
 7. Conditional instructions
 
 Modular Prompt Files (TASK 12 - NEW):
-- config/base_instructions.txt: Generic translation rules (17 bullet points)
-- config/output_examples.txt: JSON format examples (4 examples)
-- Allows per-project customization by overriding these files
+- Base instructions: Embedded in _DEFAULT_PROMPT_TEMPLATE (prompt_builder.py, Session 25 — removed config/base_instructions.txt)
+- Output examples: Embedded in _DEFAULT_OUTPUT_EXAMPLES (prompt_builder.py, Session 25 — removed config/output_examples.txt)
+- Allows per-project customization by overriding via config_dir files
 
 Methods:
 - `set_project_config(config)` - Update project config and reload summary
@@ -3512,7 +3598,7 @@ API Key Loading Priority:
 1. Module constant (API_KEY) - rare, discouraged
 2. Environment variable (API2GLOSSARY_API_KEY)
 3. CherryAI.ini [api] section (api_key) - recommended
-4. config/config.txt (API2GLOSSARY_API_KEY)
+4. user/API.ini [api2glossary] key (Session 25: replaced config/config.txt)
 
 Main Functions:
 - enrich_speakers_via_api(speaker_data, all_lines, enabled, write_to_glossary) → Dict[speaker, enrichment_data]
@@ -3731,7 +3817,7 @@ Also serves as central registry for model encoding mappings (TASK 16.3).
 Constants:
 - DEFAULT_CONFIG: Dict with default values for all sections:
   - [api]: provider, api_key, model, temperature, timeout, etc.
-  - [recent]: last_input, last_manifest
+  - [session]: last_input, last_manifest
   - [ui]: geometry, state
 - MODEL_ENCODINGS: Dict[str, str] - Tiktoken encoding per model:
   - "gpt-4": "cl100k_base"
@@ -4367,32 +4453,113 @@ Stored at: Projects/{stem}.CherryAI.json
 
 GLOSSARY (CSV)
 
-Location: user/glossary.csv
+GLOBAL GLOSSARY (TSV)
 
-```csv
-Original,Translation,Notes,Source,Type,Gender,Refers_to_themselves_as,Referred_to_as
-イオリ,Iori,Female protagonist,API,Name,Female,私,ちゃん
-メイド,Maid,Occupation,Analysis,Term,,,
-<color>,,,Analysis,Code,,,
+Location: user/globalglossary.tsv  [Session 26: renamed from GlobalGlossary.csv; changing to TSV with 3-column design]
+⚠️ CONFLICT: gui/steps/information.py::_global_db_path() currently returns user/global_glossary.json
+   for the Global Glossary widget. Both systems must be consolidated into globalglossary.tsv (Phase 62).
+
+```tsv
+Original	Translation	Notes
+イオリ	Iori	Female protagonist. API.女性. 私と言う。ちゃんと呼ばれる
+メイド	Maid	Occupation term
+<color>		Control code — preserve as-is
 ```
 
-CONFIG (INI)
+Note: The Notes column carries all additional context (gender, role, source, pronouns) as plain text
+within a single field. No extra CSV columns. Three columns only.
 
-Location: CherryAI.ini
+CODE DATABASE (TSV)
+
+Location: user/codedatabase.tsv  [Session 26: replaces codeglossary.db SQLite and global_codes.json]
+⚠️ CONFLICT: gui/steps/information.py::_global_db_path() returns user/global_codes.json
+   for the Code Database widget. Both must be consolidated into codedatabase.tsv (Phase 62).
+⚠️ CONFLICT: functions/glossaries/code_glossary_db.py uses SQLite (user/codeglossary.db).
+   This module must be replaced with TSV-based I/O (Phase 62).
+
+```tsv
+Pattern	Type	RegEx	Notes	Visible	IsInvisible	IsCouple	IsNumber	IsWord
+\V[\d+]	RPGMakerVariable	\\V\[\d+\]	Game variable reference	1	0	0	1	0
+\c[\d+]	ColorCode	\\c\[\d+\]	Color control code	0	1	0	0	0
+```
+
+Note: Visibility and extended property columns (IsInvisible, IsCouple, IsNumber, IsWord)
+are the explicit in-file representation of the Code Database Extended Properties (see §5.7).
+Purpose: Non-meta settings only. General config, presets, UI state, and all non-meta prompt content
+(system instructions defaults, style/tone presets, conditional prompts, caching, logging, limits).
 
 ```ini
-[Paths]
-last_input_dir = /path/to/last/used
-last_template_dir = /path/to/templates
+[session]
+last_manifest = /path/to/last.cherryproj
+manifest_history = /path/a.cherryproj, /path/b.cherryproj
+last_step = 0
+load_last = true
 
-[UI]
-window_width = 1200
-window_height = 800
-last_selected_mode = Custom Placeholder
+[ui]
+geometry = 
+state = normal
 
-[Processing]
-enable_dedup = true
-aggressive_dedup = false
+[confirmations]
+remove_character = true
+
+[api]
+; Non-secret settings only. Encrypted secrets are in user/API.ini
+provider = openai
+model = gpt-4o-mini
+temperature = 0.3
+
+[manifest_defaults]
+; Default values for newly created manifests
+
+[defaults]
+; Long-text defaults (SystemInstructions, Summary)
+
+[style]
+; User-saved style presets (built-ins always available without entries here)
+
+[tone]
+; User-saved tone presets
+```
+
+ENCRYPTED API CONFIG (INI)
+
+Location: user/API.ini  [NEW 2026 — managed by functions/api_config.py]
+Purpose: ALL API meta information — encrypted keys + provider profiles (model, temperature, URL, etc.)
+⚠️ PLANNED (Phase 62): `api_profiles.ini` at project root to be consolidated here.
+Full intended structure:
+
+```ini
+[security]
+password_hash = $2b$10$...     ; bcrypt WF-10 hash
+key_salt      = <32-byte hex>  ; PBKDF2 salt
+
+[translation]
+; Primary translation API profile (from api_profiles.ini, to be moved here)
+provider = openai
+api_key = gAAAAAB...           ; Fernet AES-256 encrypted
+base_url =
+model = gpt-4o-mini
+temperature = 0.3
+timeout = 60
+retries = 3
+rate_limit_requests = 60
+
+[glossary]
+; API profile for LLM-assisted glossary generation (API2Glossary)
+provider = gemini
+api_key = gAAAAAB...
+model = gpt-4o-mini
+temperature = 0.3
+
+[api2glossary]
+; API key for optional glossary LLM extraction
+key =
+
+[api_presets]
+gemini_free = https://...|gemini-2.0-flash-lite|0.3|120|15
+
+[rate_limits]
+; Per-model rate limit settings
 ```
 
 ANALYSIS LOG (JSON)

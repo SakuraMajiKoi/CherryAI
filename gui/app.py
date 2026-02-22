@@ -541,7 +541,8 @@ class App(tk.Tk):
             # This ensures files are populated even if tab didn't change
             self._step_tabs[saved_step].on_enter()
 
-        # Add to recent manifests
+        # Add to recent manifests and save as last opened
+        ini_manager.set_last_manifest(manifest_path)
         ini_manager.add_to_recent_manifests(manifest_path)
         
         # Refresh UI

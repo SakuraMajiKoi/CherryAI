@@ -289,7 +289,7 @@ DEFAULT_CONFIG: Dict[str, Dict[str, Any]] = {
     },
     "project": {
         "name": "",
-        "summary_file": "config/game_summary.txt",
+        "summary_file": "",
         "genre": "",
         "tone": "",
         "style_notes": "",
@@ -297,7 +297,7 @@ DEFAULT_CONFIG: Dict[str, Dict[str, Any]] = {
         "glossary_api_profile": "",
     },
     "translation": {
-        "style_file": "config/translation_style.txt",
+        "style_file": "",
         "formal_level": "casual",
         "preserve_honorifics": "true",
         "localize_cultural_refs": "false",

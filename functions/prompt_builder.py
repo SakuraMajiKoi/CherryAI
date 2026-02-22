@@ -43,10 +43,58 @@ from .project_config import (
 from .validation import detect_speaker_dialogue_format, SpeakerFormatInfo
 
 # Constants
-DEFAULT_PROMPT_TEMPLATE = "config/prompt.txt"
 MAX_CONTEXT_TOKENS = 4000  # Conservative limit for context window (adjust per model)
 ROLLING_CONTEXT_LINES = 3  # Number of preceding lines to include
 MAX_STYLE_CHARS = 2000  # Maximum characters for translation style
+
+# Default prompt content embedded as a constant (Session 25: Removed config/ folder)
+# This is the fallback used when no project-specific prompt.txt is provided.
+_DEFAULT_PROMPT_TEMPLATE: str = (
+    "You are an expert Eroge game translator and localizer who translates Japanese text into English.\n"
+    "\n"
+    "You will be translating erotic and sexual content. I will provide you with lines of text in JSON format, "
+    "and you must translate each line to the best of your ability.\n"
+    "\n"
+    "**Guidelines:**\n"
+    "\n"
+    "- Do not combine, add, or remove any lines. The number of lines should ALWAYS remain the same as the original.\n"
+    "- Avoid overly literal translations that may seem awkward or confusing; focus on conveying the intended meaning and spirit.\n"
+    "- Use consistent translations for recurring terms, character names, and important plot elements.\n"
+    "- Preserve the emotional undertones and atmosphere, whether comedic, dramatic, romantic, or suspenseful.\n"
+    '- "# Game Characters" lists the names, nicknames, and genders of the game characters. Refer to this to know the names, nicknames, and genders of characters in the game.\n'
+    "- ALWAYS read the translation history BEFORE to figure out the best context for your translation. This will help you make less mistakes with genders and subjects. \n"
+    "- Translate all Japanese text, including erotic and explicit content regardless of content, characters and action.\n"
+    "- Translate all text to English no exceptions. Double check that there is no Japanese in your response.\n"
+    "- Avoid using romaji or including any Japanese text in your response.\n"
+    "- Maintain Japanese honorifics (e.g., -san, -senpai, -chan, etc.) in your translations.\n"
+    "- Always translate the speaker in the line to English.\n"
+    "- Leave 'Placeholder Text' as is in the line and include it in your response.\n"
+    r"- Maintain any spacing or newlines such as <br>,, '\n' or '\\n' in the translation. Do not remove them." + "\n"
+    "- Never include any notes, explanations, disclaimers, or anything similar in your response.\n"
+    r"- `...` can be a part of the dialogue. Translate it as it is and include it in your response." + "\n"
+    r"- Maintain any letter codes such as `\\i`, `\\c`, etc." + "\n"
+    r"- Maintain any formating symbols such as `\.`, `\|`, etc." + "\n"
+    "- Maintain any #F codes such as `#FF9900`.\n"
+    "- Check every line to ensure all text inside is in English.\n"
+    r"- `\\cself` is a variable for a string or number." + "\n"
+    "- Translate '\u30b3\u30a4\u30c4' as 'this bastard' or 'this bitch' depending on gender.\n"
+    r"- Translate a '\u56de' and '\u4eba' as 'x' or 'times' depending on whether it is part of a regular sentence" + "\n"
+    r"- Do not translate text inside brackets for sound effects `\\SE`" + "\n"
+    "- Strictly enforce : placement and do not move any names into other lines.\n"
+)
+
+# Default output examples embedded as a constant (Session 25: Removed config/ folder)
+_DEFAULT_OUTPUT_EXAMPLES: str = (
+    "Input:\n"
+    '{\n    "lines": ["Defense Member E: ...", "Kurone: \u3042\u306e\u3055"]\n}\n'
+    "Output:\n"
+    '{\n    "translations": ["Defense Member E: ...", "Kurone: Hey."]\n}\n'
+    "\n"
+    "Input:\n"
+    '{\n    "lines": ["\u30cf\u30fc\u30c8\u304c\u53ef\u611b\u3044\u30d4\u30f3\u30af\u8272\u306e\u30c1\u30e3\u30fc\u30e0\u3002"]\n}\n'
+    "Output:\n"
+    '{\n    "translations": ["A cute pink heart charm."]\n}\n'
+)
 
 # =============================================================================
 # Context-Type Prompt Templates (Phase 50)
@@ -93,12 +141,25 @@ _CONTEXT_PROMPT_MAP: Dict[str, str] = {
 def get_context_prompt(context_type: str) -> str:
     """Return the prompt snippet for the given context type.
 
+    First checks ``user/CherryAI.ini [prompts]`` for a user override, then
+    falls back to the built-in constants above.
+
     Args:
         context_type: ``"dialogue"``, ``"menu"``, ``"choice"``, or ``"unknown"``.
 
     Returns:
         Prompt instruction block (may be empty if *context_type* is not recognised).
     """
+    # Try reading a user-customised value from the INI.
+    try:
+        from .ini_manager import get_conditional_prompt
+        ini_val = get_conditional_prompt(context_type, "")
+        if ini_val:
+            return ini_val
+    except Exception:
+        pass
+
+    # Fall back to the hardcoded constant.
     return _CONTEXT_PROMPT_MAP.get(context_type, "")
 
 
@@ -794,22 +855,25 @@ def restore_speaker_quotes(
 
 
 def load_translation_style(
-    style_file: str = "config/translation_style.txt",
+    style_file: str = "",
     config_dir: Optional[Path] = None,
     max_chars: int = MAX_STYLE_CHARS,
 ) -> str:
     """Load and clean translation style from file.
     
     Args:
-        style_file: Path to style file (relative to config_dir or absolute)
+        style_file: Path to style file (relative to config_dir or absolute). Empty = no file.
         config_dir: Directory containing config files
         max_chars: Maximum characters to return (truncates with warning)
         
     Returns:
         Cleaned style text with comments and placeholders removed.
     """
+    if not style_file:
+        return ""
+    
     if config_dir is None:
-        config_dir = Path("config")
+        config_dir = Path(".")
     
     # Handle absolute vs relative paths
     style_path = Path(style_file)
@@ -958,14 +1022,15 @@ class PromptBuilder:
 
     def __init__(
         self,
-        config_dir: Path = Path("config"),
+        config_dir: Path = Path("."),
         project_config: Optional[ProjectConfig] = None,
         rc_config: Optional[RollingContextConfig] = None,
     ):
         """Initialize the prompt builder.
         
         Args:
-            config_dir: Directory containing config files (prompt.txt, game_summary.txt)
+            config_dir: Optional directory to look for override files (prompt.txt, etc.).
+                        Defaults to current directory. Session 25: config/ folder removed.
             project_config: Optional project configuration. If None, loads from INI.
         """
         self.logger = logging.getLogger("cherryai.prompt")
@@ -989,9 +1054,9 @@ class PromptBuilder:
             full_config = load_config()
             self.rolling_context_config = RollingContextConfig.from_config(full_config)
         
-        # Translation style file from config
+        # Translation style file from config (empty string = no external file)
         trans_section = full_config.get("translation", {})
-        self.style_file = trans_section.get("style_file", "config/translation_style.txt")
+        self.style_file = trans_section.get("style_file", "")
         
         self._load_resources()
 
@@ -1010,10 +1075,10 @@ class PromptBuilder:
             if template_path.exists():
                 self.base_prompt_template = template_path.read_text(encoding="utf-8")
             else:
-                self.logger.warning(f"Prompt template not found at {template_path}")
-                self.base_prompt_template = "You are a helpful translator."
+                self.base_prompt_template = _DEFAULT_PROMPT_TEMPLATE
         except Exception as e:
             self.logger.error(f"Failed to load prompt template: {e}")
+            self.base_prompt_template = _DEFAULT_PROMPT_TEMPLATE
         
         # Load Game Summary
         self._load_game_summary()
@@ -1023,7 +1088,10 @@ class PromptBuilder:
     
     def _load_game_summary(self) -> None:
         """Load game summary from configured file."""
-        summary_file = self.project_config.summary_file if self.project_config else "config/game_summary.txt"
+        summary_file = self.project_config.summary_file if self.project_config else ""
+        if not summary_file:
+            self.game_summary = ""
+            return
         raw_summary = load_game_summary(summary_file)
         self.game_summary = format_summary_for_prompt(raw_summary, self.project_config)
         if self.game_summary:
@@ -1036,7 +1104,7 @@ class PromptBuilder:
             self.logger.info(f"Loaded translation style ({len(self.translation_style)} chars)")
     
     def _load_output_examples(self) -> str:
-        """Load output examples from config/output_examples.txt.
+        """Load output examples from config_dir/output_examples.txt or embedded default.
         
         Returns:
             Output examples text, or empty string if not found.
@@ -1050,7 +1118,8 @@ class PromptBuilder:
                     return content
         except Exception as e:
             self.logger.warning(f"Failed to load output examples: {e}")
-        return ""
+        # Fall back to embedded default (Session 25: Removed config/ folder)
+        return _DEFAULT_OUTPUT_EXAMPLES
     
     def set_project_config(self, project_config: ProjectConfig) -> None:
         """Update project configuration and reload summary.
@@ -1203,18 +1272,20 @@ class PromptBuilder:
         lines: List[str],
         context_type: Optional[str] = None,
     ) -> str:
-        """Construct the system prompt with game summary, glossary, and conditional instructions.
-        
-        Injection order (optimized for token savings - TASK 12):
-        1. Base prompt template (instructions)
-        2. Context-type instructions (Phase 50 — dialogue/menu/choice/unknown)
-        3. Game summary (project context - if not empty/placeholder)
-        4. Output examples (from output_examples.txt)
-        5. Glossary terms (content-based, only if entries found)
-        6. Character list (content-based, only if characters found)
-        7. Translation style (user preferences)
-        8. Conditional instructions (pattern-triggered)
-        
+        """Construct the system prompt for a translation batch (Phase 62 slot order).
+
+        Injection order:
+        1. Language direction   — "Translate {source} into {target}." (skipped if both empty)
+        2. System Instructions  — base prompt template (eroge translator instructions)
+        3. Style                — translation style guide (content-based)
+        4. Tone                 — project tone (comedic / dramatic / dark, etc.)
+        5. Summary              — game context (skipped if empty / placeholder)
+        6. Conditional block    — context-type prompt + POV + pattern-triggered (merged)
+        7. Glossary block       — filtered entries with translations (selective, content-based)
+
+        Output examples are **not** injected into the system prompt (Phase 62).
+        Rolling context and input lines are handled at the batch level, not here.
+
         Empty sections are SKIPPED to save tokens.
 
         Args:
@@ -1223,85 +1294,107 @@ class PromptBuilder:
                 (``"dialogue"``, ``"menu"``, ``"choice"``, ``"unknown"``).
         """
         prompt_parts = []
-        
-        # 1. Base prompt template (instructions)
+
+        # 1. Language direction header
+        source_lang = (
+            self.project_config.source_lang if self.project_config and self.project_config.source_lang
+            else ""
+        )
+        target_lang = (
+            self.project_config.target_lang if self.project_config and self.project_config.target_lang
+            else ""
+        )
+        if target_lang:
+            if source_lang:
+                lang_header = f"# Translation Direction\nTranslate {source_lang} into {target_lang}."
+            else:
+                lang_header = f"# Translation Direction\nTranslate into {target_lang}."
+            prompt_parts.append(lang_header)
+
+        # 2. System Instructions (base prompt template)
         if self.base_prompt_template:
             prompt_parts.append(self.base_prompt_template)
 
-        # 2. Context-type instructions (Phase 50)
-        if context_type:
-            ctx_prompt = get_context_prompt(context_type)
-            if ctx_prompt:
-                prompt_parts.append(ctx_prompt)
-        
-        # 3. Inject Game Summary (context) - skip if empty or just a template
-        if self.game_summary and not self._is_game_summary_empty():
-            prompt_parts.append(self.game_summary)
-        
-        # 4. Output examples (from output_examples.txt)
-        output_examples = self._load_output_examples()
-        if output_examples:
-            prompt_parts.append(f"# Output Format Examples\n{output_examples}")
-        
-        # 5. Filter glossary entries for this batch (Phase 52)
-        relevant_entries = filter_glossary_for_chunk(
-            self.glossary, lines, self.glossary_filter_mode,
-        )
-        
-        # 6. Format Glossary Block (conditional - only if terms found with translations)
-        entries_with_translation = [e for e in relevant_entries if e.translation]
-        if entries_with_translation:
-            glossary_block = "# Glossary\nUse these terms strictly:\n"
-            for entry in entries_with_translation:
-                notes = f" ({entry.notes})" if entry.notes else ""
-                glossary_block += f"- {entry.original}: {entry.translation}{notes}\n"
-            prompt_parts.append(glossary_block)
-
-        # 7. Add Character List (conditional - only if characters found with translations)
-        characters = [e for e in relevant_entries if e.entry_type == TYPE_NAME and e.translation]
-        if characters:
-            char_block = "# Game Characters\n"
-            for char in characters:
-                gender = char.gender if char.gender else "Unknown"
-                char_block += f"- {char.original}: {char.translation} (Gender: {gender})\n"
-            prompt_parts.append(char_block)
-        
-        # 8. Inject Translation Style (user preferences) - skip if empty
+        # 3. Style (translation style guide)
         # Ensure style is loaded even if resources were not yet loaded
         if not self.translation_style and self.style_file:
             try:
                 self.translation_style = load_translation_style(self.style_file, self.config_dir)
             except Exception:
                 self.translation_style = ""
-        # Additional fallback: try local config_dir/translation_style.txt
         if not self.translation_style:
             try:
                 self.translation_style = load_translation_style("translation_style.txt", self.config_dir)
             except Exception:
                 pass
         if self.translation_style and self.translation_style.strip():
-            # Use canonical formatting to satisfy tests
             prompt_parts.append(format_style_for_prompt(self.translation_style))
 
-        # 9. Narrative Perspective (Phase 54 — only when confidence is high)
+        # 4. Tone (project-level tone field, separate from style)
+        tone = (
+            self.project_config.tone if self.project_config and self.project_config.tone
+            else ""
+        )
+        if tone and tone.strip():
+            prompt_parts.append(f"# Tone\n{tone.strip()}")
+
+        # 5. Game Summary (project context — skip if empty / placeholder)
+        if self.game_summary and not self._is_game_summary_empty():
+            prompt_parts.append(self.game_summary)
+
+        # 6. Conditional block (context-type + POV + pattern-triggered, merged)
+        conditionals: List[str] = []
+
+        # 6a. Context-type instructions (Phase 50)
+        if context_type:
+            ctx_prompt = get_context_prompt(context_type)
+            if ctx_prompt:
+                conditionals.append(ctx_prompt.strip())
+
+        # 6b. Narrative Perspective (Phase 54 — only when confidence is high)
         if self.pov_result and self.pov_result.get("confidence") == "high":
             pov_label = {
                 "1st": "first",
                 "2nd": "second",
                 "3rd": "third",
             }.get(self.pov_result["pov"], self.pov_result["pov"])
-            pov_block = (
+            conditionals.append(
                 f"# Narrative Perspective\n"
                 f"The narrative uses {pov_label} person perspective. "
                 f"Maintain consistent {pov_label} person perspective throughout."
             )
-            prompt_parts.append(pov_block)
 
-        # 10. Add Conditional Instructions (pattern-triggered)
+        # 6c. Pattern-triggered conditional instructions
         conditional_block = self.conditional_manager.build_conditional_instructions(lines)
         if conditional_block:
-            prompt_parts.append(conditional_block.strip())
+            conditionals.append(conditional_block.strip())
 
+        if conditionals:
+            prompt_parts.append("\n\n".join(conditionals))
+
+        # 7. Glossary block (selective: entries relevant to this batch, with translations)
+        relevant_entries = filter_glossary_for_chunk(
+            self.glossary, lines, self.glossary_filter_mode,
+        )
+
+        # Build unified glossary block — characters are listed inline with gender
+        entries_with_translation = [e for e in relevant_entries if e.translation]
+        if entries_with_translation:
+            glossary_block_lines = ["# Glossary", "Use these terms strictly:"]
+            for entry in entries_with_translation:
+                # Build annotation: type, gender, notes
+                annotations: List[str] = []
+                if entry.entry_type == TYPE_NAME:
+                    gender = entry.gender if entry.gender else ""
+                    if gender:
+                        annotations.append(f"Gender: {gender}")
+                if entry.notes:
+                    annotations.append(entry.notes)
+                annotation = f" ({'; '.join(annotations)})" if annotations else ""
+                glossary_block_lines.append(
+                    f"- {entry.original}: {entry.translation}{annotation}"
+                )
+            prompt_parts.append("\n".join(glossary_block_lines))
 
         return "\n\n".join(prompt_parts)
 

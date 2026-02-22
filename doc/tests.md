@@ -102,7 +102,9 @@ if global_opts is not None:
 
 **Location:** `dev/test_*.py`  
 **Runner:** `pytest`  
-**Count:** 4390 tests collected (verified January 2026)
+**Count:** ~5800 tests collected (verified 2026-Q2 — 5783 passed, 33 pre-existing PROT failures)
+**Note (2026):** 33 "FAILED" entries are all pre-existing PROT-renaming regressions unrelated to
+the user-folder/encryption overhaul. They do not reflect code written since January 2026.
 **Configuration:** `conftest.py` - pytest hooks for CherryAI module setup
 
 Script Tests are fast unit tests that validate internal logic without LLM API calls.
@@ -739,7 +741,7 @@ Application startup manifest loading tests (Task 21.4).
 
 | Test | Purpose |
 |------|---------|
-| `test_default_is_true` | Default restore_on_launch is True when set in INI |
+| `test_default_is_true` | Default load_last is True when set in INI |
 | `test_can_disable` | Can disable restore on launch |
 | `test_can_enable` | Can enable restore on launch |
 | `test_fallback_when_not_set` | Falls back when key not present |
@@ -772,9 +774,9 @@ Application startup manifest loading tests (Task 21.4).
 | Test | Purpose |
 |------|---------|
 | `test_manifest_lines_load_on_resume` | Resume loads manifest lines into InputExtractionStep |
-| `test_auto_load_checkbox_saves_setting` | WelcomeDialog checkbox persists restore_on_launch |
+| `test_auto_load_checkbox_saves_setting` | WelcomeDialog checkbox persists load_last |
 | `test_manifest_list_sorted_by_date` | LoadManifestDialog shows newest manifests first |
-| `test_global_options_syncs_restore_setting` | GlobalOptions read/write syncs with [recent] section |
+| `test_global_options_syncs_restore_setting` | GlobalOptions read/write syncs with [session] section |
 | `test_save_concurrent_modification_safe` | ManifestManager.save() uses deepcopy for thread safety |
 
 #### TestPhase58_12_InputDialogUX (4 tests) - Phase 58.12
@@ -2767,8 +2769,8 @@ The formatting (dividers, headers) is LOG-ONLY and not part of the actual API re
 - functions/prompt_builder.py: Section ordering, empty section skip, examples
 - functions/conditional_prompts.py: All 14 instructions shortened
 - functions/mainhelper.py: Call write_log_header()
-- config/base_instructions.txt: NEW - generic instructions
-- config/output_examples.txt: NEW - JSON format examples
+- Base instructions: embedded in _DEFAULT_PROMPT_TEMPLATE (Session 25: config/base_instructions.txt removed)
+- Output examples: embedded in _DEFAULT_OUTPUT_EXAMPLES (Session 25: config/output_examples.txt removed)
 - CherryAI.ini: Added content_warning_enabled setting
 
 **Conditional Prompt Token Reduction:**
@@ -7211,6 +7213,8 @@ Tests added for the Phase 18 Polish & Fixes tasks.
 ### dev/test_gui_dialogs.py (14 tests) - TASK 18.7
 
 Tests for GlobalOptionsDialog freeze fix and lifecycle management.
+**Session 24+:** TestDialogDataHandling and TestDialogCleanup updated to reflect renamed Settings
+dataclass fields (autosave, interval, load_last, banned, encoding, lines, preservebom, backup).
 
 #### TestGlobalOptionsDataclass (5 tests)
 
@@ -8912,6 +8916,8 @@ Edit Before Translation feature tests.
 ### test_prompts_config.py (40 tests) - TASK 33.2
 
 Configurable Edit/TLC Prompts feature tests.
+**Session 24+:** TestPromptsINIConfiguration tests updated to read `defaults.ini` with
+`encoding='utf-8'` (file is UTF-8 due to em/en-dash characters in [limit] section).
 
 #### TestPromptsSettingsDataclass (7 tests)
 
@@ -10023,4 +10029,105 @@ protagonist variable handling, no-truncation, details population, and category c
 
 ```bash
 python -m pytest CherryAI/dev/test_analysis_findings.py -v --timeout=10
+```
+
+---
+
+## Phase 62 Test Files — File System and API Unification
+
+### test_phase62_glossary.py (32 tests) — Task 62.1: Glossary TSV
+
+Tests for `functions/glossary.py` TSV unification: path resolution, migration chain, 3-column format, GlossaryEntry serialisation, and Notes metadata encoding.
+
+| Test Group | Count | Coverage |
+|-----------|-------|----------|
+| Path and Header | 4 | `_unified_glossary_path()` returns TSV, UNIFIED_HEADER = 3 cols, env var override, path under user/ |
+| GlossaryEntry TSV | 6 | to_tsv_row() basic, from_tsv_row() roundtrip, metadata encoding in Notes, gender encoding, empty fields, source encoding |
+| read/write roundtrip | 5 | write then read returns identical dict, empty glossary, unicode keys, multiple entries, overwrite |
+| Migration | 7 | CSV->TSV, GlobalGlossary.csv->TSV, JSON merge->TSV, .migrated rename, no source = empty read, partial migration |
+| filter_glossary_for_chunk | 5 | original match, translation match, no match filtered, empty glossary, case sensitivity |
+| global glossary read | 5 | absent returns {}, header-only returns {}, malformed rows skipped, notes parsed, characters section |
+
+```bash
+python -m pytest dev/test_phase62_glossary.py -v --timeout=15
+```
+
+### test_phase62_codedb.py (27 tests) — Task 62.2: Code Database TSV
+
+Tests for `functions/glossaries/code_glossary_db.py` TSV unification: path resolution, HEADER constant, migration from SQLite/CSV/JSON, 4-column compat API, and full 9-column extended API.
+
+| Test Group | Count | Coverage |
+|-----------|-------|----------|
+| Path and Header | 3 | get_db_path() under user/, HEADER = 9 cols, env var override |
+| init_db | 4 | creates TSV with header, idempotent, creates parent dirs, header row correct |
+| Migration | 6 | SQLite migration preserves data, CSV migration, JSON merge, .migrated rename, combined chain, empty source |
+| read_all_rows (4-col compat) | 5 | absent returns [], header-only returns [], data rows, extra cols ignored, malformed rows skipped |
+| read_all_rows_extended (9-col) | 4 | all 9 cols returned, absent returns [], bool cols parsed, default empty string for missing |
+| write_all_rows / upsert / delete | 5 | write roundtrip, upsert new, upsert update existing, delete existing row, delete nonexistent no-op |
+
+```bash
+python -m pytest dev/test_phase62_codedb.py -v --timeout=15
+```
+
+### test_phase62_api.py (25 tests) — Task 62.3: API Profiles Consolidation
+
+Tests for `functions/api_config.py` profile settings and `functions/project_config.py` API profile CRUD using `user/API.ini`.
+
+| Test Group | Count | Coverage |
+|-----------|-------|----------|
+| _ensure_sections | 2 | [translation] section created, [glossary] section created |
+| get/set_profile_setting | 5 | read missing key returns fallback, write and read back, unknown profile creates section, empty value stored, unicode value |
+| get_all_profile_settings | 3 | empty section returns {}, populated section returns dict, unknown profile returns {} |
+| migrate_profiles_ini | 5 | non-secret fields migrated, api_key excluded, source renamed to .migrated, empty source no error, count returned |
+| project_config CRUD | 10 | load_api_profiles() reads from API.ini, load triggers migration, save writes to API.ini, get reads fields, delete removes section, save excludes api_key, reload after save, delete nonexistent no error, profile isolation, all profiles loaded |
+
+```bash
+python -m pytest dev/test_phase62_api.py -v --timeout=15
+```
+
+### test_phase62_prompt.py (28 tests) — Task 62.4: Prompt Order Alignment
+
+Tests for `functions/prompt_builder.py` `_construct_system_prompt()` 7-slot order, language direction header, separate Tone slot, merged Conditional block, and removal of output examples.
+
+| Test Group | Count | Coverage |
+|-----------|-------|----------|
+| Language Direction (slot 1) | 4 | Header present, correct format, source/target from project_config, absent when langs missing |
+| System Instructions (slot 2) | 3 | Base prompt present, position after direction, placeholder text excluded |
+| Style (slot 3) | 3 | Style injected, position after instructions, empty style skipped |
+| Tone (slot 4) | 3 | Tone injected as separate slot, position after style, empty tone skipped |
+| Summary (slot 5) | 3 | Summary injected, placeholder skipped, ordering relative to tone |
+| Conditional block (slot 6) | 5 | Context-type merged, POV merged, pattern-triggered merged, single slot ordering, empty conditional skipped |
+| Glossary (slot 7) | 4 | Glossary last, characters inline no separate block, only terms in chunk, absent entries skip |
+| Output examples removed | 3 | No output examples in system prompt, examples not in result, slot 3 is Style not examples |
+
+```bash
+python -m pytest dev/test_phase62_prompt.py -v --timeout=15
+```
+
+### test_phase62_dirs.py (17 tests) — Directory Initialisation and File Auto-Creation
+
+Tests for `functions/ini_manager.py` `ensure_app_dirs()` and auto-creation of all critical files on first access.
+
+| Test Function | Coverage |
+|--------------|----------|
+| test_ensure_app_dirs_creates_projects | Projects/ created by ensure_app_dirs() |
+| test_ensure_app_dirs_creates_logs | logs/ created by ensure_app_dirs() |
+| test_ensure_app_dirs_creates_cache | cache/ created by ensure_app_dirs() |
+| test_ensure_app_dirs_creates_user | user/ created by ensure_app_dirs() |
+| test_ensure_app_dirs_idempotent | Calling 3x does not raise |
+| test_ensure_app_dirs_all_four_dirs | All 4 dirs created in single call |
+| test_load_ini_triggers_dir_creation | _load_ini() creates Projects/, logs/, cache/ |
+| test_cherryai_ini_created_when_absent | CherryAI.ini written on first _load_ini() |
+| test_cherryai_ini_has_required_sections | All required sections present after creation |
+| test_cherryai_ini_reinits_after_deletion | CherryAI.ini recreated with sections after delete |
+| test_api_ini_created_when_absent | API.ini created on first write access |
+| test_api_ini_reinits_after_deletion | API.ini recreated after deletion |
+| test_globalglossary_tsv_created_when_absent | read_unified_glossary() returns {} when absent |
+| test_globalglossary_tsv_reinits_after_deletion | read_unified_glossary() safe after deletion |
+| test_codedatabase_tsv_created_on_init | init_db() creates codedatabase.tsv with correct header |
+| test_codedatabase_tsv_reinits_after_deletion | init_db() recreates TSV after deletion |
+| test_codedatabase_tsv_read_all_rows_absent | read_all_rows() returns [] when TSV absent |
+
+```bash
+python -m pytest dev/test_phase62_dirs.py -v --timeout=15
 ```

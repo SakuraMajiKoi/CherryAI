@@ -27,7 +27,7 @@ MAX_SUMMARY_CHARS = 2000
 # Default project configuration
 DEFAULT_PROJECT_CONFIG: Dict[str, Any] = {
     "name": "",
-    "summary_file": "config/game_summary.txt",
+    "summary_file": "",
     "genre": "",
     "tone": "",
     "style_notes": "",
@@ -81,7 +81,7 @@ class ProjectConfig:
         max_retries: Maximum retry attempts (0 = use global)
     """
     name: str = ""
-    summary_file: str = "config/game_summary.txt"
+    summary_file: str = ""
     genre: str = ""
     tone: str = ""
     style_notes: str = ""
@@ -148,7 +148,7 @@ class ProjectConfig:
         
         return cls(
             name=data.get("name", ""),
-            summary_file=data.get("summary_file", "config/game_summary.txt"),
+            summary_file=data.get("summary_file", ""),
             genre=data.get("genre", ""),
             tone=data.get("tone", ""),
             style_notes=data.get("style_notes", ""),
@@ -215,7 +215,7 @@ class ProjectConfig:
         # Override with other's non-default/non-empty values
         if other.name:
             result.name = other.name
-        if other.summary_file != "config/game_summary.txt":
+        if other.summary_file:
             result.summary_file = other.summary_file
         if other.genre:
             result.genre = other.genre
@@ -340,7 +340,7 @@ def _get_api_profiles_path() -> Path:
 
 
 def load_game_summary(
-    summary_file: str = "config/game_summary.txt",
+    summary_file: str = "",
     max_chars: int = MAX_SUMMARY_CHARS,
 ) -> str:
     """Load game summary from file.
@@ -352,6 +352,9 @@ def load_game_summary(
     Returns:
         Summary text with comments stripped, or empty string if file not found.
     """
+    if not summary_file:
+        return ""
+    
     summary_path = Path(summary_file)
     
     # If not absolute, treat as relative to project root
@@ -505,117 +508,108 @@ def save_project_config_to_ini(
 
 
 def load_api_profiles() -> Dict[str, APIProfile]:
-    """Load all API profiles from api_profiles.ini.
-    
+    """Load all API profiles from ``user/API.ini`` (Phase 62).
+
+    On first call this function automatically migrates any legacy
+    ``api_profiles.ini`` file found in the project root into the secure
+    ``user/API.ini`` store and renames the source file to
+    ``api_profiles.ini.migrated``.
+
     Returns:
         Dict mapping profile name to APIProfile.
     """
+    # Phase 62: one-time migration from api_profiles.ini → API.ini
+    from . import api_config as _api_cfg
     profiles_path = _get_api_profiles_path()
+    if profiles_path.exists():
+        try:
+            _api_cfg.migrate_profiles_ini(profiles_path)
+        except Exception as exc:
+            logging.warning("api_profiles.ini migration failed: %s", exc)
+
+    # Read profiles from API.ini
     profiles: Dict[str, APIProfile] = {}
-    
-    config = configparser.ConfigParser()
-    try:
-        if profiles_path.exists():
-            config.read(profiles_path, encoding="utf-8")
-    except Exception as e:
-        logging.warning(f"Failed to read API profiles: {e}")
-        return profiles
-    
-    for section in config.sections():
-        profile_data = dict(config[section])
-        profiles[section] = APIProfile.from_dict(section, profile_data)
-    
+    for name in ("translation", "glossary"):
+        data = _api_cfg.get_all_profile_settings(name)
+        if data:
+            profiles[name] = APIProfile.from_dict(name, data)
+        else:
+            profiles[name] = APIProfile(name=name)
+
     return profiles
 
 
 def save_api_profile(profile: APIProfile) -> None:
-    """Save an API profile to api_profiles.ini.
-    
+    """Save an API profile to ``user/API.ini`` (Phase 62).
+
+    Non-secret fields are written to the matching section in API.ini.
+    The ``api_key`` field is intentionally excluded here — use
+    ``api_config.set_api_key()`` to store keys with encryption.
+
     Args:
-        profile: API profile to save (uses profile.name as section name)
+        profile: API profile to save (uses ``profile.name`` as section name).
     """
-    profiles_path = _get_api_profiles_path()
-    
-    config = configparser.ConfigParser()
-    try:
-        if profiles_path.exists():
-            config.read(profiles_path, encoding="utf-8")
-    except Exception:
-        pass
-    
-    if not config.has_section(profile.name):
-        config.add_section(profile.name)
-    
+    from . import api_config as _api_cfg
+
     data = profile.to_dict()
     for key, value in data.items():
-        config.set(profile.name, key, str(value))
-    
-    try:
-        profiles_path.parent.mkdir(parents=True, exist_ok=True)
-        with profiles_path.open("w", encoding="utf-8") as f:
-            config.write(f)
-    except Exception as e:
-        logging.error(f"Failed to save API profile: {e}")
+        if key == "api_key":
+            continue  # handled by encrypted set_api_key()
+        _api_cfg.set_profile_setting(profile.name, key, str(value))
 
 
 def get_api_profile(
     profile_name: str = "default",
     fallback_to_main_config: bool = True,
 ) -> Optional[APIProfile]:
-    """Get a specific API profile by name.
-    
+    """Get a specific API profile from ``user/API.ini`` (Phase 62).
+
     Args:
-        profile_name: Name of the profile to load
-        fallback_to_main_config: If True and profile not found, create from CherryAI.ini [api]
-        
+        profile_name: Section name, e.g. ``"translation"`` or ``"glossary"``.
+        fallback_to_main_config: If True and profile section is empty, build
+            an APIProfile from the CherryAI.ini ``[api]`` section.
+
     Returns:
-        APIProfile or None if not found and fallback disabled.
+        APIProfile, or None if not found and fallback disabled.
     """
-    profiles = load_api_profiles()
-    
-    if profile_name in profiles:
-        return profiles[profile_name]
-    
+    from . import api_config as _api_cfg
+
+    data = _api_cfg.get_all_profile_settings(profile_name)
+    if data:
+        return APIProfile.from_dict(profile_name, data)
+
     if fallback_to_main_config:
-        # Import here to avoid circular dependency
         from .config import load_config
         config = load_config()
         api_section = config.get("api", {})
         return APIProfile.from_dict(profile_name, api_section)
-    
+
     return None
 
 
 def delete_api_profile(profile_name: str) -> bool:
-    """Delete an API profile from api_profiles.ini.
-    
+    """Delete an API profile section from ``user/API.ini`` (Phase 62).
+
     Args:
-        profile_name: Name of the profile to delete
-        
+        profile_name: Section name to delete (e.g. ``"translation"``).
+
     Returns:
-        True if deleted, False if not found.
+        True if the section existed and was removed, False otherwise.
     """
-    profiles_path = _get_api_profiles_path()
-    
-    config = configparser.ConfigParser()
-    try:
-        if profiles_path.exists():
-            config.read(profiles_path, encoding="utf-8")
-    except Exception:
+    from . import api_config as _api_cfg
+    import configparser as _cp
+
+    path = _api_cfg.get_api_ini_path()
+    cfg = _cp.ConfigParser()
+    cfg.optionxform = str
+    if path.exists():
+        cfg.read(str(path), encoding="utf-8")
+    if not cfg.has_section(profile_name):
         return False
-    
-    if not config.has_section(profile_name):
-        return False
-    
-    config.remove_section(profile_name)
-    
-    try:
-        with profiles_path.open("w", encoding="utf-8") as f:
-            config.write(f)
-        return True
-    except Exception as e:
-        logging.error(f"Failed to delete API profile: {e}")
-        return False
+    cfg.remove_section(profile_name)
+    with path.open("w", encoding="utf-8") as fh:
+        cfg.write(fh)
+    return True
 
 
 # =============================================================================

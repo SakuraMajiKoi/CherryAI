@@ -39,7 +39,7 @@ from collections import Counter
 
 # API key for the LLM service (Gemini free tier or OpenAI-compatible endpoint)
 # By default this is left empty and is read from the environment variable
-# `API2GLOSSARY_API_KEY` or from the project's `config/config.txt` file.
+# `API2GLOSSARY_API_KEY` or from `user/API.ini` [api2glossary] key.
 API_KEY: str = ""
 
 # API endpoint URL (OpenAI-compatible format)
@@ -130,7 +130,7 @@ def _get_api_key() -> Optional[str]:
     1. Module constant (API_KEY)
     2. Environment variable (API2GLOSSARY_API_KEY)
     3. CherryAI.ini [api] section (api_key)
-    4. config/config.txt (API2GLOSSARY_API_KEY)
+    4. user/API.ini [api2glossary] key
     """
     import configparser
     
@@ -156,23 +156,17 @@ def _get_api_key() -> Optional[str]:
     except Exception:
         pass
 
-    # 4) project config file: <repo>/CherryAI/config/config.txt
+    # 4) user/API.ini [api2glossary] key  (Session 25: removed config/config.txt)
     try:
-        cfg_path = Path(__file__).resolve().parents[1] / "config" / "config.txt"
-        if cfg_path.exists():
-            text = cfg_path.read_text(encoding="utf-8")
-            for raw in text.splitlines():
-                line = raw.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if "=" in line:
-                    k, v = line.split("=", 1)
-                    key = k.strip().upper()
-                    val = v.strip().strip('"').strip("'")
-                    if key in {"API2GLOSSARY_API_KEY", "API_KEY", "API2GLOSSARY_KEY"} and val:
-                        return val
+        api_ini_path = Path(__file__).resolve().parents[1] / "user" / "API.ini"
+        if api_ini_path.exists():
+            config2 = configparser.ConfigParser()
+            config2.read(api_ini_path, encoding="utf-8")
+            if config2.has_option("api2glossary", "key"):
+                val = config2.get("api2glossary", "key").strip()
+                if val:
+                    return val
     except Exception:
-        # ignore errors reading config
         pass
 
     return None

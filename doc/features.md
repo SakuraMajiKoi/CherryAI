@@ -15,12 +15,13 @@ When implementing or modifying features:
 - Cross-reference with `technical.md` for implementation details
 
 VERIFIED MODULE COUNTS (January 2026):
-- functions/: 36 modules (+ glossaries/ subfolder with 5 files)
+- functions/: 38 modules (+ glossaries/ subfolder with 6 files)
 - modi/: 12 processing modes
 - formats/: 5 format handlers
 - gui/steps/: 10 workflow tabs
 - gui/helpers/: 6 adapter modules
-- gui/dialogs/: 3 dialog modules
+- gui/dialogs/: 5 dialog modules (global_options, project_dialog, loading_progress, input_dialog, password_dialog)
+- gui/widgets/: 1 widget module (password_strength)
 
 For module-level documentation, see: doc/technical.md
 For test documentation, see: doc/tests.md
@@ -644,7 +645,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - **Input Dialog UX Improvements (Phase 58.12):**
     - UnifiedInputDialog remembers last used directory across sessions
     - Project Name field integrated into Options panel (avoids separate dialog)
-    - Directory persisted in `[recent].last_input_dir` in CherryAI.ini
+    - Directory persisted in `[session].last_input_dir` in CherryAI.ini
   - Unified "Input" button opens UnifiedInputDialog directly (no dropdown)
   - **Collapsible folder hierarchy:** Treeview with parent folder nodes and leaf file nodes
     - Multi-select support for bulk deletion
@@ -788,8 +789,8 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Changes auto-save to manifest on widget interaction
     - Values auto-load on step entry via `_load_from_manifest_bindings()`
   - **Application Startup (Task 21.4, Phase 58.11):**
-    - On launch, reads last manifest path from INI [recent] section
-    - Auto-loads last project if restore_on_launch enabled (default)
+    - On launch, reads last manifest path from INI [session] section
+    - Auto-loads last project if load_last enabled (default)
     - Shows WelcomeDialog if no last manifest or file missing:
       - Resume: Load last project
       - New Project: Start fresh with file loading
@@ -798,8 +799,8 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
       - **Auto-load checkbox:** "Automatically load last project on startup" (Phase 58.11, updated Phase 60)
         - Always visible regardless of whether Resume option is available
         - Loads current INI setting on display; saves immediately on toggle
-        - Persists via ini_manager.set_restore_on_launch()
-        - GlobalOptions syncs with this setting in [recent] section
+        - Persists via ini_manager.set_load_last()
+        - GlobalOptions syncs with this setting in [session] section
     - Saves last manifest path on app close for next launch
     - Recent manifests list maintained (up to 10)
   - **Global vs Project Glossary**: Toggle in Information step to use global glossary.json or project-specific glossary stored in manifest
@@ -896,7 +897,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Status icons: ○ Pending, ◐ Translating, ✓ Done, ✗ Failed, ⊘ Skipped
   - **Prompt Editor Panel:**
     - Style preset entry for translation style configuration
-    - Game summary scrollable text area (loads from config/game_summary.txt)
+    - Game summary scrollable text area (configured via [project].summary_file in CherryAI.ini)
     - Glossary entries scrollable text area
     - Conditional prompts scrollable text area
     - Ban tokens entry (comma-separated: em_dash, smart_quotes, etc.)
@@ -919,7 +920,8 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - **TLC Step Prompt:** Configurable instructions for TLC passes
     - Placeholder support: {source_lang}, {target_lang}
     - Reset to Default buttons for each prompt
-    - Stored in [prompts] section of config/defaults.ini (user preference)
+    - Stored in [prompts] section of CherryAI.ini (user preference)
+    - Factory defaults embedded in `_FACTORY_DEFAULTS_INI_TEXT` (ini_manager.py)
     - Default prompts provided out of the box
   - **Translation Progress Window (Modal):**
     - Progress bar with percentage display
@@ -1234,8 +1236,8 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Auto-starts on create_new() and load()
     - Auto-stops on close()
   - **Properties:**
-    - `autosave_enabled` - Enable/disable via property
-    - `autosave_interval` - Interval in seconds
+    - `autosave` - Enable/disable via property
+    - `interval` - Interval in seconds
     - `save_on_close` - Save on close behavior
   - **Methods:**
     - `start_autosave()` - Start background thread
@@ -1292,10 +1294,10 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
 - **User Defaults Configuration (Phase 31, Task 31.2):**
   - Allow users to customize defaults and reset to initial values
   - **Storage:**
-    - Initial defaults: `config/defaults.ini` (factory, read-only reference)
+    - Initial defaults: embedded in `_FACTORY_DEFAULTS_INI_TEXT` constant (ini_manager.py, Session 25)
     - User defaults: `[user_defaults]` section in CherryAI.ini
   - **ini_manager.py Functions:**
-    - `get_initial_default()` - Load from config/defaults.ini
+    - `get_initial_default()` - Load from embedded `_FACTORY_DEFAULTS_INI_TEXT` constant
     - `get_user_default()` / `set_user_default()` / `has_user_default()` - User defaults
     - `get_effective_default()` - Resolves user > initial > fallback chain
     - `save_as_user_defaults()` - Save multiple values for a section
@@ -1418,7 +1420,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - `reset_all_suppressions()`: clears all suppression keys (removes `[confirmations]` section)
     - Used for: character removal, code pattern removal, preset deletion
     - Recovery: Global Options → Session → "Reset All Confirmation Dialogs" button
-    - Also in Global Options → Session: "Reset Style & Tone Presets" button (deletes user preset JSON files)
+    - Also in Global Options → Session: "Reset Style & Tone Presets" button (removes user preset keys from ``[style]``/``[tone]`` INI sections; old JSON files are gone)
   - **Preprocessing & Postprocessing (Phase 42):**
     - Anchoring Widget Redesign: 5-column Treeview (Pattern, Action, Anchor Spec, RegEx, Description) replacing old simple fields
     - Custom Placeholders RegEx: _RuleDialog `show_regex` parameter, `regex_result` attribute, regex checkbox UI
@@ -1433,7 +1435,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Newline Rendering: newlines displayed as ↵ symbol in table cells, 200-char truncation limit
     - Mock Translation: "Mock Translation" as first MODEL_OPTIONS entry, routes to `MockTranslator` in `functions/mock_translator.py`
     - API Provider Management: `APIProviderEntry` dataclass, `PROVIDER_PRESETS` (5 presets: OpenAI GPT-4o-mini, GPT-4o, Gemini Flash, Claude Sonnet, Local LLM), providers Treeview in Global Options, `_ProviderEditDialog` and `_PresetPickerDialog` helper dialogs
-    - Settings Migration: cache_mode in CachingSettings, thinking_enabled/thinking_budget in RequestSettings, rolling_context_lines in RequestSettings; `_sync_from_global_options()` applies overrides on tab enter
+    - Settings Migration: caching.mode in CachingSettings, thinking_enabled/thinking_budget in RequestSettings, rolling_context_lines in RequestSettings; `_sync_from_global_options()` applies overrides on tab enter
     - Retry Refinement: UI shows only Batch + Contextual (`RETRY_STRATEGIES`); `ALL_RETRY_STRATEGIES` kept for CLI with all 4; max retries minimum changed from 1 to 0
     - Prompt Editor Redesign: removed Style Preset and Game Summary textarea; "Preview Prompt" read-only button; Ban Tokens LabelFrame with preset dropdown (None/Clean English/Strict)
     - Chunk Sync: LinesPerChunk synced between Costs step and manifest; `_on_chunk_changed()` write-back
@@ -1501,8 +1503,9 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Integration: build_line_infos() converts LineEntry to LineInfo with context propagation
     - File-section tracking: _file_section field prevents Step 4 from merging across file boundaries
     - Conditional Prompts: CONTEXT_PROMPT_DIALOGUE, CONTEXT_PROMPT_MENU, CONTEXT_PROMPT_CHOICE, CONTEXT_PROMPT_UNKNOWN
-    - get_context_prompt() returns type-specific instruction snippet for system prompt injection
+    - get_context_prompt() reads INI first (get_conditional_prompt()), falls back to hardcoded constants; user-configurable via Global Options → Prompts
     - _construct_system_prompt() accepts optional context_type parameter (Phase 50 slot 2 of 9)
+    - Mock translation: context_type extracted from system_prompt header and forwarded to MockTranslator
 - **Speaker Duplicate Removal (Phase 51):**
     - Detection: detect_consecutive_speakers() identifies lines with same speaker as previous
     - Regex: _SPEAKER_PREFIX_RE handles half-width `:` and fullwidth `：` colons
@@ -1529,22 +1532,29 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - Centralized options accessible from Tools → Options menu
   - Modal dialog with navigation tree on left, content panels on right
   - **Enums:**
-    - OptionSection: API, REQUEST, CACHING, LOGGING, SESSION, SAFETY, FILE_IO, PROMPTS (8 sections)
+    - OptionSection: API, REQUEST, CACHING, LOGGING, SESSION, LIMIT, FILE_IO, PROMPTS, SECURITY (9 sections)
     - OptionCategory: CONNECTION, PROCESSING, APPLICATION (3 categories)
     - LogLevel: DEBUG, INFO, WARNING, ERROR, CRITICAL
     - ThemeMode: LIGHT, DARK, SYSTEM
     - LineEnding: LF, CRLF, CR, AUTO
     - EncodingOption: UTF8, UTF8_BOM, UTF16, SHIFT_JIS, EUC_JP, AUTO
+  - **Security Section (added 2026):**
+    - Set/change master password via SetPasswordDialog / ChangePasswordDialog
+    - Real-time password strength meter (PasswordStrengthWidget)
+    - HiveSystems 2025 tier legend (Instantly/Weak/Good/Great/Safe)
+    - bcrypt WF-10 hashing + AES-256 Fernet encryption for API keys (user/API.ini)
+    - See doc/passwords.md for full details
   - **Settings Dataclasses (with to_dict/from_dict):**
     - APISettings: provider, api_key, base_url, model, temperature
     - RequestSettings: timeout, retries, rate_limit, chunk_size, thinking_enabled, thinking_budget, rolling_context_lines
-    - CachingSettings: enabled, cache_dir, max_age_hours, max_size_mb, cache_mode
-    - LoggingSettings: level, log_file, debug_mode, log_api_calls
-    - SessionSettings: autosave_enabled, autosave_interval, theme, restore_on_launch, confirm_on_exit
-    - SafetySettings: ban_tokens, content_warning_enabled, max_output_tokens
-    - FileIOSettings: default_encoding, line_ending, preserve_bom, backup_originals
-    - PromptsSettings: edit_prompt, tlc_prompt (Task 33.2)
-    - GlobalOptions: Container for all settings sections, providers list, get_model_list(), get_provider_for_model()
+    - CachingSettings: enabled, dir, age (days; 0=unlimited), size (MB; 0=unlimited), mode (strict/line/any/model_only/disabled)
+    - LoggingSettings: level, location, debug, api_log
+    - SessionSettings: autosave, interval, theme, load_last
+    - LimitSettings: banned (comma-sep chars), output (tokens), warnings, safe; SafetySettings = alias
+    - FileIOSettings: encoding, lines, preservebom, backup
+    - PromptsSettings: edit, tlc, glossary, summary, code, input, tlc_include_* booleans,
+      dialogue, menu, choice, unknown (conditional context-type prompts — Session 24+)
+    - GlobalOptions: Container for all settings sections, providers list; `safety` property is alias for `limit`
     - APIProviderEntry: name, provider_type, url, api_key, model (to_dict/from_dict) — Task 43.6
     - PROVIDER_PRESETS: 5 presets (OpenAI GPT-4o-mini, GPT-4o, Gemini Flash, Claude Sonnet, Local LLM) — Task 43.6
   - **Helper Constants:**
@@ -1595,14 +1605,22 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Line ending style dropdown
     - Preserve BOM toggle
     - Backup originals toggle
-  - **Prompts Section (Task 33.2):**
+  - **Prompts Section (Task 33.2 + Session 24+):**
     - OptionSection.PROMPTS in Processing category
-    - PromptsSettings dataclass with edit_prompt and tlc_prompt
+    - PromptsSettings dataclass with edit, tlc, and 4 conditional prompt fields
     - Edit Step Prompt: Multi-line text area for Edit pass instructions
     - TLC Step Prompt: Multi-line text area for TLC pass instructions
     - Placeholder support: {source_lang}, {target_lang} for language substitution
     - Reset to Default button for each prompt
-    - Prompts stored in [prompts] section of config/defaults.ini
+    - **Conditional Prompts Table (Session 24+):** 4-row LabelFrame table configuring context-type prompts:
+      - Dialogue: Character voice & emotional nuance; stored as `dialogue` in [prompts]
+      - Menu: Concise action-oriented UI text; stored as `menu` in [prompts]
+      - Choices: Distinct option formatting; stored as `choice` in [prompts]
+      - Unknown/Mixed: Adaptive mixed-content; stored as `unknown` in [prompts]
+      - Each row: 3-line Text widget + scrollbar + Reset to Default button
+      - Persisted to CherryAI.ini on Apply/OK via set_conditional_prompt()
+      - Used by get_context_prompt() in prompt_builder.py for live translation and mock translation
+    - Prompts stored in [prompts] section of CherryAI.ini (auto-seeded from defaults.ini)
     - User customizations saved via Save as Default
     - Factory defaults restorable via Restore Initial Defaults
   - **Dialog Features:**
@@ -1855,9 +1873,14 @@ LINE-BY-LINE TRANSLATION MODE (Implemented)
   - Less batching efficiency
   - But more reliable for problematic content
 
-TRANSLATION STYLE PRESETS (Implemented)
-- Pre-built style guides for common translation scenarios
-- Load by name: `--style-preset fantasy_medieval`
+TRANSLATION STYLE PRESETS (Implemented — INI-based since 2026)
+- Pre-built and user-defined style guides for translation tone and approach
+- Built-in presets: Literal, Natural, Creative, Formal, Casual, Technical, Literary
+- User presets are saved in ``user/CherryAI.ini`` under the ``[style]`` section
+- Tone presets (Neutral, Serious, Humorous, Dramatic, etc.) saved under ``[tone]``
+- Saved/deleted via the Information step (Step 3) of the GUI workflow
+- Old JSON files (``user/presets/style_presets.json``, ``tone_presets.json``) have been removed
+- CLI style: `--style-preset fantasy_medieval`
 - Combine presets: `--style-preset fantasy_medieval,archaic_english`
 - **Time Period Presets:**
   - `archaic_english`: Thou/thee, -eth/-est verbs, formal address
@@ -2101,11 +2124,12 @@ The v3.0 manifest format extends v2.0 with GUI state management:
 - No background autosave thread (reduces complexity)
 
 **Glossary Options (Information Step):**
-- **Use Global Glossary**: Toggle between global `glossary.json` and project manifest
+- **Use Global Glossary**: Toggle between global `globalglossary.tsv` and project manifest
 - **Copy from Global**: Import entries from global glossary into project
 - **Project-specific glossary**: Stored in manifest, travels with project
 - **Selective Glossary (Phase 41)**: Active/inactive toggle per entry; only active entries sent to prompt
-- **Global Glossary and Database Widget (Phase 41)**: Manage cross-project glossary (`user/global_glossary.json`) and code patterns (`user/global_codes.json`) with search, import/export (JSON/CSV)
+- **Global Glossary and Database Widget (Phase 41 / Phase 62)**: Manage cross-project glossary (`user/globalglossary.tsv`) and code patterns (`user/codedatabase.tsv`) with search, import/export (TSV/JSON)
+  - ✅ **Phase 62 complete**: Widget reads/writes `globalglossary.tsv` (3-column TSV) and `codedatabase.tsv` (9-column TSV); auto-migrates from legacy JSON/CSV/SQLite on first access
 - **Glossary Entries include `active` field** (Phase 41): Persisted in manifest, defaults to True for backward compatibility
 
 **Project Creation Flow:**

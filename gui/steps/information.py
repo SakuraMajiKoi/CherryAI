@@ -39,6 +39,7 @@ from CherryAI.functions.manifest_fields import (
     save_code_glossary,
     load_code_glossary,
 )
+from CherryAI.functions import ini_manager
 
 if TYPE_CHECKING:
     from CherryAI.gui.state.store import SessionState
@@ -390,137 +391,37 @@ DEFAULT_TONE_PRESETS: Dict[str, str] = {
 CUSTOM_PRESET_NAME = "Custom"
 
 # Default text for the Summary widget.
-DEFAULT_SUMMARY_TEXT = (
-    "Write a short summary of the work here. Mentioning protagonist(s) "
-    "and Point of View is not necessary and will be automatically provided."
-)
-
-# Default text for the System Instructions widget.
-# Loaded from default/example.txt at runtime; inline fallback below.
-_SI_FALLBACK = (
-    "You are an expert translator and localizer.\n"
-    "You will be translating any content provided. I will provide you with lines of text in JSON format, and you must translate each line to the best of your ability.\n"
-    "\n"
-    "Guidelines:\n"
-    "- Do not combine, add, or remove any lines. The number of lines should ALWAYS remain the same as the original.\n"
-    "- Avoid overly literal translations that may seem awkward or confusing; focus on conveying the intended meaning and spirit.\n"
-    "- Use consistent translations for recurring terms, character names, and important plot elements.\n"
-    "- Preserve the emotional undertones and atmosphere, whether comedic, dramatic, romantic, or suspenseful.\n"
-    "- '# Glossary' lists terms including locations and the names, nicknames, and genders of the game characters. Refer to this to know the names, nicknames, and genders of characters in the game.\n"
-    "- ALWAYS read the translation history BEFORE to figure out the best context for your translation. This will help you make less mistakes with genders and subjects.\n"
-    "- Translate all text to English no exceptions. Double check that everything is translated.\n"
-    "- Avoid using romaji or including any Japanese text in your response.\n"
-    "- Always translate the speaker in the line to English.\n"
-    "- Maintain any spacing or newlines such as '\\n' or '\\\\n' in the translation.\n"
-    "- Never include any notes, explanations, disclaimers, or anything similar in your response.\n"
-    "\n"
-    "Output Examples\n"
-    "\n"
-    "Input (with protected placeholders):\n"
-    "{\n"
-    '    "Line1": "「音楽が__PROTECTED_0__流れています」",\n'
-    '    "Line2": "「そして__PROTECTED_1__効果音も鳴ります"\n'
-    "}\n"
-    "Output (placeholders preserved exactly):\n"
-    "{\n"
-    '    "Line1": "\"The music __PROTECTED_0__ is playing.\"",\n'
-    '    "Line2": "\"And the __PROTECTED_1__ sound effect is also playing.\""\n'
-    "}\n"
-    "\n"
-    "Input:\n"
-    "{\n"
-    '    "Line1": "Defense Member E: ...",\n'
-    '    "Line2": "Kurone: ...\\i[100]",\n'
-    '    "Line3": "Kurone: あのさ",\n'
-    '    "Line4": "Kurone: \\v[0]がお前に手を焼いてるみたいだったよ",\n'
-    '    "Line5": "Kurone: 他はどうでも良いけど、\\n\"\\c[10]私の標的\\c\"に余計な事 しないでくれない？",\n'
-    '    "Line6": "Kurone: 殺すよ",\n'
-    '    "Line7": "Defense Member E: ひっ...!も...申し訳ごザいまセん",\n'
-    '    "Line8": "Defense Member E: \\SE[ライター]クロネ様に永久ニ服従しまスから...\\n\\c[18]どウかお許シを"\n'
-    "}\n"
-    "Output:\n"
-    "{\n"
-    '    "Line1": "Defense Member E: ...",\n'
-    '    "Line2": "Kurone: ...\\i[100]",\n'
-    '    "Line3": "Kurone: Hey.",\n'
-    '    "Line4": "Kurone: It seems like \\v[0] is having a hard time with you.",\n'
-    '    "Line5": "Kurone: I don\'t care about the others,\\nbut could you not interfere with \"\\c[10]my target\\c\"?",\n'
-    '    "Line6": "Kurone: I\'ll kill you.",\n'
-    '    "Line7": "Defense Member E: Eek...! I-\'m so sorry.",\n'
-    '    "Line8": "Defense Member E: \\SE[ライター]I will serve you forever, Kurone-sama...\\n\\c[18]please forgive me."\n'
-    "}"
-)
+# ---------------------------------------------------------------------------
+# Preset loading / saving — all delegate to ini_manager
+# ---------------------------------------------------------------------------
 
 
-def _load_default_system_instructions() -> str:
-    """Load default System Instructions from default/example.txt.
-
-    Falls back to a short inline default if the file is missing.
-    """
-    example_path = (
-        Path(__file__).resolve().parent.parent.parent / "default" / "example.txt"
-    )
-    try:
-        if example_path.exists():
-            return example_path.read_text(encoding="utf-8").strip()
-    except Exception:
-        pass
-    return _SI_FALLBACK
+def _get_default_summary() -> str:
+    """Return the default Summary text from INI [defaults] or built-in fallback."""
+    return ini_manager.get_default_text("Summary")
 
 
-DEFAULT_SYSTEM_INSTRUCTIONS = _load_default_system_instructions()
+def _get_default_system_instructions() -> str:
+    """Return the default System Instructions text from INI [defaults] or built-in."""
+    return ini_manager.get_default_text("SystemInstruction")
 
-# Paths for user preset persistence
-_USER_PRESETS_DIR = Path(__file__).resolve().parent.parent.parent / "user" / "presets"
-_STYLE_PRESETS_FILE = _USER_PRESETS_DIR / "style_presets.json"
-_TONE_PRESETS_FILE = _USER_PRESETS_DIR / "tone_presets.json"
+
+# Module-level constants populated from INI (or built-ins) at import time.
+DEFAULT_SUMMARY_TEXT: str = _get_default_summary()
+DEFAULT_SYSTEM_INSTRUCTIONS: str = _get_default_system_instructions()
+
+# SI presets path (legacy JSON kept for backward compat — SI presets migrate lazily).
+_USER_PRESETS_DIR = ini_manager.get_user_dir() / "presets"
 _SI_PRESETS_FILE = _USER_PRESETS_DIR / "system_instructions_presets.json"
 
-# Default System Instructions presets: name → prompt text.
+# Default SI preset dict shown in the SI preset combobox.
 DEFAULT_SI_PRESETS: Dict[str, str] = {
     "Default": DEFAULT_SYSTEM_INSTRUCTIONS,
 }
 
 
-def _load_presets(defaults: Dict[str, str], user_file: Path) -> Dict[str, str]:
-    """Merge default presets with any user-saved overrides.
-
-    Returns an ordered dict: Custom first, then alphabetical.
-    User presets can override defaults and add new ones.
-    """
-    merged: Dict[str, str] = dict(defaults)
-    if user_file.exists():
-        try:
-            data = json.loads(user_file.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                merged.update(data)
-        except Exception:
-            pass
-    # Build ordered result: Custom first, then sorted
-    result: Dict[str, str] = {CUSTOM_PRESET_NAME: ""}
-    for name in sorted(merged):
-        if name.lower() != "custom":
-            result[name] = merged[name]
-    return result
-
-
-def _save_user_presets(presets: Dict[str, str], user_file: Path) -> None:
-    """Persist user presets to JSON (excludes 'Custom')."""
-    user_file.parent.mkdir(parents=True, exist_ok=True)
-    to_save = {k: v for k, v in presets.items() if k != CUSTOM_PRESET_NAME}
-    user_file.write_text(
-        json.dumps(to_save, indent=2, ensure_ascii=False), encoding="utf-8",
-    )
-
-
-def _delete_user_presets_file(user_file: Path) -> None:
-    """Remove user preset file to restore defaults."""
-    if user_file.exists():
-        user_file.unlink()
-
-
 def _unique_preset_name(name: str, existing: Dict[str, str]) -> str:
-    """Return *name* if unique, otherwise append the lowest free number."""
+    """Return *name* if unique in *existing*, otherwise append the lowest free number."""
     if name not in existing:
         return name
     n = 1
@@ -533,19 +434,16 @@ def _load_si_presets() -> Dict[str, str]:
     """Load System Instructions presets.
 
     Returns ordered dict: Custom first, Default second, then alphabetical
-    user presets.  Default can be overwritten by user presets.
+    user presets.  The Default text is always refreshed from INI.
     """
-    merged: Dict[str, str] = dict(DEFAULT_SI_PRESETS)
+    merged: Dict[str, str] = {"Default": ini_manager.get_default_text("SystemInstruction")}
     if _SI_PRESETS_FILE.exists():
         try:
-            data = json.loads(
-                _SI_PRESETS_FILE.read_text(encoding="utf-8"),
-            )
+            data = json.loads(_SI_PRESETS_FILE.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 merged.update(data)
         except Exception:
             pass
-    # Build ordered result: Custom first, Default second, then sorted
     result: Dict[str, str] = {CUSTOM_PRESET_NAME: ""}
     if "Default" in merged:
         result["Default"] = merged["Default"]
@@ -553,6 +451,18 @@ def _load_si_presets() -> Dict[str, str]:
         if name.lower() != "custom" and name != "Default":
             result[name] = merged[name]
     return result
+
+
+def _save_si_presets_to_file(presets: Dict[str, str]) -> None:
+    """Persist SI presets to JSON (excludes 'Custom' and 'Default')."""
+    _USER_PRESETS_DIR.mkdir(parents=True, exist_ok=True)
+    to_save = {
+        k: v for k, v in presets.items()
+        if k not in (CUSTOM_PRESET_NAME, "Default")
+    }
+    _SI_PRESETS_FILE.write_text(
+        json.dumps(to_save, indent=2, ensure_ascii=False), encoding="utf-8",
+    )
 
 
 # Legacy compat: keep old dicts so existing code that references them doesn't crash.
@@ -1063,13 +973,9 @@ class InformationStep(BaseStep):
         frame = ttk.LabelFrame(self._left_column, text="Translation Style & Tone")
         frame.pack(fill="x", padx=5, pady=5)
 
-        # --- Load presets ---
-        self._style_presets = _load_presets(
-            DEFAULT_STYLE_PRESETS, _STYLE_PRESETS_FILE,
-        )
-        self._tone_presets = _load_presets(
-            DEFAULT_TONE_PRESETS, _TONE_PRESETS_FILE,
-        )
+        # --- Load presets from INI ---
+        self._style_presets = ini_manager.get_all_presets("style")
+        self._tone_presets = ini_manager.get_all_presets("tone")
 
         # ---- Style ----
         style_header = ttk.Frame(frame)
@@ -1330,7 +1236,7 @@ class InformationStep(BaseStep):
         self._use_global_glossary_var = tk.BooleanVar(value=True)
         use_global_cb = ttk.Checkbutton(
             content,
-            text="Use Global Glossary (user/glossary.csv)",
+            text="Use Global Glossary (user/GlobalGlossary.csv)",
             variable=self._use_global_glossary_var,
             command=self._on_use_global_glossary_changed,
         )
@@ -1824,9 +1730,9 @@ class InformationStep(BaseStep):
         setattr(self, prev_attr, var.get())
 
     def _restore_summary_default(self) -> None:
-        """Restore the Summary field to its default text."""
+        """Restore the Summary field to its default text (always re-reads INI)."""
         self._summary_text.delete("1.0", "end")
-        self._summary_text.insert("1.0", DEFAULT_SUMMARY_TEXT)
+        self._summary_text.insert("1.0", ini_manager.get_default_text("Summary"))
 
     def _toggle_preset_state(
         self,
@@ -1870,7 +1776,7 @@ class InformationStep(BaseStep):
                 return
             name = _unique_preset_name(new_name.strip(), self._style_presets)
         self._style_presets[name] = text
-        _save_user_presets(self._style_presets, _STYLE_PRESETS_FILE)
+        ini_manager.set_preset_text("style", name, text)
         self._style_preset_combo["values"] = list(self._style_presets.keys())
         self._style_preset_var.set(name)
         logger.info("Saved style preset: %s", name)
@@ -1889,7 +1795,7 @@ class InformationStep(BaseStep):
         ):
             return
         self._style_presets.pop(name, None)
-        _save_user_presets(self._style_presets, _STYLE_PRESETS_FILE)
+        ini_manager.delete_preset("style", name)
         self._style_preset_combo["values"] = list(self._style_presets.keys())
         self._style_preset_var.set(CUSTOM_PRESET_NAME)
         self._on_style_changed()
@@ -1910,7 +1816,7 @@ class InformationStep(BaseStep):
                 return
             name = _unique_preset_name(new_name.strip(), self._tone_presets)
         self._tone_presets[name] = text
-        _save_user_presets(self._tone_presets, _TONE_PRESETS_FILE)
+        ini_manager.set_preset_text("tone", name, text)
         self._tone_preset_combo["values"] = list(self._tone_presets.keys())
         self._tone_preset_var.set(name)
         logger.info("Saved tone preset: %s", name)
@@ -1929,7 +1835,7 @@ class InformationStep(BaseStep):
         ):
             return
         self._tone_presets.pop(name, None)
-        _save_user_presets(self._tone_presets, _TONE_PRESETS_FILE)
+        ini_manager.delete_preset("tone", name)
         self._tone_preset_combo["values"] = list(self._tone_presets.keys())
         self._tone_preset_var.set(CUSTOM_PRESET_NAME)
         self._on_tone_changed()
@@ -1973,7 +1879,7 @@ class InformationStep(BaseStep):
                 new_name.strip(), self._si_presets,
             )
         self._si_presets[name] = text
-        _save_user_presets(self._si_presets, _SI_PRESETS_FILE)
+        _save_si_presets_to_file(self._si_presets)
         self._si_preset_combo["values"] = list(self._si_presets.keys())
         self._si_preset_var.set(name)
         logger.info("Saved SI preset: %s", name)
@@ -2000,7 +1906,7 @@ class InformationStep(BaseStep):
         ):
             return
         self._si_presets.pop(name, None)
-        _save_user_presets(self._si_presets, _SI_PRESETS_FILE)
+        _save_si_presets_to_file(self._si_presets)
         self._si_preset_combo["values"] = list(self._si_presets.keys())
         self._si_preset_var.set("Default")
         self._on_si_preset_changed()
@@ -3340,61 +3246,114 @@ class InformationStep(BaseStep):
             messagebox.showerror("Import Error", f"Failed to import: {e}")
 
     # ========================================================================
-    # Global Glossary / Database Management (TASK 41.9)
+    # Global Glossary / Database Management (TASK 41.9 — Phase 62 unified)
     # ========================================================================
 
     @staticmethod
     def _global_db_path(mode: str) -> Path:
-        """Return the JSON path for a global database mode.
+        """Return the canonical file path for a global database mode.
+
+        Phase 62: Both modes now use TSV files in user/.
+          - Glossary      → user/globalglossary.tsv
+          - Code Database → user/codedatabase.tsv
 
         Args:
             mode: ``"Glossary"`` or ``"Code Database"``.
 
         Returns:
-            Absolute path to the JSON file.
+            Absolute path to the TSV file.
         """
-        base = Path(__file__).resolve().parents[2] / "user"
+        from CherryAI.functions.glossary import (
+            _unified_glossary_path,
+            _code_glossary_path,
+        )
         if mode == "Code Database":
-            return base / "global_codes.json"
-        return base / "global_glossary.json"
+            return _code_glossary_path()
+        return _unified_glossary_path()
 
     def _load_global_db(self, mode: str) -> List[Dict[str, str]]:
-        """Load entries from the global JSON file.
+        """Load entries from the global TSV file.
+
+        Phase 62: Glossary reads from globalglossary.tsv via
+        ``read_unified_glossary()``.  Code Database reads from
+        codedatabase.tsv via ``code_glossary_db.read_all_rows()``.
 
         Args:
             mode: ``"Glossary"`` or ``"Code Database"``.
 
         Returns:
-            List of entry dicts.
+            List of entry dicts with keys ``col1``/``col2``/``col3``.
         """
-        path = self._global_db_path(mode)
-        if not path.exists():
-            return []
         try:
-            with open(path, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-            if isinstance(data, list):
-                return data
-        except (json.JSONDecodeError, OSError) as exc:
-            logger.warning("Failed to load global DB %s: %s", path, exc)
-        return []
+            if mode == "Code Database":
+                from CherryAI.functions.glossaries import code_glossary_db
+                rows = code_glossary_db.read_all_rows()
+                return [
+                    {"col1": r[0] if len(r) > 0 else "",
+                     "col2": r[1] if len(r) > 1 else "",
+                     "col3": r[3] if len(r) > 3 else ""}  # Pattern, Type, Notes
+                    for r in rows
+                ]
+            else:  # Glossary
+                from CherryAI.functions.glossary import read_unified_glossary
+                glossary = read_unified_glossary()
+                return [
+                    {"col1": e.original, "col2": e.translation, "col3": e.notes}
+                    for e in glossary.values()
+                ]
+        except Exception as exc:
+            logger.warning("Failed to load global DB (%s): %s", mode, exc)
+            return []
 
     def _save_global_db(
         self, mode: str, entries: List[Dict[str, str]]
     ) -> None:
-        """Persist entries to the global JSON file.
+        """Persist entries to the global TSV file.
+
+        Phase 62: Glossary writes through ``write_unified_glossary()``.
+        Code Database writes through ``code_glossary_db.write_all_rows()``.
 
         Args:
             mode: ``"Glossary"`` or ``"Code Database"``.
-            entries: List of entry dicts.
+            entries: List of entry dicts with keys ``col1``/``col2``/``col3``.
         """
-        path = self._global_db_path(mode)
-        path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            with open(path, "w", encoding="utf-8") as fh:
-                json.dump(entries, fh, ensure_ascii=False, indent=2)
-        except OSError as exc:
-            logger.error("Failed to save global DB %s: %s", path, exc)
+            if mode == "Code Database":
+                from CherryAI.functions.glossaries import code_glossary_db
+                rows = [
+                    [e.get("col1", ""), e.get("col2", ""), "", e.get("col3", "")]
+                    for e in entries
+                ]
+                code_glossary_db.write_all_rows(rows)
+            else:  # Glossary
+                from CherryAI.functions.glossary import (
+                    read_unified_glossary,
+                    write_unified_glossary,
+                    GlossaryEntry,
+                )
+                # Preserve existing metadata (source, type, gender etc.) for
+                # entries that had it; new entries get plain Notes only.
+                existing = read_unified_glossary()
+                new_glossary: dict[str, "GlossaryEntry"] = {}
+                for item in entries:
+                    original = item.get("col1", "").strip()
+                    if not original:
+                        continue
+                    if original in existing:
+                        # Update only translation & notes; keep metadata
+                        e = existing[original]
+                        e.translation = item.get("col2", "")
+                        e.notes = item.get("col3", "")
+                        new_glossary[original] = e
+                    else:
+                        new_glossary[original] = GlossaryEntry(
+                            original=original,
+                            translation=item.get("col2", ""),
+                            notes=item.get("col3", ""),
+                        )
+                write_unified_glossary(new_glossary)
+        except Exception as exc:
+            logger.error("Failed to save global DB (%s): %s", mode, exc)
 
     def _refresh_global_database(self) -> None:
         """Reload the Global Glossary / Database treeview.
@@ -3528,11 +3487,11 @@ class InformationStep(BaseStep):
         self._save_global_db(mode, entries)
 
     def _import_global_database(self) -> None:
-        """Import entries from a JSON or CSV file into the global DB."""
+        """Import entries from a TSV, JSON or CSV file into the global DB."""
         from tkinter import filedialog
         path = filedialog.askopenfilename(
             title="Import Global Database",
-            filetypes=[("JSON files", "*.json"), ("CSV files", "*.csv")],
+            filetypes=[("TSV files", "*.tsv"), ("JSON files", "*.json"), ("CSV files", "*.csv")],
             parent=self,
         )
         if not path:
@@ -3540,10 +3499,12 @@ class InformationStep(BaseStep):
         try:
             file_path = Path(path)
             entries: List[Dict[str, str]] = []
-            if file_path.suffix.lower() == ".csv":
+            suffix = file_path.suffix.lower()
+            if suffix in (".csv", ".tsv"):
                 import csv
+                delim = "\t" if suffix == ".tsv" else ","
                 with open(file_path, "r", encoding="utf-8") as fh:
-                    reader = csv.DictReader(fh)
+                    reader = csv.DictReader(fh, delimiter=delim)
                     for row in reader:
                         keys = list(row.keys())
                         entries.append({
@@ -3576,17 +3537,17 @@ class InformationStep(BaseStep):
             messagebox.showerror("Import Error", str(e))
 
     def _export_global_database(self) -> None:
-        """Export current global database to a JSON or CSV file."""
+        """Export current global database to a TSV, JSON or CSV file."""
         from tkinter import filedialog
         mode = self._global_db_mode_var.get()
         default_name = (
-            "global_codes" if mode == "Code Database" else "global_glossary"
+            "codedatabase" if mode == "Code Database" else "globalglossary"
         )
         path = filedialog.asksaveasfilename(
             title="Export Global Database",
-            defaultextension=".json",
+            defaultextension=".tsv",
             initialfile=default_name,
-            filetypes=[("JSON files", "*.json"), ("CSV files", "*.csv")],
+            filetypes=[("TSV files", "*.tsv"), ("CSV files", "*.csv"), ("JSON files", "*.json")],
             parent=self,
         )
         if not path:
@@ -3594,10 +3555,12 @@ class InformationStep(BaseStep):
         try:
             entries = self._load_global_db(mode)
             file_path = Path(path)
-            if file_path.suffix.lower() == ".csv":
+            suffix = file_path.suffix.lower()
+            if suffix in (".csv", ".tsv"):
                 import csv
+                delim = "\t" if suffix == ".tsv" else ","
                 with open(file_path, "w", encoding="utf-8", newline="") as fh:
-                    writer = csv.DictWriter(fh, fieldnames=["col1", "col2", "col3"])
+                    writer = csv.DictWriter(fh, fieldnames=["col1", "col2", "col3"], delimiter=delim)
                     writer.writeheader()
                     writer.writerows(entries)
             else:

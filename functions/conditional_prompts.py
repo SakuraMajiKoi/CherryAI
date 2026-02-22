@@ -23,7 +23,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 
 # Default path for user customization
-DEFAULT_CONDITIONS_FILE = "config/conditional_prompts.json"
+DEFAULT_CONDITIONS_FILE = "user/conditional_prompts.json"
 
 
 @dataclass
@@ -402,7 +402,7 @@ class ConditionalPromptManager:
             config_dir: Directory containing conditional_prompts.json (optional)
         """
         self.logger = logging.getLogger("cherryai.conditional_prompts")
-        self.config_dir = config_dir or Path("config")
+        self.config_dir = config_dir or Path("user")
         self.conditions: Dict[str, ConditionalPrompt] = {}
         
         self._load_builtin_conditions()
@@ -716,7 +716,7 @@ class ConditionalPromptManager:
 # Convenience Functions
 # ============================================================================
 
-def create_default_config(config_dir: Path = Path("config")) -> Path:
+def create_default_config(config_dir: Path = Path("user")) -> Path:
     """Create a default conditional_prompts.json file with documentation.
     
     Returns:

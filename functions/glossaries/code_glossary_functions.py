@@ -597,13 +597,13 @@ def update_code_in_glossary(
         UPDATE_MODE_NEW,
         _archive_glossary_with_timestamp,
         _code_glossary_path,
-        _read_csv_rows,
-        _write_csv,
         diagnose_glossary_path,
     )
-    
+    from .code_glossary_db import read_all_rows as _db_read, write_all_rows as _db_write, init_db as _db_init
+
     code_path = _code_glossary_path()
-    
+    _db_init(code_path)  # ensure schema exists / migrate from CSV if needed
+
     # Handle NEW mode: archive existing and start fresh
     if update_mode == UPDATE_MODE_NEW:
         if code_path.exists():
@@ -621,44 +621,26 @@ def update_code_in_glossary(
                 normalized_groups[normalized] = (normalized, existing_count + count)
             else:
                 normalized_groups[normalized] = (normalized, count)
-        
+
         new_rows: List[List[str]] = []
         for normalized, (norm_code, total_count) in sorted(normalized_groups.items(), key=lambda x: x[1][1], reverse=True):
             code_type = classify_code_type(norm_code)
             regex_pattern = generate_regex_pattern(norm_code, code_type)
             new_rows.append([norm_code, code_type, regex_pattern, f"Count: {total_count}"])
-        all_rows = [CODE_GLOSSARY_HEADER] + new_rows
-        _write_csv(code_path, all_rows)
-        logging.info("Wrote fresh code glossary: %s (%d codes)", code_path, len(new_rows))
+        _db_write(new_rows, code_path)
+        logging.info("Wrote fresh code glossary DB: %s (%d codes)", code_path, len(new_rows))
         return cast(Path, code_path)
-    
+
     # Read existing code glossary entries
     # Use NORMALIZED codes as keys for grouping variations
     existing_codes: Dict[str, List[str]] = {}
-    if code_path.exists():
-        rows = _read_csv_rows(code_path)
-        for i, row in enumerate(rows):
-            if not row or not row[0].strip():
-                continue
-            # Skip header row
-            if i == 0 and row[0].strip().lower() == "code":
-                continue
-            # Pad row to 4 columns (new format)
-            while len(row) < 4:
-                row.append("")
-            # If old 8-column format detected, migrate to new format
-            if len(row) > 4:
-                # Keep Code[0], extract Type if available from old IsInvisible/IsWord/etc flags
-                # For migration: just keep Code and Replacement, infer Type
-                code_key = row[0]
-                old_replacement = row[6] if len(row) > 6 else ""
-                new_type = classify_code_type(code_key)
-                row = [code_key, new_type, old_replacement, ""]
-            # Use normalized code as the key (groups variations together)
-            normalized_key = _normalize_code_segment(row[0])
-            # IMPORTANT: Update row[0] to use normalized code so it's written back normalized
-            row[0] = normalized_key
-            existing_codes[normalized_key] = row
+    for row in _db_read(code_path):
+        # Rows from DB are already 4-column, no header, no migration needed
+        while len(row) < 4:
+            row.append("")
+        normalized_key = _normalize_code_segment(row[0])
+        row[0] = normalized_key
+        existing_codes[normalized_key] = row
     
     # Process codes based on update mode
     # Use NORMALIZED codes as keys to group variations
@@ -690,58 +672,15 @@ def update_code_in_glossary(
             existing_codes[normalized_code] = existing_row
         # else: ADD mode, skip existing entries
     
-    # Write code glossary with header + existing + new
-    all_rows = [CODE_GLOSSARY_HEADER]
-    all_rows.extend(existing_codes.values())
-    all_rows.extend(appended_rows)
-    
-    # Perform pre-write diagnostics
-    diag = diagnose_glossary_path(code_path)
-    logging.debug("Pre-write diagnostics for code glossary %s: %s", code_path, diag)
-    
-    # Check if we can write
-    if diag["exists"] and not diag["writable"]:
-        error_msg = f"Code glossary file exists but is not writable: {code_path}\n"
-        error_msg += f"Error: {diag.get('error', 'Unknown')}\n"
-        error_msg += "Check if the file is open in another program or permissions are incorrect."
-        logging.error(error_msg)
-        raise PermissionError(error_msg)
-    
-    if not diag["parent_exists"] or not diag["parent_writable"]:
-        error_msg = f"Cannot write to code glossary directory: {code_path.parent}\n"
-        error_msg += f"Parent exists: {diag['parent_exists']}, Writable: {diag['parent_writable']}\n"
-        error_msg += f"Error: {diag.get('error', 'Unknown')}"
-        logging.error(error_msg)
-        raise PermissionError(error_msg)
-    
+    # Write code glossary: existing + new (no header; DB handles schema)
+    all_data_rows: List[List[str]] = list(existing_codes.values()) + appended_rows
+
     try:
-        _write_csv(code_path, all_rows)
+        _db_write(all_data_rows, code_path)
     except Exception as e:
-        # Post-failure diagnostics
-        post_diag = diagnose_glossary_path(code_path)
-        error_msg = f"Failed to write code glossary: {e}\n"
-        error_msg += f"Path: {code_path}\n"
-        error_msg += f"Post-failure diagnostics:\n"
-        error_msg += f"  Exists: {post_diag['exists']}\n"
-        error_msg += f"  Size: {post_diag['size_bytes']} bytes\n"
-        error_msg += f"  Writable: {post_diag['writable']}\n"
-        error_msg += f"  Error: {post_diag.get('error', 'None')}"
+        error_msg = f"Failed to write code glossary DB: {e}\nPath: {code_path}"
         logging.error(error_msg)
         raise RuntimeError(error_msg) from e
-    
-    # Post-write verification
-    post_diag = diagnose_glossary_path(code_path)
-    if not post_diag["exists"]:
-        error_msg = f"Code glossary was written but file does not exist: {code_path}\n"
-        error_msg += f"This is unexpected. Post-write diagnostics: {post_diag}"
-        logging.error(error_msg)
-        raise RuntimeError(error_msg)
-    
-    if post_diag["size_bytes"] == 0:
-        error_msg = f"Code glossary was written but file is empty: {code_path}\n"
-        error_msg += f"Attempted to write {len(appended_rows)} new entries."
-        logging.error(error_msg)
-        raise RuntimeError(error_msg)
-    
-    logging.info("Wrote code glossary: %s (%d new entries, %d bytes)", code_path, len(appended_rows), post_diag["size_bytes"])
+
+    logging.info("Wrote code glossary DB: %s (%d new entries)", code_path, len(appended_rows))
     return cast(Path, code_path)

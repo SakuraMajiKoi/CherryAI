@@ -52,7 +52,295 @@ MODULE COUNTS (Verified January 2026)
 
 =============================================================================
 
-PENDING TASKS - ESTIMATION TAB
+=============================================================================
+
+COMPLETED - SESSION 25 (Remove config/ Folder)
+
+### SESSION 25: Remove config/ Folder — All Config Embedded in INI/Constants ✅ DONE
+
+**Changes implemented:**
+- `config/` folder — DELETED entirely (defaults.ini, config.txt, prompt.txt,
+  output_examples.txt, base_instructions.txt, game_summary.txt,
+  translation_style.txt, conditional_prompts.json all removed)
+- `functions/ini_manager.py` — `_FACTORY_DEFAULTS_INI_TEXT` constant embeds all
+  factory defaults; `get_defaults_path()` returns None (compat stub);
+  `_load_defaults_ini()` uses `read_string()` on embedded constant;
+  added `[caching].aggressive_dedup = false` to embedded constant
+- `functions/prompt_builder.py` — `_DEFAULT_PROMPT_TEMPLATE` embeds full eroge
+  translator prompt; `_DEFAULT_OUTPUT_EXAMPLES` embeds JSON format examples;
+  `config_dir` default changed to `Path(".")`;
+  `style_file`/`summary_file` default to empty string (no external file)
+- `functions/project_config.py` — `summary_file` default changed from
+  `config/game_summary.txt` to `""` throughout; `load_game_summary()` returns
+  early on empty path
+- `functions/API2Glossary.py` — API key now read from `user/API.ini [api2glossary]
+  key` (was `config/config.txt`)
+- `functions/dedup.py` — `_is_aggressive_enabled()` reads from
+  `user/CherryAI.ini [caching].aggressive_dedup` (was `config/config.txt`)
+- `functions/config.py` — DEFAULTS `summary_file`/`style_file` both → `""`
+- `functions/agent_modes.py` — Removed `config/base_instructions.txt` and
+  `config/prompt.txt` from `DOC_READ_PATHS`
+- `functions/auto_pipeline.py` — `_step_apply_defaults()` uses
+  `get_all_initial_defaults()` and new `_apply_defaults_from_dict()` method
+- `functions/conditional_prompts.py` — `DEFAULT_CONDITIONS_FILE` →
+  `user/conditional_prompts.json`; `config_dir` default → `Path("user")`
+- `CherryAI.ini` — `summary_file =` and `style_file =` now empty (no external file)
+- `user/API.ini` — Added `[api2glossary]` section with `key =` placeholder
+- `gui/helpers/prompt_adapter.py` — All `config/...` defaults removed; uses `""`
+- `gui/helpers/glossary_adapter.py` — `summary_file` default → `""`
+- `dev/example/sample.txt` + `dev/example/sample_translated.txt` — Created
+  (moved from `config/`)
+
+**Tests fixed:**
+- `test_defaults.py` — Rewrote 5 test methods to work with embedded constant
+- `test_prompts_config.py` — Rewrote `TestPromptsINIConfiguration` (4 tests)
+- `test_game_summary.py` — `test_default_values` expects `""` not path
+- `test_phase34_comprehensive.py` — `test_config_files_exist` uses
+  `get_initial_default()` instead of checking `config/defaults.ini` file
+
+=============================================================================
+
+COMPLETED - SESSION 24 (INI System + Conditional Prompts)
+
+### SESSION 24: INI Population, Conditional Prompts in Global Options, Mock Context ✅ DONE
+
+**Changes implemented:**
+- `config/defaults.ini` — Renamed all sections/keys to match `CherryAI.ini` naming
+  (logging→log, safety→limit, file_io→fileio; updated key names throughout);
+  added `[conditional_prompts]` section with dialogue/menu/choice/unknown prompts
+- `functions/ini_manager.py` — `_populate_from_defaults()` auto-seeds empty CherryAI.ini
+  sections from defaults.ini on first load; `get_conditional_prompt()` /
+  `set_conditional_prompt()` helpers for typed access to context-type prompts
+- `functions/prompt_builder.py` — `get_context_prompt()` reads from INI first via
+  `get_conditional_prompt()`; falls back to hardcoded constants
+- `gui/dialogs/global_options.py` — `PromptsSettings` gains 4 new fields
+  (dialogue, menu, choice, unknown); Global Options Prompts section shows a
+  4-row conditional prompts table (Text widget + scrollbar + Reset per row);
+  save/load/defaults all wired up for the new fields
+- `functions/mock_translator.py` — `MockTranslator.__init__` gains `context_type`
+  param; `translate_batch()` accepts optional per-call `context_type`; factory
+  `create_mock_translator()` forwards `context_type`
+- `functions/api_client.py` — `translate_batch()` passes `system_prompt` to
+  `_mock_translate()`; `_mock_translate()` extracts context_type from prompt header
+  and forwards to `create_mock_translator()`
+- `dev/test_gui_dialogs.py` — Updated to use new Settings dataclass field names
+- `dev/test_prompts_config.py` — Updated defaults.ini reads to use `encoding='utf-8'`
+
+=============================================================================
+
+COMPLETED TASKS - PHASE 62: FILE SYSTEM AND API UNIFICATION
+✅ DONE — Session 28
+
+### Phase 62 Overview
+
+**Priority:** HIGH | **Status:** ✅ COMPLETE (Session 28) | **Effort:** 8-12 hours
+
+**Goal:** Unify all diverged parallel systems into the canonical file design:
+- `user/CherryAI.ini` — all non-meta config (prompts, sytsem instructions, style, tone, caching, limits, UI)
+- `user/API.ini` — all API meta information (keys, model, temperature, URL, provider profiles)
+- `user/globalglossary.tsv` — global translation glossary (3 columns: Original, Translation, Notes)
+- `user/codedatabase.tsv` — global code pattern database (Pattern, Type, RegEx, Notes, Visibility, extended props)
+- `Projects/` — Per-project manifests — all project-specific information, including glossary and code entries as well as current entries and options from the four above
+- `logs/` - Created and Accessed during Translation and QA
+- `cache/` - Created and Accessed during Translation to optionally skip lines or requests (filling translation via script)
+
+---
+
+### TASK 62.1: Glossary File Unification (CSV → TSV, 3-column design)
+
+**Status:** ✅ DONE (Session 28) | **Effort:** 3 hours
+**Tests:** `dev/test_phase62_glossary.py` — 32 tests, all passing
+
+**CONFLICTING FUNCTIONS (same purpose, different implementation):**
+
+| Function/File | Location | Purpose | Return/Format |
+|--------------|----------|---------|---------------|
+| `_unified_glossary_path()` | `functions/glossary.py:191` | Path to global glossary | `user/GlobalGlossary.csv` (CSV, 8 columns) |
+| `_global_db_path("Glossary")` | `gui/steps/information.py:3264` | Path to global glossary for widget | `user/global_glossary.json` (JSON, unknown schema) |
+
+**SIMILAR BUT NOT THE SAME:**
+
+| System | Where Used | What It Does | Difference |
+|--------|-----------|--------------|------------|
+| `glossary.py` CSV reader | `functions/glossary.py`, `functions/prompt_builder.py`, `functions/API2Glossary.py` | Reads/writes GlobalGlossary.csv for translation prompt inclusion | Structured CSV with 8 columns; used in translation pipeline |
+| Information step JSON | `gui/steps/information.py::_load_global_db()` | Loads global_glossary.json for the Global Glossary widget display | JSON format; GUI-only; not connected to translation pipeline |
+
+**Root Cause:** The Global Glossary widget was built independently of functions/glossary.py. It uses
+a JSON file while the translation pipeline uses CSV. Neither knows about the other.
+
+**Target Design:**
+- Single file: `user/globalglossary.tsv` with 3 columns: `Original`, `Translation`, `Notes`
+- `Notes` column carries all contextual data: type, gender, role, source (plain text in Notes field)
+- `functions/glossary.py` reads/writes `globalglossary.tsv`
+- `gui/steps/information.py` Global Glossary widget reads/writes same `globalglossary.tsv`
+- Migration: `GlobalGlossary.csv` → `globalglossary.tsv` on first access (auto-migration in `_unified_glossary_path()`)
+- Legacy `global_glossary.json` merged into `globalglossary.tsv` on first widget load then deleted
+
+**Files to Modify:**
+- `functions/glossary.py` — `_unified_glossary_path()` returns `globalglossary.tsv`; reader/writer uses TSV 3-column format; auto-migration chain: `glossary.csv` → `GlobalGlossary.csv` → `globalglossary.tsv`
+- `gui/steps/information.py` — `_global_db_path()`, `_load_global_db()`, `_save_global_db()` all route to `globalglossary.tsv` via `functions/glossary.py`
+- `dev/test_information_step_phase41.py` — Update `TestGlobalGlossaryWidget` tests to expect `globalglossary.tsv`
+- `dev/test_glossary_*.py` — Update path assertions
+
+**Tests to Add:**
+- `test_glossary_migration` — Legacy CSV migrates to TSV on first access
+- `test_glossary_3col_format` — TSV has exactly 3 columns: Original, Translation, Notes
+- `test_global_glossary_widget_uses_tsv` — Widget reads/writes same file as pipeline
+
+---
+
+### TASK 62.2: Code Database Unification (SQLite → TSV)
+
+**Status:** ✅ DONE (Session 28) | **Effort:** 3 hours
+**Tests:** `dev/test_phase62_codedb.py` — 27 tests, all passing
+
+**CONFLICTING FUNCTIONS (same purpose, different implementation):**
+
+| Function/File | Location | Purpose | Format |
+|--------------|----------|---------|--------|
+| `_code_glossary_path()` | `functions/glossary.py:204` | Path to global code DB | `user/codeglossary.db` (SQLite) |
+| `code_glossary_db.init_db()` | `functions/glossaries/code_glossary_db.py` | Initialize SQLite DB | SQLite WAL, schema: codes(code, type, regex, notes) |
+| `_global_db_path("Code Database")` | `gui/steps/information.py:3264` | Path for Code DB widget | `user/global_codes.json` (JSON) |
+
+**SIMILAR BUT NOT THE SAME:**
+
+| System | Where Used | What It Does | Difference |
+|--------|-----------|--------------|------------|
+| `code_glossary_db.py` SQLite | `functions/glossary.py`, `functions/glossaries/code_glossary_functions.py` | Read/write code patterns from SQLite for analysis and translation | Structured SQLite, 4-column schema |
+| Information step JSON | `gui/steps/information.py::_load_global_db()` | Loads global_codes.json for Code Database widget display | JSON format; GUI-only; not connected to pipeline |
+| Per-project Code Database | Manifest `CodeGlossary[]` | Project-specific code patterns with extended props (Action, IsInvisible, etc.) | JSON in manifest; used by preprocessing/postprocessing |
+
+**Root Cause:** Three separate implementations for code data. The global DB (SQLite) and widget (JSON)
+are disconnected. Project manifest code entries have more fields (Action, Visibility) than the global DB.
+
+**Target Design:**
+- Single file: `user/codedatabase.tsv` with columns: `Pattern`, `Type`, `RegEx`, `Notes`, `Visible`, `IsInvisible`, `IsCouple`, `IsNumber`, `IsWord`
+- `functions/glossaries/code_glossary_db.py` rewritten to use TSV I/O instead of SQLite
+- `gui/steps/information.py` Code Database widget routes to same `codedatabase.tsv`
+- `_code_glossary_path()` updated to return `codedatabase.tsv`
+- Migration: `codeglossary.db` → `codedatabase.tsv` on first access; `global_codes.json` merged then deleted
+
+**Files to Modify:**
+- `functions/glossaries/code_glossary_db.py` — Replace SQLite with TSV I/O; preserve API surface (`read_all_rows()`, `write_all_rows()`, `upsert_rows()`, `delete_row()`)
+- `functions/glossary.py` — `_code_glossary_path()` returns `codedatabase.tsv`
+- `gui/steps/information.py` — `_global_db_path("Code Database")`, `_load_global_db()`, `_save_global_db()` route to `codedatabase.tsv`
+- `dev/test_information_step_phase41.py` — Update `TestCodeDatabaseActions` tests
+- `dev/test_code_glossary.py` — Update path assertions
+
+**Tests to Add:**
+- `test_code_db_migration` — codeglossary.db migrates to codedatabase.tsv on first access
+- `test_code_db_9col_format` — TSV has correct columns including Visibility + extended props
+- `test_code_db_widget_uses_tsv` — Widget reads/writes same file as pipeline
+
+---
+
+### TASK 62.3: api_profiles.ini Consolidation into API.ini
+
+**Status:** ✅ DONE (Session 28) | **Effort:** 2 hours
+**Tests:** `dev/test_phase62_api.py` — 25 tests, all passing
+
+**CONFLICTING FUNCTIONS (same purpose, different implementation):**
+
+| System | File | Purpose | What It Has |
+|--------|------|---------|-------------|
+| `api_profiles.ini` | Project root | API provider profiles | `[translation]` and `[glossary]` sections with provider, api_key, base_url, model, temperature, timeout, retries, rate_limit, chunk_size |
+| `api_config.py` + `user/API.ini` | `functions/api_config.py` + `user/API.ini` | Encrypted API configuration | Currently only has encrypted keys and security hash |
+
+**Root Cause:** `api_profiles.ini` was an early design. `api_config.py`/`API.ini` was built as the
+secure replacement but only covers key encryption, not the full profile data still in `api_profiles.ini`.
+
+**Target Design:**
+- `api_profiles.ini` deleted; all data migrated into `user/API.ini` `[translation]` and `[glossary]` sections
+- `api_config.py` extended to read/write provider profile settings (model, temperature, URL, etc.)
+- Keys remain encrypted (Fernet AES-256); non-secret settings stored in plaintext in respective sections
+- `api2glossary` section (already in `user/API.ini`) retained for API2Glossary key
+
+**Files to Modify:**
+- `functions/api_config.py` — Add `get_profile_setting()`, `set_profile_setting()` for non-secret API settings
+- `api_profiles.ini` — Delete (after migration)
+- `functions/config.py` — Remove any reads from `api_profiles.ini`; route to `api_config.py`
+- `functions/project_config.py` — Update any `api_profiles.ini` reads to use `api_config.py`
+- `dev/test_api_providers.py` — Update to use new API.ini structure
+
+**Tests to Add:**
+- `test_api_profile_migration` — api_profiles.ini data migrated to API.ini on first load
+- `test_api_ini_has_translation_section` — API.ini contains `[translation]` with model/temperature/URL
+- `test_api_ini_has_glossary_section` — API.ini contains `[glossary]` with separate profile
+
+---
+
+### TASK 62.4: API Request Prompt Order Alignment
+
+**Status:** ✅ DONE (Session 28) | **Effort:** 2 hours
+**Tests:** `dev/test_phase62_prompt.py` — 28 tests, all passing
+
+**Current implementation** (`functions/prompt_builder.py::_construct_system_prompt()`):
+```
+1. Base prompt template (eroge translator instructions)
+2. Context-type instructions (dialogue/menu/choice/unknown)
+3. Game summary
+4. Output examples
+5. Filtered glossary entries + character list
+6. Translation style (combined Style+Tone)
+7. Narrative perspective (POV)
+8. Conditional instructions (pattern-triggered)
+```
+
+**Target order** (per canonical design):
+```
+1. Language direction header: "Translate {Source} into {Target}"
+2. System Instructions (the base prompt / eroge instructions)
+3. Style
+4. Tone (separate from Style)
+5. Summary (game context)
+6. Conditional Prompts (selective: context-type + pattern-triggered, trigger-based, Narrative perspective (POV))
+7. Glossary (selective: content-based, rows called when Original/Translation in Input Lines)
+8. Rolling Context (preceding lines)
+9. Input Lines
+```
+
+**SIMILAR BUT NOT THE SAME:**
+- "Conditional Prompts" in current implementation = context-type prompts (dialogue/menu/choice) AND pattern-triggered conditional_prompts.json entries — currently at positions 2 and 8 respectively. They must be merged into a single slot (slot 6).
+- Style and Tone are currently combined as a single "translation_style" string. They must become separate fields.
+- Output examples (currently injected into prompt) are not in the target design — remove from system prompt. Output examples can instead be part of System Instructions and Conditional Prompts.
+
+**Files to Modify:**
+- `functions/prompt_builder.py` — Rewrite `_construct_system_prompt()` to follow exact slot order
+- `functions/prompt_builder.py` — Add language direction header (slot 1); separate Style/Tone fields
+- `functions/prompt_builder.py` — Move context-type prompt to slot 6 (merged with conditional prompts)
+- `functions/prompt_builder.py` — Remove output examples from prompt injection
+- `gui/steps/translate.py` — `_build_system_prompt_from_manifest()` must pass separate Style/Tone
+- `dev/test_prompt_builder.py` — Update slot order assertions
+
+**Tests to Add:**
+- `test_prompt_slot_1_language_direction` — First section is "Translate X into Y"
+- `test_prompt_slot_3_style_separate` — Style injected separately from Tone
+- `test_prompt_slot_6_conditional_merged` — Context-type and pattern prompts in same slot
+- `test_prompt_slot_7_glossary_after_conditional` — Glossary comes after conditionals
+- `test_prompt_output_examples_not_in_prompt` — Output examples not in system prompt
+
+---
+
+### Phase 62 — Cross-Reference: After Each Task is Tested
+
+✅ **Session 28 complete.** All 5 doc files updated. Summary of changes:
+- **Task 62.1**: `functions/glossary.py` + `gui/steps/information.py` → `globalglossary.tsv` (3-col TSV, migration chain)
+- **Task 62.2**: `functions/glossaries/code_glossary_db.py` → `codedatabase.tsv` (9-col TSV, migration from SQLite/CSV/JSON)
+- **Task 62.3**: `functions/api_config.py` + `functions/project_config.py` → all API profiles in `user/API.ini` `[translation]`/`[glossary]`; auto-migration from `api_profiles.ini`
+- **Task 62.4**: `functions/prompt_builder.py` `_construct_system_prompt()` → 7-slot order: language direction → instructions → style → tone → summary → conditional → glossary
+- **Dir Init**: `functions/ini_manager.py` `ensure_app_dirs()` called from `_load_ini()` → creates `user/`, `Projects/`, `logs/`, `cache/` on first access
+- **Tests**: `test_phase62_glossary.py` (32), `test_phase62_codedb.py` (27), `test_phase62_api.py` (25), `test_phase62_prompt.py` (28), `test_phase62_dirs.py` (17) = **129 new tests**
+
+After each task passes tests, update:
+- `doc/features.md` — File format, glossary widget, API settings
+- `doc/technical.md` — Module descriptions, DATA FORMATS section, PROJECT STRUCTURE
+- `doc/tests.md` — New/updated test file entries
+- `doc/specs.md` — 3.1/3.2 file tables (already updated in Session 26 to reflect targets)
+- `doc/todo.md` — Mark task complete with session number
+
+=============================================================================
+
+PENDING TASKS - Costs TAB
 
 ### TASK 25.1: Analysis Results Storage
 **Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
@@ -1183,10 +1471,10 @@ by date, and fix dictionary iteration error during autosave.
 1. **Manifest Lines Not Loading:** When loading manifest via App menu or WelcomeDialog 
    Resume, lines now populate correctly in InputExtractionStep via `_populate_from_manifest()`
 2. **Auto-Load Checkbox:** WelcomeDialog shows "Automatically load last project on startup"
-   checkbox (always visible, not conditional on Resume availability), persisted via `set_restore_on_launch()`.
+   checkbox (always visible, not conditional on Resume availability), persisted via `set_load_last()`.
    Loads current INI setting on display; saves immediately on toggle (updated Phase 60).
-3. **GlobalOptions Sync:** `restore_on_launch` in GlobalOptions now reads from and writes
-   to `[recent]` section to match startup behavior
+3. **GlobalOptions Sync:** `load_last` in GlobalOptions now reads from and writes
+   to `[session]` section to match startup behavior
 4. **Manifest List Sorting:** LoadManifestDialog sorts manifests by modification date 
    (latest first) instead of alphabetically
 5. **Dictionary Iteration Error:** ManifestManager.save() now uses deepcopy to prevent
@@ -1196,7 +1484,7 @@ by date, and fix dictionary iteration error during autosave.
 - `gui/steps/input_extract.py` - Added manifest data check in `on_enter()`
 - `gui/app.py` - Added explicit `on_enter()` call after manifest load
 - `gui/dialogs/project_dialog.py` - Added auto-load checkbox, sorted manifest list
-- `gui/dialogs/global_options.py` - Sync restore_on_launch with [recent] section
+- `gui/dialogs/global_options.py` - Sync load_last with [session] section
 - `functions/manifest_manager.py` - Use deepcopy in save() method
 
 **Tests to Add:**
@@ -1218,7 +1506,7 @@ project name input to reduce dialog steps for new projects.
 
 **Features Implemented:**
 1. **Last Directory Persistence:** UnifiedInputDialog remembers the last used 
-   input directory across sessions, stored in `[recent].last_input_dir`
+   input directory across sessions, stored in `[session].last_input_dir`
 2. **Project Name Field Integration:** When creating a new project (no manifest 
    loaded), the dialog shows a "Project Name" field in the Options panel, 
    eliminating the separate ProjectNameDialog
@@ -1555,15 +1843,18 @@ operations, progress feedback, confirmation opt-out, and File menu fixes.
 - Rewrote `_remove_character()` to handle multiple selections with reverse-index deletion
 
 ### TASK 60.3: Style/Tone Preset Rework
-**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 4 hours
+**Priority:** HIGH | **Status:** ✅ COMPLETE (migrated to INI 2026) | **Effort:** 4 hours
 
 - Replaced enum-based system with string-based preset management:
-  - DEFAULT_STYLE_PRESETS / DEFAULT_TONE_PRESETS: built-in presets with full LLM prompt text
-  - User presets stored in `user/presets/style_presets.json` and `tone_presets.json`
+  - `_BUILTIN_STYLE_DEFAULTS` / `_BUILTIN_TONE_DEFAULTS`: 7+8 built-in presets in `ini_manager.py`
+  - ~~User presets stored in `user/presets/style_presets.json` and `tone_presets.json`~~
+  - **2026 Update:** User presets stored in `user/CherryAI.ini` under `[style]`/`[tone]` sections
+    via `ini_manager.set_preset_text()` / `ini_manager.delete_preset()` / `ini_manager.get_all_presets()`
+  - JSON preset files deleted; `user/presets/` now only holds system instruction presets
+  - Cases preserved thanks to `optionxform = str` in `_load_ini()`
   - Dropdown (combobox) + ScrolledText prompt field + Save/Delete buttons
   - "Custom" preset always available, cannot be overwritten or deleted
   - `_unique_preset_name()` auto-appends numbers for duplicate names
-  - Legacy migration: `from_dict` capitalizes old lowercase enum values
 - ProjectMetadata changed: `style_preset: str = "Natural"`, `tone_preset: str = "Neutral"`
 
 ### TASK 60.4: Code Database Auto-Populate
@@ -1770,6 +2061,70 @@ COMPLETED - INFORMATION STEP FUNCTIONAL ENHANCEMENTS (Post Phase 60)
 - `doc/technical.md` - Added SIPreset binding, new Phase 41+ integration notes
 - `doc/tests.md` - Added Phase 41+ coverage table, updated binding count note
 - `doc/todo.md` - Marked SI presets done, added SIPreset to manifest table
+
+=============================================================================
+
+COMPLETED - 2026 USER-FOLDER & SECURITY OVERHAUL
+--------------------------------------------------
+
+### User Folder Overhaul
+**Status:** ✅ DONE
+
+- CherryAI.ini moved to `user/CherryAI.ini` (auto-migrated from root on first run)
+- `glossary.csv` renamed to `GlobalGlossary.csv` (auto-migrated by `_unified_glossary_path()`)
+- `codeglossary.csv` replaced by `codeglossary.db` (SQLite, WAL mode, auto-migrated)
+- `user/presets/style_presets.json` and `tone_presets.json` DELETED (presets moved to INI)
+- New `[style]`/`[tone]`/`[defaults]`/`[manifest_defaults]` sections added to CherryAI.ini
+- Old `[api_presets]`/`[project]`/`[translation]` sections REMOVED from CherryAI.ini
+- `_REQUIRED_SECTIONS` in ini_manager ensures sections always survive partial saves
+
+**Files Modified/Created:**
+- `functions/ini_manager.py` - `_REQUIRED_SECTIONS`, `_ensure_required_sections()`, `_load_ini()` fix
+- `functions/glossary.py` - GlobalGlossary.csv path + auto-migration; codeglossary.db path
+- `functions/glossaries/code_glossary_db.py` (NEW) - SQLite persistence layer
+- `functions/glossaries/code_glossary_functions.py` - Uses SQLite instead of CSV
+- `gui/steps/information.py` - INI-based presets; ini_manager import; label update
+- `gui/app.py` - `set_last_manifest()` called on manifest load; `load_last = true`
+- `user/CherryAI.ini` - Restructured with all 13 required sections
+- `user/GlobalGlossary.csv` (MIGRATED from glossary.csv)
+- `user/codeglossary.db` (MIGRATED from codeglossary.csv)
+
+### Encrypted API.ini
+**Status:** ✅ DONE
+
+- All API secrets and presets moved from CherryAI.ini to `user/API.ini`
+- `functions/api_config.py` (NEW):
+  - `set_password()` / `verify_password()` — bcrypt WF-10 + 100 ms brute-force trap
+  - `set_api_key()` / `get_api_key()` — PBKDF2-SHA256 (390k iter.) + Fernet AES-256
+  - `change_password()` — re-encrypts all keys atomically
+  - `is_password_set()` — checks for bcrypt hash in [security]
+  - `migrate_from_ini()` — one-time migration from old CherryAI.ini
+  - `PasswordStrength.assess()` — HiveSystems 2025 tier assessment
+- `user/API.ini` (NEW) — created by migrate_from_ini()
+- See doc/passwords.md for full technical documentation
+
+### Password Strength UI
+**Status:** ✅ DONE
+
+- `gui/widgets/password_strength.py` (NEW) — PasswordStrengthWidget (ttk.Frame):
+  - Entry with "Show" toggle, real-time coloured strength block + tier text
+  - on_change callback, strength_var/colour_var StringVars
+- `gui/dialogs/password_dialog.py` (NEW) — SetPasswordDialog, ChangePasswordDialog, VerifyPasswordDialog
+- `gui/dialogs/global_options.py` — Added OptionSection.SECURITY (9th section) with:
+  - Password status + Set/Change buttons
+  - In-situ PasswordStrengthWidget tester
+  - HiveSystems tier legend with coloured swatches
+  - Technical info + link to doc/passwords.md
+- `dev/test_gui_v2.py` — Updated OptionSection count assertions (8 → 9)
+
+### Documentation
+**Status:** ✅ DONE
+
+- `doc/passwords.md` (NEW) — Full password system documentation
+- `doc/features.md` — Updated module counts, Security section, style presets note
+- `doc/technical.md` — Updated directory tree, new module entries, glossary/INI sections
+- `doc/tests.md` — Updated test count
+- `doc/todo.md` — This section
 
 =============================================================================
 END OF ROADMAP

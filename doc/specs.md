@@ -219,9 +219,10 @@ When global options enable automation, loading files triggers a cascade:
 
 | File | Location | Purpose | Format |
 |------|----------|---------|--------|
-| `CherryAI.ini` | Project root | API keys, presets, defaults | INI |
-| `api_profiles.ini` | Project root | API provider profiles | INI |
-| `config/defaults.ini` | `config/` | Default settings | INI |
+| `CherryAI.ini` | `user/` | General config, defaults, UI state, last manifest; all non-meta prompt content (system instructions, style, tone, summary, conditionals) | INI |
+| `API.ini` | `user/` | All API meta settings: encrypted keys, model, temperature, URL, provider profiles (AES-256 via master password) | INI |
+| `api_profiles.ini` | Project root | **DEPRECATED — consolidated into `user/API.ini` in Phase 62.** Renamed to `.migrated` on first load. | INI |
+| `_FACTORY_DEFAULTS_INI_TEXT` | `functions/ini_manager.py` | Factory default settings embedded as constant; auto-seeds `CherryAI.ini` on first load | Python constant |
 | `.vscode/settings.json` | `.vscode/` | VS Code analysis paths | JSON | Dev only
 | `pyrightconfig.json` | Project root | Type checking config | JSON | Dev only
 
@@ -230,7 +231,8 @@ When global options enable automation, loading files triggers a cascade:
 | File | Location | Purpose | Format |
 |------|----------|---------|--------|
 | `*.CherryAI.json` | `Projects/` | Project manifest (all state) | JSON |
-| `glossary.csv` | `user/` | Global translation glossary | CSV |
+| `globalglossary.tsv` | `user/` | Global translation glossary: three columns — Original, Translation, Notes | TSV |
+| `codedatabase.tsv` | `user/` | Global code pattern database: Pattern, Type, RegEx, Notes, Visibility, and extended properties | TSV |
 | `speakers.analysis.tsv` | Auto-generated | Speaker name mappings | TSV |
 | `code.analysis.tsv` | Auto-generated | Code pattern analysis | TSV |
 
@@ -298,8 +300,8 @@ Global Options are application-wide settings accessed via Tools → Options. The
 - Accessible via GlobalOptions (Session section) and WelcomeDialog checkbox
 - WelcomeDialog checkbox always visible (not conditional on Resume option availability)
 - Loads current INI setting on display; saves immediately on toggle
-- Setting stored in `[recent].restore_on_launch` for app startup behavior
-- GlobalOptions reads from and writes to `[recent]` section for sync
+- Setting stored in `[session].load_last` for app startup behavior
+- GlobalOptions reads from and writes to `[session]` section for sync
 
 #### Safety Settings
 | Setting | Type | Default | Description |
@@ -319,6 +321,8 @@ Global Options are application-wide settings accessed via Tools → Options. The
 ### 4.2 Data Source
 
 Global options are loaded from and saved to `CherryAI.ini`. The `GlobalOptions` dataclass in `gui/dialogs/global_options.py` provides the in-memory representation.
+
+`CherryAI.ini` is auto-seeded from the embedded `_FACTORY_DEFAULTS_INI_TEXT` constant in `ini_manager.py` on first load via `_populate_from_defaults()`. Conditional context-type prompts (dialogue/menu/choice/unknown) are initialised from the `[conditional_prompts]` section of the embedded constant and stored in the `[prompts]` section of `CherryAI.ini`. They are configurable via **Global Options → Prompts** and are used at translation time by `get_context_prompt()` in `prompt_builder.py`.
 
 ---
 
@@ -376,9 +380,31 @@ Each API request consists of three layers:
 
 | Layer | Contents | Token Counting |
 |-------|----------|----------------|
-| **Meta Settings** | URL, API Key, Model, Temperature, Logit Bias, No Thinking, Structured Output | NOT counted toward token estimates |
-| **Prompt** | System Instructions, Conditional prompt (Dialogue/Choice/Menu/Unknown), Summary, Style and Tone, Code Instructions (conditional), Glossary (conditional, selective), Rolling Context (conditional) | Counted as input tokens |
-| **Lines to Translate** | Preprocessed lines (preferred) or original lines when preprocessed is empty | Counted as input tokens; output estimated via language multiplier |
+| **Meta Settings** | URL, API Key, Model, Temperature, Logit Bias, No Thinking, Structured Output — sourced from `user/API.ini` | NOT counted toward token estimates |
+| **Prompt** | Language direction, System Instructions, Style, Tone, Summary, Conditional Prompts (selective), Glossary (selective, content-based), Rolling Context (conditional) — sourced from `user/CherryAI.ini` and manifest | Counted as input tokens |
+| **Input Lines** | Preprocessed lines (preferred) or original lines when preprocessed is empty — sourced from manifest | Counted as input tokens; output estimated via language multiplier |
+
+#### Prompt Injection Order
+
+The system prompt is assembled in the following fixed order. Empty sections are always skipped (zero token cost):
+
+| Slot | Component | Source | Condition |
+|------|-----------|--------|-----------|
+| 1 | **Language Direction** | Manifest `SourceLanguage` + `TargetLanguage` | Always present |
+| 2 | **System Instructions** | Manifest `Prompt` / preset from `user/CherryAI.ini` | Always present |
+| 3 | **Style** | Manifest `CustomStyle` or `StylePreset` | Skip when empty |
+| 4 | **Tone** | Manifest `CustomTone` or `TonePreset` | Skip when empty |
+| 5 | **Summary** | Manifest `Summary` | Skip when empty |
+| 6 | **Conditional Prompts** | `user/CherryAI.ini [prompts]` or `user/conditional_prompts.json` | Selective — injected only when [Input Lines] contain the trigger pattern |
+| 7 | **Glossary** | Manifest `Glossary` + `user/globalglossary.tsv` | Selective — rows injected only when Original (or Translation) found in [Input Lines] |
+| 8 | **Rolling Context** | Preceding translated lines from manifest | Conditional — dialogue/unknown requests only; disabled for Menu/Choice |
+| 9 | **Input Lines** | Manifest `lines[].prepro` (fallback: `orig`) | Always present |
+
+**Notes on ordering:**
+- Slots 1-5 are non-selective (included when non-empty regardless of line content)
+- Slots 6-7 are selective/conditional (content-based or pattern-triggered)
+- Rolling Context (slot 8) appears just before Input Lines to maximise contextual proximity
+- Meta Settings (URL, key, model, temperature, etc.) are passed separately and never counted
 
 #### Request Size
 
@@ -865,7 +891,7 @@ The Input button opens a **unified file and folder selection window** that combi
 - "Clear" button removes all pending selections
 
 **Phase 58.12 Enhancements**:
-- **Last Directory Memory**: Dialog opens to last used directory (stored in `[recent].last_input_dir`)
+- **Last Directory Memory**: Dialog opens to last used directory (stored in `[session].last_input_dir`)
 - **Project Name Integration**: When creating a new project (no manifest), Options panel includes Project Name field
 - Project name field appears left of Format and Encoding dropdowns
 - Eliminates separate ProjectNameDialog for streamlined workflow
@@ -936,7 +962,7 @@ When files are loaded and a project is created, the following steps execute auto
 |------|------|--------|--------------|
 | 1 | Create Manifest | Show Project Name dialog. User must provide name. No auto-suggestion. Save manifest file. | Manifest already exists for `source_root` |
 | 2 | Load Lines | Extract lines from all loaded files. Store in manifest `lines[].orig`. | Lines already loaded |
-| 3 | Load Defaults | Apply default values from `config/defaults.ini` to manifest fields. | Defaults already applied |
+| 3 | Load Defaults | Apply default values from embedded `_FACTORY_DEFAULTS_INI_TEXT` constant to manifest fields. | Defaults already applied |
 | 4 | Run Analysis | Execute `functions/analysis.py`. Store results in manifest (`Analysis.*` fields). | Auto-Pipeline Level < 1 |
 | 5 | Populate Inferences | (Optional) Populate Glossary, Code Database, and Point of View based on analysis inference. See Options below. | `auto_inference` disabled |
 | 6 | Run Original Estimation | Calculate input/output tokens for original lines. Record in manifest. Mark Costs Step first tick. | Auto-Pipeline Level < 2 |
@@ -1836,7 +1862,7 @@ The Costs step has **two distinct estimation states** tracked separately:
 
 **Project vs Global Glossary**:
 - Project glossary: Stored in manifest, project-specific
-- Global glossary: Stored in `user/glossary.csv`, shared across projects
+- Global glossary: Stored in `user/globalglossary.tsv`, shared across projects (three columns: Original, Translation, Notes)
 - Analysis creates project-specific glossary entries
 
 **Manifest Key**: `Glossary.project_entries[]`
@@ -1917,8 +1943,8 @@ The Costs step has **two distinct estimation states** tracked separately:
 - Global Database is searchable by pattern, code, category, notes
 
 **File Locations**:
-- Global Glossary: `user/glossary.csv`
-- Global Code Database: `user/code_patterns.db` (SQLite) or `user/code_patterns.json`
+- Global Glossary: `user/globalglossary.tsv` (three columns: Original, Translation, Notes)
+- Global Code Database: `user/codedatabase.tsv` (Pattern, Type, RegEx, Notes, Visibility, extended properties)
 
 ---
 
@@ -1982,7 +2008,7 @@ Characters:
 **Inputs**:
 - User: Manual entry of all fields
 - From Step 1: Detected speakers (populate Characters), detected code patterns (populate Code Database)
-- From Global: `user/glossary.csv`, `user/code_patterns.db`
+- From Global: `user/globalglossary.tsv`, `user/codedatabase.tsv`
 
 **Processing**:
 1. Validate field formats on change

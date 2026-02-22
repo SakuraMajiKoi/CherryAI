@@ -1248,7 +1248,7 @@ class APIClient:
 
         # Route to mock translator when model is "mock"
         if self.config.model == "mock":
-            return self._mock_translate(lines)
+            return self._mock_translate(lines, system_prompt=system_prompt)
 
         if not self.client:
             raise TranslationError("API Client not initialized (missing API key?)")
@@ -1298,19 +1298,33 @@ class APIClient:
 
         return results
 
-    def _mock_translate(self, lines: List[str]) -> List[str]:
+    def _mock_translate(self, lines: List[str], system_prompt: Optional[str] = None) -> List[str]:
         """Route translation to MockTranslator for offline pipeline testing.
 
         Uses the ``mock_translator`` module to produce deterministic nonsense
         output with optional deliberate flaw injection (Phase 56).
+
+        When a *system_prompt* is provided the context type embedded in it
+        (``"# Content Type: …"``) is detected so that mock output can be
+        adjusted accordingly (e.g. shorter labels for Menu/Choice content).
         """
         from .mock_translator import create_mock_translator
 
-        self.logger.info("Using Mock Translation for %d lines", len(lines))
+        # Detect context_type from system_prompt if available.
+        context_type: Optional[str] = None
+        if system_prompt:
+            import re as _re
+            _m = _re.search(r"# Content Type:\s*(\S+)", system_prompt, _re.IGNORECASE)
+            if _m:
+                context_type = _m.group(1).strip(".,;").lower()
+                self.logger.info("Mock translation context_type: %s", context_type)
+
+        self.logger.info("Using Mock Translation for %d lines (context=%s)", len(lines), context_type or "unknown")
         translator = create_mock_translator(
             enable_flaws=True,
             intensity="moderate",
             seed=42,
+            context_type=context_type,
         )
         return translator.translate_batch(lines)
 

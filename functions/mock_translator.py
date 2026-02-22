@@ -146,30 +146,41 @@ class MockTranslator:
         self,
         flaw_config: Optional[FlawConfig] = None,
         delay_per_chunk: float = 0.0,
+        context_type: Optional[str] = None,
     ) -> None:
         self.flaw_config = flaw_config or FlawConfig(enabled=False)
         self.delay_per_chunk = delay_per_chunk
+        self.context_type: Optional[str] = context_type
         self._rng = random.Random(self.flaw_config.seed)
         self.flaw_report = FlawReport()
         logger.info(
-            "MockTranslator initialized (flaws=%s, intensity=%s)",
+            "MockTranslator initialized (flaws=%s, intensity=%s, context=%s)",
             self.flaw_config.enabled,
             self.flaw_config.intensity.value if self.flaw_config.enabled else "off",
+            context_type or "unknown",
         )
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def translate_batch(self, lines: List[str]) -> List[str]:
+    def translate_batch(self, lines: List[str], context_type: Optional[str] = None) -> List[str]:
         """Translate a batch of lines with optional flaw injection.
 
         Args:
             lines: Source lines (may contain placeholders, anchors, code).
+            context_type: Optional context hint (``dialogue``, ``menu``,
+                ``choice``, ``unknown``).  When provided it overrides the
+                instance-level ``self.context_type`` for this call so that
+                individual batches can carry their own type information.
 
         Returns:
             List of mock-translated lines, same length as input.
         """
+        effective_context = context_type or self.context_type or "unknown"
+        if effective_context != "unknown":
+            logger.debug("translate_batch: using context_type=%s for %d lines", effective_context, len(lines))
+
         if self.delay_per_chunk > 0:
             time.sleep(self.delay_per_chunk)
 
@@ -571,6 +582,7 @@ def create_mock_translator(
     seed: Optional[int] = None,
     flaw_line_ratio: float = 0.20,
     delay: float = 0.0,
+    context_type: Optional[str] = None,
 ) -> MockTranslator:
     """Factory function to create a configured MockTranslator.
 
@@ -580,6 +592,8 @@ def create_mock_translator(
         seed: Random seed for reproducibility.
         flaw_line_ratio: Fraction of lines that may receive flaws.
         delay: Simulated delay per chunk in seconds.
+        context_type: Optional content context hint (``dialogue``, ``menu``,
+            ``choice``, ``unknown``).
 
     Returns:
         A configured ``MockTranslator`` instance.
@@ -591,4 +605,4 @@ def create_mock_translator(
         flaw_line_ratio=flaw_line_ratio,
         seed=seed,
     )
-    return MockTranslator(flaw_config=config, delay_per_chunk=delay)
+    return MockTranslator(flaw_config=config, delay_per_chunk=delay, context_type=context_type)

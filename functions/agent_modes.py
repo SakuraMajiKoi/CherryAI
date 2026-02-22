@@ -33,8 +33,6 @@ DOC_READ_PATHS: Set[str] = {
     "doc/specs.md",
     "doc/cli_guide.md",
     "doc/local_llm_guide.md",
-    "config/base_instructions.txt",
-    "config/prompt.txt",
 }
 
 DEV_READ_PATHS: Set[str] = {

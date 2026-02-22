@@ -23,6 +23,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# Deferred imports (avoid circular at module load time)
+from CherryAI.functions import api_config as _api_config  # noqa: E402
+
 
 # =============================================================================
 # Enums
@@ -37,9 +40,10 @@ class OptionSection(Enum):
     CACHING = "caching"
     LOGGING = "logging"
     SESSION = "session"
-    SAFETY = "safety"
+    LIMIT = "limit"
     FILE_IO = "file_io"
     PROMPTS = "prompts"
+    SECURITY = "security"
 
 
 class OptionCategory(Enum):
@@ -263,19 +267,19 @@ class CachingSettings:
     """Request caching settings."""
 
     enabled: bool = True
-    cache_dir: str = "temp/cache"
-    max_age_hours: int = 24
-    max_size_mb: int = 100
-    cache_mode: str = "line"  # Task 43.7: disabled, line, strict, model_only, any
+    dir: str = "Cache"
+    age: int = 0       # max age in days; 0 = unlimited
+    size: int = 0      # max size in MB;  0 = unlimited
+    mode: str = "strict"  # disabled, strict, line, model_only, any
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
             "enabled": self.enabled,
-            "cache_dir": self.cache_dir,
-            "max_age_hours": self.max_age_hours,
-            "max_size_mb": self.max_size_mb,
-            "cache_mode": self.cache_mode,
+            "dir": self.dir,
+            "age": self.age,
+            "size": self.size,
+            "mode": self.mode,
         }
 
     @classmethod
@@ -283,10 +287,10 @@ class CachingSettings:
         """Create from dictionary."""
         return cls(
             enabled=bool(data.get("enabled", True)),
-            cache_dir=str(data.get("cache_dir", "temp/cache")),
-            max_age_hours=int(data.get("max_age_hours", 24)),
-            max_size_mb=int(data.get("max_size_mb", 100)),
-            cache_mode=str(data.get("cache_mode", "line")),
+            dir=str(data.get("dir", "Cache")),
+            age=int(data.get("age", 0)),
+            size=int(data.get("size", 0)),
+            mode=str(data.get("mode", "strict")),
         )
 
 
@@ -294,28 +298,28 @@ class CachingSettings:
 class LoggingSettings:
     """Logging configuration settings."""
 
-    level: str = "INFO"
-    log_file: str = "logs/cherryai.log"
-    debug_mode: bool = False
-    log_api_calls: bool = False
+    level: str = "Error"
+    location: str = "log/"
+    debug: bool = False
+    api_log: bool = True  # API request/response logs
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
             "level": self.level,
-            "log_file": self.log_file,
-            "debug_mode": self.debug_mode,
-            "log_api_calls": self.log_api_calls,
+            "location": self.location,
+            "debug": self.debug,
+            "api_log": self.api_log,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "LoggingSettings":
         """Create from dictionary."""
         return cls(
-            level=str(data.get("level", "INFO")),
-            log_file=str(data.get("log_file", "logs/cherryai.log")),
-            debug_mode=bool(data.get("debug_mode", False)),
-            log_api_calls=bool(data.get("log_api_calls", False)),
+            level=str(data.get("level", "Error")),
+            location=str(data.get("location", "log/")),
+            debug=bool(data.get("debug", False)),
+            api_log=bool(data.get("api_log", True)),
         )
 
 
@@ -323,95 +327,94 @@ class LoggingSettings:
 class SessionSettings:
     """Session and UI settings."""
 
-    autosave_enabled: bool = True
-    autosave_interval: int = 60
+    autosave: bool = True
+    interval: int = 60
     theme: str = "light"
-    restore_on_launch: bool = True
-    confirm_on_exit: bool = True
-    auto_analyze_on_load: bool = True
-    auto_preprocess_on_load: bool = True
+    load_last: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
-            "autosave_enabled": self.autosave_enabled,
-            "autosave_interval": self.autosave_interval,
+            "autosave": self.autosave,
+            "interval": self.interval,
             "theme": self.theme,
-            "restore_on_launch": self.restore_on_launch,
-            "confirm_on_exit": self.confirm_on_exit,
-            "auto_analyze_on_load": self.auto_analyze_on_load,
-            "auto_preprocess_on_load": self.auto_preprocess_on_load,
+            "load_last": self.load_last,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SessionSettings":
         """Create from dictionary."""
         return cls(
-            autosave_enabled=bool(data.get("autosave_enabled", True)),
-            autosave_interval=int(data.get("autosave_interval", 60)),
+            autosave=bool(data.get("autosave", True)),
+            interval=int(data.get("interval", 60)),
             theme=str(data.get("theme", "light")),
-            restore_on_launch=bool(data.get("restore_on_launch", True)),
-            confirm_on_exit=bool(data.get("confirm_on_exit", True)),
-            auto_analyze_on_load=bool(data.get("auto_analyze_on_load", True)),
-            auto_preprocess_on_load=bool(data.get("auto_preprocess_on_load", True)),
+            load_last=bool(data.get("load_last", True)),
         )
 
 
 @dataclass
-class SafetySettings:
-    """Safety and content settings."""
+class LimitSettings:
+    """Safety / output-limit settings (section [limit] in INI)."""
 
-    ban_tokens: List[str] = field(default_factory=lambda: ["em_dash", "smart_quotes"])
-    content_warning_enabled: bool = True
-    max_output_tokens: int = 4096
+    banned: str = "\u2014, \u2013"  # em-dash, en-dash
+    output: int = 4096
+    warnings: bool = True   # Enable Content Warning
+    safe: bool = True       # Skip Unsafe Requests
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
-            "ban_tokens": self.ban_tokens.copy(),
-            "content_warning_enabled": self.content_warning_enabled,
-            "max_output_tokens": self.max_output_tokens,
+            "banned": self.banned,
+            "output": self.output,
+            "warnings": self.warnings,
+            "safe": self.safe,
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "SafetySettings":
+    def from_dict(cls, data: Dict[str, Any]) -> "LimitSettings":
         """Create from dictionary."""
-        ban_tokens = data.get("ban_tokens", ["em_dash", "smart_quotes"])
-        if isinstance(ban_tokens, str):
-            ban_tokens = [t.strip() for t in ban_tokens.split(",") if t.strip()]
         return cls(
-            ban_tokens=list(ban_tokens),
-            content_warning_enabled=bool(data.get("content_warning_enabled", True)),
-            max_output_tokens=int(data.get("max_output_tokens", 4096)),
+            banned=str(data.get("banned", "\u2014, \u2013")),
+            output=int(data.get("output", 4096)),
+            warnings=bool(data.get("warnings", True)),
+            safe=bool(data.get("safe", True)),
         )
+
+    def get_banned_chars(self) -> List[str]:
+        """Return the banned characters as a list (split on comma)."""
+        return [c.strip() for c in self.banned.split(",") if c.strip()]
+
+
+# Keep old name as alias for backwards compatibility with existing tests
+SafetySettings = LimitSettings
 
 
 @dataclass
 class FileIOSettings:
     """File I/O settings."""
 
-    default_encoding: str = "utf-8"
-    line_ending: str = "auto"
-    preserve_bom: bool = True
-    backup_originals: bool = True
+    encoding: str = "auto"
+    preservebom: bool = True
+    lines: str = "auto"
+    backup: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
-            "default_encoding": self.default_encoding,
-            "line_ending": self.line_ending,
-            "preserve_bom": self.preserve_bom,
-            "backup_originals": self.backup_originals,
+            "encoding": self.encoding,
+            "preservebom": self.preservebom,
+            "lines": self.lines,
+            "backup": self.backup,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "FileIOSettings":
         """Create from dictionary."""
         return cls(
-            default_encoding=str(data.get("default_encoding", "utf-8")),
-            line_ending=str(data.get("line_ending", "auto")),
-            preserve_bom=bool(data.get("preserve_bom", True)),
-            backup_originals=bool(data.get("backup_originals", True)),
+            encoding=str(data.get("encoding", "auto")),
+            preservebom=bool(data.get("preservebom", True)),
+            lines=str(data.get("lines", "auto")),
+            backup=bool(data.get("backup", True)),
         )
 
 
@@ -426,6 +429,35 @@ DEFAULT_TLC_PROMPT = (
     "Perform a Translation/Localization Check (TLC) on the translation. "
     "Verify accuracy against the source text, check for natural {target_lang} expression, "
     "ensure consistency in terminology and style, and flag any issues or suggest improvements."
+)
+
+# Default conditional (context-type) prompts — must match prompt_builder.py constants
+DEFAULT_DIALOGUE_PROMPT = (
+    "# Content Type: Dialogue\n"
+    "These lines are character dialogue. "
+    "Pay attention to the speaker names, maintain consistent voice and tone "
+    "for each character, and preserve emotional nuances in the conversation."
+)
+
+DEFAULT_MENU_PROMPT = (
+    "# Content Type: Menu\n"
+    "These lines are menu items from a game UI. "
+    "Translate each item concisely and clearly. Preserve formatting, order, "
+    "and any shortcut indicators. Keep translations brief and action-oriented."
+)
+
+DEFAULT_CHOICE_PROMPT = (
+    "# Content Type: Choices\n"
+    "These lines are player choices or options. "
+    "Translate each choice concisely and distinctly so the player can "
+    "differentiate between options. Preserve numbering or bullet formatting."
+)
+
+DEFAULT_UNKNOWN_PROMPT = (
+    "# Content Type: Mixed\n"
+    "These lines may contain dialogue, menu items, or choices. "
+    "Translate each line appropriately based on its apparent purpose. "
+    "Maintain formatting and keep menu/choice items concise."
 )
 
 
@@ -450,18 +482,23 @@ class TLCInputPolicy(Enum):
 
 @dataclass
 class PromptsSettings:
-    """Custom prompts for Edit and TLC steps (TASK 37.1)."""
+    """Custom prompts for Edit, TLC, and context-type steps (TASK 37.1)."""
 
-    edit_prompt: str = DEFAULT_EDIT_PROMPT
-    tlc_prompt: str = DEFAULT_TLC_PROMPT
-    # PHASE 37: Component toggles
-    edit_include_glossary: bool = True
-    edit_include_game_summary: bool = True
-    edit_include_character_notes: bool = True
-    edit_include_code_glossary: bool = True
+    edit: str = DEFAULT_EDIT_PROMPT
+    tlc: str = DEFAULT_TLC_PROMPT
+    # Conditional (context-type) prompts injected based on content type
+    dialogue: str = DEFAULT_DIALOGUE_PROMPT
+    menu: str = DEFAULT_MENU_PROMPT
+    choice: str = DEFAULT_CHOICE_PROMPT
+    unknown: str = DEFAULT_UNKNOWN_PROMPT
+    # Prompt component toggles
+    glossary: bool = True
+    summary: bool = True
+    code: bool = True
+    input: str = "tl_only"  # Edit input source policy
+    # TLC component toggles (separate tracking)
     tlc_include_glossary: bool = True
     tlc_include_game_summary: bool = True
-    tlc_include_character_notes: bool = True
     tlc_include_code_glossary: bool = True
     # PHASE 37: Input policies
     edit_input_policy: str = "tl_only"
@@ -470,15 +507,18 @@ class PromptsSettings:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
-            "edit_prompt": self.edit_prompt,
-            "tlc_prompt": self.tlc_prompt,
-            "edit_include_glossary": self.edit_include_glossary,
-            "edit_include_game_summary": self.edit_include_game_summary,
-            "edit_include_character_notes": self.edit_include_character_notes,
-            "edit_include_code_glossary": self.edit_include_code_glossary,
+            "edit": self.edit,
+            "tlc": self.tlc,
+            "dialogue": self.dialogue,
+            "menu": self.menu,
+            "choice": self.choice,
+            "unknown": self.unknown,
+            "glossary": self.glossary,
+            "summary": self.summary,
+            "code": self.code,
+            "input": self.input,
             "tlc_include_glossary": self.tlc_include_glossary,
             "tlc_include_game_summary": self.tlc_include_game_summary,
-            "tlc_include_character_notes": self.tlc_include_character_notes,
             "tlc_include_code_glossary": self.tlc_include_code_glossary,
             "edit_input_policy": self.edit_input_policy,
             "tlc_input_policy": self.tlc_input_policy,
@@ -488,35 +528,36 @@ class PromptsSettings:
     def from_dict(cls, data: Dict[str, Any]) -> "PromptsSettings":
         """Create from dictionary."""
         return cls(
-            edit_prompt=str(data.get("edit_prompt", DEFAULT_EDIT_PROMPT)),
-            tlc_prompt=str(data.get("tlc_prompt", DEFAULT_TLC_PROMPT)),
-            edit_include_glossary=bool(data.get("edit_include_glossary", True)),
-            edit_include_game_summary=bool(data.get("edit_include_game_summary", True)),
-            edit_include_character_notes=bool(data.get("edit_include_character_notes", True)),
-            edit_include_code_glossary=bool(data.get("edit_include_code_glossary", True)),
+            edit=str(data.get("edit", DEFAULT_EDIT_PROMPT)),
+            tlc=str(data.get("tlc", DEFAULT_TLC_PROMPT)),
+            dialogue=str(data.get("dialogue", DEFAULT_DIALOGUE_PROMPT)),
+            menu=str(data.get("menu", DEFAULT_MENU_PROMPT)),
+            choice=str(data.get("choice", DEFAULT_CHOICE_PROMPT)),
+            unknown=str(data.get("unknown", DEFAULT_UNKNOWN_PROMPT)),
+            glossary=bool(data.get("glossary", True)),
+            summary=bool(data.get("summary", True)),
+            code=bool(data.get("code", True)),
+            input=str(data.get("input", "tl_only")),
             tlc_include_glossary=bool(data.get("tlc_include_glossary", True)),
             tlc_include_game_summary=bool(data.get("tlc_include_game_summary", True)),
-            tlc_include_character_notes=bool(data.get("tlc_include_character_notes", True)),
             tlc_include_code_glossary=bool(data.get("tlc_include_code_glossary", True)),
             edit_input_policy=str(data.get("edit_input_policy", "tl_only")),
             tlc_input_policy=str(data.get("tlc_input_policy", "orig_and_tl")),
         )
 
     def get_edit_components(self) -> Dict[str, bool]:
-        """Get edit component toggles as dict (TASK 37.1)."""
+        """Get edit component toggles as dict."""
         return {
-            "glossary": self.edit_include_glossary,
-            "game_summary": self.edit_include_game_summary,
-            "character_notes": self.edit_include_character_notes,
-            "code_glossary": self.edit_include_code_glossary,
+            "glossary": self.glossary,
+            "game_summary": self.summary,
+            "code_glossary": self.code,
         }
 
     def get_tlc_components(self) -> Dict[str, bool]:
-        """Get TLC component toggles as dict (TASK 37.1)."""
+        """Get TLC component toggles as dict."""
         return {
             "glossary": self.tlc_include_glossary,
             "game_summary": self.tlc_include_game_summary,
-            "character_notes": self.tlc_include_character_notes,
             "code_glossary": self.tlc_include_code_glossary,
         }
 
@@ -530,10 +571,20 @@ class GlobalOptions:
     caching: CachingSettings = field(default_factory=CachingSettings)
     logging: LoggingSettings = field(default_factory=LoggingSettings)
     session: SessionSettings = field(default_factory=SessionSettings)
-    safety: SafetySettings = field(default_factory=SafetySettings)
+    limit: LimitSettings = field(default_factory=LimitSettings)
     file_io: FileIOSettings = field(default_factory=FileIOSettings)
     prompts: PromptsSettings = field(default_factory=PromptsSettings)
     providers: List[APIProviderEntry] = field(default_factory=list)
+
+    # Keep old 'safety' attribute as an alias so existing code still works.
+    @property
+    def safety(self) -> LimitSettings:
+        """Backward-compat alias for ``limit``."""
+        return self.limit
+
+    @safety.setter
+    def safety(self, value: LimitSettings) -> None:
+        self.limit = value
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -543,7 +594,7 @@ class GlobalOptions:
             "caching": self.caching.to_dict(),
             "logging": self.logging.to_dict(),
             "session": self.session.to_dict(),
-            "safety": self.safety.to_dict(),
+            "limit": self.limit.to_dict(),
             "file_io": self.file_io.to_dict(),
             "prompts": self.prompts.to_dict(),
             "providers": [p.to_dict() for p in self.providers],
@@ -554,13 +605,15 @@ class GlobalOptions:
         """Create from dictionary."""
         providers_raw = data.get("providers", [])
         providers = [APIProviderEntry.from_dict(p) for p in providers_raw]
+        # Support both 'limit' and legacy 'safety' key.
+        limit_data = data.get("limit") or data.get("safety") or {}
         return cls(
             api=APISettings.from_dict(data.get("api", {})),
             request=RequestSettings.from_dict(data.get("request", {})),
             caching=CachingSettings.from_dict(data.get("caching", {})),
             logging=LoggingSettings.from_dict(data.get("logging", {})),
             session=SessionSettings.from_dict(data.get("session", {})),
-            safety=SafetySettings.from_dict(data.get("safety", {})),
+            limit=LimitSettings.from_dict(limit_data),
             file_io=FileIOSettings.from_dict(data.get("file_io", {})),
             prompts=PromptsSettings.from_dict(data.get("prompts", {})),
             providers=providers,
@@ -597,16 +650,17 @@ SECTION_DESCRIPTIONS: Dict[OptionSection, str] = {
     OptionSection.CACHING: "Configure request caching to reduce API calls.",
     OptionSection.LOGGING: "Set logging level and debug options.",
     OptionSection.SESSION: "Configure session autosave and UI preferences.",
-    OptionSection.SAFETY: "Configure token banning and content warnings.",
+    OptionSection.LIMIT: "Configure output limits, banned characters, and content safeguards.",
     OptionSection.FILE_IO: "Set default file encoding and format options.",
     OptionSection.PROMPTS: "Configure custom prompts for Edit and TLC steps.",
+    OptionSection.SECURITY: "Manage the master password that encrypts stored API keys.",
 }
 
 
 CATEGORY_ORDER: List[Tuple[OptionCategory, List[OptionSection]]] = [
     (OptionCategory.CONNECTION, [OptionSection.API, OptionSection.REQUEST]),
-    (OptionCategory.PROCESSING, [OptionSection.CACHING, OptionSection.SAFETY, OptionSection.PROMPTS]),
-    (OptionCategory.APPLICATION, [OptionSection.SESSION, OptionSection.LOGGING, OptionSection.FILE_IO]),
+    (OptionCategory.PROCESSING, [OptionSection.CACHING, OptionSection.LIMIT, OptionSection.PROMPTS]),
+    (OptionCategory.APPLICATION, [OptionSection.SESSION, OptionSection.LOGGING, OptionSection.FILE_IO, OptionSection.SECURITY]),
 ]
 
 
@@ -622,9 +676,10 @@ SECTION_NAMES: Dict[OptionSection, str] = {
     OptionSection.CACHING: "Caching",
     OptionSection.LOGGING: "Logging",
     OptionSection.SESSION: "Session",
-    OptionSection.SAFETY: "Safety",
+    OptionSection.LIMIT: "Limits",
     OptionSection.FILE_IO: "File I/O",
     OptionSection.PROMPTS: "Prompts",
+    OptionSection.SECURITY: "Security",
 }
 
 
@@ -803,51 +858,52 @@ class GlobalOptionsDialog(tk.Toplevel):
 
         # Caching settings
         self.cache_enabled_var = tk.BooleanVar(value=self.options.caching.enabled)
-        self.cache_dir_var = tk.StringVar(value=self.options.caching.cache_dir)
-        self.cache_max_age_var = tk.IntVar(value=self.options.caching.max_age_hours)
-        self.cache_max_size_var = tk.IntVar(value=self.options.caching.max_size_mb)
-        self.cache_mode_var = tk.StringVar(value=self.options.caching.cache_mode)
+        self.cache_dir_var = tk.StringVar(value=self.options.caching.dir)
+        self.cache_max_age_var = tk.IntVar(value=self.options.caching.age)
+        self.cache_max_size_var = tk.IntVar(value=self.options.caching.size)
+        self.cache_mode_var = tk.StringVar(value=self.options.caching.mode)
 
         # Logging settings
         self.log_level_var = tk.StringVar(value=self.options.logging.level)
-        self.log_file_var = tk.StringVar(value=self.options.logging.log_file)
-        self.debug_mode_var = tk.BooleanVar(value=self.options.logging.debug_mode)
-        self.log_api_calls_var = tk.BooleanVar(value=self.options.logging.log_api_calls)
+        self.log_file_var = tk.StringVar(value=self.options.logging.location)
+        self.debug_mode_var = tk.BooleanVar(value=self.options.logging.debug)
+        self.log_api_calls_var = tk.BooleanVar(value=self.options.logging.api_log)
 
         # Session settings
-        self.autosave_enabled_var = tk.BooleanVar(value=self.options.session.autosave_enabled)
-        self.autosave_interval_var = tk.IntVar(value=self.options.session.autosave_interval)
+        self.autosave_enabled_var = tk.BooleanVar(value=self.options.session.autosave)
+        self.autosave_interval_var = tk.IntVar(value=self.options.session.interval)
         self.theme_var = tk.StringVar(value=self.options.session.theme)
-        # PHASE 58.11: Read from [recent] section which controls actual startup behavior
+        # Read from [session] section which controls actual startup behavior
         self.restore_on_launch_var = tk.BooleanVar(value=ini_manager.get_restore_on_launch())
-        self.confirm_on_exit_var = tk.BooleanVar(value=self.options.session.confirm_on_exit)
-        self.auto_analyze_on_load_var = tk.BooleanVar(value=self.options.session.auto_analyze_on_load)
-        self.auto_preprocess_on_load_var = tk.BooleanVar(value=self.options.session.auto_preprocess_on_load)
 
-        # Safety settings
-        self.ban_tokens_var = tk.StringVar(value=", ".join(self.options.safety.ban_tokens))
-        self.content_warning_var = tk.BooleanVar(value=self.options.safety.content_warning_enabled)
-        self.max_output_tokens_var = tk.IntVar(value=self.options.safety.max_output_tokens)
+        # Limit settings (replaces Safety)
+        self.ban_tokens_var = tk.StringVar(value=self.options.limit.banned)
+        self.content_warning_var = tk.BooleanVar(value=self.options.limit.warnings)
+        self.max_output_tokens_var = tk.IntVar(value=self.options.limit.output)
+        self.safe_var = tk.BooleanVar(value=self.options.limit.safe)
 
         # File I/O settings
-        self.encoding_var = tk.StringVar(value=self.options.file_io.default_encoding)
-        self.line_ending_var = tk.StringVar(value=self.options.file_io.line_ending)
-        self.preserve_bom_var = tk.BooleanVar(value=self.options.file_io.preserve_bom)
-        self.backup_originals_var = tk.BooleanVar(value=self.options.file_io.backup_originals)
+        self.encoding_var = tk.StringVar(value=self.options.file_io.encoding)
+        self.line_ending_var = tk.StringVar(value=self.options.file_io.lines)
+        self.preserve_bom_var = tk.BooleanVar(value=self.options.file_io.preservebom)
+        self.backup_originals_var = tk.BooleanVar(value=self.options.file_io.backup)
 
         # Prompts settings
-        self.edit_prompt_var = tk.StringVar(value=self.options.prompts.edit_prompt)
-        self.tlc_prompt_var = tk.StringVar(value=self.options.prompts.tlc_prompt)
-        # PHASE 37: Component toggles
-        self.edit_include_glossary_var = tk.BooleanVar(value=self.options.prompts.edit_include_glossary)
-        self.edit_include_game_summary_var = tk.BooleanVar(value=self.options.prompts.edit_include_game_summary)
-        self.edit_include_character_notes_var = tk.BooleanVar(value=self.options.prompts.edit_include_character_notes)
-        self.edit_include_code_glossary_var = tk.BooleanVar(value=self.options.prompts.edit_include_code_glossary)
+        self.edit_prompt_var = tk.StringVar(value=self.options.prompts.edit)
+        self.tlc_prompt_var = tk.StringVar(value=self.options.prompts.tlc)
+        # Conditional (context-type) prompt vars
+        self.dialogue_prompt_var = tk.StringVar(value=self.options.prompts.dialogue)
+        self.menu_prompt_var = tk.StringVar(value=self.options.prompts.menu)
+        self.choice_prompt_var = tk.StringVar(value=self.options.prompts.choice)
+        self.unknown_prompt_var = tk.StringVar(value=self.options.prompts.unknown)
+        # Component toggles (simplified — single set for both edit and TLC)
+        self.edit_include_glossary_var = tk.BooleanVar(value=self.options.prompts.glossary)
+        self.edit_include_game_summary_var = tk.BooleanVar(value=self.options.prompts.summary)
+        self.edit_include_code_glossary_var = tk.BooleanVar(value=self.options.prompts.code)
         self.tlc_include_glossary_var = tk.BooleanVar(value=self.options.prompts.tlc_include_glossary)
         self.tlc_include_game_summary_var = tk.BooleanVar(value=self.options.prompts.tlc_include_game_summary)
-        self.tlc_include_character_notes_var = tk.BooleanVar(value=self.options.prompts.tlc_include_character_notes)
         self.tlc_include_code_glossary_var = tk.BooleanVar(value=self.options.prompts.tlc_include_code_glossary)
-        # PHASE 37: Input policies
+        # Input policies
         self.edit_input_policy_var = tk.StringVar(value=self.options.prompts.edit_input_policy)
         self.tlc_input_policy_var = tk.StringVar(value=self.options.prompts.tlc_input_policy)
 
@@ -885,12 +941,14 @@ class GlobalOptionsDialog(tk.Toplevel):
         self._build_logging_section()
         print("DEBUG: Building Session section")
         self._build_session_section()
-        print("DEBUG: Building Safety section")
-        self._build_safety_section()
+        print("DEBUG: Building Limit section")
+        self._build_limit_section()
         print("DEBUG: Building File IO section")
         self._build_file_io_section()
         print("DEBUG: Building Prompts section")
         self._build_prompts_section()
+        print("DEBUG: Building Security section")
+        self._build_security_section()
 
         # Bottom: Buttons
         print("DEBUG: Building buttons")
@@ -1322,17 +1380,17 @@ class GlobalOptionsDialog(tk.Toplevel):
         age_row = ttk.Frame(cache_frame)
         age_row.pack(fill=tk.X, pady=5)
 
-        ttk.Label(age_row, text="Max Age (hours):", width=15).pack(side=tk.LEFT)
-        ttk.Spinbox(age_row, from_=1, to=168, textvariable=self.cache_max_age_var, width=10).pack(side=tk.LEFT, padx=5)
-        ttk.Label(age_row, text="(1-168, default: 24)", foreground="gray").pack(side=tk.LEFT, padx=5)
+        ttk.Label(age_row, text="Max Age (days):", width=15).pack(side=tk.LEFT)
+        ttk.Spinbox(age_row, from_=0, to=365, textvariable=self.cache_max_age_var, width=10).pack(side=tk.LEFT, padx=5)
+        ttk.Label(age_row, text="(0 = unlimited)", foreground="gray").pack(side=tk.LEFT, padx=5)
 
         # Max size
         size_row = ttk.Frame(cache_frame)
         size_row.pack(fill=tk.X, pady=5)
 
         ttk.Label(size_row, text="Max Size (MB):", width=15).pack(side=tk.LEFT)
-        ttk.Spinbox(size_row, from_=10, to=1000, textvariable=self.cache_max_size_var, width=10).pack(side=tk.LEFT, padx=5)
-        ttk.Label(size_row, text="(10-1000, default: 100)", foreground="gray").pack(side=tk.LEFT, padx=5)
+        ttk.Spinbox(size_row, from_=0, to=10000, textvariable=self.cache_max_size_var, width=10).pack(side=tk.LEFT, padx=5)
+        ttk.Label(size_row, text="(0 = unlimited)", foreground="gray").pack(side=tk.LEFT, padx=5)
 
         # Clear cache button
         clear_frame = ttk.Frame(panel)
@@ -1370,11 +1428,11 @@ class GlobalOptionsDialog(tk.Toplevel):
         )
         level_combo.pack(side=tk.LEFT, padx=5)
 
-        # Log file
+        # Log location (directory)
         file_row = ttk.Frame(log_frame)
         file_row.pack(fill=tk.X, pady=5)
 
-        ttk.Label(file_row, text="Log File:", width=15).pack(side=tk.LEFT)
+        ttk.Label(file_row, text="Log Directory:", width=15).pack(side=tk.LEFT)
         ttk.Entry(file_row, textvariable=self.log_file_var, width=30).pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         ttk.Button(file_row, text="Browse...", command=self._browse_log_file).pack(side=tk.LEFT, padx=5)
 
@@ -1382,8 +1440,8 @@ class GlobalOptionsDialog(tk.Toplevel):
         debug_check = ttk.Checkbutton(panel, text="Enable debug mode (verbose logging)", variable=self.debug_mode_var)
         debug_check.pack(anchor=tk.W, pady=5)
 
-        # Log API calls
-        api_check = ttk.Checkbutton(panel, text="Log API calls (request/response details)", variable=self.log_api_calls_var)
+        # Log API requests/responses
+        api_check = ttk.Checkbutton(panel, text="Log API requests/responses", variable=self.log_api_calls_var)
         api_check.pack(anchor=tk.W, pady=5)
 
         # Open log button
@@ -1436,17 +1494,8 @@ class GlobalOptionsDialog(tk.Toplevel):
         theme_combo.pack(side=tk.LEFT, padx=5)
 
         # Behavior settings
-        restore_check = ttk.Checkbutton(panel, text="Restore session on launch", variable=self.restore_on_launch_var)
+        restore_check = ttk.Checkbutton(panel, text="Load last project on launch", variable=self.restore_on_launch_var)
         restore_check.pack(anchor=tk.W, pady=5)
-
-        confirm_check = ttk.Checkbutton(panel, text="Confirm before exit with unsaved changes", variable=self.confirm_on_exit_var)
-        confirm_check.pack(anchor=tk.W, pady=5)
-
-        auto_analyze_check = ttk.Checkbutton(panel, text="Auto-analyze files on load", variable=self.auto_analyze_on_load_var)
-        auto_analyze_check.pack(anchor=tk.W, pady=5)
-
-        auto_preprocess_check = ttk.Checkbutton(panel, text="Auto-apply preprocessing rules on load", variable=self.auto_preprocess_on_load_var)
-        auto_preprocess_check.pack(anchor=tk.W, pady=5)
 
         # Confirmation dialogs reset
         confirm_frame = ttk.LabelFrame(panel, text="Confirmation Dialogs", padding=10)
@@ -1468,46 +1517,46 @@ class GlobalOptionsDialog(tk.Toplevel):
             command=self._on_reset_confirmations,
         ).pack(anchor=tk.W)
 
-        # Style/Tone presets reset
-        preset_frame = ttk.LabelFrame(panel, text="Translation Presets", padding=10)
-        preset_frame.pack(fill=tk.X, pady=(10, 0))
+        # Restore Defaults
+        restore_frame = ttk.LabelFrame(panel, text="Restore Defaults", padding=10)
+        restore_frame.pack(fill=tk.X, pady=(10, 0))
 
         ttk.Label(
-            preset_frame,
+            restore_frame,
             text=(
-                "Reset style and tone presets to factory defaults.\n"
-                "This removes all user-saved presets."
+                "Reset selected settings areas to factory defaults.\n"
+                "Choose which areas to restore in the next dialog."
             ),
             justify="left",
             foreground="gray",
         ).pack(anchor=tk.W, pady=(0, 5))
 
         ttk.Button(
-            preset_frame,
-            text="Reset Style & Tone Presets",
-            command=self._on_reset_presets,
+            restore_frame,
+            text="Restore Defaults…",
+            command=self._on_restore_defaults,
         ).pack(anchor=tk.W)
 
-    def _build_safety_section(self) -> None:
-        """Build the safety settings section."""
+    def _build_limit_section(self) -> None:
+        """Build the limits settings section (replaces old Safety section)."""
         panel = ttk.Frame(self._content_frame, padding=15)
-        self._section_panels[OptionSection.SAFETY] = panel
+        self._section_panels[OptionSection.LIMIT] = panel
 
         # Section header
-        header = ttk.Label(panel, text="Safety", font=("TkDefaultFont", 12, "bold"))
+        header = ttk.Label(panel, text="Limits", font=("TkDefaultFont", 12, "bold"))
         header.pack(anchor="w", pady=(0, 5))
 
-        desc = ttk.Label(panel, text=SECTION_DESCRIPTIONS[OptionSection.SAFETY], foreground="gray")
+        desc = ttk.Label(panel, text=SECTION_DESCRIPTIONS[OptionSection.LIMIT], foreground="gray")
         desc.pack(anchor="w", pady=(0, 15))
 
-        # Token banning
-        ban_frame = ttk.LabelFrame(panel, text="Token Banning", padding=10)
+        # Banned characters
+        ban_frame = ttk.LabelFrame(panel, text="Banned Characters", padding=10)
         ban_frame.pack(fill=tk.X, pady=(0, 10))
 
         ban_info = ttk.Label(
             ban_frame,
-            text="Comma-separated list of tokens to ban from output.\n"
-                 "Common: em_dash, smart_quotes, ellipsis, fancy_apostrophe",
+            text="Comma-separated list of characters to ban from output.\n"
+                 "Example: \u2014, \u2013  (em-dash, en-dash)",
             justify="left",
         )
         ban_info.pack(anchor=tk.W, pady=(0, 5))
@@ -1515,18 +1564,8 @@ class GlobalOptionsDialog(tk.Toplevel):
         ban_row = ttk.Frame(ban_frame)
         ban_row.pack(fill=tk.X, pady=5)
 
-        ttk.Label(ban_row, text="Ban Tokens:", width=12).pack(side=tk.LEFT)
+        ttk.Label(ban_row, text="Banned:", width=12).pack(side=tk.LEFT)
         ttk.Entry(ban_row, textvariable=self.ban_tokens_var, width=40).pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-
-        # Common tokens buttons
-        common_row = ttk.Frame(ban_frame)
-        common_row.pack(fill=tk.X, pady=5)
-
-        ttk.Label(common_row, text="Add common:", width=12).pack(side=tk.LEFT)
-        def make_add_ban_token(token: str) -> Callable[[], None]:
-            return lambda: self._add_ban_token(token)
-        for token in COMMON_BAN_TOKENS[:3]:
-            ttk.Button(common_row, text=token, command=make_add_ban_token(token)).pack(side=tk.LEFT, padx=2)
 
         # Output limits
         limit_frame = ttk.LabelFrame(panel, text="Output Limits", padding=10)
@@ -1542,6 +1581,10 @@ class GlobalOptionsDialog(tk.Toplevel):
         # Content warning
         warning_check = ttk.Checkbutton(panel, text="Enable content warnings in output", variable=self.content_warning_var)
         warning_check.pack(anchor=tk.W, pady=5)
+
+        # Safe mode
+        safe_check = ttk.Checkbutton(panel, text="Skip unsafe requests", variable=self.safe_var)
+        safe_check.pack(anchor=tk.W, pady=5)
 
     def _build_file_io_section(self) -> None:
         """Build the file I/O settings section."""
@@ -1598,6 +1641,9 @@ class GlobalOptionsDialog(tk.Toplevel):
         backup_check = ttk.Checkbutton(panel, text="Create backup of original files before overwriting", variable=self.backup_originals_var)
         backup_check.pack(anchor=tk.W, pady=5)
 
+    # Alias kept for any call sites that still use the old name
+    _build_safety_section = _build_limit_section  # type: ignore[assignment]
+
     def _build_prompts_section(self) -> None:
         """Build the prompts settings section for Edit and TLC steps."""
         panel = ttk.Frame(self._content_frame, padding=15)
@@ -1647,7 +1693,7 @@ class GlobalOptionsDialog(tk.Toplevel):
         edit_btn_frame.pack(anchor="w", pady=(5, 0))
         ttk.Button(edit_btn_frame, text="Reset to Default", command=self._reset_edit_prompt).pack(side=tk.LEFT)
 
-        # PHASE 37: Edit component toggles
+        # Edit component toggles
         edit_components_frame = ttk.LabelFrame(edit_frame, text="Include in Edit Prompt", padding=5)
         edit_components_frame.pack(fill=tk.X, pady=(10, 0))
 
@@ -1655,7 +1701,6 @@ class GlobalOptionsDialog(tk.Toplevel):
         edit_comp_row1.pack(fill=tk.X, pady=2)
         ttk.Checkbutton(edit_comp_row1, text="Glossary", variable=self.edit_include_glossary_var).pack(side=tk.LEFT, padx=10)
         ttk.Checkbutton(edit_comp_row1, text="Game Summary", variable=self.edit_include_game_summary_var).pack(side=tk.LEFT, padx=10)
-        ttk.Checkbutton(edit_comp_row1, text="Character Notes", variable=self.edit_include_character_notes_var).pack(side=tk.LEFT, padx=10)
         ttk.Checkbutton(edit_comp_row1, text="Code Glossary", variable=self.edit_include_code_glossary_var).pack(side=tk.LEFT, padx=10)
 
         # PHASE 37: Edit input policy
@@ -1700,7 +1745,7 @@ class GlobalOptionsDialog(tk.Toplevel):
         tlc_btn_frame.pack(anchor="w", pady=(5, 0))
         ttk.Button(tlc_btn_frame, text="Reset to Default", command=self._reset_tlc_prompt).pack(side=tk.LEFT)
 
-        # PHASE 37: TLC component toggles
+        # TLC component toggles
         tlc_components_frame = ttk.LabelFrame(tlc_frame, text="Include in TLC Prompt", padding=5)
         tlc_components_frame.pack(fill=tk.X, pady=(10, 0))
 
@@ -1708,10 +1753,9 @@ class GlobalOptionsDialog(tk.Toplevel):
         tlc_comp_row1.pack(fill=tk.X, pady=2)
         ttk.Checkbutton(tlc_comp_row1, text="Glossary", variable=self.tlc_include_glossary_var).pack(side=tk.LEFT, padx=10)
         ttk.Checkbutton(tlc_comp_row1, text="Game Summary", variable=self.tlc_include_game_summary_var).pack(side=tk.LEFT, padx=10)
-        ttk.Checkbutton(tlc_comp_row1, text="Character Notes", variable=self.tlc_include_character_notes_var).pack(side=tk.LEFT, padx=10)
         ttk.Checkbutton(tlc_comp_row1, text="Code Glossary", variable=self.tlc_include_code_glossary_var).pack(side=tk.LEFT, padx=10)
 
-        # PHASE 37: TLC input policy
+        # TLC input policy
         tlc_policy_row = ttk.Frame(tlc_frame)
         tlc_policy_row.pack(fill=tk.X, pady=(10, 0))
         ttk.Label(tlc_policy_row, text="Input Source:").pack(side=tk.LEFT)
@@ -1725,6 +1769,55 @@ class GlobalOptionsDialog(tk.Toplevel):
         tlc_policy_combo.pack(side=tk.LEFT, padx=5)
         ttk.Label(tlc_policy_row, text="(What text fields feed the TLC prompt)", foreground="gray").pack(side=tk.LEFT, padx=5)
 
+        # ── Conditional (Context-Type) Prompts ────────────────────────────────
+        cond_frame = ttk.LabelFrame(panel, text="Conditional Prompts (Context-Type)", padding=10)
+        cond_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+
+        cond_desc = ttk.Label(
+            cond_frame,
+            text=(
+                "These prompts are injected into the translation request based on the\n"
+                "detected content type (set via Context Markers in the translation step)."
+            ),
+            foreground="gray",
+        )
+        cond_desc.pack(anchor="w", pady=(0, 8))
+
+        # Helper to build one row per context type
+        _cond_entries = [
+            ("Dialogue", "dialogue", self.dialogue_prompt_var, "_dialogue_prompt_text", DEFAULT_DIALOGUE_PROMPT),
+            ("Menu", "menu", self.menu_prompt_var, "_menu_prompt_text", DEFAULT_MENU_PROMPT),
+            ("Choices", "choice", self.choice_prompt_var, "_choice_prompt_text", DEFAULT_CHOICE_PROMPT),
+            ("Unknown / Mixed", "unknown", self.unknown_prompt_var, "_unknown_prompt_text", DEFAULT_UNKNOWN_PROMPT),
+        ]
+
+        for _label, _key, _var, _attr, _default in _cond_entries:
+            row_frame = ttk.LabelFrame(cond_frame, text=_label, padding=6)
+            row_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
+
+            txt_container = ttk.Frame(row_frame)
+            txt_container.pack(fill=tk.BOTH, expand=True)
+
+            txt_widget = tk.Text(txt_container, height=3, width=60, wrap=tk.WORD)
+            txt_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            txt_widget.insert("1.0", _var.get())
+            setattr(self, _attr, txt_widget)
+
+            sb = ttk.Scrollbar(txt_container, orient=tk.VERTICAL, command=txt_widget.yview)
+            sb.pack(side=tk.RIGHT, fill=tk.Y)
+            txt_widget.config(yscrollcommand=sb.set)
+
+            # Capture loop var in closure
+            def _make_reset(widget: tk.Text, default: str) -> Any:
+                def _reset() -> None:
+                    widget.delete("1.0", tk.END)
+                    widget.insert("1.0", default)
+                return _reset
+
+            btn_row = ttk.Frame(row_frame)
+            btn_row.pack(anchor="w", pady=(4, 0))
+            ttk.Button(btn_row, text="Reset to Default", command=_make_reset(txt_widget, _default)).pack(side=tk.LEFT)
+
     def _reset_edit_prompt(self) -> None:
         """Reset edit prompt to default value."""
         self._edit_prompt_text.delete("1.0", tk.END)
@@ -1734,6 +1827,175 @@ class GlobalOptionsDialog(tk.Toplevel):
         """Reset TLC prompt to default value."""
         self._tlc_prompt_text.delete("1.0", tk.END)
         self._tlc_prompt_text.insert("1.0", DEFAULT_TLC_PROMPT)
+
+    # ------------------------------------------------------------------
+    # Security section
+    # ------------------------------------------------------------------
+
+    def _build_security_section(self) -> None:
+        """Build the Security settings panel.
+
+        Lets the user set or change the master password that encrypts all
+        API keys stored in ``user/API.ini``.  Also shows a brief security
+        summary and a standalone :class:`PasswordStrengthWidget` that
+        provides real-time strength feedback while the user experiments.
+        """
+        from CherryAI.gui.dialogs.password_dialog import SetPasswordDialog, ChangePasswordDialog
+        from CherryAI.gui.widgets.password_strength import PasswordStrengthWidget
+
+        panel = ttk.Frame(self._content_frame, padding=15)
+        self._section_panels[OptionSection.SECURITY] = panel
+
+        # Header
+        ttk.Label(
+            panel, text="Security", font=("TkDefaultFont", 12, "bold")
+        ).pack(anchor="w", pady=(0, 5))
+        ttk.Label(
+            panel,
+            text=SECTION_DESCRIPTIONS[OptionSection.SECURITY],
+            foreground="gray",
+        ).pack(anchor="w", pady=(0, 15))
+
+        # ---- Master password frame -----------------------------------
+        pw_frame = ttk.LabelFrame(panel, text="Master Password", padding=12)
+        pw_frame.pack(fill=tk.X, pady=(0, 12))
+
+        # Status label (updated by _refresh_security_status)
+        self._sec_status_label = ttk.Label(pw_frame, text="")
+        self._sec_status_label.pack(anchor="w", pady=(0, 10))
+
+        # Button row
+        btn_row = ttk.Frame(pw_frame)
+        btn_row.pack(anchor="w")
+
+        self._set_pw_btn = ttk.Button(
+            btn_row,
+            text="Set Password…",
+            command=self._on_set_password,
+        )
+        self._set_pw_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        self._change_pw_btn = ttk.Button(
+            btn_row,
+            text="Change Password…",
+            command=self._on_change_password,
+        )
+        self._change_pw_btn.pack(side=tk.LEFT)
+
+        # ---- Strength tester frame -----------------------------------
+        tester_frame = ttk.LabelFrame(panel, text="Password Strength Tester", padding=12)
+        tester_frame.pack(fill=tk.X, pady=(0, 12))
+
+        ttk.Label(
+            tester_frame,
+            text="Type any password to see its strength (nothing is saved here).",
+            foreground="gray",
+        ).pack(anchor="w", pady=(0, 8))
+
+        self._strength_tester = PasswordStrengthWidget(
+            tester_frame,
+            label_text="Test password:",
+            label_width=14,
+        )
+        self._strength_tester.pack(fill=tk.X)
+
+        # ---- Info / legend frame -------------------------------------
+        info_frame = ttk.LabelFrame(panel, text="Strength Tiers (HiveSystems 2025)", padding=12)
+        info_frame.pack(fill=tk.X, pady=(0, 12))
+
+        tiers = [
+            (_api_config.PasswordStrength.INSTANTLY, "#9B59B6",
+             "< 8 characters — cracked instantly"),
+            (_api_config.PasswordStrength.WEAK,      "#E74C3C",
+             "8 chars, numbers/lowercase only"),
+            (_api_config.PasswordStrength.GOOD,      "#E67E22",
+             "Mixed types, but short"),
+            (_api_config.PasswordStrength.GREAT,     "#F1C40F",
+             "12+ chars with \u2265 3 character types"),
+            (_api_config.PasswordStrength.SAFE,      "#2ECC71",
+             "16+ chars, or 12+ chars with all 4 types"),
+        ]
+
+        for tier_name, colour, description in tiers:
+            row = ttk.Frame(info_frame)
+            row.pack(fill=tk.X, pady=2)
+            # Colour swatch
+            tk.Label(
+                row,
+                text="  ",
+                bg=colour,
+                width=3,
+                relief="flat",
+            ).pack(side=tk.LEFT, padx=(0, 8), ipady=3)
+            ttk.Label(
+                row,
+                text=f"{tier_name}: {description}",
+            ).pack(side=tk.LEFT, anchor="w")
+
+        # ---- Technical info -----------------------------------------
+        tech_label = ttk.Label(
+            panel,
+            text=(
+                "Encryption: bcrypt work-factor 10 hash \u2022 "
+                "PBKDF2-SHA256 (390,000 iter.) key derivation \u2022 "
+                "Fernet AES-256 API key encryption.\n"
+                "Master password is never stored in plaintext. "
+                "See doc/passwords.md for full details."
+            ),
+            foreground="gray",
+            wraplength=500,
+            justify="left",
+        )
+        tech_label.pack(anchor="w", pady=(4, 0))
+
+        # Populate status
+        self._refresh_security_status()
+
+    def _refresh_security_status(self) -> None:
+        """Update the password status indicator in the Security panel."""
+        try:
+            if _api_config.is_password_set():
+                self._sec_status_label.configure(
+                    text="\u2705  Master password is set. API keys are encrypted.",
+                    foreground="#2ECC71",
+                )
+                self._set_pw_btn.configure(state="disabled")
+                self._change_pw_btn.configure(state="normal")
+            else:
+                self._sec_status_label.configure(
+                    text="\u26A0\ufe0f  No master password set. API keys are stored unencrypted.",
+                    foreground="#E67E22",
+                )
+                self._set_pw_btn.configure(state="normal")
+                self._change_pw_btn.configure(state="disabled")
+        except Exception as exc:
+            logger.warning("Could not read security status: %s", exc)
+
+    def _on_set_password(self) -> None:
+        """Open the Set Password dialog."""
+        from CherryAI.gui.dialogs.password_dialog import SetPasswordDialog
+        dlg = SetPasswordDialog(self)
+        self.wait_window(dlg)
+        if dlg.result:
+            messagebox.showinfo(
+                "Password Set",
+                "Master password has been set. API keys will now be encrypted.",
+                parent=self,
+            )
+            self._refresh_security_status()
+
+    def _on_change_password(self) -> None:
+        """Open the Change Password dialog."""
+        from CherryAI.gui.dialogs.password_dialog import ChangePasswordDialog
+        dlg = ChangePasswordDialog(self)
+        self.wait_window(dlg)
+        if dlg.result:
+            messagebox.showinfo(
+                "Password Changed",
+                "Master password changed. All API keys have been re-encrypted.",
+                parent=self,
+            )
+            self._refresh_security_status()
 
     def _build_buttons(self, parent: ttk.Frame) -> None:
         """Build the action buttons at the bottom."""
@@ -1949,57 +2211,60 @@ class GlobalOptionsDialog(tk.Toplevel):
             # Caching settings
             caching_defaults = {
                 "enabled": "true" if self.cache_enabled_var.get() else "false",
-                "cache_dir": self.cache_dir_var.get(),
-                "max_age_hours": str(self.cache_max_age_var.get()),
-                "max_size_mb": str(self.cache_max_size_var.get()),
+                "dir": self.cache_dir_var.get(),
+                "age": str(self.cache_max_age_var.get()),
+                "size": str(self.cache_max_size_var.get()),
+                "mode": self.cache_mode_var.get(),
             }
             ini_manager.save_as_user_defaults("caching", caching_defaults)
 
             # Logging settings
             logging_defaults = {
                 "level": self.log_level_var.get(),
-                "log_file": self.log_file_var.get(),
-                "debug_mode": "true" if self.debug_mode_var.get() else "false",
-                "log_api_calls": "true" if self.log_api_calls_var.get() else "false",
+                "location": self.log_file_var.get(),
+                "debug": "true" if self.debug_mode_var.get() else "false",
+                "api_log": "true" if self.log_api_calls_var.get() else "false",
             }
-            ini_manager.save_as_user_defaults("logging", logging_defaults)
+            ini_manager.save_as_user_defaults("log", logging_defaults)
 
             # Session settings
             session_defaults = {
-                "autosave_enabled": "true" if self.autosave_enabled_var.get() else "false",
-                "autosave_interval": str(self.autosave_interval_var.get()),
+                "autosave": "true" if self.autosave_enabled_var.get() else "false",
+                "interval": str(self.autosave_interval_var.get()),
                 "theme": self.theme_var.get(),
-                "restore_on_launch": "true" if self.restore_on_launch_var.get() else "false",
-                "confirm_on_exit": "true" if self.confirm_on_exit_var.get() else "false",
-                "auto_analyze_on_load": "true" if self.auto_analyze_on_load_var.get() else "false",
-                "auto_preprocess_on_load": "true" if self.auto_preprocess_on_load_var.get() else "false",
+                "load_last": "true" if self.restore_on_launch_var.get() else "false",
             }
             ini_manager.save_as_user_defaults("session", session_defaults)
-            
-            # PHASE 58.11: Also sync restore_on_launch to [recent] section for startup
+
+            # Also sync load_last to [session] section for startup
             ini_manager.set_restore_on_launch(self.restore_on_launch_var.get())
 
-            # Safety settings
-            safety_defaults = {
-                "ban_tokens": self.ban_tokens_var.get(),
-                "content_warning_enabled": "true" if self.content_warning_var.get() else "false",
-                "max_output_tokens": str(self.max_output_tokens_var.get()),
+            # Limit settings
+            limit_defaults = {
+                "banned": self.ban_tokens_var.get(),
+                "warnings": "true" if self.content_warning_var.get() else "false",
+                "output": str(self.max_output_tokens_var.get()),
+                "safe": "true" if self.safe_var.get() else "false",
             }
-            ini_manager.save_as_user_defaults("safety", safety_defaults)
+            ini_manager.save_as_user_defaults("limit", limit_defaults)
 
             # File I/O settings
             file_io_defaults = {
-                "default_encoding": self.encoding_var.get(),
-                "line_ending": self.line_ending_var.get(),
-                "preserve_bom": "true" if self.preserve_bom_var.get() else "false",
-                "backup_originals": "true" if self.backup_originals_var.get() else "false",
+                "encoding": self.encoding_var.get(),
+                "lines": self.line_ending_var.get(),
+                "preservebom": "true" if self.preserve_bom_var.get() else "false",
+                "backup": "true" if self.backup_originals_var.get() else "false",
             }
-            ini_manager.save_as_user_defaults("file_io", file_io_defaults)
+            ini_manager.save_as_user_defaults("fileio", file_io_defaults)
 
             # Prompts settings
             prompts_defaults = {
-                "edit_prompt": self._edit_prompt_text.get("1.0", tk.END).strip(),
-                "tlc_prompt": self._tlc_prompt_text.get("1.0", tk.END).strip(),
+                "edit": self._edit_prompt_text.get("1.0", tk.END).strip(),
+                "tlc": self._tlc_prompt_text.get("1.0", tk.END).strip(),
+                "dialogue": self._dialogue_prompt_text.get("1.0", tk.END).strip(),
+                "menu": self._menu_prompt_text.get("1.0", tk.END).strip(),
+                "choice": self._choice_prompt_text.get("1.0", tk.END).strip(),
+                "unknown": self._unknown_prompt_text.get("1.0", tk.END).strip(),
             }
             ini_manager.save_as_user_defaults("prompts", prompts_defaults)
 
@@ -2043,6 +2308,60 @@ class GlobalOptionsDialog(tk.Toplevel):
             "Reload the Information step to see the change.",
         )
         logger.info("Style/tone presets reset to factory defaults")
+
+    def _on_restore_defaults(self) -> None:
+        """Open a checklist dialog so the user can choose which areas to restore."""
+        import tkinter as _tk
+
+        dlg = tk.Toplevel(self)
+        dlg.title("Restore Defaults")
+        dlg.geometry("380x340")
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        dlg.grab_set()
+
+        ttk.Label(dlg, text="Select areas to reset to factory defaults:", padding=(10, 10, 10, 5)).pack(anchor="w")
+
+        areas = [
+            ("confirmation_dialogs", "Confirmation Dialogs"),
+            ("style_tone", "Style & Tone Presets"),
+            ("system_instructions", "System Instructions"),
+            ("session", "Session Settings"),
+        ]
+
+        vars_: Dict[str, tk.BooleanVar] = {}
+        for key, label in areas:
+            v = tk.BooleanVar(value=False)
+            vars_[key] = v
+            ttk.Checkbutton(dlg, text=label, variable=v, padding=(20, 2)).pack(anchor="w")
+
+        def _apply() -> None:
+            if vars_["confirmation_dialogs"].get():
+                self._on_reset_confirmations()
+            if vars_["style_tone"].get():
+                self._on_reset_presets()
+            if vars_["system_instructions"].get():
+                try:
+                    from CherryAI.functions import ini_manager
+                    cfg = ini_manager._get_config()
+                    if cfg.has_section("system_instructions"):
+                        for key in list(cfg.options("system_instructions")):
+                            cfg.remove_option("system_instructions", key)
+                        ini_manager._save_ini(cfg)
+                except Exception:
+                    pass
+            if vars_["session"].get():
+                try:
+                    from CherryAI.functions import ini_manager
+                    ini_manager.set_session_setting("load_last", "true")
+                except Exception:
+                    pass
+            dlg.destroy()
+
+        btn_frame = ttk.Frame(dlg, padding=10)
+        btn_frame.pack(fill=tk.X, side=tk.BOTTOM)
+        ttk.Button(btn_frame, text="Restore Selected", command=_apply).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=dlg.destroy).pack(side=tk.RIGHT)
 
     def _on_restore_initial_defaults(self) -> None:
         """Handle Restore Initial Defaults button - restore factory settings."""
@@ -2123,79 +2442,91 @@ class GlobalOptionsDialog(tk.Toplevel):
 
         # Logging defaults
         self.log_level_var.set(
-            ini_manager.get_initial_default("logging", "level", "INFO", str) or "INFO"
+            ini_manager.get_initial_default("log", "level", "Error", str) or "Error"
         )
         self.log_file_var.set(
-            ini_manager.get_initial_default("logging", "log_file", "logs/cherryai.log", str) or "logs/cherryai.log"
+            ini_manager.get_initial_default("log", "location", "log/", str) or "log/"
         )
         self.debug_mode_var.set(
-            bool(ini_manager.get_initial_default("logging", "debug_mode", False, bool))
+            bool(ini_manager.get_initial_default("log", "debug", False, bool))
         )
         self.log_api_calls_var.set(
-            bool(ini_manager.get_initial_default("logging", "log_api_calls", False, bool))
+            bool(ini_manager.get_initial_default("log", "api_log", True, bool))
         )
 
         # Session defaults
         self.autosave_enabled_var.set(
-            bool(ini_manager.get_initial_default("session", "autosave_enabled", True, bool))
+            bool(ini_manager.get_initial_default("session", "autosave", True, bool))
         )
         self.autosave_interval_var.set(
-            int(ini_manager.get_initial_default("session", "autosave_interval", 60, int) or 60)
+            int(ini_manager.get_initial_default("session", "interval", 60, int) or 60)
         )
         self.theme_var.set(
             ini_manager.get_initial_default("session", "theme", "light", str) or "light"
         )
         self.restore_on_launch_var.set(
-            bool(ini_manager.get_initial_default("session", "restore_on_launch", True, bool))
-        )
-        self.confirm_on_exit_var.set(
-            bool(ini_manager.get_initial_default("session", "confirm_on_exit", True, bool))
-        )
-        self.auto_analyze_on_load_var.set(
-            bool(ini_manager.get_initial_default("session", "auto_analyze_on_load", True, bool))
-        )
-        self.auto_preprocess_on_load_var.set(
-            bool(ini_manager.get_initial_default("session", "auto_preprocess_on_load", True, bool))
+            bool(ini_manager.get_initial_default("session", "load_last", True, bool))
         )
 
-        # Safety defaults
+        # Limit defaults
         self.ban_tokens_var.set(
-            ini_manager.get_initial_default("safety", "ban_tokens", "em_dash, smart_quotes", str) or "em_dash, smart_quotes"
+            ini_manager.get_initial_default("limit", "banned", "\u2014, \u2013", str) or "\u2014, \u2013"
         )
         self.content_warning_var.set(
-            bool(ini_manager.get_initial_default("safety", "content_warning_enabled", True, bool))
+            bool(ini_manager.get_initial_default("limit", "warnings", True, bool))
         )
         self.max_output_tokens_var.set(
-            int(ini_manager.get_initial_default("safety", "max_output_tokens", 4096, int) or 4096)
+            int(ini_manager.get_initial_default("limit", "output", 4096, int) or 4096)
         )
 
         # File I/O defaults
         self.encoding_var.set(
-            ini_manager.get_initial_default("file_io", "default_encoding", "utf-8", str) or "utf-8"
+            ini_manager.get_initial_default("fileio", "encoding", "auto", str) or "auto"
         )
         self.line_ending_var.set(
-            ini_manager.get_initial_default("file_io", "line_ending", "auto", str) or "auto"
+            ini_manager.get_initial_default("fileio", "lines", "auto", str) or "auto"
         )
         self.preserve_bom_var.set(
-            bool(ini_manager.get_initial_default("file_io", "preserve_bom", True, bool))
+            bool(ini_manager.get_initial_default("fileio", "preservebom", True, bool))
         )
         self.backup_originals_var.set(
-            bool(ini_manager.get_initial_default("file_io", "backup_originals", True, bool))
+            bool(ini_manager.get_initial_default("fileio", "backup", True, bool))
         )
 
         # Prompts defaults
         edit_prompt = (
-            ini_manager.get_initial_default("prompts", "edit_prompt", DEFAULT_EDIT_PROMPT, str)
+            ini_manager.get_initial_default("prompts", "edit", DEFAULT_EDIT_PROMPT, str)
             or DEFAULT_EDIT_PROMPT
         )
         tlc_prompt = (
-            ini_manager.get_initial_default("prompts", "tlc_prompt", DEFAULT_TLC_PROMPT, str)
+            ini_manager.get_initial_default("prompts", "tlc", DEFAULT_TLC_PROMPT, str)
             or DEFAULT_TLC_PROMPT
         )
         self._edit_prompt_text.delete("1.0", tk.END)
         self._edit_prompt_text.insert("1.0", edit_prompt)
         self._tlc_prompt_text.delete("1.0", tk.END)
         self._tlc_prompt_text.insert("1.0", tlc_prompt)
+
+        # Conditional prompt defaults (from [conditional_prompts] via ini_manager)
+        _cond_defaults = {
+            "dialogue": DEFAULT_DIALOGUE_PROMPT,
+            "menu": DEFAULT_MENU_PROMPT,
+            "choice": DEFAULT_CHOICE_PROMPT,
+            "unknown": DEFAULT_UNKNOWN_PROMPT,
+        }
+        _cond_widgets = {
+            "dialogue": self._dialogue_prompt_text,
+            "menu": self._menu_prompt_text,
+            "choice": self._choice_prompt_text,
+            "unknown": self._unknown_prompt_text,
+        }
+        for _key, _widget in _cond_widgets.items():
+            _val = (
+                ini_manager.get_initial_default("conditional_prompts", _key, _cond_defaults[_key], str)
+                or _cond_defaults[_key]
+            )
+            _widget.delete("1.0", tk.END)
+            _widget.insert("1.0", _val)
 
         # Update model list for new provider
         self._update_model_list()
@@ -2226,59 +2557,55 @@ class GlobalOptionsDialog(tk.Toplevel):
 
         self.options.caching = CachingSettings(
             enabled=self.cache_enabled_var.get(),
-            cache_dir=self.cache_dir_var.get(),
-            max_age_hours=self.cache_max_age_var.get(),
-            max_size_mb=self.cache_max_size_var.get(),
-            cache_mode=self.cache_mode_var.get(),
+            dir=self.cache_dir_var.get(),
+            age=self.cache_max_age_var.get(),
+            size=self.cache_max_size_var.get(),
+            mode=self.cache_mode_var.get(),
         )
 
         self.options.logging = LoggingSettings(
             level=self.log_level_var.get(),
-            log_file=self.log_file_var.get(),
-            debug_mode=self.debug_mode_var.get(),
-            log_api_calls=self.log_api_calls_var.get(),
+            location=self.log_file_var.get(),
+            debug=self.debug_mode_var.get(),
+            api_log=self.log_api_calls_var.get(),
         )
 
         self.options.session = SessionSettings(
-            autosave_enabled=self.autosave_enabled_var.get(),
-            autosave_interval=self.autosave_interval_var.get(),
+            autosave=self.autosave_enabled_var.get(),
+            interval=self.autosave_interval_var.get(),
             theme=self.theme_var.get(),
-            restore_on_launch=self.restore_on_launch_var.get(),
-            confirm_on_exit=self.confirm_on_exit_var.get(),
-            auto_analyze_on_load=self.auto_analyze_on_load_var.get(),
-            auto_preprocess_on_load=self.auto_preprocess_on_load_var.get(),
+            load_last=self.restore_on_launch_var.get(),
         )
 
-        # Parse ban tokens
-        ban_tokens_str = self.ban_tokens_var.get()
-        ban_tokens = [t.strip() for t in ban_tokens_str.split(",") if t.strip()]
-
-        self.options.safety = SafetySettings(
-            ban_tokens=ban_tokens,
-            content_warning_enabled=self.content_warning_var.get(),
-            max_output_tokens=self.max_output_tokens_var.get(),
+        self.options.limit = LimitSettings(
+            banned=self.ban_tokens_var.get(),
+            warnings=self.content_warning_var.get(),
+            output=self.max_output_tokens_var.get(),
+            safe=self.safe_var.get(),
         )
 
         self.options.file_io = FileIOSettings(
-            default_encoding=self.encoding_var.get(),
-            line_ending=self.line_ending_var.get(),
-            preserve_bom=self.preserve_bom_var.get(),
-            backup_originals=self.backup_originals_var.get(),
+            encoding=self.encoding_var.get(),
+            lines=self.line_ending_var.get(),
+            preservebom=self.preserve_bom_var.get(),
+            backup=self.backup_originals_var.get(),
         )
 
         self.options.prompts = PromptsSettings(
-            edit_prompt=self._edit_prompt_text.get("1.0", tk.END).strip(),
-            tlc_prompt=self._tlc_prompt_text.get("1.0", tk.END).strip(),
-            # PHASE 37: Component toggles
-            edit_include_glossary=self.edit_include_glossary_var.get(),
-            edit_include_game_summary=self.edit_include_game_summary_var.get(),
-            edit_include_character_notes=self.edit_include_character_notes_var.get(),
-            edit_include_code_glossary=self.edit_include_code_glossary_var.get(),
+            edit=self._edit_prompt_text.get("1.0", tk.END).strip(),
+            tlc=self._tlc_prompt_text.get("1.0", tk.END).strip(),
+            dialogue=self._dialogue_prompt_text.get("1.0", tk.END).strip(),
+            menu=self._menu_prompt_text.get("1.0", tk.END).strip(),
+            choice=self._choice_prompt_text.get("1.0", tk.END).strip(),
+            unknown=self._unknown_prompt_text.get("1.0", tk.END).strip(),
+            # Component toggles
+            glossary=self.edit_include_glossary_var.get(),
+            summary=self.edit_include_game_summary_var.get(),
+            code=self.edit_include_code_glossary_var.get(),
             tlc_include_glossary=self.tlc_include_glossary_var.get(),
             tlc_include_game_summary=self.tlc_include_game_summary_var.get(),
-            tlc_include_character_notes=self.tlc_include_character_notes_var.get(),
             tlc_include_code_glossary=self.tlc_include_code_glossary_var.get(),
-            # PHASE 37: Input policies
+            # Input policies
             edit_input_policy=self.edit_input_policy_var.get(),
             tlc_input_policy=self.tlc_input_policy_var.get(),
         )
@@ -2286,6 +2613,17 @@ class GlobalOptionsDialog(tk.Toplevel):
         # Invoke callback
         if self.on_save:
             self.on_save(self.options)
+
+        # Persist conditional prompts to INI immediately so prompt_builder.py
+        # can read them when building the next translation request.
+        try:
+            from CherryAI.functions.ini_manager import set_conditional_prompt
+            set_conditional_prompt("dialogue", self.options.prompts.dialogue)
+            set_conditional_prompt("menu", self.options.prompts.menu)
+            set_conditional_prompt("choice", self.options.prompts.choice)
+            set_conditional_prompt("unknown", self.options.prompts.unknown)
+        except Exception as _e:
+            logger.warning("Failed to persist conditional prompts to INI: %s", _e)
 
         logger.info("Global options saved")
 
