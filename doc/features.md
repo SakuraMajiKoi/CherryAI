@@ -474,18 +474,20 @@ TRANSLATION STYLE GUIDE
   - Dropdown with built-in presets (Natural, Formal, Casual, etc.) and user-saved presets
   - Custom text field (ScrolledText, height=1) for free-form override
   - Save/Delete buttons for managing user presets
-  - User presets stored in `user/presets/style_presets.json` and `tone_presets.json`
+  - All presets (built-in and user) stored in `user/CherryAI.ini` under `[style]` and `[tone]` sections
+  - Built-in presets are seeded automatically on first run and are never overwritten
 - Style/Tone values stored in manifest keys `CustomStyle`, `CustomTone`, `StylePreset`, `TonePreset`
 - translate.py `_build_system_prompt_from_manifest()` reads from manifest and appends to system prompt as `Style: ...` and `Tone: ...`
 - Helps maintain consistent translation style across the project
 
 SYSTEM INSTRUCTIONS
 - Provide custom LLM instructions via Information Step preset system
-- Preset dropdown: Default (loads from `default/example.txt`), Custom (free-form), or user-saved presets
-- Save/Delete buttons for managing user presets stored in `user/presets/system_instructions_presets.json`
-- Default text automatically populated when empty on step entry
+- Preset dropdown: Default (built-in full text seeded in `[system_instructions]`), Custom (free-form), or user-saved presets
+- Save/Delete buttons for managing user presets; all presets stored in `user/CherryAI.ini` under `[system_instructions]`
+- Default text (including Output Examples section) automatically populated from INI when empty on step entry
 - Instructions stored in manifest key `Prompt`, preset name in `SIPreset`
 - translate.py `_build_system_prompt_from_manifest()` reads `Prompt` from manifest and includes in system prompt
+- Global Options → Restore Defaults → System Instructions resets `[system_instructions]` section and re-seeds Default preset
 
 ROLLING CONTEXT (NEW - TASK 7)
 - Provides previous lines as context for each translation batch
@@ -1333,15 +1335,29 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - **Enums:**
     - InferenceStatus: IDLE, RUNNING, SUCCESS, FAILED
     - MetadataField: PROJECT_NAME, SUMMARY, GENRE, STYLE, TONE, NOTES, SOURCE_LANG, TARGET_LANG
-  - **Style/Tone Preset System (Phase 60):**
-    - DEFAULT_STYLE_PRESETS: Built-in presets (Natural, Literal, Localizing, Formal, Casual, Technical, Poetic) with full LLM prompt text
-    - DEFAULT_TONE_PRESETS: Built-in presets (Neutral, Casual, Formal, Dramatic, Comedic, Serious, Whimsical, Dark) with full LLM prompt text
-    - CUSTOM_PRESET_NAME: "Custom" sentinel — cannot be overwritten or deleted
-    - User presets stored in `user/presets/style_presets.json` and `user/presets/tone_presets.json`
-    - `_load_presets()` / `_save_user_presets()` / `_delete_user_presets_file()` for JSON persistence
+  - **Style/Tone Preset System (Phase 60, updated Session 28-29):**
+    - Built-in presets stored in `CherryAI.ini` via `_seed_builtin_sections()`:
+      - `[style]`: Natural, Literal, Creative, Formal, Casual, Technical, Literary (7 presets)
+      - `[tone]`: Neutral, Serious, Humorous, Dramatic, Lighthearted, Dark, Romantic, Action (8 presets)
+    - Each preset is seeded **per-key** so user-added presets are preserved when built-in keys are missing
+    - `_migrate_preset_values()` corrects mis-assigned built-in values (e.g. Dramatic having Neutral's text)
+    - CUSTOM_PRESET_NAME: "Custom" sentinel — cannot be overwritten or deleted; clears the text field on selection
+    - User presets also stored in `CherryAI.ini` `[style]`/`[tone]` sections via `set_preset_text()`
+    - `get_all_presets("style"/"tone")` returns merged dict: builtins + user INI entries (INI overrides builtins)
     - `_unique_preset_name()` auto-appends numbers for duplicate names (e.g. "My Style", "My Style 2")
-    - Presets are string-based (not enums); `style_preset: str = "Natural"`, `tone_preset: str = "Neutral"`
-    - Legacy migration: `from_dict` capitalizes old lowercase enum values
+    - Dropdown `<<ComboboxSelected>>` handlers always read **fresh from INI** (not a stale build-time dict)
+    - `on_enter()` refreshes preset dicts and combobox `values` from INI before loading manifest bindings
+    - `_ensure_style_tone_text()` **always** overwrites text fields for named presets from INI on step enter
+      (removed "only if empty" guard — ensures stale manifest CustomStyle content is replaced by preset text)
+  - **System Instructions Preset System (Session 28-29):**
+    - `[system_instructions]` section in `CherryAI.ini`; built-in "Default" preset seeded from `_BUILTIN_SYSTEM_INSTRUCTION`
+    - `[defaults].SystemInstruction` stores the **preset name** (e.g. `Default`) not the full text —
+      consistent with `default_style = Natural` and `default_tone = Neutral`
+    - `get_default_text("SystemInstruction")` resolves the stored preset name via `get_si_preset()`;
+      legacy full-text values (multi-line) are returned as-is for backward compatibility
+    - Migration: if `[defaults].SystemInstruction` contains newlines (legacy full text from prior sessions),
+      `_seed_builtin_sections()` replaces it with `"Default"` on next load
+    - `_on_si_preset_changed()` reads via `ini_manager.get_si_preset(name)` directly (always fresh from INI)
   - **Data Classes:**
     - CharacterInfo: name, gender, role, notes (with to_dict/from_dict)
     - ProjectMetadata: project_name, summary, genre, style_preset (str), tone_preset (str), notes, source_lang, target_lang, characters list
@@ -1434,7 +1450,9 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Merged Column: "Original" + "Preprocessed" replaced with "To be Translated" column (resolution: edited_prepro → preprocessed → original)
     - Newline Rendering: newlines displayed as ↵ symbol in table cells, 200-char truncation limit
     - Mock Translation: "Mock Translation" as first MODEL_OPTIONS entry, routes to `MockTranslator` in `functions/mock_translator.py`
-    - API Provider Management: `APIProviderEntry` dataclass, `PROVIDER_PRESETS` (5 presets: OpenAI GPT-4o-mini, GPT-4o, Gemini Flash, Claude Sonnet, Local LLM), providers Treeview in Global Options, `_ProviderEditDialog` and `_PresetPickerDialog` helper dialogs
+    - API Provider Management: `APIProviderEntry` dataclass, `PROVIDER_PRESETS` (5 presets: OpenAI GPT-4o-mini, GPT-4o, Gemini Flash, Claude Sonnet, Local LLM), `_PresetPickerDialog` helper dialog
+    - API Key Management: "Saved API Keys" Treeview (Name, Provider columns) with Save Key/Load Key/Remove buttons; encrypted storage via `api_config.set_api_key(provider, key, password, name)` in `[api_keys]` as `provider, name = encrypted_value`; master password prompt with first-time setup flow
+    - Connection Test: Real `test_api_connection()` using OpenAI-compatible `models.list()` endpoint; threaded execution with specific error messages (auth failure, timeout, connection refused); replaces stub that always returned success
     - Settings Migration: caching.mode in CachingSettings, thinking_enabled/thinking_budget in RequestSettings, rolling_context_lines in RequestSettings; `_sync_from_global_options()` applies overrides on tab enter
     - Retry Refinement: UI shows only Batch + Contextual (`RETRY_STRATEGIES`); `ALL_RETRY_STRATEGIES` kept for CLI with all 4; max retries minimum changed from 1 to 0
     - Prompt Editor Redesign: removed Style Preset and Game Summary textarea; "Preview Prompt" read-only button; Ban Tokens LabelFrame with preset dropdown (None/Clean English/Strict)
@@ -1557,6 +1575,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - GlobalOptions: Container for all settings sections, providers list; `safety` property is alias for `limit`
     - APIProviderEntry: name, provider_type, url, api_key, model (to_dict/from_dict) — Task 43.6
     - PROVIDER_PRESETS: 5 presets (OpenAI GPT-4o-mini, GPT-4o, Gemini Flash, Claude Sonnet, Local LLM) — Task 43.6
+    - API Key Pipeline: `_save_api_key()`, `_load_api_key()`, `_remove_api_key()`, `_ensure_password_set()`, `_prompt_password()` — GUI ↔ api_config integration
   - **Helper Constants:**
     - SECTION_DESCRIPTIONS: User-friendly descriptions for each section
     - CATEGORY_ORDER: Category → sections mapping for navigation
@@ -2991,6 +3010,32 @@ CherryAI uses a two-tier testing strategy:
    - Tests dependencies, config, I/O, pre/post processing, API
 
 For detailed test documentation, see `doc/tests.md`
+
+=============================================================================
+
+## Dynamic Model Registry
+
+CherryAI automatically discovers and prices available models from OpenAI, Google Gemini,
+and Mistral. Model information (pricing, rate limits, capabilities) is:
+- Fetched from provider APIs when API keys are available
+- Cached locally in `user/API.ini` for offline use
+- Updated via the "⟳ Refresh Models" button in Global Options
+- Automatically up-to-date via curated built-in fallback data (Feb 2026)
+
+**Models included** (23 built-in, more fetched live with keys):
+- OpenAI: GPT-4.1 family, GPT-4o family, o3/o4-mini reasoning, GPT-5 Mini
+- Google: Gemini 3.x/2.5/2.0 Flash and Pro variants
+- Mistral: Mistral Large/Medium/Small 3.x, Magistral reasoning, Codestral, Ministral
+
+**Per-model information stored**: input/output/cached/batch pricing (USD/1M tokens),
+RPM/RPD rate limits per tier, context window, structured output, thinking mode,
+logit_bias support, temperature range.
+
+**API Key Management**: Encrypted API key storage in `user/API.ini` with
+multiple named keys per provider (format: `[api_keys]` → `provider, name = encrypted_value`).
+Keys encrypted with AES-256 via Fernet, keyed from a master password (bcrypt WF-10).
+Connection testing via `test_api_connection()` validates keys against provider endpoints
+using the OpenAI-compatible `models.list()` call with specific error reporting.
 
 =============================================================================
 

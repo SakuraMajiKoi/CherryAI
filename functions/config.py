@@ -79,94 +79,8 @@ def get_models_for_encoding(encoding: str) -> List[str]:
 
 
 # =============================================================================
-# MODEL PRICING - SINGLE SOURCE OF TRUTH FOR COST ESTIMATION
+# MODEL PRICING - DYNAMICALLY LOADED FROM MODEL REGISTRY
 # =============================================================================
-
-# Pricing data for LLM models (USD per 1M tokens)
-# Structure: model_id -> {"name": display_name, "input": price, "output": price,
-#   "concurrent": max concurrent requests, "token_speed": tokens/sec output}
-MODEL_PRICING: Dict[str, Dict[str, Any]] = {
-    # OpenAI models
-    "gpt-4.1": {
-        "name": "GPT-4.1",
-        "input": 2.00,
-        "output": 8.00,
-        "concurrent": 5,
-        "token_speed": 80,
-    },
-    "gpt-4o": {
-        "name": "GPT-4o",
-        "input": 2.50,
-        "output": 10.00,
-        "concurrent": 5,
-        "token_speed": 80,
-    },
-    "gpt-4o-mini": {
-        "name": "GPT-4o Mini",
-        "input": 0.15,
-        "output": 0.60,
-        "concurrent": 10,
-        "token_speed": 120,
-    },
-    "gpt-4-turbo": {
-        "name": "GPT-4 Turbo",
-        "input": 10.00,
-        "output": 30.00,
-        "concurrent": 3,
-        "token_speed": 50,
-    },
-    # Anthropic Claude models
-    "claude-3-5-sonnet": {
-        "name": "Claude 3.5 Sonnet",
-        "input": 3.00,
-        "output": 15.00,
-        "concurrent": 3,
-        "token_speed": 70,
-    },
-    "claude-3-opus": {
-        "name": "Claude 3 Opus",
-        "input": 15.00,
-        "output": 75.00,
-        "concurrent": 2,
-        "token_speed": 30,
-    },
-    "claude-3-haiku": {
-        "name": "Claude 3 Haiku",
-        "input": 0.25,
-        "output": 1.25,
-        "concurrent": 5,
-        "token_speed": 150,
-    },
-    # Google Gemini models
-    "gemini-1.5-pro": {
-        "name": "Gemini 1.5 Pro",
-        "input": 1.25,
-        "output": 5.00,
-        "concurrent": 3,
-        "token_speed": 60,
-    },
-    "gemini-1.5-flash": {
-        "name": "Gemini 1.5 Flash",
-        "input": 0.075,
-        "output": 0.30,
-        "concurrent": 10,
-        "token_speed": 150,
-    },
-    "gemini-2.0-flash": {
-        "name": "Gemini 2.0 Flash",
-        "input": 0.10,
-        "output": 0.40,
-        "concurrent": 10,
-        "token_speed": 200,
-    },
-    "gemini-2.0-flash-lite": {
-        "name": "Gemini 2.0 Flash Lite",
-        "input": 0.0,  # Free tier
-        "output": 0.0,
-        "concurrent": 5,
-        "token_speed": 200,
-    },
-}
 
 # Default model for cost comparisons when model not specified
 DEFAULT_PRICING_MODEL: str = "gpt-4o-mini"
@@ -174,27 +88,140 @@ DEFAULT_PRICING_MODEL: str = "gpt-4o-mini"
 # Output token estimation multiplier (JP -> EN typical ratio)
 OUTPUT_TOKEN_MULTIPLIER: float = 1.2
 
+# MODULE-LEVEL CACHE — populated lazily on first access.
+# Populated from model_registry (cached INI data or built-in fallback).
+_MODEL_PRICING_CACHE: Optional[Dict[str, Dict[str, Any]]] = None
+
+
+def _load_model_pricing() -> Dict[str, Dict[str, Any]]:
+    """Load model pricing from the model_registry module.
+
+    Uses INI-cached data when available, otherwise falls back to the
+    curated built-in data in model_registry.FALLBACK_MODELS.  No network
+    request is issued by this function.
+    """
+    try:
+        from .model_registry import get_pricing_dict  # local import avoids circular deps
+        return get_pricing_dict()
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "config: could not load dynamic model pricing (%s); using built-in stub", exc
+        )
+        # Absolute minimal fallback so the app can start even if registry breaks
+        return {
+            "gpt-4o-mini": {
+                "name": "GPT-4o Mini",
+                "input": 0.15,
+                "output": 0.60,
+                "concurrent": 10,
+                "token_speed": 120,
+                "provider": "openai",
+            },
+            "gemini-2.0-flash": {
+                "name": "Gemini 2.0 Flash",
+                "input": 0.10,
+                "output": 0.40,
+                "concurrent": 10,
+                "token_speed": 200,
+                "provider": "google",
+            },
+        }
+
+
+def _get_model_pricing_cache() -> Dict[str, Dict[str, Any]]:
+    """Return the module-level pricing cache, populating it if needed."""
+    global _MODEL_PRICING_CACHE
+    if _MODEL_PRICING_CACHE is None:
+        _MODEL_PRICING_CACHE = _load_model_pricing()
+    return _MODEL_PRICING_CACHE
+
+
+def reload_model_pricing() -> None:
+    """Force the model pricing cache to be reloaded on next access.
+
+    Call this after ``model_registry.refresh_models()`` completes so that
+    ``get_model_pricing()`` immediately reflects the new data.
+    """
+    global _MODEL_PRICING_CACHE
+    _MODEL_PRICING_CACHE = None
+
+
+# Backward-compat property: ``MODEL_PRICING`` can still be imported as a dict.
+# It evaluates lazily so that tests can patch model_registry without issues.
+class _ModelPricingProxy(dict):
+    """A dict subclass that forwards attribute/item access to the live cache.
+
+    This lets existing code that does ``from functions.config import MODEL_PRICING``
+    and then uses ``MODEL_PRICING[key]`` or ``MODEL_PRICING.get(key)`` continue
+    to work without modification — while transparently pulling from the dynamic
+    registry.
+    """
+
+    def _sync(self) -> None:
+        cache = _get_model_pricing_cache()
+        self.clear()
+        self.update(cache)
+
+    def __contains__(self, key: object) -> bool:
+        self._sync()
+        return super().__contains__(key)
+
+    def __getitem__(self, key: Any) -> Any:
+        self._sync()
+        return super().__getitem__(key)
+
+    def get(self, key: Any, default: Any = None) -> Any:  # type: ignore[override]
+        self._sync()
+        return super().get(key, default)
+
+    def keys(self) -> Any:
+        self._sync()
+        return super().keys()
+
+    def values(self) -> Any:
+        self._sync()
+        return super().values()
+
+    def items(self) -> Any:
+        self._sync()
+        return super().items()
+
+    def __iter__(self) -> Any:
+        self._sync()
+        return super().__iter__()
+
+    def __len__(self) -> int:
+        self._sync()
+        return super().__len__()
+
+
+MODEL_PRICING: Dict[str, Dict[str, Any]] = _ModelPricingProxy()
+
 
 def get_model_pricing(model: str) -> Dict[str, Any]:
     """Get pricing information for a specific model.
 
     Args:
-        model: Model ID (e.g., 'gpt-4o-mini', 'claude-3-haiku').
+        model: Model ID (e.g., 'gpt-4o-mini', 'gemini-2.5-flash').
 
     Returns:
-        Dict with 'name', 'input', and 'output' pricing.
+        Dict with 'name', 'input', 'output', 'concurrent', 'token_speed', etc.
         Falls back to DEFAULT_PRICING_MODEL if model not found.
     """
-    return MODEL_PRICING.get(model, MODEL_PRICING[DEFAULT_PRICING_MODEL])
+    cache = _get_model_pricing_cache()
+    if model in cache:
+        return cache[model]
+    return cache.get(DEFAULT_PRICING_MODEL, next(iter(cache.values())))
 
 
 def get_model_names() -> List[str]:
     """Get list of all available model IDs for pricing.
 
     Returns:
-        List of model IDs (e.g., ['gpt-4o', 'gpt-4o-mini', ...]).
+        List of model IDs from all supported providers.
     """
-    return list(MODEL_PRICING.keys())
+    return list(_get_model_pricing_cache().keys())
 
 
 def get_model_display_name(model: str) -> str:
@@ -227,9 +254,9 @@ def estimate_cost(
     """
     import math
 
-    pricing = get_model_pricing(model) if model else MODEL_PRICING[DEFAULT_PRICING_MODEL]
-    input_price = pricing["input"]
-    output_price = pricing["output"]
+    pricing = get_model_pricing(model or DEFAULT_PRICING_MODEL)
+    input_price = pricing.get("input") or 0.0
+    output_price = pricing.get("output") or 0.0
 
     in_cost = (input_tokens / 1_000_000) * input_price
     out_cost = (output_tokens / 1_000_000) * output_price
@@ -253,9 +280,9 @@ def get_all_model_pricing() -> Dict[str, Dict[str, Any]]:
     """Get complete pricing dictionary for all models.
 
     Returns:
-        Full MODEL_PRICING dictionary.
+        Full MODEL_PRICING dictionary (dynamic, includes all providers).
     """
-    return MODEL_PRICING
+    return dict(_get_model_pricing_cache())
 
 
 # =============================================================================

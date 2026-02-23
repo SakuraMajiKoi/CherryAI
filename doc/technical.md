@@ -139,7 +139,11 @@ TABLE OF CONTENTS
    3.48 api_config.py ✅ — Encrypted API configuration manager (user/API.ini); Phase 62 extended
         * Single source of ALL API meta information: provider profiles, model, temperature, URL, timeout, rate limits, encrypted keys
         * ✅ Phase 62: api_profiles.ini consolidated; `[translation]` and `[glossary]` sections added
-        * Key management: set_password(), verify_password(), is_password_set(), set_api_key(), get_api_key(), change_password(), migrate_from_ini()
+        * Key management: set_password(), verify_password(), is_password_set(), set_api_key(provider, key, password, name), get_api_key(provider, password, name), change_password(), migrate_from_ini()
+        * Key listing: list_api_keys() returns [(provider, name), …] metadata; delete_api_key(provider, name) removes a saved key
+        * INI format: `[api_keys]` section stores keys as `provider, name = encrypted_value` (Fernet AES-256)
+        * Connection testing: test_api_connection(api_key, provider, base_url, timeout) → (bool, str); uses OpenAI-compatible models.list()
+        * PROVIDER_BASE_URLS: default base URLs for openai, gemini, anthropic, mistral, ollama, lmstudio, local
         * Profile settings (Phase 62 new): get_profile_setting(profile, key), set_profile_setting(profile, key, value), get_all_profile_settings(profile)
         * Migration: migrate_profiles_ini(path) — migrates non-secret fields from api_profiles.ini, renames to .migrated
         * PasswordStrength.assess(pw) / meter_text(pw) — Tiers: Instantly/Weak/Good/Great/Safe
@@ -205,7 +209,10 @@ TABLE OF CONTENTS
            SessionSettings, LimitSettings (SafetySettings=alias), FileIOSettings, PromptsSettings
          - APIProviderEntry dataclass: name, provider_type, url, api_key, model (Task 43.6)
          - PROVIDER_PRESETS: 5 provider presets (Task 43.6)
-         - _ProviderEditDialog, _PresetPickerDialog helper dialogs (Task 43.6)
+         - _PresetPickerDialog helper dialog (Task 43.6)
+         - API Key Management: "Saved API Keys" Treeview with Save Key/Load Key/Remove buttons;
+           _save_api_key(), _load_api_key(), _remove_api_key(), _ensure_password_set(), _prompt_password()
+         - Connection Test: _test_connection() calls api_config.test_api_connection() in background thread
          - GlobalOptions container: all settings + providers list; `safety` property is alias for `limit`
          - RequestSettings: +thinking_enabled, +thinking_budget, +rolling_context_lines (Tasks 43.8, 43.9)
          - CachingSettings: fields renamed — dir, age (days), size (MB), mode; defaults 0=unlimited
@@ -313,12 +320,28 @@ TABLE OF CONTENTS
          - get_all_user_defaults() / get_all_initial_defaults() - Get all for section
          - clear_user_defaults() / restore_initial_defaults() - Reset to factory
          - reload_defaults_cache() - Clear defaults.ini cache
-       - **INI Population (Session 24+, updated Session 25):** Auto-seed CherryAI.ini from embedded factory defaults on first load:
+       - **INI Population (Session 24+, updated Session 25+):** Auto-seed CherryAI.ini from embedded factory defaults on first load:
          - _DEFAULTS_POPULATE_MAP: maps factory-default sections → CherryAI.ini sections
          - _populate_from_defaults(config): reads embedded _FACTORY_DEFAULTS_INI_TEXT; seeds empty CherryAI.ini
            sections; special handling routes [conditional_prompts] → [prompts] keys
            (dialogue/menu/choice/unknown); unescapes `\n` to real newlines
-         - Called by _load_ini() after migration and ensure_required_sections
+           (dialogue/menu/choice/unknown); unescapes `\n` to real newlines
+         - _seed_builtin_sections(config): seeds Python-constant long-text data not in factory INI text —
+           [style] (7 built-in style presets, seeded **per-key** so user presets are preserved),
+           [tone] (8 built-in tone presets, same per-key approach),
+           [system_instructions].Default (full SI with Output Examples section),
+           [defaults].{default_style="Natural", default_tone="Neutral", Summary,
+           SystemInstruction="Default"} — SystemInstruction stores the **preset name** (e.g. "Default")
+           not the full text, consistent with default_style/default_tone.
+           Migration: if [defaults].SystemInstruction contains newlines (legacy full text), replaces with "Default".
+           Only writes keys that are absent; never overwrites user values. Returns True if anything written.
+         - _migrate_preset_values(config): detects and corrects **mis-assigned** built-in preset values —
+           if a built-in preset name (e.g. Dramatic) has the exact text of a *different* built-in
+           (e.g. Neutral), restores the correct built-in text. Ignores user-customised values.
+           Returns True if any value was corrected. Called by _load_ini() before _seed_builtin_sections().
+         - Called by _load_ini() after _populate_from_defaults()
+         - get_default_text("SystemInstruction"): resolves the stored preset name via get_si_preset();
+           if stored value has newlines (legacy full text) returns it directly for backward compat.
        - **Conditional Prompt Helpers (Session 24+):**
          - _CONDITIONAL_PROMPT_DEFAULTS: hardcoded fallbacks per context type
          - get_conditional_prompt(context_type, fallback="") → str: reads [prompts] section; falls back to hardcoded defaults
@@ -462,7 +485,7 @@ TABLE OF CONTENTS
          - Merged Column: "To be Translated" replaces Original+Preprocessed (resolution: edited_prepro → preprocessed → original)
          - Newline Rendering: ↵ symbol in table cells, 200-char truncation
          - Mock Translation: MODEL_OPTIONS[0] = "Mock Translation", routes to MockTranslator(delay_per_chunk=0.1)
-         - API Provider Management: APIProviderEntry dataclass, PROVIDER_PRESETS (5), providers Treeview, _ProviderEditDialog, _PresetPickerDialog
+         - API Provider Management: APIProviderEntry dataclass, PROVIDER_PRESETS (5), "Saved API Keys" Treeview with Save/Load/Remove; _PresetPickerDialog
          - Settings Migration: CachingSettings.mode, RequestSettings.thinking_enabled/budget/rolling_context_lines
          - _sync_from_global_options() applies Global Options overrides on tab enter
          - Retry Refinement: RETRY_STRATEGIES (2: Batch+Contextual for UI), ALL_RETRY_STRATEGIES (4 for CLI), min retries=0
@@ -5025,3 +5048,49 @@ Check Dependencies:
 python CherryAI/functions/dependencies.py --verbose
 python CherryAI/functions/dependencies.py --force
 ```
+
+
+=============================================================================
+
+## functions/model_registry.py
+
+New module (Dynamic Model Registry). Single source of truth for model metadata.
+
+**Key classes/functions:**
+- `ModelInfo` — dataclass with 25+ fields (pricing, limits, capabilities, timestamps)
+- `FALLBACK_MODELS` — curated built-in data for openai/google/mistral (23 models total)
+- `refresh_models(api_keys, path, providers)` — fetch from live APIs + save to INI
+- `save_to_ini(provider, models, path)` — persist to `[model_registry_<provider>]` section
+- `load_from_ini(provider, path)` → `(models, last_updated_iso)`
+- `get_all_models(path, providers, max_age_hours)` — load from INI or fallback
+- `get_all_models_flat(path, max_age_hours)` — flat list across all providers
+- `get_provider_models(provider, path, max_age_hours)` → `List[ModelInfo]`
+- `get_provider_model_ids(provider, path)` → `List[str]`
+- `get_model_info(model_id, path)` → `Optional[ModelInfo]`
+- `get_pricing_dict(path, max_age_hours)` → `MODEL_PRICING`-compatible dict
+- `get_registry_summary(path)` → status dict per provider
+- `is_data_fresh(provider, path, max_age_hours)` → `bool`
+
+**Provider constants:** `PROVIDER_OPENAI = "openai"`, `PROVIDER_GOOGLE = "google"`, `PROVIDER_MISTRAL = "mistral"`
+
+**INI sections added to user/API.ini:**
+- `[model_registry]` — version, last_refreshed
+- `[model_registry_openai]`, `[model_registry_google]`, `[model_registry_mistral]` — `last_updated` + `data` (JSON blob)
+
+**API endpoints:**
+- OpenAI: `GET https://api.openai.com/v1/models` (Bearer key)
+- Google: `GET https://generativelanguage.googleapis.com/v1beta/models?key={key}`
+- Mistral: `GET https://api.mistral.ai/v1/models` (Bearer key)
+
+**Fallback data (23 models):**
+- OpenAI (8): gpt-4.1, gpt-4.1-mini, gpt-4.1-nano, gpt-4o, gpt-4o-mini, o4-mini, o3, gpt-5-mini
+- Google (7): gemini-3.1-pro-preview, gemini-3-flash-preview, gemini-2.5-pro, gemini-2.5-flash, gemini-2.5-flash-lite, gemini-2.0-flash, gemini-2.0-flash-lite
+- Mistral (8): mistral-large-latest, mistral-medium-latest, mistral-small-latest, magistral-medium-latest, magistral-small-latest, codestral-latest, ministral-8b-latest, ministral-3b-latest
+
+**functions/config.py:** `MODEL_PRICING` is now `_ModelPricingProxy` — lazily syncs from registry on every dict access. Backward-compatible: all existing code using `MODEL_PRICING` works unchanged.
+
+**functions/options.py:** `API_PROVIDERS` is now `_APIProvidersProxy` — cloud providers (openai/gemini/mistral) get model lists from registry; static providers (anthropic/local/ollama/lmstudio) unchanged. Added `reload_api_providers()`.
+
+**gui/dialogs/global_options.py:** Added "⟳ Refresh Models" button; `_update_model_list()` uses `get_provider_models()` from registry; `_on_refresh_models()` runs in background thread.
+
+**gui/steps/translate.py:** `MODEL_OPTIONS` updated to Feb 2026 models; `_update_model_list_from_global_options()` falls back to registry before hardcoded list.

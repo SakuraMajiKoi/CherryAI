@@ -268,8 +268,23 @@ def _decrypt_value(ciphertext: str, password: str, cfg: configparser.ConfigParse
 # API key storage
 # ---------------------------------------------------------------------------
 
-def set_api_key(provider: str, key: str, password: str) -> bool:
-    """Encrypt and store an API key for *provider*.
+def _api_key_option(provider: str, name: str) -> str:
+    """Build the INI option name for a named API key.
+
+    Format: ``provider, name``  (case-preserved).
+    """
+    return f"{provider.strip()}, {name.strip()}"
+
+
+def set_api_key(
+    provider: str,
+    key: str,
+    password: str,
+    name: str = "default",
+) -> bool:
+    """Encrypt and store an API key for *provider* under *name*.
+
+    The key is stored in ``[api_keys]`` as ``provider, name = <encrypted>``.
 
     Returns False if encryption is unavailable or password incorrect.
     """
@@ -277,23 +292,59 @@ def set_api_key(provider: str, key: str, password: str) -> bool:
         return False
     cfg = _load()
     encrypted = _encrypt_value(key, password, cfg)
-    cfg.set("api_keys", provider.lower(), encrypted)
+    option = _api_key_option(provider, name)
+    cfg.set("api_keys", option, encrypted)
     _save(cfg)
     return True
 
 
-def get_api_key(provider: str, password: str) -> Optional[str]:
-    """Retrieve and decrypt the API key for *provider*.
+def get_api_key(
+    provider: str,
+    password: str,
+    name: str = "default",
+) -> Optional[str]:
+    """Retrieve and decrypt the API key for *provider* / *name*.
 
     Returns None if key not found, password wrong, or decryption fails.
     """
     if not verify_password(password):
         return None
     cfg = _load()
-    enc = cfg.get("api_keys", provider.lower(), fallback="").strip()
+    option = _api_key_option(provider, name)
+    enc = cfg.get("api_keys", option, fallback="").strip()
     if not enc:
         return None
     return _decrypt_value(enc, password, cfg) or None
+
+
+def list_api_keys() -> list[tuple[str, str]]:
+    """Return ``[(provider, name), …]`` for every saved API key.
+
+    Does **not** require the password — only metadata is returned.
+    """
+    cfg = _load()
+    if not cfg.has_section("api_keys"):
+        return []
+    result: list[tuple[str, str]] = []
+    for option in cfg.options("api_keys"):
+        if ", " in option:
+            provider, name = option.split(", ", 1)
+            result.append((provider.strip(), name.strip()))
+        else:
+            # Legacy single-name keys (provider only, no name)
+            result.append((option.strip(), "default"))
+    return result
+
+
+def delete_api_key(provider: str, name: str = "default") -> bool:
+    """Remove a saved API key.  Returns True if it existed."""
+    cfg = _load()
+    option = _api_key_option(provider, name)
+    if cfg.has_option("api_keys", option):
+        cfg.remove_option("api_keys", option)
+        _save(cfg)
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -515,6 +566,75 @@ def migrate_from_ini(source_ini_path: Path, password: Optional[str] = None) -> i
     _save(cfg)
     logger.info("Migrated %d settings from %s → API.ini", count, source_ini_path)
     return count
+
+
+# ---------------------------------------------------------------------------
+# Provider default base URLs
+# ---------------------------------------------------------------------------
+
+PROVIDER_BASE_URLS: dict[str, str] = {
+    "openai": "https://api.openai.com/v1/",
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/",
+    "anthropic": "https://api.anthropic.com/v1/",
+    "mistral": "https://api.mistral.ai/v1/",
+    "ollama": "http://localhost:11434/v1/",
+    "lmstudio": "http://localhost:1234/v1/",
+    "local": "http://localhost:1234/v1/",
+}
+
+
+def test_api_connection(
+    api_key: str,
+    provider: str = "openai",
+    base_url: str = "",
+    timeout: float = 15.0,
+) -> Tuple[bool, str]:
+    """Test connectivity to an API provider by listing models.
+
+    Uses the OpenAI-compatible ``models.list()`` endpoint which all major
+    providers support.
+
+    Args:
+        api_key:  The API key to authenticate with.
+        provider: Provider name (openai, gemini, mistral, …).
+        base_url: Custom base URL (empty → provider default).
+        timeout:  Request timeout in seconds.
+
+    Returns:
+        ``(success, message)`` — *message* contains model count on
+        success or a descriptive error string on failure.
+    """
+    if not api_key or not api_key.strip():
+        return False, "No API key provided."
+
+    url = base_url.strip() or PROVIDER_BASE_URLS.get(provider.lower(), "")
+    if not url:
+        return False, f"No base URL for provider '{provider}'."
+
+    try:
+        from openai import OpenAI  # type: ignore
+    except ImportError:
+        return False, "openai package not installed."
+
+    try:
+        client = OpenAI(api_key=api_key.strip(), base_url=url, timeout=timeout)
+        models = client.models.list()
+        count = sum(1 for _ in models)
+        return True, f"Connection successful — {count} model(s) available."
+    except Exception as exc:
+        err_msg = str(exc)
+        # Extract the most useful part of the error
+        if "401" in err_msg or "Unauthorized" in err_msg:
+            return False, "Authentication failed — invalid API key."
+        if "403" in err_msg or "Forbidden" in err_msg:
+            return False, "Access denied — check API key permissions."
+        if "404" in err_msg or "Not Found" in err_msg:
+            return False, f"Endpoint not found — check base URL: {url}"
+        if "timeout" in err_msg.lower() or "timed out" in err_msg.lower():
+            return False, "Connection timed out — check URL and network."
+        if "Connection" in err_msg and ("refused" in err_msg or "error" in err_msg.lower()):
+            return False, f"Connection refused — is the server running at {url}?"
+        return False, f"Connection failed: {err_msg}"
 
 
 # ---------------------------------------------------------------------------

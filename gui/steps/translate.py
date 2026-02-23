@@ -720,17 +720,20 @@ class TranslationStep(BaseStep):
     _IMPORT_EXPECTATION = "from functions.api_client import"
 
     # Model options for dropdown (TASK 43.5: Mock Translation always available)
+    # This list is used only as a last-resort fallback; the primary model list
+    # is populated from model_registry (dynamic) or Global Options (user-configured).
     MODEL_OPTIONS = [
         "Mock Translation",
         "gpt-4.1",
+        "gpt-4.1-mini",
         "gpt-4o",
         "gpt-4o-mini",
-        "gpt-4-turbo",
-        "claude-3-5-sonnet",
-        "claude-3-opus",
-        "claude-3-haiku",
-        "gemini-1.5-pro",
-        "gemini-1.5-flash",
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "mistral-large-latest",
+        "mistral-small-latest",
     ]
 
     # Retry strategy options - TASK 43.10: Only Batch and Contextual visible in UI
@@ -2192,8 +2195,10 @@ class TranslationStep(BaseStep):
     def _update_model_list_from_global_options(self) -> None:
         """Refresh model dropdown from Global Options providers (Task 43.6).
 
-        Falls back to hardcoded MODEL_OPTIONS when no providers are
-        configured or session/global_options is unavailable.
+        Priority:
+        1. global_options.get_model_list() when providers are configured.
+        2. model_registry.get_all_models_flat() (dynamic / cached registry).
+        3. Hardcoded MODEL_OPTIONS as a last resort.
         """
         try:
             go = getattr(self.session, "global_options", None)
@@ -2204,7 +2209,18 @@ class TranslationStep(BaseStep):
                     return
         except Exception:
             pass
-        # Fallback: use hardcoded list
+
+        # Registry fallback — use all models across all cloud providers
+        try:
+            from CherryAI.functions.model_registry import get_all_models_flat
+            reg_models = ["Mock Translation"] + [m.model_id for m in get_all_models_flat()]
+            if len(reg_models) > 1:
+                self._model_combo["values"] = reg_models
+                return
+        except Exception:
+            pass
+
+        # Final fallback: use hardcoded list
         self._model_combo["values"] = self.MODEL_OPTIONS
 
     def _save_temperature_to_manifest(self) -> None:

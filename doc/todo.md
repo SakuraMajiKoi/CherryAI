@@ -2127,5 +2127,141 @@ COMPLETED - 2026 USER-FOLDER & SECURITY OVERHAUL
 - `doc/todo.md` — This section
 
 =============================================================================
+### INI Section Seeding & Preset Migration
+**Status:** ✅ DONE
+
+- `_BUILTIN_SYSTEM_INSTRUCTION` in `ini_manager.py` updated with full text including Output Examples section (with Japanese dialogue example and `Hey.` translation).
+- `_seed_builtin_sections(config)` (NEW) added to `ini_manager.py`:
+  - Seeds `[style]` with all 7 built-in style preset texts on first run
+  - Seeds `[tone]` with all 8 built-in tone preset texts on first run
+  - Seeds `[system_instructions].Default` with full built-in SI text
+  - Seeds `[defaults].{default_style, default_tone, Summary, SystemInstruction}` keys
+  - Seeds `[session].last_manifest = ` placeholder key
+  - Never overwrites existing user values; returns True if anything written
+- `_load_ini()` now calls `_seed_builtin_sections()` after `_populate_from_defaults()`
+- `[session].last_manifest = ` added to `_FACTORY_DEFAULTS_INI_TEXT` as documented placeholder
+- `gui/app.py` `create_new_project()` fixed: now calls `ini_manager.set_last_manifest()` and `ini_manager.add_to_recent_manifests()` after manifest creation (bug: `load_last = true` never worked for newly-created projects)
+- `gui/steps/information.py` SI preset handling fully migrated from JSON to INI:
+  - `_load_si_presets()` now returns `ini_manager.get_all_si_presets()` directly; migrates legacy JSON file once via rename to `.json.migrated`
+  - `_save_si_preset()` uses `ini_manager.set_si_preset(name, text)` instead of `_save_si_presets_to_file()`
+  - `_delete_si_preset()` uses `ini_manager.delete_si_preset(name)` instead of `_save_si_presets_to_file()`
+  - `_ensure_default_texts()` uses `ini_manager.get_default_text()` fresh reads instead of stale module-level constants
+- `gui/dialogs/global_options.py` broken reset methods fixed:
+  - `_on_reset_presets()`: removed broken import of non-existent `_STYLE_PRESETS_FILE` etc.; now uses `ini_manager.restore_preset_defaults("style")` + `ini_manager.restore_preset_defaults("tone")` + `ini_manager.reload_ini()`
+  - `_apply()` in `_on_restore_defaults()`: replaced `ini_manager._get_config()` (non-existent) with `ini_manager.remove_section("system_instructions")` + `ini_manager.reload_ini()`
+- `dev/test_ini_sections.py` (NEW): 38 tests covering all seeding behaviour, SI preset CRUD, session last_manifest, and confirmations section
+- **Documentation:** Updated `doc/features.md` (preset storage: INI not JSON), `doc/technical.md` (INI Population section; `_seed_builtin_sections()` entry), `doc/tests.md` (+38 tests)
+
+**Files Modified:**
+- `functions/ini_manager.py` — `_seed_builtin_sections()` (NEW), updated `_BUILTIN_SYSTEM_INSTRUCTION`, updated `_load_ini()`, updated `_FACTORY_DEFAULTS_INI_TEXT [session]`
+- `gui/app.py` — `create_new_project()` calls `set_last_manifest()` + `add_to_recent_manifests()`
+- `gui/steps/information.py` — SI presets: JSON → INI; `_ensure_default_texts()` fresh reads
+- `gui/dialogs/global_options.py` — `_on_reset_presets()` and `_on_restore_defaults._apply()` fixed
+- `dev/test_ini_sections.py` (NEW) — 38 passing tests
+- `doc/features.md`, `doc/technical.md`, `doc/tests.md`, `doc/todo.md`
+
+---
+
+### Session 29: SystemInstruction Preset Name + Dropdown Live-Update ✅ DONE
+
+**Changes made:**
+
+- `functions/ini_manager.py`:
+  - `_seed_builtin_sections()`: `[defaults].SystemInstruction` now seeded as `"Default"` (preset name reference)
+    not the full ~2 KB prompt text — consistent with `default_style = Natural` and `default_tone = Neutral`.
+    Per-key seeding of [style]/[tone] so built-in keys are added even when section is non-empty.
+    Migration: if [defaults].SystemInstruction already contains newlines (legacy full text), replaces with `"Default"`.
+  - `_migrate_preset_values()` (NEW): detects and corrects mis-assigned built-in preset values
+    (e.g. Dramatic/Dark/Action tone presets stored with Neutral's text). Preserves genuine user edits.
+    Called by `_load_ini()` before `_seed_builtin_sections()`.
+  - `get_default_text("SystemInstruction")`: if stored value is short/no-newlines, treats it as a
+    preset name and resolves via `get_si_preset(val)`; multi-line value returned as-is for backward compat.
+
+- `gui/steps/information.py`:
+  - `_on_style_changed()` / `_on_tone_changed()`: read fresh from `ini_manager.get_all_presets()` instead
+    of stale `self._style_presets` / `self._tone_presets` dict. Custom preset clears the field.
+  - `_on_si_preset_changed()`: reads via `ini_manager.get_si_preset(name)` directly instead of stale dict.
+  - `_ensure_style_tone_text()`: **always** overwrites text fields for named presets from INI (removed
+    "only if empty" guard that prevented stale manifest content from being updated).
+  - `on_enter()`: refreshes `self._style_presets`, `self._tone_presets`, `self._si_presets` and combobox
+    `values` from INI at the top of the method so all handlers have current data.
+
+- `dev/test_ini_sections.py`: +18 new tests, total 56 passing.
+  - `TestSeedSystemInstructionPresetName` — seed stores "Default" not full text
+  - `TestSystemInstructionMigration` — full-text migrated to preset name; `get_default_text` resolves names
+  - `TestPresetMigration` — mis-assigned builtin presets corrected by `_migrate_preset_values`
+  - `TestPresetDropdownBehavior` — `get_all_presets` returns correct per-preset text after INI edit
+
+- **Documentation:** Updated `doc/technical.md` (`_seed_builtin_sections()` + new `_migrate_preset_values()` entry; `get_default_text` note), `doc/tests.md` (count 38 → 56)
+
+**Files Modified:**
+- `functions/ini_manager.py` — `_seed_builtin_sections()`, `_migrate_preset_values()` (NEW), `get_default_text()`, `_load_ini()`
+- `gui/steps/information.py` — `_on_style_changed()`, `_on_tone_changed()`, `_on_si_preset_changed()`, `_ensure_style_tone_text()`, `on_enter()`
+- `dev/test_ini_sections.py` — +18 tests (56 total)
+- `doc/technical.md`, `doc/tests.md`, `doc/todo.md`
+
+=============================================================================
+
+### DYNAMIC MODEL REGISTRY
+**Priority:** COMPLETE | **Status:** ✅ DONE
+
+**Goal:** Replace all hardcoded cloud provider/model/pricing data with a dynamic fetch system.
+
+**Implemented:**
+- `functions/model_registry.py` — NEW module: `ModelInfo` dataclass (25+ fields), `FALLBACK_MODELS` (23 models across 3 providers), `save_to_ini()` / `load_from_ini()` for `user/API.ini`, `refresh_models()` for live API fetch, `get_pricing_dict()` backward-compat helper, `get_registry_summary()`
+- `functions/config.py` — `MODEL_PRICING` is now `_ModelPricingProxy` (lazy-loads from registry; all existing callers unchanged)
+- `functions/options.py` — `API_PROVIDERS` is now `_APIProvidersProxy` (cloud model lists from registry; static providers unchanged); added `reload_api_providers()`
+- `gui/dialogs/global_options.py` — "⟳ Refresh Models" button; `_update_model_list()` uses registry; `_on_refresh_models()` background thread
+- `gui/steps/translate.py` — `MODEL_OPTIONS` updated to Feb 2026 models; `_update_model_list_from_global_options()` uses registry fallback
+- `dev/test_model_registry.py` — 83 tests (79 pass + 4 skipped live API tests)
+- `dev/test_costs_step_phase40.py` — updated 2 tests for removed legacy models
+
+**Test results:** 194 passed, 4 skipped (live tests require `CHERRYAI_TEST_LIVE=1`)
+
+**To enable live API fetching:**
+```
+set CHERRYAI_TEST_LIVE=1
+set OPENAI_API_KEY=sk-...
+set GOOGLE_API_KEY=...
+set MISTRAL_API_KEY=...
+python -m pytest dev/test_model_registry.py::TestLiveFetch -v
+```
+
+=============================================================================
+
+### API KEY MANAGEMENT & CONNECTION TESTING
+**Priority:** COMPLETE | **Status:** ✅ DONE
+
+**Goal:** Full pipeline for saving/loading/encrypting API keys in `API.ini`, real connection testing.
+
+**Implemented:**
+- `functions/api_config.py` — Extended:
+  - `set_api_key(provider, key, password, name)` / `get_api_key()` now use `provider, name` INI key format
+  - `list_api_keys()` returns `[(provider, name), …]` metadata without decryption
+  - `delete_api_key(provider, name)` removes a saved key
+  - `test_api_connection(api_key, provider, base_url, timeout)` → `(bool, msg)` via OpenAI-compatible `models.list()`
+  - `PROVIDER_BASE_URLS` — default base URLs for openai, gemini, anthropic, mistral, ollama, lmstudio, local
+  - `_api_key_option(provider, name)` — builds `"provider, name"` INI option string
+- `gui/dialogs/global_options.py` — Redesigned:
+  - "Saved Providers" table → "Saved API Keys" Treeview (Name, Provider columns)
+  - `_save_api_key()` — saves current key with user-chosen name, encrypted via `api_config`
+  - `_load_api_key()` — decrypts and loads selected key into entry field
+  - `_remove_api_key()` — deletes selected saved key
+  - `_ensure_password_set()` — first-time password setup + verification flow
+  - `_test_connection()` — real API test via `api_config.test_api_connection()` in background thread
+  - Removed `_ProviderEditDialog` (replaced by Save Key/Load Key/Remove workflow)
+- `functions/model_registry.py` — `save_to_ini()` / `load_from_ini()` rewritten for per-model key format (`model.<id> = {JSON}`)
+- `dev/test_api_keys.py` — 50 tests: password management, key storage CRUD, INI format, connection testing (mock + live), pipeline lifecycle
+
+**Test results:** 176 passed, 4 skipped across all test files
+
+**INI format:**
+```ini
+[api_keys]
+gemini, my-google-key = gAAAAABp...
+openai, personal = gAAAAABp...
+```
+
+=============================================================================
 END OF ROADMAP
 =============================================================================

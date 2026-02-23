@@ -684,7 +684,8 @@ SECTION_NAMES: Dict[OptionSection, str] = {
 
 
 # API_PROVIDERS imported from options.py - single source of truth
-from CherryAI.functions.options import API_PROVIDERS
+from CherryAI.functions.options import API_PROVIDERS, reload_api_providers
+import CherryAI.functions.model_registry as _model_registry
 
 # Common ban tokens
 COMMON_BAN_TOKENS: List[str] = [
@@ -1072,6 +1073,7 @@ class GlobalOptionsDialog(tk.Toplevel):
         )
         provider_combo.pack(side=tk.LEFT, padx=5)
         provider_combo.bind("<<ComboboxSelected>>", self._on_provider_change)
+        self._provider_combo_ref = provider_combo
 
         # API Key
         key_row = ttk.Frame(provider_frame)
@@ -1105,6 +1107,17 @@ class GlobalOptionsDialog(tk.Toplevel):
         ttk.Label(model_row, text="Model:", width=15).pack(side=tk.LEFT)
         self._model_combo = ttk.Combobox(model_row, textvariable=self.model_var, width=30)
         self._model_combo.pack(side=tk.LEFT, padx=5)
+
+        self._refresh_models_btn = ttk.Button(
+            model_row,
+            text="⟳ Refresh Models",
+            command=self._on_refresh_models,
+        )
+        self._refresh_models_btn.pack(side=tk.LEFT, padx=5)
+
+        self._refresh_models_label = ttk.Label(model_row, text="", foreground="gray")
+        self._refresh_models_label.pack(side=tk.LEFT, padx=5)
+
         self._update_model_list()
 
         # Temperature
@@ -1132,43 +1145,38 @@ class GlobalOptionsDialog(tk.Toplevel):
         self._test_status_label = ttk.Label(test_frame, text="")
         self._test_status_label.pack(side=tk.LEFT, padx=10)
 
-        # ---- Provider Table (Task 43.6) ----
-        providers_frame = ttk.LabelFrame(panel, text="Saved Providers", padding=10)
-        providers_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+        # ---- Saved API Keys ----
+        keys_frame = ttk.LabelFrame(panel, text="Saved API Keys", padding=10)
+        keys_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
 
         # Treeview
-        cols = ("name", "type", "model")
+        cols = ("name", "provider")
         self._providers_tree = ttk.Treeview(
-            providers_frame, columns=cols, show="headings", height=5,
+            keys_frame, columns=cols, show="headings", height=5,
         )
         self._providers_tree.heading("name", text="Name")
-        self._providers_tree.heading("type", text="Type")
-        self._providers_tree.heading("model", text="Model")
-        self._providers_tree.column("name", width=180)
-        self._providers_tree.column("type", width=80)
-        self._providers_tree.column("model", width=180)
+        self._providers_tree.heading("provider", text="Provider")
+        self._providers_tree.column("name", width=200)
+        self._providers_tree.column("provider", width=120)
         self._providers_tree.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
 
         # Scrollbar
         prov_scroll = ttk.Scrollbar(
-            providers_frame, orient="vertical",
+            keys_frame, orient="vertical",
             command=self._providers_tree.yview,
         )
         self._providers_tree.configure(yscrollcommand=prov_scroll.set)
         prov_scroll.pack(side=tk.LEFT, fill=tk.Y)
 
         # Buttons
-        prov_btns = ttk.Frame(providers_frame)
-        prov_btns.pack(side=tk.LEFT, padx=(10, 0), fill=tk.Y)
+        key_btns = ttk.Frame(keys_frame)
+        key_btns.pack(side=tk.LEFT, padx=(10, 0), fill=tk.Y)
 
-        ttk.Button(prov_btns, text="Add", width=8, command=self._add_provider).pack(pady=2)
-        ttk.Button(prov_btns, text="Edit", width=8, command=self._edit_provider).pack(pady=2)
-        ttk.Button(prov_btns, text="Remove", width=8, command=self._remove_provider).pack(pady=2)
+        ttk.Button(key_btns, text="Save Key", width=10, command=self._save_api_key).pack(pady=2)
+        ttk.Button(key_btns, text="Load Key", width=10, command=self._load_api_key).pack(pady=2)
+        ttk.Button(key_btns, text="Remove", width=10, command=self._remove_api_key).pack(pady=2)
 
-        ttk.Separator(prov_btns, orient="horizontal").pack(fill=tk.X, pady=5)
-        ttk.Button(prov_btns, text="Preset…", width=8, command=self._add_preset_provider).pack(pady=2)
-
-        # Populate from options
+        # Populate from API.ini
         self._refresh_providers_tree()
 
     def _build_request_section(self) -> None:
@@ -2015,7 +2023,7 @@ class GlobalOptionsDialog(tk.Toplevel):
     # Event Handlers
     # -------------------------------------------------------------------------
 
-    def _on_provider_change(self, event: tk.Event) -> None:
+    def _on_provider_change(self, event: Optional[tk.Event]) -> None:
         """Handle provider selection change."""
         provider = self.provider_var.get()
         if provider in API_PROVIDERS:
@@ -2024,13 +2032,61 @@ class GlobalOptionsDialog(tk.Toplevel):
             self._update_model_list()
 
     def _update_model_list(self) -> None:
-        """Update the model combobox based on selected provider."""
+        """Update the model combobox from the model registry for the current provider."""
+        from CherryAI.functions.options import get_provider_models
         provider = self.provider_var.get()
-        if provider in API_PROVIDERS:
+        models = get_provider_models(provider)
+        if not models and provider in API_PROVIDERS:
             models = API_PROVIDERS[provider].get("models", [])
-            self._model_combo["values"] = models
-            if self.model_var.get() not in models and models:
-                self.model_var.set(models[0])
+        self._model_combo["values"] = models
+        if self.model_var.get() not in models and models:
+            self.model_var.set(models[0])
+
+    def _on_refresh_models(self) -> None:
+        """Refresh model lists — uses built-in curated fallback data.
+
+        A full live-fetch from provider APIs requires API keys; this method
+        refreshes the INI cache from the embedded fallback so model lists are
+        always up-to-date with the latest built-in data while the app is running.
+        Call ``model_registry.refresh_models(api_keys=…)`` programmatically
+        when keys are available.
+        """
+        import threading
+        from CherryAI.functions.config import reload_model_pricing
+
+        self._refresh_models_btn.configure(state="disabled")
+        self._refresh_models_label.configure(text="Refreshing…", foreground="gray")
+        self.update_idletasks()
+
+        def _do_refresh() -> None:
+            try:
+                # Save fallback data to INI (ensures it's always current)
+                for provider_id, models in _model_registry.FALLBACK_MODELS.items():
+                    _model_registry.save_to_ini(provider_id, models)
+                reload_api_providers()
+                reload_model_pricing()
+                msg = "✓ Models updated"
+                color = "green"
+            except Exception as exc:
+                msg = f"Error: {exc}"
+                color = "red"
+
+            def _update_ui() -> None:
+                try:
+                    self._refresh_models_btn.configure(state="normal")
+                    self._refresh_models_label.configure(text=msg, foreground=color)
+                    self._update_model_list()
+                    self._provider_combo_ref.configure(values=list(API_PROVIDERS.keys()))
+                except Exception:
+                    pass
+
+            try:
+                self.after(0, _update_ui)
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_do_refresh, daemon=True)
+        t.start()
 
     def _toggle_key_visibility(self) -> None:
         """Toggle API key visibility."""
@@ -2047,72 +2103,204 @@ class GlobalOptionsDialog(tk.Toplevel):
             pass
 
     def _test_connection(self) -> None:
-        """Test the API connection."""
-        self._test_status_label.config(text="Testing...", foreground="gray")
+        """Test the API connection by calling models.list() on the provider."""
+        import threading
+
+        api_key = self.api_key_var.get().strip()
+        if not api_key:
+            self._test_status_label.config(
+                text="Error: No API key", foreground="red",
+            )
+            return
+
+        provider = self.provider_var.get()
+        base_url = self.base_url_var.get().strip()
+
+        self._test_status_label.config(text="Testing…", foreground="gray")
         self.update_idletasks()
 
-        # Simulate test (actual implementation would call API)
-        try:
-            api_key = self.api_key_var.get()
-            if not api_key:
-                self._test_status_label.config(text="Error: No API key", foreground="red")
-                return
+        def _do_test() -> None:
+            success, msg = _api_config.test_api_connection(
+                api_key=api_key,
+                provider=provider,
+                base_url=base_url,
+                timeout=15.0,
+            )
+            color = "green" if success else "red"
+            prefix = "✓ " if success else "✗ "
 
-            # TODO: Actual API test implementation
-            self._test_status_label.config(text="✓ Connection successful", foreground="green")
-        except Exception as e:
-            self._test_status_label.config(text=f"Error: {e}", foreground="red")
+            def _update_ui() -> None:
+                try:
+                    self._test_status_label.config(
+                        text=f"{prefix}{msg}", foreground=color,
+                    )
+                except Exception:
+                    pass
 
-    # ---- Provider table helpers (Task 43.6) ----
+            try:
+                self.after(0, _update_ui)
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_do_test, daemon=True)
+        t.start()
+
+    # ---- API Key management helpers ----
+
+    def _prompt_password(self, title: str = "Password") -> Optional[str]:
+        """Show a simple password dialog.  Returns None if cancelled."""
+        import tkinter.simpledialog as simpledialog
+
+        pw = simpledialog.askstring(
+            title, "Enter master password:", show="•", parent=self,
+        )
+        return pw if pw else None
+
+    def _ensure_password_set(self) -> Optional[str]:
+        """Ensure a master password is set.  Returns the password or None.
+
+        If no password has been set yet, prompts the user to create one.
+        Otherwise, prompts to verify the existing password.
+        """
+        if _api_config.is_password_set():
+            return self._prompt_password("Unlock API Keys")
+
+        # First-time password setup
+        import tkinter.simpledialog as simpledialog
+
+        pw = simpledialog.askstring(
+            "Set Master Password",
+            "No master password set yet.\n"
+            "Enter a new master password to protect your API keys:",
+            show="•",
+            parent=self,
+        )
+        if not pw:
+            return None
+
+        pw2 = simpledialog.askstring(
+            "Confirm Password",
+            "Confirm master password:",
+            show="•",
+            parent=self,
+        )
+        if pw != pw2:
+            messagebox.showerror("Error", "Passwords do not match.", parent=self)
+            return None
+
+        if _api_config.set_password(pw):
+            messagebox.showinfo(
+                "Password Set",
+                "Master password has been set successfully.",
+                parent=self,
+            )
+            return pw
+        messagebox.showerror(
+            "Error", "Failed to set master password (bcrypt unavailable?).",
+            parent=self,
+        )
+        return None
 
     def _refresh_providers_tree(self) -> None:
-        """Rebuild the providers Treeview from ``self.options.providers``."""
+        """Rebuild the API keys Treeview from ``user/API.ini``."""
         tree = self._providers_tree
         for child in tree.get_children():
             tree.delete(child)
-        for idx, p in enumerate(self.options.providers):
-            tree.insert("", "end", iid=str(idx), values=(p.name, p.provider_type, p.model))
+        for idx, (provider, name) in enumerate(_api_config.list_api_keys()):
+            tree.insert("", "end", iid=str(idx), values=(name, provider))
 
-    def _add_provider(self) -> None:
-        """Open dialog to add a new provider entry."""
-        entry = APIProviderEntry()
-        result = _ProviderEditDialog(self, entry).result
-        if result is not None:
-            self.options.providers.append(result)
+    def _save_api_key(self) -> None:
+        """Save the current API key to API.ini with a user-chosen name."""
+        api_key = self.api_key_var.get().strip()
+        if not api_key:
+            messagebox.showwarning(
+                "No Key", "Enter an API key first.", parent=self,
+            )
+            return
+
+        provider = self.provider_var.get()
+        if not provider:
+            messagebox.showwarning(
+                "No Provider", "Select a provider first.", parent=self,
+            )
+            return
+
+        # Ask for a name
+        import tkinter.simpledialog as simpledialog
+
+        key_name = simpledialog.askstring(
+            "Save API Key",
+            f"Enter a name for this {provider} key:",
+            initialvalue="default",
+            parent=self,
+        )
+        if not key_name or not key_name.strip():
+            return
+
+        # Get/set password
+        password = self._ensure_password_set()
+        if not password:
+            return
+
+        if _api_config.set_api_key(provider, api_key, password, key_name.strip()):
+            messagebox.showinfo(
+                "Saved",
+                f"API key '{key_name.strip()}' saved for {provider}.",
+                parent=self,
+            )
             self._refresh_providers_tree()
+        else:
+            messagebox.showerror(
+                "Error",
+                "Failed to save — incorrect password or encryption unavailable.",
+                parent=self,
+            )
 
-    def _edit_provider(self) -> None:
-        """Edit the selected provider entry."""
+    def _load_api_key(self) -> None:
+        """Load a saved API key into the API key entry field."""
+        sel = self._providers_tree.selection()
+        if not sel:
+            messagebox.showinfo(
+                "Select Key", "Select a saved key to load.", parent=self,
+            )
+            return
+
+        values = self._providers_tree.item(sel[0], "values")
+        key_name, provider = values[0], values[1]
+
+        password = self._prompt_password("Unlock API Key")
+        if not password:
+            return
+
+        plaintext = _api_config.get_api_key(provider, password, key_name)
+        if plaintext:
+            self.api_key_var.set(plaintext)
+            self.provider_var.set(provider)
+            self._on_provider_change(None)
+            messagebox.showinfo(
+                "Loaded",
+                f"Key '{key_name}' loaded for {provider}.",
+                parent=self,
+            )
+        else:
+            messagebox.showerror(
+                "Error",
+                "Failed to decrypt — wrong password or key not found.",
+                parent=self,
+            )
+
+    def _remove_api_key(self) -> None:
+        """Remove the selected saved API key."""
         sel = self._providers_tree.selection()
         if not sel:
             return
-        idx = int(sel[0])
-        entry = self.options.providers[idx]
-        result = _ProviderEditDialog(self, entry).result
-        if result is not None:
-            self.options.providers[idx] = result
-            self._refresh_providers_tree()
-
-    def _remove_provider(self) -> None:
-        """Remove the selected provider entry."""
-        sel = self._providers_tree.selection()
-        if not sel:
-            return
-        idx = int(sel[0])
-        name = self.options.providers[idx].name or "(unnamed)"
-        if messagebox.askyesno("Remove Provider", f"Remove provider '{name}'?"):
-            del self.options.providers[idx]
-            self._refresh_providers_tree()
-
-    def _add_preset_provider(self) -> None:
-        """Show preset picker and add the chosen preset."""
-        names = [p.name for p in PROVIDER_PRESETS]
-        dlg = _PresetPickerDialog(self, names)
-        chosen = dlg.result
-        if chosen is not None and 0 <= chosen < len(PROVIDER_PRESETS):
-            import copy
-            preset = copy.deepcopy(PROVIDER_PRESETS[chosen])
-            self.options.providers.append(preset)
+        values = self._providers_tree.item(sel[0], "values")
+        key_name, provider = values[0], values[1]
+        if messagebox.askyesno(
+            "Remove Key", f"Remove saved key '{key_name}' ({provider})?",
+            parent=self,
+        ):
+            _api_config.delete_api_key(provider, key_name)
             self._refresh_providers_tree()
 
     def _browse_cache_dir(self) -> None:
@@ -2287,12 +2475,8 @@ class GlobalOptionsDialog(tk.Toplevel):
         logger.info("All confirmation dialog suppressions reset")
 
     def _on_reset_presets(self) -> None:
-        """Delete user preset files to restore factory defaults."""
-        from CherryAI.gui.steps.information import (
-            _STYLE_PRESETS_FILE,
-            _TONE_PRESETS_FILE,
-            _delete_user_presets_file,
-        )
+        """Reset style and tone presets to factory defaults via INI."""
+        from CherryAI.functions import ini_manager  # noqa: PLC0415
 
         if not messagebox.askyesno(
             "Reset Presets",
@@ -2300,8 +2484,9 @@ class GlobalOptionsDialog(tk.Toplevel):
             "All user-saved presets will be removed.",
         ):
             return
-        _delete_user_presets_file(_STYLE_PRESETS_FILE)
-        _delete_user_presets_file(_TONE_PRESETS_FILE)
+        ini_manager.restore_preset_defaults("style")
+        ini_manager.restore_preset_defaults("tone")
+        ini_manager.reload_ini()
         messagebox.showinfo(
             "Presets Reset",
             "Style and tone presets have been restored to defaults.\n"
@@ -2342,13 +2527,10 @@ class GlobalOptionsDialog(tk.Toplevel):
                 self._on_reset_presets()
             if vars_["system_instructions"].get():
                 try:
-                    from CherryAI.functions import ini_manager
-                    cfg = ini_manager._get_config()
-                    if cfg.has_section("system_instructions"):
-                        for key in list(cfg.options("system_instructions")):
-                            cfg.remove_option("system_instructions", key)
-                        ini_manager._save_ini(cfg)
-                except Exception:
+                    from CherryAI.functions import ini_manager  # noqa: PLC0415
+                    ini_manager.remove_section("system_instructions")
+                    ini_manager.reload_ini()  # re-seeds Default preset
+                except Exception:  # noqa: BLE001
                     pass
             if vars_["session"].get():
                 try:
@@ -2661,93 +2843,8 @@ class GlobalOptionsDialog(tk.Toplevel):
 
 
 # =============================================================================
-# Provider Helper Dialogs (Task 43.6)
+# Helper Dialogs
 # =============================================================================
-
-
-class _ProviderEditDialog(tk.Toplevel):
-    """Modal dialog for adding/editing a single API provider entry."""
-
-    def __init__(
-        self,
-        parent: tk.Toplevel,
-        entry: APIProviderEntry,
-    ) -> None:
-        super().__init__(parent)
-        self.title("Edit Provider")
-        self.geometry("420x280")
-        self.resizable(False, False)
-        self.transient(parent)
-        self.grab_set()
-
-        self.result: Optional[APIProviderEntry] = None
-        self._entry = entry
-
-        frame = ttk.Frame(self, padding=15)
-        frame.pack(fill=tk.BOTH, expand=True)
-
-        # Name
-        ttk.Label(frame, text="Name:").grid(row=0, column=0, sticky="w", pady=4)
-        self._name_var = tk.StringVar(value=entry.name)
-        ttk.Entry(frame, textvariable=self._name_var, width=35).grid(
-            row=0, column=1, sticky="ew", pady=4,
-        )
-
-        # Type
-        ttk.Label(frame, text="Type:").grid(row=1, column=0, sticky="w", pady=4)
-        self._type_var = tk.StringVar(value=entry.provider_type)
-        ttk.Combobox(
-            frame, textvariable=self._type_var,
-            values=["openai", "gemini", "anthropic", "local"],
-            state="readonly", width=32,
-        ).grid(row=1, column=1, sticky="ew", pady=4)
-
-        # URL
-        ttk.Label(frame, text="URL:").grid(row=2, column=0, sticky="w", pady=4)
-        self._url_var = tk.StringVar(value=entry.url)
-        ttk.Entry(frame, textvariable=self._url_var, width=35).grid(
-            row=2, column=1, sticky="ew", pady=4,
-        )
-
-        # API Key
-        ttk.Label(frame, text="API Key:").grid(row=3, column=0, sticky="w", pady=4)
-        self._key_var = tk.StringVar(value=entry.api_key)
-        ttk.Entry(frame, textvariable=self._key_var, width=35, show="•").grid(
-            row=3, column=1, sticky="ew", pady=4,
-        )
-
-        # Model
-        ttk.Label(frame, text="Model:").grid(row=4, column=0, sticky="w", pady=4)
-        self._model_var = tk.StringVar(value=entry.model)
-        ttk.Entry(frame, textvariable=self._model_var, width=35).grid(
-            row=4, column=1, sticky="ew", pady=4,
-        )
-
-        frame.columnconfigure(1, weight=1)
-
-        # Buttons
-        btn_row = ttk.Frame(frame)
-        btn_row.grid(row=5, column=0, columnspan=2, pady=(15, 0))
-        ttk.Button(btn_row, text="OK", width=10, command=self._on_ok).pack(
-            side=tk.LEFT, padx=5,
-        )
-        ttk.Button(btn_row, text="Cancel", width=10, command=self.destroy).pack(
-            side=tk.LEFT, padx=5,
-        )
-
-        self.protocol("WM_DELETE_WINDOW", self.destroy)
-        self.wait_window()
-
-    def _on_ok(self) -> None:
-        """Accept edits and close."""
-        self.result = APIProviderEntry(
-            name=self._name_var.get().strip(),
-            provider_type=self._type_var.get(),
-            url=self._url_var.get().strip(),
-            api_key=self._key_var.get().strip(),
-            model=self._model_var.get().strip(),
-        )
-        self.destroy()
 
 
 class _PresetPickerDialog(tk.Toplevel):

@@ -135,6 +135,7 @@ autosave = true
 interval = 60
 theme = light
 load_last = true
+last_manifest = 
 
 [caching]
 enabled = true
@@ -440,7 +441,14 @@ def _load_ini() -> configparser.ConfigParser:
     # Seed empty sections from factory defaults (embedded in _FACTORY_DEFAULTS_INI_TEXT).
     populated = _populate_from_defaults(_ini_cache)
 
-    if sections_added or dirty or populated:
+    # Seed built-in Python-constant data into [style], [tone],
+    # [system_instructions], and [defaults] long-text keys.
+    seeded = _seed_builtin_sections(_ini_cache)
+
+    # Fix any corrupted / mis-assigned built-in preset values.
+    migrated = _migrate_preset_values(_ini_cache)
+
+    if sections_added or dirty or populated or seeded or migrated:
         _save_ini(_ini_cache)
 
     return _ini_cache
@@ -513,6 +521,140 @@ def _populate_from_defaults(config: configparser.ConfigParser) -> bool:
                 logger.debug("Populated [prompts].%s from defaults.ini", key)
                 changed = True
 
+    return changed
+
+
+def _seed_builtin_sections(config: configparser.ConfigParser) -> bool:
+    """Seed built-in defaults for [style], [tone], [system_instructions], and [defaults].
+
+    Unlike ``_populate_from_defaults`` (which reads from the embedded factory
+    defaults INI text), this function seeds rich Python-constant data that is
+    not stored in the factory INI text:
+
+    * ``[style]``              — all ``_BUILTIN_STYLE_DEFAULTS`` preset texts (per-key)
+    * ``[tone]``               — all ``_BUILTIN_TONE_DEFAULTS`` preset texts (per-key)
+    * ``[system_instructions]`` — the built-in ``Default`` system instruction
+    * ``[defaults]``           — ``default_style``, ``default_tone``, ``Summary``,
+                                  ``SystemInstruction`` (stores preset name, not full text)
+
+    Individual keys are only written when absent; existing user values are
+    never overwritten.  Style/tone built-in preset keys are seeded per-key
+    so that user-added presets are preserved even when built-in entries are
+    missing.
+
+    Args:
+        config: In-memory ConfigParser for CherryAI.ini.
+
+    Returns:
+        ``True`` if any key was written (caller should save the file).
+    """
+    changed = False
+
+    # ── [style] preset texts — seed each builtin key individually ────────
+    if not config.has_section("style"):
+        config.add_section("style")
+    for name, text in _BUILTIN_STYLE_DEFAULTS.items():
+        if not config.has_option("style", name):
+            config.set("style", name, text)
+            changed = True
+            logger.debug("Seeded [style].%s with built-in text", name)
+
+    # ── [tone] preset texts — seed each builtin key individually ─────────
+    if not config.has_section("tone"):
+        config.add_section("tone")
+    for name, text in _BUILTIN_TONE_DEFAULTS.items():
+        if not config.has_option("tone", name):
+            config.set("tone", name, text)
+            changed = True
+            logger.debug("Seeded [tone].%s with built-in text", name)
+
+    # ── [system_instructions] Default key ───────────────────────────────
+    if not config.has_section("system_instructions"):
+        config.add_section("system_instructions")
+    if not config.has_option("system_instructions", "Default"):
+        config.set("system_instructions", "Default", _BUILTIN_SYSTEM_INSTRUCTION)
+        changed = True
+        logger.info("Seeded [system_instructions].Default with built-in text")
+
+    # ── [defaults] long-text and named-default keys ──────────────────────
+    # ``SystemInstruction`` stores a *preset name* (e.g. 'Default'), not the
+    # full text.  This mirrors how default_style / default_tone work.
+    if not config.has_section("defaults"):
+        config.add_section("defaults")
+
+    _defaults_seeds: Dict[str, str] = {
+        "default_style": "Natural",
+        "default_tone": "Neutral",
+        "Summary": _BUILTIN_SUMMARY_DEFAULT,
+        "SystemInstruction": "Default",  # preset name reference, not full text
+    }
+    for key, value in _defaults_seeds.items():
+        if not config.has_option("defaults", key):
+            config.set("defaults", key, value)
+            changed = True
+            logger.debug("Seeded [defaults].%s = %r", key, value)
+
+    # Migration: if [defaults].SystemInstruction is the full text (i.e. it
+    # contains newlines), replace it with the preset name reference.
+    if config.has_option("defaults", "SystemInstruction"):
+        si_val = config.get("defaults", "SystemInstruction")
+        if "\n" in si_val or len(si_val) > 120:
+            config.set("defaults", "SystemInstruction", "Default")
+            changed = True
+            logger.info(
+                "Migrated [defaults].SystemInstruction: full text → preset name 'Default'"
+            )
+
+    # ── [session] missing keys ───────────────────────────────────────────
+    if not config.has_option("session", "last_manifest"):
+        config.set("session", "last_manifest", "")
+        changed = True
+        logger.debug("Seeded [session].last_manifest (empty placeholder)")
+
+    if changed:
+        logger.info("Built-in section seeding complete (at least one key written)")
+    return changed
+
+
+def _migrate_preset_values(config: configparser.ConfigParser) -> bool:
+    """Fix corrupted or mis-assigned built-in preset values in [style] and [tone].
+
+    Detects when a built-in preset name (e.g. ``Dramatic``) has been stored
+    with the text of a *different* built-in preset (e.g. the ``Neutral`` text)
+    and restores the correct built-in text.  User-customised values — those
+    that are not equal to any other builtin's text — are preserved.
+
+    Args:
+        config: In-memory ConfigParser for CherryAI.ini.
+
+    Returns:
+        ``True`` if any value was corrected.
+    """
+    changed = False
+    sections: Dict[str, Dict[str, str]] = {
+        "style": _BUILTIN_STYLE_DEFAULTS,
+        "tone": _BUILTIN_TONE_DEFAULTS,
+    }
+    for section, builtins in sections.items():
+        if not config.has_section(section):
+            continue
+        all_builtin_texts = set(builtins.values())
+        for name, correct_text in builtins.items():
+            if not config.has_option(section, name):
+                continue
+            stored = config.get(section, name)
+            if stored == correct_text:
+                continue  # Correct — leave it alone.
+            # If stored value is exactly another builtin's text, it was
+            # mis-assigned during a previous seeding run — fix it.
+            other_builtin_texts = all_builtin_texts - {correct_text}
+            if stored in other_builtin_texts:
+                config.set(section, name, correct_text)
+                changed = True
+                logger.info(
+                    "Fixed mis-assigned [%s].%s (was another preset's text)",
+                    section, name,
+                )
     return changed
 
 
@@ -819,10 +961,17 @@ def get_all_manifest_defaults() -> Dict[str, Any]:
     Reads all values from [manifest_defaults] section and converts
     to appropriate types based on known schema.
 
+    Note: The [defaults] section also contains non-manifest keys such as
+    ``default_style``, ``default_tone``, ``Summary``, and
+    ``SystemInstruction``.  These are excluded from the result so that
+    manifest tooling only sees manifest-relevant keys.
+
     Returns:
         Dictionary with all manifest default values.
     """
-    raw = get_section("defaults")
+    # Keys in [defaults] that are NOT manifest settings.
+    _non_manifest = frozenset({"default_style", "default_tone", "Summary", "SystemInstruction"})
+    raw = {k: v for k, v in get_section("defaults").items() if k not in _non_manifest}
     if not raw:
         return _get_builtin_manifest_defaults()
 
@@ -1533,13 +1682,50 @@ _BUILTIN_SYSTEM_INSTRUCTION = (
     "of the game characters. Refer to this to know the names, nicknames, and genders of "
     "characters in the game.\n"
     "- ALWAYS read the translation history BEFORE to figure out the best context for your "
-    "translation.\n"
-    "- Translate all text to English no exceptions.\n"
+    "translation. This will help you make less mistakes with genders and subjects.\n"
+    "- Translate all text to English no exceptions. Double check that everything is "
+    "translated.\n"
     "- Avoid using romaji or including any Japanese text in your response.\n"
     "- Always translate the speaker in the line to English.\n"
     "- Maintain any spacing or newlines such as '\\n' or '\\\\n' in the translation.\n"
     "- Never include any notes, explanations, disclaimers, or anything similar in your "
     "response.\n"
+    "\n"
+    "Output Examples\n"
+    "\n"
+    "Input (with protected placeholders):\n"
+    "{\n"
+    '    "Line1": "\u300c\u97f3\u697d\u304c__PROTECTED_0__\u6d41\u308c\u3066\u3044\u307e\u3059\u300d",\n'
+    '    "Line2": "\u300c\u305d\u3057\u3066__PROTECTED_1__\u52b9\u679c\u97f3\u3082\u9cf4\u308a\u307e\u3059"\n'
+    "}\n"
+    "Output (placeholders preserved exactly):\n"
+    "{\n"
+    '    "Line1": "\\"The music __PROTECTED_0__ is playing.\\"",\n'
+    '    "Line2": "\\"And the __PROTECTED_1__ sound effect is also playing.\\""\n'
+    "}\n"
+    "\n"
+    "Input:\n"
+    "{\n"
+    '    "Line1": "Defense Member E: ...",\n'
+    '    "Line2": "Kurone: ...\\\\i[100]",\n'
+    '    "Line3": "Kurone: \u3042\u306e\u3055",\n'
+    '    "Line4": "Kurone: \\\\v[0]\u304c\u304a\u524d\u306b\u624b\u3092\u713c\u3044\u3066\u308b\u307f\u305f\u3044\u3060\u3063\u305f\u3088",\n'
+    '    "Line5": "Kurone: \u4ed6\u306f\u3069\u3046\u3067\u3082\u826f\u3044\u3051\u3069\u3001\\\\n\\"\\\\c[10]\u79c1\u306e\u6a19\u7684\\\\c\\"\u306b\u4f59\u8a08\u306a\u4e8b \u3057\u306a\u3044\u3067\u304f\u308c\u306a\u3044\uff1f",\n'
+    '    "Line6": "Kurone: \u6bba\u3059\u3088",\n'
+    '    "Line7": "Defense Member E: \u3072\u3063...!\u3082...\u7533\u3057\u8a33\u3054\u30b6\u3044\u307e\u30bb\u3093",\n'
+    '    "Line8": "Defense Member E: \\\\SE[\u30e9\u30a4\u30bf\u30fc]\u30af\u30ed\u30cd\u69d8\u306b\u6c38\u4e45\u30cb\u670d\u5f93\u3057\u307e\u30b9\u304b\u3089...\\\\n\\\\c[18]\u3069\u30a6\u304b\u304a\u8a31\u30b7\u3092"\n'
+    "}\n"
+    "Output:\n"
+    "{\n"
+    '    "Line1": "Defense Member E: ...",\n'
+    '    "Line2": "Kurone: ...\\\\i[100]",\n'
+    '    "Line3": "Kurone: Hey.",\n'
+    '    "Line4": "Kurone: It seems like \\\\v[0] is having a hard time with you.",\n'
+    '    "Line5": "Kurone: I don\'t care about the others,\\\\nbut could you not interfere with \\"\\\\c[10]my target\\\\c\\"?",\n'
+    '    "Line6": "Kurone: I\'ll kill you.",\n'
+    '    "Line7": "Defense Member E: Eek...! I-\'m so sorry.",\n'
+    '    "Line8": "Defense Member E: \\\\SE[\u30e9\u30a4\u30bf\u30fc]I will serve you forever, Kurone-sama...\\\\n\\\\c[18]please forgive me."\n'
+    "}"
 )
 
 _BUILTIN_SUMMARY_DEFAULT = (
@@ -1697,6 +1883,12 @@ def get_default_text(key: str, fallback: str = "") -> str:
     Suitable for multi-line values (system instructions, summary, etc.).
     Falls back to built-in constants if not found in INI.
 
+    For the ``'SystemInstruction'`` key the stored value is treated as a
+    *preset name* (e.g. ``'Default'``) rather than the literal text.  The
+    actual text is resolved via :func:`get_si_preset`.  If the stored value
+    is multi-line (legacy full-text), it is returned directly for backward
+    compatibility.
+
     Args:
         key: Key in [defaults] section (e.g. ``'SystemInstruction'``).
         fallback: Value returned if key absent in INI and no built-in exists.
@@ -1709,11 +1901,18 @@ def get_default_text(key: str, fallback: str = "") -> str:
         'You are an expert translator...'
     """
     val = get_str("defaults", key, "")
+    if key == "SystemInstruction":
+        if val:
+            # Short value with no newlines = a preset name reference.
+            if "\n" not in val and len(val) <= 120:
+                resolved = get_si_preset(val)
+                return resolved if resolved else _BUILTIN_SYSTEM_INSTRUCTION
+            # Multi-line = legacy full text stored directly; return as-is.
+            return val
+        return _BUILTIN_SYSTEM_INSTRUCTION
     if val:
         return val
-    # Built-in constants
-    if key == "SystemInstruction":
-        return _BUILTIN_SYSTEM_INSTRUCTION
+    # Built-in constants for other keys.
     if key == "Summary":
         return _BUILTIN_SUMMARY_DEFAULT
     return fallback

@@ -431,38 +431,30 @@ def _unique_preset_name(name: str, existing: Dict[str, str]) -> str:
 
 
 def _load_si_presets() -> Dict[str, str]:
-    """Load System Instructions presets.
+    """Load System Instructions presets fully from INI (via ini_manager).
 
     Returns ordered dict: Custom first, Default second, then alphabetical
-    user presets.  The Default text is always refreshed from INI.
+    user presets.  Migrates any legacy JSON file on first call.
     """
-    merged: Dict[str, str] = {"Default": ini_manager.get_default_text("SystemInstruction")}
+    # One-time migration: import user presets from legacy JSON into INI.
     if _SI_PRESETS_FILE.exists():
         try:
             data = json.loads(_SI_PRESETS_FILE.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                merged.update(data)
-        except Exception:
-            pass
-    result: Dict[str, str] = {CUSTOM_PRESET_NAME: ""}
-    if "Default" in merged:
-        result["Default"] = merged["Default"]
-    for name in sorted(merged):
-        if name.lower() != "custom" and name != "Default":
-            result[name] = merged[name]
-    return result
+                for preset_name, preset_text in data.items():
+                    if preset_name not in (CUSTOM_PRESET_NAME, "Default"):
+                        ini_manager.set_si_preset(preset_name, str(preset_text))
+            _SI_PRESETS_FILE.rename(_SI_PRESETS_FILE.with_suffix(".json.migrated"))
+            logger.info("Migrated legacy SI presets JSON to INI")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("SI presets JSON migration failed: %s", exc)
+    return ini_manager.get_all_si_presets()
 
 
-def _save_si_presets_to_file(presets: Dict[str, str]) -> None:
-    """Persist SI presets to JSON (excludes 'Custom' and 'Default')."""
-    _USER_PRESETS_DIR.mkdir(parents=True, exist_ok=True)
-    to_save = {
-        k: v for k, v in presets.items()
-        if k not in (CUSTOM_PRESET_NAME, "Default")
-    }
-    _SI_PRESETS_FILE.write_text(
-        json.dumps(to_save, indent=2, ensure_ascii=False), encoding="utf-8",
-    )
+def _save_si_presets_to_file(presets: Dict[str, str]) -> None:  # noqa: ARG001
+    """Deprecated stub — SI presets are now stored in INI, not JSON."""
+    # Retained for import-compat during transition; callers have been updated to
+    # use ini_manager.set_si_preset() / ini_manager.delete_si_preset() directly.
 
 
 # Legacy compat: keep old dicts so existing code that references them doesn't crash.
@@ -1746,16 +1738,32 @@ class InformationStep(BaseStep):
         pass  # pragma: no cover
 
     def _on_style_changed(self, event: Optional[tk.Event] = None) -> None:
-        """Handle style preset selection — populate the prompt text field."""
+        """Handle style preset selection — populate the prompt text field.
+
+        Always reads the preset text fresh from INI so changes made in
+        Global Options are reflected immediately without restarting the app.
+        Custom preset clears the field so the user can type freely.
+        """
         name = self._style_preset_var.get()
-        prompt_text = self._style_presets.get(name, "")
+        if name == CUSTOM_PRESET_NAME:
+            self._style_text.delete("1.0", "end")
+            return
+        prompt_text = ini_manager.get_all_presets("style").get(name, "")
         self._style_text.delete("1.0", "end")
         self._style_text.insert("1.0", prompt_text)
 
     def _on_tone_changed(self, event: Optional[tk.Event] = None) -> None:
-        """Handle tone preset selection — populate the prompt text field."""
+        """Handle tone preset selection — populate the prompt text field.
+
+        Always reads the preset text fresh from INI so changes made in
+        Global Options are reflected immediately without restarting the app.
+        Custom preset clears the field so the user can type freely.
+        """
         name = self._tone_preset_var.get()
-        prompt_text = self._tone_presets.get(name, "")
+        if name == CUSTOM_PRESET_NAME:
+            self._tone_text.delete("1.0", "end")
+            return
+        prompt_text = ini_manager.get_all_presets("tone").get(name, "")
         self._tone_text.delete("1.0", "end")
         self._tone_text.insert("1.0", prompt_text)
 
@@ -1848,10 +1856,14 @@ class InformationStep(BaseStep):
     ) -> None:
         """Handle System Instructions preset selection.
 
-        Populates the text field with the preset content.
+        Populates the text field with the preset content read fresh from INI.
+        Custom preset clears the field so the user can type freely.
         """
         name = self._si_preset_var.get()
-        prompt_text = self._si_presets.get(name, "")
+        if name == CUSTOM_PRESET_NAME:
+            self._notes_text.delete("1.0", "end")
+            return
+        prompt_text = ini_manager.get_si_preset(name) or ""
         self._notes_text.delete("1.0", "end")
         self._notes_text.insert("1.0", prompt_text)
 
@@ -1879,7 +1891,7 @@ class InformationStep(BaseStep):
                 new_name.strip(), self._si_presets,
             )
         self._si_presets[name] = text
-        _save_si_presets_to_file(self._si_presets)
+        ini_manager.set_si_preset(name, text)
         self._si_preset_combo["values"] = list(self._si_presets.keys())
         self._si_preset_var.set(name)
         logger.info("Saved SI preset: %s", name)
@@ -1906,7 +1918,7 @@ class InformationStep(BaseStep):
         ):
             return
         self._si_presets.pop(name, None)
-        _save_si_presets_to_file(self._si_presets)
+        ini_manager.delete_si_preset(name)
         self._si_preset_combo["values"] = list(self._si_presets.keys())
         self._si_preset_var.set("Default")
         self._on_si_preset_changed()
@@ -3851,6 +3863,15 @@ class InformationStep(BaseStep):
         TASK 23.1: Load manifest bindings first, then legacy metadata.
         TASK 23.3: Load characters and code patterns from manifest.
         """
+        # Refresh preset dicts from INI so all handlers always have current
+        # data (reflects edits made in Global Options without a restart).
+        self._style_presets = ini_manager.get_all_presets("style")
+        self._tone_presets = ini_manager.get_all_presets("tone")
+        self._si_presets = ini_manager.get_all_si_presets()
+        self._style_preset_combo["values"] = list(self._style_presets.keys())
+        self._tone_preset_combo["values"] = list(self._tone_presets.keys())
+        self._si_preset_combo["values"] = list(self._si_presets.keys())
+
         # TASK 23.1: Load all manifest-bound fields
         self._load_from_manifest_bindings()
         
@@ -3884,57 +3905,54 @@ class InformationStep(BaseStep):
         logger.debug("Loaded %d manifest bindings", len(self._manifest_bindings))
 
     def _ensure_style_tone_text(self) -> None:
-        """Ensure style, tone, and SI text fields show preset content if empty.
+        """Populate style, tone, and SI text fields with the selected preset.
 
-        After loading from manifest or session state, the text fields
-        may be empty even though a non-Custom preset is selected.
-        This method populates them with the preset prompt text so the
-        user always sees what will be included in the translation prompt.
+        Called from ``on_enter`` after manifest bindings are loaded.
+        For named (non-Custom) presets the text field is **always** overwritten
+        with the current INI value so the user sees up-to-date preset content
+        even when the manifest or session state stored a different string.
+        Custom presets are not touched — the user's typed text is preserved.
         """
-        style_text = self._style_text.get("1.0", "end-1c").strip()
-        if not style_text:
-            name = self._style_preset_var.get()
-            if name and name != CUSTOM_PRESET_NAME:
-                prompt_text = self._style_presets.get(name, "")
-                if prompt_text:
-                    self._style_text.delete("1.0", "end")
-                    self._style_text.insert("1.0", prompt_text)
+        # Style
+        name = self._style_preset_var.get()
+        if name and name != CUSTOM_PRESET_NAME:
+            prompt_text = ini_manager.get_all_presets("style").get(name, "")
+            self._style_text.delete("1.0", "end")
+            if prompt_text:
+                self._style_text.insert("1.0", prompt_text)
 
-        tone_text = self._tone_text.get("1.0", "end-1c").strip()
-        if not tone_text:
-            name = self._tone_preset_var.get()
-            if name and name != CUSTOM_PRESET_NAME:
-                prompt_text = self._tone_presets.get(name, "")
-                if prompt_text:
-                    self._tone_text.delete("1.0", "end")
-                    self._tone_text.insert("1.0", prompt_text)
+        # Tone
+        name = self._tone_preset_var.get()
+        if name and name != CUSTOM_PRESET_NAME:
+            prompt_text = ini_manager.get_all_presets("tone").get(name, "")
+            self._tone_text.delete("1.0", "end")
+            if prompt_text:
+                self._tone_text.insert("1.0", prompt_text)
 
-        # System Instructions preset
-        si_text = self._notes_text.get("1.0", "end-1c").strip()
-        if not si_text:
-            name = self._si_preset_var.get()
-            if name and name != CUSTOM_PRESET_NAME:
-                prompt_text = self._si_presets.get(name, "")
-                if prompt_text:
-                    self._notes_text.delete("1.0", "end")
-                    self._notes_text.insert("1.0", prompt_text)
+        # System Instructions
+        si_name = self._si_preset_var.get()
+        if si_name and si_name != CUSTOM_PRESET_NAME:
+            prompt_text = ini_manager.get_si_preset(si_name) or ""
+            self._notes_text.delete("1.0", "end")
+            if prompt_text:
+                self._notes_text.insert("1.0", prompt_text)
 
     def _ensure_default_texts(self) -> None:
         """Populate Summary and System Instructions with defaults if empty.
 
         Called from ``on_enter`` after all loading is complete.
         """
-        # Summary default
+        # Summary default — always read fresh from INI so user edits propagate.
         summary_text = self._summary_text.get("1.0", "end-1c").strip()
         if not summary_text:
             self._summary_text.delete("1.0", "end")
-            self._summary_text.insert("1.0", DEFAULT_SUMMARY_TEXT)
+            self._summary_text.insert("1.0", ini_manager.get_default_text("Summary"))
 
-        # System Instructions default
+        # System Instructions default — always read fresh from INI.
         notes_text = self._notes_text.get("1.0", "end-1c").strip()
         if not notes_text:
             self._notes_text.delete("1.0", "end")
-            self._notes_text.insert("1.0", DEFAULT_SYSTEM_INSTRUCTIONS)
+            self._notes_text.insert("1.0", ini_manager.get_default_text("SystemInstruction"))
     
     def _save_characters_to_manifest(self) -> None:
         """Save character notes to manifest.

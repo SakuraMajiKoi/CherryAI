@@ -4798,6 +4798,84 @@ This catalog lists every existing function that participates in recovery, valida
 | `set_tooltips_enabled()` | Global enable/disable toggle |
 | `set_tooltip_delay()` | Configures hover delay before showing |
 
+=============================================================================
+
+## Dynamic Model Registry Specification
+
+**Requirement:** CherryAI must fetch, store, and serve model capabilities and pricing
+without any hardcoded cloud provider data.
+
+**Providers in scope:** OpenAI, Google Gemini, Mistral
+(Anthropic/local/ollama/lmstudio providers remain static — not in scope)
+
+**Data captured per model (`ModelInfo` fields):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `model_id` | str | Provider canonical ID |
+| `display_name` | str | Human-readable label |
+| `provider` | str | `openai` / `google` / `mistral` |
+| `url` | str | Pricing/info URL |
+| `input_price` | float | USD per 1M input tokens |
+| `cached_input_price` | float | USD per 1M cached input tokens |
+| `output_price` | float | USD per 1M output tokens |
+| `batch_input_price` | float | USD per 1M input tokens (batch mode) |
+| `batch_output_price` | float | USD per 1M output tokens (batch mode) |
+| `batch_mode` | bool | Batch API supported |
+| `rpm_free` | int | Requests/min (free tier) |
+| `rpm_tier1` | int | Requests/min (paid tier 1) |
+| `rpd_free` | int | Requests/day (free tier) |
+| `rpd_tier1` | int | Requests/day (paid tier 1) |
+| `tpm_free` | int | Tokens/min (free tier) |
+| `tpm_tier1` | int | Tokens/min (paid tier 1) |
+| `max_concurrent` | int | Max concurrent requests |
+| `structured_output` | bool | JSON/structured output supported |
+| `thinking` | bool | Extended thinking/reasoning supported |
+| `logit_bias` | bool | Logit bias supported |
+| `temperature_min` | float | Minimum temperature value |
+| `temperature_max` | float | Maximum temperature value |
+| `context_window` | int | Max context tokens |
+| `token_speed` | int | Approx tokens/second |
+| `fetched_at` | str | ISO-8601 timestamp of last fetch |
+
+**Storage:** `user/API.ini`
+- `[model_registry]` — `version`, `last_refreshed`
+- `[model_registry_openai]` — `last_updated` (ISO-8601), `model.<id>` per model (JSON per line)
+- `[model_registry_google]` — same structure
+- `[model_registry_mistral]` — same structure
+- `[security]` — `password_hash` (bcrypt WF-10), `key_salt` (hex, 32 bytes for PBKDF2)
+- `[api_keys]` — Named API keys: `provider, name = <Fernet-encrypted value>`
+  - Multiple keys per provider supported (e.g. `openai, work-key`, `openai, personal`)
+  - Encrypted with AES-256 via Fernet, derived from master password + PBKDF2-HMAC-SHA256 (390k iterations)
+
+**API Key Management functions** (`functions/api_config.py`):
+- `set_api_key(provider, key, password, name="default")` — encrypt and store
+- `get_api_key(provider, password, name="default")` — decrypt and return
+- `list_api_keys()` → `[(provider, name), …]` — metadata without decryption
+- `delete_api_key(provider, name)` — remove a saved key
+- `test_api_connection(api_key, provider, base_url, timeout)` → `(bool, message)` — validates via `models.list()`
+- `PROVIDER_BASE_URLS` — default base URLs for all known providers
+
+**Freshness policy:** Default 24 hours; stale data transparently falls back to built-in curated list.
+
+**Fetch methods:**
+- OpenAI: `GET https://api.openai.com/v1/models` (Bearer API key required), pricing from HTML page
+- Google: `GET https://generativelanguage.googleapis.com/v1beta/models?key={key}`, pricing from HTML page
+- Mistral: `GET https://api.mistral.ai/v1/models` (Bearer API key required), pricing embedded (JS-rendered page)
+
+**Backward compatibility requirements:**
+- `from functions.config import MODEL_PRICING` — must remain importable as a dict
+- `MODEL_PRICING[model_id]` — must return pricing dict with same keys as before
+- `from functions.options import API_PROVIDERS` — must remain importable as a dict
+- `API_PROVIDERS["openai"]["models"]` — must return list of model ID strings
+
+**GUI integration:**
+- Global Options dialog: "⟳ Refresh Models" button triggers background refresh
+- All three cloud providers (Global Options, Analysis, Translation) must use identical model lists
+- No GUI code should call `get_api_key()` with password parameter — GUI refresh uses fallback only
+
+=============================================================================
+
 ## Document Revision History
 
 | Version | Date | Changes |

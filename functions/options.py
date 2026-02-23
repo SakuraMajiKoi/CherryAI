@@ -12,7 +12,7 @@ This module now only provides:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .config import get_api_config
 from .languages import get_language_names
@@ -22,24 +22,9 @@ from .languages import get_language_names
 # API PROVIDERS - SINGLE SOURCE OF TRUTH
 # =============================================================================
 
-# Supported API providers with their default base URLs and models
-# This is the canonical definition - import from here, don't duplicate!
-API_PROVIDERS: Dict[str, Dict[str, Any]] = {
-    "openai": {
-        "name": "OpenAI",
-        "base_url": "https://api.openai.com/v1",
-        "models": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo"],
-    },
-    "gemini": {
-        "name": "Google Gemini",
-        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-        "models": [
-            "gemini-2.0-flash",
-            "gemini-2.0-flash-lite",
-            "gemini-1.5-pro",
-            "gemini-1.5-flash",
-        ],
-    },
+# Static providers whose model lists are NOT fetched from the cloud.
+# Local / self-hosted providers keep their hardcoded model defaults.
+_STATIC_PROVIDERS: Dict[str, Dict[str, Any]] = {
     "anthropic": {
         "name": "Anthropic Claude",
         "base_url": "https://api.anthropic.com/v1",
@@ -62,6 +47,138 @@ API_PROVIDERS: Dict[str, Dict[str, Any]] = {
     },
 }
 
+# Cloud providers whose model lists are fetched dynamically via model_registry.
+# Provider keys here map to model_registry provider IDs.
+_CLOUD_PROVIDER_META: Dict[str, Dict[str, str]] = {
+    "openai": {
+        "name": "OpenAI",
+        "base_url": "https://api.openai.com/v1",
+        "registry_id": "openai",
+    },
+    "gemini": {
+        "name": "Google Gemini",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "registry_id": "google",
+    },
+    "mistral": {
+        "name": "Mistral",
+        "base_url": "https://api.mistral.ai/v1",
+        "registry_id": "mistral",
+    },
+}
+
+
+def _build_api_providers() -> Dict[str, Dict[str, Any]]:
+    """Build the full API_PROVIDERS dict, pulling cloud model lists from the registry.
+
+    Falls back to built-in model lists if the registry is unavailable.
+    """
+    try:
+        from .model_registry import (
+            get_provider_model_ids,
+            PROVIDER_OPENAI,
+            PROVIDER_GOOGLE,
+            PROVIDER_MISTRAL,
+        )
+        _registry_map = {
+            "openai": PROVIDER_OPENAI,
+            "gemini": PROVIDER_GOOGLE,
+            "mistral": PROVIDER_MISTRAL,
+        }
+    except Exception:
+        _registry_map = {}
+
+    providers: Dict[str, Dict[str, Any]] = {}
+
+    # Cloud providers — dynamic model lists
+    for pkey, meta in _CLOUD_PROVIDER_META.items():
+        rid = _registry_map.get(pkey)
+        if rid:
+            try:
+                models = get_provider_model_ids(rid)  # type: ignore[name-defined]
+                if not models:
+                    raise ValueError("empty")
+            except Exception:
+                models = _CLOUD_FALLBACK_MODELS.get(pkey, [])
+        else:
+            models = _CLOUD_FALLBACK_MODELS.get(pkey, [])
+        providers[pkey] = {
+            "name": meta["name"],
+            "base_url": meta["base_url"],
+            "models": models,
+        }
+
+    # Static providers — unchanged
+    providers.update(_STATIC_PROVIDERS)
+    return providers
+
+
+# Minimal hardcoded fallback model lists for cloud providers,
+# used when the registry module itself cannot be imported.
+_CLOUD_FALLBACK_MODELS: Dict[str, List[str]] = {
+    "openai": ["gpt-4.1", "gpt-4o", "gpt-4o-mini", "gpt-4.1-mini", "gpt-4.1-nano"],
+    "gemini": ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"],
+    "mistral": ["mistral-large-latest", "mistral-small-latest", "ministral-8b-latest"],
+}
+
+
+# Module-level cache — rebuilt lazily on first access.
+_API_PROVIDERS_CACHE: Optional[Dict[str, Dict[str, Any]]] = None
+
+
+def _get_api_providers() -> Dict[str, Dict[str, Any]]:
+    global _API_PROVIDERS_CACHE
+    if _API_PROVIDERS_CACHE is None:
+        _API_PROVIDERS_CACHE = _build_api_providers()
+    return _API_PROVIDERS_CACHE
+
+
+def reload_api_providers() -> None:
+    """Force the API_PROVIDERS cache to rebuild on next access.
+
+    Call this after ``model_registry.refresh_models()`` so that provider
+    model lists immediately reflect the newly-fetched data.
+    """
+    global _API_PROVIDERS_CACHE
+    _API_PROVIDERS_CACHE = None
+
+
+class _APIProvidersProxy(dict):
+    """Transparent proxy so ``from options import API_PROVIDERS`` stays valid."""
+
+    def _sync(self) -> None:
+        fresh = _get_api_providers()
+        self.clear()
+        self.update(fresh)
+
+    def __contains__(self, key: object) -> bool:
+        self._sync(); return super().__contains__(key)
+
+    def __getitem__(self, key: Any) -> Any:
+        self._sync(); return super().__getitem__(key)
+
+    def get(self, key: Any, default: Any = None) -> Any:  # type: ignore[override]
+        self._sync(); return super().get(key, default)
+
+    def keys(self) -> Any:
+        self._sync(); return super().keys()
+
+    def values(self) -> Any:
+        self._sync(); return super().values()
+
+    def items(self) -> Any:
+        self._sync(); return super().items()
+
+    def __iter__(self) -> Any:
+        self._sync(); return super().__iter__()
+
+    def __len__(self) -> int:
+        self._sync(); return super().__len__()
+
+
+# Public constant — backward-compatible, dynamically populated
+API_PROVIDERS: Dict[str, Dict[str, Any]] = _APIProvidersProxy()
+
 
 def get_api_urls() -> Dict[str, str]:
     """Get mapping of provider keys to base URLs.
@@ -70,20 +187,21 @@ def get_api_urls() -> Dict[str, str]:
         Dict mapping provider key to base URL string.
         Compatible with CLI.py KNOWN_API_URLS format.
     """
-    return {key: info["base_url"] for key, info in API_PROVIDERS.items()}
+    return {key: info["base_url"] for key, info in _get_api_providers().items()}
 
 
 def get_provider_models(provider: str) -> List[str]:
     """Get list of models for a specific provider.
 
     Args:
-        provider: Provider key (e.g., 'openai', 'gemini').
+        provider: Provider key (e.g., 'openai', 'gemini', 'mistral').
 
     Returns:
-        List of model names for the provider, or empty list if not found.
+        List of model IDs for the provider.  Empty list if not found.
     """
-    if provider in API_PROVIDERS:
-        return API_PROVIDERS[provider].get("models", [])
+    providers = _get_api_providers()
+    if provider in providers:
+        return providers[provider].get("models", [])
     return []
 
 
@@ -91,10 +209,10 @@ def get_all_provider_models() -> Dict[str, List[str]]:
     """Get mapping of all providers to their models.
 
     Returns:
-        Dict mapping provider key to list of model names.
+        Dict mapping provider key to list of model IDs.
         Compatible with CLI.py KNOWN_MODELS format.
     """
-    return {key: info["models"] for key, info in API_PROVIDERS.items()}
+    return {key: info["models"] for key, info in _get_api_providers().items()}
 
 
 def get_provider_names() -> List[str]:
@@ -103,7 +221,7 @@ def get_provider_names() -> List[str]:
     Returns:
         List of provider key strings.
     """
-    return list(API_PROVIDERS.keys())
+    return list(_get_api_providers().keys())
 
 
 def get_provider_display_name(provider: str) -> str:
@@ -115,8 +233,9 @@ def get_provider_display_name(provider: str) -> str:
     Returns:
         Human-readable provider name, or the key if not found.
     """
-    if provider in API_PROVIDERS:
-        return API_PROVIDERS[provider].get("name", provider)
+    providers = _get_api_providers()
+    if provider in providers:
+        return providers[provider].get("name", provider)
     return provider
 
 # Supported languages for translation

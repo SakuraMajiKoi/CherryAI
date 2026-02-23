@@ -2673,8 +2673,9 @@ Thank you.
 | test_context_markers.py | 70 | Context Markers Full Implementation Phase 50 |
 | test_speaker_dedup.py | 47 | Speaker Duplicate Removal Phase 51 |
 | test_glossary_selective.py | 28 | Selective Glossary Per Chunk Phase 52 |
+| test_ini_sections.py | 56 | INI section seeding: [style], [tone], [system_instructions].Default, [defaults] long-text keys, [session].last_manifest, confirmations; SystemInstruction preset-name storage and migration; _migrate_preset_values mis-assigned preset correction; dropdown INI freshness |
 | smoke_test/*.py | 5+ | Smoke tests |
-| **Total Script Tests** | **3476** | (+28 Phase 52 selective glossary) |
+| **Total Script Tests** | **3532** | (+56 INI section seeding tests) |
 | One_Click_Test.py | 7 stages | API integration |
 
 ### TASK 11: Integration Test - 200 Lines (Completed)
@@ -10131,3 +10132,75 @@ Tests for `functions/ini_manager.py` `ensure_app_dirs()` and auto-creation of al
 ```bash
 python -m pytest dev/test_phase62_dirs.py -v --timeout=15
 ```
+
+
+=============================================================================
+
+## dev/test_model_registry.py — 83 tests
+
+Tests for the dynamic model registry system. Run with:
+```bash
+python -m pytest dev/test_model_registry.py -v --timeout=30
+```
+
+| Class | Tests | Description |
+|-------|-------|-------------|
+| `TestModelInfoDataclass` | 5 | Serialization, round-trip, unknown keys, pricing entry keys |
+| `TestFallbackData` | 10 | All providers present, prices valid, capabilities, known models |
+| `TestIniPersistence` | 9 | Save/load, sections, timestamps, multi-provider coexistence |
+| `TestRefreshModels` | 5 | No-key/fallback, writes all 3 providers, subset refresh |
+| `TestGetAllModels` | 8 | All providers, flat list, get_model_info (found/not/fallback) |
+| `TestGetPricingDict` | 7 | Backward-compat keys, all 3 providers, float prices, no INI fallback |
+| `TestStaleCache` | 6 | Timestamp logic, is_data_fresh before/after save/old-timestamp |
+| `TestRegistrySummary` | 4 | All providers, required keys, count matches, freshness |
+| `TestConfigModelPricingProxy` | 10 | Dict-like interface, openai/google/mistral models, estimate_cost |
+| `TestOptionsAPIProvidersProxy` | 10 | All providers present, get_provider_models for 3 cloud providers, reload |
+| `TestEndToEndFlow` | 3 | Fresh INI → populate → read; pricing dict from INI; shared data |
+| `TestLiveFetch` | 4 | **SKIPPED** unless `CHERRYAI_TEST_LIVE=1` — live OpenAI/Google/Mistral fetch |
+
+**Key individual tests:**
+- `test_from_dict_round_trip` — `ModelInfo.from_dict(m.to_dict())` preserves all 25+ fields
+- `test_save_load_round_trip` — `save_to_ini()` → `load_from_ini()` preserves all models and pricing
+- `test_refresh_with_no_keys_uses_fallback` — no-key path writes all 3 providers to INI
+- `test_pricing_dict_has_expected_keys` — ensures `name`/`input`/`output`/`concurrent`/`token_speed` keys
+- `test_model_pricing_proxy_estimate_cost` — `estimate_cost()` works transparently through proxy
+- `test_end_to_end_analysis_translation_same_data` — Analysis and Translation steps use same model data
+
+**Live test prerequisites** (for `TestLiveFetch`):
+```bash
+set CHERRYAI_TEST_LIVE=1
+set OPENAI_API_KEY=sk-...
+set GOOGLE_API_KEY=...
+set MISTRAL_API_KEY=...
+python -m pytest dev/test_model_registry.py::TestLiveFetch -v
+```
+=============================================================================
+
+## dev/test_api_keys.py — 50 tests
+
+Tests for the API key management, connection testing, and encrypted storage pipeline. Run with:
+```bash
+python -m pytest dev/test_api_keys.py -v --timeout=30
+```
+
+| Class | Tests | Description |
+|-------|-------|-------------|
+| `TestPasswordManagement` | 7 | Set/verify/change password, wrong password, empty password |
+| `TestApiKeyStorage` | 10 | Set/get with default and custom names, multi-provider, overwrite, special chars |
+| `TestIniFormat` | 3 | `provider, name` INI key format, Fernet encryption verification, security section fields |
+| `TestListDeleteKeys` | 6 | List all keys, delete existing/nonexistent, preserve unrelated keys |
+| `TestConnectionTest` | 8 | Empty key, unknown provider, mock success/auth/timeout/connection errors, custom URL |
+| `TestConnectionTestLive` | 3 | **Live** tests with Google Gemini API (valid/invalid key, explicit URL) |
+| `TestProviderBaseUrls` | 4 | Known providers have URLs, specific URL validation |
+| `TestApiKeyOptionHelper` | 3 | `_api_key_option()` format, whitespace stripping, case preservation |
+| `TestPasswordStrength` | 5 | Tier assessment: Instantly, Weak, Safe, meter_text |
+| `TestFullPipeline` | 2 | End-to-end lifecycle (set pw → save → list → load → delete), change_password re-encrypts all |
+
+**Key individual tests:**
+- `test_multiple_keys_per_provider` — Two keys for same provider stored and retrieved independently
+- `test_ini_key_format_provider_comma_name` — Verifies `[api_keys]` uses `provider, name` as INI option
+- `test_ini_value_is_encrypted` — Stored value starts with `gAAAAA` (Fernet token), not plaintext
+- `test_google_gemini_valid_key` — Live test validates connection to Gemini API (43+ models)
+- `test_google_gemini_invalid_key` — Live test confirms invalid key properly rejected
+- `test_auth_error_returns_invalid_key` — Mock 401 → "Authentication failed" message
+- `test_full_lifecycle` — Complete CRUD cycle: password → 3 keys → list → retrieve → delete → verify

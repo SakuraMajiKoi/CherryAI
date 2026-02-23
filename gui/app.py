@@ -210,6 +210,10 @@ class App(tk.Tk):
             for tab in self._step_tabs:
                 tab._manifest_manager = self._manifest_manager
             
+            # Persist last opened manifest so load_last works on next startup
+            ini_manager.set_last_manifest(manifest_path)
+            ini_manager.add_to_recent_manifests(manifest_path)
+
             self._set_status(f"Created project: {project_name}")
             logger.info("Created new project: %s at %s", project_name, manifest_path)
         
