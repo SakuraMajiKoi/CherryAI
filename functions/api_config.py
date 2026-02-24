@@ -215,6 +215,83 @@ def change_password(old_password: str, new_password: str) -> Tuple[bool, str]:
     return True, "Password changed successfully."
 
 
+def disable_password(current_password: str) -> Tuple[bool, str]:
+    """Disable the master password, storing all API keys in plaintext.
+
+    Decrypts all stored keys with *current_password*, clears the password
+    hash and salt, then re-stores all keys as plaintext.
+
+    Returns (success, message).
+    """
+    if not verify_password(current_password):
+        return False, "Current password is incorrect."
+    # Decrypt all keys first
+    cfg = _load()
+    decrypted: dict[str, str] = {}
+    if cfg.has_section("api_keys"):
+        for name, enc_val in cfg.items("api_keys"):
+            try:
+                decrypted[name] = _decrypt_value(enc_val, current_password, cfg)
+            except Exception:
+                decrypted[name] = ""
+    # Clear password hash and salt
+    cfg.set("security", "password_hash", "")
+    cfg.set("security", "key_salt", "")
+    # Store keys as plaintext
+    for name, plaintext in decrypted.items():
+        if plaintext:
+            cfg.set("api_keys", name, plaintext)
+    _save(cfg)
+    logger.info("Master password disabled — API keys stored in plaintext")
+    return True, "Password disabled. API keys are now stored in plaintext."
+
+
+def reset_password() -> Tuple[bool, str]:
+    """Reset the master password entirely, removing all stored API keys.
+
+    This is a destructive operation: all encrypted keys are lost because
+    they cannot be decrypted without the old password.
+
+    Returns (success, message).
+    """
+    cfg = _load()
+    cfg.set("security", "password_hash", "")
+    cfg.set("security", "key_salt", "")
+    # Remove all stored keys since they can't be decrypted
+    if cfg.has_section("api_keys"):
+        cfg.remove_section("api_keys")
+        cfg.add_section("api_keys")
+    _save(cfg)
+    logger.info("Master password reset — all stored API keys removed")
+    return True, "Password reset. All stored API keys have been removed."
+
+
+def set_api_key_plain(provider: str, key: str, name: str = "default") -> bool:
+    """Store an API key in plaintext (no encryption, no password required).
+
+    Use this when no master password is set and the user opts to store
+    keys without encryption.
+
+    Returns True on success.
+    """
+    cfg = _load()
+    option = _api_key_option(provider, name)
+    cfg.set("api_keys", option, key)
+    _save(cfg)
+    return True
+
+
+def get_api_key_plain(provider: str, name: str = "default") -> Optional[str]:
+    """Retrieve a plaintext API key (when no password is set).
+
+    Returns None if the key is not found.
+    """
+    cfg = _load()
+    option = _api_key_option(provider, name)
+    val = cfg.get("api_keys", option, fallback="").strip()
+    return val or None
+
+
 # ---------------------------------------------------------------------------
 # Key derivation (PBKDF2)
 # ---------------------------------------------------------------------------
@@ -588,7 +665,7 @@ def test_api_connection(
     provider: str = "openai",
     base_url: str = "",
     timeout: float = 15.0,
-) -> Tuple[bool, str]:
+) -> Tuple[bool, str, list]:
     """Test connectivity to an API provider by listing models.
 
     Uses the OpenAI-compatible ``models.list()`` endpoint which all major
@@ -601,40 +678,201 @@ def test_api_connection(
         timeout:  Request timeout in seconds.
 
     Returns:
-        ``(success, message)`` — *message* contains model count on
-        success or a descriptive error string on failure.
+        ``(success, message, model_ids)`` — *message* contains model count on
+        success or a descriptive error string on failure. *model_ids* is a list
+        of model ID strings (empty on failure).
     """
     if not api_key or not api_key.strip():
-        return False, "No API key provided."
+        return False, "No API key provided.", []
 
     url = base_url.strip() or PROVIDER_BASE_URLS.get(provider.lower(), "")
     if not url:
-        return False, f"No base URL for provider '{provider}'."
+        return False, f"No base URL for provider '{provider}'.", []
 
     try:
         from openai import OpenAI  # type: ignore
     except ImportError:
-        return False, "openai package not installed."
+        return False, "openai package not installed.", []
 
     try:
         client = OpenAI(api_key=api_key.strip(), base_url=url, timeout=timeout)
         models = client.models.list()
-        count = sum(1 for _ in models)
-        return True, f"Connection successful — {count} model(s) available."
+        model_ids = [m.id for m in models]
+        count = len(model_ids)
+        return True, f"Connection successful — {count} model(s) available.", model_ids
     except Exception as exc:
         err_msg = str(exc)
         # Extract the most useful part of the error
         if "401" in err_msg or "Unauthorized" in err_msg:
-            return False, "Authentication failed — invalid API key."
+            return False, "Authentication failed — invalid API key.", []
         if "403" in err_msg or "Forbidden" in err_msg:
-            return False, "Access denied — check API key permissions."
+            return False, "Access denied — check API key permissions.", []
         if "404" in err_msg or "Not Found" in err_msg:
-            return False, f"Endpoint not found — check base URL: {url}"
+            return False, f"Endpoint not found — check base URL: {url}", []
         if "timeout" in err_msg.lower() or "timed out" in err_msg.lower():
-            return False, "Connection timed out — check URL and network."
+            return False, "Connection timed out — check URL and network.", []
         if "Connection" in err_msg and ("refused" in err_msg or "error" in err_msg.lower()):
-            return False, f"Connection refused — is the server running at {url}?"
-        return False, f"Connection failed: {err_msg}"
+            return False, f"Connection refused — is the server running at {url}?", []
+        return False, f"Connection failed: {err_msg}", []
+
+
+def test_model_translation(
+    api_key: str,
+    model_id: str,
+    provider: str = "openai",
+    base_url: str = "",
+    timeout: float = 30.0,
+) -> dict:
+    """Test a specific model with a structured translation request.
+
+    Sends a short but complex test request that checks:
+    1. Structured JSON output (required)
+    2. Glossary adherence (character name consistency)
+    3. Code handling (preserving inline code markers)
+    4. Translation quality (natural phrasing, correct meaning)
+
+    Args:
+        api_key:  API key for authentication.
+        model_id: Model identifier to test.
+        provider: Provider name.
+        base_url: Custom base URL (empty → provider default).
+        timeout:  Request timeout in seconds.
+
+    Returns:
+        Dict with keys: success, message, checks (list of check results),
+        raw_response, elapsed_seconds.
+    """
+    import time as _time
+
+    url = base_url.strip() or PROVIDER_BASE_URLS.get(provider.lower(), "")
+    if not url:
+        return {"success": False, "message": f"No base URL for provider '{provider}'.",
+                "checks": [], "raw_response": "", "elapsed_seconds": 0.0}
+
+    try:
+        from openai import OpenAI  # type: ignore
+    except ImportError:
+        return {"success": False, "message": "openai package not installed.",
+                "checks": [], "raw_response": "", "elapsed_seconds": 0.0}
+
+    # Test lines: short but complex — code, name, nuance
+    test_lines = {
+        "1": "\\n[月]「この\\c[2]魔法\\c[0]は私には使えないわ。」",
+        "2": "\\n[光]「おい、月！危ないぞ！」",
+        "3": "選択肢：はい／いいえ",
+    }
+
+    system_prompt = (
+        "You are a professional Japanese-to-English translator for a visual novel. "
+        "Translate the provided lines from Japanese to English.\n\n"
+        "# Glossary\n"
+        "| Original | Translation | Notes |\n"
+        "|----------|-------------|-------|\n"
+        "| 月 | Luna | Female protagonist, speaks formally |\n"
+        "| 光 | Ray | Male friend, speaks casually |\n"
+        "| 魔法 | magic | In-world term |\n\n"
+        "# Rules\n"
+        "- Preserve ALL code markers like \\n, \\c[N], brackets, and special formatting\n"
+        "- Use character names from glossary\n"
+        "- Return ONLY valid JSON with the same keys\n"
+        "- Do NOT add or remove any lines\n"
+    )
+
+    import json as _json
+
+    user_msg = _json.dumps(test_lines, ensure_ascii=False)
+
+    t0 = _time.monotonic()
+    try:
+        client = OpenAI(api_key=api_key.strip(), base_url=url, timeout=timeout)
+        response = client.chat.completions.create(
+            model=model_id,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=0.2,
+            response_format={"type": "json_object"},
+        )
+        elapsed = _time.monotonic() - t0
+        raw = response.choices[0].message.content or ""
+    except Exception as exc:
+        elapsed = _time.monotonic() - t0
+        return {"success": False, "message": f"API call failed: {exc}",
+                "checks": [], "raw_response": "", "elapsed_seconds": round(elapsed, 2)}
+
+    # Parse and validate response
+    checks: list[dict] = []
+
+    # Check 1: Valid JSON
+    try:
+        result = _json.loads(raw)
+        checks.append({"name": "Structured Output (JSON)", "passed": True,
+                        "detail": "Valid JSON returned"})
+    except _json.JSONDecodeError as e:
+        checks.append({"name": "Structured Output (JSON)", "passed": False,
+                        "detail": f"Invalid JSON: {e}"})
+        return {"success": False, "message": "Structured output failed — invalid JSON",
+                "checks": checks, "raw_response": raw, "elapsed_seconds": round(elapsed, 2)}
+
+    # Check 2: Correct number of lines
+    expected_keys = set(test_lines.keys())
+    result_keys = set(str(k) for k in result.keys())
+    if result_keys == expected_keys:
+        checks.append({"name": "Line Count", "passed": True,
+                        "detail": f"{len(result)} lines (correct)"})
+    else:
+        missing = expected_keys - result_keys
+        extra = result_keys - expected_keys
+        detail = ""
+        if missing:
+            detail += f"Missing: {missing}. "
+        if extra:
+            detail += f"Extra: {extra}."
+        checks.append({"name": "Line Count", "passed": False, "detail": detail.strip()})
+
+    # Check 3: Code preservation
+    line1 = str(result.get("1", ""))
+    code_markers = ["\\n", "\\c[2]", "\\c[0]"]
+    preserved = [m for m in code_markers if m in line1]
+    all_preserved = len(preserved) == len(code_markers)
+    checks.append({"name": "Code Preservation", "passed": all_preserved,
+                    "detail": f"Preserved {len(preserved)}/{len(code_markers)} markers"
+                    + ("" if all_preserved else f" (found: {preserved})")})
+
+    # Check 4: Glossary adherence (names translated)
+    all_text = " ".join(str(v) for v in result.values())
+    luna_ok = "Luna" in all_text
+    ray_ok = "Ray" in all_text
+    checks.append({"name": "Glossary Adherence", "passed": luna_ok and ray_ok,
+                    "detail": f"Luna: {'✓' if luna_ok else '✗'}, "
+                              f"Ray: {'✓' if ray_ok else '✗'}"})
+
+    # Check 5: Translation completeness (no Japanese remaining in critical parts)
+    line3 = str(result.get("3", ""))
+    # Line 3 should be translated (no major kanji remaining)
+    import re as _re
+    jp_chars = len(_re.findall(r'[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff]', line3))
+    checks.append({"name": "Translation Completeness", "passed": jp_chars == 0,
+                    "detail": f"Line 3 has {jp_chars} Japanese chars remaining"
+                    + ("" if jp_chars == 0 else " (should be fully translated)")})
+
+    # Check 6: Output length sanity
+    length_ok = all(5 < len(str(v)) < 200 for v in result.values())
+    checks.append({"name": "Output Length", "passed": length_ok,
+                    "detail": "All lines within expected length range"
+                    if length_ok else "Some lines have unexpected length"})
+
+    all_passed = all(c["passed"] for c in checks)
+    passed_count = sum(1 for c in checks if c["passed"])
+    return {
+        "success": all_passed,
+        "message": f"{passed_count}/{len(checks)} checks passed"
+                   + ("" if all_passed else " — see details"),
+        "checks": checks,
+        "raw_response": raw,
+        "elapsed_seconds": round(elapsed, 2),
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -10178,7 +10178,7 @@ python -m pytest dev/test_model_registry.py::TestLiveFetch -v
 
 ## dev/test_api_keys.py — 50 tests
 
-Tests for the API key management, connection testing, and encrypted storage pipeline. Run with:
+Tests for the API key management, connection testing, encrypted storage pipeline, plaintext key storage, and password disable/reset. Run with:
 ```bash
 python -m pytest dev/test_api_keys.py -v --timeout=30
 ```
@@ -10189,8 +10189,8 @@ python -m pytest dev/test_api_keys.py -v --timeout=30
 | `TestApiKeyStorage` | 10 | Set/get with default and custom names, multi-provider, overwrite, special chars |
 | `TestIniFormat` | 3 | `provider, name` INI key format, Fernet encryption verification, security section fields |
 | `TestListDeleteKeys` | 6 | List all keys, delete existing/nonexistent, preserve unrelated keys |
-| `TestConnectionTest` | 8 | Empty key, unknown provider, mock success/auth/timeout/connection errors, custom URL |
-| `TestConnectionTestLive` | 3 | **Live** tests with Google Gemini API (valid/invalid key, explicit URL) |
+| `TestConnectionTest` | 8 | Empty key, unknown provider, mock success/auth/timeout/connection errors, custom URL; all return `(bool, str, list)` 3-tuple with model ID list |
+| `TestConnectionTestLive` | 3 | **Live** tests with Google Gemini API (valid/invalid key, explicit URL); assert models list populated |
 | `TestProviderBaseUrls` | 4 | Known providers have URLs, specific URL validation |
 | `TestApiKeyOptionHelper` | 3 | `_api_key_option()` format, whitespace stripping, case preservation |
 | `TestPasswordStrength` | 5 | Tier assessment: Instantly, Weak, Safe, meter_text |
@@ -10200,7 +10200,13 @@ python -m pytest dev/test_api_keys.py -v --timeout=30
 - `test_multiple_keys_per_provider` — Two keys for same provider stored and retrieved independently
 - `test_ini_key_format_provider_comma_name` — Verifies `[api_keys]` uses `provider, name` as INI option
 - `test_ini_value_is_encrypted` — Stored value starts with `gAAAAA` (Fernet token), not plaintext
-- `test_google_gemini_valid_key` — Live test validates connection to Gemini API (43+ models)
-- `test_google_gemini_invalid_key` — Live test confirms invalid key properly rejected
-- `test_auth_error_returns_invalid_key` — Mock 401 → "Authentication failed" message
+- `test_google_gemini_valid_key` — Live test validates connection to Gemini API (43+ models), asserts models is a list
+- `test_google_gemini_invalid_key` — Live test confirms invalid key properly rejected, models list empty
+- `test_auth_error_returns_invalid_key` — Mock 401 → "Authentication failed" message, 3-tuple return
 - `test_full_lifecycle` — Complete CRUD cycle: password → 3 keys → list → retrieve → delete → verify
+
+**Return type change (all callers updated):**
+- `test_api_connection()` returns `(bool, str, list)` — third element is list of model IDs
+- All `TestConnectionTest` and `TestConnectionTestLive` tests unpack 3-tuple: `ok, msg, models = ...`
+- Success tests assert `isinstance(models, list)` and `len(models) > 0`
+- Failure tests assert `models == []`

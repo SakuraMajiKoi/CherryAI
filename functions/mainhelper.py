@@ -872,35 +872,18 @@ def detect_delimiter(path: Path) -> str:
 
 # ----------------------------- State persistence & UI helpers ------------------------- #
 def _resolve_config_file() -> Path:
-    """Attempt to resolve a canonical CONFIG_FILE Path from the CherryAI module.
+    """Return the canonical path to ``user/CherryAI.ini``.
 
-    Falls back to a sensible local path if the CherryAI module cannot be
-    imported.
+    Uses :func:`ini_manager.get_ini_path` as the single source of truth.
+    Falls back to a sensible local path if the import fails.
     """
     try:
-        import importlib
-
-        for candidate in (
-            "CherryAI.CherryAI",
-            "CherryAI.CherryAI",
-            "CherryAI.CherryAI",
-            "CherryAI",
-            "CherryAI",
-        ):
-            try:
-                mod = importlib.import_module(candidate)
-            except Exception:
-                mod = None
-            if mod is not None and hasattr(mod, "CONFIG_FILE"):
-                cf = getattr(mod, "CONFIG_FILE")
-                try:
-                    return Path(cf)
-                except Exception:
-                    pass
+        from CherryAI.functions import ini_manager
+        return ini_manager.get_ini_path()
     except Exception:
         pass
-    # Fallback: place config next to the package root (two levels up from this file)
-    return Path(__file__).resolve().parent.parent / "CherryAI.ini"
+    # Fallback: user/ subfolder next to this file's package root
+    return Path(__file__).resolve().parent.parent / "user" / "CherryAI.ini"
 
 
 def load_app_state(config_file: Optional[Path] = None) -> Dict[str, Any]:

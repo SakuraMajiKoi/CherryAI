@@ -1452,7 +1452,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Mock Translation: "Mock Translation" as first MODEL_OPTIONS entry, routes to `MockTranslator` in `functions/mock_translator.py`
     - API Provider Management: `APIProviderEntry` dataclass, `PROVIDER_PRESETS` (5 presets: OpenAI GPT-4o-mini, GPT-4o, Gemini Flash, Claude Sonnet, Local LLM), `_PresetPickerDialog` helper dialog
     - API Key Management: "Saved API Keys" Treeview (Name, Provider columns) with Save Key/Load Key/Remove buttons; encrypted storage via `api_config.set_api_key(provider, key, password, name)` in `[api_keys]` as `provider, name = encrypted_value`; master password prompt with first-time setup flow
-    - Connection Test: Real `test_api_connection()` using OpenAI-compatible `models.list()` endpoint; threaded execution with specific error messages (auth failure, timeout, connection refused); replaces stub that always returned success
+    - Connection Test: Real `test_api_connection()` using OpenAI-compatible `models.list()` endpoint; returns `(bool, str, list)` with model IDs; threaded execution with specific error messages (auth failure, timeout, connection refused); on success, opens API Test Results dialog with filterable model table and per-model translation testing via `test_model_translation()`
     - Settings Migration: caching.mode in CachingSettings, thinking_enabled/thinking_budget in RequestSettings, rolling_context_lines in RequestSettings; `_sync_from_global_options()` applies overrides on tab enter
     - Retry Refinement: UI shows only Batch + Contextual (`RETRY_STRATEGIES`); `ALL_RETRY_STRATEGIES` kept for CLI with all 4; max retries minimum changed from 1 to 0
     - Prompt Editor Redesign: removed Style Preset and Game Summary textarea; "Preview Prompt" read-only button; Ban Tokens LabelFrame with preset dropdown (None/Clean English/Strict)
@@ -1558,6 +1558,9 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - EncodingOption: UTF8, UTF8_BOM, UTF16, SHIFT_JIS, EUC_JP, AUTO
   - **Security Section (added 2026):**
     - Set/change master password via SetPasswordDialog / ChangePasswordDialog
+    - Disable password: `disable_password()` decrypts all keys and stores them as plaintext
+    - Reset password: `reset_password()` clears password hash/salt and removes all stored keys
+    - Plaintext key storage: `set_api_key_plain()` / `get_api_key_plain()` for no-password mode
     - Real-time password strength meter (PasswordStrengthWidget)
     - HiveSystems 2025 tier legend (Instantly/Weak/Good/Great/Safe)
     - bcrypt WF-10 hashing + AES-256 Fernet encryption for API keys (user/API.ini)
@@ -1585,11 +1588,12 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - COMMON_BAN_TOKENS: em_dash, smart_quotes, ellipsis, etc.
   - **API Section:**
     - Provider dropdown (OpenAI, Gemini, Anthropic, Local, Ollama, LM Studio)
-    - API key entry with show/hide toggle
+    - Test API Connection button inline with provider dropdown; opens results dialog on success
+    - API key entry with inline Save button and show/hide toggle
     - Base URL entry (auto-filled from provider)
     - Model dropdown (updates based on provider)
     - Temperature slider (0.0-2.0)
-    - Test API Connection button
+    - API Test Results dialog: filterable model table (Structured/Batch/Thinking filters), per-model translation testing
   - **Request Section:**
     - Lines per request (chunk size)
     - Timeout in seconds
@@ -3022,20 +3026,22 @@ and Mistral. Model information (pricing, rate limits, capabilities) is:
 - Updated via the "⟳ Refresh Models" button in Global Options
 - Automatically up-to-date via curated built-in fallback data (Feb 2026)
 
-**Models included** (23 built-in, more fetched live with keys):
-- OpenAI: GPT-4.1 family, GPT-4o family, o3/o4-mini reasoning, GPT-5 Mini
+**Models included** (27 built-in, more fetched live with keys):
+- OpenAI: GPT-5.2/5.1/5/5-mini/5-nano, GPT-4.1 family, GPT-4o family, o3/o4-mini reasoning
 - Google: Gemini 3.x/2.5/2.0 Flash and Pro variants
 - Mistral: Mistral Large/Medium/Small 3.x, Magistral reasoning, Codestral, Ministral
 
-**Per-model information stored**: input/output/cached/batch pricing (USD/1M tokens),
+**Per-model information stored**: input/output/cached/batch/flex/priority pricing (USD/1M tokens),
 RPM/RPD rate limits per tier, context window, structured output, thinking mode,
 logit_bias support, temperature range.
 
-**API Key Management**: Encrypted API key storage in `user/API.ini` with
+**API Key Management**: Encrypted or plaintext API key storage in `user/API.ini` with
 multiple named keys per provider (format: `[api_keys]` → `provider, name = encrypted_value`).
 Keys encrypted with AES-256 via Fernet, keyed from a master password (bcrypt WF-10).
+Password can be disabled (stores keys as plaintext) or reset (clears all keys).
 Connection testing via `test_api_connection()` validates keys against provider endpoints
-using the OpenAI-compatible `models.list()` call with specific error reporting.
+using the OpenAI-compatible `models.list()` call, returns model ID list for the
+API Test Results dialog with filterable model table and per-model translation testing.
 
 =============================================================================
 

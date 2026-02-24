@@ -729,9 +729,9 @@ class GlobalOptionsDialog(tk.Toplevel):
         super().__init__(parent)
 
         self.title("Global Options")
-        self.geometry("750x600")
+        self.geometry("900x750")
         self.resizable(True, True)
-        self.minsize(650, 500)
+        self.minsize(750, 600)
 
         print("DEBUG: GlobalOptionsDialog bare init complete", flush=True)
         
@@ -1075,6 +1075,14 @@ class GlobalOptionsDialog(tk.Toplevel):
         provider_combo.bind("<<ComboboxSelected>>", self._on_provider_change)
         self._provider_combo_ref = provider_combo
 
+        ttk.Button(
+            provider_row, text="Test API Connection",
+            command=self._test_connection,
+        ).pack(side=tk.LEFT, padx=(10, 5))
+
+        self._test_status_label = ttk.Label(provider_row, text="")
+        self._test_status_label.pack(side=tk.LEFT, padx=5)
+
         # API Key
         key_row = ttk.Frame(provider_frame)
         key_row.pack(fill=tk.X, pady=5)
@@ -1082,6 +1090,8 @@ class GlobalOptionsDialog(tk.Toplevel):
         ttk.Label(key_row, text="API Key:", width=15).pack(side=tk.LEFT)
         self._api_key_entry = ttk.Entry(key_row, textvariable=self.api_key_var, width=40, show="•")
         self._api_key_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+
+        ttk.Button(key_row, text="Save", width=5, command=self._save_api_key).pack(side=tk.LEFT, padx=(2, 0))
 
         self._show_key_var = tk.BooleanVar(value=False)
         show_btn = ttk.Checkbutton(key_row, text="Show", variable=self._show_key_var, command=self._toggle_key_visibility)
@@ -1135,16 +1145,6 @@ class GlobalOptionsDialog(tk.Toplevel):
         temp_help = ttk.Label(model_frame, text="Lower = more deterministic, Higher = more creative (0.0-2.0)", foreground="gray")
         temp_help.pack(anchor=tk.W, pady=(0, 5))
 
-        # Test connection button
-        test_frame = ttk.Frame(panel)
-        test_frame.pack(fill=tk.X, pady=10)
-
-        test_btn = ttk.Button(test_frame, text="Test API Connection", command=self._test_connection)
-        test_btn.pack(side=tk.LEFT)
-
-        self._test_status_label = ttk.Label(test_frame, text="")
-        self._test_status_label.pack(side=tk.LEFT, padx=10)
-
         # ---- Saved API Keys ----
         keys_frame = ttk.LabelFrame(panel, text="Saved API Keys", padding=10)
         keys_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
@@ -1172,7 +1172,6 @@ class GlobalOptionsDialog(tk.Toplevel):
         key_btns = ttk.Frame(keys_frame)
         key_btns.pack(side=tk.LEFT, padx=(10, 0), fill=tk.Y)
 
-        ttk.Button(key_btns, text="Save Key", width=10, command=self._save_api_key).pack(pady=2)
         ttk.Button(key_btns, text="Load Key", width=10, command=self._load_api_key).pack(pady=2)
         ttk.Button(key_btns, text="Remove", width=10, command=self._remove_api_key).pack(pady=2)
 
@@ -1888,7 +1887,21 @@ class GlobalOptionsDialog(tk.Toplevel):
             text="Change Password…",
             command=self._on_change_password,
         )
-        self._change_pw_btn.pack(side=tk.LEFT)
+        self._change_pw_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        self._disable_pw_btn = ttk.Button(
+            btn_row,
+            text="Disable Password",
+            command=self._on_disable_password,
+        )
+        self._disable_pw_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        self._reset_pw_btn = ttk.Button(
+            btn_row,
+            text="Reset Password",
+            command=self._on_reset_password,
+        )
+        self._reset_pw_btn.pack(side=tk.LEFT)
 
         # ---- Strength tester frame -----------------------------------
         tester_frame = ttk.LabelFrame(panel, text="Password Strength Tester", padding=12)
@@ -1969,6 +1982,8 @@ class GlobalOptionsDialog(tk.Toplevel):
                 )
                 self._set_pw_btn.configure(state="disabled")
                 self._change_pw_btn.configure(state="normal")
+                self._disable_pw_btn.configure(state="normal")
+                self._reset_pw_btn.configure(state="normal")
             else:
                 self._sec_status_label.configure(
                     text="\u26A0\ufe0f  No master password set. API keys are stored unencrypted.",
@@ -1976,6 +1991,8 @@ class GlobalOptionsDialog(tk.Toplevel):
                 )
                 self._set_pw_btn.configure(state="normal")
                 self._change_pw_btn.configure(state="disabled")
+                self._disable_pw_btn.configure(state="disabled")
+                self._reset_pw_btn.configure(state="disabled")
         except Exception as exc:
             logger.warning("Could not read security status: %s", exc)
 
@@ -2004,6 +2021,49 @@ class GlobalOptionsDialog(tk.Toplevel):
                 parent=self,
             )
             self._refresh_security_status()
+
+    def _on_disable_password(self) -> None:
+        """Disable the master password, storing all keys in plaintext."""
+        confirm = messagebox.askyesno(
+            "Disable Password",
+            "This will remove encryption from all stored API keys.\n"
+            "Keys will be stored in plaintext in API.ini.\n\n"
+            "Continue?",
+            parent=self,
+        )
+        if not confirm:
+            return
+        pw = self._prompt_password("Enter Current Password")
+        if not pw:
+            return
+        success, msg = _api_config.disable_password(pw)
+        if success:
+            messagebox.showinfo("Password Disabled", msg, parent=self)
+            self._refresh_security_status()
+            self._refresh_providers_tree()
+        else:
+            messagebox.showerror("Error", msg, parent=self)
+
+    def _on_reset_password(self) -> None:
+        """Reset the master password, removing all stored keys."""
+        confirm = messagebox.askyesno(
+            "Reset Password",
+            "WARNING: This will remove the master password AND delete\n"
+            "all stored API keys (they cannot be decrypted without\n"
+            "the password).\n\n"
+            "This action cannot be undone. Continue?",
+            icon="warning",
+            parent=self,
+        )
+        if not confirm:
+            return
+        success, msg = _api_config.reset_password()
+        if success:
+            messagebox.showinfo("Password Reset", msg, parent=self)
+            self._refresh_security_status()
+            self._refresh_providers_tree()
+        else:
+            messagebox.showerror("Error", msg, parent=self)
 
     def _build_buttons(self, parent: ttk.Frame) -> None:
         """Build the action buttons at the bottom."""
@@ -2120,7 +2180,7 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.update_idletasks()
 
         def _do_test() -> None:
-            success, msg = _api_config.test_api_connection(
+            success, msg, model_ids = _api_config.test_api_connection(
                 api_key=api_key,
                 provider=provider,
                 base_url=base_url,
@@ -2134,6 +2194,10 @@ class GlobalOptionsDialog(tk.Toplevel):
                     self._test_status_label.config(
                         text=f"{prefix}{msg}", foreground=color,
                     )
+                    if success and model_ids:
+                        self._show_api_test_results(
+                            provider, api_key, base_url, model_ids,
+                        )
                 except Exception:
                     pass
 
@@ -2144,6 +2208,199 @@ class GlobalOptionsDialog(tk.Toplevel):
 
         t = threading.Thread(target=_do_test, daemon=True)
         t.start()
+
+    def _show_api_test_results(
+        self,
+        provider: str,
+        api_key: str,
+        base_url: str,
+        model_ids: list,
+    ) -> None:
+        """Open a results window showing available models and test controls.
+
+        Displays a filterable Treeview of models returned by the API, enriched
+        with metadata from the model registry (pricing, capabilities).  A
+        "Test Model" button sends a lightweight translation probe.
+
+        Args:
+            provider:  Provider name (openai, gemini, …).
+            api_key:   API key used for the test.
+            base_url:  Base URL used (may be empty for default).
+            model_ids: List of model ID strings from models.list().
+        """
+        from functions import model_registry
+
+        win = tk.Toplevel(self)
+        win.title(f"API Test Results — {provider}")
+        win.geometry("950x550")
+        win.minsize(750, 400)
+        win.transient(self)
+        win.grab_set()
+
+        # Header
+        hdr = ttk.Frame(win, padding=10)
+        hdr.pack(fill=tk.X)
+        ttk.Label(
+            hdr,
+            text=f"Provider: {provider}  —  {len(model_ids)} model(s) found",
+            font=("", 11, "bold"),
+        ).pack(side=tk.LEFT)
+
+        # Filter bar
+        filter_bar = ttk.Frame(win, padding=(10, 0, 10, 5))
+        filter_bar.pack(fill=tk.X)
+
+        struct_var = tk.BooleanVar(value=False)
+        batch_var = tk.BooleanVar(value=False)
+        thinking_var = tk.BooleanVar(value=False)
+
+        def _apply_filter() -> None:
+            """Rebuild the Treeview based on current filter checkboxes."""
+            tree.delete(*tree.get_children())
+            for mid in model_ids:
+                info = model_registry.get_model_info(mid)
+                row = _build_row(mid, info)
+                if struct_var.get() and row[1] != "✓":
+                    continue
+                if batch_var.get() and row[2] != "✓":
+                    continue
+                if thinking_var.get() and row[3] != "✓":
+                    continue
+                tree.insert("", tk.END, values=row)
+
+        ttk.Checkbutton(
+            filter_bar, text="Structured Output only",
+            variable=struct_var, command=_apply_filter,
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Checkbutton(
+            filter_bar, text="Batch only",
+            variable=batch_var, command=_apply_filter,
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Checkbutton(
+            filter_bar, text="Thinking only",
+            variable=thinking_var, command=_apply_filter,
+        ).pack(side=tk.LEFT, padx=(0, 10))
+
+        # Treeview columns
+        cols = (
+            "model", "structured", "batch", "thinking",
+            "input_price", "output_price", "context",
+        )
+        col_widths = {
+            "model": 250, "structured": 90, "batch": 60,
+            "thinking": 70, "input_price": 100, "output_price": 100,
+            "context": 100,
+        }
+        col_headings = {
+            "model": "Model", "structured": "Structured",
+            "batch": "Batch", "thinking": "Thinking",
+            "input_price": "Input $/1M", "output_price": "Output $/1M",
+            "context": "Context",
+        }
+
+        tree_frame = ttk.Frame(win, padding=10)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
+
+        tree = ttk.Treeview(
+            tree_frame, columns=cols, show="headings", height=15,
+        )
+        for c in cols:
+            tree.heading(c, text=col_headings[c])
+            anchor = tk.W if c == "model" else tk.CENTER
+            tree.column(c, width=col_widths[c], anchor=anchor)
+
+        vsb = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def _build_row(
+            mid: str, info: Optional[model_registry.ModelInfo],
+        ) -> tuple:
+            """Build a display row from a model ID and optional registry info."""
+            if info:
+                return (
+                    mid,
+                    "✓" if info.structured_output else "—",
+                    "✓" if info.batch_mode else "—",
+                    "✓" if info.thinking else "—",
+                    f"${info.input_price:.2f}" if info.input_price else "—",
+                    f"${info.output_price:.2f}" if info.output_price else "—",
+                    f"{info.context_window:,}" if info.context_window else "—",
+                )
+            return (mid, "?", "?", "?", "?", "?", "?")
+
+        # Populate table
+        for mid in sorted(model_ids):
+            info = model_registry.get_model_info(mid)
+            tree.insert("", tk.END, values=_build_row(mid, info))
+
+        # Bottom button bar
+        btn_bar = ttk.Frame(win, padding=10)
+        btn_bar.pack(fill=tk.X)
+
+        test_result_label = ttk.Label(btn_bar, text="", foreground="gray")
+        test_result_label.pack(side=tk.LEFT, padx=(0, 10), fill=tk.X, expand=True)
+
+        def _test_selected_model() -> None:
+            """Run a translation probe against the selected model."""
+            import threading as _thr
+
+            sel = tree.selection()
+            if not sel:
+                test_result_label.config(
+                    text="Select a model first.", foreground="orange",
+                )
+                return
+            mid = tree.item(sel[0], "values")[0]
+            test_result_label.config(
+                text=f"Testing {mid}…", foreground="gray",
+            )
+            win.update_idletasks()
+
+            def _run() -> None:
+                result = _api_config.test_model_translation(
+                    api_key=api_key,
+                    model_id=mid,
+                    provider=provider,
+                    base_url=base_url,
+                    timeout=30.0,
+                )
+                ok = result.get("success", False)
+                checks = result.get("checks", [])
+                elapsed = result.get("elapsed_seconds", 0.0)
+                passed = sum(1 for c in checks if c.get("passed"))
+                total = len(checks)
+                summary = (
+                    f"{'✓' if ok else '✗'} {mid}: {passed}/{total} checks "
+                    f"passed ({elapsed:.1f}s)"
+                )
+                color = "green" if ok else "red"
+                if passed > 0 and not ok:
+                    color = "orange"
+
+                def _upd() -> None:
+                    try:
+                        test_result_label.config(
+                            text=summary, foreground=color,
+                        )
+                    except Exception:
+                        pass
+
+                try:
+                    win.after(0, _upd)
+                except Exception:
+                    pass
+
+            _thr.Thread(target=_run, daemon=True).start()
+
+        ttk.Button(
+            btn_bar, text="Test Model Translation",
+            command=_test_selected_model,
+        ).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(
+            btn_bar, text="Close", command=win.destroy,
+        ).pack(side=tk.RIGHT)
 
     # ---- API Key management helpers ----
 
@@ -2210,7 +2467,11 @@ class GlobalOptionsDialog(tk.Toplevel):
             tree.insert("", "end", iid=str(idx), values=(name, provider))
 
     def _save_api_key(self) -> None:
-        """Save the current API key to API.ini with a user-chosen name."""
+        """Save the current API key to API.ini with a user-chosen name.
+
+        If no master password is set, the key is stored in plaintext.
+        If a password is set, the key is encrypted with it.
+        """
         api_key = self.api_key_var.get().strip()
         if not api_key:
             messagebox.showwarning(
@@ -2237,15 +2498,28 @@ class GlobalOptionsDialog(tk.Toplevel):
         if not key_name or not key_name.strip():
             return
 
-        # Get/set password
-        password = self._ensure_password_set()
+        # If no password is set, store plaintext
+        if not _api_config.is_password_set():
+            if _api_config.set_api_key_plain(provider, api_key, key_name.strip()):
+                messagebox.showinfo(
+                    "Saved",
+                    f"API key '{key_name.strip()}' saved for {provider} (plaintext).",
+                    parent=self,
+                )
+                self._refresh_providers_tree()
+            else:
+                messagebox.showerror("Error", "Failed to save key.", parent=self)
+            return
+
+        # Password is set — encrypt
+        password = self._prompt_password("Enter Master Password")
         if not password:
             return
 
         if _api_config.set_api_key(provider, api_key, password, key_name.strip()):
             messagebox.showinfo(
                 "Saved",
-                f"API key '{key_name.strip()}' saved for {provider}.",
+                f"API key '{key_name.strip()}' saved for {provider} (encrypted).",
                 parent=self,
             )
             self._refresh_providers_tree()
@@ -2267,6 +2541,24 @@ class GlobalOptionsDialog(tk.Toplevel):
 
         values = self._providers_tree.item(sel[0], "values")
         key_name, provider = values[0], values[1]
+
+        # If no password set, load plaintext directly
+        if not _api_config.is_password_set():
+            plaintext = _api_config.get_api_key_plain(provider, key_name)
+            if plaintext:
+                self.api_key_var.set(plaintext)
+                self.provider_var.set(provider)
+                self._on_provider_change(None)
+                messagebox.showinfo(
+                    "Loaded",
+                    f"Key '{key_name}' loaded for {provider}.",
+                    parent=self,
+                )
+            else:
+                messagebox.showerror(
+                    "Error", "Key not found.", parent=self,
+                )
+            return
 
         password = self._prompt_password("Unlock API Key")
         if not password:

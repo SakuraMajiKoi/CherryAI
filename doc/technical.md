@@ -139,10 +139,11 @@ TABLE OF CONTENTS
    3.48 api_config.py ✅ — Encrypted API configuration manager (user/API.ini); Phase 62 extended
         * Single source of ALL API meta information: provider profiles, model, temperature, URL, timeout, rate limits, encrypted keys
         * ✅ Phase 62: api_profiles.ini consolidated; `[translation]` and `[glossary]` sections added
-        * Key management: set_password(), verify_password(), is_password_set(), set_api_key(provider, key, password, name), get_api_key(provider, password, name), change_password(), migrate_from_ini()
+        * Key management: set_password(), verify_password(), is_password_set(), set_api_key(provider, key, password, name), get_api_key(provider, password, name), change_password(), migrate_from_ini(), disable_password(current_password), reset_password(), set_api_key_plain(provider, key, name), get_api_key_plain(provider, name)
         * Key listing: list_api_keys() returns [(provider, name), …] metadata; delete_api_key(provider, name) removes a saved key
-        * INI format: `[api_keys]` section stores keys as `provider, name = encrypted_value` (Fernet AES-256)
-        * Connection testing: test_api_connection(api_key, provider, base_url, timeout) → (bool, str); uses OpenAI-compatible models.list()
+        * INI format: `[api_keys]` section stores keys as `provider, name = encrypted_value` (Fernet AES-256) or plaintext when password disabled
+        * Connection testing: test_api_connection(api_key, provider, base_url, timeout) → (bool, str, list); returns model ID list; uses OpenAI-compatible models.list()
+        * Translation testing: test_model_translation(api_key, model_id, provider, base_url, timeout) → dict; 6-check translation probe (structured output, line count, code preservation, glossary adherence, completeness, output length)
         * PROVIDER_BASE_URLS: default base URLs for openai, gemini, anthropic, mistral, ollama, lmstudio, local
         * Profile settings (Phase 62 new): get_profile_setting(profile, key), set_profile_setting(profile, key, value), get_all_profile_settings(profile)
         * Migration: migrate_profiles_ini(path) — migrates non-secret fields from api_profiles.ini, renames to .migrated
@@ -212,7 +213,10 @@ TABLE OF CONTENTS
          - _PresetPickerDialog helper dialog (Task 43.6)
          - API Key Management: "Saved API Keys" Treeview with Save Key/Load Key/Remove buttons;
            _save_api_key(), _load_api_key(), _remove_api_key(), _ensure_password_set(), _prompt_password()
-         - Connection Test: _test_connection() calls api_config.test_api_connection() in background thread
+         - Connection Test: _test_connection() calls api_config.test_api_connection() in background thread;
+           on success opens _show_api_test_results() dialog with filterable model table and per-model translation testing
+         - Test API Connection button inline with Provider dropdown (moved from standalone frame)
+         - API key entry with inline Save button between key entry and Show checkbox
          - GlobalOptions container: all settings + providers list; `safety` property is alias for `limit`
          - RequestSettings: +thinking_enabled, +thinking_budget, +rolling_context_lines (Tasks 43.8, 43.9)
          - CachingSettings: fields renamed — dir, age (days), size (MB), mode; defaults 0=unlimited
@@ -229,8 +233,8 @@ TABLE OF CONTENTS
            - get/set_conditional_prompt() helpers in ini_manager for typed access
            - Configurable via Global Options → Prompts section (4-row table: 3-line Text + scrollbar + Reset)
            - Used by get_context_prompt() in prompt_builder.py for live translation and mock translation
-         - Security Section (2026): Set/Change master password, PasswordStrengthWidget tester,
-           HiveSystems tier legend, bcrypt + AES-256 info, links to doc/passwords.md
+         - Security Section (2026): Set/Change/Disable/Reset master password, PasswordStrengthWidget tester,
+           HiveSystems tier legend, bcrypt + AES-256 info, plaintext key mode, links to doc/passwords.md
        - project_dialog.py - Project management dialogs (TASK 19, TASK 21.4, Phase 58.11):
          - ProjectNameDialog: Prompt for project name on new project creation (500x280, empty name field)
          - LoadManifestDialog: File browser for loading existing manifests (sorted by date, latest first)
@@ -5057,8 +5061,8 @@ python CherryAI/functions/dependencies.py --force
 New module (Dynamic Model Registry). Single source of truth for model metadata.
 
 **Key classes/functions:**
-- `ModelInfo` — dataclass with 25+ fields (pricing, limits, capabilities, timestamps)
-- `FALLBACK_MODELS` — curated built-in data for openai/google/mistral (23 models total)
+- `ModelInfo` — dataclass with 30+ fields (standard/batch/flex/priority pricing, limits, capabilities, timestamps)
+- `FALLBACK_MODELS` — curated built-in data for openai/google/mistral (27 models total)
 - `refresh_models(api_keys, path, providers)` — fetch from live APIs + save to INI
 - `save_to_ini(provider, models, path)` — persist to `[model_registry_<provider>]` section
 - `load_from_ini(provider, path)` → `(models, last_updated_iso)`
@@ -5082,10 +5086,16 @@ New module (Dynamic Model Registry). Single source of truth for model metadata.
 - Google: `GET https://generativelanguage.googleapis.com/v1beta/models?key={key}`
 - Mistral: `GET https://api.mistral.ai/v1/models` (Bearer key)
 
-**Fallback data (23 models):**
-- OpenAI (8): gpt-4.1, gpt-4.1-mini, gpt-4.1-nano, gpt-4o, gpt-4o-mini, o4-mini, o3, gpt-5-mini
+**Fallback data (27 models):**
+- OpenAI (12): gpt-4.1, gpt-4.1-mini, gpt-4.1-nano, gpt-4o, gpt-4o-mini, o4-mini, o3, gpt-5-mini, gpt-5, gpt-5.1, gpt-5.2, gpt-5-nano
 - Google (7): gemini-3.1-pro-preview, gemini-3-flash-preview, gemini-2.5-pro, gemini-2.5-flash, gemini-2.5-flash-lite, gemini-2.0-flash, gemini-2.0-flash-lite
 - Mistral (8): mistral-large-latest, mistral-medium-latest, mistral-small-latest, magistral-medium-latest, magistral-small-latest, codestral-latest, ministral-8b-latest, ministral-3b-latest
+
+**Pricing tiers (ModelInfo fields):**
+- Standard: `input_price`, `cached_input_price`, `output_price`
+- Batch: `batch_input_price`, `batch_output_price` (async batch API, ~50% of standard)
+- Flex: `flex_input_price`, `flex_output_price` (same as batch rates, higher latency)
+- Priority: `priority_input_price`, `priority_output_price` (~1.75-2x standard, lower latency)
 
 **functions/config.py:** `MODEL_PRICING` is now `_ModelPricingProxy` — lazily syncs from registry on every dict access. Backward-compatible: all existing code using `MODEL_PRICING` works unchanged.
 

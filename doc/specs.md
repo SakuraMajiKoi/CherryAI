@@ -4837,23 +4837,32 @@ without any hardcoded cloud provider data.
 | `context_window` | int | Max context tokens |
 | `token_speed` | int | Approx tokens/second |
 | `fetched_at` | str | ISO-8601 timestamp of last fetch |
+| `flex_input_price` | float | Flex processing input (USD/1M tokens) |
+| `flex_output_price` | float | Flex processing output (USD/1M tokens) |
+| `priority_input_price` | float | Priority processing input (USD/1M tokens) |
+| `priority_output_price` | float | Priority processing output (USD/1M tokens) |
 
 **Storage:** `user/API.ini`
 - `[model_registry]` — `version`, `last_refreshed`
 - `[model_registry_openai]` — `last_updated` (ISO-8601), `model.<id>` per model (JSON per line)
 - `[model_registry_google]` — same structure
 - `[model_registry_mistral]` — same structure
-- `[security]` — `password_hash` (bcrypt WF-10), `key_salt` (hex, 32 bytes for PBKDF2)
-- `[api_keys]` — Named API keys: `provider, name = <Fernet-encrypted value>`
+- `[security]` — `password_hash` (bcrypt WF-10, empty when password disabled), `key_salt` (hex, 32 bytes for PBKDF2)
+- `[api_keys]` — Named API keys: `provider, name = <Fernet-encrypted value>` or plaintext when password disabled
   - Multiple keys per provider supported (e.g. `openai, work-key`, `openai, personal`)
   - Encrypted with AES-256 via Fernet, derived from master password + PBKDF2-HMAC-SHA256 (390k iterations)
 
 **API Key Management functions** (`functions/api_config.py`):
 - `set_api_key(provider, key, password, name="default")` — encrypt and store
 - `get_api_key(provider, password, name="default")` — decrypt and return
+- `set_api_key_plain(provider, key, name="default")` — store key as plaintext (no password required)
+- `get_api_key_plain(provider, name="default")` — retrieve plaintext key
 - `list_api_keys()` → `[(provider, name), …]` — metadata without decryption
 - `delete_api_key(provider, name)` — remove a saved key
-- `test_api_connection(api_key, provider, base_url, timeout)` → `(bool, message)` — validates via `models.list()`
+- `disable_password(current_password)` — decrypt all keys, clear hash/salt, store as plaintext
+- `reset_password()` — clear hash/salt and remove all stored keys
+- `test_api_connection(api_key, provider, base_url, timeout)` → `(bool, str, list)` — validates via `models.list()`, returns model ID list
+- `test_model_translation(api_key, model_id, provider, base_url, timeout)` → `dict` — 6-check translation test (structured output, line count, code preservation, glossary adherence, translation completeness, output length)
 - `PROVIDER_BASE_URLS` — default base URLs for all known providers
 
 **Freshness policy:** Default 24 hours; stale data transparently falls back to built-in curated list.

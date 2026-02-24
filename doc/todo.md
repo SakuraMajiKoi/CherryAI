@@ -2232,33 +2232,44 @@ python -m pytest dev/test_model_registry.py::TestLiveFetch -v
 ### API KEY MANAGEMENT & CONNECTION TESTING
 **Priority:** COMPLETE | **Status:** ✅ DONE
 
-**Goal:** Full pipeline for saving/loading/encrypting API keys in `API.ini`, real connection testing.
+**Goal:** Full pipeline for saving/loading/encrypting API keys in `API.ini`, real connection testing, plaintext key mode, password disable/reset, per-model translation testing.
 
 **Implemented:**
 - `functions/api_config.py` — Extended:
   - `set_api_key(provider, key, password, name)` / `get_api_key()` now use `provider, name` INI key format
+  - `set_api_key_plain(provider, key, name)` / `get_api_key_plain()` — plaintext storage (no password)
   - `list_api_keys()` returns `[(provider, name), …]` metadata without decryption
   - `delete_api_key(provider, name)` removes a saved key
-  - `test_api_connection(api_key, provider, base_url, timeout)` → `(bool, msg)` via OpenAI-compatible `models.list()`
+  - `disable_password(current_password)` — decrypts all keys, clears hash/salt, stores plaintext
+  - `reset_password()` — clears hash/salt, removes all stored keys
+  - `test_api_connection(api_key, provider, base_url, timeout)` → `(bool, str, list)` via OpenAI-compatible `models.list()`; returns model ID list
+  - `test_model_translation(api_key, model_id, provider, base_url, timeout)` → `dict` — 6-check translation test
   - `PROVIDER_BASE_URLS` — default base URLs for openai, gemini, anthropic, mistral, ollama, lmstudio, local
   - `_api_key_option(provider, name)` — builds `"provider, name"` INI option string
 - `gui/dialogs/global_options.py` — Redesigned:
+  - Dialog geometry `900x750`, minsize `(750, 600)`
   - "Saved Providers" table → "Saved API Keys" Treeview (Name, Provider columns)
-  - `_save_api_key()` — saves current key with user-chosen name, encrypted via `api_config`
-  - `_load_api_key()` — decrypts and loads selected key into entry field
+  - `_save_api_key()` — saves current key (encrypted or plaintext based on password state)
+  - `_load_api_key()` — decrypts/loads selected key into entry field
   - `_remove_api_key()` — deletes selected saved key
   - `_ensure_password_set()` — first-time password setup + verification flow
-  - `_test_connection()` — real API test via `api_config.test_api_connection()` in background thread
-  - Removed `_ProviderEditDialog` (replaced by Save Key/Load Key/Remove workflow)
+  - `_test_connection()` — real API test in background thread; on success shows API Test Results dialog
+  - `_show_api_test_results()` — Toplevel dialog with filterable model Treeview (Structured, Batch, Thinking, Pricing, Context); Test Model Translation button
+  - `_disable_pw_btn` / `_reset_pw_btn` — password disable and reset buttons in Security section
+  - Save button inline with API key entry field
+  - Test API Connection button inline with Provider dropdown
 - `functions/model_registry.py` — `save_to_ini()` / `load_from_ini()` rewritten for per-model key format (`model.<id> = {JSON}`)
-- `dev/test_api_keys.py` — 50 tests: password management, key storage CRUD, INI format, connection testing (mock + live), pipeline lifecycle
+  - `ModelInfo` dataclass: added `flex_input_price`, `flex_output_price`, `priority_input_price`, `priority_output_price`
+  - `FALLBACK_MODELS`: 27 models (12 OpenAI incl. gpt-5/5.1/5.2/5-nano, 10 Google, 5 Mistral)
+  - All OpenAI models updated with flex/priority/batch pricing from live pricing page
+- `dev/test_api_keys.py` — 50 tests: password management, key storage CRUD, INI format, connection testing (mock + live, 3-tuple returns), pipeline lifecycle
 
-**Test results:** 176 passed, 4 skipped across all test files
+**Test results:** 119 passed (50 api_keys + 48 config + 21 defaults)
 
 **INI format:**
 ```ini
 [api_keys]
-gemini, my-google-key = gAAAAABp...
+gemini, default = AIzaSyCL_GMLdAa33hSK6QL1VRrbxJxlB_9h1H4
 openai, personal = gAAAAABp...
 ```
 

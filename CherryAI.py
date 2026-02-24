@@ -120,7 +120,7 @@ else:
 
 APP_NAME = "CherryAI"
 # MANIFEST_VERSION is now imported from functions.mainhelper (v2.0)
-CONFIG_FILE = Path(__file__).with_name("CherryAI.ini")
+CONFIG_FILE = Path(__file__).with_name("user") / "CherryAI.ini"
 TEMPLATES_DIR = Path(__file__).with_name("templates")
 OUTPUT_DIR = Path(__file__).with_name("Output")
 MANIFESTS_DIR = Path(__file__).with_name("Projects")
