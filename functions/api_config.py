@@ -441,6 +441,27 @@ def set_api_setting(key: str, value: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Default model per key
+# ---------------------------------------------------------------------------
+
+def get_default_model(provider: str, name: str = "default") -> str:
+    """Return the default model ID stored for a particular API key.
+
+    Returns an empty string when no default has been set.
+    """
+    key = f"default_model_{provider.lower()}_{name.lower()}"
+    return get_api_setting(key, fallback="")
+
+
+def set_default_model(
+    provider: str, name: str, model_id: str,
+) -> None:
+    """Store *model_id* as the default model for a provider/name key."""
+    key = f"default_model_{provider.lower()}_{name.lower()}"
+    set_api_setting(key, model_id)
+
+
+# ---------------------------------------------------------------------------
 # API presets
 # ---------------------------------------------------------------------------
 

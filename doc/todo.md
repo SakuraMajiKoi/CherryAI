@@ -2273,6 +2273,69 @@ gemini, default = AIzaSyCL_GMLdAa33hSK6QL1VRrbxJxlB_9h1H4
 openai, personal = gAAAAABp...
 ```
 
+### Translation Step API Key Integration ✅ DONE
+- **Bug fix:** Translation step now reads API keys from API.ini via `api_config.get_api_key_plain()` instead of the empty `CherryAI.ini [api]` section.
+- **GUI changes:**
+  - Added "Key" dropdown as first row in Request Options (populated from saved API keys in API.ini).
+  - Model dropdown moved to row 2, filtered by the selected key's provider.
+  - Temperature control removed from Translation Step GUI (value still used internally).
+- **Data flow:** Key selection → provider auto-detected → model list filtered via `model_registry.get_provider_model_ids()` → on translate, `api_config.get_api_key_plain(provider, name)` retrieves key → injected into `APIClient.config` → client reinitialised.
+- **Provider mapping:** `_KEY_PROVIDER_TO_REGISTRY` maps API.ini provider names (gemini, openai, mistral) to model_registry IDs (google, openai, mistral).
+- **Manifest fields:** `RequestOptions.ApiKeyProvider`, `RequestOptions.ApiKeyName` persist key selection per project.
+- **Modified:** `gui/steps/translate.py`
+- **Test results:** 98 + 241 + 290 + 600 passed; 0 regressions from this change.
+
+### GUI Overhaul Tasks 3–9 ✅ DONE
+
+**Task 3 — Available Models window (from registry cache):**
+- "Test API Connection" button renamed to "Details" in GO `_build_api_section()`.
+- New `_show_available_models()` method loads cached models from `model_registry.get_provider_model_ids()`.
+- `_show_api_test_results` renamed to `_show_available_models_window`; alias kept for backward compat.
+- Window title changed to "Available Models — {provider}".
+- "Update" button added — performs live API call (`test_api_connection()`) and refreshes table.
+
+**Task 4 — Default model per key:**
+- `api_config.get_default_model(provider, name)` / `set_default_model(provider, name, model_id)` added.
+- Stored in API.ini `[api]` section as `default_model_{provider}_{name}`.
+- "Set as Default" button added to Available Models window.
+- `_on_key_changed()` in translate.py auto-selects saved default model.
+
+**Task 5 — Structured Output default filter:**
+- `struct_var` defaults to checked (True) so only structured-output models shown initially.
+- Filter checkbox states saved/loaded from API.ini via `get_api_setting`/`set_api_setting` (keys: `filter_structured`, `filter_batch`, `filter_thinking`).
+- Initial populate calls `_apply_filter()` instead of showing all models.
+- translate.py `_filter_models_by_provider()` now uses `get_provider_models()` (ModelInfo objects) and applies capability filters.
+
+**Task 6 — Fix Gemini "?" marks:**
+- Model ID normalization: strips `models/` prefix from IDs in `_show_available_models_window`.
+- Applied to both initial load and Update button refresh paths.
+
+**Task 7 — Move/remove controls:**
+- Thinking/Budget removed from translate.py GUI (kept as hidden `tk.BooleanVar`/`tk.IntVar` for compat).
+- "Model Settings" LabelFrame (Model combo, Refresh, Temperature) removed from GO `_build_api_section`.
+- Temperature scale moved to `_build_request_section` in GO (after Rate Limit row).
+- Ban Tokens LabelFrame moved from `_build_prompt_editor` to `_build_request_options` in translate.py.
+
+**Task 8 — Remove Prompt Editor:**
+- `_build_prompt_editor()` stripped to only create hidden compat variables (no visible UI).
+- "👁 Preview Prompt" button moved to header bar, next to "↻ Refresh Lines".
+
+**Task 9 — Model Settings + Translation Options panels:**
+- `OptionSection.TRANSLATION` added to enum (10 sections total).
+- `SECTION_NAMES[REQUEST]` renamed from "Request Settings" to "Model Settings".
+- TRANSLATION added to `SECTION_NAMES`, `SECTION_DESCRIPTIONS`, `CATEGORY_ORDER`.
+- `_build_translation_section()` created with Workflow Defaults and Output Quality settings.
+- Translation Step rows 3–4: "Model Settings" + "Change…" and "Translation Options" + "Change…" buttons.
+- `_open_model_settings()` / `_open_translation_options()` open GO at the respective section.
+
+**Modified files:**
+- `gui/dialogs/global_options.py`
+- `gui/steps/translate.py`
+- `functions/api_config.py`
+- `dev/test_gui_v2.py` (test count assertions updated 9→10)
+
+**Test results:** 581 passed in test_gui_v2 (3 pre-existing deprecated model failures); 130 in api tests; 214 in settings/thinking/blacklist/manifest tests; 0 regressions.
+
 =============================================================================
 END OF ROADMAP
 =============================================================================

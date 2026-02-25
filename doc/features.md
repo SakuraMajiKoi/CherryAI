@@ -904,8 +904,8 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Conditional prompts scrollable text area
     - Ban tokens entry (comma-separated: em_dash, smart_quotes, etc.)
   - **Request Options Panel:**
-    - Model selection with 9 models (GPT, Claude, Gemini families)
-    - Temperature control (0.0-2.0, default 0.3)
+    - API Key selection from saved keys (populated from API.ini)
+    - Model selection filtered by selected key's provider
     - Chunk size (5-100 lines per request, default 30)
     - Retry strategy: batch, contextual, isolated, skip
     - Max retries (1-10, default 3)
@@ -944,7 +944,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Simulation mode when API unavailable
   - **Manifest Integration (Phase 26):**
     - RequestOptions nested structure with all request settings:
-      - Model, Temperature, LinesPerChunk, RetryStrategy
+      - ApiKeyProvider, ApiKeyName, Model, Temperature, LinesPerChunk, RetryStrategy
       - MaxRetries, EnableRequestCaching, LineByLineMode
       - ContextLines, Thinking, ThinkingBudget
     - All options persist to manifest and load on step enter
@@ -1550,7 +1550,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - Centralized options accessible from Tools → Options menu
   - Modal dialog with navigation tree on left, content panels on right
   - **Enums:**
-    - OptionSection: API, REQUEST, CACHING, LOGGING, SESSION, LIMIT, FILE_IO, PROMPTS, SECURITY (9 sections)
+    - OptionSection: API, REQUEST, TRANSLATION, CACHING, LOGGING, SESSION, LIMIT, FILE_IO, PROMPTS, SECURITY (10 sections)
     - OptionCategory: CONNECTION, PROCESSING, APPLICATION (3 categories)
     - LogLevel: DEBUG, INFO, WARNING, ERROR, CRITICAL
     - ThemeMode: LIGHT, DARK, SYSTEM
@@ -1588,17 +1588,23 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - COMMON_BAN_TOKENS: em_dash, smart_quotes, ellipsis, etc.
   - **API Section:**
     - Provider dropdown (OpenAI, Gemini, Anthropic, Local, Ollama, LM Studio)
-    - Test API Connection button inline with provider dropdown; opens results dialog on success
+    - "Details" button inline with provider dropdown; opens Available Models window from registry cache
+    - Available Models window: filterable model table (Structured/Batch/Thinking filters), "Update" button for live API fetch, "Set as Default" button for per-key default model
+    - Gemini model IDs normalized (strips "models/" prefix) for consistent display
+    - Filter checkbox states saved to API.ini (filter_structured, filter_batch, filter_thinking); Structured Output defaults to checked
     - API key entry with inline Save button and show/hide toggle
     - Base URL entry (auto-filled from provider)
-    - Model dropdown (updates based on provider)
-    - Temperature slider (0.0-2.0)
-    - API Test Results dialog: filterable model table (Structured/Batch/Thinking filters), per-model translation testing
-  - **Request Section:**
+    - Default model per key: `get_default_model()` / `set_default_model()` in api_config.py (stored as `default_model_{provider}_{name}` in [api] section)
+  - **Model Settings Section (renamed from Request Section):**
     - Lines per request (chunk size)
     - Timeout in seconds
     - Max retries
     - Rate limit (requests per minute)
+    - Temperature slider (0.0-2.0, moved from API section)
+  - **Translation Section (new):**
+    - OptionSection.TRANSLATION in CONNECTION category
+    - Workflow Defaults: edit-before-translate, skip-translated, skip-non-source
+    - Output Quality: auto-proofread, preserve-formatting
   - **Caching Section:**
     - Enable/disable caching toggle
     - Cache directory with browse button

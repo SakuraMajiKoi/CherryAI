@@ -205,7 +205,7 @@ TABLE OF CONTENTS
    6.6 gui/dialogs/ (6 files - 5 dialog modules)
        - __init__.py - Dialog exports
        - global_options.py - GlobalOptionsDialog with section panels:
-         - OptionSection enum: API, REQUEST, CACHING, LOGGING, SESSION, LIMIT, FILE_IO, PROMPTS, SECURITY (9 sections)
+         - OptionSection enum: API, REQUEST, TRANSLATION, CACHING, LOGGING, SESSION, LIMIT, FILE_IO, PROMPTS, SECURITY (10 sections)
          - Settings dataclasses: APISettings, RequestSettings, CachingSettings, LoggingSettings,
            SessionSettings, LimitSettings (SafetySettings=alias), FileIOSettings, PromptsSettings
          - APIProviderEntry dataclass: name, provider_type, url, api_key, model (Task 43.6)
@@ -214,8 +214,15 @@ TABLE OF CONTENTS
          - API Key Management: "Saved API Keys" Treeview with Save Key/Load Key/Remove buttons;
            _save_api_key(), _load_api_key(), _remove_api_key(), _ensure_password_set(), _prompt_password()
          - Connection Test: _test_connection() calls api_config.test_api_connection() in background thread;
-           on success opens _show_api_test_results() dialog with filterable model table and per-model translation testing
-         - Test API Connection button inline with Provider dropdown (moved from standalone frame)
+           on success opens _show_available_models_window() dialog with filterable model table and per-model translation testing
+         - "Details" button inline with Provider dropdown (opens Available Models from registry cache)
+         - _show_available_models() loads cached models; _show_available_models_window() displays filterable table
+         - "Update" button in Available Models window triggers live API call to refresh models
+         - "Set as Default" button saves default model per key via api_config.set_default_model()
+         - Gemini model IDs normalized (strips "models/" prefix) for display consistency
+         - Filter states (Structured/Batch/Thinking) saved to API.ini; Structured defaults to checked
+         - Temperature moved from API section to Request section (renamed "Model Settings")
+         - TRANSLATION section: Workflow Defaults + Output Quality settings
          - API key entry with inline Save button between key entry and Show checkbox
          - GlobalOptions container: all settings + providers list; `safety` property is alias for `limit`
          - RequestSettings: +thinking_enabled, +thinking_budget, +rolling_context_lines (Tasks 43.8, 43.9)
@@ -552,6 +559,11 @@ TABLE OF CONTENTS
          - output_inject._update_dirty_flags(): reads flags and updates indicator labels
          - input_extract._on_import_translations(): file dialog + JSON load + orig matching + field copy
          - TranslationOptions.skip_already_translated: bool field for skipping translated lines
+         - TranslationOptions.api_key_provider / api_key_name: API key selection from API.ini
+         - translate._build_request_options(): Key dropdown (row 1), Model (row 2, filtered by provider), Temperature removed from GUI
+         - translate._do_translation(): resolves API key from API.ini via api_config.get_api_key_plain(), injects into APIClient.config, reinitialises client
+         - translate._populate_key_dropdown(): lists saved keys from api_config.list_api_keys()
+         - translate._filter_models_by_provider(): filters model_registry by KEY_PROVIDER_TO_REGISTRY mapping (gemini→google)
          - translate._build_request_options(): Skip Already Translated checkbox + manifest binding
          - translate._do_translation(): skip logic checking tl field, marks LineStatus.SKIPPED
          - Modified: functions/output.py (new), functions/manifest_manager.py, gui/steps/output_inject.py, gui/steps/input_extract.py, gui/steps/translate.py

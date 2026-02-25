@@ -2610,13 +2610,16 @@ The Translation tab contains four widget sections:
 
 | Widget | Type | Default | Function |
 |--------|------|---------|----------|
-| Model | Dropdown | Mock Translation | Select LLM model from configured providers |
-| Temperature | Spinbox | 0.2 | Set generation temperature (0.0-2.0) when model supports it |
+| Key | Dropdown | (first saved key) | Select API key from saved keys in API.ini |
+| Model | Dropdown | (default for key) | Select LLM model, filtered by selected key's provider |
+| Model Settings | Label + Button | — | Opens Global Options at Model Settings section |
+| Translation Options | Label + Button | — | Opens Global Options at Translation Options section |
 | Lines/Chunk | Spinbox | 30 | Lines per API request (5-200). Must sync with Estimation step |
 | Retry Strategy | Dropdown | Batch | How failures are retried (Batch, Contextual) |
 | Max Retries | Spinbox | 3 | Round trips of retries (0 = none) |
 | Skip Non-Source Language | Checkbox | ✗ | Skip lines not detected as source language |
 | Skip Already Translated | Checkbox | ✗ | Skip lines that already have a translation |
+| Ban Tokens | Preset + Entry | — | Configure banned output tokens |
 
 **Model Selection**:
 - Models are **not** a hardcoded list. They come from Global Options where the user configures API Providers (Name, URL, Key, Model).

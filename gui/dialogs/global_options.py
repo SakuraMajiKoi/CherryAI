@@ -36,7 +36,8 @@ class OptionSection(Enum):
     """Sections in the global options dialog."""
 
     API = "api"
-    REQUEST = "request"
+    REQUEST = "request"          # displayed as "Model Settings"
+    TRANSLATION = "translation"  # Translation Options
     CACHING = "caching"
     LOGGING = "logging"
     SESSION = "session"
@@ -646,7 +647,8 @@ class GlobalOptions:
 
 SECTION_DESCRIPTIONS: Dict[OptionSection, str] = {
     OptionSection.API: "Configure API provider, model, and authentication settings.",
-    OptionSection.REQUEST: "Set request timeouts, retries, and rate limiting.",
+    OptionSection.REQUEST: "Model-level settings: temperature, thinking, timeouts, and rate limits.",
+    OptionSection.TRANSLATION: "Translation-level options: chunking, retries, caching, and output.",
     OptionSection.CACHING: "Configure request caching to reduce API calls.",
     OptionSection.LOGGING: "Set logging level and debug options.",
     OptionSection.SESSION: "Configure session autosave and UI preferences.",
@@ -658,7 +660,7 @@ SECTION_DESCRIPTIONS: Dict[OptionSection, str] = {
 
 
 CATEGORY_ORDER: List[Tuple[OptionCategory, List[OptionSection]]] = [
-    (OptionCategory.CONNECTION, [OptionSection.API, OptionSection.REQUEST]),
+    (OptionCategory.CONNECTION, [OptionSection.API, OptionSection.REQUEST, OptionSection.TRANSLATION]),
     (OptionCategory.PROCESSING, [OptionSection.CACHING, OptionSection.LIMIT, OptionSection.PROMPTS]),
     (OptionCategory.APPLICATION, [OptionSection.SESSION, OptionSection.LOGGING, OptionSection.FILE_IO, OptionSection.SECURITY]),
 ]
@@ -672,7 +674,8 @@ CATEGORY_NAMES: Dict[OptionCategory, str] = {
 
 SECTION_NAMES: Dict[OptionSection, str] = {
     OptionSection.API: "API Provider",
-    OptionSection.REQUEST: "Request Settings",
+    OptionSection.REQUEST: "Model Settings",
+    OptionSection.TRANSLATION: "Translation Options",
     OptionSection.CACHING: "Caching",
     OptionSection.LOGGING: "Logging",
     OptionSection.SESSION: "Session",
@@ -936,6 +939,8 @@ class GlobalOptionsDialog(tk.Toplevel):
         self._build_api_section()
         print("DEBUG: Building Request section")
         self._build_request_section()
+        print("DEBUG: Building Translation section")
+        self._build_translation_section()
         print("DEBUG: Building Caching section")
         self._build_caching_section()
         print("DEBUG: Building Logging section")
@@ -1076,8 +1081,8 @@ class GlobalOptionsDialog(tk.Toplevel):
         self._provider_combo_ref = provider_combo
 
         ttk.Button(
-            provider_row, text="Test API Connection",
-            command=self._test_connection,
+            provider_row, text="Details",
+            command=self._show_available_models,
         ).pack(side=tk.LEFT, padx=(10, 5))
 
         self._test_status_label = ttk.Label(provider_row, text="")
@@ -1107,43 +1112,14 @@ class GlobalOptionsDialog(tk.Toplevel):
         url_help = ttk.Label(provider_frame, text="Leave empty for default. Required for Gemini and custom endpoints.", foreground="gray")
         url_help.pack(anchor=tk.W, pady=(0, 5))
 
-        # Model settings
-        model_frame = ttk.LabelFrame(panel, text="Model Settings", padding=10)
-        model_frame.pack(fill=tk.X, pady=(0, 10))
-
-        model_row = ttk.Frame(model_frame)
-        model_row.pack(fill=tk.X, pady=5)
-
-        ttk.Label(model_row, text="Model:", width=15).pack(side=tk.LEFT)
-        self._model_combo = ttk.Combobox(model_row, textvariable=self.model_var, width=30)
-        self._model_combo.pack(side=tk.LEFT, padx=5)
-
-        self._refresh_models_btn = ttk.Button(
-            model_row,
-            text="⟳ Refresh Models",
-            command=self._on_refresh_models,
-        )
-        self._refresh_models_btn.pack(side=tk.LEFT, padx=5)
-
-        self._refresh_models_label = ttk.Label(model_row, text="", foreground="gray")
-        self._refresh_models_label.pack(side=tk.LEFT, padx=5)
-
+        # Model Settings removed — model is now selected per-key in
+        # the Translation Step.  Temperature moved to Request Settings.
+        # Keep hidden references for backward compatibility.
+        self._model_combo = ttk.Combobox(panel, textvariable=self.model_var)
+        # Don't pack — hidden widget for settings persistence only
+        self._refresh_models_btn = None
+        self._refresh_models_label = None
         self._update_model_list()
-
-        # Temperature
-        temp_row = ttk.Frame(model_frame)
-        temp_row.pack(fill=tk.X, pady=5)
-
-        ttk.Label(temp_row, text="Temperature:", width=15).pack(side=tk.LEFT)
-        temp_scale = ttk.Scale(temp_row, from_=0.0, to=2.0, variable=self.temperature_var, orient=tk.HORIZONTAL, length=200)
-        temp_scale.pack(side=tk.LEFT, padx=5)
-
-        self._temp_label = ttk.Label(temp_row, text=f"{self.temperature_var.get():.1f}")
-        self._temp_label.pack(side=tk.LEFT, padx=5)
-        self.temperature_var.trace_add("write", self._update_temp_label)
-
-        temp_help = ttk.Label(model_frame, text="Lower = more deterministic, Higher = more creative (0.0-2.0)", foreground="gray")
-        temp_help.pack(anchor=tk.W, pady=(0, 5))
 
         # ---- Saved API Keys ----
         keys_frame = ttk.LabelFrame(panel, text="Saved API Keys", padding=10)
@@ -1184,7 +1160,7 @@ class GlobalOptionsDialog(tk.Toplevel):
         self._section_panels[OptionSection.REQUEST] = panel
 
         # Section header
-        header = ttk.Label(panel, text="Request Settings", font=("TkDefaultFont", 12, "bold"))
+        header = ttk.Label(panel, text="Model Settings", font=("TkDefaultFont", 12, "bold"))
         header.pack(anchor="w", pady=(0, 5))
 
         desc = ttk.Label(panel, text=SECTION_DESCRIPTIONS[OptionSection.REQUEST], foreground="gray")
@@ -1225,6 +1201,30 @@ class GlobalOptionsDialog(tk.Toplevel):
         ttk.Label(rate_row, text="Rate Limit (req/min):", width=18).pack(side=tk.LEFT)
         ttk.Spinbox(rate_row, from_=1, to=1000, textvariable=self.rate_limit_var, width=10).pack(side=tk.LEFT, padx=5)
         ttk.Label(rate_row, text="(1-1000, default: 60)", foreground="gray").pack(side=tk.LEFT, padx=5)
+
+        # Temperature (moved from API Provider section)
+        temp_row = ttk.Frame(settings_frame)
+        temp_row.pack(fill=tk.X, pady=5)
+
+        ttk.Label(temp_row, text="Temperature:", width=18).pack(side=tk.LEFT)
+        temp_scale = ttk.Scale(
+            temp_row, from_=0.0, to=2.0,
+            variable=self.temperature_var,
+            orient=tk.HORIZONTAL, length=200,
+        )
+        temp_scale.pack(side=tk.LEFT, padx=5)
+
+        self._temp_label = ttk.Label(
+            temp_row, text=f"{self.temperature_var.get():.1f}",
+        )
+        self._temp_label.pack(side=tk.LEFT, padx=5)
+        self.temperature_var.trace_add("write", self._update_temp_label)
+
+        ttk.Label(
+            settings_frame,
+            text="Lower = more deterministic, Higher = more creative (0.0-2.0)",
+            foreground="gray",
+        ).pack(anchor=tk.W, pady=(0, 5))
 
         # Thinking Mode (Task 43.8)
         think_frame = ttk.LabelFrame(panel, text="Thinking Mode", padding=10)
@@ -1339,6 +1339,82 @@ class GlobalOptionsDialog(tk.Toplevel):
             text="Ensure recurring terms are translated consistently across all requests.",
             foreground="gray",
         ).pack(anchor=tk.W, pady=(0, 5))
+
+    def _build_translation_section(self) -> None:
+        """Build the Translation Options section.
+
+        Contains global defaults for translation behaviour such as
+        chunking strategy, auto-save, and output quality toggles.
+        """
+        panel = ttk.Frame(self._content_frame, padding=15)
+        self._section_panels[OptionSection.TRANSLATION] = panel
+
+        # Section header
+        header = ttk.Label(
+            panel, text="Translation Options",
+            font=("TkDefaultFont", 12, "bold"),
+        )
+        header.pack(anchor="w", pady=(0, 5))
+
+        desc = ttk.Label(
+            panel,
+            text=SECTION_DESCRIPTIONS[OptionSection.TRANSLATION],
+            foreground="gray",
+        )
+        desc.pack(anchor="w", pady=(0, 15))
+
+        # Workflow defaults
+        wf_frame = ttk.LabelFrame(panel, text="Workflow Defaults", padding=10)
+        wf_frame.pack(fill=tk.X, pady=(0, 10))
+
+        # Edit before translation default
+        self.edit_before_default_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            wf_frame, text="Edit Before Translation (show edit dialog)",
+            variable=self.edit_before_default_var,
+        ).pack(anchor=tk.W, pady=2)
+
+        # Skip already translated default
+        self.skip_translated_default_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            wf_frame, text="Skip Already Translated Lines",
+            variable=self.skip_translated_default_var,
+        ).pack(anchor=tk.W, pady=2)
+
+        # Skip non-source language default
+        self.skip_non_source_default_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            wf_frame, text="Skip Non-Source Language Lines",
+            variable=self.skip_non_source_default_var,
+        ).pack(anchor=tk.W, pady=2)
+
+        ttk.Label(
+            wf_frame,
+            text="These defaults apply when creating new projects.",
+            foreground="gray",
+        ).pack(anchor=tk.W, pady=(5, 0))
+
+        # Output quality
+        qual_frame = ttk.LabelFrame(panel, text="Output Quality", padding=10)
+        qual_frame.pack(fill=tk.X, pady=(0, 10))
+
+        self.auto_proofread_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            qual_frame, text="Auto-proofread after translation",
+            variable=self.auto_proofread_var,
+        ).pack(anchor=tk.W, pady=2)
+
+        self.preserve_formatting_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            qual_frame, text="Preserve original formatting and line breaks",
+            variable=self.preserve_formatting_var,
+        ).pack(anchor=tk.W, pady=2)
+
+        ttk.Label(
+            qual_frame,
+            text="Quality options affect post-processing of translated output.",
+            foreground="gray",
+        ).pack(anchor=tk.W, pady=(5, 0))
 
     def _build_caching_section(self) -> None:
         """Build the caching settings section."""
@@ -2162,6 +2238,35 @@ class GlobalOptionsDialog(tk.Toplevel):
         except tk.TclError:
             pass
 
+    def _show_available_models(self) -> None:
+        """Show the Available Models window with cached registry data.
+
+        Loads model metadata from the local model_registry (API.ini cache)
+        instead of making a live API call.  The window provides an "Update"
+        button that triggers a live connection test and refreshes the table.
+        """
+        from functions import model_registry
+        from functions.options import _CLOUD_PROVIDER_META
+
+        provider = self.provider_var.get()
+        if not provider:
+            self._test_status_label.config(
+                text="Select a provider first.", foreground="orange",
+            )
+            return
+
+        registry_id = _CLOUD_PROVIDER_META.get(provider, {}).get(
+            "registry_id", provider,
+        )
+        model_ids = model_registry.get_provider_model_ids(registry_id)
+
+        api_key = self.api_key_var.get().strip()
+        base_url = self.base_url_var.get().strip()
+
+        self._show_available_models_window(
+            provider, api_key, base_url, model_ids,
+        )
+
     def _test_connection(self) -> None:
         """Test the API connection by calling models.list() on the provider."""
         import threading
@@ -2209,29 +2314,41 @@ class GlobalOptionsDialog(tk.Toplevel):
         t = threading.Thread(target=_do_test, daemon=True)
         t.start()
 
-    def _show_api_test_results(
+    def _show_available_models_window(
         self,
         provider: str,
         api_key: str,
         base_url: str,
         model_ids: list,
     ) -> None:
-        """Open a results window showing available models and test controls.
+        """Open the Available Models window with model details and filters.
 
-        Displays a filterable Treeview of models returned by the API, enriched
-        with metadata from the model registry (pricing, capabilities).  A
-        "Test Model" button sends a lightweight translation probe.
+        Displays a filterable Treeview of models enriched with metadata from
+        the model registry (pricing, capabilities).  An "Update" button
+        fetches live model data from the API and refreshes the table.  Model
+        IDs are normalised (``models/`` prefix stripped) so that Gemini IDs
+        always match the registry.
 
         Args:
             provider:  Provider name (openai, gemini, …).
-            api_key:   API key used for the test.
-            base_url:  Base URL used (may be empty for default).
-            model_ids: List of model ID strings from models.list().
+            api_key:   API key for live tests (may be empty).
+            base_url:  Base URL (may be empty for default).
+            model_ids: List of model ID strings (from registry or API).
         """
         from functions import model_registry
+        from functions.options import _CLOUD_PROVIDER_META
+
+        # Normalise model IDs — strip "models/" prefix used by Gemini API
+        normalised_ids: list[str] = []
+        for mid in model_ids:
+            clean = mid.removeprefix("models/") if mid.startswith("models/") else mid
+            if clean not in normalised_ids:
+                normalised_ids.append(clean)
+        # Use a mutable list so the Update button can swap contents in-place
+        current_ids: list[str] = list(normalised_ids)
 
         win = tk.Toplevel(self)
-        win.title(f"API Test Results — {provider}")
+        win.title(f"Available Models — {provider}")
         win.geometry("950x550")
         win.minsize(750, 400)
         win.transient(self)
@@ -2240,24 +2357,46 @@ class GlobalOptionsDialog(tk.Toplevel):
         # Header
         hdr = ttk.Frame(win, padding=10)
         hdr.pack(fill=tk.X)
-        ttk.Label(
+        hdr_label = ttk.Label(
             hdr,
-            text=f"Provider: {provider}  —  {len(model_ids)} model(s) found",
+            text=f"Provider: {provider}  —  {len(current_ids)} model(s)",
             font=("", 11, "bold"),
-        ).pack(side=tk.LEFT)
+        )
+        hdr_label.pack(side=tk.LEFT)
 
-        # Filter bar
+        # Filter bar — structured output ON by default; states persisted
         filter_bar = ttk.Frame(win, padding=(10, 0, 10, 5))
         filter_bar.pack(fill=tk.X)
 
-        struct_var = tk.BooleanVar(value=False)
-        batch_var = tk.BooleanVar(value=False)
-        thinking_var = tk.BooleanVar(value=False)
+        # Load saved filter state (default: structured=True, rest=False)
+        _saved_struct = _api_config.get_api_setting(
+            "filter_structured", "1",
+        )
+        _saved_batch = _api_config.get_api_setting(
+            "filter_batch", "0",
+        )
+        _saved_thinking = _api_config.get_api_setting(
+            "filter_thinking", "0",
+        )
+
+        struct_var = tk.BooleanVar(value=_saved_struct == "1")
+        batch_var = tk.BooleanVar(value=_saved_batch == "1")
+        thinking_var = tk.BooleanVar(value=_saved_thinking == "1")
 
         def _apply_filter() -> None:
             """Rebuild the Treeview based on current filter checkboxes."""
+            # Persist filter state
+            _api_config.set_api_setting(
+                "filter_structured", "1" if struct_var.get() else "0",
+            )
+            _api_config.set_api_setting(
+                "filter_batch", "1" if batch_var.get() else "0",
+            )
+            _api_config.set_api_setting(
+                "filter_thinking", "1" if thinking_var.get() else "0",
+            )
             tree.delete(*tree.get_children())
-            for mid in model_ids:
+            for mid in current_ids:
                 info = model_registry.get_model_info(mid)
                 row = _build_row(mid, info)
                 if struct_var.get() and row[1] != "✓":
@@ -2330,17 +2469,17 @@ class GlobalOptionsDialog(tk.Toplevel):
                 )
             return (mid, "?", "?", "?", "?", "?", "?")
 
-        # Populate table
-        for mid in sorted(model_ids):
-            info = model_registry.get_model_info(mid)
-            tree.insert("", tk.END, values=_build_row(mid, info))
+        # Populate table (respects current filter state)
+        _apply_filter()
 
         # Bottom button bar
         btn_bar = ttk.Frame(win, padding=10)
         btn_bar.pack(fill=tk.X)
 
         test_result_label = ttk.Label(btn_bar, text="", foreground="gray")
-        test_result_label.pack(side=tk.LEFT, padx=(0, 10), fill=tk.X, expand=True)
+        test_result_label.pack(
+            side=tk.LEFT, padx=(0, 10), fill=tk.X, expand=True,
+        )
 
         def _test_selected_model() -> None:
             """Run a translation probe against the selected model."""
@@ -2394,13 +2533,109 @@ class GlobalOptionsDialog(tk.Toplevel):
 
             _thr.Thread(target=_run, daemon=True).start()
 
+        def _update_models() -> None:
+            """Fetch live model list from the API and refresh the table."""
+            import threading as _thr
+
+            effective_key = api_key
+            if not effective_key:
+                test_result_label.config(
+                    text="No API key — enter one in the Provider section.",
+                    foreground="orange",
+                )
+                return
+
+            test_result_label.config(
+                text="Updating…", foreground="gray",
+            )
+            win.update_idletasks()
+
+            def _run() -> None:
+                success, msg, live_ids = _api_config.test_api_connection(
+                    api_key=effective_key,
+                    provider=provider,
+                    base_url=base_url,
+                    timeout=15.0,
+                )
+
+                def _refresh_ui() -> None:
+                    try:
+                        if success and live_ids:
+                            # Normalise IDs (strip models/ prefix)
+                            current_ids.clear()
+                            seen: set[str] = set()
+                            for mid in live_ids:
+                                clean = mid.removeprefix("models/")
+                                if clean not in seen:
+                                    current_ids.append(clean)
+                                    seen.add(clean)
+                            hdr_label.config(
+                                text=(
+                                    f"Provider: {provider}  —  "
+                                    f"{len(current_ids)} model(s)"
+                                ),
+                            )
+                            _apply_filter()
+                            test_result_label.config(
+                                text=f"✓ {msg}", foreground="green",
+                            )
+                        else:
+                            test_result_label.config(
+                                text=f"✗ {msg}", foreground="red",
+                            )
+                    except Exception:
+                        pass
+
+                try:
+                    win.after(0, _refresh_ui)
+                except Exception:
+                    pass
+
+            _thr.Thread(target=_run, daemon=True).start()
+
+        def _set_as_default() -> None:
+            """Set the selected model as the default for the current key."""
+            sel = tree.selection()
+            if not sel:
+                test_result_label.config(
+                    text="Select a model first.", foreground="orange",
+                )
+                return
+            mid = tree.item(sel[0], "values")[0]
+            # Determine provider's key name from what's currently loaded
+            # Find matching key in saved keys
+            try:
+                keys = _api_config.list_api_keys()
+            except Exception:
+                keys = []
+            matched_name = "default"
+            for kp, kn in keys:
+                if kp.lower() == provider.lower():
+                    matched_name = kn
+                    break
+            _api_config.set_default_model(provider, matched_name, mid)
+            test_result_label.config(
+                text=f"✓ Default model set: {mid}", foreground="green",
+            )
+
         ttk.Button(
             btn_bar, text="Test Model Translation",
             command=_test_selected_model,
         ).pack(side=tk.RIGHT, padx=(5, 0))
         ttk.Button(
+            btn_bar, text="Set as Default",
+            command=_set_as_default,
+        ).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(
+            btn_bar, text="Update",
+            command=_update_models,
+        ).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(
             btn_bar, text="Close", command=win.destroy,
         ).pack(side=tk.RIGHT)
+
+    # Keep legacy name as alias for backward compatibility
+    _show_api_test_results = _show_available_models_window
 
     # ---- API Key management helpers ----
 

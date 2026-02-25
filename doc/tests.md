@@ -8955,6 +8955,8 @@ Configurable Edit/TLC Prompts feature tests.
 
 | Test | Purpose |
 |------|---------|
+| `test_option_section_count` | OptionSection has 10 members |
+| `test_option_section_iteration` | Can iterate; yields 10 sections |
 | `test_prompts_section_exists` | PROMPTS enum exists |
 | `test_prompts_section_in_descriptions` | Has description |
 | `test_prompts_section_in_names` | Has display name |

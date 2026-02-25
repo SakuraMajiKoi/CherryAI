@@ -122,6 +122,7 @@ class TranslationOptions:
     """Options for translation request.
     
     Includes all CLI-compatible options for translation:
+    - API key and provider selection
     - Model and API settings
     - Retry and rate limiting
     - Style and token bans
@@ -130,6 +131,9 @@ class TranslationOptions:
     - Edit before translation (Task 33.1)
     """
 
+    # API key selection (provider, name from API.ini)
+    api_key_provider: str = ""  # e.g. "gemini", "openai"
+    api_key_name: str = ""  # e.g. "default"
     model: str = "gpt-4o-mini"
     temperature: float = 0.3
     chunk_size: int = 30
@@ -736,6 +740,14 @@ class TranslationStep(BaseStep):
         "mistral-small-latest",
     ]
 
+    # Mapping from API.ini provider names to model_registry provider IDs.
+    _KEY_PROVIDER_TO_REGISTRY: Dict[str, str] = {
+        "gemini": "google",
+        "openai": "openai",
+        "mistral": "mistral",
+        "anthropic": "anthropic",
+    }
+
     # Retry strategy options - TASK 43.10: Only Batch and Contextual visible in UI
     # Isolated and Skip still supported internally for CLI compatibility
     RETRY_STRATEGIES = [
@@ -823,6 +835,13 @@ class TranslationStep(BaseStep):
             command=self._refresh_lines,
         ).pack(side="right", padx=(0, 5))
 
+        ttk.Button(
+            right_frame,
+            text="👁 Preview Prompt",
+            command=self._show_prompt_preview,
+            width=15,
+        ).pack(side="right", padx=(0, 5))
+
     def _build_content(self) -> None:
         """Build the main content area."""
         # Main paned window (horizontal)
@@ -897,7 +916,23 @@ class TranslationStep(BaseStep):
         frame = ttk.LabelFrame(parent, text="Request Options", padding=10)
         frame.pack(fill="x", padx=5, pady=5)
 
-        # Model selection
+        # API Key selection (row 1) — populated from saved keys in API.ini
+        key_frame = ttk.Frame(frame)
+        key_frame.pack(fill="x", pady=2)
+
+        ttk.Label(key_frame, text="Key:").pack(side="left")
+        self._key_var = tk.StringVar(value="")
+        self._key_combo = ttk.Combobox(
+            key_frame,
+            textvariable=self._key_var,
+            values=[],
+            state="readonly",
+            width=20,
+        )
+        self._key_combo.pack(side="right")
+        self._key_combo.bind("<<ComboboxSelected>>", self._on_key_changed)
+
+        # Model selection (row 2) — filtered by selected key's provider
         model_frame = ttk.Frame(frame)
         model_frame.pack(fill="x", pady=2)
 
@@ -912,6 +947,9 @@ class TranslationStep(BaseStep):
         )
         self._model_combo.pack(side="right")
 
+        # Now that both combos exist, populate keys (may filter models)
+        self._populate_key_dropdown()
+
         # Bind model to manifest
         self._manifest_bindings.append(
             bind_combobox_to_field(
@@ -925,24 +963,44 @@ class TranslationStep(BaseStep):
             )
         )
 
-        # Temperature
-        temp_frame = ttk.Frame(frame)
-        temp_frame.pack(fill="x", pady=2)
+        # Model Settings — dropdown to view current preset + open GO dialog
+        ms_frame = ttk.Frame(frame)
+        ms_frame.pack(fill="x", pady=2)
 
-        ttk.Label(temp_frame, text="Temperature:").pack(side="left")
-        self._temp_var = tk.DoubleVar(value=self._translation_options.temperature)
-        self._temp_spin = ttk.Spinbox(
-            temp_frame,
-            from_=0.0,
-            to=2.0,
-            increment=0.1,
-            textvariable=self._temp_var,
-            width=6,
+        ttk.Label(ms_frame, text="Model Settings:").pack(side="left")
+        ttk.Button(
+            ms_frame, text="Change…", width=8,
+            command=self._open_model_settings,
+        ).pack(side="right")
+        self._ms_label = ttk.Label(
+            ms_frame, text="(Global Options)",
+            foreground=THEME.text_secondary,
+            font=("TkDefaultFont", 8),
         )
-        self._temp_spin.pack(side="right")
+        self._ms_label.pack(side="right", padx=5)
 
-        # Bind temperature via trace (DoubleVar not directly supported)
-        self._temp_var.trace_add("write", lambda *_: self._save_temperature_to_manifest())
+        # Translation Options — dropdown to view current preset + open GO dialog
+        to_frame = ttk.Frame(frame)
+        to_frame.pack(fill="x", pady=2)
+
+        ttk.Label(to_frame, text="Translation Options:").pack(side="left")
+        ttk.Button(
+            to_frame, text="Change…", width=8,
+            command=self._open_translation_options,
+        ).pack(side="right")
+        self._to_label = ttk.Label(
+            to_frame, text="(Global Options)",
+            foreground=THEME.text_secondary,
+            font=("TkDefaultFont", 8),
+        )
+        self._to_label.pack(side="right", padx=5)
+
+        # Separator before per-request options
+        ttk.Separator(frame, orient="horizontal").pack(fill="x", pady=5)
+
+        # Temperature — kept as hidden variable for API client compatibility;
+        # the GUI control was moved to Global Options (Model Settings).
+        self._temp_var = tk.DoubleVar(value=self._translation_options.temperature)
 
         # Chunk size
         chunk_frame = ttk.Frame(frame)
@@ -1188,100 +1246,21 @@ class TranslationStep(BaseStep):
             )
         )
 
-        # Thinking mode (for Claude models)
-        thinking_frame = ttk.Frame(frame)
-        thinking_frame.pack(fill="x", pady=2)
-
-        self._thinking_var = tk.BooleanVar(value=self._translation_options.thinking_enabled)
-        thinking_cb = ttk.Checkbutton(
-            thinking_frame,
-            text="Extended Thinking (Claude)",
-            variable=self._thinking_var,
-            command=self._on_thinking_toggle,
+        # Thinking/Budget — hidden variables only (managed in Global Options)
+        self._thinking_var = tk.BooleanVar(
+            value=self._translation_options.thinking_enabled,
         )
-        thinking_cb.pack(side="left")
-
-        # Bind thinking to manifest
-        self._manifest_bindings.append(
-            bind_checkbox_to_field(
-                checkbox=thinking_cb,
-                var=self._thinking_var,
-                manager_getter=lambda: self.manifest_manager,
-                field_key="Thinking",
-                default=False,
-                parent_key="RequestOptions",
-            )
+        self._thinking_budget_var = tk.IntVar(
+            value=self._translation_options.thinking_budget,
         )
+        # No GUI widgets — these values are set via _sync_from_global_options
 
-        # Thinking budget
-        budget_frame = ttk.Frame(frame)
-        budget_frame.pack(fill="x", pady=2)
+        # Separator before Ban Tokens
+        ttk.Separator(frame, orient="horizontal").pack(fill="x", pady=10)
 
-        ttk.Label(budget_frame, text="Thinking Budget:").pack(side="left", padx=(20, 0))
-        self._thinking_budget_var = tk.IntVar(value=self._translation_options.thinking_budget)
-        self._budget_spin = ttk.Spinbox(
-            budget_frame,
-            from_=1000,
-            to=100000,
-            increment=1000,
-            textvariable=self._thinking_budget_var,
-            width=8,
-            state="disabled" if not self._translation_options.thinking_enabled else "normal",
-        )
-        self._budget_spin.pack(side="right")
-
-        # Bind thinking budget to manifest
-        self._manifest_bindings.append(
-            bind_spinbox_to_field(
-                spinbox=self._budget_spin,
-                var=self._thinking_budget_var,
-                manager_getter=lambda: self.manifest_manager,
-                field_key="ThinkingBudget",
-                min_val=1000,
-                max_val=100000,
-                default=10000,
-                parent_key="RequestOptions",
-            )
-        )
-
-        # Help text for advanced options
-        ttk.Label(
-            frame,
-            text="(Line-by-line translates individually; Thinking uses Claude's extended reasoning)",
-            foreground=THEME.text_secondary,
-            font=("TkDefaultFont", 8),
-        ).pack(anchor="w", pady=(5, 0))
-
-    def _build_prompt_editor(self, parent: ttk.Frame) -> None:
-        """Build prompt editor panel (Task 43.11 redesign).
-
-        Simplified to a prompt preview button (read-only) and a separate
-        Ban Tokens section.  Style Preset and Game Summary are now managed
-        in the Information step.
-        """
-        frame = ttk.LabelFrame(parent, text="Prompt Editor", padding=10)
-        frame.pack(fill="x", padx=5, pady=5)
-
-        # Preview button — shows the fully-constructed prompt read-only
-        preview_row = ttk.Frame(frame)
-        preview_row.pack(fill="x", pady=2)
-
-        ttk.Label(
-            preview_row,
-            text="Prompt is built from Information step data (glossary, summary, style).",
-            foreground=THEME.text_secondary,
-            font=("TkDefaultFont", 8),
-        ).pack(side="left")
-        ttk.Button(
-            preview_row,
-            text="👁 Preview Prompt",
-            command=self._show_prompt_preview,
-            width=15,
-        ).pack(side="right")
-
-        # Ban Tokens section (Task 43.11)
+        # Ban Tokens (moved from Prompt Editor)
         ban_lf = ttk.LabelFrame(frame, text="Ban Tokens", padding=5)
-        ban_lf.pack(fill="x", pady=(10, 0))
+        ban_lf.pack(fill="x", pady=(0, 5))
 
         preset_row = ttk.Frame(ban_lf)
         preset_row.pack(fill="x", pady=2)
@@ -1327,9 +1306,24 @@ class TranslationStep(BaseStep):
             )
         )
 
+        # Help text
+        ttk.Label(
+            frame,
+            text="(Line-by-line translates individually)",
+            foreground=THEME.text_secondary,
+            font=("TkDefaultFont", 8),
+        ).pack(anchor="w", pady=(5, 0))
+
+    def _build_prompt_editor(self, parent: ttk.Frame) -> None:
+        """Initialize hidden compatibility variables (prompt editor removed).
+
+        The Prompt Editor panel has been removed.  Ban Tokens are now in
+        Request Options, and the Preview button is in the header bar.
+        This method only sets up hidden variables required by other code.
+        """
         # Hidden summary text for backward compat (loaded by _load_prompt_data)
         self._summary_text = scrolledtext.ScrolledText(
-            frame, height=0, wrap="word",
+            parent, height=0, wrap="word",
         )
         # Don't pack — kept only as data holder
 
@@ -1511,7 +1505,10 @@ class TranslationStep(BaseStep):
         Returns:
             TranslationOptions with current values.
         """
+        key_provider, key_name = self._parse_key_selection()
         return TranslationOptions(
+            api_key_provider=key_provider,
+            api_key_name=key_name,
             model=self._model_var.get(),
             temperature=self._temp_var.get(),
             chunk_size=self._chunk_var.get(),
@@ -1783,20 +1780,69 @@ class TranslationStep(BaseStep):
                 self._mock_translator = None
                 # Try to import and initialize API client
                 try:
-                    from CherryAI.functions.api_client import APIClient, APIConfig, TranslationError
-                    self._api_client = APIClient(enable_api_log=True)
+                    from CherryAI.functions.api_client import (
+                        APIClient, APIConfig, TranslationError,
+                    )
+                    from CherryAI.functions.api_config import (
+                        get_api_key_plain, PROVIDER_BASE_URLS,
+                    )
 
-                    # Apply options
-                    self._api_client.config.model = self._translation_options.model
-                    self._api_client.config.temperature = self._translation_options.temperature
-                    self._api_client.config.chunk_size = self._translation_options.chunk_size
-                    self._api_client.config.retries = self._translation_options.max_retries
-                    self._api_client.config.cache_enabled = self._translation_options.cache_enabled
+                    # Resolve the API key from the user's selection
+                    key_provider = self._translation_options.api_key_provider
+                    key_name = self._translation_options.api_key_name
+                    resolved_key = ""
+                    if key_provider and key_name:
+                        resolved_key = get_api_key_plain(
+                            key_provider, key_name,
+                        ) or ""
 
-                    if self._translation_options.banned_tokens:
-                        self._api_client.configure_logit_bias(
-                            enabled=True,
-                            banned_tokens=self._translation_options.banned_tokens,
+                    if not resolved_key:
+                        self._log_progress(
+                            "No API key selected — please choose a key "
+                            "in the Request Options panel."
+                        )
+                        self._api_client = None
+                    else:
+                        self._api_client = APIClient(enable_api_log=True)
+
+                        # Inject the resolved key, provider, and base URL
+                        self._api_client.config.api_key = resolved_key
+                        self._api_client.config.provider = key_provider
+                        base_url = PROVIDER_BASE_URLS.get(
+                            key_provider, "",
+                        )
+                        if base_url:
+                            self._api_client.config.base_url = base_url
+
+                        # Reinitialize the OpenAI client with the real key
+                        self._api_client._init_client()
+
+                        # Apply per-request options
+                        self._api_client.config.model = (
+                            self._translation_options.model
+                        )
+                        self._api_client.config.temperature = (
+                            self._translation_options.temperature
+                        )
+                        self._api_client.config.chunk_size = (
+                            self._translation_options.chunk_size
+                        )
+                        self._api_client.config.retries = (
+                            self._translation_options.max_retries
+                        )
+                        self._api_client.config.cache_enabled = (
+                            self._translation_options.cache_enabled
+                        )
+
+                        if self._translation_options.banned_tokens:
+                            self._api_client.configure_logit_bias(
+                                enabled=True,
+                                banned_tokens=self._translation_options.banned_tokens,
+                            )
+
+                        self._log_progress(
+                            f"API client initialized: {key_provider} "
+                            f"({self._translation_options.model})"
                         )
 
                 except ImportError as e:
@@ -2193,27 +2239,30 @@ class TranslationStep(BaseStep):
         self._update_cache()
 
     def _update_model_list_from_global_options(self) -> None:
-        """Refresh model dropdown from Global Options providers (Task 43.6).
+        """Refresh model dropdown from the selected key's provider.
+
+        When an API key is selected in the Key dropdown, models are
+        filtered to that provider.  Falls back to the full registry or
+        hardcoded list when no key is selected.
 
         Priority:
-        1. global_options.get_model_list() when providers are configured.
+        1. Provider-filtered models when a key is selected.
         2. model_registry.get_all_models_flat() (dynamic / cached registry).
         3. Hardcoded MODEL_OPTIONS as a last resort.
         """
-        try:
-            go = getattr(self.session, "global_options", None)
-            if go is not None and hasattr(go, "get_model_list"):
-                models = go.get_model_list()
-                if len(models) > 1:  # More than just Mock Translation
-                    self._model_combo["values"] = models
-                    return
-        except Exception:
-            pass
+        # If a key is selected, filter by its provider
+        provider, _ = self._parse_key_selection()
+        if provider:
+            self._filter_models_by_provider(provider)
+            return
 
-        # Registry fallback — use all models across all cloud providers
+        # No key selected — show all models from registry
         try:
             from CherryAI.functions.model_registry import get_all_models_flat
-            reg_models = ["Mock Translation"] + [m.model_id for m in get_all_models_flat()]
+            reg_models = (
+                ["Mock Translation"]
+                + [m.model_id for m in get_all_models_flat()]
+            )
             if len(reg_models) > 1:
                 self._model_combo["values"] = reg_models
                 return
@@ -2240,6 +2289,21 @@ class TranslationStep(BaseStep):
         mgr = self.manifest_manager
         if mgr is None or not mgr.is_loaded:
             return
+
+        # Load API Key selection
+        key_provider = load_nested_text_field(
+            mgr, "RequestOptions", "ApiKeyProvider", "",
+        )
+        key_name = load_nested_text_field(
+            mgr, "RequestOptions", "ApiKeyName", "",
+        )
+        if key_provider and key_name:
+            combo_val = f"{key_provider}: {key_name}"
+            # Only set if this key still exists in saved keys
+            current_values = list(self._key_combo["values"])
+            if combo_val in current_values:
+                self._key_var.set(combo_val)
+                self._filter_models_by_provider(key_provider)
 
         # Load Model
         model = load_nested_text_field(mgr, "RequestOptions", "Model", "")
@@ -2495,6 +2559,128 @@ class TranslationStep(BaseStep):
                 "No special patterns detected in the loaded lines.",
             )
 
+    # ------------------------------------------------------------------
+    # API Key selection helpers
+    # ------------------------------------------------------------------
+
+    def _populate_key_dropdown(self) -> None:
+        """Populate the Key combobox from saved keys in API.ini."""
+        try:
+            from CherryAI.functions.api_config import list_api_keys
+            keys = list_api_keys()
+        except Exception:
+            keys = []
+
+        display_values: list[str] = []
+        for provider, name in keys:
+            display_values.append(f"{provider}: {name}")
+
+        self._key_combo["values"] = display_values
+
+        # Auto-select the first key if available and nothing is set
+        if display_values and not self._key_var.get():
+            self._key_var.set(display_values[0])
+            self._on_key_changed()
+
+    def _parse_key_selection(self) -> tuple[str, str]:
+        """Parse the Key combobox value into (provider, name).
+
+        Returns:
+            Tuple of (provider, name) or ("", "") if invalid.
+        """
+        val = self._key_var.get()
+        if not val or ": " not in val:
+            return ("", "")
+        provider, name = val.split(": ", 1)
+        return (provider.strip(), name.strip())
+
+    def _on_key_changed(self, event: Any = None) -> None:
+        """Handle key selection change — filter Models by provider.
+
+        After filtering the model list, the default model for the selected
+        key is applied automatically (if one was set via "Set as Default"
+        in the Available Models window).
+        """
+        provider, name = self._parse_key_selection()
+        if not provider:
+            return
+
+        # Save key selection to manifest
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            save_nested_text_field(mgr, "RequestOptions", "ApiKeyProvider", provider)
+            save_nested_text_field(mgr, "RequestOptions", "ApiKeyName", name)
+
+        # Filter models to the selected provider
+        self._filter_models_by_provider(provider)
+
+        # Auto-set the default model for this key (if configured)
+        try:
+            from CherryAI.functions.api_config import get_default_model
+            default_model = get_default_model(provider, name)
+            if default_model:
+                values = list(self._model_combo["values"])
+                if default_model in values:
+                    self._model_var.set(default_model)
+        except Exception:
+            pass
+
+    def _filter_models_by_provider(self, provider: str) -> None:
+        """Update Model combobox to show only models for *provider*.
+
+        Uses model_registry to look up models for the registry-ID that
+        corresponds to the API.ini provider key (e.g. gemini → google).
+        Applies the saved capability filters from the Available Models
+        window (Structured Output, Batch, Thinking).
+        """
+        registry_id = self._KEY_PROVIDER_TO_REGISTRY.get(provider, provider)
+
+        try:
+            from CherryAI.functions.model_registry import (
+                get_provider_models,
+            )
+            from CherryAI.functions.api_config import get_api_setting
+            all_models = get_provider_models(registry_id)
+        except Exception:
+            all_models = []
+
+        # Apply capability filters (saved in API.ini by Available Models)
+        try:
+            filter_struct = get_api_setting("filter_structured", "1") == "1"
+            filter_batch = get_api_setting("filter_batch", "0") == "1"
+            filter_thinking = get_api_setting("filter_thinking", "0") == "1"
+        except Exception:
+            filter_struct = True
+            filter_batch = False
+            filter_thinking = False
+
+        filtered_ids: list[str] = []
+        for m in all_models:
+            if filter_struct and not m.structured_output:
+                continue
+            if filter_batch and not m.batch_mode:
+                continue
+            if filter_thinking and not m.thinking:
+                continue
+            filtered_ids.append(m.model_id)
+
+        if filtered_ids:
+            values = ["Mock Translation"] + filtered_ids
+        elif all_models:
+            # Filters excluded everything — fall back to all provider models
+            values = ["Mock Translation"] + [m.model_id for m in all_models]
+        else:
+            # Fallback: show all models
+            values = self.MODEL_OPTIONS
+
+        self._model_combo["values"] = values
+
+        # If current model is not in the new list, reset to first real model
+        current = self._model_var.get()
+        if current not in values:
+            default_model = values[1] if len(values) > 1 else values[0]
+            self._model_var.set(default_model)
+
     def _on_line_by_line_toggle(self) -> None:
         """Handle line-by-line mode toggle.
         
@@ -2507,25 +2693,6 @@ class TranslationStep(BaseStep):
         if enabled:
             # Warn that this is slower
             logger.info("Line-by-line mode enabled - translates each line individually")
-
-    def _on_thinking_toggle(self) -> None:
-        """Handle thinking mode toggle.
-        
-        Enables/disables the thinking budget spinbox based on mode state.
-        """
-        enabled = self._thinking_var.get()
-        state = "normal" if enabled else "disabled"
-        self._budget_spin.configure(state=state)
-        
-        if enabled:
-            # Check if model is Claude
-            model = self._model_var.get().lower()
-            if "claude" not in model:
-                messagebox.showwarning(
-                    "Thinking Mode",
-                    "Extended thinking is optimized for Claude models.\n"
-                    "Other models may not benefit from this setting.",
-                )
 
     def get_translated_lines(self) -> List[str]:
         """Get list of translated lines.
@@ -2547,3 +2714,39 @@ class TranslationStep(BaseStep):
             "pending": sum(1 for l in self._lines if l.status == LineStatus.PENDING),
             "skipped": sum(1 for l in self._lines if l.status == LineStatus.SKIPPED),
         }
+
+    # ------------------------------------------------------------------
+    # Quick-access buttons for Global Options dialogs
+    # ------------------------------------------------------------------
+
+    def _open_model_settings(self) -> None:
+        """Open the Global Options dialog at the Model Settings section."""
+        try:
+            from CherryAI.gui.dialogs.global_options import (
+                GlobalOptionsDialog, OptionSection,
+            )
+            app = self.winfo_toplevel()
+            go = getattr(app, "_global_options", None)
+            if go is None:
+                return
+            dlg = GlobalOptionsDialog(self, go)
+            dlg._show_panel(OptionSection.REQUEST)
+        except Exception:
+            logger.debug("Could not open Model Settings dialog", exc_info=True)
+
+    def _open_translation_options(self) -> None:
+        """Open the Global Options dialog at the Translation Options section."""
+        try:
+            from CherryAI.gui.dialogs.global_options import (
+                GlobalOptionsDialog, OptionSection,
+            )
+            app = self.winfo_toplevel()
+            go = getattr(app, "_global_options", None)
+            if go is None:
+                return
+            dlg = GlobalOptionsDialog(self, go)
+            dlg._show_panel(OptionSection.TRANSLATION)
+        except Exception:
+            logger.debug(
+                "Could not open Translation Options dialog", exc_info=True,
+            )
