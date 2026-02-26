@@ -2670,6 +2670,7 @@ Thank you.
 | test_output_phase47.py | 51 | Output + Pipeline Completeness + Import Phase 47 |
 | test_pipeline_logging.py | 52 | Pipeline Logging System Phase 48 |
 | test_request_formation.py | 50 | Request Formation 4-Step Process Phase 49 |
+| test_request_preview.py | 40 | Preview Requests dialog: PreviewRequest dataclass, FILTER_PARTS, RequestPreviewDialog (Pure/Formatted/Plain views, Jump/Search/Filter), _build_preview_requests integration |
 | test_context_markers.py | 70 | Context Markers Full Implementation Phase 50 |
 | test_speaker_dedup.py | 47 | Speaker Duplicate Removal Phase 51 |
 | test_glossary_selective.py | 28 | Selective Glossary Per Chunk Phase 52 |
@@ -10212,3 +10213,29 @@ python -m pytest dev/test_api_keys.py -v --timeout=30
 - All `TestConnectionTest` and `TestConnectionTestLive` tests unpack 3-tuple: `ok, msg, models = ...`
 - Success tests assert `isinstance(models, list)` and `len(models) > 0`
 - Failure tests assert `models == []`
+
+=============================================================================
+
+## dev/test_request_preview.py — 40 tests
+
+Tests for the Preview Requests feature: `PreviewRequest` dataclass, `FILTER_PARTS` constant, `RequestPreviewDialog` class, and `_build_preview_requests()` integration. Run with:
+```bash
+python -m pytest dev/test_request_preview.py -v --timeout=15
+```
+
+| Class | Tests | Description |
+|-------|-------|-------------|
+| `TestPreviewRequestDataclass` | 8 | `get_part()`, `build_full_request_text()` with/without filters, empty parts skipped, `build_pure_json()` valid JSON, temperature extraction, `line_count` |
+| `TestFilterParts` | 3 | 9 entries in `FILTER_PARTS`, unique keys, keys match dataclass field names |
+| `TestViewModes` | 4 | Pure returns valid JSON, Formatted has section headers (═══), Plain strips JSON syntax, Plain wraps long lines |
+| `TestRequestPreviewDialogCreation` | 5 | Dialog opens/closes, shows request count, Jump To navigates, clamp high, clamp low |
+| `TestRequestPreviewDialogSearch` | 4 | Search finds matches with highlighting, no-match shows "0 of 0", next wraps around, prev wraps around |
+| `TestRequestPreviewDialogFilter` | 3 | Deselect hides section from display, Select All restores, Deselect All clears |
+| `TestRequestPreviewDialogViewModes` | 3 | Switch to Pure validates JSON, switch to Plain strips markers, switch to Formatted shows headers |
+| `TestBuildPreviewRequests` | 5 | Correct chunk count (3 lines / chunk_size 2 → 2 requests), all parts populated, input_lines valid JSON, POV excluded on low confidence, glossary entries present |
+| `TestEdgeCases` | 5 | Empty request list, all empty parts, Unicode in Pure JSON, case-insensitive search, info label updates |
+
+**Key implementation details tested:**
+- `PreviewRequest.build_pure_json()` — Produces valid JSON with `messages` array (system + user), `model`, `temperature`
+- `RequestPreviewDialog` — Headless Tk tests (2 may skip on CI where Tk is unavailable)
+- `_build_preview_requests()` — Integration test using mocked `TranslationStep` with `_build_chunks` side effect, patched `build_conditional_instructions` and `load_glossary_entries`

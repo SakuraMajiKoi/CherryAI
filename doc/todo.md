@@ -2318,7 +2318,7 @@ openai, personal = gAAAAABp...
 
 **Task 8 — Remove Prompt Editor:**
 - `_build_prompt_editor()` stripped to only create hidden compat variables (no visible UI).
-- "👁 Preview Prompt" button moved to header bar, next to "↻ Refresh Lines".
+- "👁 Preview Requests" button moved to header bar, next to "↻ Refresh Lines". Opens `RequestPreviewDialog` showing actual API requests built with `_build_preview_requests()` (same manifest data and chunking as real translation). Three view modes (Pure/Formatted/Plain), toolbar with Jump To, Search (prev/next, match count), and Filter (9 checkboxes for Meta/System Instructions/Summary/Tone/Style/POV/Conditional Prompts/Glossary/Input Lines). Test file: `dev/test_request_preview.py` (40 tests, 38 passed, 2 skipped on headless Tk).
 
 **Task 9 — Model Settings + Translation Options panels:**
 - `OptionSection.TRANSLATION` added to enum (10 sections total).

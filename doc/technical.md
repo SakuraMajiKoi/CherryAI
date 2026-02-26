@@ -192,7 +192,7 @@ TABLE OF CONTENTS
        - costs.py - Step 2: Costs (renamed from estimate.py in Phase 40)
        - information.py - Step 3: Information ❌NO shared imports (moved from Step 2)
        - preprocess.py - Step 4: Preprocessing ❌NO shared imports (moved from Step 3)
-       - translate.py - Step 5: Translation 🔗api_client, mock_translator (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching)
+       - translate.py - Step 5: Translation 🔗api_client, mock_translator, prompt_adapter, manifest_fields (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching; Preview Requests: PreviewRequest dataclass, FILTER_PARTS constant, RequestPreviewDialog class with Pure/Formatted/Plain views and Jump/Search/Filter toolbar, _build_preview_requests() mirrors real translation request building)
        - postprocess.py - Step 6: Postprocess 🔗postprocess (moved from Step 7)
        - wordwrap_overwrite.py - Step 7: Wordwrap 🔗wordwrap (moved from Step 8)
        - qa.py - Step 8: QA 🔗validation (moved from Step 6)

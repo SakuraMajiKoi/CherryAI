@@ -2568,7 +2568,7 @@ The Translation tab contains four widget sections:
 
 1. **Translatable Lines Widget** - Table showing all lines with status and translation
 2. **Request Options Widget** - Model, temperature, chunking, retry settings
-3. **Prompt Editor Widget** - Preview button for constructed prompt; Ban Tokens separated
+3. **Preview Requests Widget** - Preview Requests button opens RequestPreviewDialog showing actual API requests with Pure/Formatted/Plain views, Jump/Search/Filter toolbar; Ban Tokens separated
 4. **API Usage Widget** - Live token usage, cost estimate, rate limit display
 
 ---
@@ -2676,27 +2676,50 @@ The Translation tab contains four widget sections:
 
 ---
 
-#### Widget: Prompt Editor
+#### Widget: Preview Requests
 
-**Purpose**: Preview the constructed translation prompt. The Prompt Editor does NOT build its own prompt — it reads all relevant data from the manifest (Summary, Style, Tone, System Instructions, Glossary, Code Database, Conditional Prompts) and constructs a preview.
+**Purpose**: Preview the actual API requests that would be sent during translation. The Preview Requests button builds requests using the same functions and data as the real translation pipeline — reading from the manifest (Summary, Style, Tone, System Instructions, Glossary, Conditional Prompts) and chunking the lines identically.
 
-**Change from Current**: The Prompt Editor is reduced to a **single Preview button** and Renamed to **Prompt Preview** plus a separated Ban Tokens field. It must NOT contain its own Summary, Style, or Glossary inputs — those are managed in Step 3: Information and stored in the manifest. The Prompt Editor reads from the manifest to show the complete prompt but formatted for readability (##NAMEINCAPS shows Source but are not sent in the request).
+**Implementation**: `_build_preview_requests()` gathers options from UI, filters pending lines, chunks them via `_build_chunks()`, reads manifest data (Prompt, Summary, CustomStyle, CustomTone, POV), loads glossary entries via `load_glossary_entries()`, detects conditional prompts via `build_conditional_instructions()`, and produces a list of `PreviewRequest` dataclass instances — one per chunk. `RequestPreviewDialog` displays them.
 
 **UI Components**:
 | Component | Type | Function |
 |-----------|------|----------|
-| Preview Prompt Button | Button | Opens a read-only dialog showing the full constructed prompt |
+| 👁 Preview Requests Button | Button | Opens `RequestPreviewDialog` showing all built requests |
 | Ban Tokens Entry | Entry | Comma-separated token ban list (em_dash, smart_quotes, etc.) |
 | Ban Tokens Preset Dropdown | Combobox | Quick-select common ban presets |
 
-**Preview Dialog** (opened by button):
-- Shows the complete system prompt as it would be sent to the LLM
-- Read-only text area with syntax highlighting for different prompt sections
-- Token count estimate for the prompt (header showing total tokens and breakdown)
-- Sections: System Instructions, Game Summary, Translation Style, Glossary (selective), Code Database (selective), Conditional Prompts (if triggered), Rolling Context sample
+**RequestPreviewDialog** (opened by button):
+- **Toolbar row 1**: Jump To (Spinbox 1–N / total count) · View mode (Combobox: Pure / Formatted / Plain) · Search (Entry with ▲ prev / ▼ next buttons and match count label) · Filter (Menubutton with 9 checkbox items)
+- **Text area**: read-only `tk.Text` with vertical + horizontal scrollbars, displays current request
+- **Footer**: info label (request index, line count, model, temperature)
+
+**View Modes**:
+| Mode | Description |
+|------|-------------|
+| Pure | Raw JSON exactly as sent to the API (`{"messages": [...], "model": ..., "temperature": ...}`) |
+| Formatted | Section headers (═══ META ═══, ═══ SYSTEM INSTRUCTIONS ═══, etc.) with content below each |
+| Plain | Stripped of JSON syntax, word-wrapped at 100 characters for readability |
+
+**Filter Parts** (9 toggleable checkboxes via `FILTER_PARTS` constant):
+| Key | Label |
+|-----|-------|
+| meta | Meta |
+| system_instructions | System Instructions |
+| summary | Summary |
+| tone | Tone |
+| style | Style |
+| pov | Point of View |
+| conditional_prompts | Conditional Prompts |
+| glossary | Glossary |
+| input_lines | Input Lines |
+
+Deselecting a filter hides that section from the Formatted/Plain views and omits it from Pure JSON content field.
+
+**Search**: Case-insensitive text search with yellow highlight (`search_hl` tag) for all matches, orange highlight (`search_current` tag) for the active match. Previous/Next buttons cycle through matches with wrap-around. Match count displayed as "N of M".
 
 **Ban Tokens**:
-- Separated from the Prompt Editor into its own clearly labeled section
+- Separated into its own clearly labeled section
 - Entry field for comma-separated token names
 - Dropdown with presets: "None", "Clean English" (em_dash, smart_quotes), "Strict" (em_dash, smart_quotes, ellipsis_variants)
 - Applied via logit bias in the API request
@@ -4897,7 +4920,7 @@ without any hardcoded cloud provider data.
 | 2.7 | 2026-02-08 | Comprehensive rewrite of Step 8 (Wordwrap): Redefined purpose (auto from parser or manual settings). Pretty wrap is now standard — removed Prevent Orphans and Prefer Punctuation Breaks checkboxes (always active). Mode changed from radio buttons to dropdown, removed RPG Maker (→ its own parser) and Disabled options. Width changed from Spinbox to Dropdown with Character/Pixel modes. Break Character linked to Preprocessing and Translation Prompt with cost-optimization note. Speaker Handling reduced to Ignore + Count (renamed from Sameline), removed Samelineindent and Newline. Ignore Patterns replaced with read-only Code Database table (no checkboxes). Removed Typography widget entirely. Removed Overwrite Strategy widget — Overwrite becomes a column in the Lines Table with diff filtering. Added table filters (All/Changed/Exceeding/Overwrite Differs). Added Standard Wrapping Rules table documenting always-active `pretty_wrap()` behavior. Added comprehensive Future Improvements for parser-driven wrap, font commands, pixel-accurate width, New Textboxes, and break char removal before translation. |
 | 2.6 | 2026-02-08 | Comprehensive rewrite of Step 7 (Postprocessing): Complete mirror-symmetry spec with Step 4 Preprocessing — reverse priority ordering, automatic restorations (Placeholder/Code/BR always-on, no GUI toggle), post-exclusive recovery processes (Bracket Balance, Quote Balance, Whitespace Normalization with toggles). Renamed "Postprocessed Lines" to "Processed Lines" with new filters (Changed/Written/Flagged/By Process). Removed Refresh and Revert All buttons (overwrite semantics with confirmation dialog). Added Postprocess Options widget (bidirectional Symbol Conversion: Fullwidth↔Halfwidth). Redesigned Failure Handling (Write=default, Flag for Review=no-write, Queue for Retry=hidden/future). Added Diff View manual editing with Mark-as-Fixed. Added Postprocessing Summary with live updates and 100% completion popup. Fixed MouseWheel `bind_all` bug across all step files (qa.py, postprocess.py, translate.py, wordwrap_overwrite.py, output_inject.py). |
 | 2.5 | 2026-02-07 | Step 5 (Translation): Added Translation/Edit/TLC Mode Toggle to Hidden (Future Improvement) — three-way toggle with line-matching strategy design challenge. Step 6 (Quality Assurance): Complete rewrite — defined purpose as safety net for issues automatic recovery couldn't fix, added philosophy section, specified placeholder toggle mode (current state), preserved full widget spec and validation rules as future reference, added Edit/TLC filtering note. |
-| 2.4 | 2026-02-07 | Comprehensive update to Step 5 (Translation): Complete widget specifications for Translatable Lines (merged Original/Preprocessed into "To be Translated"), Request Options (Model from Global Options providers, Mock Translation default, Lines/Chunk sync with Estimation, Retry Strategy details for Batch/Contextual, Skip Non-Source Language), Prompt Editor (preview-only button, Ban Tokens separated), API Usage (live metrics). Added performance requirements (< 1s load for 100K lines, virtual scrolling, tab caching). Moved Request Caching, Extended Thinking, and Rolling Context to Global Options. Hidden Edit Before Translation and Line-by-Line Mode as Future Improvements. Added Mock Translation specification. |
+| 2.4 | 2026-02-07 | Comprehensive update to Step 5 (Translation): Complete widget specifications for Translatable Lines (merged Original/Preprocessed into "To be Translated"), Request Options (Model from Global Options providers, Mock Translation default, Lines/Chunk sync with Estimation, Retry Strategy details for Batch/Contextual, Skip Non-Source Language), Preview Requests (RequestPreviewDialog with Pure/Formatted/Plain views, Jump/Search/Filter toolbar, Ban Tokens separated), API Usage (live metrics). Added performance requirements (< 1s load for 100K lines, virtual scrolling, tab caching). Moved Request Caching, Extended Thinking, and Rolling Context to Global Options. Hidden Edit Before Translation and Line-by-Line Mode as Future Improvements. Added Mock Translation specification. |
 | 2.3 | 2026-02-03 | Comprehensive update to Step 4 (Preprocessing): Complete widget specifications for Standard Rules Panel, Custom Placeholders, Protect Code Patterns, and Anchoring (renamed from Anchor Removal). Added detailed process specifications with priority ordering, execution order documentation, Preprocessing↔Postprocessing mirror symmetry, validation and recovery strategies, RegEx toggle support for all pattern widgets, Preview Table with filtering, and comprehensive testing requirements. |
 | 2.2 | 2026-02-01 | Updated Step 3 (Information) with comprehensive widget specifications: Project Details (Name, Title, Genre with ADD behavior), Languages (Source/Target with "Other" custom input), Summary (renamed), Translation Style and Tone (dropdown graying with custom override), System Instructions (renamed from Prompt), Glossary Settings (3-column editable table, selective glossary), Code Database (renamed from Code Glossary, Preserve/Translate/Remove actions), and NEW Global Glossary and Database widget. Added prompt formats and manifest keys for all widgets. |
 | 2.1 | 2026-02-01 | Updated Step 1 (Analysis) with QoL future improvements. Renamed Step 2 from Estimation to Costs with comprehensive spec including: dual estimation workflow (Original + Preprocessed), Tokens/Request limit, prompt overhead calculation, model comparison expanded fields, time estimation with concurrent requests. Updated data flow and automation triggers. |

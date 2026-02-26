@@ -706,6 +706,485 @@ class EditPreviewDialog(tk.Toplevel):
         return self._edited_data
 
 
+# ======================================================================
+# Preview Request data model and dialog
+# ======================================================================
+
+# Filter part keys — order matches the toolbar dropdown
+FILTER_PARTS: List[Tuple[str, str]] = [
+    ("meta", "Meta"),
+    ("system_instructions", "System Instructions"),
+    ("summary", "Summary"),
+    ("tone", "Tone"),
+    ("style", "Style"),
+    ("pov", "Point of View"),
+    ("conditional_prompts", "Conditional Prompts"),
+    ("glossary", "Glossary"),
+    ("input_lines", "Input Lines"),
+]
+
+
+@dataclass
+class PreviewRequest:
+    """One API request with labelled parts for filtering."""
+
+    index: int
+    meta: str
+    system_instructions: str
+    summary: str
+    style: str
+    tone: str
+    pov: str
+    conditional_prompts: str
+    glossary: str
+    input_lines: str
+    full_system_prompt: str
+    line_count: int = 0
+
+    def get_part(self, key: str) -> str:
+        """Return the text of a named part."""
+        return str(getattr(self, key, ""))
+
+    def build_full_request_text(
+        self,
+        active_parts: Optional[set[str]] = None,
+    ) -> str:
+        """Assemble the visible request text honouring active filters.
+
+        Args:
+            active_parts: Set of part keys to include.  ``None`` = all.
+
+        Returns:
+            Concatenated request text.
+        """
+        if active_parts is None:
+            active_parts = {k for k, _ in FILTER_PARTS}
+
+        sections: list[str] = []
+        for key, label in FILTER_PARTS:
+            if key not in active_parts:
+                continue
+            text = self.get_part(key)
+            if not text:
+                continue
+            sections.append(f"=== {label} ===\n{text}")
+        return "\n\n".join(sections)
+
+    def build_pure_json(self) -> str:
+        """Build a single-line JSON of the complete API request payload."""
+        messages = [
+            {"role": "system", "content": self.full_system_prompt},
+            {"role": "user", "content": self.input_lines},
+        ]
+        payload: dict[str, Any] = {
+            "model": self.meta.split("\n")[0].replace("model: ", ""),
+            "messages": messages,
+            "temperature": 0.3,
+            "response_format": {"type": "json_object"},
+        }
+        # Extract temperature from meta
+        for line in self.meta.split("\n"):
+            if line.startswith("temperature:"):
+                try:
+                    payload["temperature"] = float(
+                        line.split(":")[1].strip(),
+                    )
+                except ValueError:
+                    pass
+        return json.dumps(payload, ensure_ascii=False)
+
+
+class RequestPreviewDialog(tk.Toplevel):
+    """Read-only dialog showing all API requests as they would be sent.
+
+    Features:
+        * **Jump To** — request number spinner + total label.
+        * **View** dropdown — Pure / Formatted / Plain.
+        * **Search** — text entry with Previous / Next and match count.
+        * **Filter** — checkboxes for each request part.
+        * Selectable (but not editable) text area.
+    """
+
+    _VIEW_PURE = "Pure"
+    _VIEW_FORMATTED = "Formatted"
+    _VIEW_PLAIN = "Plain"
+    _VIEW_OPTIONS = [_VIEW_PURE, _VIEW_FORMATTED, _VIEW_PLAIN]
+
+    def __init__(
+        self,
+        parent: tk.Widget,
+        requests: List[PreviewRequest],
+    ) -> None:
+        super().__init__(parent)
+        self.title("Request Preview")
+        self.geometry("950x700")
+        self.minsize(700, 400)
+        self.transient(parent)  # type: ignore[call-overload]
+
+        self._requests = requests
+        self._current_idx = 0  # 0-based index of displayed request
+        self._view_mode: str = self._VIEW_FORMATTED
+        self._search_matches: list[str] = []  # tk text indices
+        self._search_match_idx = -1
+
+        # Active filter parts (all enabled by default)
+        self._active_filters: dict[str, tk.BooleanVar] = {}
+
+        self._build_ui()
+        self._render_current_request()
+
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+        self.bind("<Escape>", lambda _: self.destroy())
+        self.grab_set()
+        self.focus_set()
+
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
+
+    def _build_ui(self) -> None:
+        """Build the full dialog layout."""
+        main = ttk.Frame(self, padding=8)
+        main.pack(fill="both", expand=True)
+
+        self._build_toolbar(main)
+        self._build_text_area(main)
+        self._build_footer(main)
+
+    def _build_toolbar(self, parent: ttk.Frame) -> None:
+        """Build the top toolbar row."""
+        toolbar = ttk.Frame(parent)
+        toolbar.pack(fill="x", pady=(0, 6))
+
+        # --- Jump To ---
+        ttk.Label(toolbar, text="Request:").pack(side="left")
+        self._jump_var = tk.IntVar(value=1)
+        self._jump_spin = ttk.Spinbox(
+            toolbar,
+            from_=1,
+            to=max(len(self._requests), 1),
+            textvariable=self._jump_var,
+            width=5,
+            command=self._on_jump,
+        )
+        self._jump_spin.pack(side="left", padx=(4, 0))
+        self._jump_spin.bind("<Return>", lambda _: self._on_jump())
+
+        self._total_label = ttk.Label(
+            toolbar, text=f"/ {len(self._requests)}",
+        )
+        self._total_label.pack(side="left", padx=(2, 10))
+
+        # --- View Mode ---
+        ttk.Label(toolbar, text="View:").pack(side="left")
+        self._view_var = tk.StringVar(value=self._VIEW_FORMATTED)
+        view_combo = ttk.Combobox(
+            toolbar,
+            textvariable=self._view_var,
+            values=self._VIEW_OPTIONS,
+            state="readonly",
+            width=11,
+        )
+        view_combo.pack(side="left", padx=(4, 10))
+        view_combo.bind("<<ComboboxSelected>>", self._on_view_change)
+
+        # --- Search ---
+        ttk.Label(toolbar, text="Search:").pack(side="left")
+        self._search_var = tk.StringVar()
+        self._search_entry = ttk.Entry(
+            toolbar, textvariable=self._search_var, width=18,
+        )
+        self._search_entry.pack(side="left", padx=(4, 2))
+        self._search_entry.bind("<Return>", lambda _: self._do_search())
+
+        ttk.Button(
+            toolbar, text="◀", width=2, command=self._search_prev,
+        ).pack(side="left")
+        ttk.Button(
+            toolbar, text="▶", width=2, command=self._search_next,
+        ).pack(side="left")
+        self._match_label = ttk.Label(toolbar, text="0 / 0")
+        self._match_label.pack(side="left", padx=(4, 10))
+
+        # --- Filter dropdown (Menubutton with checkboxes) ---
+        self._filter_btn = ttk.Menubutton(toolbar, text="Filter ▾")
+        self._filter_btn.pack(side="left")
+        filter_menu = tk.Menu(self._filter_btn, tearoff=False)
+        self._filter_btn["menu"] = filter_menu
+
+        for key, label in FILTER_PARTS:
+            var = tk.BooleanVar(value=True)
+            self._active_filters[key] = var
+            filter_menu.add_checkbutton(
+                label=label,
+                variable=var,
+                command=self._on_filter_change,
+            )
+
+        filter_menu.add_separator()
+        filter_menu.add_command(
+            label="Select All",
+            command=lambda: self._set_all_filters(True),
+        )
+        filter_menu.add_command(
+            label="Deselect All",
+            command=lambda: self._set_all_filters(False),
+        )
+
+    def _build_text_area(self, parent: ttk.Frame) -> None:
+        """Build the main scrollable text display."""
+        text_frame = ttk.Frame(parent)
+        text_frame.pack(fill="both", expand=True)
+
+        self._text = tk.Text(
+            text_frame,
+            wrap="none",
+            font=("Consolas", 9),
+            state="disabled",
+            exportselection=True,
+        )
+        yscroll = ttk.Scrollbar(
+            text_frame, orient="vertical", command=self._text.yview,
+        )
+        xscroll = ttk.Scrollbar(
+            text_frame, orient="horizontal", command=self._text.xview,
+        )
+        self._text.configure(
+            yscrollcommand=yscroll.set,
+            xscrollcommand=xscroll.set,
+        )
+        self._text.grid(row=0, column=0, sticky="nsew")
+        yscroll.grid(row=0, column=1, sticky="ns")
+        xscroll.grid(row=1, column=0, sticky="ew")
+        text_frame.rowconfigure(0, weight=1)
+        text_frame.columnconfigure(0, weight=1)
+
+        # Tag for search highlights
+        self._text.tag_configure(
+            "search_hl",
+            background="#FFFF00",
+            foreground="#000000",
+        )
+        self._text.tag_configure(
+            "search_current",
+            background="#FF8800",
+            foreground="#FFFFFF",
+        )
+
+    def _build_footer(self, parent: ttk.Frame) -> None:
+        """Build the footer with info and close button."""
+        footer = ttk.Frame(parent)
+        footer.pack(fill="x", pady=(6, 0))
+
+        self._info_label = ttk.Label(
+            footer, text="", foreground=THEME.text_secondary,
+        )
+        self._info_label.pack(side="left")
+
+        ttk.Button(footer, text="Close", command=self.destroy).pack(
+            side="right",
+        )
+
+    # ------------------------------------------------------------------
+    # Rendering
+    # ------------------------------------------------------------------
+
+    def _render_current_request(self) -> None:
+        """Render the request at ``self._current_idx`` into the text area."""
+        if not self._requests:
+            return
+
+        req = self._requests[self._current_idx]
+        active = {
+            k for k, v in self._active_filters.items() if v.get()
+        }
+        mode = self._view_var.get()
+
+        if mode == self._VIEW_PURE:
+            content = req.build_pure_json()
+        elif mode == self._VIEW_PLAIN:
+            raw = req.build_full_request_text(active)
+            # Strip JSON/code artefacts and word-wrap
+            content = self._plain_text(raw)
+        else:
+            # Formatted (default)
+            content = req.build_full_request_text(active)
+
+        # Set wrap mode based on view
+        if mode == self._VIEW_PLAIN:
+            self._text.configure(wrap="word")
+        else:
+            self._text.configure(wrap="none")
+
+        self._text.configure(state="normal")
+        self._text.delete("1.0", "end")
+        self._text.insert("1.0", content)
+        self._text.configure(state="disabled")
+
+        # Info label
+        est_tokens = len(content) // 4
+        self._info_label.configure(
+            text=(
+                f"Request {self._current_idx + 1} of "
+                f"{len(self._requests)}  |  "
+                f"{req.line_count} lines  |  "
+                f"~{est_tokens:,} tokens"
+            ),
+        )
+
+        # Re-apply search highlights if a search is active
+        if self._search_var.get():
+            self._do_search()
+
+    # ------------------------------------------------------------------
+    # View helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _plain_text(raw: str) -> str:
+        """Convert raw request text to plain readable text.
+
+        Strips JSON formatting characters and wraps long lines.
+        """
+        import textwrap
+        import re as _re
+
+        # Remove JSON structure characters
+        cleaned = raw
+        cleaned = cleaned.replace("\\n", "\n")
+        cleaned = _re.sub(r'[{}\[\]"]', "", cleaned)
+        cleaned = _re.sub(r",\s*$", "", cleaned, flags=_re.MULTILINE)
+        cleaned = _re.sub(r"^\s*translations:\s*", "", cleaned, flags=_re.MULTILINE)
+        cleaned = _re.sub(r"^\s*lines:\s*", "", cleaned, flags=_re.MULTILINE)
+        cleaned = _re.sub(r"^\s*role:\s*\w+\s*$", "", cleaned, flags=_re.MULTILINE)
+        cleaned = _re.sub(r"^\s*content:\s*", "", cleaned, flags=_re.MULTILINE)
+
+        # Collapse multiple blank lines
+        cleaned = _re.sub(r"\n{3,}", "\n\n", cleaned)
+
+        # Word wrap to ~100 chars
+        wrapped_lines: list[str] = []
+        for line in cleaned.split("\n"):
+            if len(line) > 100:
+                wrapped_lines.extend(textwrap.wrap(line, width=100))
+            else:
+                wrapped_lines.append(line)
+
+        return "\n".join(wrapped_lines).strip()
+
+    # ------------------------------------------------------------------
+    # Jump To
+    # ------------------------------------------------------------------
+
+    def _on_jump(self) -> None:
+        """Handle Jump To spinbox change."""
+        try:
+            val = self._jump_var.get()
+        except tk.TclError:
+            return
+        idx = max(0, min(val - 1, len(self._requests) - 1))
+        self._current_idx = idx
+        self._jump_var.set(idx + 1)
+        self._render_current_request()
+
+    # ------------------------------------------------------------------
+    # View mode
+    # ------------------------------------------------------------------
+
+    def _on_view_change(self, _event: object = None) -> None:
+        """Handle View dropdown change."""
+        self._render_current_request()
+
+    # ------------------------------------------------------------------
+    # Search
+    # ------------------------------------------------------------------
+
+    def _do_search(self) -> None:
+        """Run the search and highlight all matches."""
+        term = self._search_var.get()
+
+        # Clear previous highlights
+        self._text.tag_remove("search_hl", "1.0", "end")
+        self._text.tag_remove("search_current", "1.0", "end")
+        self._search_matches.clear()
+        self._search_match_idx = -1
+
+        if not term:
+            self._match_label.configure(text="0 / 0")
+            return
+
+        # Find all occurrences (case-insensitive)
+        start = "1.0"
+        while True:
+            pos = self._text.search(
+                term, start, stopindex="end", nocase=True,
+            )
+            if not pos:
+                break
+            end_pos = f"{pos}+{len(term)}c"
+            self._text.tag_add("search_hl", pos, end_pos)
+            self._search_matches.append(pos)
+            start = end_pos
+
+        count = len(self._search_matches)
+        if count:
+            self._search_match_idx = 0
+            self._highlight_current_match()
+        self._match_label.configure(
+            text=f"{self._search_match_idx + 1 if count else 0} / {count}",
+        )
+
+    def _highlight_current_match(self) -> None:
+        """Highlight the current match distinctively and scroll to it."""
+        self._text.tag_remove("search_current", "1.0", "end")
+        if 0 <= self._search_match_idx < len(self._search_matches):
+            pos = self._search_matches[self._search_match_idx]
+            term = self._search_var.get()
+            end_pos = f"{pos}+{len(term)}c"
+            self._text.tag_add("search_current", pos, end_pos)
+            self._text.see(pos)
+
+    def _search_next(self) -> None:
+        """Move to the next search match."""
+        if not self._search_matches:
+            self._do_search()
+            return
+        self._search_match_idx = (
+            (self._search_match_idx + 1) % len(self._search_matches)
+        )
+        self._highlight_current_match()
+        self._match_label.configure(
+            text=f"{self._search_match_idx + 1} / {len(self._search_matches)}",
+        )
+
+    def _search_prev(self) -> None:
+        """Move to the previous search match."""
+        if not self._search_matches:
+            self._do_search()
+            return
+        self._search_match_idx = (
+            (self._search_match_idx - 1) % len(self._search_matches)
+        )
+        self._highlight_current_match()
+        self._match_label.configure(
+            text=f"{self._search_match_idx + 1} / {len(self._search_matches)}",
+        )
+
+    # ------------------------------------------------------------------
+    # Filter
+    # ------------------------------------------------------------------
+
+    def _on_filter_change(self) -> None:
+        """Re-render after a filter checkbox changes."""
+        self._render_current_request()
+
+    def _set_all_filters(self, state: bool) -> None:
+        """Set all filter checkboxes to *state* and re-render."""
+        for var in self._active_filters.values():
+            var.set(state)
+        self._render_current_request()
+
+
 class TranslationStep(BaseStep):
     """Translation step for executing translations with live progress.
 
@@ -837,9 +1316,9 @@ class TranslationStep(BaseStep):
 
         ttk.Button(
             right_frame,
-            text="👁 Preview Prompt",
-            command=self._show_prompt_preview,
-            width=15,
+            text="👁 Preview Requests",
+            command=self._show_request_preview,
+            width=16,
         ).pack(side="right", padx=(0, 5))
 
     def _build_content(self) -> None:
@@ -2448,81 +2927,175 @@ class TranslationStep(BaseStep):
         except Exception as e:
             logger.debug("Error loading prompt data: %s", e)
 
-    def _show_prompt_preview(self) -> None:
-        """Show prompt preview dialog with complete system prompt.
+    def _show_request_preview(self) -> None:
+        """Show request preview dialog with all API requests.
 
-        Uses manifest data from the Information step for style, tone,
-        summary, and system instructions.
+        Builds the exact same requests that would be sent during
+        translation, using the same system prompt construction and
+        chunking logic.  Opens a read-only dialog with Jump To,
+        Search, View modes (Pure/Formatted/Plain), and part filters.
         """
-        # Build the actual system prompt from manifest
-        system_prompt = self._build_system_prompt_from_manifest()
+        if not self._lines:
+            self._refresh_lines()
 
-        # Create a simple preview view
-        preview = PromptPreviewView(
-            system_prompt=system_prompt,
-            game_summary="",
-            glossary_section="",
-            style_section="",
-            conditional_section="",
-            total_tokens=len(system_prompt.split()),
-            breakdown={},
-        )
+        if not self._lines:
+            messagebox.showwarning(
+                "No Data",
+                "Please load files in the Input step first.",
+            )
+            return
 
-        # Show in a dialog
-        self._show_preview_dialog(preview)
+        # Build structured requests using the same code path as translation
+        requests = self._build_preview_requests()
 
-    def _show_preview_dialog(self, preview: PromptPreviewView) -> None:
-        """Show prompt preview in a dialog window.
+        if not requests:
+            messagebox.showinfo(
+                "Preview Requests",
+                "No translatable lines found.",
+            )
+            return
 
-        Args:
-            preview: The preview data to display.
+        # Open the preview dialog
+        RequestPreviewDialog(self, requests)
+
+    def _build_preview_requests(self) -> "list[PreviewRequest]":
+        """Build preview request objects mirroring the real translation flow.
+
+        Returns:
+            List of :class:`PreviewRequest` with labelled parts.
         """
-        dialog = tk.Toplevel(self)
-        dialog.title("Prompt Preview")
-        dialog.geometry("700x500")
-        dialog.transient(self)  # type: ignore[call-overload]
+        # Gather options from UI
+        opts = self._get_options_from_ui()
 
-        # Main frame
-        main = ttk.Frame(dialog, padding=10)
-        main.pack(fill="both", expand=True)
+        # Gather pending lines (same filtering as _do_translation)
+        pending = [
+            line for line in self._lines
+            if line.status in (LineStatus.PENDING, LineStatus.COMPLETED,
+                               LineStatus.FAILED, LineStatus.SKIPPED)
+        ]
+        if not pending:
+            pending = list(self._lines)
 
-        # Token count header
-        header = ttk.Frame(main)
-        header.pack(fill="x", pady=(0, 10))
+        # Chunk the lines the same way translation does
+        chunks = self._build_chunks(pending)
 
-        ttk.Label(
-            header,
-            text=f"Estimated Tokens: {preview.total_tokens}",
-            font=("TkDefaultFont", 10, "bold"),
-        ).pack(side="left")
+        # Build system prompt parts from manifest for each chunk
+        mgr = self.manifest_manager
+        sys_instructions = ""
+        summary = ""
+        style = ""
+        tone = ""
+        pov_block = ""
+        conditional_block = ""
+        glossary_block = ""
 
-        # Breakdown
-        breakdown_text = " | ".join(
-            f"{k}: {v}" for k, v in preview.breakdown.items()
+        if mgr is not None and mgr.is_loaded:
+            sys_instructions = (
+                mgr._manifest_data.get("Prompt", "") or ""
+            ).strip()
+            summary = (
+                mgr._manifest_data.get("Summary", "") or ""
+            ).strip()
+            style = (
+                mgr._manifest_data.get("CustomStyle", "") or ""
+            ).strip()
+            tone = (
+                mgr._manifest_data.get("CustomTone", "") or ""
+            ).strip()
+
+            # POV
+            pov_data = mgr._manifest_data.get("POV", {})
+            if isinstance(pov_data, dict) and pov_data.get("confidence") == "high":
+                pov_label = {
+                    "1st": "first",
+                    "2nd": "second",
+                    "3rd": "third",
+                }.get(pov_data.get("pov", ""), pov_data.get("pov", ""))
+                pov_block = (
+                    f"# Narrative Perspective\n"
+                    f"The narrative uses {pov_label} person perspective. "
+                    f"Maintain consistent {pov_label} person perspective throughout."
+                )
+
+            # Glossary from manifest
+            from CherryAI.functions.manifest_fields import load_glossary_entries
+            glossary_entries = load_glossary_entries(mgr)
+            active_entries = [
+                e for e in glossary_entries if e.get("active", True)
+            ]
+            if active_entries:
+                g_lines = ["# Glossary", "Use these terms strictly:"]
+                for entry in active_entries:
+                    src = entry.get("source", "")
+                    tgt = entry.get("target", "")
+                    notes = entry.get("notes", "")
+                    if src:
+                        line_text = f"- {src}: {tgt}" if tgt else f"- {src}"
+                        if notes:
+                            line_text += f" ({notes})"
+                        g_lines.append(line_text)
+                glossary_block = "\n".join(g_lines)
+
+        # Detect conditional prompts from the lines
+        all_line_texts = [
+            (line.edited_prepro or line.preprocessed or line.original)
+            for line in self._lines
+        ]
+        cond_text, _ = build_conditional_instructions(all_line_texts[:200])
+        if cond_text and cond_text.strip():
+            conditional_block = cond_text.strip()
+
+        # Build the full system prompt (replicate _build_system_prompt_from_manifest)
+        prompt_parts: list[str] = []
+        if sys_instructions:
+            prompt_parts.append(sys_instructions)
+        if style:
+            prompt_parts.append(f"# Translation Style Guidelines\n{style}")
+        if tone:
+            prompt_parts.append(f"# Translation Tone\n{tone}")
+        if summary:
+            prompt_parts.append(f"# Game Context\n{summary}")
+        if pov_block:
+            prompt_parts.append(pov_block)
+        if conditional_block:
+            prompt_parts.append(conditional_block)
+        if glossary_block:
+            prompt_parts.append(glossary_block)
+        full_system_prompt = "\n\n".join(prompt_parts)
+
+        # Meta info
+        meta_block = (
+            f"model: {opts.model}\n"
+            f"temperature: {opts.temperature}\n"
+            f"response_format: {{\"type\": \"json_object\"}}"
         )
-        ttk.Label(
-            header,
-            text=breakdown_text,
-            foreground=THEME.text_secondary,
-        ).pack(side="right")
 
-        # System prompt display
-        ttk.Label(main, text="System Prompt:").pack(anchor="w")
-        text_widget = scrolledtext.ScrolledText(
-            main,
-            wrap="word",
-            font=("Consolas", 9),
-        )
-        text_widget.pack(fill="both", expand=True, pady=5)
-        text_widget.insert("1.0", preview.system_prompt)
-        text_widget.configure(state="disabled")
+        # Build preview requests per chunk
+        requests: list[PreviewRequest] = []
+        for chunk_idx, chunk in enumerate(chunks):
+            lines_for_chunk = [
+                line.edited_prepro or line.preprocessed or line.original
+                for line in chunk
+            ]
+            user_content = json.dumps(
+                {"lines": lines_for_chunk}, ensure_ascii=False,
+            )
+            requests.append(PreviewRequest(
+                index=chunk_idx,
+                meta=meta_block,
+                system_instructions=sys_instructions,
+                summary=f"# Game Context\n{summary}" if summary else "",
+                style=f"# Translation Style Guidelines\n{style}" if style else "",
+                tone=f"# Translation Tone\n{tone}" if tone else "",
+                pov=pov_block,
+                conditional_prompts=conditional_block,
+                glossary=glossary_block,
+                input_lines=user_content,
+                full_system_prompt=full_system_prompt,
+                line_count=len(lines_for_chunk),
+            ))
 
-        # Close button
-        ttk.Button(
-            main,
-            text="Close",
-            command=dialog.destroy,
-        ).pack(pady=10)
+        return requests
 
     def _detect_conditional_prompts(self) -> None:
         """Detect conditional prompts based on loaded lines.
