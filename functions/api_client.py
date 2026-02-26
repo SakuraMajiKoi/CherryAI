@@ -1576,20 +1576,36 @@ class APIClient:
         # Construct the prompt
         # We use JSON mode to ensure structured output
         user_content = json.dumps({"lines": chunk}, ensure_ascii=False)
-        
-        base_system_prompt = (
-            f"You are a professional translator translating from {self.config.source_lang} to {self.config.target_lang}.\n"
-            "Output must be a valid JSON object with a single key 'translations' containing an array of strings.\n"
-            "The array must have exactly the same number of elements as the input 'lines' array.\n"
+
+        # JSON format instructions are always appended
+        json_instructions = (
+            "Output must be a valid JSON object with a single key "
+            "'translations' containing an array of strings.\n"
+            "The array must have exactly the same number of elements "
+            "as the input 'lines' array.\n"
             "Preserve all special tokens like __PROTECTED__ exactly.\n"
-            "Do not translate proper names if you are unsure, or follow the glossary if provided."
+            "Do not translate proper names if you are unsure, or "
+            "follow the glossary if provided."
         )
-        
-        if system_prompt:
-            base_system_prompt += f"\n\nAdditional Instructions:\n{system_prompt}"
+
+        if system_prompt and system_prompt.strip():
+            # Full system prompt assembled by the caller (translate step)
+            # already contains Language, System Instructions, Style, Tone,
+            # Summary, Genre, Conditional Prompts, Glossary, Rolling Context.
+            final_system_prompt = (
+                f"{system_prompt.strip()}\n\n"
+                f"# Output Format\n{json_instructions}"
+            )
+        else:
+            # Fallback: no caller prompt — use a minimal default
+            final_system_prompt = (
+                f"You are a professional translator translating from "
+                f"{self.config.source_lang} to {self.config.target_lang}.\n"
+                f"{json_instructions}"
+            )
 
         messages = [
-            {"role": "system", "content": base_system_prompt},
+            {"role": "system", "content": final_system_prompt},
             {"role": "user", "content": user_content}
         ]
 

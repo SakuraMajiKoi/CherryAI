@@ -286,23 +286,26 @@ secure replacement but only covers key encryption, not the full profile data sti
 8. Conditional instructions (pattern-triggered)
 ```
 
-**Target order** (per canonical design):
+**Target order** (per canonical design — IMPLEMENTED):
 ```
-1. Language direction header: "Translate {Source} into {Target}"
-2. System Instructions (the base prompt / eroge instructions)
-3. Style
-4. Tone (separate from Style)
-5. Summary (game context)
-6. Conditional Prompts (selective: context-type + pattern-triggered, trigger-based, Narrative perspective (POV))
-7. Glossary (selective: content-based, rows called when Original/Translation in Input Lines)
-8. Rolling Context (preceding lines)
-9. Input Lines
+1. Language direction header: "# Language\nTranslate from {Source} to {Target}."
+2. System Instructions (custom_notes from metadata)
+3. Style (# Translation Style Guidelines)
+4. Tone (# Translation Tone; separate from Style)
+5. Summary (# Game Context)
+6. Genre (# Genre)
+7. Conditional Prompts (selective: context-type + pattern-triggered + POV)
+8. Glossary (selective: content-based + Characters from metadata)
+9. Rolling Context (# Rolling Context; preceding translated lines)
+10. Input Lines
 ```
 
-**SIMILAR BUT NOT THE SAME:**
-- "Conditional Prompts" in current implementation = context-type prompts (dialogue/menu/choice) AND pattern-triggered conditional_prompts.json entries — currently at positions 2 and 8 respectively. They must be merged into a single slot (slot 6).
-- Style and Tone are currently combined as a single "translation_style" string. They must become separate fields.
-- Output examples (currently injected into prompt) are not in the target design — remove from system prompt. Output examples can instead be part of System Instructions and Conditional Prompts.
+**Implementation Notes:**
+- `_build_system_prompt_from_manifest()` now reads ALL data from `step_state.Information.data.metadata` via `mgr.get_step_data_value(3, "metadata", {})`
+- `api_client._translate_chunk()` uses the caller's system prompt directly and appends `# Output Format` with JSON instructions
+- `ManifestManager.consolidate_project_info()` migrates top-level keys into metadata on load
+- `FILTER_PARTS` expanded from 9 to 12 entries (added Language, Genre, Rolling Context)
+- Characters from metadata are included as a `# Characters` section after the glossary
 
 **Files to Modify:**
 - `functions/prompt_builder.py` — Rewrite `_construct_system_prompt()` to follow exact slot order
@@ -327,7 +330,7 @@ secure replacement but only covers key encryption, not the full profile data sti
 - **Task 62.1**: `functions/glossary.py` + `gui/steps/information.py` → `globalglossary.tsv` (3-col TSV, migration chain)
 - **Task 62.2**: `functions/glossaries/code_glossary_db.py` → `codedatabase.tsv` (9-col TSV, migration from SQLite/CSV/JSON)
 - **Task 62.3**: `functions/api_config.py` + `functions/project_config.py` → all API profiles in `user/API.ini` `[translation]`/`[glossary]`; auto-migration from `api_profiles.ini`
-- **Task 62.4**: `functions/prompt_builder.py` `_construct_system_prompt()` → 7-slot order: language direction → instructions → style → tone → summary → conditional → glossary
+- **Task 62.4**: `functions/prompt_builder.py` `_construct_system_prompt()` → 7-slot order: language direction → instructions → style → tone → summary → conditional → glossary; UPDATED: `gui/steps/translate.py` `_build_system_prompt_from_manifest()` → 10-slot order reading from `step_state.Information.data.metadata`: language → instructions → style → tone → summary → genre → conditional → glossary+characters → rolling context → (output format appended by api_client); `FILTER_PARTS` expanded to 12 entries; `api_client._translate_chunk()` uses caller prompt directly; `consolidate_project_info()` added to ManifestManager
 - **Dir Init**: `functions/ini_manager.py` `ensure_app_dirs()` called from `_load_ini()` → creates `user/`, `Projects/`, `logs/`, `cache/` on first access
 - **Tests**: `test_phase62_glossary.py` (32), `test_phase62_codedb.py` (27), `test_phase62_api.py` (25), `test_phase62_prompt.py` (28), `test_phase62_dirs.py` (17) = **129 new tests**
 

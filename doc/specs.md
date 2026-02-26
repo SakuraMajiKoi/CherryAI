@@ -390,20 +390,21 @@ The system prompt is assembled in the following fixed order. Empty sections are 
 
 | Slot | Component | Source | Condition |
 |------|-----------|--------|-----------|
-| 1 | **Language Direction** | Manifest `SourceLanguage` + `TargetLanguage` | Always present |
-| 2 | **System Instructions** | Manifest `Prompt` / preset from `user/CherryAI.ini` | Always present |
-| 3 | **Style** | Manifest `CustomStyle` or `StylePreset` | Skip when empty |
-| 4 | **Tone** | Manifest `CustomTone` or `TonePreset` | Skip when empty |
-| 5 | **Summary** | Manifest `Summary` | Skip when empty |
-| 6 | **Conditional Prompts** | `user/CherryAI.ini [prompts]` or `user/conditional_prompts.json` | Selective — injected only when [Input Lines] contain the trigger pattern |
-| 7 | **Glossary** | Manifest `Glossary` + `user/globalglossary.tsv` | Selective — rows injected only when Original (or Translation) found in [Input Lines] |
-| 8 | **Rolling Context** | Preceding translated lines from manifest | Conditional — dialogue/unknown requests only; disabled for Menu/Choice |
-| 9 | **Input Lines** | Manifest `lines[].prepro` (fallback: `orig`) | Always present |
+| 1 | **Language Direction** | `step_state.Information.data.metadata.source_language` + `target_language` (fallback: top-level `SourceLanguage`/`TargetLanguage`) | Always present |
+| 2 | **System Instructions** | `metadata.custom_notes` / preset from `user/CherryAI.ini` | Always present |
+| 3 | **Style** | `metadata.style` (fallback: `CustomStyle`) | Skip when empty |
+| 4 | **Tone** | `metadata.tone` (fallback: `CustomTone`) | Skip when empty |
+| 5 | **Summary** | `metadata.summary` | Skip when empty |
+| 6 | **Genre** | `metadata.genre` (fallback: top-level `Genre`) | Skip when empty |
+| 7 | **Conditional Prompts** | `user/CherryAI.ini [prompts]` or `user/conditional_prompts.json` | Selective — injected only when [Input Lines] contain the trigger pattern |
+| 8 | **Glossary** | Manifest `Glossary` + `user/globalglossary.tsv` + `metadata.characters` | Selective — rows injected only when Original (or Translation) found in [Input Lines]; Characters always included |
+| 9 | **Rolling Context** | Preceding translated lines from manifest | Conditional — dialogue/unknown requests only; disabled for Menu/Choice |
+| 10 | **Input Lines** | Manifest `lines[].prepro` (fallback: `orig`) | Always present |
 
 **Notes on ordering:**
-- Slots 1-5 are non-selective (included when non-empty regardless of line content)
-- Slots 6-7 are selective/conditional (content-based or pattern-triggered)
-- Rolling Context (slot 8) appears just before Input Lines to maximise contextual proximity
+- Slots 1-6 are non-selective (included when non-empty regardless of line content)
+- Slots 7-8 are selective/conditional (content-based or pattern-triggered)
+- Rolling Context (slot 9) appears just before Input Lines to maximise contextual proximity
 - Meta Settings (URL, key, model, temperature, etc.) are passed separately and never counted
 
 #### Request Size
@@ -1799,7 +1800,7 @@ The Costs step has **two distinct estimation states** tracked separately:
 
 **Manifest Keys**: `StylePreset`, `CustomStyle`, `TonePreset`, `CustomTone`
 
-**Data Flow**: translate.py `_build_system_prompt_from_manifest()` reads `CustomStyle` and `CustomTone` from manifest. If non-empty, they are appended to the system prompt as `Style: ...` and `Tone: ...` lines. Values are saved/loaded via manifest bindings (`bind_text_to_field` for CustomStyle/CustomTone, `bind_combobox_to_field` for StylePreset/TonePreset).
+**Data Flow**: translate.py `_build_system_prompt_from_manifest()` reads style and tone from `step_state.Information.data.metadata` (keys: `style`, `tone`). If non-empty, they are appended to the system prompt as `# Translation Style Guidelines\n...` and `# Translation Tone\n...` sections. The method also reads language direction, system instructions, summary, genre, glossary, characters, and rolling context from the same metadata dict. Values are saved/loaded via manifest bindings (`bind_text_to_field` for CustomStyle/CustomTone, `bind_combobox_to_field` for StylePreset/TonePreset). Top-level keys are migrated into metadata by `ManifestManager.consolidate_project_info()` on manifest load.
 
 ---
 
@@ -2022,8 +2023,10 @@ Characters:
 - `code_patterns[]` - Patterns with their actions
 
 **Stored In**:
-- Manifest: `project_info{}`, `Glossary{}`, `CodeGlossary[]`, `CharacterNotes[]`
+- Manifest: `step_state.Information.data.metadata{}` (source_language, target_language, genre, style, tone, summary, custom_notes, characters, code_patterns, system_instructions)
+- Legacy compat: `project_info{}`, `Glossary{}`, `CodeGlossary[]`, `CharacterNotes[]`
 - Step data: `Information.{fields...}`
+- Top-level keys (`SourceLanguage`, `TargetLanguage`, `Genre`, etc.) are migrated into metadata by `ManifestManager.consolidate_project_info()` on load
 
 ---
 
@@ -2701,17 +2704,20 @@ The Translation tab contains four widget sections:
 | Formatted | Section headers (═══ META ═══, ═══ SYSTEM INSTRUCTIONS ═══, etc.) with content below each |
 | Plain | Stripped of JSON syntax, word-wrapped at 100 characters for readability |
 
-**Filter Parts** (9 toggleable checkboxes via `FILTER_PARTS` constant):
+**Filter Parts** (12 toggleable checkboxes via `FILTER_PARTS` constant):
 | Key | Label |
 |-----|-------|
 | meta | Meta |
+| language | Language |
 | system_instructions | System Instructions |
-| summary | Summary |
-| tone | Tone |
 | style | Style |
+| tone | Tone |
+| summary | Summary |
+| genre | Genre |
 | pov | Point of View |
 | conditional_prompts | Conditional Prompts |
 | glossary | Glossary |
+| rolling_context | Rolling Context |
 | input_lines | Input Lines |
 
 Deselecting a filter hides that section from the Formatted/Plain views and omits it from Pure JSON content field.
@@ -2772,13 +2778,13 @@ Deselecting a filter hides that section from the Formatted/Plain views and omits
 **Inputs**:
 - From Step 4: `prepro[]` (preprocessed lines) — preferred
 - From Step 0: `orig[]` (original lines) — fallback if no preprocessing
-- From Step 3 (via manifest): Summary, Style, Tone, System Instructions, Glossary, Code Database
+- From Step 3 (via manifest `step_state.Information.data.metadata`): Summary, Style, Tone, System Instructions, Genre, Characters, Glossary, Code Database
 - From Global Options: API Provider config (URL, Key, Model), Caching mode, Rolling Context, Thinking Mode
 
 **Processing** (via `functions/api_client.py` or Mock Translation):
-1. Build translation prompt from manifest data via `functions/prompt_builder.py`
+1. Build translation prompt from Information metadata via `_build_system_prompt_from_manifest()` (follows §5.2 10-slot injection order)
 2. Determine input: use `get_input_for_translation()` per line (edited_prepro → prepro → orig)
-3. Optionally skip lines not in source language (language detection)
+3. Set `source_lang`/`target_lang` on API client config from Information metadata
 4. Chunk lines by configured Lines/Chunk size
 5. For each chunk:
    a. Check line cache for existing translations (if caching enabled)
@@ -2828,7 +2834,7 @@ Cloud providers (OpenAI, Gemini, Anthropic, Mistral):
 {
   "model": "gemini-2.0-flash",
   "messages": [
-    {"role": "system", "content": "[Full system prompt from prompt_builder]"},
+    {"role": "system", "content": "[Full system prompt from _build_system_prompt_from_manifest() + Output Format]"},
     {"role": "user", "content": "[Lines to translate as numbered JSON]"}
   ],
   "response_format": {"type": "json_object"},
@@ -2841,7 +2847,7 @@ Local providers (LM Studio, Ollama, local):
 {
   "model": "qwen/qwen3.5-35b-a3b",
   "messages": [
-    {"role": "system", "content": "[Full system prompt from prompt_builder]"},
+    {"role": "system", "content": "[Full system prompt from _build_system_prompt_from_manifest() + Output Format]"},
     {"role": "user", "content": "[Lines to translate as numbered JSON]"}
   ],
   "response_format": {

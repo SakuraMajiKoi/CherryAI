@@ -457,7 +457,7 @@ GAME SUMMARY & PROJECT CONTEXT
 - Summary widget in Information Step (Step 3), height=2, with "🔄 Restore Default" button
 - Default text: "Write a short summary of the work here. Mentioning protagonist(s) and Point of View is not necessary and will be automatically provided."
 - Summary stored in manifest key `Summary`, auto-saved/loaded via manifest binding
-- Summary is automatically injected into the system prompt by translate.py
+- Summary is automatically injected into the system prompt by translate.py `_build_system_prompt_from_manifest()` as `# Game Context\n...`, reading from `step_state.Information.data.metadata.summary`
 - Helps AI maintain consistent characterization and tone
 - Project configuration stored per-project in manifest:
   - Project name (from Input step, not folder name), genre, tone
@@ -476,8 +476,8 @@ TRANSLATION STYLE GUIDE
   - Save/Delete buttons for managing user presets
   - All presets (built-in and user) stored in `user/CherryAI.ini` under `[style]` and `[tone]` sections
   - Built-in presets are seeded automatically on first run and are never overwritten
-- Style/Tone values stored in manifest keys `CustomStyle`, `CustomTone`, `StylePreset`, `TonePreset`
-- translate.py `_build_system_prompt_from_manifest()` reads from manifest and appends to system prompt as `Style: ...` and `Tone: ...`
+- Style/Tone values stored in manifest keys `CustomStyle`, `CustomTone`, `StylePreset`, `TonePreset` (migrated into `step_state.Information.data.metadata` by `consolidate_project_info()` on load)
+- translate.py `_build_system_prompt_from_manifest()` reads from `step_state.Information.data.metadata` and appends to system prompt as `# Translation Style Guidelines\n...` and `# Translation Tone\n...` sections
 - Helps maintain consistent translation style across the project
 
 SYSTEM INSTRUCTIONS
@@ -486,7 +486,7 @@ SYSTEM INSTRUCTIONS
 - Save/Delete buttons for managing user presets; all presets stored in `user/CherryAI.ini` under `[system_instructions]`
 - Default text (including Output Examples section) automatically populated from INI when empty on step entry
 - Instructions stored in manifest key `Prompt`, preset name in `SIPreset`
-- translate.py `_build_system_prompt_from_manifest()` reads `Prompt` from manifest and includes in system prompt
+- translate.py `_build_system_prompt_from_manifest()` reads `custom_notes` from `step_state.Information.data.metadata` and includes in system prompt
 - Global Options → Restore Defaults → System Instructions resets `[system_instructions]` section and re-seeds Default preset
 
 ROLLING CONTEXT (NEW - TASK 7)
@@ -738,7 +738,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - **Auto-save on step change**: Manifest saved when navigating between steps
   - **Manifest v3.0 format** stores all project data:
     - step_state: Completion status, skipped flags, metadata per step
-    - project_info: Name, source/target language, genre, tone
+    - project_info: Name, source/target language, genre, tone (migrated into `step_state.Information.data.metadata` by `consolidate_project_info()` on load)
     - glossary: Project-specific glossary entries (optional, can use global)
     - characters: Speaker database with gender and context
     - code_patterns: Protected code and custom placeholders
@@ -1470,7 +1470,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Connection Test: Real `test_api_connection()` using OpenAI-compatible `models.list()` endpoint; returns `(bool, str, list)` with model IDs; threaded execution with specific error messages (auth failure, timeout, connection refused); on success, opens API Test Results dialog with filterable model table and per-model translation testing via `test_model_translation()`
     - Settings Migration: caching.mode in CachingSettings, thinking_enabled/thinking_budget in RequestSettings, rolling_context_lines in RequestSettings; `_sync_from_global_options()` applies overrides on tab enter
     - Retry Refinement: UI shows only Batch + Contextual (`RETRY_STRATEGIES`); `ALL_RETRY_STRATEGIES` kept for CLI with all 4; max retries minimum changed from 1 to 0
-    - Prompt Editor Redesign: removed Style Preset and Game Summary textarea; "Preview Requests" button opens `RequestPreviewDialog` showing actual API requests built with the same functions as translation; three view modes (Pure JSON / Formatted with section headers / Plain readable text); toolbar with Jump To (request number), Search with previous/next and match count, and Filter dropdown with checkboxes for 9 prompt parts (Meta, System Instructions, Summary, Tone, Style, POV, Conditional Prompts, Glossary, Input Lines); Ban Tokens LabelFrame with preset dropdown (None/Clean English/Strict)
+    - Prompt Editor Redesign: removed Style Preset and Game Summary textarea; "Preview Requests" button opens `RequestPreviewDialog` showing actual API requests built with the same functions as translation; three view modes (Pure JSON / Formatted with section headers / Plain readable text); toolbar with Jump To (request number), Search with previous/next and match count, and Filter dropdown with checkboxes for 12 prompt parts (Meta, Language, System Instructions, Style, Tone, Summary, Genre, POV, Conditional Prompts, Glossary, Rolling Context, Input Lines); Ban Tokens LabelFrame with preset dropdown (None/Clean English/Strict)
     - Chunk Sync: LinesPerChunk synced between Costs step and manifest; `_on_chunk_changed()` write-back
     - Language Skip: `detect_line_script()` in `functions/analysis.py` (CJK/kana/hangul/latin detection); `_LANG_SCRIPT_MAP` and `_apply_language_skip()` filter non-source lines
     - Tab Caching: `BaseStep` infrastructure (`_compute_cache_hash`, `_is_cache_valid`, `_update_cache`, `_invalidate_cache`, `_force_refresh`); TranslationStep early-returns on cache hit

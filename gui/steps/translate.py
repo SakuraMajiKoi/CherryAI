@@ -710,16 +710,19 @@ class EditPreviewDialog(tk.Toplevel):
 # Preview Request data model and dialog
 # ======================================================================
 
-# Filter part keys — order matches the toolbar dropdown
+# Filter part keys — order matches the toolbar dropdown and spec §5.2
 FILTER_PARTS: List[Tuple[str, str]] = [
     ("meta", "Meta"),
+    ("language", "Language"),
     ("system_instructions", "System Instructions"),
-    ("summary", "Summary"),
-    ("tone", "Tone"),
     ("style", "Style"),
+    ("tone", "Tone"),
+    ("summary", "Summary"),
+    ("genre", "Genre"),
     ("pov", "Point of View"),
     ("conditional_prompts", "Conditional Prompts"),
     ("glossary", "Glossary"),
+    ("rolling_context", "Rolling Context"),
     ("input_lines", "Input Lines"),
 ]
 
@@ -730,13 +733,16 @@ class PreviewRequest:
 
     index: int
     meta: str
+    language: str
     system_instructions: str
     summary: str
     style: str
     tone: str
+    genre: str
     pov: str
     conditional_prompts: str
     glossary: str
+    rolling_context: str
     input_lines: str
     full_system_prompt: str
     line_count: int = 0
@@ -2029,12 +2035,26 @@ class TranslationStep(BaseStep):
             "conditional": conditional,
         }
 
-    def _build_system_prompt_from_manifest(self) -> str:
-        """Build the system prompt from manifest data (Information step).
+    def _build_system_prompt_from_manifest(
+        self,
+        rolling_context_text: str = "",
+    ) -> str:
+        """Build the system prompt from manifest Information step metadata.
 
-        Reads System Instructions, Summary, Style, and Tone from the
-        manifest so that the translation uses the same data the user
-        configured in the Information step.
+        Follows the spec §5.2 injection order:
+        1. Language Direction
+        2. System Instructions (custom_notes)
+        3. Style
+        4. Tone
+        5. Summary
+        6. Genre
+        7. Conditional Prompts (selective)
+        8. Glossary (selective)
+        9. Rolling Context (conditional)
+
+        Args:
+            rolling_context_text: Pre-formatted rolling context lines to
+                include in the prompt. Empty string disables.
 
         Returns:
             Assembled system prompt string.
@@ -2043,36 +2063,70 @@ class TranslationStep(BaseStep):
 
         mgr = self.manifest_manager
         if mgr is not None and mgr.is_loaded:
-            # System Instructions (base prompt)
-            system_instructions = mgr._manifest_data.get("Prompt", "")
-            if system_instructions and system_instructions.strip():
-                parts.append(system_instructions.strip())
+            # Read from step_state.Information.data.metadata (index 3)
+            metadata = mgr.get_step_data_value(3, "metadata", {})
+            if not isinstance(metadata, dict):
+                metadata = {}
 
-            # Game Summary
-            summary = mgr._manifest_data.get("Summary", "")
-            if summary and summary.strip():
-                parts.append(f"# Game Context\n{summary.strip()}")
-
-            # Translation Style
-            style = mgr._manifest_data.get("CustomStyle", "")
-            if style and style.strip():
+            # --- 1. Language Direction ---
+            source_lang = (
+                metadata.get("source_language", "")
+                or mgr._manifest_data.get("SourceLanguage", "")
+            )
+            target_lang = (
+                metadata.get("target_language", "")
+                or mgr._manifest_data.get("TargetLanguage", "")
+            )
+            if source_lang and target_lang:
                 parts.append(
-                    f"# Translation Style Guidelines\n{style.strip()}"
+                    f"# Language\n"
+                    f"Translate from {source_lang} to {target_lang}."
                 )
 
-            # Translation Tone
-            tone = mgr._manifest_data.get("CustomTone", "")
-            if tone and tone.strip():
-                parts.append(f"# Translation Tone\n{tone.strip()}")
+            # --- 2. System Instructions (custom_notes) ---
+            system_instructions = (metadata.get("custom_notes", "") or "").strip()
+            if system_instructions:
+                parts.append(system_instructions)
 
-            # Glossary entries from manifest
+            # --- 3. Style ---
+            style = (metadata.get("style", "") or "").strip()
+            if style:
+                parts.append(f"# Translation Style Guidelines\n{style}")
+
+            # --- 4. Tone ---
+            tone = (metadata.get("tone", "") or "").strip()
+            if tone:
+                parts.append(f"# Translation Tone\n{tone}")
+
+            # --- 5. Summary ---
+            summary = (metadata.get("summary", "") or "").strip()
+            if summary:
+                parts.append(f"# Game Context\n{summary}")
+
+            # --- 6. Genre ---
+            genre = (metadata.get("genre", "") or "").strip()
+            if not genre:
+                genre = (mgr._manifest_data.get("Genre", "") or "").strip()
+            if genre:
+                parts.append(f"# Genre\n{genre}")
+
+            # --- 7. Conditional Prompts ---
+            all_line_texts = [
+                (line.edited_prepro or line.preprocessed or line.original)
+                for line in self._lines[:200]
+            ]
+            cond_text, _ = build_conditional_instructions(all_line_texts)
+            if cond_text and cond_text.strip():
+                parts.append(cond_text.strip())
+
+            # --- 8. Glossary ---
             from CherryAI.functions.manifest_fields import load_glossary_entries
             glossary_entries = load_glossary_entries(mgr)
             active_entries = [
                 e for e in glossary_entries if e.get("active", True)
             ]
             if active_entries:
-                glossary_lines = []
+                glossary_lines: list[str] = []
                 for entry in active_entries:
                     src = entry.get("source", "")
                     tgt = entry.get("target", "")
@@ -2084,8 +2138,35 @@ class TranslationStep(BaseStep):
                         glossary_lines.append(line)
                 if glossary_lines:
                     parts.append(
-                        "# Glossary\n" + "\n".join(glossary_lines)
+                        "# Glossary\nUse these terms strictly:\n"
+                        + "\n".join(f"- {gl}" for gl in glossary_lines)
                     )
+
+            # Build character glossary from metadata characters
+            characters = metadata.get("characters", [])
+            if characters:
+                char_lines: list[str] = []
+                for ch in characters:
+                    orig = ch.get("original_name", "")
+                    eng = ch.get("name", "")
+                    gender = ch.get("gender", "") or ch.get("notes", "")
+                    if orig:
+                        entry_text = f"- {orig}"
+                        if eng:
+                            entry_text += f" → {eng}"
+                        if gender:
+                            entry_text += f" ({gender})"
+                        char_lines.append(entry_text)
+                if char_lines:
+                    parts.append(
+                        "# Characters\n" + "\n".join(char_lines)
+                    )
+
+            # --- 9. Rolling Context ---
+            if rolling_context_text and rolling_context_text.strip():
+                parts.append(
+                    f"# Rolling Context\n{rolling_context_text.strip()}"
+                )
 
         # Fallback to legacy prompt parts if manifest is not available
         if not parts:
@@ -2325,6 +2406,20 @@ class TranslationStep(BaseStep):
                             self._translation_options.cache_enabled
                         )
 
+                        # Set source/target language from Information metadata
+                        info_mgr = self.manifest_manager
+                        if info_mgr is not None and info_mgr.is_loaded:
+                            info_meta = info_mgr.get_step_data_value(
+                                3, "metadata", {},
+                            )
+                            if isinstance(info_meta, dict):
+                                sl = info_meta.get("source_language", "")
+                                tl = info_meta.get("target_language", "")
+                                if sl:
+                                    self._api_client.config.source_lang = sl
+                                if tl:
+                                    self._api_client.config.target_lang = tl
+
                         if self._translation_options.banned_tokens:
                             self._api_client.configure_logit_bias(
                                 enabled=True,
@@ -2407,6 +2502,11 @@ class TranslationStep(BaseStep):
                         line.translated = translation
                         line.status = LineStatus.COMPLETED
                         self._progress.translated_lines += 1
+                        # Persist to manifest
+                        if self._manifest_manager is not None:
+                            self._manifest_manager.update_translation(
+                                line.idx, translation,
+                            )
 
                 except Exception as e:
                     self._log_progress(f"Chunk {chunk_idx + 1} failed: {e}")
@@ -2447,6 +2547,11 @@ class TranslationStep(BaseStep):
                                 line.translated = result.translation
                                 line.status = LineStatus.COMPLETED
                                 self._progress.translated_lines += 1
+                                # Persist to manifest
+                                if self._manifest_manager is not None:
+                                    self._manifest_manager.update_translation(
+                                        line.idx, result.translation,
+                                    )
                             else:
                                 line.status = LineStatus.FAILED
                                 line.error_message = result.error_message or str(e)
@@ -2899,26 +3004,27 @@ class TranslationStep(BaseStep):
         }
 
     def _load_prompt_data(self) -> None:
-        """Load prompt data from manifest (Information step).
+        """Load prompt data from manifest Information step metadata.
 
-        Reads Summary and Style from the manifest keys set by the
-        Information step.  Falls back to config files for backward
-        compatibility.
+        Reads Summary and Style from ``step_state.Information.data.metadata``
+        set by the Information step.  Falls back to config files for
+        backward compatibility.
         """
         try:
             mgr = self.manifest_manager
             if mgr is not None and mgr.is_loaded:
-                # Read summary from manifest
-                summary = mgr._manifest_data.get("Summary", "")
-                if summary:
-                    self._summary_text.delete("1.0", "end")
-                    self._summary_text.insert("1.0", summary)
+                # Read from Information metadata (step index 3)
+                metadata = mgr.get_step_data_value(3, "metadata", {})
+                if isinstance(metadata, dict):
+                    summary = (metadata.get("summary", "") or "").strip()
+                    if summary:
+                        self._summary_text.delete("1.0", "end")
+                        self._summary_text.insert("1.0", summary)
 
-                # Read style from manifest
-                style = mgr._manifest_data.get("CustomStyle", "")
-                if style:
-                    self._style_var.set(style[:100])
-                return
+                    style = (metadata.get("style", "") or "").strip()
+                    if style:
+                        self._style_var.set(style[:100])
+                    return
 
             # Fallback: load from config files (legacy)
             from pathlib import Path
@@ -2973,6 +3079,9 @@ class TranslationStep(BaseStep):
     def _build_preview_requests(self) -> "list[PreviewRequest]":
         """Build preview request objects mirroring the real translation flow.
 
+        Reads from step_state.Information.data.metadata following the
+        same logic as ``_build_system_prompt_from_manifest``.
+
         Returns:
             List of :class:`PreviewRequest` with labelled parts.
         """
@@ -2991,29 +3100,60 @@ class TranslationStep(BaseStep):
         # Chunk the lines the same way translation does
         chunks = self._build_chunks(pending)
 
-        # Build system prompt parts from manifest for each chunk
+        # Build system prompt parts from Information metadata
         mgr = self.manifest_manager
+        language_block = ""
         sys_instructions = ""
         summary = ""
         style = ""
         tone = ""
+        genre_block = ""
         pov_block = ""
         conditional_block = ""
         glossary_block = ""
 
         if mgr is not None and mgr.is_loaded:
+            metadata = mgr.get_step_data_value(3, "metadata", {})
+            if not isinstance(metadata, dict):
+                metadata = {}
+
+            # Language
+            source_lang = (
+                metadata.get("source_language", "")
+                or mgr._manifest_data.get("SourceLanguage", "")
+            )
+            target_lang = (
+                metadata.get("target_language", "")
+                or mgr._manifest_data.get("TargetLanguage", "")
+            )
+            if source_lang and target_lang:
+                language_block = (
+                    f"# Language\n"
+                    f"Translate from {source_lang} to {target_lang}."
+                )
+
+            # System Instructions
             sys_instructions = (
-                mgr._manifest_data.get("Prompt", "") or ""
+                metadata.get("custom_notes", "") or ""
             ).strip()
-            summary = (
-                mgr._manifest_data.get("Summary", "") or ""
-            ).strip()
-            style = (
-                mgr._manifest_data.get("CustomStyle", "") or ""
-            ).strip()
-            tone = (
-                mgr._manifest_data.get("CustomTone", "") or ""
-            ).strip()
+
+            # Style
+            style = (metadata.get("style", "") or "").strip()
+
+            # Tone
+            tone = (metadata.get("tone", "") or "").strip()
+
+            # Summary
+            summary = (metadata.get("summary", "") or "").strip()
+
+            # Genre
+            genre_raw = (metadata.get("genre", "") or "").strip()
+            if not genre_raw:
+                genre_raw = (
+                    mgr._manifest_data.get("Genre", "") or ""
+                ).strip()
+            if genre_raw:
+                genre_block = f"# Genre\n{genre_raw}"
 
             # POV
             pov_data = mgr._manifest_data.get("POV", {})
@@ -3026,7 +3166,8 @@ class TranslationStep(BaseStep):
                 pov_block = (
                     f"# Narrative Perspective\n"
                     f"The narrative uses {pov_label} person perspective. "
-                    f"Maintain consistent {pov_label} person perspective throughout."
+                    f"Maintain consistent {pov_label} person perspective "
+                    f"throughout."
                 )
 
             # Glossary from manifest
@@ -3048,6 +3189,27 @@ class TranslationStep(BaseStep):
                         g_lines.append(line_text)
                 glossary_block = "\n".join(g_lines)
 
+            # Character glossary from metadata
+            characters = metadata.get("characters", [])
+            if characters:
+                char_lines: list[str] = ["# Characters"]
+                for ch in characters:
+                    orig = ch.get("original_name", "")
+                    eng = ch.get("name", "")
+                    gender = ch.get("gender", "") or ch.get("notes", "")
+                    if orig:
+                        entry_text = f"- {orig}"
+                        if eng:
+                            entry_text += f" → {eng}"
+                        if gender:
+                            entry_text += f" ({gender})"
+                        char_lines.append(entry_text)
+                if len(char_lines) > 1:
+                    if glossary_block:
+                        glossary_block += "\n\n" + "\n".join(char_lines)
+                    else:
+                        glossary_block = "\n".join(char_lines)
+
         # Detect conditional prompts from the lines
         all_line_texts = [
             (line.edited_prepro or line.preprocessed or line.original)
@@ -3057,8 +3219,10 @@ class TranslationStep(BaseStep):
         if cond_text and cond_text.strip():
             conditional_block = cond_text.strip()
 
-        # Build the full system prompt (replicate _build_system_prompt_from_manifest)
+        # Build the full system prompt (same order as §5.2)
         prompt_parts: list[str] = []
+        if language_block:
+            prompt_parts.append(language_block)
         if sys_instructions:
             prompt_parts.append(sys_instructions)
         if style:
@@ -3067,6 +3231,8 @@ class TranslationStep(BaseStep):
             prompt_parts.append(f"# Translation Tone\n{tone}")
         if summary:
             prompt_parts.append(f"# Game Context\n{summary}")
+        if genre_block:
+            prompt_parts.append(genre_block)
         if pov_block:
             prompt_parts.append(pov_block)
         if conditional_block:
@@ -3095,13 +3261,19 @@ class TranslationStep(BaseStep):
             requests.append(PreviewRequest(
                 index=chunk_idx,
                 meta=meta_block,
+                language=language_block,
                 system_instructions=sys_instructions,
                 summary=f"# Game Context\n{summary}" if summary else "",
-                style=f"# Translation Style Guidelines\n{style}" if style else "",
+                style=(
+                    f"# Translation Style Guidelines\n{style}"
+                    if style else ""
+                ),
                 tone=f"# Translation Tone\n{tone}" if tone else "",
+                genre=genre_block,
                 pov=pov_block,
                 conditional_prompts=conditional_block,
                 glossary=glossary_block,
+                rolling_context="",  # populated at translation time
                 input_lines=user_content,
                 full_system_prompt=full_system_prompt,
                 line_count=len(lines_for_chunk),

@@ -192,7 +192,7 @@ TABLE OF CONTENTS
        - costs.py - Step 2: Costs (renamed from estimate.py in Phase 40)
        - information.py - Step 3: Information ❌NO shared imports (moved from Step 2)
        - preprocess.py - Step 4: Preprocessing ❌NO shared imports (moved from Step 3)
-       - translate.py - Step 5: Translation 🔗api_client, mock_translator, prompt_adapter, manifest_fields (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching; Preview Requests: PreviewRequest dataclass, FILTER_PARTS constant, RequestPreviewDialog class with Pure/Formatted/Plain views and Jump/Search/Filter toolbar, _build_preview_requests() mirrors real translation request building)
+       - translate.py - Step 5: Translation 🔗api_client, mock_translator, prompt_adapter, manifest_fields (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching; Preview Requests: PreviewRequest dataclass, FILTER_PARTS constant (12 entries: meta, language, system_instructions, style, tone, summary, genre, pov, conditional_prompts, glossary, rolling_context, input_lines), RequestPreviewDialog class with Pure/Formatted/Plain views and Jump/Search/Filter toolbar, _build_preview_requests() mirrors real translation request building; _build_system_prompt_from_manifest() reads from `step_state.Information.data.metadata`)
        - postprocess.py - Step 6: Postprocess 🔗postprocess (moved from Step 7)
        - wordwrap_overwrite.py - Step 7: Wordwrap 🔗wordwrap (moved from Step 8)
        - qa.py - Step 8: QA 🔗validation (moved from Step 6)
@@ -303,6 +303,7 @@ TABLE OF CONTENTS
        - Loads/saves extended manifest v3.0 format
        - TASK 21.2: Creates manifests with ALL v3.0 fields from INI defaults
        - _ensure_all_fields_present() upgrades v2.x manifests on load
+       - consolidate_project_info(): Migrates top-level keys (SourceLanguage, TargetLanguage, Genre, StylePreset, TonePreset, ProjectName, Title) into `step_state.Information.data.metadata`; Information metadata takes priority; also ensures `system_instructions` key exists; called automatically during `load()` after `_ensure_all_fields_present()`
        - TASK 21.3: Settings helper methods for processing functions
        - TASK 32.1: Absolute path storage:
          - create_new() stores source_files with resolve() for absolute paths
@@ -469,7 +470,7 @@ TABLE OF CONTENTS
          - **System Instructions preset system:** mirrors Style/Tone pattern — `_SI_PRESETS_FILE` in `user/presets/`, `DEFAULT_SI_PRESETS` dict, `_load_si_presets()`, Combobox (Default/Custom/user), Save/Delete buttons, `_on_si_preset_changed()`, `_save_si_preset()`, `_delete_si_preset()` methods; manifest key `SIPreset` for preset name, `Prompt` for text content; `DEFAULT_SYSTEM_INSTRUCTIONS` loaded from `temp/example.txt`
          - **Hint labels removed:** Description labels removed from Summary and System Instructions widgets
          - **Project Name source fix:** `_apply_suggested_project_name()` now prefers manifest `ProjectName` (set during Input step) over step data `suggested_project_name` (folder name)
-         - **Style/Tone translation integration:** translate.py `_build_system_prompt_from_manifest()` reads `CustomStyle`, `CustomTone`, `Summary`, `Prompt`, and glossary entries from manifest; replaces legacy config file reads; appends `Style: ...` and `Tone: ...` to system prompt
+         - **Style/Tone translation integration:** translate.py `_build_system_prompt_from_manifest()` reads all prompt data from `step_state.Information.data.metadata` via `mgr.get_step_data_value(3, "metadata", {})`; reads `style`, `tone`, `summary`, `custom_notes`, `genre`, `characters`, `source_language`, `target_language`; appends `# Translation Style Guidelines\n...` and `# Translation Tone\n...` to system prompt; also reads glossary entries and characters from metadata; `consolidate_project_info()` migrates top-level keys on load
          - **Analysis→Glossary data flow:** `_show_nameable_dialog._apply()` in analysis.py now creates glossary entry with source=replacement_name and notes="Gender: X; Role: Y; custom_notes" when assigning variable codes to characters
        - **Phase 60 Integration:** Confirmation opt-out, File menu fixes, WelcomeDialog update:
          - `gui/helpers/confirmations.py`: confirm_action(), is_suppressed(), suppress(), reset_all_suppressions()
@@ -2187,7 +2188,7 @@ Key Features:
   - `LOCAL_PROVIDERS = ("local", "lmstudio", "ollama")` — class constant
   - `is_local_provider()` — checks provider name against `LOCAL_PROVIDERS` and falls back to `local_llm.is_local_url()` for URL-based detection
   - `_init_client()` — auto-detects local providers; uses placeholder key `"lm-studio"` when no API key is configured
-  - `_translate_chunk()` — uses `json_schema` response format for local providers (LM Studio rejects `json_object` with HTTP 400); cloud providers continue using `json_object`
+  - `_translate_chunk()` — uses `json_schema` response format for local providers (LM Studio rejects `json_object` with HTTP 400); cloud providers continue using `json_object`. Uses the caller's `system_prompt` as the primary prompt and appends `# Output Format` with JSON structure instructions. Falls back to a minimal default prompt only when `system_prompt` is not provided.
   - JSON schema enforces `{"translations": ["...", "..."]}` structure with `strict: True` and `additionalProperties: False`
 
 API Logging (TASK 11 + TASK 12 enhancements):
@@ -2468,14 +2469,18 @@ Key Features:
 - Conditional Prompts: Pattern-detected instructions for token handling.
 - Empty Section Skipping: Skips game summary if placeholder text detected (TASK 12)
 
-Prompt Construction Order (Phase 62 — 7-slot design):
-1. Language direction header: "# Translation Direction\nTranslate {source} into {target}."
-2. System Instructions (base prompt template)
-3. Style (from manifest CustomStyle / StylePreset)
-4. Tone (from manifest CustomTone / TonePreset; separate from Style slot)
-5. Summary (game summary, skipped if empty/placeholder)
-6. Conditional block (merged): context-type instructions + POV + pattern-triggered prompts
-7. Glossary (selective: characters inline with gender, only terms present in batch)
+Prompt Construction Order (Phase 62 — 10-slot design):
+1. Language direction header: "# Language\nTranslate from {source} to {target}."
+2. System Instructions (from `metadata.custom_notes` or preset)
+3. Style (from `metadata.style`; prefixed "# Translation Style Guidelines")
+4. Tone (from `metadata.tone`; prefixed "# Translation Tone")
+5. Summary (from `metadata.summary`; prefixed "# Game Context")
+6. Genre (from `metadata.genre` or top-level `Genre`; prefixed "# Genre")
+7. Conditional block (merged): context-type instructions + POV + pattern-triggered prompts
+8. Glossary (selective: manifest entries + characters from `metadata.characters` with gender)
+9. Rolling Context (preceding translated lines, prefixed "# Rolling Context")
+10. Output Format (JSON structure instructions — appended by `api_client._translate_chunk()`)
+Note: All metadata keys read from `step_state.Information.data.metadata` via `mgr.get_step_data_value(3, "metadata", {})`.
 Note: Output examples removed from system prompt in Phase 62.
 
 Previous order (before TASK 12):

@@ -1086,6 +1086,9 @@ class ManifestManager:
             # Ensure all v3.0 fields are present (backward compatibility)
             self._ensure_all_fields_present()
             
+            # Consolidate top-level project_info into Information metadata
+            self.consolidate_project_info()
+            
             self._current_step = data.get("current_step", 0)
             self._dirty = False
             
@@ -1371,6 +1374,81 @@ class ManifestManager:
         self._dirty = False
         self._current_step = 0
     
+    # ========================== Project Info Consolidation ========================== #
+
+    def consolidate_project_info(self) -> bool:
+        """Migrate top-level project_info fields into Information metadata.
+
+        Merges ``SourceLanguage``, ``TargetLanguage``, ``Genre``,
+        ``StylePreset``, ``TonePreset``, ``ProjectName``, ``Title``
+        into ``step_state.Information.data.metadata``.  Information
+        metadata values take priority when both exist.  Top-level
+        duplicates are cleaned up afterwards.
+
+        Also adds ``system_instructions`` to the metadata if not
+        already present (sourced from ``custom_notes``).
+
+        Returns:
+            True if any fields were migrated, False otherwise.
+        """
+        if not self.is_loaded:
+            return False
+
+        metadata = (
+            self._manifest_data
+            .get("step_state", {})
+            .get("Information", {})
+            .get("data", {})
+            .get("metadata", {})
+        )
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        changed = False
+
+        # Mapping: top-level key -> metadata key
+        migration_map: dict[str, str] = {
+            "SourceLanguage": "source_language",
+            "TargetLanguage": "target_language",
+            "Genre": "genre",
+            "StylePreset": "style_preset",
+            "TonePreset": "tone_preset",
+            "ProjectName": "project_name",
+            "Title": "game_title",
+        }
+
+        for top_key, meta_key in migration_map.items():
+            top_val = self._manifest_data.get(top_key, "")
+            meta_val = metadata.get(meta_key, "")
+            if top_val and not meta_val:
+                metadata[meta_key] = top_val
+                changed = True
+                logger.debug(
+                    "Migrated %s -> metadata.%s = %s",
+                    top_key, meta_key, top_val,
+                )
+
+        # Ensure system_instructions key exists
+        if "system_instructions" not in metadata:
+            metadata["system_instructions"] = metadata.get(
+                "custom_notes", "",
+            )
+            changed = True
+
+        # Write back
+        if changed:
+            info_state = (
+                self._manifest_data
+                .setdefault("step_state", {})
+                .setdefault("Information", {"name": "Information", "status": "not-started"})
+                .setdefault("data", {})
+            )
+            info_state["metadata"] = metadata
+            self._mark_dirty()
+            logger.info("Consolidated project_info into Information metadata")
+
+        return changed
+
     # ========================== Step State Operations ========================== #
     
     def get_step_state(self, step_index: int) -> StepState:
