@@ -887,7 +887,7 @@ ORPHANED MODULES (Exist but Not Fully Integrated)
 | formats/document.py | Placeholder (PDF/EPUB) | Keep for future |
 | formats/html.py | Under development | Keep for HTML support |
 | formats/rpgmaker.py | Placeholder | Keep for RPG Maker support |
-| functions/local_llm.py | Not integrated with GUI | Integrate with Translation step |
+| functions/local_llm.py | ✅ Integrated with GUI | LM Studio/Ollama support in Translation Step, Global Options |
 | functions/replication.py | CLI only | Consider GUI integration |
 
 =============================================================================

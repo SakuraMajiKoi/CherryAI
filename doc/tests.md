@@ -6018,6 +6018,45 @@ Local LLM integration tests for server detection, health checking, and error han
 | | `test_health_check_measures_time` | Response time measured |
 | | `test_local_url_case_insensitive` | URL check case-insensitive |
 
+#### dev/test_lmstudio_live.py (Live Integration Test)
+
+Live integration test for LM Studio server at `http://127.0.0.1:1234`.
+Requires LM Studio running with a model loaded. Tests actual API connectivity.
+
+| Test | Purpose |
+|------|---------|
+| `test_server_health` | Verify LM Studio server responds on port 1234 |
+| `test_model_discovery` | List models via `/v1/models` endpoint |
+| `test_chat_completion` | Send a basic chat request, measure tok/s |
+| `test_json_schema_mode` | Verify `json_schema` response format works |
+| `test_openai_sdk_compat` | Verify OpenAI SDK compatibility |
+
+#### dev/_test_backend_lmstudio.py (Backend Integration Test)
+
+End-to-end backend test using `APIClient` with `provider="lmstudio"`.
+Validates the full translation pipeline against a live LM Studio server.
+
+| Test | Purpose |
+|------|---------|
+| `test_api_client_init` | Initialize APIClient with lmstudio provider |
+| `test_is_local_provider` | `is_local_provider()` returns True |
+| `test_translate_chunk_json_schema` | `_translate_chunk()` with `json_schema` format |
+| `test_code_marker_preservation` | VN code markers preserved in translation |
+| `test_model_translation` | `test_model_translation()` passes 6/6 checks |
+
+#### dev/_test_gui_flow.py (GUI Flow Validation Test)
+
+Non-GUI test that validates all components needed for the GUI LM Studio flow.
+
+| Test | Purpose |
+|------|---------|
+| `test_key_save_load` | Save/load lmstudio key in API.ini |
+| `test_api_connection` | `test_api_connection()` succeeds |
+| `test_api_providers_registry` | lmstudio in `API_PROVIDERS` |
+| `test_model_discovery` | `discover_models()` returns server models |
+| `test_provider_detection` | `is_local_provider()` for all local types |
+| `test_provider_presets` | LM Studio preset in `PROVIDER_PRESETS` |
+
 #### dev/test_postprocess.py (79 tests)
 
 Post-process recovery suite tests for fixing translation structural issues.

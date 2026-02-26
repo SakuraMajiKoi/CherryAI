@@ -523,23 +523,38 @@ LOCAL LLM SUPPORT (Current + Planned Enhancement)
 - **Current Support:**
   - Works with any OpenAI-compatible local server
   - Built-in presets: `local` (port 1234), `ollama` (port 11434), `lmstudio` (port 1234)
+  - Dedicated **LM Studio** preset in Global Options → API Provider (alongside OpenAI, Gemini, Anthropic, etc.)
   - CLI usage: `python CherryAI.py translate --preset local input.txt`
-  - No API key required for local endpoints
+  - No API key required for local endpoints — placeholder `lm-studio` key used automatically
+  - LM Studio keys can be saved in Global Options → Saved API Keys and selected in the Translation Step
+  - Uses `json_schema` response format for structured output (LM Studio does not support `json_object`)
+  - Automatic model discovery from running LM Studio server via `/v1/models` endpoint
+  - Translation Step model dropdown auto-populates with models loaded in LM Studio
 - **Compatible Software:**
-  - **LM Studio**: OpenAI-compatible server, easy model management
+  - **LM Studio**: OpenAI-compatible server, easy model management, tested with Qwen 3.5 35B A3B (~2-4 tok/s)
   - **Ollama**: Fast local inference, many model options
   - **text-generation-webui**: Advanced interface with extensions
   - **LocalAI**: Drop-in OpenAI replacement
   - **llama.cpp server**: Lightweight, direct GGUF support
-- **Quick Start:**
+- **Quick Start (GUI):**
+  1. Start LM Studio and load a model (enable the local server)
+  2. Open CherryAI → Global Options → API Provider → select **LM Studio**
+  3. Base URL auto-fills to `http://localhost:1234/v1`
+  4. Enter `lm-studio` as the API key and click Save
+  5. Go to Translation Step → select the saved LM Studio key
+  6. The Model dropdown auto-populates with models from the server
+  7. Translate — no cloud API key or costs required
+- **Quick Start (CLI):**
   1. Start your local LLM server (e.g., LM Studio → Start Server)
   2. Run: `python CherryAI.py translate --preset local myfile.txt`
   3. No API key needed - uses localhost:1234 by default
-- **Planned Enhancements** (see todo.md):
-  - Auto-detection of running local servers
-  - Model discovery from /v1/models endpoint
-  - Health check before translation
-  - Better error messages for connection issues
+- **Implementation Details:**
+  - Provider detection: `APIClient.is_local_provider()` checks provider name and URL
+  - `LOCAL_PROVIDERS = ("local", "lmstudio", "ollama")` in `api_client.py`
+  - Response format: `json_schema` (with strict schema enforcing `{"translations": [...]}`) for local providers, `json_object` for cloud providers
+  - `test_model_translation()` in `api_config.py` also uses `json_schema` for local providers
+  - `_filter_models_by_provider()` in `translate.py` queries the live server for model lists
+  - `functions/local_llm.py`: `LocalLLMProvider` enum, `discover_models()`, `check_server_health()`, `is_local_url()`
 
 PARTIAL TRANSLATION MODE (NEW - TASK 9)
 - Translate only the first N lines of a file, leaving the rest unchanged
@@ -1450,7 +1465,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Merged Column: "Original" + "Preprocessed" replaced with "To be Translated" column (resolution: edited_prepro → preprocessed → original)
     - Newline Rendering: newlines displayed as ↵ symbol in table cells, 200-char truncation limit
     - Mock Translation: "Mock Translation" as first MODEL_OPTIONS entry, routes to `MockTranslator` in `functions/mock_translator.py`
-    - API Provider Management: `APIProviderEntry` dataclass, `PROVIDER_PRESETS` (5 presets: OpenAI GPT-4o-mini, GPT-4o, Gemini Flash, Claude Sonnet, Local LLM), `_PresetPickerDialog` helper dialog
+    - API Provider Management: `APIProviderEntry` dataclass, `PROVIDER_PRESETS` (6 presets: OpenAI GPT-4o-mini, GPT-4o, Gemini Flash, Claude Sonnet, Local LLM, LM Studio), `_PresetPickerDialog` helper dialog
     - API Key Management: "Saved API Keys" Treeview (Name, Provider columns) with Save Key/Load Key/Remove buttons; encrypted storage via `api_config.set_api_key(provider, key, password, name)` in `[api_keys]` as `provider, name = encrypted_value`; master password prompt with first-time setup flow
     - Connection Test: Real `test_api_connection()` using OpenAI-compatible `models.list()` endpoint; returns `(bool, str, list)` with model IDs; threaded execution with specific error messages (auth failure, timeout, connection refused); on success, opens API Test Results dialog with filterable model table and per-model translation testing via `test_model_translation()`
     - Settings Migration: caching.mode in CachingSettings, thinking_enabled/thinking_budget in RequestSettings, rolling_context_lines in RequestSettings; `_sync_from_global_options()` applies overrides on tab enter
@@ -1577,17 +1592,17 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
       dialogue, menu, choice, unknown (conditional context-type prompts — Session 24+)
     - GlobalOptions: Container for all settings sections, providers list; `safety` property is alias for `limit`
     - APIProviderEntry: name, provider_type, url, api_key, model (to_dict/from_dict) — Task 43.6
-    - PROVIDER_PRESETS: 5 presets (OpenAI GPT-4o-mini, GPT-4o, Gemini Flash, Claude Sonnet, Local LLM) — Task 43.6
+    - PROVIDER_PRESETS: 6 presets (OpenAI GPT-4o-mini, GPT-4o, Gemini Flash, Claude Sonnet, Local LLM, LM Studio) — Task 43.6
     - API Key Pipeline: `_save_api_key()`, `_load_api_key()`, `_remove_api_key()`, `_ensure_password_set()`, `_prompt_password()` — GUI ↔ api_config integration
   - **Helper Constants:**
     - SECTION_DESCRIPTIONS: User-friendly descriptions for each section
     - CATEGORY_ORDER: Category → sections mapping for navigation
     - CATEGORY_NAMES: Display names for categories
     - SECTION_NAMES: Display names for sections
-    - API_PROVIDERS: Imported from options.py (6 providers: openai, gemini, anthropic, local, ollama, lmstudio)
+    - API_PROVIDERS: Imported from options.py (7 providers: openai, gemini, anthropic, mistral, local, ollama, lmstudio)
     - COMMON_BAN_TOKENS: em_dash, smart_quotes, ellipsis, etc.
   - **API Section:**
-    - Provider dropdown (OpenAI, Gemini, Anthropic, Local, Ollama, LM Studio)
+    - Provider dropdown (OpenAI, Gemini, Anthropic, Mistral, Local, Ollama, LM Studio)
     - "Details" button inline with provider dropdown; opens Available Models window from registry cache
     - Available Models window: filterable model table (Structured/Batch/Thinking filters), "Update" button for live API fetch, "Set as Default" button for per-key default model
     - Gemini model IDs normalized (strips "models/" prefix) for consistent display

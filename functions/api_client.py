@@ -250,9 +250,10 @@ class APIClient:
         # For local LLMs, allow dummy/empty keys
         api_key = self.config.api_key
         if not api_key:
-            if self.config.no_api_key:
+            if (self.config.no_api_key
+                    or self.config.provider.lower() in self.LOCAL_PROVIDERS):
                 # Use a placeholder key for local LLMs
-                api_key = "local-no-key-required"
+                api_key = "lm-studio"
                 self.logger.info("Using no-API-key mode for local LLM")
             else:
                 self.logger.warning("No API key found in configuration.")
@@ -330,6 +331,20 @@ class APIClient:
         "o3-mini",
     ]
     
+    # Providers that are local and don't require API keys
+    LOCAL_PROVIDERS = ("local", "lmstudio", "ollama")
+
+    def is_local_provider(self) -> bool:
+        """Check if the current provider is a local LLM server.
+
+        Returns:
+            True if using a local provider (LM Studio, Ollama, etc.).
+        """
+        if self.config.provider.lower() in self.LOCAL_PROVIDERS:
+            return True
+        from CherryAI.functions.local_llm import is_local_url
+        return is_local_url(self.config.base_url or "")
+
     def supports_thinking_mode(self) -> bool:
         """Check if the current model supports extended thinking mode.
         
@@ -1579,11 +1594,38 @@ class APIClient:
         ]
 
         # Build API call parameters
-        api_params = {
+        #
+        # Local providers (LM Studio, Ollama) may not support
+        # {"type": "json_object"}.  LM Studio requires
+        # {"type": "json_schema", "json_schema": {...}} instead.
+        # We detect the provider and choose the right format.
+        if self.is_local_provider():
+            response_fmt: Dict[str, Any] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "translation",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "translations": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            }
+                        },
+                        "required": ["translations"],
+                        "additionalProperties": False,
+                    },
+                },
+            }
+        else:
+            response_fmt = {"type": "json_object"}
+
+        api_params: Dict[str, Any] = {
             "model": self.config.model,
             "messages": messages,
             "temperature": self.config.temperature,
-            "response_format": {"type": "json_object"},
+            "response_format": response_fmt,
         }
         
         # Add thinking mode parameters if enabled

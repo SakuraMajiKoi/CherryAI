@@ -2183,6 +2183,12 @@ Key Features:
 - **API Logging**: Request-response pair logging with API key redaction (TASK 11)
 - **Token Tracking**: Running total of prompt/completion tokens (TASK 12)
 - **Content Warning**: Detects explicit content terms (TASK 12)
+- **Local LLM Support**: Automatic provider detection and response format adaptation
+  - `LOCAL_PROVIDERS = ("local", "lmstudio", "ollama")` — class constant
+  - `is_local_provider()` — checks provider name against `LOCAL_PROVIDERS` and falls back to `local_llm.is_local_url()` for URL-based detection
+  - `_init_client()` — auto-detects local providers; uses placeholder key `"lm-studio"` when no API key is configured
+  - `_translate_chunk()` — uses `json_schema` response format for local providers (LM Studio rejects `json_object` with HTTP 400); cloud providers continue using `json_object`
+  - JSON schema enforces `{"translations": ["...", "..."]}` structure with `strict: True` and `additionalProperties: False`
 
 API Logging (TASK 11 + TASK 12 enhancements):
 - `enable_api_log` parameter in __init__ to enable logging

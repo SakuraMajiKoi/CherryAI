@@ -265,7 +265,7 @@ Global Options are application-wide settings accessed via Tools → Options. The
 #### API Settings
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| Provider | enum | openai | API provider (openai, gemini, anthropic, local) |
+| Provider | enum | openai | API provider (openai, gemini, anthropic, local, ollama, lmstudio) |
 | API Key | secret | "" | Authentication key |
 | Base URL | url | Provider default | Custom endpoint URL |
 | Model | string | gpt-4o-mini | Model identifier |
@@ -2823,6 +2823,7 @@ Deselecting a filter hides that section from the Formatted/Plain views and omits
 
 #### API Request Format
 
+Cloud providers (OpenAI, Gemini, Anthropic, Mistral):
 ```json
 {
   "model": "gemini-2.0-flash",
@@ -2834,6 +2835,38 @@ Deselecting a filter hides that section from the Formatted/Plain views and omits
   "temperature": 0.2
 }
 ```
+
+Local providers (LM Studio, Ollama, local):
+```json
+{
+  "model": "qwen/qwen3.5-35b-a3b",
+  "messages": [
+    {"role": "system", "content": "[Full system prompt from prompt_builder]"},
+    {"role": "user", "content": "[Lines to translate as numbered JSON]"}
+  ],
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "translation",
+      "strict": true,
+      "schema": {
+        "type": "object",
+        "properties": {
+          "translations": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["translations"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "temperature": 0.3
+}
+```
+
+> **Note:** LM Studio does not support `response_format: {"type": "json_object"}`.
+> It requires `{"type": "json_schema", ...}` with a full schema definition.
+> The `APIClient.is_local_provider()` method detects the provider type and selects
+> the appropriate format automatically.
 
 ---
 
@@ -4752,7 +4785,21 @@ This catalog lists every existing function that participates in recovery, valida
 |----------|---------|
 | `check_port_open()` | Validates local LLM server port |
 | `check_server_health()` | Health check for local LLM server |
+| `discover_models()` | Query `/v1/models` endpoint for available models |
+| `is_local_url()` | Check if URL points to localhost/LAN |
 | `get_local_error_help()` | Returns human-readable error guidance |
+| `get_provider_setup_instructions()` | Returns setup guide for a provider |
+| `format_server_status()` | Formats server list for display |
+| `detect_local_servers()` | Scan common ports for running LLM servers |
+
+Local provider integration points:
+- `APIClient.LOCAL_PROVIDERS = ("local", "lmstudio", "ollama")`
+- `APIClient.is_local_provider()` — provider name + URL detection
+- `_translate_chunk()` — `json_schema` format for local, `json_object` for cloud
+- `test_model_translation()` in `api_config.py` — same `json_schema` adaptation
+- `_filter_models_by_provider()` in `translate.py` — queries live server for models
+- `_do_translation()` in `translate.py` — placeholder key + `no_api_key` for local providers
+- `PROVIDER_PRESETS` — dedicated "LM Studio" entry (`provider_type="lmstudio"`)
 
 **Batch Tracker** (`functions/batch_tracker.py`):
 | Function | Purpose |

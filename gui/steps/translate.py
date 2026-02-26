@@ -1225,6 +1225,9 @@ class TranslationStep(BaseStep):
         "openai": "openai",
         "mistral": "mistral",
         "anthropic": "anthropic",
+        "lmstudio": "lmstudio",
+        "local": "local",
+        "ollama": "ollama",
     }
 
     # Retry strategy options - TASK 43.10: Only Batch and Contextual visible in UI
@@ -2275,7 +2278,12 @@ class TranslationStep(BaseStep):
                             key_provider, key_name,
                         ) or ""
 
-                    if not resolved_key:
+                    # Local providers (lmstudio, local, ollama) don't need
+                    # a real API key — use a placeholder if none is set.
+                    _LOCAL_PROVIDERS = ("local", "lmstudio", "ollama")
+                    is_local = key_provider.lower() in _LOCAL_PROVIDERS
+
+                    if not resolved_key and not is_local:
                         self._log_progress(
                             "No API key selected — please choose a key "
                             "in the Request Options panel."
@@ -2285,8 +2293,12 @@ class TranslationStep(BaseStep):
                         self._api_client = APIClient(enable_api_log=True)
 
                         # Inject the resolved key, provider, and base URL
-                        self._api_client.config.api_key = resolved_key
+                        self._api_client.config.api_key = (
+                            resolved_key or "lm-studio"
+                        )
                         self._api_client.config.provider = key_provider
+                        if is_local:
+                            self._api_client.config.no_api_key = True
                         base_url = PROVIDER_BASE_URLS.get(
                             key_provider, "",
                         )
@@ -3203,9 +3215,42 @@ class TranslationStep(BaseStep):
 
         Uses model_registry to look up models for the registry-ID that
         corresponds to the API.ini provider key (e.g. gemini → google).
+        For local providers (lmstudio, local, ollama), queries the server
+        directly for available models.
         Applies the saved capability filters from the Available Models
         window (Structured Output, Batch, Thinking).
         """
+        _LOCAL_PROVIDERS = ("local", "lmstudio", "ollama")
+        is_local = provider.lower() in _LOCAL_PROVIDERS
+
+        # For local providers, try to discover models from the server
+        if is_local:
+            try:
+                from CherryAI.functions.local_llm import discover_models
+                from CherryAI.functions.api_config import PROVIDER_BASE_URLS
+                base_url = PROVIDER_BASE_URLS.get(provider.lower(), "")
+                if base_url:
+                    server_models = discover_models(base_url, timeout=5.0)
+                    model_ids = [m.id for m in server_models if m.id]
+                    if model_ids:
+                        values = ["Mock Translation"] + model_ids
+                        self._model_combo["values"] = values
+                        current = self._model_var.get()
+                        if current not in values:
+                            self._model_var.set(
+                                values[1] if len(values) > 1 else values[0]
+                            )
+                        return
+            except Exception:
+                pass
+            # Fallback for local: generic model options
+            values = ["Mock Translation", "local-model"]
+            self._model_combo["values"] = values
+            current = self._model_var.get()
+            if current not in values:
+                self._model_var.set(values[1])
+            return
+
         registry_id = self._KEY_PROVIDER_TO_REGISTRY.get(provider, provider)
 
         try:

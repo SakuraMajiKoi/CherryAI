@@ -803,6 +803,34 @@ def test_model_translation(
 
     user_msg = _json.dumps(test_lines, ensure_ascii=False)
 
+    # Determine response_format based on provider/URL.
+    # Local providers (LM Studio, Ollama) reject {"type": "json_object"} and
+    # require {"type": "json_schema", ...} instead.
+    _LOCAL_PROVIDERS = ("local", "lmstudio", "ollama")
+    from .local_llm import is_local_url as _is_local_url
+
+    _is_local = provider.lower() in _LOCAL_PROVIDERS or _is_local_url(url)
+    if _is_local:
+        _resp_fmt: dict = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "translation_test",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "1": {"type": "string"},
+                        "2": {"type": "string"},
+                        "3": {"type": "string"},
+                    },
+                    "required": ["1", "2", "3"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    else:
+        _resp_fmt = {"type": "json_object"}
+
     t0 = _time.monotonic()
     try:
         client = OpenAI(api_key=api_key.strip(), base_url=url, timeout=timeout)
@@ -813,7 +841,7 @@ def test_model_translation(
                 {"role": "user", "content": user_msg},
             ],
             temperature=0.2,
-            response_format={"type": "json_object"},
+            response_format=_resp_fmt,
         )
         elapsed = _time.monotonic() - t0
         raw = response.choices[0].message.content or ""

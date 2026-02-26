@@ -207,6 +207,13 @@ PROVIDER_PRESETS: List[APIProviderEntry] = [
         api_key="not-needed",
         model="local-model",
     ),
+    APIProviderEntry(
+        name="LM Studio",
+        provider_type="lmstudio",
+        url="http://localhost:1234/v1",
+        api_key="lm-studio",
+        model="local-model",
+    ),
 ]
 
 
