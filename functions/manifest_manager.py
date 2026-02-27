@@ -449,8 +449,14 @@ class ManifestManager:
     
     @property
     def project_name(self) -> str:
-        """Get the project name."""
-        return self._manifest_data.get("project_name", "")
+        """Get the project name from Information metadata."""
+        meta = self.get_info_metadata()
+        name = meta.get("project_name", "")
+        if not name:
+            # Fallback to manifest filename stem
+            if self._manifest_path is not None:
+                name = self._manifest_path.stem.replace(MANIFEST_EXT.replace(".", ""), "").rstrip(".")
+        return name
     
     @property
     def current_step(self) -> int:
@@ -487,15 +493,13 @@ class ManifestManager:
             "updated_at": now,
             
             # === Project Identity ===
-            "project_name": defaults.get("project_name", "Project1"),
             "current_step": 0,
             
             # === v3.2 Source Path Management (TASK 38) ===
-            # source_root: Common prefix for all source files (e.g., "D:\Games\WIP")
-            # source_files: DEPRECATED - use filedir with source_root instead
-            # Each file's absolute path = source_root + filedir[n].rel_path
+            # source_root: Display-only folder name of the nearest common
+            # ancestor.  NOT a resolvable path.  File resolution uses the
+            # project's Original/ directory instead.
             "source_root": "",
-            "source_files": [],  # Kept for backward compat, but redundant with filedir
             
             # === v3.1 File Directory (TASK 35.1) ===
             # Maps line index ranges to source files for input/output decoupling
@@ -510,7 +514,6 @@ class ManifestManager:
             "metadata": {},
             
             # === v3.0 Project Settings ===
-            "project_info": self._create_project_info_defaults(defaults),
             "characters": [],
             "code_patterns": [],
             "step_state": {name: StepState(name=name).to_dict() for name in STEP_NAMES},
@@ -701,28 +704,8 @@ class ManifestManager:
             "output_export_glossary_entries": False,
         }
     
-    def _create_project_info_defaults(self, defaults: Dict[str, Any]) -> Dict[str, Any]:
-        """Create project_info dict with defaults.
-        
-        Args:
-            defaults: Dictionary of default values from INI.
-            
-        Returns:
-            project_info dictionary with all fields.
-        """
-        return {
-            "project_name": defaults.get("project_name", "Project1"),
-            "game_title": defaults.get("title", "Title1"),
-            "source_language": defaults.get("source_language", "Japanese"),
-            "target_language": defaults.get("target_language", "English"),
-            "genre": defaults.get("genre", "fictional, nonfictional"),
-            "summary": defaults.get("summary", "[Summary of the Content]"),
-            "style_preset": defaults.get("style_preset", "neutral"),
-            "custom_style": "",
-            "tone_preset": defaults.get("tone_preset", "natural"),
-            "custom_tone": "",
-            "custom_notes": "",
-        }
+    # _create_project_info_defaults removed — project_info is no longer a
+    # top-level manifest key.  Metadata lives in step_state.Information.data.metadata.
     
     def _parse_list_default(self, value: Any) -> list:
         """Parse a comma-separated string into a list.
@@ -853,47 +836,45 @@ class ManifestManager:
     
     @property
     def source_root(self) -> str:
-        """Get the source root path (common prefix for all source files)."""
+        """Folder name (display-only) of the common source ancestor."""
         return self._manifest_data.get("source_root", "")
     
     @source_root.setter
     def source_root(self, value: str) -> None:
-        """Set the source root path."""
+        """Set the source root folder name."""
         self._manifest_data["source_root"] = value
         self._mark_dirty()
     
     def resolve_file_path(self, rel_path: str) -> Path:
-        """Resolve a relative path to an absolute path using source_root.
-        
+        """Resolve a relative path to an absolute path.
+
+        Uses the project's ``Original/`` directory as the base — this is
+        where source files are copied on first load.  ``source_root`` is
+        a display-only folder name and is **not** used for resolution.
+
         Args:
-            rel_path: Path relative to source_root (e.g., "battle_on.json" or 
-                     "event/arena/arena_01.json")
-                     
+            rel_path: Path relative to the original files directory
+                (e.g. ``"battle_on.json"`` or ``"event/arena/arena_01.json"``).
+
         Returns:
-            Absolute Path object.
+            Absolute Path inside ``<project>/Original/``.
         """
-        root = self._manifest_data.get("source_root", "")
-        if root:
-            return Path(root) / rel_path
-        return Path(rel_path)
+        return self.get_original_dir() / rel_path
     
     def make_relative_path(self, abs_path: Path) -> str:
-        """Convert an absolute path to a path relative to source_root.
+        """Convert an absolute path to a path relative to Original/ dir.
         
         Args:
             abs_path: Absolute file path.
             
         Returns:
-            Relative path string, or absolute path if no source_root.
+            Relative path string, or filename if path is outside Original/.
         """
-        root = self._manifest_data.get("source_root", "")
-        if root:
-            try:
-                return str(abs_path.relative_to(root))
-            except ValueError:
-                # Path is not under source_root
-                return str(abs_path)
-        return str(abs_path)
+        orig_dir = self.get_original_dir()
+        try:
+            return str(abs_path.relative_to(orig_dir))
+        except ValueError:
+            return abs_path.name
     
     def get_file_for_line_idx(self, idx: int) -> Optional[Dict[str, Any]]:
         """Get the filedir entry for a given line index.
@@ -926,33 +907,50 @@ class ManifestManager:
         return None
     
     @staticmethod
-    def compute_source_root(source_files: List[Any]) -> str:
-        """Compute the common root path from a list of source files.
-        
+    def _compute_full_root(source_files: List[Any]) -> str:
+        """Compute the full common root path from a list of source files.
+
+        Used internally during project creation for building relative paths.
+        Not stored in the manifest — only the folder name is persisted.
+
         Args:
             source_files: List of source file paths (str or Path).
-            
+
         Returns:
-            Common prefix path as string, or empty string if no files.
+            Full common ancestor directory as string, or empty string.
         """
         if not source_files:
             return ""
-        
-        # Convert to Path objects
+
         paths = [Path(f) if isinstance(f, str) else f for f in source_files]
-        
+
         if len(paths) == 1:
-            # Single file - use parent directory as root
             return str(paths[0].parent)
-        
-        # Find common path prefix
+
         import os
         try:
             common = os.path.commonpath([str(p) for p in paths])
             return common
         except ValueError:
-            # No common path (e.g., different drives on Windows)
             return ""
+
+    @staticmethod
+    def compute_source_root(source_files: List[Any]) -> str:
+        """Return the folder name (last path component) of the common root.
+
+        This is the value stored in ``source_root`` — a short, portable,
+        privacy-safe identifier.  It is **not** a resolvable path.
+
+        Args:
+            source_files: List of source file paths (str or Path).
+
+        Returns:
+            Folder name string, or empty string if no files.
+        """
+        full = ManifestManager._compute_full_root(source_files)
+        if not full:
+            return ""
+        return Path(full).name
     
     # ========================== Project Operations ========================== #
     
@@ -985,18 +983,17 @@ class ManifestManager:
         
         # Initialize manifest data
         self._manifest_data = self._create_empty_manifest()
-        self._manifest_data["project_name"] = project_name
         
-        # TASK 38: Compute and store source_root (common path prefix)
-        source_root = self.compute_source_root(source_files)
-        self._manifest_data["source_root"] = source_root
+        # Store project_name in Information metadata (single source of truth)
+        self.set_info_metadata_field("project_name", project_name)
         
-        # Keep source_files for backward compatibility (but empty if using source_root)
-        # This allows older versions to still know what files are in the project
-        self._manifest_data["source_files"] = [str(p.resolve()) for p in source_files]
+        # Compute full common root (for building rel_paths) and folder name
+        full_root = self._compute_full_root(source_files)
+        folder_name = Path(full_root).name if full_root else ""
+        self._manifest_data["source_root"] = folder_name
         
-        # Initialize lines and filedir from source files
-        self._initialize_lines_from_files(source_files)
+        # Initialize lines and filedir using the *full* root for rel_paths
+        self._initialize_lines_from_files(source_files, full_root)
         
         self._dirty = True
         self._current_step = 0
@@ -1008,14 +1005,22 @@ class ManifestManager:
         logger.info("Created new manifest: %s", self._manifest_path)
         return self._manifest_path
     
-    def _initialize_lines_from_files(self, source_files: List[Path]) -> None:
+    def _initialize_lines_from_files(
+        self,
+        source_files: List[Path],
+        full_root: str = "",
+    ) -> None:
         """Initialize lines array and filedir from source files.
-        
+
+        Args:
+            source_files: Absolute paths to source files.
+            full_root: Full common ancestor path used *only* to compute
+                relative paths for filedir.  Not stored in the manifest.
+
         TASK 38: Lines no longer store source_file - use filedir for lookup.
         """
         lines: List[Dict[str, Any]] = []
         filedir: List[Dict[str, Any]] = []
-        source_root = self._manifest_data.get("source_root", "")
         idx = 0
         
         for file_path in source_files:
@@ -1032,10 +1037,10 @@ class ManifestManager:
                     })
                     idx += 1
                 
-                # Build filedir entry
-                if source_root:
+                # Build filedir entry — rel_path relative to full_root
+                if full_root:
                     try:
-                        rel_path = str(file_path.relative_to(source_root))
+                        rel_path = str(file_path.relative_to(full_root))
                     except ValueError:
                         rel_path = file_path.name
                 else:
@@ -1216,35 +1221,29 @@ class ManifestManager:
             version = "3.1"
         
         # TASK 38: v3.1 → v3.2 optimization
-        # Remove redundant source_file from lines, add source_root
+        # Remove redundant source_file from lines, store source_root as folder name
         if version == "3.1":
             logger.info("Optimizing manifest from v3.1 to v3.2")
             
-            # Compute source_root from source_files
+            # Compute full common root (for building rel_paths) and folder name
             source_files = data.get("source_files", [])
-            if source_files:
-                data["source_root"] = self.compute_source_root(source_files)
-            else:
-                data["source_root"] = ""
+            full_root = self._compute_full_root(source_files) if source_files else ""
+            folder_name = Path(full_root).name if full_root else ""
+            data["source_root"] = folder_name
             
-            # Update filedir entries - remove source_hint, make rel_path relative to source_root
-            source_root = data.get("source_root", "")
+            # Update filedir entries — remove source_hint, make rel_path relative
             filedir = data.get("filedir", [])
             for entry in filedir:
-                # Remove source_hint if present
                 if "source_hint" in entry:
                     del entry["source_hint"]
-                # Ensure rel_path is relative to source_root
                 rel_path = entry.get("rel_path", "")
-                if source_root and rel_path:
-                    # If rel_path is absolute, make it relative to source_root
+                if full_root and rel_path:
                     try:
                         rel_path_obj = Path(rel_path)
                         if rel_path_obj.is_absolute():
-                            rel_path = str(rel_path_obj.relative_to(source_root))
+                            rel_path = str(rel_path_obj.relative_to(full_root))
                             entry["rel_path"] = rel_path
                     except ValueError:
-                        # Can't make relative - keep as is
                         pass
             
             # Remove source_file from all line entries (compact format)
@@ -1252,6 +1251,9 @@ class ManifestManager:
             for line in lines:
                 if "source_file" in line:
                     del line["source_file"]
+            
+            # Remove source_files array (no longer needed)
+            data.pop("source_files", None)
             
             data["version"] = MANIFEST_VERSION
         
@@ -1377,16 +1379,13 @@ class ManifestManager:
     # ========================== Project Info Consolidation ========================== #
 
     def consolidate_project_info(self) -> bool:
-        """Migrate top-level project_info fields into Information metadata.
+        """Migrate legacy top-level fields into Information metadata.
 
-        Merges ``SourceLanguage``, ``TargetLanguage``, ``Genre``,
-        ``StylePreset``, ``TonePreset``, ``ProjectName``, ``Title``
-        into ``step_state.Information.data.metadata``.  Information
-        metadata values take priority when both exist.  Top-level
-        duplicates are cleaned up afterwards.
-
-        Also adds ``system_instructions`` to the metadata if not
-        already present (sourced from ``custom_notes``).
+        Moves ``project_info``, ``project_name``, ``SourceLanguage``,
+        ``TargetLanguage``, ``Genre``, ``StylePreset``, ``TonePreset``,
+        ``ProjectName``, ``Title``, ``source_files`` and other redundant
+        top-level keys into ``step_state.Information.data.metadata``.
+        Legacy keys are deleted after migration.
 
         Returns:
             True if any fields were migrated, False otherwise.
@@ -1394,20 +1393,25 @@ class ManifestManager:
         if not self.is_loaded:
             return False
 
-        metadata = (
-            self._manifest_data
-            .get("step_state", {})
-            .get("Information", {})
-            .get("data", {})
-            .get("metadata", {})
-        )
-        if not isinstance(metadata, dict):
-            metadata = {}
-
+        metadata = self.get_info_metadata()
         changed = False
 
-        # Mapping: top-level key -> metadata key
-        migration_map: dict[str, str] = {
+        # --- Migrate top-level project_info dict ---
+        pi = self._manifest_data.pop("project_info", None)
+        if isinstance(pi, dict) and pi:
+            for k, v in pi.items():
+                if v and not metadata.get(k):
+                    metadata[k] = v
+                    changed = True
+
+        # --- Migrate top-level project_name ---
+        pn = self._manifest_data.pop("project_name", None)
+        if pn and not metadata.get("project_name"):
+            metadata["project_name"] = pn
+            changed = True
+
+        # --- Migrate PascalCase top-level keys ---
+        pascal_map: dict[str, str] = {
             "SourceLanguage": "source_language",
             "TargetLanguage": "target_language",
             "Genre": "genre",
@@ -1415,39 +1419,72 @@ class ManifestManager:
             "TonePreset": "tone_preset",
             "ProjectName": "project_name",
             "Title": "game_title",
+            "Summary": "summary",
+            "CustomStyle": "custom_style",
+            "CustomTone": "custom_tone",
+            "SIPreset": "si_preset",
+            "Prompt": "custom_notes",
         }
-
-        for top_key, meta_key in migration_map.items():
-            top_val = self._manifest_data.get(top_key, "")
-            meta_val = metadata.get(meta_key, "")
-            if top_val and not meta_val:
+        for top_key, meta_key in pascal_map.items():
+            top_val = self._manifest_data.pop(top_key, None)
+            if top_val and not metadata.get(meta_key):
                 metadata[meta_key] = top_val
                 changed = True
-                logger.debug(
-                    "Migrated %s -> metadata.%s = %s",
-                    top_key, meta_key, top_val,
-                )
 
-        # Ensure system_instructions key exists
+        # --- Migrate source_files (remove entirely) ---
+        self._manifest_data.pop("source_files", None)
+
+        # Ensure system_instructions alias
         if "system_instructions" not in metadata:
-            metadata["system_instructions"] = metadata.get(
-                "custom_notes", "",
-            )
+            metadata["system_instructions"] = metadata.get("custom_notes", "")
             changed = True
 
-        # Write back
         if changed:
-            info_state = (
-                self._manifest_data
-                .setdefault("step_state", {})
-                .setdefault("Information", {"name": "Information", "status": "not-started"})
-                .setdefault("data", {})
-            )
-            info_state["metadata"] = metadata
-            self._mark_dirty()
-            logger.info("Consolidated project_info into Information metadata")
+            self.set_info_metadata(metadata)
+            logger.info("Consolidated legacy fields into Information metadata")
 
         return changed
+
+    # ========================== Information Metadata Access ======================== #
+
+    def get_info_metadata(self) -> Dict[str, Any]:
+        """Get the Information step metadata dict (single source of truth).
+
+        Returns a *reference* to the dict inside step_state so callers can
+        mutate it directly (followed by ``_mark_dirty()``).  If the path
+        does not exist yet it is created with safe defaults.
+        """
+        ss = self._manifest_data.setdefault("step_state", {})
+        info = ss.setdefault(
+            "Information",
+            {"name": "Information", "status": "not-started"},
+        )
+        data = info.setdefault("data", {})
+        meta = data.setdefault("metadata", {})
+        return meta
+
+    def set_info_metadata(self, metadata: Dict[str, Any]) -> None:
+        """Replace the Information step metadata dict wholesale."""
+        ss = self._manifest_data.setdefault("step_state", {})
+        info = ss.setdefault(
+            "Information",
+            {"name": "Information", "status": "not-started"},
+        )
+        data = info.setdefault("data", {})
+        data["metadata"] = metadata
+        self._mark_dirty()
+
+    def set_info_metadata_field(self, key: str, value: Any) -> None:
+        """Set a single field inside Information metadata."""
+        meta = self.get_info_metadata()
+        meta[key] = value
+        self._mark_dirty()
+
+    def get_info_metadata_field(
+        self, key: str, default: Any = ""
+    ) -> Any:
+        """Read a single field from Information metadata."""
+        return self.get_info_metadata().get(key, default)
 
     # ========================== Step State Operations ========================== #
     
@@ -1588,22 +1625,24 @@ class ManifestManager:
     # ========================== Project Info Operations ========================== #
     
     def get_project_info(self) -> ProjectInfo:
-        """Get project information."""
-        data = self._manifest_data.get("project_info", {})
+        """Get project information from Information metadata."""
+        data = self.get_info_metadata()
         return ProjectInfo.from_dict(data)
     
     def set_project_info(self, info: ProjectInfo) -> None:
-        """Set project information."""
-        self._manifest_data["project_info"] = info.to_dict()
+        """Set project information into Information metadata."""
+        meta = self.get_info_metadata()
+        for key, value in info.to_dict().items():
+            if value:  # Only write populated fields
+                meta[key] = value
         self._mark_dirty()
     
     def update_project_info(self, **kwargs: Any) -> None:
-        """Update specific project info fields."""
-        info = self.get_project_info()
+        """Update specific project info fields in Information metadata."""
+        meta = self.get_info_metadata()
         for key, value in kwargs.items():
-            if hasattr(info, key):
-                setattr(info, key, value)
-        self.set_project_info(info)
+            meta[key] = value
+        self._mark_dirty()
     
     # ========================== Characters Operations ========================== #
     
@@ -1705,18 +1744,18 @@ class ManifestManager:
     
     # ========================== Source Files ========================== #
     
+    # source_files removed — use filedir + source_root instead.
+    # Legacy callers that still call get_source_files/set_source_files will
+    # get empty results / log warnings.
+
     def get_source_files(self) -> List[Path]:
-        """Get source file paths."""
-        return [Path(p) for p in self._manifest_data.get("source_files", [])]
-    
+        """Deprecated — source_files no longer stored. Use filedir."""
+        logger.warning("get_source_files() is deprecated; use get_filedir()")
+        return []
+
     def set_source_files(self, files: List[Path]) -> None:
-        """Set source file paths.
-        
-        Stores as absolute paths (TASK 32.1).
-        """
-        # Store as absolute paths
-        self._manifest_data["source_files"] = [str(p.resolve()) for p in files]
-        self._mark_dirty()
+        """Deprecated — source_files no longer stored. Use filedir."""
+        logger.warning("set_source_files() is deprecated; use set_filedir()")
     
     # ========================== File Directory (TASK 35.1) ========================== #
     
@@ -1789,8 +1828,8 @@ class ManifestManager:
         
         Returns path like Projects/{project_name}/ for storing Original/ and Patch/.
         """
-        project_name = self._manifest_data.get("project_name", "Project1")
-        safe_name = "".join(c for c in project_name if c.isalnum() or c in " -_").strip()
+        name = self.project_name or "Untitled"
+        safe_name = "".join(c for c in name if c.isalnum() or c in " -_").strip()
         if not safe_name:
             safe_name = "Untitled"
         return MANIFEST_DIR / safe_name
@@ -1809,59 +1848,92 @@ class ManifestManager:
         """
         return self.get_project_dir() / "Patch"
     
-    def copy_originals_to_project(self, force: bool = False) -> Dict[str, str]:
+    def copy_originals_to_project(
+        self,
+        source_paths: Optional[Dict[str, Path]] = None,
+        force: bool = False,
+    ) -> Dict[str, str]:
         """Copy source files into the project's Original/ directory.
-        
-        TASK 35.2: Ensures complex formats have a stable local reference even
-        if the user moves/deletes the original inputs. Updates filedir entries
-        to point to the copied files.
-        
+
+        ``source_root`` is now a display-only folder name, so callers must
+        provide the actual absolute paths via *source_paths*.
+
         Args:
-            force: If True, overwrite existing copies. If False, skip existing.
-            
+            source_paths: Mapping of ``rel_path`` → absolute source ``Path``.
+                If *None*, falls back to looking in ``step_state.Input.data.files``.
+            force: If True, overwrite existing copies.
+
         Returns:
-            Dict mapping original paths to copied paths. Empty dict if failed.
+            Dict mapping original paths to copied paths.
         """
         import shutil
-        
+
         filedir = self.get_filedir()
         if not filedir:
             logger.warning("No filedir entries to copy")
             return {}
-        
+
+        # Build source_paths from step_state.Input if not provided
+        if source_paths is None:
+            source_paths = self._build_source_paths_from_input()
+
         original_dir = self.get_original_dir()
         original_dir.mkdir(parents=True, exist_ok=True)
-        
+
         copied_files: Dict[str, str] = {}
-        
+
         for entry in filedir:
-            # TASK 38: Use source_root + rel_path to resolve full path
-            source_path = self.resolve_file_path(entry.rel_path)
-            
-            if not source_path or not source_path.exists():
-                logger.warning("Source file not found: %s", entry.rel_path)
+            abs_source = source_paths.get(entry.rel_path)
+            if abs_source is None or not abs_source.exists():
+                logger.warning("Source file not found for rel_path=%s", entry.rel_path)
                 continue
-            
-            # Destination path preserves relative folder structure
+
             dest_path = original_dir / entry.rel_path
-            
-            # Create parent directories
             dest_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Skip if already exists and not forcing
+
             if dest_path.exists() and not force:
                 logger.debug("Original already exists: %s", dest_path)
-                copied_files[str(source_path)] = str(dest_path)
+                copied_files[str(abs_source)] = str(dest_path)
                 continue
-            
+
             try:
-                shutil.copy2(source_path, dest_path)
-                copied_files[str(source_path)] = str(dest_path)
-                logger.info("Copied original: %s -> %s", source_path.name, dest_path)
+                shutil.copy2(abs_source, dest_path)
+                copied_files[str(abs_source)] = str(dest_path)
+                logger.info("Copied original: %s -> %s", abs_source.name, dest_path)
             except Exception as e:
-                logger.error("Failed to copy %s: %s", source_path, e)
-        
+                logger.error("Failed to copy %s: %s", abs_source, e)
+
         return copied_files
+
+    def _build_source_paths_from_input(self) -> Dict[str, Path]:
+        """Build rel_path → absolute-source-path map from Input step state.
+
+        Falls back to matching filedir rel_paths against Input.data.files[].path.
+        """
+        result: Dict[str, Path] = {}
+        ss = self._manifest_data.get("step_state", {})
+        input_data = ss.get("Input", {}).get("data", {})
+        files_list = input_data.get("files", [])
+
+        filedir = self.get_filedir()
+        # Build a quick lookup: filename → absolute path
+        abs_by_name: Dict[str, Path] = {}
+        for f in files_list:
+            p = Path(f.get("path", ""))
+            abs_by_name[p.name] = p
+            # Also store by full path for exact matching
+            abs_by_name[str(p)] = p
+
+        for entry in filedir:
+            rel = entry.rel_path
+            # Try matching by filename (last component of rel_path)
+            fname = Path(rel).name
+            if fname in abs_by_name:
+                result[rel] = abs_by_name[fname]
+            elif rel in abs_by_name:
+                result[rel] = abs_by_name[rel]
+
+        return result
     
     def get_original_file_path(self, entry: FileDirEntry) -> Path:
         """Get the path to the copied original file for a filedir entry.
@@ -2511,7 +2583,7 @@ class ManifestManager:
             Dict containing all processing settings grouped by category.
         """
         return {
-            "project_info": deepcopy(self._manifest_data.get("project_info", {})),
+            "project_info": deepcopy(self.get_info_metadata()),
             "preprocessing": self.get_preprocessing_options(),
             "request": self.get_request_options(),
             "validation": self.get_validation_rules(),

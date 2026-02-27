@@ -432,6 +432,8 @@ PROJECT FILE STAGING (v3.1)
 - Input/output decoupling via `filedir` field maps line index ranges to files
 - Source files are copied to `Projects/{project_name}/Original/` on load
 - Translated files are written to `Projects/{project_name}/Patch/`
+- `source_root` stores only the folder name (privacy-safe, portable)
+- File resolution uses the local `Original/` directory, not original user paths
 - Projects remain functional even if original source files are moved/deleted
 - Folder structure is preserved for multi-file projects
 - Supports per-file encoding (utf-8, shift_jis, etc.)
@@ -738,11 +740,12 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - **Auto-save on step change**: Manifest saved when navigating between steps
   - **Manifest v3.0 format** stores all project data:
     - step_state: Completion status, skipped flags, metadata per step
-    - project_info: Name, source/target language, genre, tone (migrated into `step_state.Information.data.metadata` by `consolidate_project_info()` on load)
+    - project_info: **Removed as top-level key.** Now lives in `step_state.Information.data.metadata` (single source of truth). Access via `get_info_metadata()` / `set_info_metadata_field()`.
     - glossary: Project-specific glossary entries (optional, can use global)
     - characters: Speaker database with gender and context
     - code_patterns: Protected code and custom placeholders
     - lines: Source and translated line content
+    - **Line field persistence (Task 3):** Each processing step writes its per-line output directly to manifest `lines[]` via `set_line_field()` — `prepro` (preprocessing), `tl` (translation), `postpro` (postprocessing), `wordwr` (wordwrap). Fields accumulate through the pipeline and survive session restore.
   - **Settings Flow to Processing Functions (Task 21.3):**
     - Grouped settings access via ManifestManager helper methods
     - `get_request_options()` - API settings (Model, Temperature, LinesPerChunk)
@@ -2150,8 +2153,8 @@ GUI PROJECT INTEGRATION (v3.0)
 The v3.0 manifest format extends v2.0 with GUI state management:
 
 **New Manifest Sections:**
-- `step_state`: Completion status, skipped flags, metadata per GUI step
-- `project_info`: Project name, source/target language, genre, tone, style notes
+- `step_state`: Completion status, skipped flags, metadata per GUI step (includes project metadata in `Information.data.metadata`)
+- `project_info`: **Removed** — now lives in `step_state.Information.data.metadata`
 - `glossary`: Project-specific glossary entries (alternative to global glossary.json)
 - `characters`: Speaker database with gender, context, and aliases
 - `code_patterns`: Protected regex patterns and custom placeholders

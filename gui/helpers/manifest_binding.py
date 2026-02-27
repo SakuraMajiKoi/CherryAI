@@ -59,6 +59,8 @@ from CherryAI.functions.manifest_fields import (
     load_enum_field,
     save_nested_enum_field,
     load_nested_enum_field,
+    save_info_metadata_field,
+    load_info_metadata_field,
 )
 
 if TYPE_CHECKING:
@@ -792,3 +794,170 @@ def load_all_bindings(bindings: List[BindingInfo]) -> None:
                 binding.load_from_manifest()  # type: ignore
             except Exception as e:
                 logger.error("Failed to load binding %s: %s", binding.field_key, e)
+
+
+# ============================================================================
+# Information Metadata Bindings
+# ============================================================================
+
+
+def bind_entry_to_info_field(
+    entry: Union[ttk.Entry, tk.Entry],
+    var: tk.StringVar,
+    manager_getter: ManagerGetter,
+    meta_key: str,
+    default: str = "",
+    on_save: Optional[Callable[[str], None]] = None,
+) -> BindingInfo:
+    """Bind an entry widget to an Information metadata field.
+
+    Writes to ``step_state.Information.data.metadata[meta_key]`` instead
+    of a top-level manifest key.
+
+    Args:
+        entry: The Entry widget to bind.
+        var: The StringVar associated with the entry.
+        manager_getter: Callable that returns ManifestManager or None.
+        meta_key: snake_case metadata key (e.g. ``project_name``).
+        default: Default value if not in manifest.
+        on_save: Optional callback after save (receives new value).
+
+    Returns:
+        BindingInfo for tracking / testing.
+    """
+    binding = BindingInfo(entry, meta_key, "info_metadata", "text")
+    _binding_registry.append(binding)
+
+    def on_change(*args: Any) -> None:
+        manager = manager_getter()
+        if manager is None:
+            return
+        value = var.get()
+        binding.record_save(value)
+        save_info_metadata_field(manager, meta_key, value)
+        if on_save:
+            on_save(value)
+        logger.debug("Info-meta entry saved: %s = %r", meta_key, value)
+
+    var.trace_add("write", on_change)
+
+    def load_from_manifest() -> str:
+        manager = manager_getter()
+        if manager is None:
+            var.set(default)
+            return default
+        value = load_info_metadata_field(manager, meta_key, default)
+        var.set(value)
+        binding.record_load(value)
+        logger.debug("Info-meta entry loaded: %s = %r", meta_key, value)
+        return value
+
+    binding.load_from_manifest = load_from_manifest  # type: ignore
+    return binding
+
+
+def bind_combobox_to_info_field(
+    combobox: ttk.Combobox,
+    var: tk.StringVar,
+    manager_getter: ManagerGetter,
+    meta_key: str,
+    default: str = "",
+    on_save: Optional[Callable[[str], None]] = None,
+) -> BindingInfo:
+    """Bind a combobox widget to an Information metadata field.
+
+    Writes to ``step_state.Information.data.metadata[meta_key]``.
+
+    Args:
+        combobox: The Combobox widget to bind.
+        var: The StringVar associated with the combobox.
+        manager_getter: Callable that returns ManifestManager or None.
+        meta_key: snake_case metadata key.
+        default: Default value if not in manifest.
+        on_save: Optional callback after save.
+
+    Returns:
+        BindingInfo for tracking / testing.
+    """
+    binding = BindingInfo(combobox, meta_key, "info_metadata", "enum")
+    _binding_registry.append(binding)
+
+    def on_change(*args: Any) -> None:
+        manager = manager_getter()
+        if manager is None:
+            return
+        value = var.get()
+        binding.record_save(value)
+        save_info_metadata_field(manager, meta_key, value)
+        if on_save:
+            on_save(value)
+        logger.debug("Info-meta combo saved: %s = %r", meta_key, value)
+
+    var.trace_add("write", on_change)
+
+    def load_from_manifest() -> str:
+        manager = manager_getter()
+        if manager is None:
+            var.set(default)
+            return default
+        value = load_info_metadata_field(manager, meta_key, default)
+        var.set(value)
+        binding.record_load(value)
+        logger.debug("Info-meta combo loaded: %s = %r", meta_key, value)
+        return value
+
+    binding.load_from_manifest = load_from_manifest  # type: ignore
+    return binding
+
+
+def bind_scrolledtext_to_info_field(
+    text_widget: scrolledtext.ScrolledText,
+    manager_getter: ManagerGetter,
+    meta_key: str,
+    default: str = "",
+    on_save: Optional[Callable[[str], None]] = None,
+) -> BindingInfo:
+    """Bind a ScrolledText widget to an Information metadata field.
+
+    Writes to ``step_state.Information.data.metadata[meta_key]``.
+
+    Args:
+        text_widget: The ScrolledText widget to bind.
+        manager_getter: Callable that returns ManifestManager or None.
+        meta_key: snake_case metadata key.
+        default: Default value if not in manifest.
+        on_save: Optional callback after save.
+
+    Returns:
+        BindingInfo for tracking / testing.
+    """
+    binding = BindingInfo(text_widget, meta_key, "info_metadata", "text")
+    _binding_registry.append(binding)
+
+    def on_change(event: Any = None) -> None:
+        manager = manager_getter()
+        if manager is None:
+            return
+        value = text_widget.get("1.0", "end-1c")
+        binding.record_save(value)
+        save_info_metadata_field(manager, meta_key, value)
+        if on_save:
+            on_save(value)
+
+    text_widget.bind("<FocusOut>", on_change)
+    text_widget.bind("<KeyRelease>", on_change)
+
+    def load_from_manifest() -> str:
+        manager = manager_getter()
+        if manager is None:
+            text_widget.delete("1.0", "end")
+            text_widget.insert("1.0", default)
+            return default
+        value = load_info_metadata_field(manager, meta_key, default)
+        text_widget.delete("1.0", "end")
+        text_widget.insert("1.0", value)
+        binding.record_load(value)
+        return value
+
+    binding.load_from_manifest = load_from_manifest  # type: ignore
+    return binding

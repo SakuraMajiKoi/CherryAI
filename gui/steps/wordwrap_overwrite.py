@@ -811,7 +811,7 @@ class WordwrapOverwriteStep(BaseStep):
                 if mm:
                     pdir = getattr(mm, "_project_dir", None)
                     pname = (
-                        mm.get_project_info().name
+                        mm.get_project_info().project_name
                         if hasattr(mm, "get_project_info") else None
                     )
                     if pdir and pname:
@@ -1278,7 +1278,12 @@ class WordwrapOverwriteStep(BaseStep):
             self._lines.append(wrap_line)
 
     def _save_to_session(self) -> None:
-        """Save current state to session."""
+        """Save current state to session.
+
+        Persists wrapped text to manifest lines[].wordwr via
+        set_line_field so downstream steps and session restore
+        can read the wrapped text directly from the manifest.
+        """
         step_data = self.get_step_data()
         step_data["wrap_options"] = {
             "mode": self._mode_var.get(),
@@ -1289,6 +1294,12 @@ class WordwrapOverwriteStep(BaseStep):
         }
         step_data["wrapped_lines"] = [l.wrapped for l in self._lines]
         self.set_step_data(step_data)
+
+        # Persist each wrapped line to the manifest
+        mgr = self.manifest_manager
+        if mgr is not None:
+            for line in self._lines:
+                mgr.set_line_field(line.idx, "wordwr", line.wrapped)
 
     # =========================================================================
     # Public API

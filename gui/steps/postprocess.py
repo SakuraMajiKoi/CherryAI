@@ -1344,7 +1344,7 @@ class PostprocessingStep(BaseStep):
         # Write to manifest if available
         if self.manifest_manager is not None:
             try:
-                self.manifest_manager.update_line_field(
+                self.manifest_manager.set_line_field(
                     line.idx, "postpro", new_text
                 )
             except Exception as exc:
@@ -1433,7 +1433,7 @@ class PostprocessingStep(BaseStep):
             mm = getattr(self, "_manifest_manager", None)
             if mm:
                 pdir = getattr(mm, "_project_dir", None)
-                pname = mm.get_project_info().name if hasattr(mm, "get_project_info") else None
+                pname = mm.get_project_info().project_name if hasattr(mm, "get_project_info") else None
                 if pdir and pname:
                     from pathlib import Path as _P
                     _pp_log_path = _rotate_log(_P(str(pdir)), pname, "postprocess")
@@ -1638,6 +1638,12 @@ class PostprocessingStep(BaseStep):
 
         # Store postprocessed lines for next step
         step_data["postprocessed_lines"] = [l.postprocessed for l in self._lines]
+
+        # Persist each postprocessed line to the manifest
+        mgr = self.manifest_manager
+        if mgr is not None:
+            for line in self._lines:
+                mgr.set_line_field(line.idx, "postpro", line.postprocessed)
 
         # TASK 45.8: Completion popup
         messagebox.showinfo(

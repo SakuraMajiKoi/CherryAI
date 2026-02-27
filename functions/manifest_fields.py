@@ -1335,3 +1335,44 @@ def load_glossary_entries(
             })
     
     return result
+
+
+# ========================== Information Metadata Helpers ========================== #
+
+
+def save_info_metadata_field(
+    manager: "ManifestManager", key: str, value: str
+) -> None:
+    """Save a text field into step_state.Information.data.metadata.
+
+    This is the canonical write path for project metadata fields that
+    used to live at the top level (ProjectName, SourceLanguage, etc.).
+
+    Args:
+        manager: ManifestManager instance.
+        key: snake_case metadata key (e.g. ``project_name``).
+        value: Text value to save.
+    """
+    if not isinstance(value, str):
+        value = str(value) if value is not None else ""
+    manager.set_info_metadata_field(key, value)
+    logger.debug("Saved info metadata %s = %r", key, value[:50] if value else "")
+
+
+def load_info_metadata_field(
+    manager: "ManifestManager", key: str, default: str = ""
+) -> str:
+    """Load a text field from step_state.Information.data.metadata.
+
+    Args:
+        manager: ManifestManager instance.
+        key: snake_case metadata key (e.g. ``project_name``).
+        default: Default value if not found.
+
+    Returns:
+        Text value or *default*.
+    """
+    value = manager.get_info_metadata_field(key, default)
+    if value is None:
+        return default
+    return str(value)

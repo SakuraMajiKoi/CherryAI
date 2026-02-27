@@ -1109,7 +1109,12 @@ class PreprocessingStep(BaseStep):
         self._update_step_data()
 
     def _update_step_data(self) -> None:
-        """Update step data with current configuration and results."""
+        """Update step data with current configuration and results.
+
+        Persists preprocessed text to manifest lines[].prepro via
+        set_line_field so that downstream steps and session restore
+        can read the preprocessed text directly from the manifest.
+        """
         data = {
             "config": dict(self._config),
             "processed_count": len(self._preview_lines),
@@ -1117,6 +1122,14 @@ class PreprocessingStep(BaseStep):
             "processed_lines": [p for _, p, _ in self._preview_lines],
         }
         self.set_step_data(data)
+
+        # Persist each preprocessed line to the manifest
+        mgr = self.manifest_manager
+        if mgr is not None:
+            for idx, (_orig, processed, _changes) in enumerate(
+                self._preview_lines
+            ):
+                mgr.set_line_field(idx, "prepro", processed)
 
     def _reset_rules(self) -> None:
         """Reset rules to defaults."""

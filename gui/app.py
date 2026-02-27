@@ -938,9 +938,8 @@ For more information, see the documentation.
             manifest_data["metadata"]["last_modified"] = datetime.utcnow().isoformat() + "Z"
             
             # Store Information step metadata in manifest
-            info_data = self.session.get_step(3).data  # Information step
-            if info_data.get("metadata"):
-                manifest_data["project_info"] = info_data["metadata"]
+            # (no longer copies to top-level project_info — canonical
+            # location is step_state.Information.data.metadata)
             
             # Write updated manifest
             with open(manifest_path, "w", encoding="utf-8") as f:

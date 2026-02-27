@@ -306,8 +306,8 @@ TABLE OF CONTENTS
        - consolidate_project_info(): Migrates top-level keys (SourceLanguage, TargetLanguage, Genre, StylePreset, TonePreset, ProjectName, Title) into `step_state.Information.data.metadata`; Information metadata takes priority; also ensures `system_instructions` key exists; called automatically during `load()` after `_ensure_all_fields_present()`
        - TASK 21.3: Settings helper methods for processing functions
        - TASK 32.1: Absolute path storage:
-         - create_new() stores source_files with resolve() for absolute paths
-         - set_source_files() stores with resolve() for absolute paths
+         - create_new() computes folder name for source_root, copies files to Original/
+         - source_files is no longer stored; file resolution uses Original/ directory
 
    6.10 functions/ini_manager.py - INI Configuration (v3.0 + Phase 62)
        - Central INI path resolution relative to main module
@@ -493,6 +493,7 @@ TABLE OF CONTENTS
          - New file: functions/process_order.py (get_pre_order, get_post_order)
          - Modified: gui/steps/preprocess.py, gui/state/store.py, functions/dedup.py, functions/mainhelper.py
          - Modified: functions/manifest_fields.py, functions/postprocess.py, modi/standard_mode.py
+         - Bug Fix (Task 3): _update_step_data() now calls set_line_field(idx, "prepro", processed) to persist preprocessed lines to manifest. Previously only stored in step_state.
        - **Phase 43 Integration:** Translation Tab Overhaul:
          - Merged Column: "To be Translated" replaces Original+Preprocessed (resolution: edited_prepro → preprocessed → original)
          - Newline Rendering: ↵ symbol in table cells, 200-char truncation
@@ -525,6 +526,7 @@ TABLE OF CONTENTS
          - Filters: All/Changed/Written/Flagged radio buttons; status icons ⚠/✓
          - Modified: gui/steps/postprocess.py (~1732 lines)
          - Test file: dev/test_postprocess_phase45.py (49 tests)
+         - Bug Fix (Task 3): _mark_line_as_fixed() called nonexistent update_line_field(); fixed to set_line_field(). _on_postprocess_complete() now calls set_line_field(line.idx, "postpro", line.postprocessed) to persist results to manifest.
 
        - **Phase 46 Integration:**
          - WrapMode enum reduced to MANUAL only (removed RPGMAKER, DISABLED)
@@ -543,6 +545,7 @@ TABLE OF CONTENTS
          - _simple_wrap() sets exceeds_limit from max_lines
          - Modified: gui/steps/wordwrap_overwrite.py (~1200 lines)
          - Test file: dev/test_wordwrap_phase46.py (45 tests)
+         - Bug Fix (Task 3): _save_to_session() now calls set_line_field(line.idx, "wordwr", line.wrapped) to persist wrapped lines to manifest. Previously only stored in step_state.
 
        - **Phase 47 Integration:**
          - New module: functions/output.py (~148 lines)
@@ -980,10 +983,10 @@ DESIGN DOCUMENT: See doc/MANIFEST_UPDATE_DESIGN.md for full specification.
 
 VERSION 3.2 OPTIMIZATIONS (TASK 38)
 
-v3.2 optimizes manifest size by:
-1. Storing `source_root` - the common path prefix for all source files
-2. Removing redundant `source_file` from each line entry
-3. Removing `source_hint` from filedir entries (use `source_root + rel_path` instead)
+v3.2 optimizes manifest size and privacy by:
+1. Storing `source_root` as a display-only **folder name** (not a full path)
+2. Removing `source_files` array, `source_file` from lines, `source_hint` from filedir
+3. File resolution uses the project’s `Original/` directory instead of absolute source paths
 
 **Size Reduction:** For a project with 50,000 lines and a 60-character path prefix,
 this saves ~4MB (60 chars × 50,000 lines + JSON overhead).
@@ -991,23 +994,32 @@ this saves ~4MB (60 chars × 50,000 lines + JSON overhead).
 ```json
 {
     "version": "3.2",
-    "source_root": "D:/Translations/MyGame/Data",
+    "source_root": "Data",
     "filedir": [
         {"first_idx": 0, "last_idx": 99, "format": "txt", "rel_path": "chapter1.txt"},
         {"first_idx": 100, "last_idx": 249, "format": "csv", "rel_path": "data/items.csv", "encoding": "shift_jis"}
     ],
     "step_state": {
-        "InputExtractionStep": {"completed": true, "skipped": false, "metadata": {}},
-        "AnalysisStep": {"completed": true, "skipped": false, "metadata": {}},
-        ...
-    },
-    "project_info": {
-        "name": "My Game Translation",
-        "source_language": "Japanese",
-        "target_language": "English",
-        "genre": "Visual Novel",
-        "tone": "Dramatic",
-        "style_notes": "Maintain character speech patterns"
+        "Input": {"name": "Input", "status": "completed"},
+        "Analysis": {"name": "Analysis", "status": "completed"},
+        "Information": {
+            "name": "Information",
+            "status": "completed",
+            "data": {
+                "metadata": {
+                    "project_name": "My Game Translation",
+                    "source_language": "Japanese",
+                    "target_language": "English",
+                    "genre": "Visual Novel",
+                    "summary": "",
+                    "style_preset": "Natural",
+                    "custom_style": "",
+                    "tone_preset": "Dramatic",
+                    "custom_tone": "",
+                    "custom_notes": "Maintain character speech patterns"
+                }
+            }
+        }
     },
     "glossary": [
         {"original": "太郎", "translation": "Taro", "gender": "male", "context": "main character"}
@@ -1022,13 +1034,13 @@ this saves ~4MB (60 chars × 50,000 lines + JSON overhead).
 }
 ```
 
-**Path Resolution:** To get the full path for a file:
+**Path Resolution:** Files are resolved against the project's `Original/` directory:
 ```python
-# v3.2: source_root + rel_path
-full_path = Path(manifest["source_root"]) / entry["rel_path"]
+# v3.2: resolve via project-local copy (source_root is display-only)
+full_path = mgr.get_original_dir() / entry["rel_path"]
 
-# Example: "D:/Translations/MyGame/Data" + "chapter1.txt"
-#       -> "D:/Translations/MyGame/Data/chapter1.txt"
+# Example: Projects/MyGame/Original/ + "chapter1.txt"
+#       -> Projects/MyGame/Original/chapter1.txt
 ```
 
 **Project Directory Structure (TASK 35.2/35.3):**
@@ -1048,7 +1060,7 @@ Projects/
 When loading a manifest, the Input step's `_populate_from_manifest()` method uses
 the v3.2 filedir format to reconstruct the file tree:
 1. Reads `filedir` array with `first_idx`, `last_idx`, `rel_path` per file
-2. Combines `source_root` + `rel_path` to reconstruct full file paths
+2. Resolves files from `Original/` directory (project-local copies)
 3. Extracts lines for each file using the index range from `lines[]` array
 4. Builds folder hierarchy with folders appearing above files (collapsed by default)
 ```
@@ -1205,7 +1217,7 @@ class ManifestManager:
     def get_patch_dir(self) -> Path:
         """Get the Patch/ directory for output files."""
     
-    def copy_originals_to_project(self, force: bool = False) -> Dict[str, str]:
+    def copy_originals_to_project(self, source_paths=None, force: bool = False) -> Dict[str, str]:
         """Copy source files into the project's Original/ directory."""
     
     def get_original_file_path(self, entry: FileDirEntry) -> Path:

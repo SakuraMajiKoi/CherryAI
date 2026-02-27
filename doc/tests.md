@@ -322,6 +322,267 @@ Core Manifest v2.0 unit tests validating LineEntry and Manifest classes.
 
 ---
 
+### dev/test_manifest_metadata.py (28 tests)
+
+Task 1 consolidation: project metadata single source of truth in
+`step_state.Information.data.metadata`. Tests info metadata CRUD,
+`consolidate_project_info` migration, `project_name` property, and
+absence of legacy top-level keys.
+
+#### TestInfoMetadata (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_get_info_metadata_creates_path` | Creates nested path if missing |
+| `test_set_info_metadata_field` | Writes into correct path |
+| `test_get_info_metadata_field_default` | Returns default when absent |
+| `test_set_info_metadata_replaces_entirely` | Replaces whole dict |
+
+#### TestProjectNameProperty (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_reads_from_metadata` | Reads from info metadata |
+| `test_fallback_to_manifest_stem` | Falls back to filename |
+| `test_no_top_level_project_name` | Not stored at top level |
+
+#### TestConsolidateProjectInfo (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_migrates_project_info_dict` | Migrates and deletes project_info |
+| `test_migrates_top_level_project_name` | Migrates and deletes project_name |
+| `test_migrates_pascal_case_keys` | Migrates PascalCase keys |
+| `test_removes_source_files` | Removes source_files |
+| `test_no_overwrite_existing_metadata` | Existing metadata preserved |
+
+#### TestProjectInfoOps (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_get_project_info_from_metadata` | Reads from info metadata |
+| `test_set_project_info_writes_metadata` | Writes to info metadata |
+| `test_update_project_info_kwargs` | kwargs update metadata |
+
+#### TestGetProjectDir (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_uses_info_metadata_name` | Uses info metadata project_name |
+| `test_fallback_untitled` | Falls back to Untitled |
+
+#### TestGetAllSettings (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_project_info_from_metadata` | Returns info metadata |
+
+#### TestDeprecatedSourceFiles (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_get_returns_empty` | Returns empty list |
+| `test_set_does_nothing` | No-op |
+
+#### TestEmptyManifestStructure (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_no_project_info_key` | No project_info key |
+| `test_no_top_level_project_name` | No project_name key |
+| `test_no_source_files_key` | No source_files key |
+
+#### TestCreateNew (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_project_name_in_metadata` | Stored in info metadata |
+| `test_no_top_level_project_name` | Not at top level |
+| `test_no_source_files` | No source_files |
+
+#### TestManifestFieldHelpers (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_and_load` | save/load roundtrip |
+| `test_load_default` | Returns default |
+
+---
+
+### dev/test_source_root.py (27 tests)
+
+Task 2: source_root simplification. Tests that `source_root` stores only
+a folder name (not a full path), `resolve_file_path` uses `Original/`,
+`source_files` array and `source_file` per line are removed, copy and
+migration work correctly.
+
+#### TestComputeSourceRoot (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_single_file_returns_parent_name` | Single file → parent folder name |
+| `test_multiple_files_same_folder` | Same folder → folder name |
+| `test_nested_files_common_ancestor` | Nested → common ancestor name |
+| `test_empty_list_returns_empty` | Empty list → empty string |
+| `test_string_paths` | Accepts string paths |
+
+#### TestComputeFullRoot (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_single_file` | Returns full parent path |
+| `test_multiple_files` | Returns full common path |
+| `test_empty_returns_empty` | Empty → empty string |
+
+#### TestCreateNewSourceRoot (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_source_root_is_folder_name` | Stores folder name only |
+| `test_source_root_not_full_path` | No slashes in source_root |
+| `test_no_source_files_in_manifest` | source_files absent |
+| `test_lines_have_no_source_file` | No source_file per line |
+| `test_filedir_has_correct_rel_paths` | Correct filedir rel_paths |
+
+#### TestNestedSourceFiles (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_nested_rel_paths` | Preserves folder structure in rel_path |
+
+#### TestResolveFilePath (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_resolves_to_original_dir` | Resolves to Original/ dir |
+| `test_nested_path` | Nested rel_path resolves correctly |
+| `test_does_not_use_source_root` | source_root not used for resolution |
+
+#### TestMakeRelativePath (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_path_inside_original` | Path inside Original/ |
+| `test_path_outside_original` | Path outside → filename only |
+
+#### TestCopyOriginalsToProject (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_copies_with_explicit_paths` | Copies with explicit source map |
+| `test_skips_missing_source` | Skips nonexistent source |
+| `test_fallback_to_input_step_data` | Falls back to Input step data |
+
+#### TestMigrationSourceRoot (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_v31_source_root_becomes_folder_name` | Full path → folder name |
+| `test_migration_preserves_rel_paths` | Absolute rel_paths made relative |
+
+#### TestSavedManifestStructure (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_saved_json_has_no_source_files` | No source_files in JSON |
+| `test_saved_json_source_root_is_folder_name` | Folder name in JSON |
+| `test_saved_lines_have_no_source_file` | No source_file in lines |
+
+---
+
+### dev/test_line_saving.py (39 tests)
+
+Task 3: line field saving across all steps. Tests that preprocessing,
+postprocessing, and wordwrap steps persist per-line results to manifest
+`lines[]` via `set_line_field`. Validates round-trip persistence, field
+progression, edge cases, and that the `update_line_field` bug is fixed.
+
+#### TestSetLineField (8 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_set_prepro_field` | Writes prepro to existing line |
+| `test_set_postpro_field` | Writes postpro to existing line |
+| `test_set_wordwr_field` | Writes wordwr to existing line |
+| `test_set_tl_field` | Writes tl to existing line |
+| `test_update_translation_uses_set_line_field` | update_translation delegates to set_line_field |
+| `test_set_field_marks_dirty` | set_line_field marks manifest dirty |
+| `test_set_field_on_nonexistent_line_creates_it` | Creates new line entry |
+| `test_overwrite_existing_field` | Overwrites existing field value |
+
+#### TestFieldProgression (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_full_progression_on_single_line` | Line accumulates all fields |
+| `test_multiple_lines_get_different_fields` | Lines get independent values |
+| `test_setting_later_field_does_not_remove_earlier` | Later fields preserve earlier ones |
+| `test_all_five_lines_get_all_fields` | All lines get full field set |
+
+#### TestRoundTrip (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_prepro_survives_save_load` | prepro persists through save/load |
+| `test_postpro_survives_save_load` | postpro persists through save/load |
+| `test_wordwr_survives_save_load` | wordwr persists through save/load |
+| `test_full_progression_survives_save_load` | All fields survive round-trip |
+| `test_edited_prepro_survives_save_load` | edited_prepro survives round-trip |
+
+#### TestBugFixVerification (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_update_line_field_does_not_exist` | update_line_field must NOT exist |
+| `test_set_line_field_exists` | set_line_field exists and callable |
+| `test_update_translation_exists` | update_translation exists and callable |
+
+#### TestPreprocessIntegration (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_preprocess_has_set_line_field_call` | _update_step_data calls set_line_field |
+| `test_preprocess_does_not_call_update_line_field` | No update_line_field in source |
+
+#### TestPostprocessIntegration (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_postprocess_complete_has_set_line_field` | _on_postprocess_complete calls set_line_field |
+| `test_mark_line_as_fixed_uses_set_line_field` | Uses set_line_field (not update_line_field) |
+| `test_postprocess_no_update_line_field_anywhere` | No update_line_field in source |
+
+#### TestWordwrapIntegration (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_to_session_has_set_line_field` | _save_to_session calls set_line_field |
+| `test_wordwrap_does_not_call_update_line_field` | No update_line_field in source |
+
+#### TestTranslateAlreadyCorrect (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_translate_has_update_translation_call` | translate.py calls update_translation |
+| `test_update_translation_delegates_to_set_line_field` | update_translation writes tl field |
+
+#### TestLineFieldEdgeCases (10 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_empty_string_field` | Handles empty string values |
+| `test_multiline_field_value` | Handles multiline wordwrap output |
+| `test_unicode_field_value` | Handles Unicode text |
+| `test_field_with_special_chars` | Handles game codes like \\V[1] |
+| `test_prepro_ops_list_field` | Handles list values (prepro_ops) |
+| `test_none_field_value` | Handles None overwrite field |
+| `test_rapid_updates_same_line` | 50 rapid updates to same field |
+| `test_rapid_updates_multiple_lines` | Full field set on all lines |
+| `test_field_does_not_corrupt_adjacent_lines` | Writing one line doesn't affect others |
+| `test_save_load_preserves_field_order` | All fields present in saved JSON |
+
+---
+
 ### dev/test_manifest_state.py (27 tests)
 
 ManifestManager state management tests for Manifest 3.0 unified state.
@@ -2675,8 +2936,11 @@ Thank you.
 | test_speaker_dedup.py | 47 | Speaker Duplicate Removal Phase 51 |
 | test_glossary_selective.py | 28 | Selective Glossary Per Chunk Phase 52 |
 | test_ini_sections.py | 56 | INI section seeding: [style], [tone], [system_instructions].Default, [defaults] long-text keys, [session].last_manifest, confirmations; SystemInstruction preset-name storage and migration; _migrate_preset_values mis-assigned preset correction; dropdown INI freshness |
+| test_manifest_metadata.py | 28 | Manifest metadata consolidation (Task 1) |
+| test_source_root.py | 27 | source_root simplification (Task 2) |
+| test_line_saving.py | 39 | Line field saving across all steps (Task 3) |
 | smoke_test/*.py | 5+ | Smoke tests |
-| **Total Script Tests** | **3532** | (+56 INI section seeding tests) |
+| **Total Script Tests** | **3626** | (+94 manifest task tests) |
 | One_Click_Test.py | 7 stages | API integration |
 
 ### TASK 11: Integration Test - 200 Lines (Completed)

@@ -28,9 +28,12 @@ from CherryAI.gui.helpers.confirmations import confirm_action
 from CherryAI.gui.helpers.manifest_binding import (
     BindingInfo,
     bind_entry_to_field,
+    bind_entry_to_info_field,
     bind_checkbox_to_field,
     bind_combobox_to_field,
+    bind_combobox_to_info_field,
     bind_text_to_field,
+    bind_scrolledtext_to_info_field,
     load_all_bindings,
 )
 from CherryAI.functions.manifest_fields import (
@@ -778,11 +781,11 @@ class InformationStep(BaseStep):
         
         # TASK 23.1: Bind to manifest
         self._manifest_bindings.append(
-            bind_entry_to_field(
+            bind_entry_to_info_field(
                 entry=self._project_name_entry,
                 var=self._project_name_var,
                 manager_getter=lambda: self.manifest_manager,
-                field_key="ProjectName",
+                meta_key="project_name",
                 default="",
             )
         )
@@ -800,11 +803,11 @@ class InformationStep(BaseStep):
         
         # TASK 23.1: Bind to manifest
         self._manifest_bindings.append(
-            bind_entry_to_field(
+            bind_entry_to_info_field(
                 entry=self._game_title_entry,
                 var=self._game_title_var,
                 manager_getter=lambda: self.manifest_manager,
-                field_key="Title",
+                meta_key="game_title",
                 default="",
             )
         )
@@ -822,11 +825,11 @@ class InformationStep(BaseStep):
         
         # TASK 23.1: Bind to manifest
         self._manifest_bindings.append(
-            bind_entry_to_field(
+            bind_entry_to_info_field(
                 entry=self._genre_entry,
                 var=self._genre_var,
                 manager_getter=lambda: self.manifest_manager,
-                field_key="Genre",
+                meta_key="genre",
                 default="",
             )
         )
@@ -874,12 +877,11 @@ class InformationStep(BaseStep):
         
         # TASK 23.1: Bind to manifest
         self._manifest_bindings.append(
-            bind_combobox_to_field(
+            bind_combobox_to_info_field(
                 combobox=self._source_lang_combo,
                 var=self._source_lang_var,
                 manager_getter=lambda: self.manifest_manager,
-                field_key="SourceLanguage",
-                options=SOURCE_LANGUAGES,
+                meta_key="source_language",
                 default="Japanese",
             )
         )
@@ -905,12 +907,11 @@ class InformationStep(BaseStep):
         
         # TASK 23.1: Bind to manifest
         self._manifest_bindings.append(
-            bind_combobox_to_field(
+            bind_combobox_to_info_field(
                 combobox=self._target_lang_combo,
                 var=self._target_lang_var,
                 manager_getter=lambda: self.manifest_manager,
-                field_key="TargetLanguage",
-                options=TARGET_LANGUAGES,
+                meta_key="target_language",
                 default="English",
             )
         )
@@ -935,10 +936,10 @@ class InformationStep(BaseStep):
         
         # TASK 23.1: Bind to manifest (auto-saves on focus out)
         self._manifest_bindings.append(
-            bind_text_to_field(
+            bind_scrolledtext_to_info_field(
                 text_widget=self._summary_text,
                 manager_getter=lambda: self.manifest_manager,
-                field_key="Summary",
+                meta_key="summary",
                 default="",
             )
         )
@@ -989,12 +990,11 @@ class InformationStep(BaseStep):
 
         # TASK 23.2: Bind preset name to manifest
         self._manifest_bindings.append(
-            bind_combobox_to_field(
+            bind_combobox_to_info_field(
                 combobox=self._style_preset_combo,
                 var=self._style_preset_var,
                 manager_getter=lambda: self.manifest_manager,
-                field_key="StylePreset",
-                options=list(self._style_presets.keys()),
+                meta_key="style_preset",
                 default="Natural",
             )
         )
@@ -1017,10 +1017,10 @@ class InformationStep(BaseStep):
 
         # Bind prompt text to manifest (auto-saves on focus out)
         self._manifest_bindings.append(
-            bind_text_to_field(
+            bind_scrolledtext_to_info_field(
                 text_widget=self._style_text,
                 manager_getter=lambda: self.manifest_manager,
-                field_key="CustomStyle",
+                meta_key="custom_style",
                 default="",
             )
         )
@@ -1051,12 +1051,11 @@ class InformationStep(BaseStep):
 
         # TASK 23.2: Bind preset name to manifest
         self._manifest_bindings.append(
-            bind_combobox_to_field(
+            bind_combobox_to_info_field(
                 combobox=self._tone_preset_combo,
                 var=self._tone_preset_var,
                 manager_getter=lambda: self.manifest_manager,
-                field_key="TonePreset",
-                options=list(self._tone_presets.keys()),
+                meta_key="tone_preset",
                 default="Neutral",
             )
         )
@@ -1079,10 +1078,10 @@ class InformationStep(BaseStep):
 
         # Bind prompt text to manifest
         self._manifest_bindings.append(
-            bind_text_to_field(
+            bind_scrolledtext_to_info_field(
                 text_widget=self._tone_text,
                 manager_getter=lambda: self.manifest_manager,
-                field_key="CustomTone",
+                meta_key="custom_tone",
                 default="",
             )
         )
@@ -1595,12 +1594,11 @@ class InformationStep(BaseStep):
 
         # Bind preset name to manifest
         self._manifest_bindings.append(
-            bind_combobox_to_field(
+            bind_combobox_to_info_field(
                 combobox=self._si_preset_combo,
                 var=self._si_preset_var,
                 manager_getter=lambda: self.manifest_manager,
-                field_key="SIPreset",
-                options=list(self._si_presets.keys()),
+                meta_key="si_preset",
                 default="Default",
             )
         )
@@ -1625,10 +1623,10 @@ class InformationStep(BaseStep):
 
         # Bind prompt text to manifest
         self._manifest_bindings.append(
-            bind_text_to_field(
+            bind_scrolledtext_to_info_field(
                 text_widget=self._notes_text,
                 manager_getter=lambda: self.manifest_manager,
-                field_key="Prompt",
+                meta_key="custom_notes",
                 default="",
             )
         )
@@ -4094,7 +4092,7 @@ class InformationStep(BaseStep):
     def _apply_suggested_project_name(self) -> None:
         """Apply project name from manifest or Input step if field is empty.
 
-        Prefers the ``ProjectName`` field in the manifest (set during
+        Prefers the project_name in Information metadata (set during
         project creation) over the folder-name-based suggestion from
         Input step data.
         """
@@ -4103,10 +4101,10 @@ class InformationStep(BaseStep):
             return
 
         try:
-            # Prefer manifest ProjectName (set during project creation)
+            # Prefer Information metadata project_name
             mgr = self.manifest_manager
             if mgr is not None and mgr.is_loaded:
-                manifest_name = mgr._manifest_data.get("ProjectName", "")
+                manifest_name = mgr.get_info_metadata_field("project_name", "")
                 if manifest_name and manifest_name.strip():
                     self._project_name_var.set(manifest_name.strip())
                     logger.debug(

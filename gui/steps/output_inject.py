@@ -1112,7 +1112,7 @@ class OutputInjectStep(BaseStep):
                 if mm:
                     pdir = getattr(mm, "_project_dir", None)
                     pname = (
-                        mm.get_project_info().name
+                        mm.get_project_info().project_name
                         if hasattr(mm, "get_project_info") else None
                     )
                     if pdir and pname:
@@ -1358,7 +1358,7 @@ class OutputInjectStep(BaseStep):
             if mm:
                 pdir = getattr(mm, "_project_dir", None)
                 pname = (
-                    mm.get_project_info().name
+                    mm.get_project_info().project_name
                     if hasattr(mm, "get_project_info") else None
                 )
                 if pdir and pname:

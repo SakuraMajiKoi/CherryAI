@@ -2071,11 +2071,11 @@ class TranslationStep(BaseStep):
             # --- 1. Language Direction ---
             source_lang = (
                 metadata.get("source_language", "")
-                or mgr._manifest_data.get("SourceLanguage", "")
+                or mgr.get_info_metadata_field("source_language", "")
             )
             target_lang = (
                 metadata.get("target_language", "")
-                or mgr._manifest_data.get("TargetLanguage", "")
+                or mgr.get_info_metadata_field("target_language", "")
             )
             if source_lang and target_lang:
                 parts.append(
@@ -2106,7 +2106,7 @@ class TranslationStep(BaseStep):
             # --- 6. Genre ---
             genre = (metadata.get("genre", "") or "").strip()
             if not genre:
-                genre = (mgr._manifest_data.get("Genre", "") or "").strip()
+                genre = (mgr.get_info_metadata_field("genre", "") or "").strip()
             if genre:
                 parts.append(f"# Genre\n{genre}")
 
@@ -2626,7 +2626,9 @@ class TranslationStep(BaseStep):
         source_lang = "Japanese"
         mgr = self.manifest_manager
         if mgr is not None and mgr.is_loaded:
-            source_lang = mgr._manifest_data.get("SourceLanguage", "Japanese")
+            source_lang = mgr.get_info_metadata_field(
+                "source_language", "Japanese",
+            )
 
         expected_script = self._LANG_SCRIPT_MAP.get(source_lang)
         if expected_script is None:
@@ -3120,11 +3122,11 @@ class TranslationStep(BaseStep):
             # Language
             source_lang = (
                 metadata.get("source_language", "")
-                or mgr._manifest_data.get("SourceLanguage", "")
+                or mgr.get_info_metadata_field("source_language", "")
             )
             target_lang = (
                 metadata.get("target_language", "")
-                or mgr._manifest_data.get("TargetLanguage", "")
+                or mgr.get_info_metadata_field("target_language", "")
             )
             if source_lang and target_lang:
                 language_block = (
@@ -3150,7 +3152,7 @@ class TranslationStep(BaseStep):
             genre_raw = (metadata.get("genre", "") or "").strip()
             if not genre_raw:
                 genre_raw = (
-                    mgr._manifest_data.get("Genre", "") or ""
+                    mgr.get_info_metadata_field("genre", "") or ""
                 ).strip()
             if genre_raw:
                 genre_block = f"# Genre\n{genre_raw}"

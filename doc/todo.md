@@ -975,6 +975,7 @@ FUTURE IDEAS (No Phase Commitment)
 - **Project Templates**: Save/load entire Information step configurations as reusable templates
 
 ### Preprocessing/Postprocessing Future Enhancements
+- [x] **Line Field Persistence (Task 3)**: Fixed critical bug where preprocessing, postprocessing, and wordwrap steps stored per-line results only in step_state but never wrote to manifest `lines[].prepro` / `lines[].postpro` / `lines[].wordwr` via `set_line_field()`. Also fixed `_mark_line_as_fixed()` calling nonexistent `update_line_field()` → `set_line_field()`. 39 tests in `dev/test_line_saving.py`.
 - **Speaker Name Replacement Rework**: Handle edge cases (speakers with colons in name, multiple dialogue formats, speaker extraction from non-standard patterns)
 - **Code Spacing Rules Expansion**: Deeper integration with Code Database, expanded rule definitions, per-pattern spacing tags (visible/invisible, variable handling)
 - **Advanced Deduplication Rules**: Pattern-based deduplication using Increase/Decrease equivalence, RPG stat names (Strength/Willpower/Dexterity) as equivalent, database of auto-translations for common patterns
@@ -1190,18 +1191,18 @@ Instead, use the bridge methods to sync processing results into ManifestManager.
 
 | GUI Field | Manifest Key | Type | Default | Passed To |
 |-----------|--------------|------|---------|-----------|
-| Project Name | `ProjectName` | text | "Project1" | - |
-| Title | `Title` | text | "Title1" | prompt |
-| Genre | `Genre` | text | "fictional, nonfictional" | prompt |
-| Source Language | `SourceLanguage` | text | "Japanese" | api_client |
-| Target Language | `TargetLanguage` | text | "English" | api_client |
-| Summary | `Summary` | text | "[DEFAULT_SUMMARY_TEXT]" | prompt |
-| Style Preset | `StylePreset` | text | "Natural" | prompt |
-| Tone Preset | `TonePreset` | text | "Neutral" | prompt |
+| Project Name | `step_state.Information.data.metadata.project_name` | text | "Project1" | - |
+| Title | `step_state.Information.data.metadata.game_title` | text | "Title1" | prompt |
+| Genre | `step_state.Information.data.metadata.genre` | text | "fictional, nonfictional" | prompt |
+| Source Language | `step_state.Information.data.metadata.source_language` | text | "Japanese" | api_client |
+| Target Language | `step_state.Information.data.metadata.target_language` | text | "English" | api_client |
+| Summary | `step_state.Information.data.metadata.summary` | text | "[DEFAULT_SUMMARY_TEXT]" | prompt |
+| Style Preset | `step_state.Information.data.metadata.style_preset` | text | "Natural" | prompt |
+| Tone Preset | `step_state.Information.data.metadata.tone_preset` | text | "Neutral" | prompt |
 | Glossary (Characters) | `CharacterNotes` | special | [] | prompt |
 | Code Database | `CodeGlossary` | special | [] | prompt |
-| Prompt | `Prompt` | text | "[DEFAULT_SYSTEM_INSTRUCTIONS]" | prompt |
-| SI Preset | `SIPreset` | text | "Default" | - |
+| Prompt | `step_state.Information.data.metadata.custom_notes` | text | "[DEFAULT_SYSTEM_INSTRUCTIONS]" | prompt |
+| SI Preset | `step_state.Information.data.metadata.si_preset` | text | "Default" | - |
 | Deduplication | `Deduplication` | boolean | true | dedup mode |
 | Dedup Threshold | `DeduplicationThreshold` | int | 1 | dedup mode |
 | Ellipsis Compression | `EllipsisCompression` | boolean | true | ellipsis mode |

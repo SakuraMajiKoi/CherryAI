@@ -1006,23 +1006,23 @@ class InputExtractionStep(BaseStep):
         """Sync loaded file lines to the manifest (TASK 19 Phase 5).
         
         TASK 35.1: Also populates filedir for input/output decoupling.
+        Lines no longer store source_file — filedir maps idx ranges to files.
         """
         mgr = self.manifest_manager
         if mgr is None or not mgr.is_loaded:
             return
         
-        # Collect all lines and build filedir entries
+        # Collect all lines (compact: idx + orig only)
         lines: List[Dict[str, Any]] = []
         file_infos: List[Dict[str, Any]] = []
         idx = 0
         
         for loaded_file in self._loaded_files:
-            _file_start_idx = idx  # Track start for potential future filedir use
+            _file_start_idx = idx
             for line_text in loaded_file.lines:
                 lines.append({
                     "idx": idx,
                     "orig": line_text,
-                    "source_file": str(loaded_file.path),
                 })
                 idx += 1
             
@@ -1036,11 +1036,14 @@ class InputExtractionStep(BaseStep):
         
         # Update manifest with lines
         mgr.set_lines(lines)
-        mgr.set_source_files([f.path for f in self._loaded_files])
         
         # TASK 35.1: Build and set filedir
         filedir_entries = mgr.build_filedir_from_files(file_infos)
         mgr.set_filedir(filedir_entries)
+        
+        # Compute and store source_root as folder name only
+        source_paths = [f.path for f in self._loaded_files]
+        mgr.source_root = mgr.compute_source_root(source_paths)
         
         # TASK 35.2: Copy original files to project folder
         self._copy_originals_to_project()
@@ -1056,7 +1059,18 @@ class InputExtractionStep(BaseStep):
             return
         
         try:
-            copied = mgr.copy_originals_to_project()
+            # Build rel_path → absolute source path mapping from loaded files
+            filedir = mgr.get_filedir()
+            source_paths: Dict[str, Path] = {}
+            for loaded_file in self._loaded_files:
+                # Match by filename against filedir entries
+                for entry in filedir:
+                    entry_name = Path(entry.rel_path).name
+                    if loaded_file.path.name == entry_name:
+                        source_paths[entry.rel_path] = loaded_file.path
+                        break
+
+            copied = mgr.copy_originals_to_project(source_paths=source_paths)
             if copied:
                 logger.info("Copied %d original file(s) to project", len(copied))
         except Exception as e:
@@ -1525,67 +1539,95 @@ class InputExtractionStep(BaseStep):
             return False
 
     def _check_source_files_status(self, data: Dict[str, Any]) -> Dict[str, str]:
-        """Check status of source files in manifest.
-        
+        """Check status of source files using filedir + Original/ directory.
+
+        Files are expected in the project's ``Original/`` directory after the
+        first load.  Falls back to ``step_state.Input.data.files`` for the
+        original absolute paths when ``Original/`` has not been populated yet.
+
         Returns:
-            Dict mapping file path to status: 'found', 'recoverable', 'missing'
+            Dict mapping rel_path (or abs path) to status:
+            ``'found'``, ``'recoverable'``, ``'missing'``
         """
         status: Dict[str, str] = {}
-        
-        # Recoverable formats - have lines stored in manifest or can rebuild
+
         RECOVERABLE_FORMATS = {"txt", "csv", "tsv", "json"}
-        # Non-recoverable formats - complex structure that can't be rebuilt
-        # Note: Used implicitly - anything not in RECOVERABLE_FORMATS is non-recoverable
         _NON_RECOVERABLE_FORMATS = {"rpgm", "xlsx", "epub", "pdf"}  # noqa: F841
-        
-        source_files = data.get("source_files", [])
-        if not source_files:
-            # Try legacy singular field
-            source_file = data.get("source_file")
-            if source_file:
-                source_files = [source_file]
-        
-        file_format = data.get("format", "txt")
+
+        mgr = self.manifest_manager
+        filedir = data.get("filedir", [])
         has_lines = bool(data.get("lines"))
-        
-        for source_file in source_files:
-            source_path = Path(source_file)
-            
-            if source_path.exists():
-                status[source_file] = "found"
+
+        # Determine where originals live
+        original_dir: Optional[Path] = None
+        if mgr is not None and mgr.is_loaded:
+            original_dir = mgr.get_original_dir()
+
+        for entry in filedir:
+            rel_path = entry.get("rel_path", "unknown")
+            file_format = entry.get("format", "txt")
+            display_key = rel_path  # Use rel_path as status key
+
+            # Check Original/ directory first
+            found = False
+            if original_dir is not None:
+                candidate = original_dir / rel_path
+                if candidate.exists():
+                    found = True
+
+            if found:
+                status[display_key] = "found"
             elif has_lines and file_format in RECOVERABLE_FORMATS:
-                status[source_file] = "recoverable"
+                status[display_key] = "recoverable"
             else:
-                status[source_file] = "missing"
-        
+                status[display_key] = "missing"
+
+        # If no filedir, try legacy source_files for old manifests
+        if not filedir:
+            source_files = data.get("source_files", [])
+            if not source_files:
+                sf = data.get("source_file")
+                if sf:
+                    source_files = [sf]
+            file_format = data.get("format", "txt")
+            for sf in source_files:
+                sp = Path(sf)
+                if sp.exists():
+                    status[sf] = "found"
+                elif has_lines and file_format in RECOVERABLE_FORMATS:
+                    status[sf] = "recoverable"
+                else:
+                    status[sf] = "missing"
+
         # Show warnings if needed
         recoverable_files = [f for f, s in status.items() if s == "recoverable"]
         missing_files = [f for f, s in status.items() if s == "missing"]
-        
+
         if recoverable_files:
             file_list = "\n".join(Path(f).name for f in recoverable_files[:5])
             if len(recoverable_files) > 5:
                 file_list += f"\n...and {len(recoverable_files) - 5} more"
             messagebox.showwarning(
                 "Source Files Not Found",
-                f"Original source files not found, but content can be recovered from manifest:\n\n{file_list}",
+                "Original source files not found, but content can be "
+                f"recovered from manifest:\n\n{file_list}",
             )
-        
+
         if missing_files:
-            # TASK 32.1: Offer option to relocate missing files
             file_list = "\n".join(Path(f).name for f in missing_files[:5])
             if len(missing_files) > 5:
                 file_list += f"\n...and {len(missing_files) - 5} more"
-            
+
             response = messagebox.askyesno(
                 "Source Files Missing",
-                f"Original source files not found and cannot be recovered:\n\n{file_list}\n\n"
-                "These files have complex formats that require the original file.\n\n"
+                "Original source files not found and cannot be "
+                f"recovered:\n\n{file_list}\n\n"
+                "These files have complex formats that require the "
+                "original file.\n\n"
                 "Would you like to browse and relocate them?",
             )
-            
+
             if response:
-                # Offer to relocate each missing file
                 for missing_file in missing_files:
                     original_name = Path(missing_file).name
                     relocated = filedialog.askopenfilename(
@@ -1612,7 +1654,8 @@ class InputExtractionStep(BaseStep):
             data: Manifest data dictionary.
         
         TASK 32.1: Uses relocated files if available.
-        TASK 38: Uses filedir with source_root for v3.2 format (lines no longer have source_file).
+        Files are resolved via the project's ``Original/`` directory;
+        ``source_root`` is a display-only folder name.
         """
         # Clear existing loaded files
         self._loaded_files.clear()
@@ -1625,9 +1668,15 @@ class InputExtractionStep(BaseStep):
         # Get relocated files (TASK 32.1)
         relocated = getattr(self, "_relocated_files", {})
         
+        # Determine Original/ directory for file resolution
+        mgr = self.manifest_manager
+        original_dir: Optional[Path] = None
+        if mgr is not None and mgr.is_loaded:
+            original_dir = mgr.get_original_dir()
+        
         # v3.2 format: use filedir to map lines to files
         if filedir:
-            # Set folder root for relative path display
+            # Set folder root for display only (source_root is just a name)
             if source_root:
                 self._folder_root = Path(source_root)
             
@@ -1637,14 +1686,14 @@ class InputExtractionStep(BaseStep):
                 rel_path = file_entry.get("rel_path", "unknown")
                 file_format = file_entry.get("format", "txt")
                 
-                # Build absolute path from source_root + rel_path
-                if source_root:
-                    file_path = Path(source_root) / rel_path
+                # Resolve via Original/ directory (project-local copies)
+                if original_dir is not None:
+                    file_path = original_dir / rel_path
                 else:
                     file_path = Path(rel_path)
                 
                 # Check if file was relocated (TASK 32.1)
-                actual_path = Path(relocated.get(str(file_path), str(file_path)))
+                actual_path = Path(relocated.get(rel_path, str(file_path)))
                 
                 # Extract lines for this file from lines_data using index range
                 file_lines = []

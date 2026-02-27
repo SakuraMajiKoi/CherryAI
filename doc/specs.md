@@ -912,7 +912,8 @@ The Input button opens a **unified file and folder selection window** that combi
    - Cancel button to abort
 
 **After Loading**:
-- The containing folder is stored in the manifest as `source_root`
+- The containing folder *name* is stored in the manifest as `source_root` (display-only, not a full path)
+- Source files are copied to the project's `Original/` directory for portability
 - All selected files/folders and their lines are saved to manifest
 - The Automatic Pipeline begins (based on Auto-Pipeline setting)
 
@@ -1048,7 +1049,7 @@ When `auto_inference` is enabled (Global Option), the pipeline offers several in
 - `file_dir: List[FileDirEntry]` - Index ranges per file (for output injection)
 
 **Stored In**:
-- Manifest: `source_root`, `source_files[]`, `file_dir[]`, `lines[].orig`
+- Manifest: `source_root` (folder name), `file_dir[]`, `lines[].orig`
 - Manifest step data: `Input.file_count`, `Input.total_lines`, `Input.formats`
 
 #### Step Completion
@@ -3742,9 +3743,8 @@ Displays after export:
 #### Settings Received from Input (Step 0)
 
 Output inherits these settings from Input to ensure format consistency:
-- `source_root` — base path for resolving relative file paths
+- `source_root` — folder name for display (resolution uses `Original/` directory)
 - `file_dir[]` — line-to-file mapping for injection targeting
-- `source_files[]` — list of loaded source files
 - Encoding per file (from Input format detection)
 - Format per file (for format-aware injection via `formats/` handlers)
 
@@ -3882,17 +3882,42 @@ The manifest (`.CherryAI.json`) is the single source of truth for project state.
 ```json
 {
   "version": "3.2",
-  "project_info": { /* ProjectInfo */ },
   "glossary": { /* GlossaryConfig */ },
-  "source_root": "C:/path/to/source",
+  "source_root": "GameFolder",
   "file_dir": [ /* FileDirEntry[] */ ],
   "lines": [ /* LineEntry[] */ ],
   "operations": [ /* Operation[] */ ],
-  "steps": [ /* StepState[] */ ],
+  "step_state": {
+    "Information": {
+      "name": "Information",
+      "status": "completed",
+      "data": {
+        "metadata": {
+          "project_name": "MyProject",
+          "source_language": "Japanese",
+          "target_language": "English",
+          "genre": "Visual Novel",
+          "summary": "...",
+          "style_preset": "Natural",
+          "custom_style": "",
+          "tone_preset": "Neutral",
+          "custom_tone": "",
+          "custom_notes": ""
+        }
+      }
+    }
+  },
   "created_at": "2026-01-31T12:00:00Z",
   "updated_at": "2026-01-31T14:30:00Z"
 }
 ```
+
+**Note:** `project_info` and `project_name` are no longer top-level keys.
+All project metadata lives in `step_state.Information.data.metadata`.
+The `ManifestManager.get_info_metadata()` / `set_info_metadata_field()` helpers
+provide the canonical read/write API.  Legacy top-level keys (`ProjectName`,
+`SourceLanguage`, `Genre`, etc.) are migrated by `consolidate_project_info()`
+on load.
 
 ### 8.2 LineEntry Structure
 
@@ -3914,6 +3939,12 @@ The manifest (`.CherryAI.json`) is the single source of truth for project state.
 ```
 orig → prepro → edited_prepro → tl → tlc1 → edit1 → tlc2 → ... → postpro → wordwr → overwrite
 ```
+
+Each step writes its output field via `ManifestManager.set_line_field(idx, field, value)`:
+- Step 4 `_update_step_data()` writes `prepro`
+- Step 5 `update_translation()` writes `tl` (and `edited_prepro`)
+- Step 6 `_on_postprocess_complete()` / `_mark_line_as_fixed()` writes `postpro`
+- Step 7 `_save_to_session()` writes `wordwr`
 
 Resolution methods:
 - `get_input_for_translation()`: edited_prepro → prepro → orig
