@@ -25,6 +25,7 @@ from CherryAI.gui.theme.colors import THEME
 
 # TASK 25.1: Import manifest field helpers for saving/loading analysis results
 from CherryAI.functions.manifest_fields import (
+    get_all_lines_resolved,
     save_int_field,
     load_int_field,
 )
@@ -205,7 +206,7 @@ class CostsStep(BaseStep):
     - Chunk size impact
     """
 
-    step_id = 2
+    step_id = 4
     step_name = "Costs"
 
     def __init__(
@@ -579,9 +580,10 @@ class CostsStep(BaseStep):
         self._comparison_table.set_data(rows)
 
     def _get_lines(self) -> Tuple[List[str], List[str]]:
-        """Get original and preprocessed lines from previous steps.
+        """Get original and preprocessed lines from manifest.
 
-        Task 40.9: Also checks manifest for preprocessed lines (prepro[]).
+        Returns original ``orig`` lines and preprocessed ``prepro`` lines
+        (falling back to ``orig`` when no preprocessing has been applied).
 
         Returns:
             Tuple of (original_lines, preprocessed_lines).
@@ -589,55 +591,36 @@ class CostsStep(BaseStep):
         original: List[str] = []
         preprocessed: List[str] = []
 
-        try:
-            # Get from input step (step 0)
-            app = self.winfo_toplevel()
-            if hasattr(app, "_step_tabs") and len(app._step_tabs) > 0:
-                input_step = app._step_tabs[0]
-                if hasattr(input_step, "get_loaded_files"):
-                    loaded_files = input_step.get_loaded_files()
-                    for lf in loaded_files:
-                        if hasattr(lf, "lines"):
-                            original.extend(lf.lines)
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            manifest_lines = mgr.get_lines()
+            if manifest_lines:
+                original = [ln.get("orig", "") for ln in manifest_lines]
+                preprocessed = get_all_lines_resolved(mgr, "prepro")
 
-            # Get preprocessed from step 4 session data
-            if hasattr(app, "_step_tabs") and len(app._step_tabs) > 4:
-                prep_data = self.session.get_step(4).data
-                if "preprocessed_lines" in prep_data:
-                    preprocessed = prep_data["preprocessed_lines"]
+        # Fallback: GUI input step
+        if not original:
+            try:
+                app = self.winfo_toplevel()
+                if hasattr(app, "_step_tabs") and len(app._step_tabs) > 0:
+                    input_step = app._step_tabs[0]
+                    if hasattr(input_step, "get_loaded_files"):
+                        loaded_files = input_step.get_loaded_files()
+                        for lf in loaded_files:
+                            if hasattr(lf, "lines"):
+                                original.extend(lf.lines)
+            except Exception as e:
+                logger.debug("Error getting lines from GUI: %s", e)
 
-            # Task 40.9: Check manifest for prepro[] if no session data
-            if not preprocessed and self.manifest_manager is not None:
-                try:
-                    lines_data = self.manifest_manager.get("lines", [])
-                    if lines_data and isinstance(lines_data, list):
-                        prepro_lines = []
-                        for entry in lines_data:
-                            if isinstance(entry, dict) and "prepro" in entry:
-                                prepro_lines.append(entry["prepro"])
-                        if prepro_lines:
-                            preprocessed = prepro_lines
-                            logger.debug(
-                                "Using %d preprocessed lines from manifest",
-                                len(prepro_lines),
-                            )
-                except Exception as e:
-                    logger.debug("Error reading prepro from manifest: %s", e)
-
-            # Fallback: use original if no preprocessed data
-            if not preprocessed and original:
-                preprocessed = original[:]
-
-        except Exception as e:
-            logger.debug("Error getting lines: %s", e)
-
-        # Final fallback from step data
+        # Final fallback: session step data
         if not original:
             input_data = self.session.get_step(0).data
             if "all_lines" in input_data:
                 original = input_data["all_lines"]
-            if not preprocessed:
-                preprocessed = original[:]
+
+        # Ensure preprocessed falls back to original
+        if not preprocessed and original:
+            preprocessed = original[:]
 
         return original, preprocessed
 
@@ -651,8 +634,8 @@ class CostsStep(BaseStep):
             Estimated token count for system prompt.
         """
         try:
-            # Get game summary from Information step (step 3)
-            info_data = self.session.get_step(3).data
+            # Get game summary from Information step (step 2)
+            info_data = self.session.get_step(2).data
             metadata = info_data.get("metadata", {})
             game_summary = metadata.get("game_summary", "")
             

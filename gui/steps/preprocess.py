@@ -136,7 +136,7 @@ class PreprocessingStep(BaseStep):
     - Auto-suggestion for rules based on analysis
     """
 
-    step_id = 4  # Moved from position 3
+    step_id = 3
     step_name = "Preprocessing"
 
     def __init__(
@@ -910,25 +910,38 @@ class PreprocessingStep(BaseStep):
         self.session.set_dirty(True)
 
     def _get_loaded_lines(self) -> List[str]:
-        """Get lines from loaded files.
+        """Get lines from manifest ``orig`` fields, with GUI/session fallback.
 
         Returns:
-            List of lines from input step.
+            List of original lines.
         """
+        # Primary: manifest orig fields
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            manifest_lines = mgr.get_lines()
+            if manifest_lines:
+                orig_lines = [
+                    ln.get("orig", "") for ln in manifest_lines
+                ]
+                if any(orig_lines):
+                    return orig_lines
+
+        # Fallback: GUI input step
         try:
             app = self.winfo_toplevel()
             if hasattr(app, "_step_tabs") and len(app._step_tabs) > 0:
                 input_step = app._step_tabs[0]
                 if hasattr(input_step, "get_loaded_files"):
                     loaded_files = input_step.get_loaded_files()
-                    lines = []
+                    lines: list[str] = []
                     for lf in loaded_files:
                         lines.extend(lf.lines)
-                    return lines
+                    if lines:
+                        return lines
         except Exception as e:
             logger.debug("Could not get loaded lines: %s", e)
 
-        # Fallback to step data
+        # Final fallback: session step data
         input_data = self.session.get_step(0).data
         return input_data.get("all_lines", [])
 
@@ -1008,7 +1021,8 @@ class PreprocessingStep(BaseStep):
 
         except Exception as e:
             logger.exception("Error processing lines: %s", e)
-            self.after(0, lambda: messagebox.showerror("Error", f"Processing failed: {e}"))
+            err_msg = str(e)
+            self.after(0, lambda: messagebox.showerror("Error", f"Processing failed: {err_msg}"))
         finally:
             self._is_processing = False
             self.after(0, lambda: self._apply_btn.configure(state="normal", text="▶ Apply Rules"))
@@ -1540,7 +1554,40 @@ class PreprocessingStep(BaseStep):
                     self._protect_tree.insert(
                         "", "end", values=(pat, is_re, desc),
                     )
-    
+
+        # Restore preview from manifest orig/prepro if available
+        if not self._preview_lines:
+            self._load_preview_from_manifest()
+
+    def _load_preview_from_manifest(self) -> None:
+        """Populate the preview table from manifest ``orig``/``prepro`` fields.
+
+        Called during ``on_enter`` so that returning to the tab shows
+        existing preprocessing results without re-running Apply Rules.
+        """
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            return
+
+        manifest_lines = mgr.get_lines()
+        if not manifest_lines:
+            return
+
+        preview: list[tuple[str, str, str]] = []
+        for ln in manifest_lines:
+            orig = ln.get("orig", "")
+            prepro = ln.get("prepro", "")
+            if prepro and prepro != orig:
+                diff = "preprocessed"
+            else:
+                prepro = orig
+                diff = ""
+            preview.append((orig, prepro, diff))
+
+        if preview:
+            self._preview_lines = preview
+            self._update_preview()
+
     def _load_from_manifest_bindings(self) -> None:
         """Load values from manifest into bound widgets.
         

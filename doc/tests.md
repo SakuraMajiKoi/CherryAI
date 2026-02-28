@@ -1484,6 +1484,8 @@ PHASE 37: Edit/TLC Prompt Components (Configurable Input Sources). Tests for com
 
 Manifest field type helpers for Task 22.1 and 22.2. Reusable save/load operations for different field types and complex data structures.
 
+**Session 26 additions:** `manifest_fields.py` now also exports shared priority resolution functions used by all GUI steps: `resolve_line_field()`, `resolve_line_field_from()`, `get_latest_line_text()`, `get_all_lines_resolved()`. PIPELINE_FIELDS chain: `qa_overwrite → wordwr → postpro → tl → prepro → orig`.
+
 #### TestTextFieldSave (6 tests)
 
 | Test | Purpose |
@@ -6800,6 +6802,7 @@ status tracking, severity levels, quality scoring, and pattern-based rule matchi
 Session persistence tests validating auto-save on close and auto-load on startup.
 Added for Release Stabilization task "Ensure Sessions Are Properly Saved & Loaded".
 Extended in January 2025 with file restoration and auto-numbered save tests.
+**Session 26:** Updated assertions for new tab order (Information=2, Preprocessing=3, Costs=4).
 
 #### TestSessionPersistence (6 tests)
 
@@ -7745,6 +7748,7 @@ Tests for Code Glossary widget in Information tab.
 ### dev/test_session_loading.py (28 tests) - TASKS 18.1-18.8
 
 Tests for session loading and state restoration fixes.
+**Session 26:** Updated `TestSessionStepNameMapping` assertions for new tab order (Information=2, Preprocessing=3).
 
 #### TestAnalysisSessionLoading (4 tests) - TASK 18.1
 

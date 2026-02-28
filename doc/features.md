@@ -986,6 +986,8 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
       JapaneseCharacterDetection, SpeakerFormat, QuoteBalance, EmptyTranslation
     - QAOptions nested: RerunPolicy, MaxJapaneseChars, MaxLineLength
     - All toggles persist to manifest and load on step enter
+    - **Session 26:** QA step now persists `qa_overwrite` field to manifest on leave
+    - Column "Translated" renamed to "Overwrite" to reflect qa_overwrite field
   - **Issue Types (IssueType enum):**
     - PLACEHOLDER_MISSING, PLACEHOLDER_EXTRA, PLACEHOLDER_MANGLED
     - ANCHOR_MISSING, ANCHOR_EXTRA
@@ -1098,12 +1100,13 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
         QuoteBalanceRecovery, WhitespaceNormalization, RestoreCodeCharacters,
         RestoreLinebreaks, EnableSymbolConversion, FullwidthToHalfwidth
       - FailureHandling enum: "skip", "flag", "retry"
+      - Legacy enum mapping via `_FAILURE_POLICY_MAP` (e.g., "FlagForReview" → "flag")
     - All options persist to manifest and load on step enter
     - 35 tests in dev/test_postprocess_manifest.py
 - **Wordwrap & Overwrite Tab (Phase 10):**
   - WordwrapOverwriteStep class (step_id=7, ~950 lines)
   - Preview table with line length indicators:
-    - Columns: #, Status, Chars, Lines, Original, Wrapped Preview
+    - Columns: #, Status, Chars, Lines, Latest, Wrapped Preview
     - Status icons: ✓ Wrapped, ⚠ Exceeds, — No change
     - Filter and checkbox selection support
   - **Format Selector:**

@@ -46,13 +46,13 @@ MANIFEST_VERSION = "3.2"  # TASK 38: Optimized format - removed redundant per-li
 STEP_NAMES = [
     "Input",
     "Analysis",
-    "Estimation",
     "Information",
     "Preprocessing",
+    "Estimation",
     "Translation",
-    "Quality Assurance",
     "Postprocessing",
     "Wordwrap",
+    "Quality Assurance",
     "Output",
 ]
 

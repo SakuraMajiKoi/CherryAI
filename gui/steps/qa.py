@@ -29,6 +29,8 @@ from CherryAI.gui.helpers.manifest_binding import (
     bind_combobox_to_field,
 )
 from CherryAI.functions.manifest_fields import (
+    get_all_lines_resolved,
+    get_latest_line_text,
     save_nested_bool_field,
     load_nested_bool_field,
     save_nested_int_field,
@@ -363,7 +365,7 @@ class QAStep(BaseStep):
             ColumnDef(key="status", title="Status", width=80, anchor="center"),
             ColumnDef(key="issues", title="Issues", width=60, anchor="center"),
             ColumnDef(key="original", title="Original", width=200),
-            ColumnDef(key="translated", title="Translated", width=200),
+            ColumnDef(key="translated", title="Overwrite", width=200),
         ]
 
         self._lines_table = SharedTable(
@@ -701,64 +703,75 @@ class QAStep(BaseStep):
         self._rejected_label.grid(row=0, column=7, sticky="w", padx=(10, 0))
 
     def _get_lines_from_previous_steps(self) -> Tuple[List[str], List[str]]:
-        """Get original and translated lines from previous steps.
+        """Get latest-processed lines and existing qa_overwrite from manifest.
+
+        The *original* column shows the full-chain resolved text
+        (wordwr → postpro → tl → prepro → orig).  The *translated* (Overwrite)
+        column shows any existing ``qa_overwrite`` value, falling back to
+        the latest line.
 
         Returns:
-            Tuple of (original_lines, translated_lines).
+            Tuple of (latest_lines, overwrite_lines).
         """
-        original: List[str] = []
-        translated: List[str] = []
+        latest: List[str] = []
+        overwrite: List[str] = []
 
-        try:
-            # Get from translation step (step 5) data
-            trans_data = self.session.get_step(5).data
-            if "translated_lines" in trans_data:
-                translated = trans_data["translated_lines"]
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            manifest_lines = mgr.get_lines()
+            if manifest_lines:
+                latest = get_all_lines_resolved(mgr)
+                for ln in manifest_lines:
+                    qa = ln.get("qa_overwrite", "")
+                    latest_val = get_latest_line_text(mgr, ln.get("idx", 0))
+                    overwrite.append(qa if qa else latest_val)
 
-            # Get original from input step (step 0)
-            app = self.winfo_toplevel()
-            if hasattr(app, "_step_tabs") and len(app._step_tabs) > 0:
-                input_step = app._step_tabs[0]
-                if hasattr(input_step, "get_loaded_files"):
-                    loaded_files = input_step.get_loaded_files()
-                    for lf in loaded_files:
-                        if hasattr(lf, "lines"):
-                            original.extend(lf.lines)
+        # Fallback: session data
+        if not latest:
+            try:
+                app = self.winfo_toplevel()
+                if hasattr(app, "_step_tabs") and len(app._step_tabs) > 0:
+                    input_step = app._step_tabs[0]
+                    if hasattr(input_step, "get_loaded_files"):
+                        loaded_files = input_step.get_loaded_files()
+                        for lf in loaded_files:
+                            if hasattr(lf, "lines"):
+                                latest.extend(lf.lines)
+            except Exception as e:
+                logger.debug("Error getting lines: %s", e)
 
-            # Fallback from step data
-            if not original:
-                input_data = self.session.get_step(0).data
-                if "all_lines" in input_data:
-                    original = input_data["all_lines"]
+        if not latest:
+            input_data = self.session.get_step(0).data
+            if "all_lines" in input_data:
+                latest = input_data["all_lines"]
 
-            # If no translated, use original as placeholder
-            if not translated and original:
-                translated = [""] * len(original)
+        # If no overwrite, default to latest
+        if not overwrite and latest:
+            overwrite = [""] * len(latest)
 
-        except Exception as e:
-            logger.debug("Error getting lines: %s", e)
-
-        return original, translated
+        return latest, overwrite
 
     def _refresh_lines(self) -> None:
-        """Refresh lines from previous steps."""
-        original, translated = self._get_lines_from_previous_steps()
+        """Refresh lines from manifest.
 
-        if not original:
+        Populates QALine objects with the latest processed text as
+        *original* and existing ``qa_overwrite`` as *translated*.
+        """
+        latest, overwrite = self._get_lines_from_previous_steps()
+
+        if not latest:
             self._status_label.configure(text="No lines loaded")
             return
 
-        # Ensure translated list matches original length
-        while len(translated) < len(original):
-            translated.append("")
+        while len(overwrite) < len(latest):
+            overwrite.append("")
 
-        # Create QALine objects
         self._lines = []
-        for idx, (orig, trans) in enumerate(zip(original, translated)):
+        for idx, (lat, ow) in enumerate(zip(latest, overwrite)):
             line = QALine(
                 idx=idx,
-                original=orig,
-                translated=trans,
+                original=lat,
+                translated=ow,
             )
             self._lines.append(line)
 
@@ -1453,7 +1466,11 @@ class QAStep(BaseStep):
                 self._refresh_lines()
 
     def on_leave(self) -> None:
-        """Called when leaving step."""
+        """Called when leaving step.
+
+        Persists ``qa_overwrite`` to manifest for each line whose
+        *translated* (overwrite) text differs from the latest line.
+        """
         if not self._full_ui_built:
             return
 
@@ -1464,6 +1481,13 @@ class QAStep(BaseStep):
             "max_line_length": self._max_len_var.get(),
             "rerun_policy": self._rerun_var.get(),
         }
+
+        # Persist qa_overwrite to manifest
+        mgr = self.manifest_manager
+        if mgr is not None and self._lines:
+            for line in self._lines:
+                if line.translated:
+                    mgr.set_line_field(line.idx, "qa_overwrite", line.translated)
 
     def get_qa_results(self) -> Dict[str, Any]:
         """Get QA results.

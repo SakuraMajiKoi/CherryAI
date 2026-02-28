@@ -28,6 +28,7 @@ from CherryAI.gui.helpers.manifest_binding import (
     bind_entry_to_field,
 )
 from CherryAI.functions.manifest_fields import (
+    get_all_lines_resolved,
     save_nested_text_field,
 )
 
@@ -60,6 +61,26 @@ class NamingStrategy(Enum):
     PREFIX = "prefix"
     REPLACE = "replace"
     SUBFOLDER = "subfolder"
+
+
+# Map legacy PascalCase names to current enum values
+_NAMING_STRATEGY_MAP: Dict[str, str] = {
+    "PutInSubfolder": "subfolder",
+    "Subfolder": "subfolder",
+    "Suffix": "suffix",
+    "Prefix": "prefix",
+    "Replace": "replace",
+}
+
+
+def _safe_naming_strategy(raw: str) -> NamingStrategy:
+    """Parse a NamingStrategy from *raw*, handling legacy PascalCase values."""
+    mapped = _NAMING_STRATEGY_MAP.get(raw, raw)
+    try:
+        return NamingStrategy(mapped)
+    except ValueError:
+        logger.warning("Unknown naming strategy %r, defaulting to SUFFIX", raw)
+        return NamingStrategy.SUFFIX
 
 
 class BackupStrategy(Enum):
@@ -926,7 +947,7 @@ class OutputInjectStep(BaseStep):
 
     def _on_naming_changed(self) -> None:
         """Handle naming strategy change."""
-        strategy = NamingStrategy(self._naming_var.get())
+        strategy = _safe_naming_strategy(self._naming_var.get())
 
         # Update the value entry placeholder
         if strategy == NamingStrategy.SUFFIX:
@@ -1440,7 +1461,7 @@ class OutputInjectStep(BaseStep):
         from CherryAI.functions.manifest_manager import FileDirEntry
         
         # Get output options
-        strategy = NamingStrategy(self._naming_var.get())
+        strategy = _safe_naming_strategy(self._naming_var.get())
         value = self._naming_value_var.get()
         dest_base = self._dest_var.get() or ""
         format_ext = FORMAT_EXTENSIONS.get(
@@ -1495,7 +1516,7 @@ class OutputInjectStep(BaseStep):
         lines = step_data.get("lines", [])
 
         # Get naming options
-        strategy = NamingStrategy(self._naming_var.get())
+        strategy = _safe_naming_strategy(self._naming_var.get())
         value = self._naming_value_var.get()
         dest_base = self._dest_var.get() or ""
         format_ext = FORMAT_EXTENSIONS.get(
@@ -1726,8 +1747,20 @@ class OutputInjectStep(BaseStep):
         self._save_to_session()
 
     def _load_from_session(self) -> None:
-        """Load data from session state."""
+        """Load data from session state.
+
+        Populates ``step_data["lines"]`` from manifest using the full
+        pipeline resolution so the latest processed text is available
+        for export.
+        """
         step_data = self.get_step_data()
+
+        # Populate lines from manifest (latest processed text)
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            resolved = get_all_lines_resolved(mgr)
+            if resolved:
+                step_data["lines"] = resolved
 
         # Load destination if saved
         if "destination" in step_data:
@@ -1774,7 +1807,7 @@ class OutputInjectStep(BaseStep):
             format=OutputFormat(self._format_var.get().lower()),
             destination=self._dest_var.get(),
             naming=NamingOptions(
-                strategy=NamingStrategy(self._naming_var.get()),
+                strategy=_safe_naming_strategy(self._naming_var.get()),
                 suffix=self._naming_value_var.get() if self._naming_var.get() == "suffix" else "_translated",
                 prefix=self._naming_value_var.get() if self._naming_var.get() == "prefix" else "translated_",
                 subfolder=self._naming_value_var.get() if self._naming_var.get() == "subfolder" else "translated",

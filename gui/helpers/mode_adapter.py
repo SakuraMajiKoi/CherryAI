@@ -274,7 +274,7 @@ def apply_protect_code(
 
     Args:
         line: Line to process.
-        patterns: List of regex patterns to protect.
+        patterns: List of regex patterns (str) or dicts with a ``pattern`` key.
 
     Returns:
         Tuple of (processed_line, was_changed, captured_values).
@@ -282,7 +282,13 @@ def apply_protect_code(
     original = line
     captured: List[str] = []
 
-    for pattern_str in patterns:
+    for entry in patterns:
+        # Handle both dict entries and raw strings
+        if isinstance(entry, dict):
+            pattern_str = entry.get("pattern", "")
+        else:
+            pattern_str = str(entry) if entry is not None else ""
+
         if not pattern_str.strip():
             continue
         try:

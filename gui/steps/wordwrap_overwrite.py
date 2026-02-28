@@ -24,6 +24,7 @@ from CherryAI.gui.helpers.manifest_binding import (
     bind_combobox_to_field,
 )
 from CherryAI.functions.manifest_fields import (
+    get_all_lines_resolved,
     save_nested_text_field,
     load_nested_text_field,
     save_nested_int_field,
@@ -358,7 +359,7 @@ class WordwrapOverwriteStep(BaseStep):
             ColumnDef(key="status", title="Status", width=90, anchor="center"),
             ColumnDef(key="chars", title="Chars", width=60, anchor="center"),
             ColumnDef(key="lines", title="Lines", width=50, anchor="center"),
-            ColumnDef(key="original", title="Original", width=180),
+            ColumnDef(key="original", title="Latest", width=180),
             ColumnDef(key="wrapped", title="Wordwrap", width=180),
             ColumnDef(key="overwrite", title="Overwrite", width=180),
         ]
@@ -1264,16 +1265,34 @@ class WordwrapOverwriteStep(BaseStep):
         self._save_to_session()
 
     def _load_lines_from_session(self) -> None:
-        """Load lines from session state."""
-        step_data = self.get_step_data()
-        lines = step_data.get("lines", [])
+        """Load lines from manifest using postpro → tl → prepro → orig chain.
+
+        Also restores existing ``wordwr`` values when available.
+        """
+        latest: list[str] = []
+        wordwr_map: dict[int, str] = {}
+
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            latest = get_all_lines_resolved(mgr, "postpro")
+            for ln in mgr.get_lines():
+                idx = ln.get("idx")
+                wr = ln.get("wordwr", "")
+                if idx is not None and wr:
+                    wordwr_map[idx] = wr
+
+        # Fallback: session step data
+        if not latest:
+            step_data = self.get_step_data()
+            latest = step_data.get("lines", [])
 
         self._lines = []
-        for i, line in enumerate(lines):
+        for i, line in enumerate(latest):
+            wr = wordwr_map.get(i, line)
             wrap_line = WrapLine(
                 idx=i,
                 original=line,
-                wrapped=line,
+                wrapped=wr,
             )
             self._lines.append(wrap_line)
 

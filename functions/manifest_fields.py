@@ -13,12 +13,122 @@ They do NOT modify the v2.1 processing fields (lines, operations, mappings).
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union
+from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
     from .manifest_manager import ManifestManager
 
 logger = logging.getLogger(__name__)
+
+
+# ========================== Line Priority Resolution ========================== #
+
+# Canonical pipeline field order (latest result first).
+# Each downstream step writes its own field; reading backwards finds the
+# most-processed version of a line.
+PIPELINE_FIELDS: List[str] = [
+    "qa_overwrite",  # QA manual overwrite (Step 8)
+    "wordwr",        # Wordwrapped text    (Step 7)
+    "postpro",       # Postprocessed text   (Step 6)
+    "tl",            # Translation          (Step 5)
+    "prepro",        # Preprocessed text    (Step 4)
+    "orig",          # Original text        (Step 0)
+]
+
+
+def resolve_line_field(
+    line: Dict[str, Any],
+    priority: Optional[Sequence[str]] = None,
+) -> str:
+    """Return the highest-priority non-empty field value for a manifest line.
+
+    The default priority walks the pipeline backwards from the latest
+    processing stage to the original text so that every caller gets the
+    most-processed version available.
+
+    Args:
+        line: A single manifest line dict (must contain at least ``orig``).
+        priority: Field names to try in order.  Defaults to
+            :data:`PIPELINE_FIELDS` (qa_overwrite → wordwr → … → orig).
+
+    Returns:
+        The first non-empty string found, or ``""`` if the line is
+        completely empty.
+    """
+    if priority is None:
+        priority = PIPELINE_FIELDS
+    for field_name in priority:
+        value = line.get(field_name) or ""
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def resolve_line_field_from(
+    line: Dict[str, Any],
+    start_field: str,
+) -> str:
+    """Return the highest-priority field starting from *start_field* downward.
+
+    Convenience wrapper that slices :data:`PIPELINE_FIELDS` from the
+    requested starting point before delegating to :func:`resolve_line_field`.
+
+    Example::
+
+        # Get the best text starting from ``tl`` (tl → prepro → orig):
+        text = resolve_line_field_from(line, "tl")
+
+    Args:
+        line: A single manifest line dict.
+        start_field: The topmost field to consider.  Must be one of
+            :data:`PIPELINE_FIELDS`.
+
+    Returns:
+        First non-empty string from *start_field* down to ``orig``, or ``""``.
+    """
+    try:
+        idx = PIPELINE_FIELDS.index(start_field)
+    except ValueError:
+        logger.warning("Unknown pipeline field %r, falling back to full chain", start_field)
+        return resolve_line_field(line)
+    return resolve_line_field(line, PIPELINE_FIELDS[idx:])
+
+
+def get_latest_line_text(manager: "ManifestManager", idx: int) -> str:
+    """Get the most-processed text for a single manifest line by index.
+
+    Args:
+        manager: ManifestManager instance.
+        idx: Line index.
+
+    Returns:
+        Most-processed text, or ``""`` if the line does not exist.
+    """
+    line = manager.get_line(idx)
+    if line is None:
+        return ""
+    return resolve_line_field(line)
+
+
+def get_all_lines_resolved(
+    manager: "ManifestManager",
+    start_field: Optional[str] = None,
+) -> List[str]:
+    """Return all manifest lines resolved through the priority chain.
+
+    Args:
+        manager: ManifestManager instance.
+        start_field: Optional ceiling field (see
+            :func:`resolve_line_field_from`).  When ``None`` the full
+            pipeline chain is used.
+
+    Returns:
+        List of resolved strings, one per manifest line index in order.
+    """
+    lines = manager.get_lines()
+    if start_field is not None:
+        return [resolve_line_field_from(ln, start_field) for ln in lines]
+    return [resolve_line_field(ln) for ln in lines]
 
 
 # ========================== Text Field Helpers ========================== #

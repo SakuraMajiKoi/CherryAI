@@ -90,32 +90,33 @@ class StepState:
 
 
 # Step definitions with their IDs and names
-# NOTE: Estimation moved to Step 2 (after Analysis) per release stabilization task
+# NOTE: Information and Preprocessing precede Costs so that cost estimation
+#       can compare original vs. preprocessed token counts.
 STEP_DEFINITIONS: List[tuple] = [
     (0, "Input"),
     (1, "Analysis"),
-    (2, "Costs"),            # Renamed from Estimation in Phase 40
-    (3, "Information"),      # Moved from position 2
-    (4, "Preprocessing"),    # Moved from position 3
+    (2, "Information"),      # Moved before Preprocessing/Costs
+    (3, "Preprocessing"),    # Moved before Costs
+    (4, "Costs"),            # After Preprocessing for dual estimation
     (5, "Translation"),
-    (6, "Postprocessing"),   # Moved from position 7
-    (7, "Wordwrap"),         # Moved from position 8
-    (8, "Quality Assurance"),# Moved from position 6
+    (6, "Postprocessing"),
+    (7, "Wordwrap"),
+    (8, "Quality Assurance"),
     (9, "Output"),
 ]
 
 # Preset definitions: name -> list of step indices to mark as done automatically
-# NOTE: Step order - 2=Costs, 3=Information, 4=Preprocessing
+# NOTE: Step order - 2=Information, 3=Preprocessing, 4=Costs
 PRESET_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "Sample": {
         "description": "Quick test with minimal steps",
         "auto_steps": [0, 1],  # Only Input and Analysis
-        "skip_steps": [2, 3, 6, 7, 8],  # Skip Estimation, Info, QA, Post, Wordwrap
+        "skip_steps": [2, 4, 6, 7, 8],  # Skip Info, Costs, Post, Wordwrap, QA
     },
     "Dirty & Cheap": {
         "description": "Fast translation with minimal processing",
-        "auto_steps": [0, 1, 4, 5, 9],  # Input, Analysis, Preprocess, Translate, Output
-        "skip_steps": [2, 3, 6, 7, 8],  # Skip Estimation, Info, QA, Post, Wordwrap
+        "auto_steps": [0, 1, 3, 5, 9],  # Input, Analysis, Preprocess, Translate, Output
+        "skip_steps": [2, 4, 6, 7, 8],  # Skip Info, Costs, Post, Wordwrap, QA
     },
     "Automatic Luxury": {
         "description": "Full pipeline with all automation",

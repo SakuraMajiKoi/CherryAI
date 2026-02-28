@@ -33,6 +33,7 @@ from CherryAI.gui.helpers.manifest_binding import (
     bind_combobox_to_field,
 )
 from CherryAI.functions.manifest_fields import (
+    get_all_lines_resolved,
     save_nested_text_field,
     load_nested_text_field,
     save_nested_float_field,
@@ -1858,7 +1859,10 @@ class TranslationStep(BaseStep):
         self._usage_rate_label.grid(row=0, column=5, sticky="w", padx=(10, 0))
 
     def _get_lines_from_previous_steps(self) -> Tuple[List[str], List[str]]:
-        """Get original and preprocessed lines from previous steps.
+        """Get original and preprocessed lines from manifest.
+
+        Uses manifest ``orig`` for originals and ``prepro`` chain
+        (prepro → orig fallback) for the preprocessed column.
 
         Returns:
             Tuple of (original_lines, preprocessed_lines).
@@ -1866,45 +1870,44 @@ class TranslationStep(BaseStep):
         original: List[str] = []
         preprocessed: List[str] = []
 
-        try:
-            # Get from input step (step 0)
-            app = self.winfo_toplevel()
-            if hasattr(app, "_step_tabs") and len(app._step_tabs) > 0:
-                input_step = app._step_tabs[0]
-                if hasattr(input_step, "get_loaded_files"):
-                    loaded_files = input_step.get_loaded_files()
-                    for lf in loaded_files:
-                        if hasattr(lf, "lines"):
-                            original.extend(lf.lines)
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            manifest_lines = mgr.get_lines()
+            if manifest_lines:
+                original = [ln.get("orig", "") for ln in manifest_lines]
+                preprocessed = get_all_lines_resolved(mgr, "prepro")
 
-            # Get preprocessed from step 3
-            if hasattr(app, "_step_tabs") and len(app._step_tabs) > 3:
-                prep_data = self.session.get_step(3).data
-                if "preprocessed_lines" in prep_data:
-                    preprocessed = prep_data["preprocessed_lines"]
+        # Fallback: GUI input step
+        if not original:
+            try:
+                app = self.winfo_toplevel()
+                if hasattr(app, "_step_tabs") and len(app._step_tabs) > 0:
+                    input_step = app._step_tabs[0]
+                    if hasattr(input_step, "get_loaded_files"):
+                        loaded_files = input_step.get_loaded_files()
+                        for lf in loaded_files:
+                            if hasattr(lf, "lines"):
+                                original.extend(lf.lines)
+            except Exception as e:
+                logger.debug("Error getting lines: %s", e)
 
-            # Fallback: use original if no preprocessed data
-            if not preprocessed and original:
-                preprocessed = original[:]
-
-        except Exception as e:
-            logger.debug("Error getting lines: %s", e)
-
-        # Final fallback from step data
+        # Final fallback: session step data
         if not original:
             input_data = self.session.get_step(0).data
             if "all_lines" in input_data:
                 original = input_data["all_lines"]
-            if not preprocessed:
-                preprocessed = original[:]
+
+        # Fallback preprocessed to original
+        if not preprocessed and original:
+            preprocessed = original[:]
 
         return original, preprocessed
 
     def _refresh_lines(self) -> None:
         """Refresh lines from previous steps.
 
-        TASK 43.2: Optimized to avoid per-line manifest lookups for
-        edited_prepro when the manifest has no edit data.
+        Reads ``edited_prepro`` and existing ``tl`` translations from
+        the manifest so that re-entering the tab shows prior work.
         """
         original, preprocessed = self._get_lines_from_previous_steps()
 
@@ -1912,10 +1915,12 @@ class TranslationStep(BaseStep):
             self._status_label.configure(text="No lines loaded")
             return
 
-        # TASK 43.2: Batch-read edited_prepro from manifest
+        # Batch-read edited_prepro and existing tl from manifest
         edit_map: dict[int, str] = {}
+        tl_map: dict[int, str] = {}
         mgr = self.manifest_manager
         if mgr is not None and mgr.is_loaded:
+            # edited_prepro from Lines section
             lines_section = mgr._manifest_data.get("Lines", {})
             for idx_str, line_data in lines_section.items():
                 if isinstance(line_data, dict):
@@ -1926,22 +1931,39 @@ class TranslationStep(BaseStep):
                         except (ValueError, TypeError):
                             pass
 
+            # tl from lines[] array
+            for ln in mgr.get_lines():
+                idx = ln.get("idx")
+                tl_val = ln.get("tl", "")
+                if idx is not None and tl_val:
+                    tl_map[idx] = tl_val
+
         # Create TranslatableLine objects
-        self._lines = [
-            TranslatableLine(
+        self._lines = []
+        for idx, (orig, prep) in enumerate(zip(original, preprocessed)):
+            tl_text = tl_map.get(idx, "")
+            line = TranslatableLine(
                 idx=idx,
                 original=orig,
                 preprocessed=prep,
                 edited_prepro=edit_map.get(idx, ""),
+                translated=tl_text,
+                status=LineStatus.COMPLETED if tl_text else LineStatus.PENDING,
             )
-            for idx, (orig, prep) in enumerate(zip(original, preprocessed))
-        ]
+            self._lines.append(line)
 
         # Update table
         self._update_lines_table()
 
         # Update status
-        self._status_label.configure(text=f"{len(self._lines)} lines ready")
+        completed = sum(1 for l in self._lines if l.status == LineStatus.COMPLETED)
+        total = len(self._lines)
+        if completed > 0:
+            self._status_label.configure(
+                text=f"{total} lines ready ({completed} translated)",
+            )
+        else:
+            self._status_label.configure(text=f"{total} lines ready")
 
     def _update_lines_table(self) -> None:
         """Update the lines table with current data.

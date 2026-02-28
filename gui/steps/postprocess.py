@@ -24,6 +24,8 @@ from CherryAI.gui.helpers.manifest_binding import (
     bind_checkbox_to_field,
 )
 from CherryAI.functions.manifest_fields import (
+    get_all_lines_resolved,
+    resolve_line_field_from,
     save_nested_text_field,
     load_nested_text_field,
 )
@@ -1059,7 +1061,10 @@ class PostprocessingStep(BaseStep):
         self._rate_label.grid(row=0, column=11, sticky="w", padx=(10, 0))
 
     def _get_lines_from_previous_steps(self) -> Tuple[List[str], List[str]]:
-        """Get original and translated lines from previous steps.
+        """Get translated and original lines from manifest.
+
+        Uses ``tl → prepro → orig`` chain for the translated column
+        and ``orig`` for the original column.
 
         Returns:
             Tuple of (original_lines, translated_lines).
@@ -1067,47 +1072,45 @@ class PostprocessingStep(BaseStep):
         original: List[str] = []
         translated: List[str] = []
 
-        try:
-            # Get from translation step (step 5) data
-            trans_data = self.session.get_step(5).data
-            if "translated_lines" in trans_data:
-                translated = trans_data["translated_lines"]
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            manifest_lines = mgr.get_lines()
+            if manifest_lines:
+                original = [ln.get("orig", "") for ln in manifest_lines]
+                translated = get_all_lines_resolved(mgr, "tl")
 
-            # Get from QA step (step 6) if available
-            qa_data = self.session.get_step(6).data
-            if "qa_lines" in qa_data:
-                # QA may have modified translations
-                qa_lines = qa_data["qa_lines"]
-                if isinstance(qa_lines, list) and qa_lines:
-                    translated = qa_lines
+        # Fallback: GUI input step for originals
+        if not original:
+            try:
+                app = self.winfo_toplevel()
+                if hasattr(app, "_step_tabs") and len(app._step_tabs) > 0:
+                    input_step = app._step_tabs[0]
+                    if hasattr(input_step, "get_loaded_files"):
+                        loaded_files = input_step.get_loaded_files()
+                        for lf in loaded_files:
+                            if hasattr(lf, "lines"):
+                                original.extend(lf.lines)
+            except Exception as e:
+                logger.debug("Error getting lines: %s", e)
 
-            # Get original from input step (step 0)
-            app = self.winfo_toplevel()
-            if hasattr(app, "_step_tabs") and len(app._step_tabs) > 0:
-                input_step = app._step_tabs[0]
-                if hasattr(input_step, "get_loaded_files"):
-                    loaded_files = input_step.get_loaded_files()
-                    for lf in loaded_files:
-                        if hasattr(lf, "lines"):
-                            original.extend(lf.lines)
+        # Final fallback: session step data
+        if not original:
+            input_data = self.session.get_step(0).data
+            if "all_lines" in input_data:
+                original = input_data["all_lines"]
 
-            # Fallback from step data
-            if not original:
-                input_data = self.session.get_step(0).data
-                if "all_lines" in input_data:
-                    original = input_data["all_lines"]
-
-            # If no translated, use original as placeholder
-            if not translated and original:
-                translated = list(original)
-
-        except Exception as e:
-            logger.debug("Error getting lines: %s", e)
+        # If no translated, use original as placeholder
+        if not translated and original:
+            translated = list(original)
 
         return original, translated
 
     def _refresh_lines(self) -> None:
-        """Refresh lines from previous steps."""
+        """Refresh lines from previous steps.
+
+        Also loads existing ``postpro`` values from the manifest so that
+        re-entering the tab shows prior postprocessing results.
+        """
         original, translated = self._get_lines_from_previous_steps()
 
         if not original:
@@ -1118,14 +1121,26 @@ class PostprocessingStep(BaseStep):
         while len(translated) < len(original):
             translated.append("")
 
+        # Batch-read existing postpro from manifest
+        postpro_map: dict[int, str] = {}
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            for ln in mgr.get_lines():
+                idx = ln.get("idx")
+                pp = ln.get("postpro", "")
+                if idx is not None and pp:
+                    postpro_map[idx] = pp
+
         # Create PostprocessLine objects
         self._lines = []
         for idx, (orig, trans) in enumerate(zip(original, translated)):
+            pp = postpro_map.get(idx, trans)
             line = PostprocessLine(
                 idx=idx,
                 original=orig,
                 translated=trans,
-                postprocessed=trans,  # Initially same as translated
+                postprocessed=pp,
+                has_changes=pp != trans,
             )
             self._lines.append(line)
 
@@ -1372,7 +1387,20 @@ class PostprocessingStep(BaseStep):
         self._pp_options.enable_symbol_conversion = self._symbol_var.get()
         self._pp_options.convert_fullwidth_to_halfwidth = self._fullwidth_var.get()
         self._pp_options.convert_halfwidth_to_fullwidth = self._halfwidth_var.get()
-        self._pp_options.failure_policy = FailurePolicy(self._failure_var.get())
+        # Map legacy or PascalCase values to current enum values
+        _FAILURE_POLICY_MAP = {
+            "FlagForReview": "flag",
+            "Flag": "flag",
+            "Write": "write",
+            "Retry": "retry",
+        }
+        raw = self._failure_var.get()
+        mapped = _FAILURE_POLICY_MAP.get(raw, raw)
+        try:
+            self._pp_options.failure_policy = FailurePolicy(mapped)
+        except ValueError:
+            logger.warning("Unknown failure policy %r, defaulting to WRITE", raw)
+            self._pp_options.failure_policy = FailurePolicy.WRITE
 
     def _apply_postprocessing(self) -> None:
         """Apply postprocessing to all lines (TASK 45.10: overwrite warning)."""

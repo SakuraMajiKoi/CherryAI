@@ -1,0 +1,12 @@
+Duplicate Line
+Duplicate Line
+Aggressive Duplicate Line 1
+Aggressive Duplicate Line 2
+Fullwidth Symbols、！。？
+Elipsis ………………
+Protagonist: Dialogue
+Protagonist: "Dialogue"
+Speaker: "{Code}Dialogue{Code} for RegEx Anchor"
+Speaker: "Dialogue for {Generic Placeholder}"
+Speaker: "Dialogue for {Custom Placeholder}"
+Narration for PoV Detection Protagonist

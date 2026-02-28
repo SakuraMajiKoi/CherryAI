@@ -110,7 +110,7 @@ TABLE OF CONTENTS
         * set_last_manifest / get_last_manifest — persist last opened manifest
         * add_to_recent_manifests / get_recent_manifests — manifest history
    3.34 manifest_manager.py ✅🔗 - Unified manifest state management (TASK 19)
-   3.35 manifest_fields.py ✅ - Manifest field type helpers (TASK 22.1) + special format helpers (TASK 22.2)
+   3.35 manifest_fields.py ✅ - Manifest field type helpers (TASK 22.1) + special format helpers (TASK 22.2) + shared priority resolution API: resolve_line_field(), resolve_line_field_from(), get_latest_line_text(), get_all_lines_resolved(); PIPELINE_FIELDS chain: qa_overwrite → wordwr → postpro → tl → prepro → orig
    3.36 preset_manager.py ✅ - Preset save/load/delete operations (TASK 30.1)
    3.37 mock_translator.py ✅ - Mock translation engine with flaw injection (Phase 56)
    3.38 consistency.py ✅ - Consistency system for term translation tracking (Phase 55)
@@ -189,14 +189,14 @@ TABLE OF CONTENTS
        - base.py - BaseStep abstract class (TASK 43.14: tab caching infra)
        - input_extract.py - Step 0: Input/Extraction 🔗formats/
        - analysis.py - Step 1: Analysis ❌NO shared imports
-       - costs.py - Step 2: Costs (renamed from estimate.py in Phase 40)
-       - information.py - Step 3: Information ❌NO shared imports (moved from Step 2)
-       - preprocess.py - Step 4: Preprocessing ❌NO shared imports (moved from Step 3)
+       - costs.py - Step 4: Costs (renamed from estimate.py in Phase 40)
+       - information.py - Step 2: Information 🔗manifest_fields
+       - preprocess.py - Step 3: Preprocessing 🔗manifest_fields
        - translate.py - Step 5: Translation 🔗api_client, mock_translator, prompt_adapter, manifest_fields (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching; Preview Requests: PreviewRequest dataclass, FILTER_PARTS constant (12 entries: meta, language, system_instructions, style, tone, summary, genre, pov, conditional_prompts, glossary, rolling_context, input_lines), RequestPreviewDialog class with Pure/Formatted/Plain views and Jump/Search/Filter toolbar, _build_preview_requests() mirrors real translation request building; _build_system_prompt_from_manifest() reads from `step_state.Information.data.metadata`)
-       - postprocess.py - Step 6: Postprocess 🔗postprocess (moved from Step 7)
-       - wordwrap_overwrite.py - Step 7: Wordwrap 🔗wordwrap (moved from Step 8)
-       - qa.py - Step 8: QA 🔗validation (moved from Step 6)
-       - output_inject.py - Step 9: Output/Inject ❌NO shared imports
+       - postprocess.py - Step 6: Postprocess 🔗postprocess, manifest_fields; _FAILURE_POLICY_MAP for legacy enum mapping
+       - wordwrap_overwrite.py - Step 7: Wordwrap 🔗wordwrap, manifest_fields; column "Latest" (renamed from "Original")
+       - qa.py - Step 8: QA 🔗validation, manifest_fields; persists qa_overwrite field; column "Overwrite" (renamed from "Translated")
+       - output_inject.py - Step 9: Output/Inject 🔗manifest_fields; _NAMING_STRATEGY_MAP for legacy enum mapping
    
    6.5 gui/components/ (2 files)
        - __init__.py - Component exports

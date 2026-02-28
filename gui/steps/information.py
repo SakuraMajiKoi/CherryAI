@@ -552,7 +552,7 @@ class InformationStep(BaseStep):
     - All fields auto-load from manifest on step enter
     """
 
-    step_id = 3  # Moved from position 2
+    step_id = 2
     step_name = "Information"
 
     def __init__(

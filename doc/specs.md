@@ -58,9 +58,9 @@ CherryAI features terms that may not be clear at first glance or slightly differ
 6. [GUI Mode: Step-by-Step Specification](#6-gui-mode-step-by-step-specification)
    - [Step 0: Input](#step-0-input)
    - [Step 1: Analysis](#step-1-analysis)
-   - [Step 2: Costs](#step-2-costs)
-   - [Step 3: Information](#step-3-information)
-   - [Step 4: Preprocessing](#step-4-preprocessing)
+   - [Step 2: Information](#step-2-information)
+   - [Step 3: Preprocessing](#step-3-preprocessing)
+   - [Step 4: Costs](#step-4-costs)
    - [Step 5: Translation](#step-5-translation)
    - [Step 6: Postprocessing](#step-6-postprocessing)
    - [Step 7: Wordwrap](#step-7-wordwrap)
@@ -136,24 +136,24 @@ User Files (TXT/CSV/JSON/XLSX/RPG Maker/Images)
          │
          ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Step 2: Costs          │ Token count, cost projection      │
-│  Produces: token_count, │ cost_original, cost_preprocessed  │
-│  time_estimate          │ (Two-state: Original + Prepro)    │
-│  Auto-Trigger: On load  │ Auto-Trigger: After Preprocessing │
-└─────────────────────────┴───────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Step 3: Information    │ Project metadata, style, tone     │
+│  Step 2: Information    │ Project metadata, style, tone     │
 │  Produces: metadata{},  │ characters[], code_glossary[]     │
 │  prompt_context         │                                   │
 └─────────────────────────┴───────────────────────────────────┘
          │
          ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Step 4: Preprocessing  │ Dedup, placeholders, protect code │
+│  Step 3: Preprocessing  │ Dedup, placeholders, protect code │
 │  Produces: prepro[],    │ prepro_ops[], dedup_map           │
 │  protected_patterns     │ (Runs automatically if enabled)   │
+└─────────────────────────┴───────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Step 4: Costs          │ Token count, cost projection      │
+│  Produces: token_count, │ cost_original, cost_preprocessed  │
+│  time_estimate          │ (Two-state: Original + Prepro)    │
+│  Auto-Trigger: On load  │ Auto-Trigger: After Preprocessing │
 └─────────────────────────┴───────────────────────────────────┘
          │
          ▼
@@ -370,9 +370,9 @@ The following systems span multiple pipeline steps. They are documented here as 
 
 **Implementation Status:** ✅ Phase 49 DONE — All 6 tasks implemented (50 tests passing, 4985 total suite)
 
-**Affects**: Costs (Step 2), Translation (Step 5)
+**Affects**: Costs (Step 4), Translation (Step 5)
 
-**Purpose**: Define how translation requests are structured and how lines are grouped into requests. The same request builder function is shared between Estimation (Step 2) and Translation (Step 5) to ensure cost estimates match actual usage.
+**Purpose**: Define how translation requests are structured and how lines are grouped into requests. The same request builder function is shared between Estimation (Step 4) and Translation (Step 5) to ensure cost estimates match actual usage.
 
 #### Request Structure
 
@@ -1448,7 +1448,7 @@ The Analysis step is functional and provides valuable information. Phase 59 adds
 
 ---
 
-### Step 2: Costs
+### Step 4: Costs
 
 **Purpose**: Calculate and display estimated costs before translation and track actual costs after translation. The Costs step provides visibility into resource consumption and enables informed decisions about model selection and preprocessing optimization.
 
@@ -1615,8 +1615,8 @@ The Costs step has **two distinct estimation states** tracked separately:
 
 **Inputs**:
 - From Step 0: `all_lines[]` (original lines)
-- From Step 4: `prepro[]` (preprocessed lines, if available)
-- From Step 3: Summary, tone, style, characters, code glossary (for prompt calculation)
+- From Step 3: `prepro[]` (preprocessed lines, if available)
+- From Step 2: Summary, tone, style, characters, code glossary (for prompt calculation)
 - From Global Options: Model, temperature, chunk size, rate limits
 
 **Processing** (via `gui/helpers/chunker_adapter.py` → `functions/chunker.py`):
@@ -1681,7 +1681,7 @@ The Costs step has **two distinct estimation states** tracked separately:
 
 ---
 
-### Step 3: Information
+### Step 2: Information
 
 **Purpose**: Configure project metadata and translation context. All fields contribute to building the final translation prompt. Every entry is saved in the manifest for persistence.
 
@@ -2058,7 +2058,7 @@ Characters:
 
 ---
 
-### Step 4: Preprocessing
+### Step 3: Preprocessing
 
 **Implementation Status:** ✅ Phase 42 DONE — All 12 tasks implemented (80 tests passing, 4679 total suite)
 
@@ -2632,7 +2632,7 @@ The Translation tab contains four widget sections:
 - The dropdown displays the provider Name field from Global Options.
 
 **Lines/Chunk Sync with Estimation**:
-- Lines/Chunk must have parity with the Estimation step (Step 2: Costs).
+- Lines/Chunk must have parity with the Estimation step (Step 4: Costs).
 - Changing Lines/Chunk in Translation updates the value in Estimation and vice versa.
 - When Lines/Chunk changes, the user is prompted: "Chunk size changed. Re-run estimation?" with Yes/No.
 - Both steps read/write the same manifest key: `RequestOptions.LinesPerChunk`.
@@ -2777,9 +2777,9 @@ Deselecting a filter hides that section from the Formatted/Plain views and omits
 #### Data Flow
 
 **Inputs**:
-- From Step 4: `prepro[]` (preprocessed lines) — preferred
+- From Step 3: `prepro[]` (preprocessed lines) — preferred
 - From Step 0: `orig[]` (original lines) — fallback if no preprocessing
-- From Step 3 (via manifest `step_state.Information.data.metadata`): Summary, Style, Tone, System Instructions, Genre, Characters, Glossary, Code Database
+- From Step 2 (via manifest `step_state.Information.data.metadata`): Summary, Style, Tone, System Instructions, Genre, Characters, Glossary, Code Database
 - From Global Options: API Provider config (URL, Key, Model), Caching mode, Rolling Context, Thinking Mode
 
 **Processing** (via `functions/api_client.py` or Mock Translation):
@@ -2918,7 +2918,7 @@ Local providers (LM Studio, Ollama, local):
 
 ---
 
-### Step 6: Quality Assurance
+### Step 8: Quality Assurance
 
 **Purpose**: Manual inspection of translation quality for issues that automatic recovery and retries could not resolve. Optimally, this step is never needed — the Translation step (Step 5) and Postprocessing step (Step 7) already employ the same validation scripts to automatically recover or retry failed lines. Only when those automated mechanisms are exhausted and issues remain does the QA step become relevant.
 
@@ -3009,12 +3009,12 @@ The following widgets will be activated once the Translation/Edit/TLC mode toggl
 
 ---
 
-### Step 7: Postprocessing
+### Step 6: Postprocessing
 
-**Purpose**: Reverse all Preprocessing transformations and apply post-exclusive recovery processes to produce final translated text. Step 7 mirrors Step 4 — every Preprocessing transformation has a corresponding Postprocessing restoration that executes in reverse priority order. Additionally, Postprocessing includes exclusive recovery processes (Bracket Balance, Quote Balance, Whitespace Normalization) that only run here.
+**Purpose**: Reverse all Preprocessing transformations and apply post-exclusive recovery processes to produce final translated text. Step 6 mirrors Step 3 — every Preprocessing transformation has a corresponding Postprocessing restoration that executes in reverse priority order. Additionally, Postprocessing includes exclusive recovery processes (Bracket Balance, Quote Balance, Whitespace Normalization) that only run here.
 
 **Design Goals**:
-1. **Mirror Symmetry**: Every Preprocessing transformation (Step 4) is reversed here. Without exception, all lines that were preprocessed are postprocessed.
+1. **Mirror Symmetry**: Every Preprocessing transformation (Step 3) is reversed here. Without exception, all lines that were preprocessed are postprocessed.
 2. **Reverse Priority Ordering**: Processes execute in descending priority order (highest priority runs first), the inverse of Preprocessing.
 3. **Perfect Restoration**: All Preprocessing changes must be undone to produce accurate final output.
 4. **Post-Exclusive Recovery**: Bracket Balance, Quote Balance, and Whitespace Normalization are Postprocessing-exclusive — they only appear here and address translation-introduced issues.
@@ -3390,7 +3390,7 @@ Postprocessing reverses the Preprocessing order. Highest priority runs first (op
 
 ---
 
-### Step 8: Wordwrap
+### Step 7: Wordwrap
 
 **Purpose**: Apply wordwrap rules to format text for game engine display requirements. Wordwrap operates in two conceptual modes: **automatic** (parser-detected settings based on the game engine format) or **manual** (user-configured width, break character, and line limits). The core wrapping algorithm is `pretty_wrap` — punctuation-preferred breaks and anti-orphan handling are always active (no user toggle).
 
@@ -3475,7 +3475,7 @@ Key principles:
 
 **Behavior**:
 - Auto-detected from the input files during loading (parser identifies the line break convention).
-- Linked to **Preprocessing** (Step 4): The break character should be protected during preprocessing so it is not mangled by translation.
+- Linked to **Preprocessing** (Step 3): The break character should be protected during preprocessing so it is not mangled by translation.
 - Linked to **Translation Prompt** (Step 5): The prompt should state what the line break character is so the LLM can use it correctly.
 - **Cost optimization** (future, belongs to Preprocessing): Line breaks may optionally be removed before translation to reduce token count (fewer characters = fewer costs). If enabled, a warning is displayed that post-editing may be needed since the LLM won't see line structure. Re-wrapping after translation restores line breaks.
 
@@ -3515,7 +3515,7 @@ Speaker format is always `Speaker: Dialogue` or `Speaker: "Dialogue"`.
 
 ##### Ignore Patterns (Code Database Integration)
 
-Ignore patterns are **no longer configured in Wordwrap settings**. Instead, they are sourced from the **Code Database** (Step 3, Information tab):
+Ignore patterns are **no longer configured in Wordwrap settings**. Instead, they are sourced from the **Code Database** (Step 2, Information tab):
 
 - The Code Database defines code patterns with their actions (Preserve, Translate, Remove) and Categories.
 - Patterns marked as **Invisible** are automatically treated as invisible during width calculation.
@@ -3630,15 +3630,16 @@ For each line, Output resolves the text to inject by walking the following prior
 
 | Priority | Manifest Field | Source Step | Description |
 |----------|---------------|-------------|-------------|
-| 1 (highest) | `lines[].overwrite` | Step 8: Wordwrap | Manually overwritten / injection-ready text |
-| 2 | `lines[].wordwr` | Step 8: Wordwrap | Wordwrapped text |
-| 3 | `lines[].postpro` | Step 7: Postprocessing | Postprocessed text |
-| 4 | `lines[].edit{N}` | Step 5: Translation (Edit mode) | Latest Edit round (highest N) |
-| 5 | `lines[].tlc{N}` | Step 5: Translation (TLC mode) | Latest TLC round (highest N) |
-| 6 | `lines[].tl` | Step 5: Translation | Base translation |
-| 7 | `lines[].preedit` | Step 5: Translation (Pre-edit) | Pre-edit result |
-| 8 | `lines[].prepro` | Step 4: Preprocessing | Preprocessed text |
-| 9 (lowest) | `lines[].orig` | Step 0: Input | Original extracted text |
+| 1 (highest) | `lines[].qa_overwrite` | Step 8: QA | QA-overwritten text |
+| 2 | `lines[].overwrite` | Step 7: Wordwrap | Manually overwritten / injection-ready text |
+| 3 | `lines[].wordwr` | Step 7: Wordwrap | Wordwrapped text |
+| 4 | `lines[].postpro` | Step 6: Postprocessing | Postprocessed text |
+| 5 | `lines[].edit{N}` | Step 5: Translation (Edit mode) | Latest Edit round (highest N) |
+| 6 | `lines[].tlc{N}` | Step 5: Translation (TLC mode) | Latest TLC round (highest N) |
+| 7 | `lines[].tl` | Step 5: Translation | Base translation |
+| 8 | `lines[].preedit` | Step 5: Translation (Pre-edit) | Pre-edit result |
+| 9 | `lines[].prepro` | Step 3: Preprocessing | Preprocessed text |
+| 10 (lowest) | `lines[].orig` | Step 0: Input | Original extracted text |
 
 **Notes**:
 - `edit{N}` and `tlc{N}` are round-numbered fields (e.g., `edit1`, `edit2`, `tlc1`). The highest available round number is used.
@@ -3651,8 +3652,8 @@ Before exporting, Output checks dirty flags to warn the user if upstream steps h
 
 | Flag | Set When | Cleared When | Warning Message |
 |------|----------|--------------|-----------------|
-| Process Flag | Any preprocessing is applied (Step 4) | Postprocessing reaches 100% completion (Step 7) | "Preprocessing was applied but Postprocessing is not complete. Output may contain unrecovered codes." |
-| Wordwrap Flag | Files are loaded or translation changes | Wordwrap is applied (Step 8) | "Wordwrap has not been applied. Output will use unwrapped text." |
+| Process Flag | Any preprocessing is applied (Step 3) | Postprocessing reaches 100% completion (Step 6) | "Preprocessing was applied but Postprocessing is not complete. Output may contain unrecovered codes." |
+| Wordwrap Flag | Files are loaded or translation changes | Wordwrap is applied (Step 7) | "Wordwrap has not been applied. Output will use unwrapped text." |
 
 **Behavior**:
 - Dirty flags are stored in manifest step data: `DirtyFlags.process`, `DirtyFlags.wordwrap`
@@ -3930,27 +3931,37 @@ on load.
   "tl": "Translated English text",
   "postpro": "Restored translated text with \\V[1]",
   "wordwr": "Word-wrapped\ntext",
-  "overwrite": null
+  "overwrite": null,
+  "qa_overwrite": null
 }
 ```
 
 ### 8.3 Field Progression
 
 ```
-orig → prepro → edited_prepro → tl → tlc1 → edit1 → tlc2 → ... → postpro → wordwr → overwrite
+orig → prepro → edited_prepro → tl → tlc1 → edit1 → tlc2 → ... → postpro → wordwr → qa_overwrite
 ```
 
 Each step writes its output field via `ManifestManager.set_line_field(idx, field, value)`:
-- Step 4 `_update_step_data()` writes `prepro`
+- Step 3 `_update_step_data()` writes `prepro`
 - Step 5 `update_translation()` writes `tl` (and `edited_prepro`)
 - Step 6 `_on_postprocess_complete()` / `_mark_line_as_fixed()` writes `postpro`
 - Step 7 `_save_to_session()` writes `wordwr`
+- Step 8 `on_leave()` writes `qa_overwrite`
+
+**All steps now read from manifest** using `manifest_fields.py` shared resolution functions
+instead of session step_data. The priority chain is:
+`qa_overwrite → wordwr → postpro → tl → prepro → orig`
 
 Resolution methods:
+- `resolve_line_field(line_entry, *fields)`: Returns first non-empty field from ordered priority chain
+- `resolve_line_field_from(line_entry, start_field)`: Resolves starting from a specific field in PIPELINE_FIELDS
+- `get_latest_line_text(line_entry)`: Returns the most recent non-empty text from the full chain
+- `get_all_lines_resolved(mgr, field?)`: Returns list of resolved texts for all lines (optional start field)
 - `get_input_for_translation()`: edited_prepro → prepro → orig
 - `get_input_for_tlc(N)`: edit{N-1} → tlc{N-1} → ... → tl
 - `get_input_for_postprocessing()`: Latest in TLC/Edit chain → tl → prepro → orig
-- `get_final_output()`: overwrite → wordwr → postpro
+- `get_final_output()`: qa_overwrite → wordwr → postpro
 
 ### 8.4 Options Structure (Phase 58/59 Additions)
 

@@ -54,6 +54,49 @@ MODULE COUNTS (Verified January 2026)
 
 =============================================================================
 
+COMPLETED - SESSION 26 (Manifest-First Pipeline + Tab Reorder + Error Fixes)
+
+### SESSION 26: Manifest-First Step Resolution, Tab Reorder, Python Error Fixes ✅ DONE
+
+**Tab Reorder (Tasks 0-2):**
+- New order: Input(0), Analysis(1), Information(2), Preprocessing(3), Costs(4), Translation(5), Postprocessing(6), Wordwrap(7), QA(8), Output(9)
+- Updated STEP_DEFINITIONS in `gui/state/store.py`, STEP_NAMES in `functions/manifest_manager.py`
+- Updated PRESET_DEFINITIONS skip_steps and auto_steps
+- Updated `gui/app.py` tab creation elif chain
+- Fixed step_id class attributes: InformationStep=2, PreprocessingStep=3, CostsStep=4
+
+**Manifest-First Step Resolution (Tasks 1-7):**
+- `functions/manifest_fields.py` - Added PIPELINE_FIELDS chain and shared resolution API:
+  `resolve_line_field()`, `resolve_line_field_from()`, `get_latest_line_text()`, `get_all_lines_resolved()`
+- `gui/steps/preprocess.py` - Reads `orig` from manifest; added `_load_preview_from_manifest()`
+- `gui/steps/costs.py` - Uses `get_all_lines_resolved(mgr, "prepro")` for preprocessed lines
+- `gui/steps/translate.py` - Reads from manifest prepro→orig chain; loads existing `tl` translations
+- `gui/steps/postprocess.py` - Reads from manifest tl→prepro→orig chain; loads existing `postpro`
+- `gui/steps/wordwrap_overwrite.py` - Reads from manifest postpro→tl→prepro→orig chain; loads existing `wordwr`; column "Original" renamed to "Latest"
+- `gui/steps/qa.py` - Reads full chain; persists `qa_overwrite` field; column "Translated" renamed to "Overwrite"
+- `gui/steps/output_inject.py` - Populates lines from manifest using full pipeline resolution
+
+**Python Error Fixes (Task 8):**
+- `gui/helpers/mode_adapter.py` - `apply_protect_code()` now handles dict entries (extracts "pattern" key)
+- `gui/steps/preprocess.py` - Fixed free variable 'e' bug in lambda (captured as `err_msg = str(e)`)
+- `gui/steps/postprocess.py` - Added `_FAILURE_POLICY_MAP` for legacy enum values ("FlagForReview"→"flag")
+- `gui/steps/output_inject.py` - Added `_NAMING_STRATEGY_MAP` and `_safe_naming_strategy()` for legacy values ("PutInSubfolder"→"subfolder")
+
+**New Manifest Field:**
+- `qa_overwrite` - Persisted by QA step on_leave via `set_line_field(idx, "qa_overwrite", text)`
+- Added to PIPELINE_FIELDS priority chain: qa_overwrite → wordwr → postpro → tl → prepro → orig
+
+**Tests Updated:**
+- `dev/test_session_persistence.py` - Updated for new tab order
+- `dev/test_session_loading.py` - Updated step name mapping assertions
+- `dev/test_costs_step_phase40.py` - Updated CostsStep.step_id assertions (2→4)
+- `dev/test_gui_v2.py` - Updated step definitions names, step IDs, sequential order assertions
+- `dev/test_information_step_phase41.py` - Updated InformationStep.step_id assertion (3→2)
+- `dev/test_request_building.py` - Updated metadata step index (3→2)
+- **Net result: 0 new failures, 4 pre-existing failures fixed**
+
+=============================================================================
+
 COMPLETED - SESSION 25 (Remove config/ Folder)
 
 ### SESSION 25: Remove config/ Folder — All Config Embedded in INI/Constants ✅ DONE
@@ -753,7 +796,9 @@ Notes & Constraints:
 ### TASK 17.9: Estimation Step Upgrade (Move & Enhancements) ✅ DONE
 **Priority:** MEDIUM | **Effort:** 6-10 hours | **Status:** COMPLETE
 
-Goal: Improve the Estimation step so it runs earlier in the workflow (after Extraction and before Analysis) and provides a configurable LLM inference options panel with a real-time estimated price using the currently selected model and preset.
+Goal: Improve the Estimation step (now renamed "Costs") so it runs after Preprocessing in the workflow and provides a configurable LLM inference options panel with a real-time estimated price using the currently selected model and preset.
+
+**Current Tab Order (updated):** Input(0), Analysis(1), Information(2), Preprocessing(3), Costs(4), Translation(5), Postprocessing(6), Wordwrap(7), QA(8), Output(9)
 
 Motivation:
 - Presenting cost and inference options earlier helps users choose models/options before heavy analysis and pre-processing, preventing wasted compute and allowing better control of pipeline cost.
@@ -1128,7 +1173,7 @@ functions/mainhelper.py       - LineEntry, Manifest dataclass, Processor
                                 (runtime processing - DO NOT change format)
 functions/manifest_manager.py - ManifestManager (file I/O, v3.0 fields)
 functions/ini_manager.py      - INI defaults loading
-functions/manifest_fields.py  - Field type helpers for GUI binding
+functions/manifest_fields.py  - Field type helpers for GUI binding + shared priority resolution (PIPELINE_FIELDS, resolve_line_field, get_all_lines_resolved)
 functions/options.py          - API providers (global settings, not per-project)
 functions/project_config.py   - Project overrides (will merge into ManifestManager)
 gui/app.py                    - Uses ManifestManager for all state

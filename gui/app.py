@@ -293,7 +293,7 @@ class App(tk.Tk):
         self._paned.add(self._notebook, weight=4)
 
         # Create tabs for each step
-        # NOTE: Step order changed - Estimation is now step 2 (after Analysis)
+        # NOTE: Information→2, Preprocessing→3, Costs→4 for dual estimation
         for step_id, step_name in STEP_DEFINITIONS:
             tab: BaseStep
             if step_id == 0:
@@ -311,22 +311,22 @@ class App(tk.Tk):
                     manifest_manager=self._manifest_manager,
                 )
             elif step_id == 2:
-                # Costs step (renamed from Estimation in Phase 40)
-                tab = CostsStep(
-                    self._notebook,
-                    self.session,
-                    manifest_manager=self._manifest_manager,
-                )
-            elif step_id == 3:
-                # Information - fully implemented (moved from step 2)
+                # Information - project metadata, glossary, code database
                 tab = InformationStep(
                     self._notebook,
                     self.session,
                     manifest_manager=self._manifest_manager,
                 )
-            elif step_id == 4:
-                # Preprocessing - fully implemented (moved from step 3)
+            elif step_id == 3:
+                # Preprocessing - dedup, placeholders, protect code
                 tab = PreprocessingStep(
+                    self._notebook,
+                    self.session,
+                    manifest_manager=self._manifest_manager,
+                )
+            elif step_id == 4:
+                # Costs - estimation (after preprocessing for dual view)
+                tab = CostsStep(
                     self._notebook,
                     self.session,
                     manifest_manager=self._manifest_manager,
