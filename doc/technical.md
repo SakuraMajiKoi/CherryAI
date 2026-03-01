@@ -200,7 +200,7 @@ TABLE OF CONTENTS
    
    6.5 gui/components/ (2 files)
        - __init__.py - Component exports
-       - table.py - SharedTable, ColumnDef, TableRow (Phase 43: batch insertion for large datasets; Phase 17: version tracking to cancel stale batches)
+       - table.py - SharedTable, ColumnDef, TableRow (Phase 43: batch insertion for large datasets; Phase 17: version tracking to cancel stale batches; TASK 71: bulk delete, 2000-row batches, 50k display cap)
    
    6.6 gui/dialogs/ (6 files - 5 dialog modules)
        - __init__.py - Dialog exports
@@ -506,7 +506,8 @@ TABLE OF CONTENTS
          - Chunk Sync: costs.py reads/writes LinesPerChunk to manifest RequestOptions
          - Language Skip: detect_line_script() in analysis.py, _LANG_SCRIPT_MAP, _apply_language_skip()
          - Tab Caching: BaseStep._compute_cache_hash/_is_cache_valid/_update_cache/_invalidate_cache/_force_refresh
-         - Performance: SharedTable batch insertion (500-row batches), _refresh_lines() batch manifest dict read
+         - Performance: SharedTable batch insertion (2000-row batches), bulk *children delete, 50k display cap, _refresh_lines() batch manifest dict read
+         - TASK 71: Removed redundant all_lines/processed_lines/postprocessed_lines/files from step_data; manifest migration strips on load; new ManifestManager.get_all_orig_lines() API
          - Bug Fix (Phase 17): Added _batch_insert_version counter to cancel stale batch insertions when _refresh_display() called multiple times
          - Modified: gui/steps/translate.py, gui/steps/base.py, gui/steps/costs.py, gui/components/table.py
          - Modified: gui/dialogs/global_options.py, functions/analysis.py
@@ -1131,6 +1132,9 @@ class ManifestManager:
         """Mark step as completed/not completed."""
     
     # === Settings Access Methods (Task 21.3) ===
+    
+    def get_all_orig_lines(self) -> List[str]:
+        """Return lines[].orig as flat list (TASK 71 replacement for all_lines)."""
     
     def get_request_options(self) -> Dict[str, Any]:
         """Get request settings for API client (Model, Temperature, etc.)."""

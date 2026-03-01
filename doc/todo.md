@@ -54,6 +54,56 @@ MODULE COUNTS (Verified January 2026)
 
 =============================================================================
 
+COMPLETED - SESSION 27 (TASK 71 — Manifest Bloat Elimination + Table Performance)
+
+### SESSION 27: TASK 71 — Eliminate Redundant Manifest Arrays, Optimize Table Loading ✅ DONE
+
+**Problem:** 25.8 MB manifests (416,232 lines) for 55,604-line projects caused by three
+redundant arrays (`all_lines`, `processed_lines`, `postprocessed_lines`) duplicating data
+already stored in manifest `lines[].orig/prepro/postpro`. `step_state.Input.files` also
+duplicated `filedir[]`.
+
+**Task 1 — Eliminate `all_lines` and `processed_lines` from step_data:**
+- `gui/steps/input_extract.py` — `_update_step_data()` no longer stores `all_lines` or `files`
+- `gui/steps/preprocess.py` — `_update_step_data()` no longer stores `processed_lines`
+- `gui/steps/postprocess.py` — Removed `postprocessed_lines` from step_data (write-only, never read)
+- All consumers updated with manifest-first fallback → legacy session data fallback chain
+
+**Task 2 — Fold `step_state.Input.files` into `filedir`:**
+- `gui/steps/input_extract.py` — `_restore_files_from_session()` reads from manifest filedir + lines[].orig
+- `files` key no longer stored in Input step_data
+
+**Task 3 — Steps 5-9 use only `lines[]` via PIPELINE_FIELDS chain:**
+- `gui/steps/qa.py` — Added `mgr.get_all_orig_lines()` as primary fallback before legacy `all_lines`
+- `gui/steps/information.py` — Two places updated: `_infer_genders()` and `_get_sample_lines()`
+- All other steps (costs, translate, postprocess, wordwrap, output) already used manifest resolution
+
+**Task 4 — SharedTable performance optimization:**
+- `gui/components/table.py` — Bulk delete via single `self._tree.delete(*children)` Tcl call
+- Batch size raised from 500 to 2000 rows per `after()` callback
+- Pre-built value tuples in Python before Tcl bridge calls
+- Added `_MAX_DISPLAY_ROWS = 50_000` cap with status message for large datasets
+
+**New ManifestManager API:**
+- `get_all_orig_lines()` — Returns `[ln.get("orig", "") for ln in lines]`
+- Migration code in `_migrate_manifest()` strips redundant keys on load:
+  `{"Input": ["all_lines", "files"], "Preprocessing": ["processed_lines"], "Postprocessing": ["postprocessed_lines"]}`
+
+**Tests Updated / Added:**
+- `dev/test_gui_v2.py` — Added `TestManifestMigrationStripsRedundant` (7 tests) + 2 `get_all_orig_lines` tests
+- `dev/test_session_persistence.py` — 3 tests renamed for new behavior
+- `dev/test_session_loading.py` — 2 tests updated to remove redundant keys from test data
+- `dev/test_table_batch_insert.py` — 8 new performance stress tests (10k/50k/100k rows, cap, batch, filter)
+- **Net result: 16/16 table tests, 85/85 session tests, ~596/598 gui_v2 tests pass (3 pre-existing failures unrelated)**
+
+**Documentation Updated:**
+- `doc/features.md` — Input step data sharing, SharedTable performance section
+- `doc/technical.md` — table.py description, Phase 43, ManifestManager API section
+- `doc/specs.md` — 6 references updated from all_lines to manifest lines[].orig
+- `doc/tests.md` — Test names, migration test section, table batch section
+
+=============================================================================
+
 COMPLETED - SESSION 26 (Manifest-First Pipeline + Tab Reorder + Error Fixes)
 
 ### SESSION 26: Manifest-First Step Resolution, Tab Reorder, Python Error Fixes ✅ DONE

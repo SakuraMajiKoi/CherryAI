@@ -1891,7 +1891,7 @@ class TranslationStep(BaseStep):
             except Exception as e:
                 logger.debug("Error getting lines: %s", e)
 
-        # Final fallback: session step data
+        # Final fallback: legacy session step data
         if not original:
             input_data = self.session.get_step(0).data
             if "all_lines" in input_data:

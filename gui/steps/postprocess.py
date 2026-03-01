@@ -1093,7 +1093,7 @@ class PostprocessingStep(BaseStep):
             except Exception as e:
                 logger.debug("Error getting lines: %s", e)
 
-        # Final fallback: session step data
+        # Final fallback: legacy session step data
         if not original:
             input_data = self.session.get_step(0).data
             if "all_lines" in input_data:
@@ -1663,9 +1663,6 @@ class PostprocessingStep(BaseStep):
             "issues_retry": self._stats.issues_retry,
             "recovery_rate": self._stats.recovery_rate,
         }
-
-        # Store postprocessed lines for next step
-        step_data["postprocessed_lines"] = [l.postprocessed for l in self._lines]
 
         # Persist each postprocessed line to the manifest
         mgr = self.manifest_manager

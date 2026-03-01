@@ -123,7 +123,7 @@ User Files (TXT/CSV/JSON/XLSX/RPG Maker/Images)
          ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  Step 0: Input          │ Load files, detect format         │
-│  Produces: all_lines[]  │ Store in manifest file_dir        │
+│  Produces: lines[].orig │ Store in manifest filedir         │
 │  Auto-Trigger: Analysis │ Starts pipeline when files loaded │
 └─────────────────────────┴───────────────────────────────────┘
          │
@@ -1044,7 +1044,9 @@ When `auto_inference` is enabled (Global Option), the pipeline offers several in
 7. Auto-create project if no manifest exists (prompt for project name)
 
 **Outputs**:
-- `all_lines: List[str]` - All extracted text lines from all files
+- `total_lines: int` - Total extracted line count (all files)
+- `encoding: str` - Default encoding override if user-supplied
+- *(TASK 71)* `all_lines` no longer stored — access via `mgr.get_all_orig_lines()` or `lines[].orig`
 - `loaded_files: List[LoadedFile]` - File metadata objects
 - `file_dir: List[FileDirEntry]` - Index ranges per file (for output injection)
 
@@ -1378,7 +1380,7 @@ When user right-clicks on rows where Category = "Code Patterns":
 #### Data Flow
 
 **Inputs**:
-- From Step 0: `all_lines[]` from loaded files
+- From Step 0: manifest `lines[].orig` via `mgr.get_all_orig_lines()`
 - From Session: Previously stored analysis results
 
 **Processing** (via `gui/helpers/analysis_adapter.py` → `functions/analysis.py`):
@@ -1585,7 +1587,7 @@ The Costs step has **two distinct estimation states** tracked separately:
 
 **1. Auto-Estimation (Original)**:
 - Trigger: Files loaded in Step 0 (Input), manifest initialized
-- Input: Original lines from `all_lines[]`
+- Input: Original lines from manifest `lines[].orig`
 - Prompt: Default prompts only (no preprocessing-specific prompts)
 - Result: Populates "Original" columns
 - Progress Tracker: Marks first tick on Costs step
@@ -1614,7 +1616,7 @@ The Costs step has **two distinct estimation states** tracked separately:
 #### Data Flow
 
 **Inputs**:
-- From Step 0: `all_lines[]` (original lines)
+- From Step 0: manifest `lines[].orig` (original lines)
 - From Step 3: `prepro[]` (preprocessed lines, if available)
 - From Step 2: Summary, tone, style, characters, code glossary (for prompt calculation)
 - From Global Options: Model, temperature, chunk size, rate limits
@@ -2471,7 +2473,7 @@ The Preprocessing tab is organized into three sections:
 #### Data Flow
 
 **Inputs**:
-- From Step 0: `all_lines[]` - Original lines from loaded files
+- From Step 0: manifest `lines[].orig` - Original lines from loaded files
 - From Step 3: `code_patterns[]` - Code patterns for protection rules
 - From Step 3: `glossary[]` - For Speaker Name Replacement
 - From Manifest: Standard rule toggles, pattern lists

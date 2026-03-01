@@ -1257,6 +1257,25 @@ class ManifestManager:
             
             data["version"] = MANIFEST_VERSION
         
+        # TASK 71: Strip redundant step_state arrays.
+        # all_lines, processed_lines, postprocessed_lines duplicate lines[].orig /
+        # prepro / postpro.  files duplicates filedir[].  Remove them on load so
+        # the next save produces a compact manifest.
+        _REDUNDANT_STEP_KEYS: Dict[str, List[str]] = {
+            "Input": ["all_lines", "files"],
+            "Preprocessing": ["processed_lines"],
+            "Postprocessing": ["postprocessed_lines"],
+        }
+        step_state = data.get("step_state", {})
+        for step_name, keys in _REDUNDANT_STEP_KEYS.items():
+            step_entry = step_state.get(step_name, {})
+            step_data = step_entry.get("data", {})
+            for key in keys:
+                if key in step_data:
+                    logger.debug("Stripping redundant key '%s' from %s step_data",
+                                 key, step_name)
+                    del step_data[key]
+        
         return data
     
     def _build_filedir_from_legacy(self, data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1715,6 +1734,16 @@ class ManifestManager:
                 return line
         return None
     
+    def get_all_orig_lines(self) -> List[str]:
+        """Return the ``orig`` text for every line in index order.
+
+        This replaces the legacy ``all_lines`` flat array that was
+        previously duplicated in ``step_state.Input.data``.  All callers
+        that need the original extracted text should use this method or
+        the manifest ``lines[].orig`` field directly.
+        """
+        return [ln.get("orig", "") for ln in self._manifest_data.get("lines", [])]
+
     def set_line_field(self, idx: int, field: str, value: Any) -> None:
         """Set a field on a specific line."""
         lines = self._manifest_data.get("lines", [])

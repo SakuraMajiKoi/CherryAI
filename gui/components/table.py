@@ -470,34 +470,54 @@ class SharedTable(ttk.Frame):
         """Refresh the treeview display.
 
         TASK 43.2: Uses batch insertion for large datasets (>1000 rows).
-        Rows are inserted in chunks of ``_BATCH_SIZE`` with periodic
-        ``update_idletasks()`` to keep the UI responsive.
-        
+        TASK 71: Optimised deletion (single Tcl call), larger batches,
+        and a display cap of ``_MAX_DISPLAY_ROWS`` to keep the UI
+        responsive with 50k+ line projects.
+
         Uses version tracking to cancel stale batch insertions when a new
         refresh starts before a previous one completes.
         """
         # Increment version to invalidate any pending batch insertions
         self._batch_insert_version += 1
         current_version = self._batch_insert_version
-        
-        # Clear existing items
-        for item in self._tree.get_children():
-            self._tree.delete(item)
+
+        # Bulk-delete all children in a single Tcl call
+        children = self._tree.get_children()
+        if children:
+            self._tree.delete(*children)
 
         # Get visible columns
         visible_cols = [c for c in self.columns if c.visible]
 
         rows = self._filtered_rows
-        batch_size = 500
+        _MAX_DISPLAY_ROWS = 50_000
+        capped = False
+        display_rows = rows
+        if len(rows) > _MAX_DISPLAY_ROWS:
+            display_rows = rows[:_MAX_DISPLAY_ROWS]
+            capped = True
 
-        if len(rows) <= batch_size:
+        batch_size = 2000
+
+        if len(display_rows) <= batch_size:
             # Small dataset: insert synchronously
-            self._insert_rows(rows, visible_cols, 0)
+            self._insert_rows(display_rows, visible_cols, 0)
         else:
             # Large dataset: batch insert with version tracking
-            self._batch_insert(rows, visible_cols, 0, batch_size, current_version)
+            self._batch_insert(
+                display_rows, visible_cols, 0, batch_size, current_version,
+            )
 
-        self._update_status()
+        if capped:
+            total = len(rows)
+            self._status_label.configure(
+                text=(
+                    f"Showing first {_MAX_DISPLAY_ROWS:,} of {total:,} rows. "
+                    "Use filter to narrow results."
+                )
+            )
+        else:
+            self._update_status()
 
     def _insert_rows(
         self,
@@ -505,21 +525,32 @@ class SharedTable(ttk.Frame):
         visible_cols: list,
         start: int,
     ) -> None:
-        """Insert rows into the Treeview (Task 43.2 helper)."""
-        for i, row in enumerate(rows, start=start):
-            values: list = []
-            if self._show_checkboxes:
-                values.append("☑" if row.id in self._checked_rows else "☐")
-            for col in visible_cols:
-                val = row.values.get(col.key, "")
-                values.append(str(val) if val is not None else "")
+        """Insert rows into the Treeview (Task 43.2 helper).
 
+        TASK 71: Pre-builds all value tuples in Python before issuing any
+        Tcl calls to minimise Python↔Tcl bridge crossings.
+        """
+        tree = self._tree
+        show_chk = self._show_checkboxes
+        checked = self._checked_rows
+        col_keys = [c.key for c in visible_cols]
+
+        # Pre-build rows entirely in Python
+        prepared: list = []
+        for i, row in enumerate(rows, start=start):
+            vals: list = []
+            if show_chk:
+                vals.append("☑" if row.id in checked else "☐")
+            for key in col_keys:
+                val = row.values.get(key, "")
+                vals.append(str(val) if val is not None else "")
             tags = list(row.tags)
             tags.append("odd" if i % 2 == 0 else "even")
+            prepared.append((str(row.id), tuple(vals), tuple(tags)))
 
-            self._tree.insert(
-                "", "end", iid=str(row.id), values=values, tags=tags,
-            )
+        # Batch Tcl calls
+        for iid, values, tags in prepared:
+            tree.insert("", "end", iid=iid, values=values, tags=tags)
 
     def _batch_insert(
         self,

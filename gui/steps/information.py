@@ -2047,17 +2047,19 @@ class InformationStep(BaseStep):
             return
 
         # --- Gather context data ---
-        # 1. Get loaded lines from Input step for full_text + lines
+        # 1. Get loaded lines from manifest for full_text + lines
         all_lines: List[str] = []
         try:
             mgr = self.manifest_manager
             if mgr is not None and mgr.is_loaded:
-                input_data = mgr.get_step_data(0)
-            elif self.session is not None:
-                input_data = self.session.get_step(0).data
-            else:
-                input_data = {}
-            all_lines = input_data.get("all_lines", [])
+                all_lines = mgr.get_all_orig_lines()
+            if not all_lines:
+                # Legacy fallback: old session step data (pre-v3.3)
+                if self.session is not None:
+                    input_data = self.session.get_step(0).data
+                else:
+                    input_data = {}
+                all_lines = input_data.get("all_lines", [])
         except Exception:
             pass
 
@@ -3740,8 +3742,14 @@ class InformationStep(BaseStep):
     def _get_sample_lines(self) -> List[str]:
         """Get sample lines from input step."""
         try:
-            input_step_data = self.session.get_step(0).data
-            all_lines = input_step_data.get("all_lines", [])
+            # Primary: manifest orig lines
+            mgr = self.manifest_manager
+            if mgr is not None and mgr.is_loaded:
+                all_lines = mgr.get_all_orig_lines()
+            else:
+                # Legacy fallback (pre-v3.3)
+                input_step_data = self.session.get_step(0).data
+                all_lines = input_step_data.get("all_lines", [])
             sample_count = self._sample_lines_var.get()
             return all_lines[:sample_count]
         except Exception as e:

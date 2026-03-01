@@ -223,11 +223,21 @@ class AnalysisStep(BaseStep):
         except Exception as e:
             logger.debug("Could not get loaded files from input step: %s", e)
 
-        # Fallback: reconstruct from step data if stored there
+        # Fallback: reconstruct from manifest lines[].orig
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            orig_lines = mgr.get_all_orig_lines()
+            if orig_lines:
+                class _LineWrapper:
+                    def __init__(self, lines: List[str]) -> None:
+                        self.lines = lines
+
+                return [_LineWrapper(orig_lines)]
+
+        # Legacy fallback: step_data all_lines (pre-migration sessions)
         input_step_data = self.session.get_step(0).data
         if "all_lines" in input_step_data:
-            # Create a simple wrapper with lines
-            class _LineWrapper:
+            class _LineWrapper:  # type: ignore[no-redef]
                 def __init__(self, lines: List[str]) -> None:
                     self.lines = lines
 

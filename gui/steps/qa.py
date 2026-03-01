@@ -740,6 +740,13 @@ class QAStep(BaseStep):
             except Exception as e:
                 logger.debug("Error getting lines: %s", e)
 
+        # Final fallback: manifest orig lines
+        if not latest:
+            mgr = self.manifest_manager
+            if mgr is not None and mgr.is_loaded:
+                latest = mgr.get_all_orig_lines()
+
+        # Legacy fallback: old session step data (pre-v3.3)
         if not latest:
             input_data = self.session.get_step(0).data
             if "all_lines" in input_data:

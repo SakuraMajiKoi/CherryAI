@@ -1948,18 +1948,17 @@ class InputExtractionStep(BaseStep):
             self._ready_label.configure(text="")
 
     def _update_step_data(self) -> None:
-        """Update step data in session state."""
-        # Collect all lines from all files for analysis step
-        all_lines: List[str] = []
-        for f in self._loaded_files:
-            all_lines.extend(f.lines)
+        """Update step data in session state.
 
+        Lines are already stored in the manifest ``lines[].orig`` via
+        filedir, so we no longer duplicate them as ``all_lines``.
+        File metadata is stored in the manifest ``filedir`` array, so
+        we no longer duplicate it as ``files``.
+        """
         data = {
-            "files": [f.to_dict() for f in self._loaded_files],
             "total_lines": sum(f.line_count for f in self._loaded_files),
             "encoding": self._encoding_var.get() if self._encoding_var else "utf-8",
             "format_override": self._format_var.get() if self._format_var else "auto",
-            "all_lines": all_lines,  # For analysis step access
         }
         self.set_step_data(data)
 
@@ -1967,14 +1966,14 @@ class InputExtractionStep(BaseStep):
 
     def on_enter(self) -> None:
         """Called when entering this step tab."""
-        # Restore state from session
         step_data = self.get_step_data()
-        
-        # Restore LoadedFile objects from session data if not already loaded
-        if not self._loaded_files and step_data.get("files"):
+
+        # Restore LoadedFile objects from manifest filedir + lines
+        # (falls back to legacy step_data keys if manifest not available)
+        if not self._loaded_files:
             self._restore_files_from_session(step_data)
-        
-        # PHASE 58.11: If no loaded files but manifest has filedir/lines data,
+
+        # PHASE 58.11: If still no loaded files but manifest has filedir/lines,
         # populate from manifest (happens when loading manifest via App menu)
         if not self._loaded_files:
             mgr = self.manifest_manager
@@ -1988,57 +1987,99 @@ class InputExtractionStep(BaseStep):
                         len(filedir), len(lines),
                     )
                     self._populate_from_manifest(raw_data)
-        
+
         if self._loaded_files:
-            # Files already loaded, refresh UI
             self._update_file_list()
             self._update_summary()
-            # Select first file if none selected
             if self._current_file_index < 0:
                 self._select_first_file_in_tree()
         logger.debug("Entered Input step")
 
     def _restore_files_from_session(self, step_data: Dict[str, Any]) -> None:
-        """Restore LoadedFile objects from session step data.
-        
+        """Restore LoadedFile objects from manifest filedir + lines.
+
+        Reads file metadata from ``filedir`` and line text from
+        ``lines[].orig`` so that no duplicate ``files`` or ``all_lines``
+        arrays are needed in step_data.
+
+        Falls back to legacy ``files``/``all_lines`` keys for older
+        session data that hasn't been migrated yet.
+
         Args:
             step_data: Step data dictionary from session.
         """
+        mgr = self.manifest_manager
+
+        # ------- Primary path: manifest filedir + lines -------
+        if mgr is not None and mgr.is_loaded:
+            filedir = mgr.get_filedir()
+            manifest_lines = mgr.get_lines()
+            if filedir and manifest_lines:
+                original_dir = mgr.get_original_dir()
+                relocated = getattr(self, "_relocated_files", {})
+
+                for entry in filedir:
+                    rel_path = entry.rel_path
+                    if original_dir is not None:
+                        file_path = original_dir / rel_path
+                    else:
+                        file_path = Path(rel_path)
+                    actual_path = Path(relocated.get(rel_path, str(file_path)))
+
+                    # Extract orig lines from the manifest line entries
+                    file_lines: List[str] = []
+                    for idx in range(entry.first_idx, entry.last_idx + 1):
+                        if idx < len(manifest_lines):
+                            ln = manifest_lines[idx]
+                            file_lines.append(
+                                ln.get("orig", "") if isinstance(ln, dict) else str(ln)
+                            )
+
+                    loaded = LoadedFile(
+                        path=actual_path if actual_path.exists() else file_path,
+                        format_id=entry.format,
+                        lines=file_lines,
+                        manifest_path=(
+                            self.session.manifest_path if self.session else None
+                        ),
+                        encoding=entry.encoding,
+                    )
+                    self._loaded_files.append(loaded)
+
+                logger.info(
+                    "Restored %d files from manifest filedir", len(self._loaded_files)
+                )
+                return
+
+        # ------- Legacy fallback: step_data files + all_lines -------
         files_data = step_data.get("files", [])
         all_lines = step_data.get("all_lines", [])
-        
-        # Track line offset for multi-file support
+
         line_offset = 0
-        
         for file_info in files_data:
             path = Path(file_info["path"])
             format_id = file_info.get("format_id", "txt")
             line_count = file_info.get("line_count", 0)
             manifest_path_str = file_info.get("manifest_path")
             encoding = file_info.get("encoding", "utf-8")
-            
-            # Restore manifest path from session or detect it
+
             if manifest_path_str:
                 manifest_path = Path(manifest_path_str)
-                # Verify it still exists
                 if not manifest_path.exists():
                     manifest_path = self._find_manifest(path)
             else:
-                # Try to detect manifest if not in session
                 manifest_path = self._find_manifest(path)
-            
-            # Get lines for this file from all_lines
+
             if all_lines:
                 file_lines = all_lines[line_offset:line_offset + line_count]
                 line_offset += line_count
             else:
-                # Try to reload from disk if lines not in session
                 try:
                     file_lines = self._extract_lines(path, format_id, encoding)
                 except Exception as e:
                     logger.warning("Could not reload file %s: %s", path, e)
                     file_lines = []
-            
+
             loaded = LoadedFile(
                 path=path,
                 format_id=format_id,
@@ -2047,12 +2088,11 @@ class InputExtractionStep(BaseStep):
                 encoding=encoding,
             )
             self._loaded_files.append(loaded)
-            
-            # Update session manifest path if we found one
+
             if manifest_path and self.session is not None and not self.session.manifest_path:
                 self.session.manifest_path = manifest_path
-        
-        logger.info("Restored %d files from session", len(self._loaded_files))
+
+        logger.info("Restored %d files from session (legacy)", len(self._loaded_files))
 
     def on_leave(self) -> None:
         """Called when leaving this step tab."""

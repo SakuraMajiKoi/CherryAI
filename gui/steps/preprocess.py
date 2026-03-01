@@ -941,7 +941,7 @@ class PreprocessingStep(BaseStep):
         except Exception as e:
             logger.debug("Could not get loaded lines: %s", e)
 
-        # Final fallback: session step data
+        # Final fallback: legacy session step data
         input_data = self.session.get_step(0).data
         return input_data.get("all_lines", [])
 
@@ -1133,7 +1133,6 @@ class PreprocessingStep(BaseStep):
             "config": dict(self._config),
             "processed_count": len(self._preview_lines),
             "changed_count": sum(1 for _, _, c in self._preview_lines if c),
-            "processed_lines": [p for _, p, _ in self._preview_lines],
         }
         self.set_step_data(data)
 
@@ -1757,13 +1756,13 @@ class PreprocessingStep(BaseStep):
         are available for preprocessing.
         """
         try:
-            # First check if we can get lines from session directly
-            input_data = self.session.get_step(0).data
-            session_lines = input_data.get("all_lines", [])
-            
-            if session_lines:
-                logger.debug("Session has %d lines available for Preprocessing", len(session_lines))
-                return  # Lines available in session, we can use fallback
+            # Check if manifest has lines
+            mgr = self.manifest_manager
+            if mgr is not None and mgr.is_loaded:
+                manifest_lines = mgr.get_lines()
+                if manifest_lines:
+                    logger.debug("Manifest has %d lines available for Preprocessing", len(manifest_lines))
+                    return  # Lines available in manifest
             
             # Try to trigger Input step restore
             app = self.winfo_toplevel()

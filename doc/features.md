@@ -1480,7 +1480,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Chunk Sync: LinesPerChunk synced between Costs step and manifest; `_on_chunk_changed()` write-back
     - Language Skip: `detect_line_script()` in `functions/analysis.py` (CJK/kana/hangul/latin detection); `_LANG_SCRIPT_MAP` and `_apply_language_skip()` filter non-source lines
     - Tab Caching: `BaseStep` infrastructure (`_compute_cache_hash`, `_is_cache_valid`, `_update_cache`, `_invalidate_cache`, `_force_refresh`); TranslationStep early-returns on cache hit
-    - Performance: SharedTable batch insertion (500-row batches via `after(1, ...)`); `_refresh_lines()` optimized with batch manifest dict read
+    - Performance: SharedTable batch insertion (2000-row batches via `after(1, ...)`); bulk `*children` delete; 50k display cap; `_refresh_lines()` optimized with batch manifest dict read
   - **QA Step & Validation (Phase 44):**
     - QA Step Placeholder Mode: toggle switch defaults to placeholder, preserves full QA UI behind toggle
     - Shared Validation: Translation uses prompt_adapter retry/recovery, Postprocessing uses recover_line + validate_character_word
@@ -1683,7 +1683,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - StepState recursive serialization: _serialize_value handles nested objects
   - Analysis header deduplication: Removed redundant "Step 2:" prefix
   - Analysis data flow: Fixed to access input step's loaded files directly
-  - Input step data sharing: Stores all_lines for cross-step access
+  - Input step data sharing: Orig lines accessed via manifest `lines[].orig` (TASK 71)
 - **Known Issues (Follow-up Phase):**
   - Autosave JSON parse error on corrupt files
   - Manifest not created automatically on file load

@@ -6881,9 +6881,9 @@ Extended in January 2025 with file restoration and auto-numbered save tests.
 | Test | Purpose |
 |------|---------|
 | `test_session_files_metadata_structure` | Files metadata has expected structure |
-| `test_session_all_lines_persistence` | all_lines data persists through save/load |
-| `test_session_files_with_lines_complete_roundtrip` | Complete file metadata and lines roundtrip |
-| `test_empty_session_files_handled` | Empty files list handled gracefully |
+| `test_session_step_metadata_persistence` | Input step metadata persists through save/load (TASK 71) |
+| `test_session_input_metadata_roundtrip` | Input step metadata roundtrip (no all_lines/files) |
+| `test_empty_session_input_handled` | Empty Input step data handled gracefully |
 
 #### TestAutoNumberedSessionSaves (4 tests)
 
@@ -7243,8 +7243,20 @@ Phase 11 (Output), Phase 12 (Information), Phase 13 (Global Options), Phase 14 (
 
 | Test | Purpose |
 |------|---------|
-| `test_input_step_stores_all_lines` | Input step stores all_lines in step data |
-| `test_session_save_load_preserves_all_lines` | Session save/load preserves all_lines |
+| `test_input_step_data_no_longer_stores_all_lines` | Input step data no longer stores all_lines (TASK 71) |
+| `test_session_save_load_preserves_step_metadata` | Session save/load preserves Input step metadata |
+
+#### TestManifestMigrationStripsRedundant (7 tests) - TASK 71
+
+| Test | Purpose |
+|------|---------|
+| `test_strips_all_lines_from_input` | all_lines removed from Input step_data during migration |
+| `test_strips_files_from_input` | files removed from Input step_data during migration |
+| `test_strips_processed_lines_from_preprocessing` | processed_lines removed from Preprocessing step_data |
+| `test_strips_postprocessed_lines_from_postprocessing` | postprocessed_lines removed from Postprocessing step_data |
+| `test_no_error_if_keys_absent` | Migration doesn't fail when redundant keys already absent |
+| `test_get_all_orig_lines_returns_orig_values` | ManifestManager.get_all_orig_lines() returns lines[].orig |
+| `test_get_all_orig_lines_empty_manifest` | get_all_orig_lines returns empty list when no lines |
 
 #### TestLoadedFileSerialization (1 test) - Data Flow Fixes
 
@@ -7791,7 +7803,7 @@ Tests for session loading and state restoration fixes.
 
 | Test | Purpose |
 |------|---------|
-| `test_input_step_data_has_all_lines` | all_lines storage |
+| `test_input_step_data_no_redundant_all_lines` | Input step data no longer stores all_lines (TASK 71) |
 | `test_preprocessing_config_storage` | Config storage and retrieval |
 | `test_preprocessing_placeholder_rules_storage` | Placeholder rules storage |
 | `test_preprocessing_protect_patterns_storage` | Protect patterns storage |
@@ -10226,13 +10238,16 @@ python -m pytest CherryAI/dev/test_i18n.py -v --timeout=10
 python -m pytest CherryAI/dev/test_session_persistence.py -v --timeout=10
 ```
 
-#### Table Batch Insertion (test_table_batch_insert.py, 8 tests)
+#### Table Batch Insertion (test_table_batch_insert.py, 16 tests)
 
 | Test Class | Count | Coverage |
 |-----------|-------|----------|
 | TestBatchInsertVersionTracking | 5 | Version initialization, refresh increments version, stale batch skipped, current version proceeds, multiple refresh cancels previous |
 | TestBatchInsertSignature | 1 | Version parameter in method signature |
 | TestTableRowDeduplication | 2 | Row IDs unique, Tcl/Tk duplicate detection |
+| TestRowConstructionPerformance | 3 | TASK 71: 10k/50k/100k row build under threshold |
+| TestDisplayCapAndBatching | 3 | TASK 71: 50k display cap, 2000-row batches, bulk *children delete |
+| TestFilterPerformance | 2 | TASK 71: 10k filter < 200ms, 50k filter < 1s |
 
 ```bash
 python -m pytest CherryAI/dev/test_table_batch_insert.py -v --timeout=10
