@@ -910,6 +910,170 @@ def handle_failed_lines(
 # ---------------- Prompt Builder Functions ---------------- #
 
 
+def build_full_system_prompt(
+    metadata: Dict[str, Any],
+    glossary_entries: Optional[List[Dict[str, Any]]] = None,
+    characters: Optional[List[Dict[str, Any]]] = None,
+    sample_lines: Optional[List[str]] = None,
+    rolling_context_text: str = "",
+    pov_data: Optional[Dict[str, Any]] = None,
+    config_dir: Optional[Path] = None,
+) -> Tuple[str, Dict[str, int]]:
+    """Build the full system prompt following spec §5.2 injection order.
+
+    This is the **single source of truth** for prompt assembly, shared
+    by the Costs step (prompt overhead estimate) and the Translation
+    step (actual API requests + request preview).
+
+    §5.2 Injection Order:
+        1. Language Direction
+        2. System Instructions (custom_notes)
+        3. Style
+        4. Tone
+        5. Summary
+        6. Genre
+        7. POV (narrative perspective)
+        8. Conditional Prompts (selective)
+        9. Glossary + Characters (selective)
+        10. Rolling Context (conditional)
+
+    Args:
+        metadata: Information-step metadata dict with keys
+            source_language, target_language, custom_notes, style,
+            tone, summary, genre.
+        glossary_entries: Active glossary entries, each a dict with
+            source, target, notes, active keys.
+        characters: Character list from metadata (original_name,
+            name, gender/notes).
+        sample_lines: Lines for conditional prompt detection (first
+            ~200 preprocessed lines).
+        rolling_context_text: Pre-formatted rolling context to append.
+        pov_data: POV dict from manifest (pov, confidence keys).
+        config_dir: Config directory for conditional prompt loading.
+
+    Returns:
+        Tuple of (assembled_prompt, token_breakdown) where
+        token_breakdown maps section name → estimated word count.
+    """
+    if metadata is None:
+        metadata = {}
+
+    parts: List[str] = []
+    breakdown: Dict[str, int] = {}
+
+    def _add(section_name: str, text: str) -> None:
+        if text and text.strip():
+            parts.append(text)
+            breakdown[section_name] = len(text.split())
+
+    # --- 1. Language Direction ---
+    source_lang = (metadata.get("source_language", "") or "").strip()
+    target_lang = (metadata.get("target_language", "") or "").strip()
+    if source_lang and target_lang:
+        _add(
+            "language",
+            f"# Language\nTranslate from {source_lang} to {target_lang}.",
+        )
+
+    # --- 2. System Instructions ---
+    sys_instructions = (metadata.get("custom_notes", "") or "").strip()
+    if sys_instructions:
+        _add("system_instructions", sys_instructions)
+
+    # --- 3. Style ---
+    style = (metadata.get("style", "") or "").strip()
+    if style:
+        _add("style", f"# Translation Style Guidelines\n{style}")
+
+    # --- 4. Tone ---
+    tone = (metadata.get("tone", "") or "").strip()
+    if tone:
+        _add("tone", f"# Translation Tone\n{tone}")
+
+    # --- 5. Summary ---
+    summary = (metadata.get("summary", "") or "").strip()
+    if summary:
+        _add("summary", f"# Game Context\n{summary}")
+
+    # --- 6. Genre ---
+    genre = (metadata.get("genre", "") or "").strip()
+    if genre:
+        _add("genre", f"# Genre\n{genre}")
+
+    # --- 7. POV ---
+    if pov_data and isinstance(pov_data, dict):
+        if pov_data.get("confidence") == "high":
+            pov_label = {
+                "1st": "first",
+                "2nd": "second",
+                "3rd": "third",
+            }.get(pov_data.get("pov", ""), pov_data.get("pov", ""))
+            _add(
+                "pov",
+                f"# Narrative Perspective\n"
+                f"The narrative uses {pov_label} person perspective. "
+                f"Maintain consistent {pov_label} person perspective "
+                f"throughout.",
+            )
+
+    # --- 8. Conditional Prompts ---
+    if sample_lines:
+        cond_text, _ = build_conditional_instructions(
+            sample_lines[:200], config_dir,
+        )
+        if cond_text and cond_text.strip():
+            _add("conditional", cond_text.strip())
+
+    # --- 9. Glossary + Characters ---
+    glossary_block = ""
+    if glossary_entries:
+        active = [e for e in glossary_entries if e.get("active", True)]
+        if active:
+            g_lines = ["# Glossary", "Use these terms strictly:"]
+            for entry in active:
+                src = entry.get("source", "")
+                tgt = entry.get("target", "")
+                notes = entry.get("notes", "")
+                if src:
+                    line_text = f"- {src} → {tgt}" if tgt else f"- {src}"
+                    if notes:
+                        line_text += f" ({notes})"
+                    g_lines.append(line_text)
+            glossary_block = "\n".join(g_lines)
+
+    if characters:
+        char_lines: List[str] = ["# Characters"]
+        for ch in characters:
+            orig = ch.get("original_name", "")
+            eng = ch.get("name", "")
+            gender = ch.get("gender", "") or ch.get("notes", "")
+            if orig:
+                entry_text = f"- {orig}"
+                if eng:
+                    entry_text += f" → {eng}"
+                if gender:
+                    entry_text += f" ({gender})"
+                char_lines.append(entry_text)
+        if len(char_lines) > 1:
+            if glossary_block:
+                glossary_block += "\n\n" + "\n".join(char_lines)
+            else:
+                glossary_block = "\n".join(char_lines)
+
+    if glossary_block:
+        _add("glossary", glossary_block)
+
+    # --- 10. Rolling Context ---
+    if rolling_context_text and rolling_context_text.strip():
+        _add(
+            "rolling_context",
+            f"# Rolling Context\n{rolling_context_text.strip()}",
+        )
+
+    assembled = "\n\n".join(parts)
+    return assembled, breakdown
+
+
 def build_prompt_preview(
     lines: List[str],
     game_summary: str = "",

@@ -1564,7 +1564,11 @@ class PostprocessingStep(BaseStep):
                 if self._stats.lines_processed % 10 == 0:
                     self.after(0, self._update_summary)
 
-            # Complete
+            # ── Deduplication restoration ──────────────────────────────
+            # After all normal lines are post-processed, restore dedup
+            # lines by copying the postprocessed text from their source
+            # line (accessed in RAM for latest state).
+            self._restore_dedup_lines()
             self._status = PostprocessStatus.COMPLETED
             # Phase 48: Write postprocess step log footer
             try:
@@ -1621,6 +1625,109 @@ class PostprocessingStep(BaseStep):
             text = re.sub(r"\s+__", "__", text)
 
         return text
+
+    # ────────────────────────────────────────────────────────────────────
+    # Deduplication Restoration
+    # ────────────────────────────────────────────────────────────────────
+
+    def _restore_dedup_lines(self) -> None:
+        """Restore deduplicated lines from their source lines.
+
+        Reads the dedup_map / aggr_dedup_map / aggr_numbers from the
+        preprocessing step data (step 3).  For each dedup'd line the
+        most up-to-date text is copied from the *in-RAM* source line
+        (postpro → tl → prepro → orig).
+
+        For aggressive-dedup lines the number tokens are restored from
+        the per-line numbers list stored in ``aggr_numbers``.
+        """
+        # Load dedup maps from preprocessing step data
+        prepro_data = self.session.get_step(3).data
+        if not prepro_data:
+            return
+
+        dedup_map_raw = prepro_data.get("dedup_map", {})
+        aggr_map_raw = prepro_data.get("aggr_dedup_map", {})
+        aggr_nums_raw = prepro_data.get("aggr_numbers", {})
+
+        # Keys may be strings due to JSON serialisation
+        dedup_map: Dict[int, int] = {
+            int(k): int(v) for k, v in dedup_map_raw.items()
+        }
+        aggr_map: Dict[int, int] = {
+            int(k): int(v) for k, v in aggr_map_raw.items()
+        }
+        aggr_nums: Dict[int, List[str]] = {
+            int(k): list(v) for k, v in aggr_nums_raw.items()
+        }
+
+        if not dedup_map and not aggr_map:
+            return
+
+        # Build idx → PostprocessLine lookup for O(1) access
+        by_idx: Dict[int, PostprocessLine] = {
+            line.idx: line for line in self._lines
+        }
+
+        restored = 0
+
+        # Standard dedup restoration
+        for dup_idx, src_idx in dedup_map.items():
+            dup_line = by_idx.get(dup_idx)
+            src_line = by_idx.get(src_idx)
+            if dup_line is None or src_line is None:
+                continue
+            # Pick latest text from source: postpro → tl → prepro → orig
+            text = self._best_text(src_line)
+            if text:
+                dup_line.postprocessed = text
+                dup_line.has_changes = True
+                restored += 1
+
+        # Aggressive dedup restoration
+        for dup_idx, src_idx in aggr_map.items():
+            dup_line = by_idx.get(dup_idx)
+            src_line = by_idx.get(src_idx)
+            if dup_line is None or src_line is None:
+                continue
+            text = self._best_text(src_line)
+            if not text:
+                continue
+            # Restore numbers from this specific line's original
+            nums = aggr_nums.get(dup_idx, [])
+            if nums:
+                try:
+                    from CherryAI.gui.helpers.mode_adapter import (
+                        aggressive_restore_line,
+                    )
+                    text = aggressive_restore_line(text, nums)
+                except ImportError:
+                    pass
+            dup_line.postprocessed = text
+            dup_line.has_changes = True
+            restored += 1
+
+        if restored:
+            self._stats.lines_with_changes += restored
+            logger.info("Restored %d deduplicated lines", restored)
+
+    @staticmethod
+    def _best_text(line: PostprocessLine) -> str:
+        """Return the most up-to-date text for *line*.
+
+        Resolution order: postprocessed → translated → original.
+        Skips ``__DEDUP__`` sentinel values.
+
+        Args:
+            line: The source line to read from.
+
+        Returns:
+            Best available text, or empty string.
+        """
+        for candidate in (line.postprocessed, line.translated, line.original):
+            if candidate and candidate != "__DEDUP__":
+                return candidate
+        return ""
 
     def _apply_symbol_conversion(self, text: str) -> str:
         """Apply symbol conversion to text (TASK 45.5: bidirectional).

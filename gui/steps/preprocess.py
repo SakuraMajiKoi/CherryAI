@@ -1054,6 +1054,7 @@ class PreprocessingStep(BaseStep):
                 processed_lines.append((original, new_line, display, line_tags))
 
             self._preview_lines = processed_lines
+            self._last_stats = stats  # Preserve dedup maps for step data
 
             # Hide progress and update UI on main thread
             self.after(0, self._hide_progress)
@@ -1197,6 +1198,9 @@ class PreprocessingStep(BaseStep):
         Skips writing prepro when it equals orig (unchanged lines)
         since the PIPELINE_FIELDS resolution chain already falls back
         to orig.  Also writes a comma-separated ``tags`` field per line.
+
+        Deduplication maps (dedup_map, aggr_dedup_map, aggr_numbers)
+        are stored in step data so postprocessing can restore duplicates.
         """
         data = {
             "config": dict(self._config),
@@ -1206,6 +1210,25 @@ class PreprocessingStep(BaseStep):
                 if (entry[3] if len(entry) == 4 else entry[2])
             ),
         }
+
+        # Persist dedup mappings for postprocessing restoration
+        last_stats = getattr(self, "_last_stats", {})
+        dedup_map = last_stats.get("dedup_map", {})
+        aggr_dedup_map = last_stats.get("aggr_dedup_map", {})
+        aggr_numbers = last_stats.get("aggr_numbers", {})
+
+        if dedup_map:
+            # Serialize with string keys for JSON compatibility
+            data["dedup_map"] = {str(k): v for k, v in dedup_map.items()}
+        if aggr_dedup_map:
+            data["aggr_dedup_map"] = {
+                str(k): v for k, v in aggr_dedup_map.items()
+            }
+        if aggr_numbers:
+            data["aggr_numbers"] = {
+                str(k): v for k, v in aggr_numbers.items()
+            }
+
         self.set_step_data(data)
 
         # Persist each preprocessed line to the manifest

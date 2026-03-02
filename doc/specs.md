@@ -397,16 +397,19 @@ The system prompt is assembled in the following fixed order. Empty sections are 
 | 4 | **Tone** | `metadata.tone` (fallback: `CustomTone`) | Skip when empty |
 | 5 | **Summary** | `metadata.summary` | Skip when empty |
 | 6 | **Genre** | `metadata.genre` (fallback: top-level `Genre`) | Skip when empty |
-| 7 | **Conditional Prompts** | `user/CherryAI.ini [prompts]` or `user/conditional_prompts.json` | Selective — injected only when [Input Lines] contain the trigger pattern |
-| 8 | **Glossary** | Manifest `Glossary` + `user/globalglossary.tsv` + `metadata.characters` | Selective — rows injected only when Original (or Translation) found in [Input Lines]; Characters always included |
-| 9 | **Rolling Context** | Preceding translated lines from manifest | Conditional — dialogue/unknown requests only; disabled for Menu/Choice |
-| 10 | **Input Lines** | Manifest `lines[].prepro` (fallback: `orig`) | Always present |
+| 7 | **POV** | `manifest POV` dict (`pov`, `confidence`) | Skip when confidence ≠ "high" |
+| 8 | **Conditional Prompts** | `user/CherryAI.ini [prompts]` or `user/conditional_prompts.json` | Selective — injected only when [Input Lines] contain the trigger pattern |
+| 9 | **Glossary** | Manifest `Glossary` + `user/globalglossary.tsv` + `metadata.characters` | Selective — rows injected only when Original (or Translation) found in [Input Lines]; Characters always included |
+| 10 | **Rolling Context** | Preceding translated lines from manifest | Conditional — dialogue/unknown requests only; disabled for Menu/Choice |
+| 11 | **Input Lines** | Manifest `lines[].prepro` (fallback: `orig`) | Always present |
 
 **Notes on ordering:**
-- Slots 1-6 are non-selective (included when non-empty regardless of line content)
-- Slots 7-8 are selective/conditional (content-based or pattern-triggered)
-- Rolling Context (slot 9) appears just before Input Lines to maximise contextual proximity
+- Slots 1-7 are non-selective (included when non-empty regardless of line content)
+- POV (slot 7) maps "1st"→"first person", "2nd"→"second person", "3rd"→"third person"
+- Slots 8-9 are selective/conditional (content-based or pattern-triggered)
+- Rolling Context (slot 10) appears just before Input Lines to maximise contextual proximity
 - Meta Settings (URL, key, model, temperature, etc.) are passed separately and never counted
+- **Single source of truth**: `build_full_system_prompt()` in `gui/helpers/prompt_adapter.py` assembles the prompt for Costs (Step 4) and Translation (Step 5)
 
 #### Request Size
 
@@ -657,7 +660,7 @@ The following table lists all processes in their execution order. Preprocessing 
 
 | Order | Process | Pre Step | Post Step | Notes |
 |-------|---------|----------|-----------|-------|
-| 1 | Deduplication | First (P10) | Last (P90) | Replaces duplicates with `__DEDUP__`; post recovers from unique translation |
+| 1 | Deduplication | First (P10) | Last (P90) | Replaces duplicates with `__DEDUP__`; post recovers from unique translation; GUI: `apply_dedup_batch()` in mode_adapter; tags D{idx} |
 | 2 | Code Spacing Rules | — | P50 (Post only for recovery) | Post-exclusive spacing recovery; also pre for normalization |
 | 3 | Whitespace Normalization | — | P120 (Post-exclusive) | Post-exclusive: matches indentation to original |
 | 4 | Bracket Balance | — | P110 (Post-exclusive) | Post-exclusive: fixes unmatched brackets |
@@ -670,7 +673,7 @@ The following table lists all processes in their execution order. Preprocessing 
 | 11 | Width Conversion | P35 (Pre only) | — | Fullwidth↔Halfwidth character width; Pre only |
 | 12 | Anchoring | P75 | P10 | Remove code at anchors; restore first in Post |
 | 13 | Quote Stripping | P76 (after Anchoring) | P9 (before Anchoring restore) | Strip quotes at dialogue boundaries to save tokens |
-| 14 | Aggressive Deduplication | Last (P90) | First (P5) | Variant-aware dedup with generic substitutions |
+| 14 | Aggressive Deduplication | Last (P90) | First (P5) | Variant-aware dedup with generic substitutions; GUI: `apply_aggressive_dedup_batch()` in mode_adapter; tags AD{idx} |
 
 #### Width Conversion (Pre only)
 

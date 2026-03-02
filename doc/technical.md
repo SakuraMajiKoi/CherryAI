@@ -275,7 +275,7 @@ TABLE OF CONTENTS
    
    6.7 gui/helpers/ (9 files - 7 adapter modules + 1 confirmation module)
        - __init__.py - Helper exports
-       - mode_adapter.py - Bridge between GUI config and modi/ modules (TASK 16.5; TASK 72: tags_by_line tracking, progress_cb parameter)
+       - mode_adapter.py - Bridge between GUI config and modi/ modules (TASK 16.5; TASK 72: tags_by_line tracking, progress_cb parameter; TASK 73: apply_dedup_batch, apply_aggressive_dedup_batch, DEDUP_PLACEHOLDER, aggressive helper fallbacks)
        - analysis_adapter.py - Bridge between GUI and functions/analysis.py (TASK 16.6)
          - detect_individual_codes_batch(): Individual code patterns with counts, types, samples
          - analyze_lines(): Full analysis with speaker_samples and individual_codes
@@ -284,7 +284,7 @@ TABLE OF CONTENTS
          - Note: Speaker actions in analysis.py write to character glossary (`characters` key)
            via `_upsert_character_entry()`, not to project glossary entries
        - chunker_adapter.py - Bridge between GUI and functions/chunker.py
-       - prompt_adapter.py - Bridge between GUI and functions/prompt_builder.py
+       - prompt_adapter.py - Bridge between GUI and functions/prompt_builder.py (TASK 73: build_full_system_prompt shared builder — single source of truth for §5.2 prompt assembly)
        - manifest_binding.py - Widget-to-Manifest binding system (TASK 22.3)
        - tooltip.py - Tooltip display utilities for widgets
        - confirmations.py - Confirmation dialog with "Don't ask again" opt-out (Phase 60)

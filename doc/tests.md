@@ -3518,15 +3518,104 @@ Deduplication module tests validating placeholder tokens, normalization, and rou
 
 ---
 
-### dev/test_options.py (29 tests)
+### dev/test_dedup_pipeline.py (26 tests)
 
-Options dialog and API configuration tests validating providers, languages, and settings.
+GUI dedup pipeline tests validating apply_dedup_batch, apply_aggressive_dedup_batch, preprocessing integration, and postprocessing _best_text resolution.
 
-#### TestAPIProviders (5 tests)
+#### TestApplyDedupBatch (6 tests)
 
 | Test | Purpose |
-|------|---------|
-| `test_providers_exist` | All expected providers defined |
+|------|---------|  
+| `test_no_duplicates` | No duplicates returns unchanged |
+| `test_simple_duplicates` | Duplicates replaced with __DEDUP__ |
+| `test_empty_lines_ignored` | Empty lines not treated as duplicates |
+| `test_threshold_zero_disables` | Threshold 0 disables dedup |
+| `test_many_duplicates` | Multiple groups handled |
+| `test_returns_copy` | Input list not mutated |
+
+#### TestApplyAggressiveDedupBatch (4 tests)
+
+| Test | Purpose |
+|------|---------|  
+| `test_no_number_variations` | No variations returns unchanged |
+| `test_number_normalised_dedup` | Number variants collapsed |
+| `test_skips_dedup_placeholder` | __DEDUP__ lines skipped |
+| `test_empty_lines_skipped` | Empty lines not matched |
+
+#### TestAggressiveHelpers (3 tests)
+
+| Test | Purpose |
+|------|---------|  
+| `test_normalize_replaces_digits` | Digits replaced for matching |
+| `test_mask_captures_numbers` | Numbers captured during masking |
+| `test_restore_puts_numbers_back` | Numbers restored from list |
+
+#### TestApplyPreprocessingDedup (9 tests)
+
+| Test | Purpose |
+|------|---------|  
+| `test_dedup_applied_first` | Dedup runs at P10 |
+| `test_dedup_tags_generated` | D{idx} tags created |
+| `test_aggressive_dedup_applied_last` | Aggressive dedup runs at P90 |
+| `test_aggressive_tags_generated` | AD{idx} tags created |
+| `test_aggr_numbers_stored` | aggr_numbers dict populated |
+| `test_dedup_disabled` | Config off skips dedup |
+| `test_combined_standard_and_aggressive` | Both dedup types in one pass |
+| `test_progress_callback` | progress_cb called with float values |
+| `test_dedup_map_string_keys_for_json` | Map keys are strings for JSON |
+
+#### TestBestText (4 tests)
+
+| Test | Purpose |
+|------|---------|  
+| `test_prefers_postprocessed` | Postprocessed text preferred |
+| `test_falls_back_to_translated` | Falls back to translated |
+| `test_skips_dedup_sentinel` | __DEDUP__ sentinel skipped |
+| `test_all_empty_returns_empty` | All empty returns empty string |
+
+---
+
+### dev/test_prompt_builder_shared.py (20 tests)
+
+Shared prompt builder tests validating §5.2 slot assembly, POV integration, glossary filtering, and that Costs and Translation both use the shared builder.
+
+#### TestBuildFullSystemPrompt (17 tests)
+
+| Test | Purpose |
+|------|---------|  
+| `test_all_sections_present` | All §5.2 sections in output |
+| `test_injection_order` | Sections appear in correct order |
+| `test_pov_high_confidence_included` | POV included when high confidence |
+| `test_pov_low_confidence_excluded` | POV excluded when low confidence |
+| `test_pov_none_excluded` | POV excluded when None |
+| `test_empty_metadata` | Empty dict handled gracefully |
+| `test_none_metadata` | None metadata handled gracefully |
+| `test_glossary_active_filter` | Only active entries included |
+| `test_glossary_with_notes` | Notes column appended |
+| `test_characters_section` | Characters section formatted |
+| `test_rolling_context_appended` | Rolling context at end |
+| `test_breakdown_counts_words` | Token breakdown has word counts |
+| `test_language_section_format` | Language direction formatted |
+| `test_partial_language_excluded` | Missing language skips section |
+| `test_pov_1st_person` | 1st person mapped correctly |
+| `test_pov_3rd_person` | 3rd person mapped correctly |
+
+#### TestCostsPromptOverhead (2 tests)
+
+| Test | Purpose |
+|------|---------|  
+| `test_costs_imports_shared_builder` | Costs module imports builder |
+| `test_shared_builder_returns_nonzero_tokens` | Builder returns >0 tokens |
+
+#### TestTranslateUsesSharedBuilder (2 tests)
+
+| Test | Purpose |
+|------|---------|  
+| `test_translate_imports_shared_builder` | Translate module imports builder |
+| `test_prompt_includes_pov_when_set` | POV present in translate prompt |
+
+---
+
 | `test_provider_has_required_keys` | name, base_url, models present |
 | `test_openai_has_empty_base_url` | OpenAI uses SDK default |
 | `test_gemini_has_openai_compat_url` | Gemini uses compat endpoint |

@@ -58,7 +58,10 @@ from CherryAI.gui.helpers.chunker_adapter import (
 )
 
 # Import prompt adapter for prompt token estimation
-from CherryAI.gui.helpers.prompt_adapter import build_prompt_preview
+from CherryAI.gui.helpers.prompt_adapter import (
+    build_prompt_preview,
+    build_full_system_prompt,
+)
 
 if TYPE_CHECKING:
     from CherryAI.gui.state.store import SessionState
@@ -625,45 +628,64 @@ class CostsStep(BaseStep):
         return original, preprocessed
 
     def _get_prompt_tokens(self) -> int:
-        """Get estimated token count for the system prompt.
-        
-        Includes game summary, glossary, translation style, and conditional
-        prompts that will be sent with each API request.
-        
+        """Get estimated token count for the system prompt overhead.
+
+        Builds the full §5.2 system prompt using
+        ``build_full_system_prompt`` so the estimate covers all
+        sections: Language, System Instructions, Style, Tone,
+        Summary, Genre, POV, Conditional, Glossary, and Characters.
+
         Returns:
             Estimated token count for system prompt.
         """
         try:
-            # Get game summary from Information step (step 2)
+            # Read Information step metadata (step index 2)
             info_data = self.session.get_step(2).data
             metadata = info_data.get("metadata", {})
-            game_summary = metadata.get("game_summary", "")
-            
-            # Get glossary from Information step
-            # Characters and code patterns contribute to glossary
+
+            # Glossary from manifest
+            glossary_entries: list[dict] = []
+            mgr = self.manifest_manager
+            if mgr is not None and mgr.is_loaded:
+                try:
+                    from CherryAI.functions.manifest_fields import (
+                        load_glossary_entries,
+                    )
+                    glossary_entries = load_glossary_entries(mgr)
+                except ImportError:
+                    pass
+
+            # Characters from metadata
             characters = metadata.get("characters", [])
-            glossary_lines = []
-            for char in characters:
-                if isinstance(char, dict):
-                    name = char.get("name", "")
-                    original = char.get("original_name", "")
-                    if name and original:
-                        glossary_lines.append(f"{original} → {name}")
-            glossary_text = "\n".join(glossary_lines)
-            
-            # Get translation style (from config or step data)
-            style_text = ""
-            
-            # Build prompt preview to get token count
-            preview, _ = build_prompt_preview(
-                lines=self._lines_preprocessed[:10],  # Sample lines
-                game_summary=game_summary,
-                glossary_text=glossary_text,
-                style_text=style_text,
+
+            # POV from manifest top-level
+            pov_data: dict = {}
+            if mgr is not None and mgr.is_loaded:
+                pov_data = mgr._manifest_data.get("POV", {})
+
+            # Sample preprocessed lines for conditional prompt detection
+            sample_lines = self._lines_preprocessed[:200] if self._lines_preprocessed else []
+
+            # Build the full prompt using the shared builder
+            prompt_text, breakdown = build_full_system_prompt(
+                metadata=metadata,
+                glossary_entries=glossary_entries,
+                characters=characters,
+                sample_lines=sample_lines,
+                pov_data=pov_data,
             )
-            
-            return preview.total_tokens
-            
+
+            if not prompt_text:
+                return 0
+
+            # Use tiktoken if available; otherwise rough 4-char estimate
+            try:
+                token_count = count_tokens(prompt_text)
+            except Exception:
+                token_count = len(prompt_text) // 4
+
+            return token_count
+
         except Exception as e:
             logger.debug("Error calculating prompt tokens: %s", e)
             return 0

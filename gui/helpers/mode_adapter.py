@@ -426,6 +426,152 @@ def apply_placeholder_batch(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Deduplication (lightweight — no Processor required)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Import aggressive helpers from dedup.py when available
+try:
+    from CherryAI.functions.dedup import (
+        aggressive_normalize_line,
+        aggressive_mask_line,
+        aggressive_restore_line,
+        AGGR_NUM_TOKEN,
+    )
+    _HAS_DEDUP = True
+except ImportError:
+    _HAS_DEDUP = False
+    AGGR_NUM_TOKEN = "<NUM>"
+
+    def aggressive_normalize_line(line: str) -> str:  # type: ignore[misc]
+        """Fallback normalizer: replace digits with <NUM>."""
+        if not line:
+            return ""
+        s = re.sub(r"[0-9０-９]+", f" {AGGR_NUM_TOKEN} ", str(line))
+        return re.sub(r"\s+", " ", s).strip()
+
+    def aggressive_mask_line(line: str) -> Tuple[str, List[str]]:  # type: ignore[misc]
+        """Fallback masker."""
+        nums: List[str] = []
+        def _repl(m: re.Match) -> str:
+            nums.append(m.group(0))
+            return AGGR_NUM_TOKEN
+        s = re.sub(r"[0-9０-９]+", _repl, str(line))
+        return s, nums
+
+    def aggressive_restore_line(masked: str, numbers: List[str]) -> str:  # type: ignore[misc]
+        """Fallback restorer."""
+        parts = masked.split(AGGR_NUM_TOKEN)
+        out: List[str] = []
+        for idx_p, part in enumerate(parts):
+            out.append(part)
+            if idx_p < len(parts) - 1:
+                if idx_p < len(numbers):
+                    out.append(numbers[idx_p])
+                else:
+                    out.append(AGGR_NUM_TOKEN)
+        return "".join(out)
+
+
+DEDUP_PLACEHOLDER = "__DEDUP__"
+
+
+def apply_dedup_batch(
+    lines: List[str],
+    threshold: int = 1,
+) -> Tuple[List[str], int, List[int], Dict[int, int]]:
+    """Apply standard deduplication to lines.
+
+    Keeps the first occurrence of each line; replaces later duplicates
+    with ``__DEDUP__``.  Returns a mapping ``{dup_idx: source_idx}``
+    for postprocessing restoration.
+
+    Args:
+        lines: Lines to process.
+        threshold: Minimum occurrence count before dedup applies (1 = all).
+
+    Returns:
+        Tuple of (processed_lines, change_count, changed_indices,
+        dedup_map ``{dup_idx: source_idx}``).
+    """
+    if threshold <= 0:
+        return list(lines), 0, [], {}
+
+    result = list(lines)
+    first_by_text: Dict[str, int] = {}
+    dedup_map: Dict[int, int] = {}
+    changed_indices: List[int] = []
+    changes = 0
+
+    for i, line in enumerate(result):
+        if not line.strip():
+            continue
+        head_idx = first_by_text.get(line)
+        if head_idx is not None:
+            result[i] = DEDUP_PLACEHOLDER
+            dedup_map[i] = head_idx
+            changed_indices.append(i)
+            changes += 1
+        else:
+            first_by_text[line] = i
+
+    return result, changes, changed_indices, dedup_map
+
+
+def apply_aggressive_dedup_batch(
+    lines: List[str],
+) -> Tuple[List[str], int, List[int], Dict[int, int], Dict[int, List[str]]]:
+    """Apply aggressive deduplication (number-normalized) to lines.
+
+    Lines that differ only in digit sequences are treated as duplicates.
+    The first occurrence is kept (with numbers masked to ``<NUM>``);
+    later occurrences become ``__DEDUP__``.
+
+    Args:
+        lines: Lines to process (already standard-dedup'd).
+
+    Returns:
+        Tuple of (processed_lines, change_count, changed_indices,
+        aggr_dedup_map ``{dup_idx: source_idx}``,
+        aggr_numbers ``{line_idx: [original_numbers]}``).
+    """
+    result = list(lines)
+    first_by_norm: Dict[str, int] = {}
+    aggr_map: Dict[int, int] = {}
+    aggr_numbers: Dict[int, List[str]] = {}
+    changed_indices: List[int] = []
+    changes = 0
+
+    for i, line in enumerate(result):
+        if not line.strip() or line == DEDUP_PLACEHOLDER:
+            continue
+        norm = aggressive_normalize_line(line)
+        head_idx = first_by_norm.get(norm)
+        if head_idx is not None:
+            # Store numbers for this duplicate so post can restore
+            _, nums = aggressive_mask_line(line)
+            if nums:
+                aggr_numbers[i] = nums
+            # Mask the head line on first dup encounter if not yet masked
+            if head_idx not in aggr_numbers:
+                masked_head, head_nums = aggressive_mask_line(result[head_idx])
+                if head_nums:
+                    aggr_numbers[head_idx] = head_nums
+                    if masked_head != result[head_idx]:
+                        result[head_idx] = masked_head
+                        if head_idx not in changed_indices:
+                            changed_indices.append(head_idx)
+                            changes += 1
+            result[i] = DEDUP_PLACEHOLDER
+            aggr_map[i] = head_idx
+            changed_indices.append(i)
+            changes += 1
+        else:
+            first_by_norm[norm] = i
+
+    return result, changes, changed_indices, aggr_map, aggr_numbers
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Unified Preprocessing Pipeline
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -437,9 +583,21 @@ def apply_preprocessing(
 ) -> Tuple[List[str], Dict[str, Any]]:
     """Apply full preprocessing pipeline based on configuration.
 
+    Follows the priority ordering from specs §5.9:
+      P10  Deduplication (first)
+      P20  Ellipsis Compression
+      P30  Symbol Conversion
+      P60  PROTECTED Compression
+      P70  Custom Placeholders
+      P80  Protect Code Patterns
+      P90  Aggressive Deduplication (last)
+
     Args:
         lines: Lines to process.
         config: Preprocessing configuration dict with keys:
+            - dedup_enabled: bool
+            - dedup_threshold: int
+            - aggressive_dedup_enabled: bool
             - ellipsis_enabled: bool
             - symbol_conversion_enabled: bool
             - symbol_src_lang: str
@@ -457,6 +615,9 @@ def apply_preprocessing(
             - changes_by_rule: Dict[str, int]
             - changed_lines: List[int]
             - tags_by_line: Dict[int, List[str]]  — per-line tag names
+            - dedup_map: Dict[int, int]  — {dup_idx: source_idx}
+            - aggr_dedup_map: Dict[int, int]  — {dup_idx: source_idx}
+            - aggr_numbers: Dict[int, List[str]]  — {line_idx: [numbers]}
     """
     result = list(lines)
     tags_by_line: Dict[int, List[str]] = {}
@@ -465,6 +626,9 @@ def apply_preprocessing(
         "changes_by_rule": {},
         "changed_lines": set(),
         "tags_by_line": tags_by_line,
+        "dedup_map": {},
+        "aggr_dedup_map": {},
+        "aggr_numbers": {},
     }
 
     def _tag_indices(indices: List[int], tag: str) -> None:
@@ -475,8 +639,36 @@ def apply_preprocessing(
         if progress_cb is not None:
             progress_cb(name, frac)
 
-    # 1. Symbol conversion (should happen early)
-    _report("Symbol Conversion", 0.0)
+    # P10. Deduplication (FIRST — per specs §5.9)
+    _report("Deduplication", 0.0)
+    if config.get("dedup_enabled", True):
+        threshold = config.get("dedup_threshold", 1)
+        if threshold > 0:
+            result, count, indices, dedup_map = apply_dedup_batch(
+                result, threshold,
+            )
+            stats["dedup_map"] = dedup_map
+            if count:
+                stats["changes_by_rule"]["dedup"] = count
+                stats["total_changes"] += count
+                stats["changed_lines"].update(indices)
+                # Tag each dedup'd line for display + direct lookup
+                for dup_idx, src_idx in dedup_map.items():
+                    tags_by_line.setdefault(dup_idx, []).append("dedup")
+                    tags_by_line[dup_idx].append(f"D{src_idx}")
+
+    # P20. Ellipsis compression
+    _report("Ellipsis Compression", 0.15)
+    if config.get("ellipsis_enabled", True):
+        result, count, indices = apply_ellipsis_batch(result)
+        if count:
+            stats["changes_by_rule"]["ellipsis"] = count
+            stats["total_changes"] += count
+            stats["changed_lines"].update(indices)
+            _tag_indices(indices, "ellipsis")
+
+    # P30. Symbol conversion
+    _report("Symbol Conversion", 0.30)
     if config.get("symbol_conversion_enabled", True):
         src = config.get("symbol_src_lang", "ja")
         tgt = config.get("symbol_tgt_lang", "en")
@@ -487,18 +679,8 @@ def apply_preprocessing(
             stats["changed_lines"].update(indices)
             _tag_indices(indices, "symbol_conversion")
 
-    # 2. Ellipsis compression
-    _report("Ellipsis Compression", 0.2)
-    if config.get("ellipsis_enabled", True):
-        result, count, indices = apply_ellipsis_batch(result)
-        if count:
-            stats["changes_by_rule"]["ellipsis"] = count
-            stats["total_changes"] += count
-            stats["changed_lines"].update(indices)
-            _tag_indices(indices, "ellipsis")
-
-    # 3. Protect code patterns
-    _report("Protect Code Patterns", 0.4)
+    # P60. PROTECTED compression (after PROTECTED tokens are created)
+    _report("Protect Code Patterns", 0.45)
     patterns = config.get("protect_code_patterns", [])
     if patterns:
         result, count, indices, captured = apply_protect_batch(result, patterns)
@@ -509,8 +691,8 @@ def apply_preprocessing(
             stats["protect_code_captured"] = captured
             _tag_indices(indices, "protect_code")
 
-    # 4. Custom placeholder rules
-    _report("Custom Placeholders", 0.6)
+    # P70. Custom placeholder rules
+    _report("Custom Placeholders", 0.55)
     rules = config.get("placeholder_rules", [])
     if rules:
         result, count, indices, captured = apply_placeholder_batch(result, rules)
@@ -521,8 +703,8 @@ def apply_preprocessing(
             stats["placeholder_captured"] = captured
             _tag_indices(indices, "placeholder")
 
-    # 5. PROTECTED compression (should happen last after PROTECTED tokens are created)
-    _report("Protected Compression", 0.8)
+    # P80. PROTECTED compression (after PROTECTED tokens are created)
+    _report("Protected Compression", 0.70)
     if config.get("prot_compression_enabled", True):
         result, count, indices = apply_prot_batch(result)
         if count:
@@ -530,6 +712,23 @@ def apply_preprocessing(
             stats["total_changes"] += count
             stats["changed_lines"].update(indices)
             _tag_indices(indices, "prot_compression")
+
+    # P90. Aggressive Deduplication (LAST — per specs §5.9)
+    _report("Aggressive Deduplication", 0.85)
+    if config.get("aggressive_dedup_enabled", False):
+        result, count, indices, aggr_map, aggr_nums = (
+            apply_aggressive_dedup_batch(result)
+        )
+        stats["aggr_dedup_map"] = aggr_map
+        stats["aggr_numbers"] = aggr_nums
+        if count:
+            stats["changes_by_rule"]["aggressive_dedup"] = count
+            stats["total_changes"] += count
+            stats["changed_lines"].update(indices)
+            # Tag each aggressive-dedup'd line for display + direct lookup
+            for dup_idx, src_idx in aggr_map.items():
+                tags_by_line.setdefault(dup_idx, []).append("aggressive_dedup")
+                tags_by_line[dup_idx].append(f"AD{src_idx}")
 
     _report("Complete", 1.0)
 

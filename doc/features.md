@@ -2014,6 +2014,32 @@ AGGRESSIVE DEDUPLICATION (Implemented)
 - Runs last in preprocessing (after all normalization is complete)
 - Variant-deduplicated lines receive the postprocessed result of their unique original
 - Implemented in `functions/dedup.py`
+- **GUI Pipeline Integration (TASK 73):**
+  - Standard Dedup (`apply_dedup_batch`) at P10 (first in pre) and Aggressive Dedup
+    (`apply_aggressive_dedup_batch`) at P90 (last in pre) in `gui/helpers/mode_adapter.py`
+  - Per-line tags: display tags ("dedup", "aggressive_dedup") + lookup tags ("D{src_idx}",
+    "AD{src_idx}") stored in `lines[].tags` for postprocessing restoration
+  - `DEDUP_PLACEHOLDER = "__DEDUP__"` sentinel replaces duplicate content
+  - Preprocessing step persists `dedup_map`, `aggr_dedup_map`, `aggr_numbers` in step data
+  - Postprocessing (`_restore_dedup_lines`) reads maps from step 3 data, resolves best text
+    from in-RAM source lines (postprocessed → translated → original), and restores aggressive
+    dedup lines with number substitution via `aggressive_restore_line()`
+  - Test suite: `dev/test_dedup_pipeline.py` (26 tests)
+
+SHARED PROMPT BUILDER (Implemented)
+- Single source of truth for system prompt assembly: `build_full_system_prompt()` in
+  `gui/helpers/prompt_adapter.py`
+- Implements all §5.2 slots: Language → System Instructions → Style → Tone → Summary →
+  Genre → POV → Conditional → Glossary+Characters → Rolling Context
+- **POV slot**: Maps "1st"→"first", "2nd"→"second", "3rd"→"third"; included only when
+  `pov_data.confidence == "high"`
+- **Costs (Step 4)**: `_get_prompt_tokens()` now calls shared builder with full metadata,
+  glossary, characters, POV, and sample lines for accurate prompt overhead estimation
+- **Translation (Step 5)**: `_build_system_prompt_from_manifest()` and
+  `_build_preview_requests()` both delegate to shared builder so Request Preview matches
+  actual translation requests exactly
+- Returns `(assembled_prompt, token_breakdown)` where breakdown maps slot names to word counts
+- Test suite: `dev/test_prompt_builder_shared.py` (20 tests)
 
 POINT OF VIEW INFERENCE (Implemented)
 - Infers narrative perspective (1st/2nd/3rd person) from non-dialogue text

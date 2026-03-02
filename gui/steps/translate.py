@@ -2064,16 +2064,8 @@ class TranslationStep(BaseStep):
     ) -> str:
         """Build the system prompt from manifest Information step metadata.
 
-        Follows the spec §5.2 injection order:
-        1. Language Direction
-        2. System Instructions (custom_notes)
-        3. Style
-        4. Tone
-        5. Summary
-        6. Genre
-        7. Conditional Prompts (selective)
-        8. Glossary (selective)
-        9. Rolling Context (conditional)
+        Delegates to ``build_full_system_prompt()`` in prompt_adapter.py
+        which is the single source of truth for §5.2 injection order.
 
         Args:
             rolling_context_text: Pre-formatted rolling context lines to
@@ -2082,7 +2074,7 @@ class TranslationStep(BaseStep):
         Returns:
             Assembled system prompt string.
         """
-        parts: list[str] = []
+        from CherryAI.gui.helpers.prompt_adapter import build_full_system_prompt
 
         mgr = self.manifest_manager
         if mgr is not None and mgr.is_loaded:
@@ -2091,122 +2083,56 @@ class TranslationStep(BaseStep):
             if not isinstance(metadata, dict):
                 metadata = {}
 
-            # --- 1. Language Direction ---
-            source_lang = (
-                metadata.get("source_language", "")
-                or mgr.get_info_metadata_field("source_language", "")
-            )
-            target_lang = (
-                metadata.get("target_language", "")
-                or mgr.get_info_metadata_field("target_language", "")
-            )
-            if source_lang and target_lang:
-                parts.append(
-                    f"# Language\n"
-                    f"Translate from {source_lang} to {target_lang}."
-                )
+            # Merge fallback fields read from manifest info section
+            for field_name in ("source_language", "target_language", "genre"):
+                if not metadata.get(field_name):
+                    fb = mgr.get_info_metadata_field(field_name, "")
+                    if fb:
+                        metadata[field_name] = fb
 
-            # --- 2. System Instructions (custom_notes) ---
-            system_instructions = (metadata.get("custom_notes", "") or "").strip()
-            if system_instructions:
-                parts.append(system_instructions)
+            # Glossary
+            from CherryAI.functions.manifest_fields import load_glossary_entries
+            glossary_entries = load_glossary_entries(mgr)
 
-            # --- 3. Style ---
-            style = (metadata.get("style", "") or "").strip()
-            if style:
-                parts.append(f"# Translation Style Guidelines\n{style}")
+            # Characters
+            characters = metadata.get("characters", [])
 
-            # --- 4. Tone ---
-            tone = (metadata.get("tone", "") or "").strip()
-            if tone:
-                parts.append(f"# Translation Tone\n{tone}")
+            # POV from manifest top-level
+            pov_data = mgr._manifest_data.get("POV", {})
 
-            # --- 5. Summary ---
-            summary = (metadata.get("summary", "") or "").strip()
-            if summary:
-                parts.append(f"# Game Context\n{summary}")
-
-            # --- 6. Genre ---
-            genre = (metadata.get("genre", "") or "").strip()
-            if not genre:
-                genre = (mgr.get_info_metadata_field("genre", "") or "").strip()
-            if genre:
-                parts.append(f"# Genre\n{genre}")
-
-            # --- 7. Conditional Prompts ---
-            all_line_texts = [
+            # Sample lines for conditional prompt detection
+            sample_lines = [
                 (line.edited_prepro or line.preprocessed or line.original)
                 for line in self._lines[:200]
             ]
-            cond_text, _ = build_conditional_instructions(all_line_texts)
-            if cond_text and cond_text.strip():
-                parts.append(cond_text.strip())
 
-            # --- 8. Glossary ---
-            from CherryAI.functions.manifest_fields import load_glossary_entries
-            glossary_entries = load_glossary_entries(mgr)
-            active_entries = [
-                e for e in glossary_entries if e.get("active", True)
-            ]
-            if active_entries:
-                glossary_lines: list[str] = []
-                for entry in active_entries:
-                    src = entry.get("source", "")
-                    tgt = entry.get("target", "")
-                    notes = entry.get("notes", "")
-                    if src:
-                        line = f"{src} → {tgt}" if tgt else src
-                        if notes:
-                            line += f" ({notes})"
-                        glossary_lines.append(line)
-                if glossary_lines:
-                    parts.append(
-                        "# Glossary\nUse these terms strictly:\n"
-                        + "\n".join(f"- {gl}" for gl in glossary_lines)
-                    )
+            prompt_text, _ = build_full_system_prompt(
+                metadata=metadata,
+                glossary_entries=glossary_entries,
+                characters=characters,
+                sample_lines=sample_lines,
+                rolling_context_text=rolling_context_text,
+                pov_data=pov_data,
+            )
 
-            # Build character glossary from metadata characters
-            characters = metadata.get("characters", [])
-            if characters:
-                char_lines: list[str] = []
-                for ch in characters:
-                    orig = ch.get("original_name", "")
-                    eng = ch.get("name", "")
-                    gender = ch.get("gender", "") or ch.get("notes", "")
-                    if orig:
-                        entry_text = f"- {orig}"
-                        if eng:
-                            entry_text += f" → {eng}"
-                        if gender:
-                            entry_text += f" ({gender})"
-                        char_lines.append(entry_text)
-                if char_lines:
-                    parts.append(
-                        "# Characters\n" + "\n".join(char_lines)
-                    )
-
-            # --- 9. Rolling Context ---
-            if rolling_context_text and rolling_context_text.strip():
-                parts.append(
-                    f"# Rolling Context\n{rolling_context_text.strip()}"
-                )
+            if prompt_text:
+                return prompt_text
 
         # Fallback to legacy prompt parts if manifest is not available
-        if not parts:
-            prompt_parts = self._get_prompt_parts()
-            if prompt_parts["summary"]:
-                parts.append(
-                    f"Game Context:\n{prompt_parts['summary']}"
-                )
-            if prompt_parts["glossary"]:
-                parts.append(
-                    f"Glossary:\n{prompt_parts['glossary']}"
-                )
-            if prompt_parts["conditional"]:
-                parts.append(
-                    f"Special Instructions:\n{prompt_parts['conditional']}"
-                )
-
+        parts: list[str] = []
+        prompt_parts = self._get_prompt_parts()
+        if prompt_parts["summary"]:
+            parts.append(
+                f"Game Context:\n{prompt_parts['summary']}"
+            )
+        if prompt_parts["glossary"]:
+            parts.append(
+                f"Glossary:\n{prompt_parts['glossary']}"
+            )
+        if prompt_parts["conditional"]:
+            parts.append(
+                f"Special Instructions:\n{prompt_parts['conditional']}"
+            )
         return "\n\n".join(parts)
 
     def _start_translation(self) -> None:
@@ -3104,12 +3030,16 @@ class TranslationStep(BaseStep):
     def _build_preview_requests(self) -> "list[PreviewRequest]":
         """Build preview request objects mirroring the real translation flow.
 
-        Reads from step_state.Information.data.metadata following the
-        same logic as ``_build_system_prompt_from_manifest``.
+        Uses ``build_full_system_prompt`` from prompt_adapter.py
+        (single source of truth) for the assembled system prompt,
+        and reads individual metadata fields for the labelled preview
+        parts so the dialog can highlight each section.
 
         Returns:
             List of :class:`PreviewRequest` with labelled parts.
         """
+        from CherryAI.gui.helpers.prompt_adapter import build_full_system_prompt
+
         # Gather options from UI
         opts = self._get_options_from_ui()
 
@@ -3125,146 +3055,134 @@ class TranslationStep(BaseStep):
         # Chunk the lines the same way translation does
         chunks = self._build_chunks(pending)
 
-        # Build system prompt parts from Information metadata
+        # Read metadata from Information step
         mgr = self.manifest_manager
         language_block = ""
         sys_instructions = ""
-        summary = ""
-        style = ""
-        tone = ""
+        summary_block = ""
+        style_block = ""
+        tone_block = ""
         genre_block = ""
         pov_block = ""
-        conditional_block = ""
         glossary_block = ""
+        conditional_block = ""
+        full_system_prompt = ""
+
+        metadata: dict = {}
+        glossary_entries: list[dict] = []
+        characters: list[dict] = []
+        pov_data: dict = {}
 
         if mgr is not None and mgr.is_loaded:
             metadata = mgr.get_step_data_value(3, "metadata", {})
             if not isinstance(metadata, dict):
                 metadata = {}
 
-            # Language
-            source_lang = (
-                metadata.get("source_language", "")
-                or mgr.get_info_metadata_field("source_language", "")
-            )
-            target_lang = (
-                metadata.get("target_language", "")
-                or mgr.get_info_metadata_field("target_language", "")
-            )
-            if source_lang and target_lang:
-                language_block = (
-                    f"# Language\n"
-                    f"Translate from {source_lang} to {target_lang}."
-                )
+            # Merge fallback fields
+            for field_name in ("source_language", "target_language", "genre"):
+                if not metadata.get(field_name):
+                    fb = mgr.get_info_metadata_field(field_name, "")
+                    if fb:
+                        metadata[field_name] = fb
 
-            # System Instructions
-            sys_instructions = (
-                metadata.get("custom_notes", "") or ""
-            ).strip()
-
-            # Style
-            style = (metadata.get("style", "") or "").strip()
-
-            # Tone
-            tone = (metadata.get("tone", "") or "").strip()
-
-            # Summary
-            summary = (metadata.get("summary", "") or "").strip()
-
-            # Genre
-            genre_raw = (metadata.get("genre", "") or "").strip()
-            if not genre_raw:
-                genre_raw = (
-                    mgr.get_info_metadata_field("genre", "") or ""
-                ).strip()
-            if genre_raw:
-                genre_block = f"# Genre\n{genre_raw}"
-
-            # POV
-            pov_data = mgr._manifest_data.get("POV", {})
-            if isinstance(pov_data, dict) and pov_data.get("confidence") == "high":
-                pov_label = {
-                    "1st": "first",
-                    "2nd": "second",
-                    "3rd": "third",
-                }.get(pov_data.get("pov", ""), pov_data.get("pov", ""))
-                pov_block = (
-                    f"# Narrative Perspective\n"
-                    f"The narrative uses {pov_label} person perspective. "
-                    f"Maintain consistent {pov_label} person perspective "
-                    f"throughout."
-                )
-
-            # Glossary from manifest
+            # Glossary
             from CherryAI.functions.manifest_fields import load_glossary_entries
             glossary_entries = load_glossary_entries(mgr)
-            active_entries = [
-                e for e in glossary_entries if e.get("active", True)
-            ]
-            if active_entries:
-                g_lines = ["# Glossary", "Use these terms strictly:"]
-                for entry in active_entries:
-                    src = entry.get("source", "")
-                    tgt = entry.get("target", "")
-                    notes = entry.get("notes", "")
-                    if src:
-                        line_text = f"- {src}: {tgt}" if tgt else f"- {src}"
-                        if notes:
-                            line_text += f" ({notes})"
-                        g_lines.append(line_text)
-                glossary_block = "\n".join(g_lines)
 
-            # Character glossary from metadata
+            # Characters + POV
             characters = metadata.get("characters", [])
-            if characters:
-                char_lines: list[str] = ["# Characters"]
-                for ch in characters:
-                    orig = ch.get("original_name", "")
-                    eng = ch.get("name", "")
-                    gender = ch.get("gender", "") or ch.get("notes", "")
-                    if orig:
-                        entry_text = f"- {orig}"
-                        if eng:
-                            entry_text += f" → {eng}"
-                        if gender:
-                            entry_text += f" ({gender})"
-                        char_lines.append(entry_text)
-                if len(char_lines) > 1:
-                    if glossary_block:
-                        glossary_block += "\n\n" + "\n".join(char_lines)
-                    else:
-                        glossary_block = "\n".join(char_lines)
+            pov_data = mgr._manifest_data.get("POV", {})
 
-        # Detect conditional prompts from the lines
-        all_line_texts = [
+        # Sample lines for conditional
+        sample_lines = [
             (line.edited_prepro or line.preprocessed or line.original)
-            for line in self._lines
+            for line in self._lines[:200]
         ]
-        cond_text, _ = build_conditional_instructions(all_line_texts[:200])
+
+        # Build the FULL system prompt with the shared builder
+        full_system_prompt, _ = build_full_system_prompt(
+            metadata=metadata,
+            glossary_entries=glossary_entries,
+            characters=characters,
+            sample_lines=sample_lines,
+            pov_data=pov_data,
+        )
+
+        # Extract individual labelled sections for the preview dialog
+        src = (metadata.get("source_language", "") or "").strip()
+        tgt = (metadata.get("target_language", "") or "").strip()
+        if src and tgt:
+            language_block = f"# Language\nTranslate from {src} to {tgt}."
+
+        sys_instructions = (metadata.get("custom_notes", "") or "").strip()
+
+        style_val = (metadata.get("style", "") or "").strip()
+        if style_val:
+            style_block = f"# Translation Style Guidelines\n{style_val}"
+
+        tone_val = (metadata.get("tone", "") or "").strip()
+        if tone_val:
+            tone_block = f"# Translation Tone\n{tone_val}"
+
+        summary_val = (metadata.get("summary", "") or "").strip()
+        if summary_val:
+            summary_block = f"# Game Context\n{summary_val}"
+
+        genre_val = (metadata.get("genre", "") or "").strip()
+        if genre_val:
+            genre_block = f"# Genre\n{genre_val}"
+
+        if isinstance(pov_data, dict) and pov_data.get("confidence") == "high":
+            pov_label = {
+                "1st": "first", "2nd": "second", "3rd": "third",
+            }.get(pov_data.get("pov", ""), pov_data.get("pov", ""))
+            pov_block = (
+                f"# Narrative Perspective\n"
+                f"The narrative uses {pov_label} person perspective. "
+                f"Maintain consistent {pov_label} person perspective "
+                f"throughout."
+            )
+
+        # Glossary block for display
+        active = [e for e in glossary_entries if e.get("active", True)]
+        if active:
+            g_lines = ["# Glossary", "Use these terms strictly:"]
+            for entry in active:
+                s = entry.get("source", "")
+                t = entry.get("target", "")
+                n = entry.get("notes", "")
+                if s:
+                    lt = f"- {s} → {t}" if t else f"- {s}"
+                    if n:
+                        lt += f" ({n})"
+                    g_lines.append(lt)
+            glossary_block = "\n".join(g_lines)
+        if characters:
+            char_lines = ["# Characters"]
+            for ch in characters:
+                orig = ch.get("original_name", "")
+                eng = ch.get("name", "")
+                gender = ch.get("gender", "") or ch.get("notes", "")
+                if orig:
+                    et = f"- {orig}"
+                    if eng:
+                        et += f" → {eng}"
+                    if gender:
+                        et += f" ({gender})"
+                    char_lines.append(et)
+            if len(char_lines) > 1:
+                if glossary_block:
+                    glossary_block += "\n\n" + "\n".join(char_lines)
+                else:
+                    glossary_block = "\n".join(char_lines)
+
+        # Conditional
+        from CherryAI.gui.helpers.prompt_adapter import (
+            build_conditional_instructions,
+        )
+        cond_text, _ = build_conditional_instructions(sample_lines[:200])
         if cond_text and cond_text.strip():
             conditional_block = cond_text.strip()
-
-        # Build the full system prompt (same order as §5.2)
-        prompt_parts: list[str] = []
-        if language_block:
-            prompt_parts.append(language_block)
-        if sys_instructions:
-            prompt_parts.append(sys_instructions)
-        if style:
-            prompt_parts.append(f"# Translation Style Guidelines\n{style}")
-        if tone:
-            prompt_parts.append(f"# Translation Tone\n{tone}")
-        if summary:
-            prompt_parts.append(f"# Game Context\n{summary}")
-        if genre_block:
-            prompt_parts.append(genre_block)
-        if pov_block:
-            prompt_parts.append(pov_block)
-        if conditional_block:
-            prompt_parts.append(conditional_block)
-        if glossary_block:
-            prompt_parts.append(glossary_block)
-        full_system_prompt = "\n\n".join(prompt_parts)
 
         # Meta info
         meta_block = (
@@ -3288,12 +3206,9 @@ class TranslationStep(BaseStep):
                 meta=meta_block,
                 language=language_block,
                 system_instructions=sys_instructions,
-                summary=f"# Game Context\n{summary}" if summary else "",
-                style=(
-                    f"# Translation Style Guidelines\n{style}"
-                    if style else ""
-                ),
-                tone=f"# Translation Tone\n{tone}" if tone else "",
+                summary=summary_block,
+                style=style_block,
+                tone=tone_block,
                 genre=genre_block,
                 pov=pov_block,
                 conditional_prompts=conditional_block,

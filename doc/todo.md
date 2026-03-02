@@ -54,6 +54,46 @@ MODULE COUNTS (Verified January 2026)
 
 =============================================================================
 
+COMPLETED - SESSION 29 (TASK 73 — Dedup Pipeline Fix + Shared Prompt Builder)
+
+### SESSION 29: TASK 73 — Dedup Pipeline & API Request Fix ✅ DONE
+
+**Problem:** (1) Deduplication settings were read by preprocessing config but never executed
+in the GUI pipeline — `apply_preprocessing()` had no dedup step. (2) API request prompt
+overhead was broken: `_get_prompt_tokens()` used wrong key and missed most §5.2 slots;
+`_build_system_prompt_from_manifest()` was missing POV; three separate copies of prompt
+assembly logic existed with no single source of truth.
+
+**Task 1 — Dedup pipeline integration:**
+- `gui/helpers/mode_adapter.py` — Added `apply_dedup_batch()` (standard, P10) and
+  `apply_aggressive_dedup_batch()` (variant-aware, P90) with `DEDUP_PLACEHOLDER` sentinel.
+  Integrated into `apply_preprocessing()` at correct §5.9 priorities. Each deduped line
+  gets display tag ("dedup"/"aggressive_dedup") + lookup tag ("D{src_idx}"/"AD{src_idx}").
+- `gui/steps/preprocess.py` — `_process_lines()` saves `self._last_stats`; `_update_step_data()`
+  persists `dedup_map`, `aggr_dedup_map`, `aggr_numbers` with string keys for JSON.
+- `gui/steps/postprocess.py` — Added `_restore_dedup_lines()` reading maps from step 3 data,
+  resolving best text from in-RAM source lines (postprocessed → translated → original), and
+  restoring aggressive dedup lines via `aggressive_restore_line()`. Added `_best_text()`.
+- Test suite: `dev/test_dedup_pipeline.py` (26 tests)
+
+**Task 2 — Shared prompt builder & API request fix:**
+- `gui/helpers/prompt_adapter.py` — Added `build_full_system_prompt()` as single source of truth
+  for §5.2 prompt assembly (all 11 slots including POV). Returns `(prompt, token_breakdown)`.
+- `gui/steps/costs.py` — Rewrote `_get_prompt_tokens()` to call shared builder with full
+  metadata, glossary entries, characters, POV, and sample lines.
+- `gui/steps/translate.py` — Rewrote `_build_system_prompt_from_manifest()` and
+  `_build_preview_requests()` to delegate to shared builder so Request Preview matches
+  actual translation requests exactly.
+- Test suite: `dev/test_prompt_builder_shared.py` (20 tests)
+
+**Modified files:** gui/helpers/mode_adapter.py, gui/helpers/prompt_adapter.py,
+gui/steps/preprocess.py, gui/steps/postprocess.py, gui/steps/costs.py,
+gui/steps/translate.py
+
+**New test files:** dev/test_dedup_pipeline.py (26 tests), dev/test_prompt_builder_shared.py (20 tests)
+
+=============================================================================
+
 COMPLETED - SESSION 28 (TASK 72 — Big Project Performance + Table Pagination)
 
 ### SESSION 28: TASK 72 — Preprocessing Tags, Skip Unchanged Lines, Pagination ✅ DONE
