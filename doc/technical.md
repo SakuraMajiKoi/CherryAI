@@ -5144,3 +5144,70 @@ New module (Dynamic Model Registry). Single source of truth for model metadata.
 **gui/dialogs/global_options.py:** Added "⟳ Refresh Models" button; `_update_model_list()` uses `get_provider_models()` from registry; `_on_refresh_models()` runs in background thread.
 
 **gui/steps/translate.py:** `MODEL_OPTIONS` updated to Feb 2026 models; `_update_model_list_from_global_options()` falls back to registry before hardcoded list.
+
+=============================================================================
+
+## Task 74 — Request Preview Overhaul & Formation Integration
+
+### gui/steps/translate.py Changes
+
+**`SECTION_DESCRIPTIONS` dict:** Maps 12 section keys to informative descriptions displayed
+in `build_full_request_text()` headers as `=== Label (description) ===`.
+
+**`_build_chunks()` rewrite:** Replaced simple fixed-size chunking with formation-aware logic:
+1. Converts `TranslatableLine` → `LineInfo` (index, text, is_invalid flag for __DEDUP__/__PROTECTED__/__CUSTOM__)
+2. Injects `file_end` context markers from `mgr.get_filedir()` entries
+3. Calls `build_requests(line_infos, RequestFormationConfig(max_lines=chunk_size))`
+4. Maps `TranslationRequest.line_indices` back to `List[List[TranslatableLine]]`
+5. Stores `_formation_ctx` dict on first line of each chunk (receives_context, provides_context, context_type)
+6. Falls back to simple `range(0, len, chunk_size)` on ImportError or pipeline failure
+
+**Rolling context in `_do_translation()` loop:**
+- Reads `rolling_context_lines` from `session.global_options.request` (default 3)
+- Maintains `rolling_ctx_buffer: list[str]` of all completed translations
+- For chunks with `receives_context=True` (from formation metadata or chunk_idx > 0 fallback):
+  formats last N translations as `rolling_context_text` and passes to `_translate_chunk()`
+- `_translate_chunk()` passes `rolling_context_text` to `_build_system_prompt_from_manifest()`
+- Chunks with `provides_context=True` append their translations to the buffer
+
+**`_translate_chunk()` signature change:** Added `rolling_context_text: str = ""` parameter.
+Now passes both `rolling_context_text` and `chunk_lines` (filtered for __DEDUP__) to
+`_build_system_prompt_from_manifest()`.
+
+**`_build_preview_requests()` rolling context hint:** For chunks that would receive rolling
+context at translation time, the preview shows a descriptive placeholder:
+`[Rolling context: last N translated lines from previous chunk will be inserted here]`.
+
+**Step index bug fixes:** Two occurrences of `get_step_data_value(3, "metadata", {})` →
+`get_step_data_value(2, "metadata", {})` — Information step is index 2, not 3.
+
+**`_log_request_json()` method:** Writes timestamped JSON to `logs/requests/` when
+`global_options.logging.log_requests` is True. Payload: timestamp, chunk_index, model,
+temperature, system_prompt, input_lines, line_count.
+
+**Cross-request search:** `RequestPreviewDialog` tracks `_cross_counts` (per-request match
+counts), `_cross_total`, `_cross_global_idx`. `_do_search()` scans all requests via
+`_render_text_for_request()`. Navigation methods: `_resolve_global_index()` maps to
+(request_idx, local_match_idx); `_navigate_to_global_match()` switches request;
+`_search_next()`/`_search_prev()` use modular wrapping.
+
+### gui/helpers/prompt_adapter.py Changes
+
+**`build_full_system_prompt()` `chunk_lines` parameter:** `Optional[List[str]]` that enables
+per-chunk selective filtering:
+- Section 8 (Conditional): detects against `chunk_lines` instead of `sample_lines`
+- Section 9 (Glossary): filters entries by `source` term presence in chunk text
+- Section 9 (Characters): filters by `original_name` presence in chunk text
+
+### gui/dialogs/global_options.py Changes
+
+**`LoggingSettings.log_requests`:** `bool = False` field. Wired to `self.log_requests_var`
+BooleanVar, checkbox UI in `_build_logging_section`, `logging_defaults` dict for INI
+save/load, `ini_manager` for defaults loading, `LoggingSettings` constructor in options build.
+
+### Rename custom_notes → system_instructions
+
+Updated across 6 files: `ProjectMetadata` dataclass + to_dict/from_dict in information.py,
+`ProjectInfo` dataclass + pascal_map "Prompt" mapping in manifest_manager.py (migration reads
+both keys), `metadata.get()` calls in prompt_adapter.py and translate.py,
+`"system_instructions"` key in test_prompt_builder_shared.py.

@@ -2540,5 +2540,73 @@ openai, personal = gAAAAABp...
 **Test results:** 581 passed in test_gui_v2 (3 pre-existing deprecated model failures); 130 in api tests; 214 in settings/thinking/blacklist/manifest tests; 0 regressions.
 
 =============================================================================
+
+COMPLETED - SESSION 30 (TASK 74 — Request Preview, Formation, Rolling Context)
+
+### SESSION 30: TASK 74 — Preview Requests Overhaul & Formation Integration ✅ DONE
+
+**Problem:** (1) Preview Requests section headers were bare labels with no explanation.
+(2) `custom_notes` field name was inconsistent with UI label "System Instructions".
+(3) Translation used simple fixed-size chunking instead of the 4-step formation pipeline.
+(4) Glossary/conditional prompts were not filtered per-chunk.
+(5) Cross-request search was missing.
+(6) Request logging had no debug tool.
+
+**Pre-task — Request logging toggle:**
+- `gui/dialogs/global_options.py` — Added `log_requests: bool = False` to `LoggingSettings`,
+  wired BooleanVar + checkbox in `_build_logging_section`, INI save/load, options building.
+- `gui/steps/translate.py` — Added `_log_request_json()` writing timestamped JSON files to
+  `logs/requests/` directory when enabled (model, temperature, system_prompt, input_lines).
+
+**Task 1 — Section headers + rename custom_notes → system_instructions:**
+- `gui/steps/information.py` — Renamed `ProjectMetadata.custom_notes` → `system_instructions`
+  in dataclass field, `to_dict`, `from_dict`, UI binding, `_collect_form_data`, `_populate_form`.
+- `functions/manifest_manager.py` — Renamed `ProjectInfo.custom_notes` → `system_instructions`,
+  updated `pascal_map`, migration reads both keys: `d.get("system_instructions", d.get("custom_notes", ""))`.
+- `gui/helpers/prompt_adapter.py` — Updated `metadata.get("system_instructions")`.
+- `gui/steps/translate.py` — Added `SECTION_DESCRIPTIONS` dict (12 keys with informative text),
+  updated `build_full_request_text()` to render `=== Label (desc) ===` headers.
+  Added 3 missing fields (language, genre, rolling_context) to `PreviewRequest`.
+
+**Task 2 — Formation-based chunking + rolling context:**
+- `gui/steps/translate.py` — Replaced simple `_build_chunks()` with formation-aware method:
+  converts `TranslatableLine` → `LineInfo`, injects `file_end` markers from `mgr.get_filedir()`,
+  calls `build_requests()` from `prompt_builder.py` (4-step: menu/choice split, file boundary
+  split, balanced split, short merge). Stores `_formation_ctx` metadata (receives_context,
+  provides_context, context_type) on each chunk. Falls back to fixed-size on ImportError.
+- Rolling context: `_do_translation()` loop tracks `rolling_ctx_buffer` of previous translations;
+  for chunks with `receives_context=True`, formats last N lines (from `rolling_context_lines`
+  global option) and passes to `_build_system_prompt_from_manifest(rolling_context_text=...)`.
+  Preview shows descriptive placeholder for chunks that will receive rolling context.
+- Fixed 2 step index bugs: `get_step_data_value(3, ...)` → `get_step_data_value(2, ...)`
+  in both `_do_translation` and `_get_prompt_data_from_manifest`.
+
+**Task 3 — Selective glossary/conditional per-chunk:**
+- `gui/helpers/prompt_adapter.py` — Added `chunk_lines: Optional[List[str]]` parameter to
+  `build_full_system_prompt()`. When provided: conditional prompts detect against chunk_lines,
+  glossary entries filtered by source term presence, characters filtered by original_name.
+- `gui/steps/translate.py` — Refactored `_build_preview_requests()` to build glossary/conditional
+  inside per-chunk loop with selective filtering. Updated `_translate_chunk()` to filter
+  `__DEDUP__` lines from API input and pass `chunk_lines` to system prompt builder.
+
+**Task 4 — Cross-request search:**
+- `gui/steps/translate.py` — `RequestPreviewDialog` rewritten: `_do_search()` scans all
+  requests via `_render_text_for_request()`, builds per-request match counts.
+  `_resolve_global_index()` maps global match index to (request_idx, local_match_idx).
+  `_navigate_to_global_match()` switches request and highlights. `_search_next()`/`_search_prev()`
+  use modular global index wrapping. Match label shows "N of M (across K requests)".
+
+**Task 5 — Fix costs estimation TypeError** (previous session):
+- `gui/steps/costs.py` — `token_count, _ = count_tokens(prompt_text)` tuple unpacking.
+- `gui/steps/translate.py` — Step index 3→2 for metadata lookup.
+
+**Modified files:** gui/dialogs/global_options.py, gui/helpers/prompt_adapter.py,
+gui/steps/information.py, gui/steps/translate.py, functions/manifest_manager.py,
+gui/steps/costs.py
+
+**Updated test files:** dev/test_prompt_builder_shared.py (20 tests),
+dev/test_request_preview.py (42 tests, +2 cross-request search tests)
+
+=============================================================================
 END OF ROADMAP
 =============================================================================

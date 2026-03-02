@@ -206,7 +206,7 @@ class ProjectMetadata:
     genre: str = ""
     characters: List[CharacterInfo] = field(default_factory=list)
     code_patterns: List[CodePattern] = field(default_factory=list)  # TASK 18.5
-    custom_notes: str = ""
+    system_instructions: str = ""
     created_at: str = ""
     updated_at: str = ""
 
@@ -225,7 +225,7 @@ class ProjectMetadata:
             "genre": self.genre,
             "characters": [c.to_dict() for c in self.characters],
             "code_patterns": [p.to_dict() for p in self.code_patterns],
-            "custom_notes": self.custom_notes,
+            "system_instructions": self.system_instructions,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -261,7 +261,7 @@ class ProjectMetadata:
             genre=data.get("genre", ""),
             characters=characters,
             code_patterns=code_patterns,
-            custom_notes=data.get("custom_notes", ""),
+            system_instructions=data.get("system_instructions", ""),
             created_at=data.get("created_at", ""),
             updated_at=data.get("updated_at", ""),
         )
@@ -1626,7 +1626,7 @@ class InformationStep(BaseStep):
             bind_scrolledtext_to_info_field(
                 text_widget=self._notes_text,
                 manager_getter=lambda: self.manifest_manager,
-                meta_key="custom_notes",
+                meta_key="system_instructions",
                 default="",
             )
         )
@@ -3602,7 +3602,7 @@ class InformationStep(BaseStep):
         self._metadata.style_preset = self._style_preset_var.get()
         self._metadata.tone = self._tone_text.get("1.0", "end-1c")
         self._metadata.tone_preset = self._tone_preset_var.get()
-        self._metadata.custom_notes = self._notes_text.get("1.0", "end-1c")
+        self._metadata.system_instructions = self._notes_text.get("1.0", "end-1c")
         self._metadata.updated_at = datetime.now().isoformat()
         if not self._metadata.created_at:
             self._metadata.created_at = self._metadata.updated_at
@@ -3643,7 +3643,7 @@ class InformationStep(BaseStep):
         self._tone_text.insert("1.0", tone_text)
 
         self._notes_text.delete("1.0", "end")
-        self._notes_text.insert("1.0", self._metadata.custom_notes)
+        self._notes_text.insert("1.0", self._metadata.system_instructions)
 
         self._refresh_character_list()
         self._refresh_code_pattern_list()  # TASK 18.2: Also refresh code patterns

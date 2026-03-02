@@ -3110,6 +3110,49 @@ API Test Results dialog with filterable model table and per-model translation te
 
 =============================================================================
 
+## Request Preview Overhaul (Task 74)
+
+**Informative Section Headers**: Preview Requests now renders each section with a
+descriptive label: `=== Meta (Section headers are for display only) ===`,
+`=== Glossary (Only terms present in this chunk are included) ===`, etc. 12 sections
+have descriptions via the `SECTION_DESCRIPTIONS` dict.
+
+**Renamed custom_notes → system_instructions**: The `custom_notes` metadata field has
+been renamed to `system_instructions` across all files (information.py, manifest_manager.py,
+prompt_adapter.py, translate.py). Manifest migration reads both keys for backward compat.
+
+**Formation-Based Chunking**: Translation now uses the 4-step `build_requests()` pipeline
+from `prompt_builder.py` instead of simple fixed-size splitting:
+1. Split at menu/choice context markers
+2. Split at file boundaries (from manifest `filedir`)
+3. Balance sub-groups to stay within `max_lines`
+4. Merge short requests within file boundaries
+
+Falls back to simple chunking when the formation pipeline is unavailable.
+
+**Rolling Context**: Each chunk receives context from prior translations when:
+- The formation pipeline marks it with `receives_context=True`
+- The Global Options `rolling_context_lines` setting is > 0
+- Previous chunks produced translations (stored in `rolling_ctx_buffer`)
+
+Preview Requests shows a descriptive placeholder for chunks that will receive rolling context.
+
+**Selective Glossary/Conditional Per-Chunk**: `build_full_system_prompt()` accepts
+`chunk_lines` parameter. When provided, only glossary entries whose source term appears
+in the chunk's lines are included; characters are filtered by `original_name`; conditional
+prompts are detected against chunk lines instead of sample lines.
+
+**Cross-Request Search**: The Preview Requests dialog now searches across all requests.
+Match counter shows "N of M (across K requests)". Next/Prev navigation automatically
+switches between requests when matches span boundaries.
+
+**Request Logging**: Global Options → Application → Logging includes a new
+"Log outgoing requests as JSON" checkbox. When enabled, each API request writes a
+timestamped JSON file to `logs/requests/` containing model, temperature, system prompt,
+and input lines — useful for comparing Preview Requests against actual requests.
+
+=============================================================================
+
 END OF USER GUIDE
 
 For technical details about the tool, see technical.md

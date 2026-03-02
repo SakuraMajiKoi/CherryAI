@@ -310,6 +310,7 @@ class LoggingSettings:
     location: str = "log/"
     debug: bool = False
     api_log: bool = True  # API request/response logs
+    log_requests: bool = False  # Log outgoing requests as JSON files
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -318,6 +319,7 @@ class LoggingSettings:
             "location": self.location,
             "debug": self.debug,
             "api_log": self.api_log,
+            "log_requests": self.log_requests,
         }
 
     @classmethod
@@ -328,6 +330,7 @@ class LoggingSettings:
             location=str(data.get("location", "log/")),
             debug=bool(data.get("debug", False)),
             api_log=bool(data.get("api_log", True)),
+            log_requests=bool(data.get("log_requests", False)),
         )
 
 
@@ -879,6 +882,7 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.log_file_var = tk.StringVar(value=self.options.logging.location)
         self.debug_mode_var = tk.BooleanVar(value=self.options.logging.debug)
         self.log_api_calls_var = tk.BooleanVar(value=self.options.logging.api_log)
+        self.log_requests_var = tk.BooleanVar(value=self.options.logging.log_requests)
 
         # Session settings
         self.autosave_enabled_var = tk.BooleanVar(value=self.options.session.autosave)
@@ -1533,6 +1537,14 @@ class GlobalOptionsDialog(tk.Toplevel):
         # Log API requests/responses
         api_check = ttk.Checkbutton(panel, text="Log API requests/responses", variable=self.log_api_calls_var)
         api_check.pack(anchor=tk.W, pady=5)
+
+        # Log outgoing requests as JSON files
+        req_check = ttk.Checkbutton(
+            panel,
+            text="Log outgoing requests as JSON (for debugging)",
+            variable=self.log_requests_var,
+        )
+        req_check.pack(anchor=tk.W, pady=5)
 
         # Open log button
         open_frame = ttk.Frame(panel)
@@ -2946,6 +2958,7 @@ class GlobalOptionsDialog(tk.Toplevel):
                 "location": self.log_file_var.get(),
                 "debug": "true" if self.debug_mode_var.get() else "false",
                 "api_log": "true" if self.log_api_calls_var.get() else "false",
+                "log_requests": "true" if self.log_requests_var.get() else "false",
             }
             ini_manager.save_as_user_defaults("log", logging_defaults)
 
@@ -3169,6 +3182,9 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.log_api_calls_var.set(
             bool(ini_manager.get_initial_default("log", "api_log", True, bool))
         )
+        self.log_requests_var.set(
+            bool(ini_manager.get_initial_default("log", "log_requests", False, bool))
+        )
 
         # Session defaults
         self.autosave_enabled_var.set(
@@ -3284,6 +3300,7 @@ class GlobalOptionsDialog(tk.Toplevel):
             location=self.log_file_var.get(),
             debug=self.debug_mode_var.get(),
             api_log=self.log_api_calls_var.get(),
+            log_requests=self.log_requests_var.get(),
         )
 
         self.options.session = SessionSettings(

@@ -133,7 +133,7 @@ class ProjectInfo:
     custom_style: str = ""
     tone_preset: str = "neutral"
     custom_tone: str = ""
-    custom_notes: str = ""
+    system_instructions: str = ""
     
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary (sparse - only non-empty values)."""
@@ -158,8 +158,8 @@ class ProjectInfo:
             result["tone_preset"] = self.tone_preset
         if self.custom_tone:
             result["custom_tone"] = self.custom_tone
-        if self.custom_notes:
-            result["custom_notes"] = self.custom_notes
+        if self.system_instructions:
+            result["system_instructions"] = self.system_instructions
         return result
     
     @classmethod
@@ -176,7 +176,7 @@ class ProjectInfo:
             custom_style=d.get("custom_style", ""),
             tone_preset=d.get("tone_preset", "neutral"),
             custom_tone=d.get("custom_tone", ""),
-            custom_notes=d.get("custom_notes", ""),
+            system_instructions=d.get("system_instructions", d.get("custom_notes", "")),
         )
 
 
@@ -1442,7 +1442,7 @@ class ManifestManager:
             "CustomStyle": "custom_style",
             "CustomTone": "custom_tone",
             "SIPreset": "si_preset",
-            "Prompt": "custom_notes",
+            "Prompt": "system_instructions",
         }
         for top_key, meta_key in pascal_map.items():
             top_val = self._manifest_data.pop(top_key, None)
@@ -1453,9 +1453,12 @@ class ManifestManager:
         # --- Migrate source_files (remove entirely) ---
         self._manifest_data.pop("source_files", None)
 
-        # Ensure system_instructions alias
-        if "system_instructions" not in metadata:
-            metadata["system_instructions"] = metadata.get("custom_notes", "")
+        # Migrate custom_notes → system_instructions
+        if "custom_notes" in metadata and "system_instructions" not in metadata:
+            metadata["system_instructions"] = metadata.pop("custom_notes")
+            changed = True
+        elif "custom_notes" in metadata:
+            metadata.pop("custom_notes")
             changed = True
 
         if changed:

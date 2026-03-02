@@ -655,8 +655,10 @@ class CostsStep(BaseStep):
                 except ImportError:
                     pass
 
-            # Characters from metadata
+            # Characters from metadata + manifest top-level
             characters = metadata.get("characters", [])
+            if not characters and mgr is not None and mgr.is_loaded:
+                characters = mgr._manifest_data.get("characters", [])
 
             # POV from manifest top-level
             pov_data: dict = {}
@@ -680,7 +682,7 @@ class CostsStep(BaseStep):
 
             # Use tiktoken if available; otherwise rough 4-char estimate
             try:
-                token_count = count_tokens(prompt_text)
+                token_count, _ = count_tokens(prompt_text)
             except Exception:
                 token_count = len(prompt_text) // 4
 

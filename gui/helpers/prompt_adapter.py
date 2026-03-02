@@ -918,6 +918,7 @@ def build_full_system_prompt(
     rolling_context_text: str = "",
     pov_data: Optional[Dict[str, Any]] = None,
     config_dir: Optional[Path] = None,
+    chunk_lines: Optional[List[str]] = None,
 ) -> Tuple[str, Dict[str, int]]:
     """Build the full system prompt following spec §5.2 injection order.
 
@@ -927,29 +928,37 @@ def build_full_system_prompt(
 
     §5.2 Injection Order:
         1. Language Direction
-        2. System Instructions (custom_notes)
+        2. System Instructions (system_instructions)
         3. Style
         4. Tone
         5. Summary
         6. Genre
         7. POV (narrative perspective)
-        8. Conditional Prompts (selective)
-        9. Glossary + Characters (selective)
+        8. Conditional Prompts (selective per-chunk)
+        9. Glossary + Characters (selective per-chunk)
         10. Rolling Context (conditional)
+
+    When ``chunk_lines`` is provided, glossary entries and characters
+    are filtered to only those whose source term / original_name
+    appears in the chunk.  Conditional prompts are likewise detected
+    against the chunk rather than the full sample.
 
     Args:
         metadata: Information-step metadata dict with keys
-            source_language, target_language, custom_notes, style,
+            source_language, target_language, system_instructions, style,
             tone, summary, genre.
         glossary_entries: Active glossary entries, each a dict with
             source, target, notes, active keys.
         characters: Character list from metadata (original_name,
             name, gender/notes).
         sample_lines: Lines for conditional prompt detection (first
-            ~200 preprocessed lines).
+            ~200 preprocessed lines).  Used as fallback when
+            ``chunk_lines`` is not provided.
         rolling_context_text: Pre-formatted rolling context to append.
         pov_data: POV dict from manifest (pov, confidence keys).
         config_dir: Config directory for conditional prompt loading.
+        chunk_lines: When provided, enables per-chunk selective
+            filtering of glossary, characters, and conditional prompts.
 
     Returns:
         Tuple of (assembled_prompt, token_breakdown) where
@@ -976,7 +985,7 @@ def build_full_system_prompt(
         )
 
     # --- 2. System Instructions ---
-    sys_instructions = (metadata.get("custom_notes", "") or "").strip()
+    sys_instructions = (metadata.get("system_instructions", "") or "").strip()
     if sys_instructions:
         _add("system_instructions", sys_instructions)
 
@@ -1016,18 +1025,28 @@ def build_full_system_prompt(
                 f"throughout.",
             )
 
-    # --- 8. Conditional Prompts ---
-    if sample_lines:
+    # --- 8. Conditional Prompts (selective per-chunk) ---
+    cond_lines = chunk_lines if chunk_lines is not None else (sample_lines or [])
+    if cond_lines:
         cond_text, _ = build_conditional_instructions(
-            sample_lines[:200], config_dir,
+            cond_lines[:200], config_dir,
         )
         if cond_text and cond_text.strip():
             _add("conditional", cond_text.strip())
 
-    # --- 9. Glossary + Characters ---
+    # --- 9. Glossary + Characters (selective per-chunk) ---
+    # When chunk_lines is provided, only include entries whose source
+    # term / original_name appears in the chunk text.
+    chunk_text_joined = "\n".join(chunk_lines) if chunk_lines else ""
+
     glossary_block = ""
     if glossary_entries:
         active = [e for e in glossary_entries if e.get("active", True)]
+        if chunk_lines is not None:
+            active = [
+                e for e in active
+                if e.get("source", "") and e["source"] in chunk_text_joined
+            ]
         if active:
             g_lines = ["# Glossary", "Use these terms strictly:"]
             for entry in active:
@@ -1042,8 +1061,15 @@ def build_full_system_prompt(
             glossary_block = "\n".join(g_lines)
 
     if characters:
+        relevant_chars = characters
+        if chunk_lines is not None:
+            relevant_chars = [
+                ch for ch in characters
+                if ch.get("original_name", "")
+                and ch["original_name"] in chunk_text_joined
+            ]
         char_lines: List[str] = ["# Characters"]
-        for ch in characters:
+        for ch in relevant_chars:
             orig = ch.get("original_name", "")
             eng = ch.get("name", "")
             gender = ch.get("gender", "") or ch.get("notes", "")

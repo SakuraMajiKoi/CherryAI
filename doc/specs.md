@@ -5013,10 +5013,90 @@ without any hardcoded cloud provider data.
 
 =============================================================================
 
+## Request Preview & Formation Integration Specification (Task 74)
+
+### Section Headers with Descriptions
+
+`SECTION_DESCRIPTIONS` dict maps 12 keys to informative text:
+- meta: "Section headers (===) are for display only and not sent to the API"
+- language: "Source/target language pair for translation"
+- system_instructions: "Custom instructions provided in the Information step"
+- summary: "Game context summary from the Information step"
+- style: "Translation style guidelines"
+- tone: "Translation tone"
+- genre: "Genre of the source material"
+- pov: "Narrative perspective (1st/2nd/3rd person)"
+- conditional_prompts: "Auto-detected structural patterns in this chunk"
+- glossary: "Only terms present in this chunk are included"
+- rolling_context: "Last N translated lines from the previous chunk"
+- input_lines: "Lines to translate in this chunk (JSON array)"
+
+`build_full_request_text()` renders: `=== Label (description) ===`
+
+### Formation-Based Chunking
+
+`_build_chunks()` uses the 4-step pipeline from `prompt_builder.py`:
+1. `TranslatableLine` → `LineInfo` conversion (index, text, is_invalid for __DEDUP__/__PROTECTED__/__CUSTOM__)
+2. `file_end` markers injected from `mgr.get_filedir()` FileDirEntry.last_idx
+3. `build_requests(line_infos, RequestFormationConfig(max_lines=chunk_size, min_lines=max(2, chunk_size//5)))` called
+4. `TranslationRequest.line_indices` mapped back to `List[List[TranslatableLine]]`
+
+Each chunk's first line gets `_formation_ctx` dict: `{receives_context, provides_context, context_type}`.
+Falls back to fixed-size splitting on ImportError or pipeline failure.
+
+### Rolling Context
+
+The `_do_translation()` loop maintains:
+- `rolling_ctx_max`: from `global_options.request.rolling_context_lines` (default 3)
+- `rolling_ctx_buffer: list[str]`: all translations from chunks with `provides_context=True`
+- For chunks with `receives_context=True`: last N translations formatted as `rolling_context_text`
+- Passed through: `_translate_chunk(rolling_context_text=...)` → `_build_system_prompt_from_manifest(rolling_context_text=...)` → `build_full_system_prompt(rolling_context_text=...)`
+
+Preview shows placeholder: `[Rolling context: last N translated lines will be inserted here]`
+
+### Per-Chunk Selective Filtering
+
+`build_full_system_prompt(chunk_lines=...)` activates selective mode:
+- Conditional prompts: detect against chunk_lines (not sample_lines)
+- Glossary: include only entries where `entry["source"]` appears in chunk text
+- Characters: include only where `ch["original_name"]` appears in chunk text
+
+`_translate_chunk()` filters `__DEDUP__` lines before API call.
+
+### Cross-Request Search
+
+`RequestPreviewDialog` search state:
+- `_cross_counts: list[int]` — match count per request
+- `_cross_total: int` — sum of all matches
+- `_cross_global_idx: int` — current position in global match sequence
+
+Navigation: `_resolve_global_index(idx)` → `(request_idx, local_match_idx)`.
+`_navigate_to_global_match()` switches request and highlights locally.
+Match label: "N of M (across K requests)" when multiple requests have matches.
+
+### Request Logging
+
+`LoggingSettings.log_requests: bool = False` in `global_options.py`.
+When enabled, `_log_request_json()` writes to `logs/requests/request_{YYYYMMDD_HHMMSS}_chunk{N}.json`:
+```json
+{
+  "timestamp": "20260302_143022",
+  "chunk_index": 1,
+  "model": "gpt-4o",
+  "temperature": 0.3,
+  "system_prompt": "...",
+  "input_lines": ["line1", "line2"],
+  "line_count": 2
+}
+```
+
+=============================================================================
+
 ## Document Revision History
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 3.1 | 2026-03-02 | Task 74 — Request Preview Overhaul: Informative section headers (SECTION_DESCRIPTIONS dict, 12 keys), renamed custom_notes → system_instructions across 6 files, formation-based chunking (4-step build_requests pipeline integrated into _build_chunks), rolling context in translation loop (receives_context/provides_context flags, rolling_ctx_buffer), per-chunk selective glossary/conditional/character filtering (chunk_lines parameter), cross-request search (global match index navigation across all requests), request logging toggle (log_requests in LoggingSettings, JSON to logs/requests/). Fixed step index bugs (3→2) in metadata lookup. 110 tests passing (20 prompt_builder_shared + 42 request_preview + 50 request_formation). |
 | 3.0 | 2026-02-10 | Phase 17 Infrastructure: Added Batch API support (batch_tracker.py — JSONL builder, job persistence, submit/poll/cancel), Multi-Key Management (key_manager.py — key pools with sequential/even/priority rotation), Named API Profiles (project_config.py — display_name, system_prompt_tweak, rename/duplicate), Additional File Formats (markdown.py, json_lenient.py, translator_plus.py), Usage Analytics (usage_tracker.py — SQLite-backed token/cost tracking with CSV export), Agent-Assisted Modes (agent_modes.py — mode registry, sandboxed writes, audit logging), Estimation Engine (estimation.py — itemized billing, model comparison, persistence), i18n & Tooltips (i18n.py — JSON language files with fallback, tooltip.py — configurable Tk tooltips). Session persistence (app.py saves/restores last step). Bug fixes: estimate_rate_limit_time() missing params; SharedTable batch insertion duplicate item IDs (added _batch_insert_version counter). Added 339 new tests (5619 total). |
 | 2.8 | 2026-02-08 | Comprehensive rewrite of Step 9 (Output): Defined injection priority chain (9-level: overwrite → wordwrap → postprocessed → edit{N} → tlc{N} → translation → preedit → preprocessed → original). Added Dirty Flags system (Process flag set by preprocessing/cleared by postprocessing 100%, Wordwrap flag cleared when applied) with pre-export validation dialog. Non-destructive default (subfolder naming, no overwrite). Failure logging with per-file error tracking. Complete widget specifications with destination, format, naming, safety, and export extras sections. Settings received from Input (source_root, file_dir, encoding, format). Step 0 (Input): Added Import Translations button — imports translations from another manifest via exact `orig` line matching (sequential search, file/line-number agnostic, copies all processing fields). Step 5 (Translation): Added Skip Already Translated checkbox — skips lines with existing `tl` field for incremental translation workflows. Bug fixes: QA mousewheel TclError (try/except wrapper for race condition), output_inject `get_section` → `get_output_options()`, preprocess warning demoted to debug. |
 | 2.7 | 2026-02-08 | Comprehensive rewrite of Step 8 (Wordwrap): Redefined purpose (auto from parser or manual settings). Pretty wrap is now standard — removed Prevent Orphans and Prefer Punctuation Breaks checkboxes (always active). Mode changed from radio buttons to dropdown, removed RPG Maker (→ its own parser) and Disabled options. Width changed from Spinbox to Dropdown with Character/Pixel modes. Break Character linked to Preprocessing and Translation Prompt with cost-optimization note. Speaker Handling reduced to Ignore + Count (renamed from Sameline), removed Samelineindent and Newline. Ignore Patterns replaced with read-only Code Database table (no checkboxes). Removed Typography widget entirely. Removed Overwrite Strategy widget — Overwrite becomes a column in the Lines Table with diff filtering. Added table filters (All/Changed/Exceeding/Overwrite Differs). Added Standard Wrapping Rules table documenting always-active `pretty_wrap()` behavior. Added comprehensive Future Improvements for parser-driven wrap, font commands, pixel-accurate width, New Textboxes, and break char removal before translation. |

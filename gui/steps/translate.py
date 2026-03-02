@@ -727,6 +727,22 @@ FILTER_PARTS: List[Tuple[str, str]] = [
     ("input_lines", "Input Lines"),
 ]
 
+# Extended header descriptions for Formatted view — shown in === headers
+SECTION_DESCRIPTIONS: Dict[str, str] = {
+    "meta": "Section headers (===) are for display only and not sent to the API",
+    "language": "Source → Target language pair from Information step",
+    "system_instructions": "General instructions from Information step",
+    "style": "Translation style guidelines from Information step",
+    "tone": "Translation tone and register from Information step",
+    "summary": "Game/project context summary from Information step",
+    "genre": "Content genre classification from Information step",
+    "pov": "Narrative perspective detected by Analysis step",
+    "conditional_prompts": "Auto-detected pattern-based instructions",
+    "glossary": "Term translations and character names",
+    "rolling_context": "Previous translations for continuity (per-chunk)",
+    "input_lines": "Lines to translate — sent as user message",
+}
+
 
 @dataclass
 class PreviewRequest:
@@ -758,6 +774,10 @@ class PreviewRequest:
     ) -> str:
         """Assemble the visible request text honouring active filters.
 
+        Section headers include informative descriptions so users
+        understand which parts are sent to the API and where data
+        originates.
+
         Args:
             active_parts: Set of part keys to include.  ``None`` = all.
 
@@ -774,7 +794,12 @@ class PreviewRequest:
             text = self.get_part(key)
             if not text:
                 continue
-            sections.append(f"=== {label} ===\n{text}")
+            desc = SECTION_DESCRIPTIONS.get(key, "")
+            if desc:
+                header = f"=== {label} ({desc}) ==="
+            else:
+                header = f"=== {label} ==="
+            sections.append(f"{header}\n{text}")
         return "\n\n".join(sections)
 
     def build_pure_json(self) -> str:
@@ -831,8 +856,13 @@ class RequestPreviewDialog(tk.Toplevel):
         self._requests = requests
         self._current_idx = 0  # 0-based index of displayed request
         self._view_mode: str = self._VIEW_FORMATTED
-        self._search_matches: list[str] = []  # tk text indices
+        self._search_matches: list[str] = []  # tk text indices (current req)
         self._search_match_idx = -1
+
+        # Cross-request search state
+        self._cross_counts: list[int] = []   # match count per request
+        self._cross_total: int = 0           # sum of all counts
+        self._cross_global_idx: int = -1     # current global match index
 
         # Active filter parts (all enabled by default)
         self._active_filters: dict[str, tk.BooleanVar] = {}
@@ -1039,9 +1069,10 @@ class RequestPreviewDialog(tk.Toplevel):
             ),
         )
 
-        # Re-apply search highlights if a search is active
-        if self._search_var.get():
-            self._do_search()
+        # Re-apply local search highlights if a search is active
+        term = self._search_var.get()
+        if term:
+            self._highlight_local_matches(term)
 
     # ------------------------------------------------------------------
     # View helpers
@@ -1107,20 +1138,86 @@ class RequestPreviewDialog(tk.Toplevel):
     # ------------------------------------------------------------------
 
     def _do_search(self) -> None:
-        """Run the search and highlight all matches."""
+        """Run search across ALL requests and highlight current request matches.
+
+        Builds per-request match counts so that Previous/Next can
+        navigate across request boundaries seamlessly.
+        """
         term = self._search_var.get()
 
-        # Clear previous highlights
+        # Clear highlights on current text widget
         self._text.tag_remove("search_hl", "1.0", "end")
         self._text.tag_remove("search_current", "1.0", "end")
         self._search_matches.clear()
         self._search_match_idx = -1
+        self._cross_counts.clear()
+        self._cross_total = 0
+        self._cross_global_idx = -1
 
         if not term:
             self._match_label.configure(text="0 / 0")
             return
 
-        # Find all occurrences (case-insensitive)
+        # Count matches in every request (using rendered text)
+        active = {k for k, v in self._active_filters.items() if v.get()}
+        mode = self._view_var.get()
+        lower_term = term.lower()
+        for req in self._requests:
+            content = self._render_text_for_request(req, active, mode)
+            count = content.lower().count(lower_term)
+            self._cross_counts.append(count)
+        self._cross_total = sum(self._cross_counts)
+
+        # Highlight matches in the currently displayed request
+        self._highlight_local_matches(term)
+
+        total = self._cross_total
+        if total:
+            # Set global index to first match in current request, or 0
+            offset = sum(self._cross_counts[:self._current_idx])
+            if self._search_matches:
+                self._cross_global_idx = offset
+                self._search_match_idx = 0
+                self._highlight_current_match()
+            else:
+                self._cross_global_idx = 0
+                self._search_match_idx = -1
+        self._update_match_label()
+
+    def _render_text_for_request(
+        self,
+        req: "PreviewRequest",
+        active: set[str],
+        mode: str,
+    ) -> str:
+        """Render request text without touching the widget.
+
+        Args:
+            req: The request to render.
+            active: Active filter keys.
+            mode: View mode string.
+
+        Returns:
+            Rendered text string.
+        """
+        if mode == self._VIEW_PURE:
+            return req.build_pure_json()
+        elif mode == self._VIEW_PLAIN:
+            return self._plain_text(req.build_full_request_text(active))
+        return req.build_full_request_text(active)
+
+    def _highlight_local_matches(self, term: str) -> None:
+        """Find and highlight all matches of *term* in the text widget.
+
+        Populates ``_search_matches`` with tk text indices.
+
+        Args:
+            term: Search term (case-insensitive).
+        """
+        self._text.tag_remove("search_hl", "1.0", "end")
+        self._text.tag_remove("search_current", "1.0", "end")
+        self._search_matches.clear()
+
         start = "1.0"
         while True:
             pos = self._text.search(
@@ -1133,14 +1230,6 @@ class RequestPreviewDialog(tk.Toplevel):
             self._search_matches.append(pos)
             start = end_pos
 
-        count = len(self._search_matches)
-        if count:
-            self._search_match_idx = 0
-            self._highlight_current_match()
-        self._match_label.configure(
-            text=f"{self._search_match_idx + 1 if count else 0} / {count}",
-        )
-
     def _highlight_current_match(self) -> None:
         """Highlight the current match distinctively and scroll to it."""
         self._text.tag_remove("search_current", "1.0", "end")
@@ -1151,31 +1240,72 @@ class RequestPreviewDialog(tk.Toplevel):
             self._text.tag_add("search_current", pos, end_pos)
             self._text.see(pos)
 
+    def _update_match_label(self) -> None:
+        """Update the match count label with global index/total."""
+        if self._cross_total:
+            self._match_label.configure(
+                text=(
+                    f"{self._cross_global_idx + 1} / "
+                    f"{self._cross_total}"
+                ),
+            )
+        else:
+            self._match_label.configure(text="0 / 0")
+
+    def _resolve_global_index(self, global_idx: int) -> tuple[int, int]:
+        """Map a global match index to (request_idx, local_match_idx).
+
+        Args:
+            global_idx: 0-based index across all requests.
+
+        Returns:
+            Tuple of (request index, local match index within that request).
+        """
+        cumulative = 0
+        for req_idx, count in enumerate(self._cross_counts):
+            if cumulative + count > global_idx:
+                return req_idx, global_idx - cumulative
+            cumulative += count
+        # Fallback — should not happen
+        return len(self._requests) - 1, 0
+
+    def _navigate_to_global_match(self, global_idx: int) -> None:
+        """Switch to the request containing ``global_idx`` and highlight.
+
+        Args:
+            global_idx: 0-based global match index.
+        """
+        req_idx, local_idx = self._resolve_global_index(global_idx)
+        self._cross_global_idx = global_idx
+
+        if req_idx != self._current_idx:
+            self._current_idx = req_idx
+            self._jump_var.set(req_idx + 1)
+            self._render_current_request()
+            # _render_current_request calls _do_search if search active,
+            # which would reset global state.  Re-highlight instead.
+            term = self._search_var.get()
+            self._highlight_local_matches(term)
+
+        self._search_match_idx = local_idx
+        self._highlight_current_match()
+        self._update_match_label()
+
     def _search_next(self) -> None:
-        """Move to the next search match."""
-        if not self._search_matches:
+        """Move to the next search match (cross-request)."""
+        if self._cross_total == 0:
             self._do_search()
             return
-        self._search_match_idx = (
-            (self._search_match_idx + 1) % len(self._search_matches)
-        )
-        self._highlight_current_match()
-        self._match_label.configure(
-            text=f"{self._search_match_idx + 1} / {len(self._search_matches)}",
-        )
+        new_idx = (self._cross_global_idx + 1) % self._cross_total
+        self._navigate_to_global_match(new_idx)
 
     def _search_prev(self) -> None:
-        """Move to the previous search match."""
-        if not self._search_matches:
+        """Move to the previous search match (cross-request)."""
+        if self._cross_total == 0:
             self._do_search()
             return
-        self._search_match_idx = (
-            (self._search_match_idx - 1) % len(self._search_matches)
-        )
-        self._highlight_current_match()
-        self._match_label.configure(
-            text=f"{self._search_match_idx + 1} / {len(self._search_matches)}",
-        )
+        new_idx = (self._cross_global_idx - 1) % self._cross_total
+        self._navigate_to_global_match(new_idx)
 
     # ------------------------------------------------------------------
     # Filter
@@ -2061,6 +2191,7 @@ class TranslationStep(BaseStep):
     def _build_system_prompt_from_manifest(
         self,
         rolling_context_text: str = "",
+        chunk_lines: Optional[List[str]] = None,
     ) -> str:
         """Build the system prompt from manifest Information step metadata.
 
@@ -2070,6 +2201,9 @@ class TranslationStep(BaseStep):
         Args:
             rolling_context_text: Pre-formatted rolling context lines to
                 include in the prompt. Empty string disables.
+            chunk_lines: When provided, enables per-chunk selective
+                filtering of glossary, characters, and conditional
+                prompts (only terms present in these lines are included).
 
         Returns:
             Assembled system prompt string.
@@ -2078,8 +2212,8 @@ class TranslationStep(BaseStep):
 
         mgr = self.manifest_manager
         if mgr is not None and mgr.is_loaded:
-            # Read from step_state.Information.data.metadata (index 3)
-            metadata = mgr.get_step_data_value(3, "metadata", {})
+            # Read from step_state.Information.data.metadata (index 2)
+            metadata = mgr.get_step_data_value(2, "metadata", {})
             if not isinstance(metadata, dict):
                 metadata = {}
 
@@ -2094,8 +2228,10 @@ class TranslationStep(BaseStep):
             from CherryAI.functions.manifest_fields import load_glossary_entries
             glossary_entries = load_glossary_entries(mgr)
 
-            # Characters
+            # Characters from metadata + manifest top-level
             characters = metadata.get("characters", [])
+            if not characters:
+                characters = mgr._manifest_data.get("characters", [])
 
             # POV from manifest top-level
             pov_data = mgr._manifest_data.get("POV", {})
@@ -2113,6 +2249,7 @@ class TranslationStep(BaseStep):
                 sample_lines=sample_lines,
                 rolling_context_text=rolling_context_text,
                 pov_data=pov_data,
+                chunk_lines=chunk_lines,
             )
 
             if prompt_text:
@@ -2359,7 +2496,7 @@ class TranslationStep(BaseStep):
                         info_mgr = self.manifest_manager
                         if info_mgr is not None and info_mgr.is_loaded:
                             info_meta = info_mgr.get_step_data_value(
-                                3, "metadata", {},
+                                2, "metadata", {},
                             )
                             if isinstance(info_meta, dict):
                                 sl = info_meta.get("source_language", "")
@@ -2417,6 +2554,16 @@ class TranslationStep(BaseStep):
 
             self._log_progress(f"Processing {len(pending_lines)} lines in {len(chunks)} chunks")
 
+            # Rolling context state
+            go = getattr(self.session, "global_options", None)
+            try:
+                rolling_ctx_max = int(
+                    go.request.rolling_context_lines,
+                ) if go else 3
+            except (TypeError, ValueError, AttributeError):
+                rolling_ctx_max = 3
+            rolling_ctx_buffer: list[str] = []
+
             # Process each chunk
             for chunk_idx, chunk in enumerate(chunks):
                 if self._cancel_requested:
@@ -2442,9 +2589,23 @@ class TranslationStep(BaseStep):
 
                 self.after(0, self._update_lines_table)
 
+                # Build rolling context text for this chunk
+                formation_ctx = getattr(chunk[0], "_formation_ctx", None)
+                receives_context = (
+                    formation_ctx.get("receives_context", False)
+                    if formation_ctx else (chunk_idx > 0)
+                )
+
+                rolling_context_text = ""
+                if receives_context and rolling_ctx_buffer and rolling_ctx_max > 0:
+                    tail = rolling_ctx_buffer[-rolling_ctx_max:]
+                    rolling_context_text = "\n".join(tail)
+
                 # Translate chunk
                 try:
-                    translations = self._translate_chunk(chunk)
+                    translations = self._translate_chunk(
+                        chunk, rolling_context_text=rolling_context_text,
+                    )
 
                     # Apply translations
                     for line, translation in zip(chunk, translations):
@@ -2456,6 +2617,15 @@ class TranslationStep(BaseStep):
                             self._manifest_manager.update_translation(
                                 line.idx, translation,
                             )
+
+                    # Update rolling context buffer with this chunk's
+                    # translations (only if the chunk provides context).
+                    provides_context = (
+                        formation_ctx.get("provides_context", True)
+                        if formation_ctx else True
+                    )
+                    if provides_context:
+                        rolling_ctx_buffer.extend(translations)
 
                 except Exception as e:
                     self._log_progress(f"Chunk {chunk_idx + 1} failed: {e}")
@@ -2604,30 +2774,124 @@ class TranslationStep(BaseStep):
         return kept
 
     def _build_chunks(self, lines: List[TranslatableLine]) -> List[List[TranslatableLine]]:
-        """Build chunks from lines.
+        """Build translation chunks using the 4-step formation pipeline.
+
+        Uses :func:`build_requests` from ``prompt_builder.py`` which
+        implements:
+            Rule 1 — Split at file boundaries (``first_idx``/``last_idx``).
+            Rule 2 — Balance sub-groups to avoid single-line requests.
+            Rule 3 — Tag rolling context eligibility per request.
+            Rule 4 — Merge short requests within file boundaries.
+
+        Falls back to simple fixed-size chunking when the pipeline is
+        not available or the manifest has no filedir data.
 
         Args:
             lines: Lines to chunk.
 
         Returns:
-            List of chunks.
+            List of chunks (each chunk is a list of TranslatableLine).
         """
-        chunks: List[List[TranslatableLine]] = []
         chunk_size = self._translation_options.chunk_size
 
+        try:
+            from CherryAI.functions.prompt_builder import (
+                LineInfo, RequestFormationConfig, build_requests,
+            )
+
+            # Build LineInfo objects from TranslatableLine objects
+            idx_to_line: dict[int, TranslatableLine] = {
+                line.idx: line for line in lines
+            }
+            line_infos: list[LineInfo] = []
+            for line in lines:
+                text = (
+                    line.edited_prepro or line.preprocessed or line.original
+                )
+                is_invalid = (
+                    not text.strip()
+                    or "__DEDUP__" in text
+                    or "__PROTECTED__" in text
+                    or "__CUSTOM__" in text
+                )
+                line_infos.append(LineInfo(
+                    index=line.idx,
+                    text=text,
+                    is_invalid=is_invalid,
+                ))
+
+            # Inject file-end markers from manifest filedir
+            mgr = self.manifest_manager
+            if mgr is not None and mgr.is_loaded:
+                try:
+                    filedir = mgr.get_filedir()
+                    for entry in filedir:
+                        # Insert file_end marker after each file's last_idx
+                        last = entry.last_idx
+                        line_infos.append(LineInfo(
+                            index=last + 1,
+                            text="",
+                            is_invalid=True,
+                            context_marker="file_end",
+                        ))
+                except Exception:
+                    pass
+
+            # Sort by index (file_end markers slot between files)
+            line_infos.sort(key=lambda li: li.index)
+
+            config = RequestFormationConfig(
+                max_lines=chunk_size,
+                min_lines=max(2, chunk_size // 5),
+            )
+            formation_requests = build_requests(line_infos, config)
+
+            # Convert back to List[List[TranslatableLine]]
+            chunks: list[list[TranslatableLine]] = []
+            for req in formation_requests:
+                chunk_lines = [
+                    idx_to_line[idx]
+                    for idx in req.line_indices
+                    if idx in idx_to_line
+                ]
+                if chunk_lines:
+                    # Store formation metadata on the first line
+                    chunk_lines[0]._formation_ctx = {
+                        "receives_context": req.receives_context,
+                        "provides_context": req.provides_context,
+                        "context_type": req.context_type,
+                    }
+                    chunks.append(chunk_lines)
+
+            if chunks:
+                return chunks
+
+        except ImportError:
+            logger.debug("prompt_builder not available, using simple chunking")
+        except Exception:
+            logger.debug("Formation pipeline failed, using simple chunking",
+                         exc_info=True)
+
+        # Fallback: simple fixed-size chunking
+        chunks = []
         for i in range(0, len(lines), chunk_size):
             chunk = lines[i:i + chunk_size]
             chunks.append(chunk)
-
         return chunks
 
-    def _translate_chunk(self, chunk: List[TranslatableLine]) -> List[str]:
+    def _translate_chunk(
+        self,
+        chunk: List[TranslatableLine],
+        rolling_context_text: str = "",
+    ) -> List[str]:
         """Translate a chunk of lines.
 
         TASK 43.5: Routes to MockTranslator when mock model selected.
 
         Args:
             chunk: Lines to translate.
+            rolling_context_text: Pre-formatted rolling context from
+                previously translated chunks.
 
         Returns:
             List of translations.
@@ -2649,7 +2913,8 @@ class TranslationStep(BaseStep):
             ]
 
         # Build system prompt from manifest (Information step data)
-        system_prompt = self._build_system_prompt_from_manifest()
+        # NOTE: System prompt is built AFTER collecting chunk lines
+        # so that selective filtering can be applied.
 
         # Get text for translation - use edited_prepro if available (Task 33.1)
         lines_to_translate = [
@@ -2657,9 +2922,23 @@ class TranslationStep(BaseStep):
             for line in chunk
         ]
 
+        # Filter __DEDUP__ lines from request input
+        filtered_for_api = [
+            ln for ln in lines_to_translate if "__DEDUP__" not in ln
+        ]
+
+        # Build system prompt with per-chunk selective filtering
+        system_prompt = self._build_system_prompt_from_manifest(
+            rolling_context_text=rolling_context_text,
+            chunk_lines=filtered_for_api,
+        )
+
+        # Log outgoing request when enabled in Global Options
+        self._log_request_json(system_prompt, filtered_for_api)
+
         # Call API
         translations = self._api_client.translate_batch(
-            lines_to_translate,
+            filtered_for_api,
             system_prompt=system_prompt if system_prompt else None,
         )
 
@@ -2671,6 +2950,52 @@ class TranslationStep(BaseStep):
             )
 
         return translations
+
+    def _log_request_json(
+        self,
+        system_prompt: str,
+        lines_to_translate: List[str],
+    ) -> None:
+        """Write outgoing request as JSON when log_requests is enabled.
+
+        Logs are written to the ``logs/`` directory as timestamped JSON files
+        so that actual requests can be compared against the Request Preview.
+
+        Args:
+            system_prompt: The full system prompt built for this chunk.
+            lines_to_translate: The input lines sent to the API.
+        """
+        try:
+            go = getattr(self.session, "global_options", None)
+            if go is None or not getattr(go.logging, "log_requests", False):
+                return
+
+            from pathlib import Path
+
+            log_dir = Path(__file__).resolve().parents[2] / "logs" / "requests"
+            log_dir.mkdir(parents=True, exist_ok=True)
+
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            chunk_idx = self._progress.current_chunk
+            filename = f"request_{timestamp}_chunk{chunk_idx}.json"
+
+            payload = {
+                "timestamp": timestamp,
+                "chunk_index": chunk_idx,
+                "model": self._translation_options.model,
+                "temperature": self._translation_options.temperature,
+                "system_prompt": system_prompt,
+                "input_lines": lines_to_translate,
+                "line_count": len(lines_to_translate),
+            }
+
+            (log_dir / filename).write_text(
+                json.dumps(payload, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            logger.debug("Logged request to %s", filename)
+        except Exception:
+            logger.debug("Failed to log request JSON", exc_info=True)
 
     def _update_progress_display(self) -> None:
         """Update the progress window display."""
@@ -2964,8 +3289,8 @@ class TranslationStep(BaseStep):
         try:
             mgr = self.manifest_manager
             if mgr is not None and mgr.is_loaded:
-                # Read from Information metadata (step index 3)
-                metadata = mgr.get_step_data_value(3, "metadata", {})
+                # Read from Information metadata (step index 2)
+                metadata = mgr.get_step_data_value(2, "metadata", {})
                 if isinstance(metadata, dict):
                     summary = (metadata.get("summary", "") or "").strip()
                     if summary:
@@ -3055,6 +3380,13 @@ class TranslationStep(BaseStep):
         # Chunk the lines the same way translation does
         chunks = self._build_chunks(pending)
 
+        # Rolling context setting (for preview hint)
+        go = getattr(self.session, "global_options", None)
+        try:
+            rolling_ctx_max = int(go.request.rolling_context_lines) if go else 3
+        except (TypeError, ValueError, AttributeError):
+            rolling_ctx_max = 3
+
         # Read metadata from Information step
         mgr = self.manifest_manager
         language_block = ""
@@ -3074,7 +3406,7 @@ class TranslationStep(BaseStep):
         pov_data: dict = {}
 
         if mgr is not None and mgr.is_loaded:
-            metadata = mgr.get_step_data_value(3, "metadata", {})
+            metadata = mgr.get_step_data_value(2, "metadata", {})
             if not isinstance(metadata, dict):
                 metadata = {}
 
@@ -3089,32 +3421,26 @@ class TranslationStep(BaseStep):
             from CherryAI.functions.manifest_fields import load_glossary_entries
             glossary_entries = load_glossary_entries(mgr)
 
-            # Characters + POV
+            # Characters from metadata + manifest top-level
             characters = metadata.get("characters", [])
+            if not characters:
+                characters = mgr._manifest_data.get("characters", [])
+
             pov_data = mgr._manifest_data.get("POV", {})
 
-        # Sample lines for conditional
+        # Sample lines for conditional (fallback when no per-chunk filtering)
         sample_lines = [
             (line.edited_prepro or line.preprocessed or line.original)
             for line in self._lines[:200]
         ]
 
-        # Build the FULL system prompt with the shared builder
-        full_system_prompt, _ = build_full_system_prompt(
-            metadata=metadata,
-            glossary_entries=glossary_entries,
-            characters=characters,
-            sample_lines=sample_lines,
-            pov_data=pov_data,
-        )
-
-        # Extract individual labelled sections for the preview dialog
+        # Extract individual labelled sections (non-per-chunk sections)
         src = (metadata.get("source_language", "") or "").strip()
         tgt = (metadata.get("target_language", "") or "").strip()
         if src and tgt:
             language_block = f"# Language\nTranslate from {src} to {tgt}."
 
-        sys_instructions = (metadata.get("custom_notes", "") or "").strip()
+        sys_instructions = (metadata.get("system_instructions", "") or "").strip()
 
         style_val = (metadata.get("style", "") or "").strip()
         if style_val:
@@ -3143,46 +3469,10 @@ class TranslationStep(BaseStep):
                 f"throughout."
             )
 
-        # Glossary block for display
-        active = [e for e in glossary_entries if e.get("active", True)]
-        if active:
-            g_lines = ["# Glossary", "Use these terms strictly:"]
-            for entry in active:
-                s = entry.get("source", "")
-                t = entry.get("target", "")
-                n = entry.get("notes", "")
-                if s:
-                    lt = f"- {s} → {t}" if t else f"- {s}"
-                    if n:
-                        lt += f" ({n})"
-                    g_lines.append(lt)
-            glossary_block = "\n".join(g_lines)
-        if characters:
-            char_lines = ["# Characters"]
-            for ch in characters:
-                orig = ch.get("original_name", "")
-                eng = ch.get("name", "")
-                gender = ch.get("gender", "") or ch.get("notes", "")
-                if orig:
-                    et = f"- {orig}"
-                    if eng:
-                        et += f" → {eng}"
-                    if gender:
-                        et += f" ({gender})"
-                    char_lines.append(et)
-            if len(char_lines) > 1:
-                if glossary_block:
-                    glossary_block += "\n\n" + "\n".join(char_lines)
-                else:
-                    glossary_block = "\n".join(char_lines)
-
-        # Conditional
+        # Conditional import
         from CherryAI.gui.helpers.prompt_adapter import (
             build_conditional_instructions,
         )
-        cond_text, _ = build_conditional_instructions(sample_lines[:200])
-        if cond_text and cond_text.strip():
-            conditional_block = cond_text.strip()
 
         # Meta info
         meta_block = (
@@ -3191,15 +3481,104 @@ class TranslationStep(BaseStep):
             f"response_format: {{\"type\": \"json_object\"}}"
         )
 
-        # Build preview requests per chunk
+        # Build preview requests per chunk — glossary, characters, and
+        # conditional prompts are selective (only included when their
+        # source term / trigger appears in the chunk's lines).
         requests: list[PreviewRequest] = []
         for chunk_idx, chunk in enumerate(chunks):
             lines_for_chunk = [
                 line.edited_prepro or line.preprocessed or line.original
                 for line in chunk
             ]
+
+            # Filter out __DEDUP__ lines from input
+            filtered_lines = [
+                ln for ln in lines_for_chunk
+                if "__DEDUP__" not in ln
+            ]
+
+            chunk_text_joined = "\n".join(filtered_lines)
+
+            # Per-chunk selective glossary
+            chunk_glossary_block = ""
+            active = [
+                e for e in glossary_entries
+                if e.get("active", True) and e.get("source", "")
+                and e["source"] in chunk_text_joined
+            ]
+            if active:
+                g_lines = ["# Glossary", "Use these terms strictly:"]
+                for entry in active:
+                    s = entry.get("source", "")
+                    t = entry.get("target", "")
+                    n = entry.get("notes", "")
+                    if s:
+                        lt = f"- {s} → {t}" if t else f"- {s}"
+                        if n:
+                            lt += f" ({n})"
+                        g_lines.append(lt)
+                chunk_glossary_block = "\n".join(g_lines)
+
+            # Per-chunk selective characters
+            relevant_chars = [
+                ch for ch in characters
+                if ch.get("original_name", "")
+                and ch["original_name"] in chunk_text_joined
+            ]
+            if relevant_chars:
+                char_lines = ["# Characters"]
+                for ch in relevant_chars:
+                    orig = ch.get("original_name", "")
+                    eng = ch.get("name", "")
+                    gender = ch.get("gender", "") or ch.get("notes", "")
+                    if orig:
+                        et = f"- {orig}"
+                        if eng:
+                            et += f" → {eng}"
+                        if gender:
+                            et += f" ({gender})"
+                        char_lines.append(et)
+                if len(char_lines) > 1:
+                    if chunk_glossary_block:
+                        chunk_glossary_block += "\n\n" + "\n".join(char_lines)
+                    else:
+                        chunk_glossary_block = "\n".join(char_lines)
+
+            # Per-chunk selective conditional prompts
+            chunk_conditional_block = ""
+            cond_text, _ = build_conditional_instructions(filtered_lines)
+            if cond_text and cond_text.strip():
+                chunk_conditional_block = cond_text.strip()
+
+            # Build per-chunk full system prompt with selective filtering
+            chunk_full_prompt, _ = build_full_system_prompt(
+                metadata=metadata,
+                glossary_entries=glossary_entries,
+                characters=characters,
+                sample_lines=sample_lines,
+                pov_data=pov_data,
+                chunk_lines=filtered_lines,
+            )
+
+            # Rolling context preview hint — the actual rolling context
+            # is populated at translation time from prior chunk results,
+            # so we show a descriptive placeholder for chunks that will
+            # receive it.
+            formation_ctx = getattr(chunk[0], "_formation_ctx", None)
+            receives_ctx = (
+                formation_ctx.get("receives_context", False)
+                if formation_ctx else (chunk_idx > 0)
+            )
+            rolling_ctx_hint = ""
+            if receives_ctx and rolling_ctx_max > 0:
+                rolling_ctx_hint = (
+                    f"[Rolling context: last {rolling_ctx_max} translated "
+                    f"lines from previous chunk will be inserted here at "
+                    f"translation time]"
+                )
+
             user_content = json.dumps(
-                {"lines": lines_for_chunk}, ensure_ascii=False,
+                {"lines": filtered_lines}, ensure_ascii=False,
             )
             requests.append(PreviewRequest(
                 index=chunk_idx,
@@ -3211,12 +3590,12 @@ class TranslationStep(BaseStep):
                 tone=tone_block,
                 genre=genre_block,
                 pov=pov_block,
-                conditional_prompts=conditional_block,
-                glossary=glossary_block,
-                rolling_context="",  # populated at translation time
+                conditional_prompts=chunk_conditional_block,
+                glossary=chunk_glossary_block,
+                rolling_context=rolling_ctx_hint,
                 input_lines=user_content,
-                full_system_prompt=full_system_prompt,
-                line_count=len(lines_for_chunk),
+                full_system_prompt=chunk_full_prompt,
+                line_count=len(filtered_lines),
             ))
 
         return requests

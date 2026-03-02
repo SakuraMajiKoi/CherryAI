@@ -10628,7 +10628,7 @@ python -m pytest dev/test_api_keys.py -v --timeout=30
 
 =============================================================================
 
-## dev/test_request_preview.py — 40 tests
+## dev/test_request_preview.py — 42 tests
 
 Tests for the Preview Requests feature: `PreviewRequest` dataclass, `FILTER_PARTS` constant, `RequestPreviewDialog` class, and `_build_preview_requests()` integration. Run with:
 ```bash
@@ -10638,16 +10638,26 @@ python -m pytest dev/test_request_preview.py -v --timeout=15
 | Class | Tests | Description |
 |-------|-------|-------------|
 | `TestPreviewRequestDataclass` | 8 | `get_part()`, `build_full_request_text()` with/without filters, empty parts skipped, `build_pure_json()` valid JSON, temperature extraction, `line_count` |
-| `TestFilterParts` | 3 | 9 entries in `FILTER_PARTS`, unique keys, keys match dataclass field names |
+| `TestFilterParts` | 3 | 12 entries in `FILTER_PARTS`, unique keys, keys match dataclass field names |
 | `TestViewModes` | 4 | Pure returns valid JSON, Formatted has section headers (═══), Plain strips JSON syntax, Plain wraps long lines |
 | `TestRequestPreviewDialogCreation` | 5 | Dialog opens/closes, shows request count, Jump To navigates, clamp high, clamp low |
 | `TestRequestPreviewDialogSearch` | 4 | Search finds matches with highlighting, no-match shows "0 of 0", next wraps around, prev wraps around |
 | `TestRequestPreviewDialogFilter` | 3 | Deselect hides section from display, Select All restores, Deselect All clears |
 | `TestRequestPreviewDialogViewModes` | 3 | Switch to Pure validates JSON, switch to Plain strips markers, switch to Formatted shows headers |
-| `TestBuildPreviewRequests` | 5 | Correct chunk count (3 lines / chunk_size 2 → 2 requests), all parts populated, input_lines valid JSON, POV excluded on low confidence, glossary entries present |
-| `TestEdgeCases` | 5 | Empty request list, all empty parts, Unicode in Pure JSON, case-insensitive search, info label updates |
+| `TestBuildPreviewRequests` | 5 | Correct chunk count (3 lines / chunk_size 2 → 2 requests), all parts populated, input_lines valid JSON, POV excluded on low confidence, glossary entries present with selective per-chunk filtering |
+| `TestEdgeCases` | 7 | Empty request list, all empty parts, Unicode in Pure JSON, case-insensitive search, info label updates, cross-request search counts across all requests, cross-request navigation switches requests |
 
 **Key implementation details tested:**
 - `PreviewRequest.build_pure_json()` — Produces valid JSON with `messages` array (system + user), `model`, `temperature`
 - `RequestPreviewDialog` — Headless Tk tests (2 may skip on CI where Tk is unavailable)
 - `_build_preview_requests()` — Integration test using mocked `TranslationStep` with `_build_chunks` side effect, patched `build_conditional_instructions` and `load_glossary_entries`
+- Cross-request search — `_do_search()` scans all requests, `_search_next()`/`_search_prev()` navigate across request boundaries with global match index
+- Section headers — `=== Label (description) ===` format with `SECTION_DESCRIPTIONS` dict
+- Selective glossary — Only glossary entries whose source term appears in chunk lines are included
+- Formation-aware chunking — `_build_chunks()` integrates `build_requests()` from `prompt_builder.py`
+
+**Session 30 updates:** Added 2 cross-request search tests (`test_cross_request_search_counts`,
+`test_cross_request_search_navigates`). Updated `FILTER_PARTS` count 9→12 for new sections
+(language, genre, rolling_context). Updated header assertions for `=== Label (desc) ===` format.
+Updated `_make_request` helper with language/genre/rolling_context fields.
+Updated glossary test for selective per-chunk filtering (source terms in input lines).
