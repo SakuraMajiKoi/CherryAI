@@ -57,6 +57,22 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Tag name → display label mapping for the preview filter and Changes column.
+TAG_DISPLAY_NAMES: Dict[str, str] = {
+    "symbol_conversion": "Symbol Conversion",
+    "ellipsis": "Ellipsis Compression",
+    "protect_code": "Protected",
+    "placeholder": "Custom Placeholder",
+    "prot_compression": "Protected Compression",
+    "dedup": "Deduplicated",
+    "aggressive_dedup": "Aggressive Deduplicated",
+    "anchor": "Anchored",
+    "speaker": "Speaker Name Replacement",
+}
+
+# Reverse mapping: filter dropdown label → internal tag name.
+FILTER_TAG_MAP: Dict[str, str] = {v: k for k, v in TAG_DISPLAY_NAMES.items()}
+
 # TASK 16.5: Import centralized preprocessing config from store
 # Use conditional import to avoid circular imports
 try:
@@ -153,7 +169,7 @@ class PreprocessingStep(BaseStep):
             manifest_manager: ManifestManager for unified state (TASK 19).
         """
         self._config: Dict[str, Any] = dict(DEFAULT_PREPROCESS_CONFIG)
-        self._preview_lines: List[Tuple[str, str, str]] = []  # (original, processed, diff)
+        self._preview_lines: List[Tuple[str, str, str, List[str]]] = []  # (original, processed, diff, tags)
         self._is_processing = False
         
         # TASK 24.1: Manifest bindings for standard rules
@@ -174,12 +190,32 @@ class PreprocessingStep(BaseStep):
     def _build_ui(self) -> None:
         """Build the Preprocessing UI."""
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(1, weight=1)
+        self.rowconfigure(2, weight=1)
 
-        # Header with Apply button
+        # Header with Apply button (row 0)
         self._build_header()
 
-        # Main content: rules panel (left) + preview table (right)
+        # Progress bar (row 1, hidden by default)
+        self._progress_frame = ttk.Frame(self)
+        self._progress_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 2))
+        self._progress_frame.grid_remove()
+
+        self._progress_label = ttk.Label(
+            self._progress_frame,
+            text="",
+            foreground=THEME.text_secondary,
+        )
+        self._progress_label.pack(side="left", padx=(0, 10))
+
+        self._progress_bar = ttk.Progressbar(
+            self._progress_frame,
+            orient="horizontal",
+            mode="determinate",
+            maximum=100,
+        )
+        self._progress_bar.pack(side="left", fill="x", expand=True)
+
+        # Main content: rules panel (left) + preview table (right) (row 2)
         self._build_content()
 
     def _build_header(self) -> None:
@@ -220,7 +256,7 @@ class PreprocessingStep(BaseStep):
         """Build the main content area with rules and preview."""
         # Horizontal paned window
         paned = ttk.PanedWindow(self, orient="horizontal")
-        paned.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
+        paned.grid(row=2, column=0, sticky="nsew", padx=10, pady=5)
 
         # Left: Rules panel
         left_frame = ttk.Frame(paned)
@@ -807,14 +843,27 @@ class PreprocessingStep(BaseStep):
         # TASK 42.8: Filter dropdown
         filter_frame = ttk.Frame(parent)
         filter_frame.pack(fill="x", padx=5, pady=(5, 0))
-        ttk.Label(filter_frame, text="Filter:").pack(side="left")
+        ttk.Label(filter_frame, text="Search:").pack(side="left")
         self._preview_filter_var = tk.StringVar(value="All")
         filter_combo = ttk.Combobox(
             filter_frame,
             textvariable=self._preview_filter_var,
-            values=["All", "Changed", "Custom", "Deduplicated", "Protected", "Anchored", "Errors"],
+            values=[
+                "All",
+                "Changed",
+                "Unchanged",
+                "Deduplicated",
+                "Aggressive Deduplicated",
+                "Ellipsis Compression",
+                "Symbol Conversion",
+                "Protected Compression",
+                "Custom Placeholder",
+                "Protected",
+                "Anchored",
+                "Speaker Name Replacement",
+            ],
             state="readonly",
-            width=16,
+            width=24,
         )
         filter_combo.pack(side="left", padx=5)
         filter_combo.bind("<<ComboboxSelected>>", lambda _: self._update_preview())
@@ -834,6 +883,7 @@ class PreprocessingStep(BaseStep):
             columns=columns,
             show_filter=True,
             show_checkboxes=False,
+            show_count_filter=False,
         )
         self._preview_table.pack(fill="both", expand=True)
 
@@ -970,62 +1020,73 @@ class PreprocessingStep(BaseStep):
         """Process lines with configured rules in background.
 
         Uses mode_adapter.apply_preprocessing() for comprehensive processing
-        via modi/ modules (TASK 16.5).
+        via modi/ modules (TASK 16.5).  Reports progress to the UI
+        progress bar.
 
         Args:
             lines: Lines to process.
         """
         try:
-            # TASK 16.5: Use apply_preprocessing for comprehensive processing
-            processed, stats = apply_preprocessing(lines, self._config)
+            # Show progress bar on the main thread
+            self.after(0, self._show_progress)
 
-            # Build preview data with change tracking
-            processed_lines: List[Tuple[str, str, str]] = []
-            changes_by_line = stats.get("changes_by_rule", {})
-            changed_indices = set(stats.get("changed_lines", []))
+            def _on_progress(step_name: str, fraction: float) -> None:
+                self.after(
+                    0,
+                    lambda n=step_name, f=fraction: self._set_progress(n, f),
+                )
+
+            # TASK 16.5: Use apply_preprocessing for comprehensive processing
+            processed, stats = apply_preprocessing(
+                lines, self._config, progress_cb=_on_progress,
+            )
+
+            # Build preview data using per-line tags from stats
+            _on_progress("Building preview…", 0.9)
+            processed_lines: List[Tuple[str, str, str, List[str]]] = []
+            tags_by_line = stats.get("tags_by_line", {})
 
             for idx, (original, new_line) in enumerate(zip(lines, processed)):
-                if idx in changed_indices:
-                    # Determine which rules changed this line
-                    changes_for_line: List[str] = []
-                    # Check each rule type
-                    if changes_by_line.get("symbol_conversion"):
-                        old_sym, _ = apply_symbol_conversion(
-                            original,
-                            self._config.get("symbol_src_lang", "ja"),
-                            self._config.get("symbol_tgt_lang", "en"),
-                        )
-                        if old_sym != original:
-                            changes_for_line.append("symbols")
-                    if changes_by_line.get("ellipsis"):
-                        old_ell, changed = apply_ellipsis_compression(original)
-                        if changed:
-                            changes_for_line.append("ellipsis")
-                    if changes_by_line.get("protect_code"):
-                        changes_for_line.append("protect")
-                    if changes_by_line.get("placeholder"):
-                        changes_for_line.append("placeholder")
-                    if changes_by_line.get("prot_compression"):
-                        changes_for_line.append("prot_compress")
-
-                    change_str = ", ".join(changes_for_line) if changes_for_line else "changed"
-                else:
-                    change_str = ""
-
-                processed_lines.append((original, new_line, change_str))
+                line_tags = tags_by_line.get(idx, [])
+                display = ", ".join(
+                    TAG_DISPLAY_NAMES.get(t, t) for t in line_tags
+                ) if line_tags else ""
+                processed_lines.append((original, new_line, display, line_tags))
 
             self._preview_lines = processed_lines
 
-            # Update UI on main thread
+            # Hide progress and update UI on main thread
+            self.after(0, self._hide_progress)
             self.after(0, self._update_preview)
 
         except Exception as e:
             logger.exception("Error processing lines: %s", e)
             err_msg = str(e)
+            self.after(0, self._hide_progress)
             self.after(0, lambda: messagebox.showerror("Error", f"Processing failed: {err_msg}"))
         finally:
             self._is_processing = False
             self.after(0, lambda: self._apply_btn.configure(state="normal", text="▶ Apply Rules"))
+
+    def _show_progress(self) -> None:
+        """Show the progress bar."""
+        self._progress_bar["value"] = 0
+        self._progress_label.configure(text="Starting…")
+        self._progress_frame.grid()
+
+    def _hide_progress(self) -> None:
+        """Hide the progress bar."""
+        self._progress_frame.grid_remove()
+
+    def _set_progress(self, step_name: str, fraction: float) -> None:
+        """Update the progress bar value and label.
+
+        Args:
+            step_name: Current processing step name.
+            fraction: Progress fraction between 0.0 and 1.0.
+        """
+        self._progress_bar["value"] = int(fraction * 100)
+        self._progress_label.configure(text=step_name)
 
     def _apply_ellipsis(self, line: str) -> str:
         """Apply ellipsis compression to a line.
@@ -1062,7 +1123,7 @@ class PreprocessingStep(BaseStep):
     def _update_preview(self) -> None:
         """Update the preview table with processed lines.
 
-        TASK 42.8: Respects the preview filter dropdown to show subsets.
+        Filters entirely by reading the per-line tags list (read-only).
         """
         rows = []
         changed_count = 0
@@ -1070,24 +1131,28 @@ class PreprocessingStep(BaseStep):
         if hasattr(self, "_preview_filter_var"):
             active_filter = self._preview_filter_var.get() or "All"
 
-        for idx, (original, processed, changes) in enumerate(self._preview_lines):
-            if changes:
+        # Resolve which tag name the active filter maps to (if any).
+        required_tag = FILTER_TAG_MAP.get(active_filter, "")
+
+        for idx, entry in enumerate(self._preview_lines):
+            # Support both 4-tuple (with tags) and legacy 3-tuple format
+            if len(entry) == 4:
+                original, processed, changes, line_tags = entry
+            else:
+                original, processed, changes = entry[:3]
+                line_tags: List[str] = []
+
+            has_changes = bool(line_tags) or bool(changes)
+            if has_changes:
                 changed_count += 1
 
-            # TASK 42.8: Apply filter
-            if active_filter != "All":
-                if active_filter == "Changed" and not changes:
-                    continue
-                if active_filter == "Custom" and "__CUST__" not in processed:
-                    continue
-                if active_filter == "Deduplicated" and "__DEDUP__" not in processed:
-                    continue
-                if active_filter == "Protected" and "__PROTECTED__" not in processed:
-                    continue
-                if active_filter == "Anchored" and "anchor" not in (changes or "").lower():
-                    continue
-                if active_filter == "Errors" and "error" not in (changes or "").lower():
-                    continue
+            # Apply filter
+            if active_filter == "Changed" and not has_changes:
+                continue
+            if active_filter == "Unchanged" and has_changes:
+                continue
+            if required_tag and required_tag not in line_tags:
+                continue
 
             rows.append(
                 TableRow(
@@ -1105,7 +1170,7 @@ class PreprocessingStep(BaseStep):
 
         self._preview_table.set_data(rows)
 
-        # TASK 42.8: Update filter count
+        # Update filter count
         if hasattr(self, "_filter_count_label") and active_filter != "All":
             self._filter_count_label.configure(
                 text=f"({len(rows)} of {len(self._preview_lines)} lines)",
@@ -1128,21 +1193,62 @@ class PreprocessingStep(BaseStep):
         Persists preprocessed text to manifest lines[].prepro via
         set_line_field so that downstream steps and session restore
         can read the preprocessed text directly from the manifest.
+
+        Skips writing prepro when it equals orig (unchanged lines)
+        since the PIPELINE_FIELDS resolution chain already falls back
+        to orig.  Also writes a comma-separated ``tags`` field per line.
         """
         data = {
             "config": dict(self._config),
             "processed_count": len(self._preview_lines),
-            "changed_count": sum(1 for _, _, c in self._preview_lines if c),
+            "changed_count": sum(
+                1 for entry in self._preview_lines
+                if (entry[3] if len(entry) == 4 else entry[2])
+            ),
         }
         self.set_step_data(data)
 
         # Persist each preprocessed line to the manifest
         mgr = self.manifest_manager
         if mgr is not None:
-            for idx, (_orig, processed, _changes) in enumerate(
-                self._preview_lines
-            ):
-                mgr.set_line_field(idx, "prepro", processed)
+            lines = mgr.get_lines()
+            # Build idx→line dict for O(1) lookups instead of O(N) iteration
+            idx_map: Dict[int, Dict] = {
+                ln.get("idx"): ln for ln in lines if ln.get("idx") is not None
+            }
+            dirty = False
+            for idx, entry in enumerate(self._preview_lines):
+                if len(entry) == 4:
+                    _orig, processed, _changes, line_tags = entry
+                else:
+                    _orig, processed, _changes = entry[:3]
+                    line_tags = []
+
+                manifest_line = idx_map.get(idx)
+                if manifest_line is None:
+                    continue
+
+                orig = manifest_line.get("orig", "")
+
+                # Write tags
+                tags_str = ",".join(line_tags)
+                old_tags = manifest_line.get("tags", "")
+                if tags_str != old_tags:
+                    manifest_line["tags"] = tags_str
+                    dirty = True
+
+                # Skip writing prepro when it equals orig
+                if processed == orig:
+                    if "prepro" in manifest_line:
+                        del manifest_line["prepro"]
+                        dirty = True
+                else:
+                    if manifest_line.get("prepro") != processed:
+                        manifest_line["prepro"] = processed
+                        dirty = True
+
+            if dirty:
+                mgr._mark_dirty()
 
     def _reset_rules(self) -> None:
         """Reset rules to defaults."""
@@ -1559,10 +1665,11 @@ class PreprocessingStep(BaseStep):
             self._load_preview_from_manifest()
 
     def _load_preview_from_manifest(self) -> None:
-        """Populate the preview table from manifest ``orig``/``prepro`` fields.
+        """Populate the preview table from manifest ``orig``/``prepro``/``tags`` fields.
 
         Called during ``on_enter`` so that returning to the tab shows
         existing preprocessing results without re-running Apply Rules.
+        Tags are read directly for efficient filtering.
         """
         mgr = self.manifest_manager
         if mgr is None or not mgr.is_loaded:
@@ -1572,16 +1679,20 @@ class PreprocessingStep(BaseStep):
         if not manifest_lines:
             return
 
-        preview: list[tuple[str, str, str]] = []
+        preview: list[tuple[str, str, str, list[str]]] = []
         for ln in manifest_lines:
             orig = ln.get("orig", "")
             prepro = ln.get("prepro", "")
+            tags_str = ln.get("tags", "")
+            line_tags = [t for t in tags_str.split(",") if t] if tags_str else []
             if prepro and prepro != orig:
-                diff = "preprocessed"
+                display = ", ".join(
+                    TAG_DISPLAY_NAMES.get(t, t) for t in line_tags
+                ) if line_tags else "preprocessed"
             else:
                 prepro = orig
-                diff = ""
-            preview.append((orig, prepro, diff))
+                display = ""
+            preview.append((orig, prepro, display, line_tags))
 
         if preview:
             self._preview_lines = preview

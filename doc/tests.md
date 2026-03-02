@@ -102,7 +102,7 @@ if global_opts is not None:
 
 **Location:** `dev/test_*.py`  
 **Runner:** `pytest`  
-**Count:** ~5800 tests collected (verified 2026-Q2 — 5783 passed, 33 pre-existing PROT failures)
+**Count:** ~6200+ tests collected (verified 2026-Q2 — 6222 passed, 222 pre-existing failures, 30 skipped)
 **Note (2026):** 33 "FAILED" entries are all pre-existing PROT-renaming regressions unrelated to
 the user-folder/encryption overhaul. They do not reflect code written since January 2026.
 **Configuration:** `conftest.py` - pytest hooks for CherryAI module setup
@@ -541,7 +541,7 @@ progression, edge cases, and that the `update_line_field` bug is fixed.
 
 | Test | Purpose |
 |------|---------|
-| `test_preprocess_has_set_line_field_call` | _update_step_data calls set_line_field |
+| `test_preprocess_persists_prepro` | _update_step_data writes prepro and tags fields to manifest (TASK 72) |
 | `test_preprocess_does_not_call_update_line_field` | No update_line_field in source |
 
 #### TestPostprocessIntegration (3 tests)
@@ -9746,6 +9746,7 @@ python -m mypy CherryAI/functions CherryAI/modi CherryAI/formats
 ### Phase 42: Preprocessing & Postprocessing Tests (80 tests)
 
 **File:** `dev/test_preprocess_phase42.py`
+**TASK 72 Updates:** `TestPreviewFiltering` updated for tag-based filtering (required_tag, line_tags); filter options expanded to 12 entries
 
 | Test Class | Tests | Coverage |
 |-----------|-------|----------|
@@ -9756,7 +9757,7 @@ python -m mypy CherryAI/functions CherryAI/modi CherryAI/formats
 | TestEllipsisCompression | 7 | Compress 3/6/9 dots, decompress, multiple, passthrough |
 | TestPROTCompression | 7 | Adjacent, non-adjacent, three-way, decompress, mixed |
 | TestCodeSpacingIntegration | 3 | save_code_glossary visible/spacing, manifest reads |
-| TestPreviewFiltering | 4 | Filter var, options, update_preview, count label |
+| TestPreviewFiltering | 4 | Filter var, options (12 TASK 72), update_preview tag-based, count label |
 | TestRoundtrip | 4 | Ellipsis, PROT, aggressive dedup, empty line roundtrips |
 | TestValidationRecovery | 11 | Position shift, extra tokens, recover_line, save_to_manifest |
 | TestProcessOrder | 7 | Module import, pre/post ordering, get_pre/post_order |
@@ -10246,7 +10247,7 @@ python -m pytest CherryAI/dev/test_session_persistence.py -v --timeout=10
 | TestBatchInsertSignature | 1 | Version parameter in method signature |
 | TestTableRowDeduplication | 2 | Row IDs unique, Tcl/Tk duplicate detection |
 | TestRowConstructionPerformance | 3 | TASK 71: 10k/50k/100k row build under threshold |
-| TestDisplayCapAndBatching | 3 | TASK 71: 50k display cap, 2000-row batches, bulk *children delete |
+| TestDisplayCapAndBatching | 3 | TASK 72: pagination (5000 rows/page), 2000-row batches, bulk *children delete |
 | TestFilterPerformance | 2 | TASK 71: 10k filter < 200ms, 50k filter < 1s |
 
 ```bash

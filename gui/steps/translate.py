@@ -1364,6 +1364,7 @@ class TranslationStep(BaseStep):
             columns=columns,
             show_filter=True,
             show_checkboxes=False,
+            show_count_filter=False,
         )
         self._lines_table.pack(fill="both", expand=True)
 

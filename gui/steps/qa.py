@@ -373,6 +373,7 @@ class QAStep(BaseStep):
             columns=columns,
             show_filter=True,
             show_checkboxes=True,
+            show_count_filter=False,
             on_select=self._on_line_selected,
         )
         self._lines_table.pack(fill="both", expand=True, padx=5, pady=5)
@@ -1489,11 +1490,11 @@ class QAStep(BaseStep):
             "rerun_policy": self._rerun_var.get(),
         }
 
-        # Persist qa_overwrite to manifest
+        # Persist qa_overwrite to manifest – only for lines that changed
         mgr = self.manifest_manager
         if mgr is not None and self._lines:
             for line in self._lines:
-                if line.translated:
+                if line.translated and line.translated != line.original:
                     mgr.set_line_field(line.idx, "qa_overwrite", line.translated)
 
     def get_qa_results(self) -> Dict[str, Any]:

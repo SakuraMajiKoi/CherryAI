@@ -395,6 +395,7 @@ class PostprocessingStep(BaseStep):
             columns=columns,
             show_filter=True,
             show_checkboxes=True,
+            show_count_filter=False,
             on_select=self._on_line_selected,
         )
         self._lines_table.pack(fill="both", expand=True, padx=5, pady=5)

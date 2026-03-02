@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -433,6 +433,7 @@ def apply_placeholder_batch(
 def apply_preprocessing(
     lines: List[str],
     config: Dict[str, Any],
+    progress_cb: Optional[Callable[[str, float], None]] = None,
 ) -> Tuple[List[str], Dict[str, Any]]:
     """Apply full preprocessing pipeline based on configuration.
 
@@ -446,21 +447,36 @@ def apply_preprocessing(
             - prot_compression_enabled: bool
             - protect_code_patterns: List[str]
             - placeholder_rules: List[Dict]
+        progress_cb: Optional callback ``(step_name, fraction)`` invoked
+            after each preprocessing rule completes. *fraction* ranges
+            from 0.0 to 1.0.
 
     Returns:
         Tuple of (processed_lines, stats_dict) where stats_dict contains:
             - total_changes: int
             - changes_by_rule: Dict[str, int]
             - changed_lines: List[int]
+            - tags_by_line: Dict[int, List[str]]  — per-line tag names
     """
     result = list(lines)
+    tags_by_line: Dict[int, List[str]] = {}
     stats: Dict[str, Any] = {
         "total_changes": 0,
         "changes_by_rule": {},
         "changed_lines": set(),
+        "tags_by_line": tags_by_line,
     }
 
+    def _tag_indices(indices: List[int], tag: str) -> None:
+        for i in indices:
+            tags_by_line.setdefault(i, []).append(tag)
+
+    def _report(name: str, frac: float) -> None:
+        if progress_cb is not None:
+            progress_cb(name, frac)
+
     # 1. Symbol conversion (should happen early)
+    _report("Symbol Conversion", 0.0)
     if config.get("symbol_conversion_enabled", True):
         src = config.get("symbol_src_lang", "ja")
         tgt = config.get("symbol_tgt_lang", "en")
@@ -469,16 +485,20 @@ def apply_preprocessing(
             stats["changes_by_rule"]["symbol_conversion"] = count
             stats["total_changes"] += count
             stats["changed_lines"].update(indices)
+            _tag_indices(indices, "symbol_conversion")
 
     # 2. Ellipsis compression
+    _report("Ellipsis Compression", 0.2)
     if config.get("ellipsis_enabled", True):
         result, count, indices = apply_ellipsis_batch(result)
         if count:
             stats["changes_by_rule"]["ellipsis"] = count
             stats["total_changes"] += count
             stats["changed_lines"].update(indices)
+            _tag_indices(indices, "ellipsis")
 
     # 3. Protect code patterns
+    _report("Protect Code Patterns", 0.4)
     patterns = config.get("protect_code_patterns", [])
     if patterns:
         result, count, indices, captured = apply_protect_batch(result, patterns)
@@ -487,8 +507,10 @@ def apply_preprocessing(
             stats["total_changes"] += count
             stats["changed_lines"].update(indices)
             stats["protect_code_captured"] = captured
+            _tag_indices(indices, "protect_code")
 
     # 4. Custom placeholder rules
+    _report("Custom Placeholders", 0.6)
     rules = config.get("placeholder_rules", [])
     if rules:
         result, count, indices, captured = apply_placeholder_batch(result, rules)
@@ -497,14 +519,19 @@ def apply_preprocessing(
             stats["total_changes"] += count
             stats["changed_lines"].update(indices)
             stats["placeholder_captured"] = captured
+            _tag_indices(indices, "placeholder")
 
     # 5. PROTECTED compression (should happen last after PROTECTED tokens are created)
+    _report("Protected Compression", 0.8)
     if config.get("prot_compression_enabled", True):
         result, count, indices = apply_prot_batch(result)
         if count:
             stats["changes_by_rule"]["prot_compression"] = count
             stats["total_changes"] += count
             stats["changed_lines"].update(indices)
+            _tag_indices(indices, "prot_compression")
+
+    _report("Complete", 1.0)
 
     # Convert set to sorted list
     stats["changed_lines"] = sorted(stats["changed_lines"])

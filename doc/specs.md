@@ -107,8 +107,9 @@ The GUI is organized as:
 
 All application state is stored in the Manifest (`.CherryAI.json`), not in GUI memory. For every translation project, a manifest file is created which loads all project data and saves all process steps. The ManifestManager handles:
 - Auto-save on step change, close, and periodic interval (15s default)
+- Skip-unchanged guard: `set_line_field()` returns early when new value equals existing (TASK 72)
 - Per-step data storage with automatic serialization
-- Line-by-line translation state tracking
+- Line-by-line translation state tracking with per-line `tags` field (TASK 72)
 - Project recovery and session restoration
 
 ---
@@ -144,7 +145,7 @@ User Files (TXT/CSV/JSON/XLSX/RPG Maker/Images)
          ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  Step 3: Preprocessing  │ Dedup, placeholders, protect code │
-│  Produces: prepro[],    │ prepro_ops[], dedup_map           │
+│  Produces: prepro[],    │ prepro_ops[], dedup_map, tags[]   │
 │  protected_patterns     │ (Runs automatically if enabled)   │
 └─────────────────────────┴───────────────────────────────────┘
          │
@@ -2062,7 +2063,7 @@ Characters:
 
 ### Step 3: Preprocessing
 
-**Implementation Status:** ✅ Phase 42 DONE — All 12 tasks implemented (80 tests passing, 4679 total suite)
+**Implementation Status:** ✅ Phase 42 DONE — All 12 tasks implemented (80 tests passing, 4679 total suite); TASK 72 optimizations added (tags, pagination, skip unchanged)
 
 **Purpose**: Process text before translation with transformations that will be exactly mirrored and restored in Step 7: Postprocessing. Each process has a priority integer determining execution order. Preprocessing reduces tokens, protects code, and normalizes text while ensuring perfect reversibility.
 
@@ -2072,6 +2073,7 @@ Characters:
 3. **Perfect Reversibility**: All changes must be recoverable to produce accurate final output
 4. **Token Efficiency**: Reduce tokens sent to LLM to minimize costs
 5. **Code Protection**: Ensure code and placeholders survive translation unchanged
+6. **Big Project Efficiency** (TASK 72): Per-line tags for O(1) filter, skip unchanged writes, progress feedback
 
 ---
 

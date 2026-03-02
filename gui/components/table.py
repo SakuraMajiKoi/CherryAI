@@ -127,6 +127,7 @@ class SharedTable(ttk.Frame):
         columns: Optional[List[ColumnDef]] = None,
         show_filter: bool = True,
         show_checkboxes: bool = False,
+        show_count_filter: bool = True,
         on_select: Optional[Callable[[List[int]], None]] = None,
         on_edit: Optional[Callable[[int, str, Any], None]] = None,
     ) -> None:
@@ -137,6 +138,9 @@ class SharedTable(ttk.Frame):
             columns: Column definitions. Defaults to DEFAULT_COLUMNS.
             show_filter: Whether to show filter bar.
             show_checkboxes: Whether to show checkbox column.
+            show_count_filter: Whether to show count filter in the
+                filter bar.  Set to ``False`` for tables that do not
+                have a meaningful numeric count column.
             on_select: Callback when selection changes.
             on_edit: Callback when a cell is edited.
         """
@@ -147,6 +151,7 @@ class SharedTable(ttk.Frame):
         self._filtered_rows: List[TableRow] = []
         self._show_filter = show_filter
         self._show_checkboxes = show_checkboxes
+        self._show_count_filter = show_count_filter
         self._on_select = on_select
         self._on_edit = on_edit
         self._checked_rows: set = set()
@@ -156,6 +161,10 @@ class SharedTable(ttk.Frame):
         self._current_filter = ""
         self._current_count_filter = ""
         self._batch_insert_version = 0  # Track batch insertion version to cancel stale batches
+
+        # Pagination state
+        self._page_size = 5000
+        self._current_page = 0  # zero-indexed
 
         self._build_ui()
 
@@ -172,11 +181,11 @@ class SharedTable(ttk.Frame):
         self._build_status_bar()
 
     def _build_filter_bar(self) -> None:
-        """Build the filter/search bar with text and count filters."""
+        """Build the filter/search bar with text and optional count filters."""
         filter_frame = ttk.Frame(self)
         filter_frame.pack(fill="x", padx=5, pady=(5, 2))
 
-        ttk.Label(filter_frame, text="Filter:").pack(side="left", padx=(0, 5))
+        ttk.Label(filter_frame, text="Search:").pack(side="left", padx=(0, 5))
 
         self._filter_entry = ttk.Entry(
             filter_frame,
@@ -186,27 +195,28 @@ class SharedTable(ttk.Frame):
         self._filter_entry.pack(side="left", fill="x", expand=True)
         self._filter_entry.bind("<KeyRelease>", self._on_filter_change)
 
-        # Count filter (supports <X, >X, <=X, >=X, =X syntax)
-        ttk.Label(filter_frame, text="Count:").pack(
-            side="left", padx=(10, 5),
-        )
+        if self._show_count_filter:
+            # Count filter (supports <X, >X, <=X, >=X, =X syntax)
+            ttk.Label(filter_frame, text="Count:").pack(
+                side="left", padx=(10, 5),
+            )
 
-        # Toggle button for ≥ / ≤ default operator
-        self._count_mode_btn = ttk.Button(
-            filter_frame,
-            textvariable=self._count_mode_var,
-            width=2,
-            command=self._toggle_count_mode,
-        )
-        self._count_mode_btn.pack(side="left")
+            # Toggle button for ≥ / ≤ default operator
+            self._count_mode_btn = ttk.Button(
+                filter_frame,
+                textvariable=self._count_mode_var,
+                width=2,
+                command=self._toggle_count_mode,
+            )
+            self._count_mode_btn.pack(side="left")
 
-        self._count_filter_entry = ttk.Entry(
-            filter_frame,
-            textvariable=self._count_filter_var,
-            width=8,
-        )
-        self._count_filter_entry.pack(side="left")
-        self._count_filter_entry.bind("<KeyRelease>", self._on_filter_change)
+            self._count_filter_entry = ttk.Entry(
+                filter_frame,
+                textvariable=self._count_filter_var,
+                width=8,
+            )
+            self._count_filter_entry.pack(side="left")
+            self._count_filter_entry.bind("<KeyRelease>", self._on_filter_change)
 
         clear_btn = ttk.Button(
             filter_frame,
@@ -295,7 +305,7 @@ class SharedTable(ttk.Frame):
         self._tree.tag_configure("warning", foreground=THEME.accent_warning)
 
     def _build_status_bar(self) -> None:
-        """Build the status bar."""
+        """Build the status bar with pagination controls."""
         status_frame = ttk.Frame(self)
         status_frame.pack(fill="x", padx=5, pady=(2, 5))
 
@@ -306,7 +316,7 @@ class SharedTable(ttk.Frame):
         )
         self._status_label.pack(side="left")
 
-        # Export button
+        # Export button (right side)
         export_btn = ttk.Button(
             status_frame,
             text="Export CSV",
@@ -314,6 +324,31 @@ class SharedTable(ttk.Frame):
             width=10,
         )
         export_btn.pack(side="right")
+
+        # Pagination controls (right of status, left of export)
+        self._page_frame = ttk.Frame(status_frame)
+        self._page_frame.pack(side="right", padx=(10, 10))
+
+        self._prev_btn = ttk.Button(
+            self._page_frame, text="< Prev", width=6,
+            command=self._prev_page,
+        )
+        self._prev_btn.pack(side="left", padx=2)
+
+        self._page_label = ttk.Label(
+            self._page_frame, text="",
+            foreground=THEME.text_secondary,
+        )
+        self._page_label.pack(side="left", padx=4)
+
+        self._next_btn = ttk.Button(
+            self._page_frame, text="Next >", width=6,
+            command=self._next_page,
+        )
+        self._next_btn.pack(side="left", padx=2)
+
+        # Hide pagination controls initially (shown when needed)
+        self._page_frame.pack_forget()
 
     def _update_column_menu(self) -> None:
         """Update the column visibility menu."""
@@ -464,18 +499,15 @@ class SharedTable(ttk.Frame):
 
                 filtered.append(row)
             self._filtered_rows = filtered
+        self._current_page = 0
         self._refresh_display()
 
     def _refresh_display(self) -> None:
-        """Refresh the treeview display.
+        """Refresh the treeview display with pagination.
 
-        TASK 43.2: Uses batch insertion for large datasets (>1000 rows).
-        TASK 71: Optimised deletion (single Tcl call), larger batches,
-        and a display cap of ``_MAX_DISPLAY_ROWS`` to keep the UI
-        responsive with 50k+ line projects.
-
-        Uses version tracking to cancel stale batch insertions when a new
-        refresh starts before a previous one completes.
+        Displays only the current page of rows from ``_filtered_rows``.
+        When the total row count fits in a single page the pagination
+        controls are hidden; otherwise they are shown with page info.
         """
         # Increment version to invalidate any pending batch insertions
         self._batch_insert_version += 1
@@ -490,34 +522,59 @@ class SharedTable(ttk.Frame):
         visible_cols = [c for c in self.columns if c.visible]
 
         rows = self._filtered_rows
-        _MAX_DISPLAY_ROWS = 50_000
-        capped = False
-        display_rows = rows
-        if len(rows) > _MAX_DISPLAY_ROWS:
-            display_rows = rows[:_MAX_DISPLAY_ROWS]
-            capped = True
+        total = len(rows)
+
+        # Compute pagination bounds
+        total_pages = max(1, (total + self._page_size - 1) // self._page_size)
+        if self._current_page >= total_pages:
+            self._current_page = max(0, total_pages - 1)
+
+        start = self._current_page * self._page_size
+        end = min(start + self._page_size, total)
+        display_rows = rows[start:end]
 
         batch_size = 2000
 
         if len(display_rows) <= batch_size:
-            # Small dataset: insert synchronously
-            self._insert_rows(display_rows, visible_cols, 0)
+            self._insert_rows(display_rows, visible_cols, start)
         else:
-            # Large dataset: batch insert with version tracking
             self._batch_insert(
                 display_rows, visible_cols, 0, batch_size, current_version,
             )
 
-        if capped:
-            total = len(rows)
-            self._status_label.configure(
-                text=(
-                    f"Showing first {_MAX_DISPLAY_ROWS:,} of {total:,} rows. "
-                    "Use filter to narrow results."
-                )
+        # Update pagination controls
+        if total_pages > 1:
+            page_num = self._current_page + 1
+            self._page_label.configure(
+                text=f"Page {page_num} / {total_pages}",
             )
+            self._prev_btn.configure(
+                state="normal" if self._current_page > 0 else "disabled",
+            )
+            self._next_btn.configure(
+                state="normal" if self._current_page < total_pages - 1 else "disabled",
+            )
+            self._page_frame.pack(side="right", padx=(10, 10))
         else:
-            self._update_status()
+            self._page_frame.pack_forget()
+
+        self._update_status()
+
+    def _prev_page(self) -> None:
+        """Navigate to the previous page."""
+        if self._current_page > 0:
+            self._current_page -= 1
+            self._refresh_display()
+
+    def _next_page(self) -> None:
+        """Navigate to the next page."""
+        total_pages = max(
+            1,
+            (len(self._filtered_rows) + self._page_size - 1) // self._page_size,
+        )
+        if self._current_page < total_pages - 1:
+            self._current_page += 1
+            self._refresh_display()
 
     def _insert_rows(
         self,

@@ -879,6 +879,16 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Protect Code Patterns saved/loaded from manifest in ProtectCodePatterns format
     - Custom Placeholders saved/loaded from manifest in CustomPlaceholders format
     - Anchor Removal settings saved/loaded from manifest in AnchorRemoval format
+  - **Big Project Optimizations (TASK 72):**
+    - Per-line tags (`lines[].tags`): mode_adapter writes tag names during processing
+      (e.g. "symbol_conversion", "ellipsis", "protect_code", "placeholder", "prot_compression")
+    - Tag-based filter dropdown with 12 entries: All, Changed, Unchanged, Deduplicated,
+      Aggressive Deduplicated, Ellipsis Compression, Symbol Conversion, Protected Compression,
+      Custom Placeholder, Protected, Anchored, Speaker Name Replacement
+    - Progress bar (hidden by default) shown during Apply Rules processing
+    - Skip writing `prepro` when `processed == orig` — PIPELINE_FIELDS fallback chain handles reads
+    - O(1) `idx_map` lookup replaces N×`set_line_field` calls; single `_mark_dirty()` at end
+    - Filter label renamed from "Filter:" to "Search:"
 - **Costs Tab (Phase 6, updated Phase 40):**
   - **Renamed from Estimation to Costs** (class CostsStep, step_name "Costs")
   - Token counting with tiktoken (cl100k_base) or heuristic fallback
@@ -1480,7 +1490,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Chunk Sync: LinesPerChunk synced between Costs step and manifest; `_on_chunk_changed()` write-back
     - Language Skip: `detect_line_script()` in `functions/analysis.py` (CJK/kana/hangul/latin detection); `_LANG_SCRIPT_MAP` and `_apply_language_skip()` filter non-source lines
     - Tab Caching: `BaseStep` infrastructure (`_compute_cache_hash`, `_is_cache_valid`, `_update_cache`, `_invalidate_cache`, `_force_refresh`); TranslationStep early-returns on cache hit
-    - Performance: SharedTable batch insertion (2000-row batches via `after(1, ...)`); bulk `*children` delete; 50k display cap; `_refresh_lines()` optimized with batch manifest dict read
+    - Performance: SharedTable batch insertion (2000-row batches via `after(1, ...)`); bulk `*children` delete; page-based display (5000 rows/page with Prev/Next navigation, TASK 72); `_refresh_lines()` optimized with batch manifest dict read
   - **QA Step & Validation (Phase 44):**
     - QA Step Placeholder Mode: toggle switch defaults to placeholder, preserves full QA UI behind toggle
     - Shared Validation: Translation uses prompt_adapter retry/recovery, Postprocessing uses recover_line + validate_character_word
@@ -1706,7 +1716,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - gui/steps/postprocess.py - Postprocessing tab
   - gui/steps/wordwrap_overwrite.py - Wordwrap & Overwrite tab
   - gui/steps/output_inject.py - Output & Injection tab
-  - gui/components/table.py - Shared table component (708 lines)
+  - gui/components/table.py - Shared table component (pagination, ~950 lines)
   - gui/components/ - Reusable UI components
 - Legacy GUI preserved at functions/gui_legacy.py
 
@@ -1715,9 +1725,11 @@ GUI TABLE VIEW & EDITOR (Implemented)
 - **Standard Table Features (Implemented):**
   - Sortable columns (click header to sort)
   - Column visibility toggle (Columns menu)
-  - Filter by any field (search bar)
+  - Filter by any field (search bar, renamed from "Filter" to "Search" — TASK 72)
   - Search within table
   - Virtualized scrolling for large files (10k+ lines)
+  - Page-based display (5000 rows/page) with Prev/Next page navigation (TASK 72)
+  - Count filter shown only where needed (`show_count_filter` parameter — TASK 72)
 - **Editing (Implemented):**
   - In-place cell editing (double-click to edit)
   - Multi-select with checkboxes (optional)

@@ -369,6 +369,7 @@ class WordwrapOverwriteStep(BaseStep):
             columns=columns,
             show_filter=True,
             show_checkboxes=True,
+            show_count_filter=False,
             on_select=self._on_line_selected,
         )
         self._preview_table.pack(fill="both", expand=True, padx=5, pady=5)
@@ -1300,8 +1301,8 @@ class WordwrapOverwriteStep(BaseStep):
         """Save current state to session.
 
         Persists wrapped text to manifest lines[].wordwr via
-        set_line_field so downstream steps and session restore
-        can read the wrapped text directly from the manifest.
+        set_line_field.  Only writes lines where the wrapped text
+        differs from the original to avoid unnecessary manifest bloat.
         """
         step_data = self.get_step_data()
         step_data["wrap_options"] = {
@@ -1314,11 +1315,12 @@ class WordwrapOverwriteStep(BaseStep):
         step_data["wrapped_lines"] = [l.wrapped for l in self._lines]
         self.set_step_data(step_data)
 
-        # Persist each wrapped line to the manifest
+        # Persist only changed wrapped lines to the manifest
         mgr = self.manifest_manager
         if mgr is not None:
             for line in self._lines:
-                mgr.set_line_field(line.idx, "wordwr", line.wrapped)
+                if line.wrapped != line.original:
+                    mgr.set_line_field(line.idx, "wordwr", line.wrapped)
 
     # =========================================================================
     # Public API

@@ -200,7 +200,7 @@ TABLE OF CONTENTS
    
    6.5 gui/components/ (2 files)
        - __init__.py - Component exports
-       - table.py - SharedTable, ColumnDef, TableRow (Phase 43: batch insertion for large datasets; Phase 17: version tracking to cancel stale batches; TASK 71: bulk delete, 2000-row batches, 50k display cap)
+       - table.py - SharedTable, ColumnDef, TableRow (Phase 43: batch insertion for large datasets; Phase 17: version tracking to cancel stale batches; TASK 71: bulk delete, 2000-row batches; TASK 72: page-based display (5000 rows/page), show_count_filter parameter, "Search:" label rename)
    
    6.6 gui/dialogs/ (6 files - 5 dialog modules)
        - __init__.py - Dialog exports
@@ -275,7 +275,7 @@ TABLE OF CONTENTS
    
    6.7 gui/helpers/ (9 files - 7 adapter modules + 1 confirmation module)
        - __init__.py - Helper exports
-       - mode_adapter.py - Bridge between GUI config and modi/ modules (TASK 16.5)
+       - mode_adapter.py - Bridge between GUI config and modi/ modules (TASK 16.5; TASK 72: tags_by_line tracking, progress_cb parameter)
        - analysis_adapter.py - Bridge between GUI and functions/analysis.py (TASK 16.6)
          - detect_individual_codes_batch(): Individual code patterns with counts, types, samples
          - analyze_lines(): Full analysis with speaker_samples and individual_codes
@@ -506,8 +506,9 @@ TABLE OF CONTENTS
          - Chunk Sync: costs.py reads/writes LinesPerChunk to manifest RequestOptions
          - Language Skip: detect_line_script() in analysis.py, _LANG_SCRIPT_MAP, _apply_language_skip()
          - Tab Caching: BaseStep._compute_cache_hash/_is_cache_valid/_update_cache/_invalidate_cache/_force_refresh
-         - Performance: SharedTable batch insertion (2000-row batches), bulk *children delete, 50k display cap, _refresh_lines() batch manifest dict read
+         - Performance: SharedTable batch insertion (2000-row batches), bulk *children delete, page-based display (5000 rows/page, TASK 72), _refresh_lines() batch manifest dict read
          - TASK 71: Removed redundant all_lines/processed_lines/postprocessed_lines/files from step_data; manifest migration strips on load; new ManifestManager.get_all_orig_lines() API
+         - TASK 72: Per-line tags in mode_adapter (tags_by_line dict); preprocessing progress bar; skip unchanged prepro writes; tag-based filter dropdown (12 entries); pagination (5000 rows/page); "Search:" label; show_count_filter=False for 6 step tables; set_line_field skip-unchanged guard; wordwrap/QA on_leave skip unchanged lines
          - Bug Fix (Phase 17): Added _batch_insert_version counter to cancel stale batch insertions when _refresh_display() called multiple times
          - Modified: gui/steps/translate.py, gui/steps/base.py, gui/steps/costs.py, gui/components/table.py
          - Modified: gui/dialogs/global_options.py, functions/analysis.py

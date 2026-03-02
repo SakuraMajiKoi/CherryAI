@@ -28,7 +28,7 @@ TESTING REFERENCE
 
 For comprehensive test documentation, see `doc/tests.md`
 
-**Current Status:** 4428 tests (verified June 2025 via pytest --collect-only)
+**Current Status:** 6222 tests passing (verified Q2 2026 via pytest)
 
 Two test types:
 - **Script Test**: pytest unit tests (fast, no LLM)
@@ -51,6 +51,70 @@ MODULE COUNTS (Verified January 2026)
 - gui/dialogs/: 3 dialog modules (global_options, project_dialog, loading_progress)
 
 =============================================================================
+
+=============================================================================
+
+COMPLETED - SESSION 28 (TASK 72 — Big Project Performance + Table Pagination)
+
+### SESSION 28: TASK 72 — Preprocessing Tags, Skip Unchanged Lines, Pagination ✅ DONE
+
+**Problem:** 55,604-line manifests caused severe inefficiencies: preprocessing filter
+scanned text content on every dropdown change, `set_line_field` wrote all lines
+even when unchanged (triggering autosave), SharedTable had a 50k hard cap with no
+navigation, and tab switches wrote entries for every line regardless of changes.
+
+**Task 1 — Per-line tags for preprocessing filter:**
+- `gui/helpers/mode_adapter.py` — `apply_preprocessing()` now tracks `tags_by_line: Dict[int, List[str]]`
+  mapping line indices to tag names (e.g. "symbol_conversion", "ellipsis", "protect_code",
+  "placeholder", "prot_compression"). Returns tags in stats dict.
+- `gui/steps/preprocess.py` — Added `TAG_DISPLAY_NAMES` and `FILTER_TAG_MAP` constants.
+  Preview lines now store tags as 4th tuple element. Filter dropdown uses tags for O(1)
+  lookup instead of re-scanning text content. Filter values expanded to 12 entries.
+- Manifest `lines[].tags` field stores per-line tag list for reload.
+
+**Task 2 — Skip writing unchanged prepro lines:**
+- `gui/steps/preprocess.py` — `_update_step_data()` skips writing `prepro` when
+  `processed == orig`. Uses O(1) `idx_map` lookup instead of N×`set_line_field` calls.
+  Writes `tags` field. Calls `_mark_dirty()` once at end.
+
+**Task 3 — Progress bar for preprocessing:**
+- `gui/helpers/mode_adapter.py` — `apply_preprocessing()` accepts optional
+  `progress_cb: Optional[Callable[[str, float], None]]` parameter. Reports progress
+  at 0.0→0.2→0.4→0.6→0.8→1.0 between pipeline steps.
+- `gui/steps/preprocess.py` — Added hidden progress bar widget between header and content.
+  Shown/updated during processing via `_show_progress()`, `_set_progress()`, `_hide_progress()`.
+
+**Task 4 — Pagination replacing 50k hard cap:**
+- `gui/components/table.py` — Removed `_MAX_DISPLAY_ROWS = 50_000` hard cap. Added
+  `_page_size = 5000` and `_current_page = 0` pagination state. Page navigation controls
+  (Prev/Next buttons, page label) in status bar. `_refresh_display()` shows only current
+  page slice. Search/filter still works across all rows; page resets on filter change.
+
+**Task 5 — Rename Filter→Search, remove Count filter from step tables:**
+- `gui/components/table.py` — Renamed "Filter:" label to "Search:". Added `show_count_filter`
+  parameter (default True). Count filter conditionally built.
+- Six step tables (preprocess, translate, postprocess, wordwrap, qa, output_inject)
+  instantiate SharedTable with `show_count_filter=False`.
+
+**Task 6 — Skip autosave when value unchanged:**
+- `functions/manifest_manager.py` — `set_line_field()` checks `field in line and
+  line[field] == value` before writing. Returns early if no change, avoiding
+  unnecessary `_mark_dirty()` calls.
+
+**Task 7 — Skip unchanged lines on tab leave:**
+- `gui/steps/wordwrap_overwrite.py` — `_save_to_session()` only writes `wordwr` for
+  lines where `line.wrapped != line.original`.
+- `gui/steps/qa.py` — `on_leave()` only writes `qa_overwrite` for lines where
+  `line.translated != line.original`.
+
+**Tests Updated / Added:**
+- `dev/test_preprocess_phase42.py` — `test_filter_options_defined` updated for new filter values;
+  `test_update_preview_checks_filter` updated for tag-based filtering (`required_tag`, `line_tags`)
+- `dev/test_line_saving.py` — `TestPreprocessIntegration` updated: checks for `prepro` and `tags`
+  fields instead of `set_line_field`
+- `dev/test_table_batch_insert.py` — Mock objects updated with pagination attributes
+  (`_page_size`, `_current_page`, `_page_frame`, etc.); `test_display_cap_is_50k` renamed to
+  `test_display_uses_pagination`
 
 =============================================================================
 

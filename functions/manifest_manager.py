@@ -1745,10 +1745,16 @@ class ManifestManager:
         return [ln.get("orig", "") for ln in self._manifest_data.get("lines", [])]
 
     def set_line_field(self, idx: int, field: str, value: Any) -> None:
-        """Set a field on a specific line."""
+        """Set a field on a specific line.
+
+        Only marks the manifest dirty when the value actually changes
+        to prevent unnecessary autosave cycles.
+        """
         lines = self._manifest_data.get("lines", [])
         for line in lines:
             if line.get("idx") == idx:
+                if field in line and line[field] == value:
+                    return  # No change
                 line[field] = value
                 self._mark_dirty()
                 return
