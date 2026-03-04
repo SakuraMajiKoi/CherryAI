@@ -3529,14 +3529,14 @@ class TranslationStep(BaseStep):
                 char_lines = ["# Characters"]
                 for ch in relevant_chars:
                     orig = ch.get("original_name", "")
-                    eng = ch.get("name", "")
-                    gender = ch.get("gender", "") or ch.get("notes", "")
+                    eng = ch.get("translation", "") or ch.get("name", "")
+                    notes = ch.get("notes", "")
                     if orig:
                         et = f"- {orig}"
                         if eng:
                             et += f" → {eng}"
-                        if gender:
-                            et += f" ({gender})"
+                        if notes:
+                            et += f" ({notes})"
                         char_lines.append(et)
                 if len(char_lines) > 1:
                     if chunk_glossary_block:

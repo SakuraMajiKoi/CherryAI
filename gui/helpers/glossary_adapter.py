@@ -724,16 +724,19 @@ def sync_characters_to_glossary(
     for char in characters:
         original = char.get("original_name", "")
         if not original:
-            original = char.get("name", "")
+            original = char.get("translation", "") or char.get("name", "")
         if not original:
             continue
-        
+
+        translation = char.get("translation", "") or char.get("name", "")
+        notes = char.get("notes", "")
+
         success = add_glossary_entry(
             original=original,
-            translation=char.get("name", ""),
-            notes=char.get("role", ""),
+            translation=translation,
+            notes=notes,
             entry_type=TYPE_NAME,
-            gender=char.get("gender", GENDER_UNKNOWN),
+            gender=GENDER_UNKNOWN,
             source=source,
         )
         if success:

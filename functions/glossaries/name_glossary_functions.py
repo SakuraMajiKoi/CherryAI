@@ -740,12 +740,23 @@ def update_speakers_in_glossary(
         
         # Use API gender if available, otherwise use inferred
         final_gender = extra.get("gender", "") or inferred_gender
-        
+
+        # Task 75: Auto-romanize kana names when no translation exists
+        translation = extra.get("romaji", "")
+        if not translation:
+            try:
+                from ..romanization import romanize_if_japanese
+                translation = romanize_if_japanese(name)
+                if translation == name:
+                    translation = ""  # No kana found, don't duplicate
+            except ImportError:
+                pass
+
         entry = GlossaryEntry(
             original=name,
-            translation=extra.get("romaji", ""),
+            translation=translation,
             notes=extra.get("note", ""),
-            source="Analysis",
+            source="",
             entry_type=TYPE_NAME,
             gender=final_gender,
             refers_to_themself_as=refers_to_formatted,

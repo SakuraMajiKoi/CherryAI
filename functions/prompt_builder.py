@@ -31,7 +31,7 @@ from .glossary import (
     GLOSSARY_FILTER_ORIGINAL,
     GLOSSARY_FILTER_BOTH,
 )
-from .analysis import count_tokens
+from .analysis import count_tokens, format_protagonist_prompt, POVResult
 from .conditional_prompts import ConditionalPromptManager
 from .config import load_config
 from .project_config import (
@@ -1038,6 +1038,8 @@ class PromptBuilder:
         self.glossary: Dict[str, GlossaryEntry] = {}
         self.glossary_filter_mode: str = GLOSSARY_FILTER_ALL  # Phase 52
         self.pov_result: Optional[Dict[str, Any]] = None  # Phase 54
+        self.characters: List[Dict[str, Any]] = []  # Task 75
+        self.code_patterns: List[Dict[str, Any]] = []  # Task 75
         self.base_prompt_template = ""
         self.conditional_manager = ConditionalPromptManager(config_dir)
         
@@ -1338,6 +1340,20 @@ class PromptBuilder:
         if tone and tone.strip():
             prompt_parts.append(f"# Tone\n{tone.strip()}")
 
+        # 4b. Protagonist + Narration (Task 75)
+        protagonist_section = ""
+        if self.characters or self.code_patterns:
+            pov_obj = None
+            if self.pov_result:
+                pov_obj = POVResult.from_dict(self.pov_result)
+            protagonist_section = format_protagonist_prompt(
+                self.characters,
+                self.code_patterns or None,
+                pov_obj,
+            )
+        if protagonist_section:
+            prompt_parts.append(f"# Protagonist\n{protagonist_section}")
+
         # 5. Game Summary (project context — skip if empty / placeholder)
         if self.game_summary and not self._is_game_summary_empty():
             prompt_parts.append(self.game_summary)
@@ -1351,8 +1367,12 @@ class PromptBuilder:
             if ctx_prompt:
                 conditionals.append(ctx_prompt.strip())
 
-        # 6b. Narrative Perspective (Phase 54 — only when confidence is high)
-        if self.pov_result and self.pov_result.get("confidence") == "high":
+        # 6b. Narrative Perspective (Phase 54 — skip when protagonist has narration)
+        if (
+            not protagonist_section
+            and self.pov_result
+            and self.pov_result.get("confidence") == "high"
+        ):
             pov_label = {
                 "1st": "first",
                 "2nd": "second",
@@ -1476,19 +1496,21 @@ class PromptBuilder:
         if components.get("character_notes", True) and character_notes:
             char_notes_block = "# Character Notes\n"
             for char_note in character_notes:
-                name = char_note.get("name") or char_note.get("original_name", "Unknown")
+                name = (
+                    char_note.get("original_name")
+                    or char_note.get("name", "Unknown")
+                )
+                translation = (
+                    char_note.get("translation")
+                    or char_note.get("name", "")
+                )
                 notes = char_note.get("notes", "")
-                style = char_note.get("speaking_style", "")
-                gender = char_note.get("gender", "")
-                if notes or style:
+                if notes or translation:
                     char_notes_block += f"- {name}"
-                    if gender:
-                        char_notes_block += f" ({gender})"
-                    char_notes_block += ":"
+                    if translation:
+                        char_notes_block += f" → {translation}"
                     if notes:
-                        char_notes_block += f" {notes}"
-                    if style:
-                        char_notes_block += f" [Style: {style}]"
+                        char_notes_block += f": {notes}"
                     char_notes_block += "\n"
             if char_notes_block != "# Character Notes\n":
                 prompt_parts.append(char_notes_block)

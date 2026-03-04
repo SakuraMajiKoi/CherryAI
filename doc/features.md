@@ -738,6 +738,9 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - **File menu**: New Project, Open Project, Open Files, Exit
   - **Manual save**: Ctrl+S saves current manifest state
   - **Auto-save on step change**: Manifest saved when navigating between steps
+  - **Atomic saves**: Manifest written to `.tmp` file, fsynced, then atomically renamed via `os.replace()` to prevent corruption on crash
+  - **Deep-copy safety**: `get_step_data()` callers that mutate data use `deepcopy()` to prevent shared-reference contamination; `_SafeManifestEncoder` handles non-serializable objects as a safety net
+  - **Robust on-close**: `_on_close()` retries save up to 3 times with exponential backoff; on persistent failure, user is prompted to force-quit or retry; structured sequence: save manifest → save INI → stop autosave → destroy
   - **Manifest v3.0 format** stores all project data:
     - step_state: Completion status, skipped flags, metadata per step
     - project_info: **Removed as top-level key.** Now lives in `step_state.Information.data.metadata` (single source of truth). Access via `get_info_metadata()` / `set_info_metadata_field()`.
@@ -1390,7 +1393,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
       `_seed_builtin_sections()` replaces it with `"Default"` on next load
     - `_on_si_preset_changed()` reads via `ini_manager.get_si_preset(name)` directly (always fresh from INI)
   - **Data Classes:**
-    - CharacterInfo: name, gender, role, notes (with to_dict/from_dict)
+    - CharacterInfo: original_name, translation, notes (with to_dict/from_dict; legacy `name`/`gender`/`role`/`speaking_style` auto-migrated on load)
     - ProjectMetadata: project_name, summary, genre, style_preset (str), tone_preset (str), notes, source_lang, target_lang, characters list
     - InferenceOptions: infer_summary, infer_characters, infer_style, sample_size, api_profile
     - InferenceResult: success, metadata, error, duration
@@ -1408,8 +1411,9 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Moved from left column to right column for grouping with other glossary/database widgets
     - Table with columns: Original, Translation, Notes (Gender/Role merged into Notes for parity with Glossary Settings)
     - Treeview height=8 for taller tables; grid layout with sticky="nsew" for viewport filling
-    - Collapsible: Collapse/Display toggle button hides content while keeping header visible
+    - Collapsible via compact ▾/▸ button in LabelFrame header (see UI Enhancements below)
     - CharacterDialog with Notes field combining gender, role, other info
+    - **Right-click context menu**: Clear Notes (resets notes to empty), Edit..., Remove
     - Add/Edit/Remove character buttons with multi-select support (selectmode="extended")
     - Confirmation dialog with "Don't ask again" option for removal
     - Import from glossary functionality
@@ -1454,7 +1458,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Code Database auto-populate: prefers `individual_codes` (per-code detail) over grouped `code_patterns` when available
     - Global Glossary and Database widget: mode switch, search/filter, import/export JSON/CSV, stored in user/ directory
     - Selective glossary: Active column with ✓/✗ toggle, only active entries included in prompt
-    - **Collapsible right-column widgets**: Glossary, Glossary Settings, Code Database, and Global Glossary/Database each have a Collapse/Display toggle button; collapsed widgets hide content via `grid_remove()`, expanded widgets share space via row weight=1; `_reconfigure_right_column_weights()` dynamically adjusts grid weights
+    - **Collapsible right-column widgets**: All four right-column sections (Glossary, Glossary Settings, Code Database, Global Glossary/Database) use `_build_collapsible_labelframe()` helper — a compact ▾/▸ toggle button (width=2) + bold label embedded as the LabelFrame's `labelwidget`; collapsed widgets hide content via `grid_remove()`, expanded widgets share space via row weight=1; `_reconfigure_right_column_weights()` dynamically adjusts grid weights; `_toggle_collapsible()` swaps button text between "▾" (expanded) and "▸" (collapsed)
     - **Taller tables**: All right-column Treeview widgets use height=8 (up from 4-5) with `sticky="nsew"` and parent `rowconfigure(weight=1)` for vertical expansion; canvas `<Configure>` binding stretches inner frame to viewport height so tables fill available space when window is maximized
     - **Glossary moved to right column**: Glossary (formerly Character Notes) relocated from left column to right column row 0, grouped with Glossary Settings (row 1), Code Database (row 2), and Global Database (row 3)
     - **Style/Tone text display fix**: `_ensure_style_tone_text()` populates text fields from preset when empty on step entry; `_populate_form()` also falls back to preset text
@@ -2049,6 +2053,39 @@ POINT OF VIEW INFERENCE (Implemented)
 - **POVResult Dataclass:** `pov`, `confidence`, `counts`, `total_narrative_lines` with `to_dict`/`from_dict`
 - **Prompt Integration** (`functions/prompt_builder.py`): `pov_result` attribute; "Narrative Perspective" section added to system prompt when confidence is "high"
 - English patterns compiled with `re.IGNORECASE` for proper case handling
+
+PROTAGONIST DETECTION + POV RE-RUN (Implemented — Task 75)
+- Identifies protagonist characters from character glossary and code database
+- **Protagonist Functions** (`functions/analysis.py`):
+  - `get_protagonists_from_characters(characters)` — scans notes field for "Protagonist" tag (case-insensitive)
+  - `get_protagonists_from_code_database(code_patterns)` — finds nameable variables marked as protagonist
+  - `run_pov_with_protagonists(lines, language, characters, code_patterns, context_markers)` — merged POV detection across all protagonist names; deduplicates 1st/2nd person counts when multiple protagonists
+  - `format_protagonist_prompt(characters, code_patterns, pov_result)` — builds prompt section with format: `Protagonist: {Original} - {Translation} ({Details})\nNarration: {1st/2nd/3rd/Mixed} View`
+- **POV Re-run on Protagonist Selection** (`gui/steps/analysis.py`): `_set_speaker_role("Protagonist")` automatically triggers `_rerun_pov_with_protagonists()` which reads all lines, gathers protagonist names, runs merged detection, and stores result in manifest `["POV"]`
+- **Prompt slot 4b** (`gui/helpers/prompt_adapter.py`, `functions/prompt_builder.py`): Protagonist+Narration section injected between Tone and Summary; legacy POV slot 7 skipped when protagonist section already includes narration
+- No protagonist: when POV confidence is low, shows "Narration: ? - Likely 3rd Person"
+- Multiple protagonists: comma-separated in prompt line
+- Test suite: `dev/test_protagonist_romanization.py` (18 protagonist tests)
+
+JAPANESE ROMANIZATION — MODIFIED HEPBURN (Implemented — Task 75)
+- Converts Japanese hiragana and katakana to Latin-letter rōmaji
+- **Module:** `functions/romanization.py` (250 lines, dependency-free)
+- **Mapping Tables:**
+  - 46 hiragana base characters + dakuten + handakuten
+  - 46 katakana base characters + dakuten + handakuten
+  - 15 hiragana digraphs (yōon: きゃ→kya, しゃ→sha, etc.)
+  - 15+ katakana digraphs (yōon + extended foreign loan-words: ファ→fa, ティ→ti, etc.)
+- **Special Handling:**
+  - Small tsu (っ/ッ): doubles the following consonant (かった→katta)
+  - Long vowel mark (ー): extends previous vowel (カー→kaa)
+  - Non-kana characters (kanji, Latin, digits, punctuation): passed through unchanged
+- **Public API:**
+  - `romanize(text)` — converts kana to rōmaji
+  - `contains_kana(text)` — returns True if text has any kana
+  - `romanize_if_japanese(text)` — romanize only if kana detected, otherwise pass through
+- **Glossary Integration:** `name_glossary_functions.py` auto-fills Translation field with romanization when no translation exists and name contains kana
+- **Code DB Integration:** `code_glossary_functions.py` auto-fills Notes field with romanization for kana code patterns (NEW, ADD, OVERWRITE modes)
+- Test suite: `dev/test_protagonist_romanization.py` (22 romanization tests)
 
 CONSISTENCY SYSTEM (Implemented)
 - Ensures consistent translation of recurring terms across all requests

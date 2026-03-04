@@ -1020,38 +1020,35 @@ def save_character_notes(
     characters: List[Dict[str, Any]]
 ) -> None:
     """Save character notes to manifest.
-    
+
     Characters are stored as a list of dicts with fields:
-    - name: str (translated name)
-    - original_name: str (original language name)
-    - gender: str (male, female, other, unknown)
-    - role: str (protagonist, antagonist, supporting, etc.)
-    - notes: str (additional notes)
-    - speaking_style: str (formal, casual, etc.)
-    
+    - original_name: str (source-language name, lookup key)
+    - translation: str (translated name)
+    - notes: str (free-form — gender, role, speaking style, etc.)
+
     Args:
         manager: ManifestManager instance.
         characters: List of character dictionaries.
     """
     if not isinstance(characters, list):
         characters = []
-    
-    # Ensure each character is a dict with required fields
+
     cleaned = []
     for char in characters:
         if isinstance(char, dict):
+            # Accept either new or legacy field names
+            translation = (
+                str(char.get("translation", ""))
+                or str(char.get("name", ""))
+            )
             cleaned.append({
-                "name": str(char.get("name", "")),
                 "original_name": str(char.get("original_name", "")),
-                "gender": str(char.get("gender", "")),
-                "role": str(char.get("role", "")),
+                "translation": translation,
                 "notes": str(char.get("notes", "")),
-                "speaking_style": str(char.get("speaking_style", "")),
             })
         elif hasattr(char, "to_dict"):
-            # Support CharacterInfo dataclass
             cleaned.append(char.to_dict())
-    
+
     manager._manifest_data["characters"] = cleaned
     manager._mark_dirty()
     logger.debug("Saved %d character notes", len(cleaned))
@@ -1061,32 +1058,48 @@ def load_character_notes(
     manager: "ManifestManager"
 ) -> List[Dict[str, Any]]:
     """Load character notes from manifest.
-    
+
     Returns list of character dicts with fields:
-    name, original_name, gender, role, notes, speaking_style
-    
+    original_name, translation, notes.
+
+    Transparently migrates legacy manifests that still have separate
+    ``name``, ``gender``, ``role``, ``speaking_style`` keys.
+
     Args:
         manager: ManifestManager instance.
-        
+
     Returns:
         List of character dictionaries.
     """
     characters = manager._manifest_data.get("characters", [])
     if not isinstance(characters, list):
         return []
-    
+
     result = []
     for char in characters:
         if isinstance(char, dict):
+            # Accept either new or legacy field names
+            translation = (
+                str(char.get("translation", ""))
+                or str(char.get("name", ""))
+            )
+            # Merge legacy separate fields into notes
+            parts: list[str] = []
+            for legacy_key in ("gender", "role", "speaking_style"):
+                val = char.get(legacy_key, "")
+                if val:
+                    parts.append(str(val))
+            existing_notes = char.get("notes", "")
+            if existing_notes:
+                parts.append(str(existing_notes))
+            notes = ", ".join(parts)
+
             result.append({
-                "name": str(char.get("name", "")),
                 "original_name": str(char.get("original_name", "")),
-                "gender": str(char.get("gender", "")),
-                "role": str(char.get("role", "")),
-                "notes": str(char.get("notes", "")),
-                "speaking_style": str(char.get("speaking_style", "")),
+                "translation": translation,
+                "notes": notes,
             })
-    
+
     return result
 
 

@@ -7279,6 +7279,8 @@ Phase 11 (Output), Phase 12 (Information), Phase 13 (Global Options), Phase 14 (
 
 #### TestAutosave (4 tests) - Phase 4
 
+Note: `test_start_autosave_creates_thread` and `test_stop_autosave_clears_thread` now expect no-op behavior since SessionState autosave was disabled in favor of ManifestManager autosave.
+
 | Test | Purpose |
 |------|---------|
 | `test_dirty_flag_initially_false` | dirty flag starts False |
@@ -7727,7 +7729,7 @@ Tests for Analysis → Information character/glossary integration.
 | Test | Purpose |
 |------|---------|
 | `test_character_info_dataclass_exists` | CharacterInfo exists |
-| `test_character_info_has_required_fields` | Required fields present |
+| `test_character_info_has_required_fields` | Required fields present (original_name, translation, notes) |
 | `test_character_info_optional_fields` | Optional fields have defaults |
 | `test_project_metadata_has_characters` | ProjectMetadata includes characters |
 
@@ -10144,6 +10146,26 @@ python -m pytest CherryAI/dev/test_parser_scripts.py -v --timeout=10
 ```bash
 # Run Phase 54 tests
 python -m pytest CherryAI/dev/test_pov_inference.py -v --timeout=10
+```
+
+### Task 75: Protagonist Detection + Japanese Romanization (40 tests)
+
+**File:** `dev/test_protagonist_romanization.py`
+**Baseline:** 6222+ passed
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestProtagonistDetection | 6 | Single/multiple/no protagonists, empty list, case-insensitive, missing notes |
+| TestProtagonistsFromCodeDB | 2 | Code pattern protagonist, no code protagonist |
+| TestRunPovWithProtagonists | 4 | 3rd person from protagonist name, 1st person without protagonist, empty lines, no protagonist set |
+| TestFormatProtagonistPrompt | 6 | Single protagonist with POV, multiple protagonists, no protagonist, low POV fallback, code patterns, no translation |
+| TestRomanize | 14 | Hiragana vowels, katakana, konnichiha, digraphs (sha/kya/cho), small tsu (katta/kitte/zutto), long vowel, mixed text, katakana/hiragana names, extended digraphs (fa/ti/wi), n-before-vowel, all dakuten, all handakuten |
+| TestContainsKana | 5 | Hiragana, katakana, Latin, empty, mixed |
+| TestRomanizeIfJapanese | 3 | Kana romanized, non-kana unchanged, empty string |
+
+```bash
+# Run Task 75 tests
+python -m pytest CherryAI/dev/test_protagonist_romanization.py -v --timeout=10
 ```
 
 ### Phase 55: Consistency System (60 tests)

@@ -429,14 +429,18 @@ TABLE OF CONTENTS
            BackupExtension (text), ExportManifestFile (bool), ExportProcessingLogs (bool),
            ExportGlossaryEntries (bool)
        - **Phase 29 Integration:** ManifestManager autosave system (TASK 29.1):
-         - Background thread with configurable interval (default 15s, clamped 5-300s)
+         - Background thread with configurable interval (default 60s, clamped 5-300s)
          - Only saves when `_dirty` flag is set
-         - Settings from INI: enabled, interval_seconds, save_on_close
+         - Settings from INI `[session]` section: `autosave` (bool), `interval` (int seconds)
          - Auto-starts on create_new() and load(), stops on close()
+         - Atomic saves: write to `.tmp` file, fsync, `os.replace()` to final path
+         - `_SafeManifestEncoder`: fallback JSON encoder for non-serializable objects (str coercion)
+         - Deep-copy safety: callers that mutate `get_step_data()` results use `deepcopy()`
+         - SessionState autosave: disabled (no-op stubs); all autosave handled by ManifestManager
          - Properties: autosave, interval, save_on_close
          - Methods: start_autosave(), stop_autosave()
        - **Phase 29 Integration:** Save triggers (TASK 29.2):
-         - On close: App._on_close() calls ManifestManager.close()
+         - On close: App._on_close() saves manifest with retry logic (3 attempts, exponential backoff); on persistent failure prompts user to force-quit or retry; structured sequence: save manifest → save INI → stop autosave → write session ref → destroy
          - After file load: InputExtractionStep._save_manifest_after_file_load()
          - Before translation: TranslationStep._save_manifest_before_translation()
          - All save methods check is_loaded, have try/except, log success/failure
@@ -461,7 +465,7 @@ TABLE OF CONTENTS
          - Global Glossary/Database widget: mode switch, search filter, import/export TSV/JSON
          - Files: user/globalglossary.tsv (3-col TSV) and user/codedatabase.tsv (9-col TSV) ✅ Phase 62 complete
          - Selective glossary: active field (bool) in manifest GlossaryEntries, defaults True
-         - **Collapsible right-column widgets:** `_collapsible_state`, `_collapsible_content`, `_collapsible_buttons` dicts track collapse state; `_toggle_collapsible(widget_name)` toggles `grid()`/`grid_remove()` on content frames; `_reconfigure_right_column_weights()` sets row weight=1 for expanded, weight=0 for collapsed; applies to Glossary (row 0), Glossary Settings (row 1), Code Database (row 2), Global Database (row 3)
+         - **Collapsible right-column widgets:** `_collapsible_state`, `_collapsible_content`, `_collapsible_buttons` dicts track collapse state; `_build_collapsible_labelframe(parent, title, widget_name, row)` helper creates compact LabelFrame with embedded header (▾/▸ toggle button width=2 + bold label as `labelwidget`); `_toggle_collapsible(widget_name)` toggles `grid()`/`grid_remove()` on content frames and swaps button text between "▾"/"▸"; `_reconfigure_right_column_weights()` sets row weight=1 for expanded, weight=0 for collapsed; applies to Glossary (row 0), Glossary Settings (row 1), Code Database (row 2), Global Database (row 3)
          - **Glossary moved to right column:** `_build_character_section()` now builds into `self._right_column` (grid row 0) instead of `self._left_column`; uses grid layout with sticky="nsew" for expansion
          - **Taller tables:** All right-column Treeview widgets use height=8 (up from 4-5); parent frames use `rowconfigure(weight=1)` and `sticky="nsew"`; canvas `<Configure>` binding stretches inner frame to viewport height
          - **Style/Tone text display:** `_ensure_style_tone_text()` called at end of `on_enter()` populates empty text fields from preset; `_populate_form()` falls back to preset text when metadata style/tone is empty
@@ -882,6 +886,7 @@ CherryAI/
 │   ├── validation.py       Pre/Post API validation (Session 13)
 │   ├── prompt_builder.py   Dynamic prompt construction with game summary
 │   ├── project_config.py   Project-level configuration (game summary, API profiles)
+│   ├── romanization.py     Japanese kana → rōmaji (Modified Hepburn, Task 75)
 │   ├── wordwrap.py         Text analysis and wordwrap
 │   ├── postanalysis.py     Post-processing analysis
 │   ├── glossaries/         Glossary detection modules
@@ -3827,11 +3832,42 @@ Point of View Inference:
 - detect_pov(lines, language, protagonist_name, context_markers): Filters dialogue/menu/choice lines, counts pronoun matches per category, infers 3rd person via protagonist name frequency, derives confidence (high if dominant >60%, mixed if dominant <60% and secondary ≥20%)
 - Integrated into prompt_builder.py: PromptBuilder.pov_result attribute; "Narrative Perspective" section added to system prompt when confidence is "high"
 
+Protagonist Detection + POV Re-run (Task 75):
+- get_protagonists_from_characters(characters) → List[Dict]: Scans notes for "Protagonist" tag (case-insensitive)
+- get_protagonists_from_code_database(code_patterns) → List[Dict]: Finds code patterns with "Protagonist" in notes
+- run_pov_with_protagonists(lines, language, characters, code_patterns, context_markers) → POVResult: Merged POV detection across all protagonist names; deduplicates 1st/2nd counts for multiple protagonists
+- format_protagonist_prompt(characters, code_patterns, pov_result) → str: Builds "Protagonist: {Original} - {Translation} ({Details})\nNarration: {pov} View" section; strips "Protagonist" from details to avoid redundancy; comma-separates multiple protagonists
+- Prompt slot 4b: Between Tone and Summary in both prompt_adapter.py and prompt_builder.py; old POV slot 7 skipped when protagonist section has narration
+- GUI integration: _set_speaker_role("Protagonist") triggers _rerun_pov_with_protagonists() in gui/steps/analysis.py; stores result in manifest["POV"]
+
 Notes:
 - Token counting uses tiktoken if available, else heuristic
 - Cost estimation based on GPT-4.1 pricing (configurable)
 - Language detection uses heuristics (Japanese, English, etc.)
 - All glossary detection is non-blocking (failures don't stop analysis)
+
+ROMANIZATION.PY (Japanese Kana → Rōmaji — Task 75)
+
+Purpose: Dependency-free Modified Hepburn romanization of Japanese hiragana/katakana.
+
+Data:
+- _HIRAGANA: Dict[str, str] — 46 base + dakuten + handakuten + small kana
+- _KATAKANA: Dict[str, str] — 46 base + dakuten + handakuten + small kana
+- _HIRAGANA_DIGRAPHS: Dict[str, str] — 15 yōon combinations (きゃ→kya, etc.)
+- _KATAKANA_DIGRAPHS: Dict[str, str] — 15 yōon + extended foreign digraphs (ファ→fa, ティ→ti, etc.)
+- _SINGLE_KANA: Merged single-char lookup
+- _DIGRAPH_KANA: Merged two-char digraph lookup
+- _SMALL_TSU: {"っ", "ッ"} — consonant doubling markers
+- _KANA_RE: Regex for detecting any kana character
+
+Public API:
+- romanize(text) → str: Convert kana to rōmaji; digraphs before singles; small tsu doubles next consonant; long vowel extends; non-kana passed through
+- contains_kana(text) → bool: True if text contains any hiragana/katakana
+- romanize_if_japanese(text) → str: Romanize only if kana detected, else return unchanged
+
+Integration:
+- name_glossary_functions.py: Auto-fills GlossaryEntry.translation with romanize_if_japanese(name) when translation is empty
+- code_glossary_functions.py: Auto-fills Notes with _auto_romanize_notes(pattern) for kana code patterns
 
 CONSISTENCY.PY (Consistency System - Phase 55)
 

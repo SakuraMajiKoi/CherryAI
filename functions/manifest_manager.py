@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 from copy import deepcopy
@@ -36,6 +37,24 @@ if TYPE_CHECKING:
     from .mainhelper import Manifest, LineEntry, Operation
 
 logger = logging.getLogger(__name__)
+
+
+class _SafeManifestEncoder(json.JSONEncoder):
+    """Defensive JSON encoder for manifest saves.
+
+    Converts objects with a ``to_dict()`` method (e.g. ``TableRow``,
+    ``FileDirEntry``) to plain dicts, and ``Path`` objects to strings.
+    Prevents "is not JSON serializable" crashes during autosave if GUI
+    objects leak into ``_manifest_data``.
+    """
+
+    def default(self, o: Any) -> Any:
+        if hasattr(o, "to_dict"):
+            return o.to_dict()
+        if isinstance(o, Path):
+            return str(o)
+        return super().default(o)
+
 
 # Constants
 MANIFEST_DIR = Path("Projects")
@@ -295,7 +314,7 @@ class ManifestManager:
         
         # TASK 29.1: Autosave configuration
         self._autosave_enabled: bool = True
-        self._autosave_interval: int = 15  # seconds
+        self._autosave_interval: int = 60  # seconds (matches [session] default)
         self._save_on_close: bool = True
         self._autosave_thread: Optional[threading.Thread] = None
         self._autosave_stop_event: threading.Event = threading.Event()
@@ -308,23 +327,27 @@ class ManifestManager:
         MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
     
     def _load_autosave_settings(self) -> None:
-        """Load autosave settings from INI file."""
+        """Load autosave settings from ``[session]`` INI section.
+
+        Reads the ``autosave`` (bool) and ``interval`` (int, seconds) keys
+        that are set by Global Options → Session Settings.  ``save_on_close``
+        is always ``True`` (no INI toggle — we never want to lose work).
+        """
         try:
             from .ini_manager import get_default
-            
+
             self._autosave_enabled = bool(
-                get_default("autosave", "enabled", True, bool)
+                get_default("session", "autosave", True, bool)
             )
             self._autosave_interval = int(
-                get_default("autosave", "interval_seconds", 15, int) or 15
+                get_default("session", "interval", 60, int) or 60
             )
-            self._save_on_close = bool(
-                get_default("autosave", "save_on_close", True, bool)
-            )
-            
+            # save_on_close is always True — no user toggle needed
+            self._save_on_close = True
+
             # Clamp interval to reasonable bounds (5-300 seconds)
             self._autosave_interval = max(5, min(300, self._autosave_interval))
-            
+
             logger.debug(
                 "Autosave settings: enabled=%s, interval=%ds, save_on_close=%s",
                 self._autosave_enabled,
@@ -1349,33 +1372,51 @@ class ManifestManager:
         return filedir
     
     def save(self) -> bool:
-        """Save the manifest to disk.
-        
-        PHASE 58.11: Uses deepcopy to prevent "dictionary changed size during
-        iteration" error when autosave runs while main thread modifies data.
-        
+        """Save the manifest to disk atomically.
+
+        Writes to a temporary file first, then replaces the real file via
+        ``os.replace`` so readers never see a partially-written manifest.
+        Uses ``deepcopy`` to prevent "dictionary changed size during
+        iteration" when autosave runs while the main thread modifies data
+        and a custom JSON encoder as safety net for objects with
+        ``to_dict()`` (e.g. ``TableRow``, ``FileDirEntry``).
+
         Returns:
-            True if saved successfully
+            True if saved successfully.
         """
         if self._manifest_path is None:
             logger.warning("Cannot save: no manifest path set")
             return False
-        
+
         try:
             self._manifest_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # PHASE 58.11: Create snapshot to prevent concurrent modification error
+
+            # Snapshot to prevent concurrent modification
             data_snapshot = deepcopy(self._manifest_data)
-            
-            with open(self._manifest_path, "w", encoding="utf-8") as f:
-                json.dump(data_snapshot, f, ensure_ascii=False, indent=2)
-            
+
+            # Atomic write: temp file → rename
+            tmp_path = self._manifest_path.with_suffix(".tmp")
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(data_snapshot, f, ensure_ascii=False, indent=2,
+                          cls=_SafeManifestEncoder)
+                f.flush()
+                os.fsync(f.fileno())
+
+            os.replace(str(tmp_path), str(self._manifest_path))
+
             self._dirty = False
             logger.debug("Saved manifest: %s", self._manifest_path)
             return True
-            
+
         except Exception as e:
             logger.error("Failed to save manifest: %s", e)
+            # Clean up temp file on failure
+            try:
+                tmp_path = self._manifest_path.with_suffix(".tmp")
+                if tmp_path.exists():
+                    tmp_path.unlink()
+            except OSError:
+                pass
             return False
     
     def close(self) -> None:

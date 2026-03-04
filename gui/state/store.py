@@ -681,38 +681,12 @@ class SessionState:
         return cls.from_dict(data)
 
     def start_autosave(self) -> None:
-        """Start the autosave background thread."""
-        if self._autosave_thread is not None and self._autosave_thread.is_alive():
-            return  # Already running
-
-        self._autosave_stop = False
-
-        def autosave_loop() -> None:
-            while not self._autosave_stop:
-                time.sleep(AUTOSAVE_INTERVAL_SECONDS)
-                if self._autosave_stop:
-                    break
-                if self.dirty:
-                    try:
-                        autosave_path = AUTOSAVE_DIR / AUTOSAVE_FILENAME
-                        self.save_to_file(autosave_path)
-                        logger.debug("Autosaved session state")
-                    except Exception as e:
-                        logger.warning("Autosave failed: %s", e)
-
-        self._autosave_thread = threading.Thread(
-            target=autosave_loop, daemon=True, name="SessionAutosave"
-        )
-        self._autosave_thread.start()
-        logger.info("Autosave started (interval: %ds)", AUTOSAVE_INTERVAL_SECONDS)
+        """No-op — autosave is handled by ManifestManager."""
+        pass
 
     def stop_autosave(self) -> None:
-        """Stop the autosave background thread."""
-        self._autosave_stop = True
-        if self._autosave_thread is not None:
-            self._autosave_thread.join(timeout=2)
-            self._autosave_thread = None
-        logger.info("Autosave stopped")
+        """No-op — autosave is handled by ManifestManager."""
+        pass
 
 
 # Global session state instance

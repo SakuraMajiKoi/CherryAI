@@ -2366,6 +2366,230 @@ def detect_pov(
     )
 
 
+# ============================================================================
+# Protagonist Detection (Task 75)
+# ============================================================================
+
+
+def get_protagonists_from_characters(
+    characters: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Return characters marked as Protagonist.
+
+    Scans the ``notes`` field for the word "Protagonist" (case-insensitive).
+
+    Args:
+        characters: Character dicts from the manifest (``original_name``,
+            ``translation``, ``notes``).
+
+    Returns:
+        Subset of *characters* that are tagged as protagonist.
+    """
+    result: List[Dict[str, Any]] = []
+    for ch in characters:
+        notes = str(ch.get("notes", "")).lower()
+        if "protagonist" in notes:
+            result.append(ch)
+    return result
+
+
+def get_protagonists_from_code_database(
+    code_patterns: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Return code patterns marked as nameable protagonist variables.
+
+    A code pattern is considered a protagonist variable when its ``notes``
+    (or ``action``) field contains "protagonist" or its type is "name"
+    and notes contain "protagonist".
+
+    Args:
+        code_patterns: Code pattern dicts from the manifest.
+
+    Returns:
+        Subset of *code_patterns* that are tagged as protagonist.
+    """
+    result: List[Dict[str, Any]] = []
+    for cp in code_patterns:
+        notes = str(cp.get("notes", "")).lower()
+        if "protagonist" in notes:
+            result.append(cp)
+    return result
+
+
+def run_pov_with_protagonists(
+    lines: List[str],
+    language: str,
+    characters: List[Dict[str, Any]],
+    code_patterns: Optional[List[Dict[str, Any]]] = None,
+    context_markers: Optional[List[Optional[str]]] = None,
+) -> POVResult:
+    """Run POV inference using all known protagonist names.
+
+    Combines protagonist names from character glossary and code database,
+    then calls :func:`detect_pov` for each name and merges results.
+    When no protagonist is configured, runs without a protagonist name
+    (only detects 1st/2nd person).
+
+    Args:
+        lines: Raw text lines.
+        language: Source language key.
+        characters: Character list from manifest.
+        code_patterns: Code patterns from manifest (optional).
+        context_markers: Per-line context markers (optional).
+
+    Returns:
+        :class:`POVResult` with detected perspective and confidence.
+    """
+    protagonist_names: List[str] = []
+
+    # Gather protagonist names from characters
+    for ch in get_protagonists_from_characters(characters):
+        name = ch.get("original_name", "").strip()
+        if name:
+            protagonist_names.append(name)
+
+    # Gather protagonist names from code patterns
+    if code_patterns:
+        for cp in get_protagonists_from_code_database(code_patterns):
+            pattern = cp.get("pattern", "").strip()
+            if pattern:
+                protagonist_names.append(pattern)
+
+    if not protagonist_names:
+        # No protagonist — only 1st/2nd detection
+        return detect_pov(lines, language, "", context_markers)
+
+    # Run detection for each protagonist and merge counts
+    merged_counts: Dict[str, int] = {"1st": 0, "2nd": 0, "3rd": 0}
+    narrative_lines = 0
+
+    for name in protagonist_names:
+        result = detect_pov(lines, language, name, context_markers)
+        for k in ("1st", "2nd", "3rd"):
+            merged_counts[k] += result.counts.get(k, 0)
+        narrative_lines = max(narrative_lines, result.total_narrative_lines)
+
+    # Deduplicate 1st/2nd counts (they're the same across runs)
+    if len(protagonist_names) > 1:
+        # 1st/2nd counts are counted identically each run, so divide
+        merged_counts["1st"] = merged_counts["1st"] // len(protagonist_names)
+        merged_counts["2nd"] = merged_counts["2nd"] // len(protagonist_names)
+
+    total = sum(merged_counts.values())
+    if total == 0 or narrative_lines == 0:
+        return POVResult(
+            pov="unknown",
+            confidence="low",
+            counts=merged_counts,
+            total_narrative_lines=narrative_lines,
+        )
+
+    dominant_pov = max(merged_counts, key=lambda k: merged_counts[k])
+    dominant_ratio = merged_counts[dominant_pov] / total
+
+    secondary = sorted(merged_counts, key=lambda k: merged_counts[k], reverse=True)
+    secondary_pov = secondary[1] if len(secondary) > 1 else None
+    secondary_ratio = merged_counts[secondary_pov] / total if secondary_pov else 0.0
+
+    if dominant_ratio < 0.6 and secondary_ratio >= 0.2:
+        pov_val = "mixed"
+        confidence = "low"
+    else:
+        pov_val = dominant_pov
+        confidence = "high" if dominant_ratio > 0.6 else "low"
+
+    return POVResult(
+        pov=pov_val,
+        confidence=confidence,
+        counts=merged_counts,
+        total_narrative_lines=narrative_lines,
+    )
+
+
+def format_protagonist_prompt(
+    characters: List[Dict[str, Any]],
+    code_patterns: Optional[List[Dict[str, Any]]] = None,
+    pov_result: Optional["POVResult"] = None,
+) -> str:
+    """Build the Protagonist + Narration prompt section.
+
+    Format::
+
+        Protagonist: {Original} - {Translation} ({Details})
+        Narration: {1st/2nd/3rd/Mixed} View
+
+    Multiple protagonists are comma-separated.
+
+    Args:
+        characters: Character list from manifest.
+        code_patterns: Code patterns from manifest (optional).
+        pov_result: POV detection result (optional).
+
+    Returns:
+        Formatted prompt string, or empty string if no protagonist.
+    """
+    protag_parts: List[str] = []
+
+    for ch in get_protagonists_from_characters(characters):
+        original = ch.get("original_name", "")
+        translation = ch.get("translation", "") or ch.get("name", "")
+        notes = ch.get("notes", "")
+        # Strip "Protagonist" from notes to avoid redundancy
+        detail_parts = [
+            p.strip() for p in notes.split(",")
+            if p.strip().lower() != "protagonist"
+        ]
+        details = ", ".join(detail_parts) if detail_parts else ""
+        if original:
+            part = f"{original}"
+            if translation:
+                part += f" - {translation}"
+            if details:
+                part += f" ({details})"
+            protag_parts.append(part)
+
+    if code_patterns:
+        for cp in get_protagonists_from_code_database(code_patterns):
+            pattern = cp.get("pattern", "")
+            notes = cp.get("notes", "")
+            detail_parts = [
+                p.strip() for p in notes.split(",")
+                if p.strip().lower() != "protagonist"
+            ]
+            details = ", ".join(detail_parts) if detail_parts else ""
+            if pattern:
+                part = f"{pattern}"
+                if details:
+                    part += f" ({details})"
+                protag_parts.append(part)
+
+    if not protag_parts and not pov_result:
+        return ""
+
+    lines_out: List[str] = []
+    if protag_parts:
+        lines_out.append(f"Protagonist: {', '.join(protag_parts)}")
+
+    if pov_result:
+        pov_label = {
+            "1st": "1st Person",
+            "2nd": "2nd Person",
+            "3rd": "3rd Person",
+            "mixed": "Mixed",
+            "unknown": "Unknown",
+        }.get(pov_result.pov, pov_result.pov)
+
+        if pov_result.confidence == "high":
+            lines_out.append(f"Narration: {pov_label} View")
+        elif not protag_parts:
+            # Without protagonist, low confidence but still show inference
+            lines_out.append(f"Narration: ? - Likely 3rd Person")
+        else:
+            lines_out.append(f"Narration: {pov_label} View")
+
+    return "\n".join(lines_out)
+
+
 # ---------------- Glossary delegates ---------------- #
 
 def update_glossaries_from_analysis(

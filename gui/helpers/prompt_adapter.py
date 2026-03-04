@@ -188,6 +188,26 @@ except ImportError:
         logger.debug("Could not import functions.retry_handler")
 
 
+# ---------------- Imports from functions/analysis.py (Task 75) ---------------- #
+
+_format_protagonist_prompt = None
+_POVResult = None
+
+try:
+    from CherryAI.functions.analysis import format_protagonist_prompt, POVResult
+
+    _format_protagonist_prompt = format_protagonist_prompt
+    _POVResult = POVResult
+except ImportError:
+    try:
+        from functions.analysis import format_protagonist_prompt, POVResult
+
+        _format_protagonist_prompt = format_protagonist_prompt
+        _POVResult = POVResult
+    except ImportError:
+        logger.debug("Could not import functions.analysis protagonist helpers")
+
+
 # ---------------- Constants ---------------- #
 
 # Default prompt settings
@@ -919,6 +939,7 @@ def build_full_system_prompt(
     pov_data: Optional[Dict[str, Any]] = None,
     config_dir: Optional[Path] = None,
     chunk_lines: Optional[List[str]] = None,
+    code_patterns: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[str, Dict[str, int]]:
     """Build the full system prompt following spec §5.2 injection order.
 
@@ -931,9 +952,10 @@ def build_full_system_prompt(
         2. System Instructions (system_instructions)
         3. Style
         4. Tone
+        4b. Protagonist + Narration  (Task 75)
         5. Summary
         6. Genre
-        7. POV (narrative perspective)
+        7. POV (narrative perspective) — skipped when 4b has narration
         8. Conditional Prompts (selective per-chunk)
         9. Glossary + Characters (selective per-chunk)
         10. Rolling Context (conditional)
@@ -959,6 +981,8 @@ def build_full_system_prompt(
         config_dir: Config directory for conditional prompt loading.
         chunk_lines: When provided, enables per-chunk selective
             filtering of glossary, characters, and conditional prompts.
+        code_patterns: Code patterns from manifest for protagonist
+            detection (optional, Task 75).
 
     Returns:
         Tuple of (assembled_prompt, token_breakdown) where
@@ -999,6 +1023,20 @@ def build_full_system_prompt(
     if tone:
         _add("tone", f"# Translation Tone\n{tone}")
 
+    # --- 4b. Protagonist + Narration (Task 75) ---
+    protagonist_section = ""
+    if _format_protagonist_prompt and (characters or code_patterns):
+        pov_obj = None
+        if pov_data and isinstance(pov_data, dict) and _POVResult:
+            pov_obj = _POVResult.from_dict(pov_data)
+        protagonist_section = _format_protagonist_prompt(
+            characters or [],
+            code_patterns,
+            pov_obj,
+        )
+    if protagonist_section:
+        _add("protagonist", f"# Protagonist\n{protagonist_section}")
+
     # --- 5. Summary ---
     summary = (metadata.get("summary", "") or "").strip()
     if summary:
@@ -1009,8 +1047,8 @@ def build_full_system_prompt(
     if genre:
         _add("genre", f"# Genre\n{genre}")
 
-    # --- 7. POV ---
-    if pov_data and isinstance(pov_data, dict):
+    # --- 7. POV (skipped when protagonist section has narration) ---
+    if not protagonist_section and pov_data and isinstance(pov_data, dict):
         if pov_data.get("confidence") == "high":
             pov_label = {
                 "1st": "first",
@@ -1071,14 +1109,14 @@ def build_full_system_prompt(
         char_lines: List[str] = ["# Characters"]
         for ch in relevant_chars:
             orig = ch.get("original_name", "")
-            eng = ch.get("name", "")
-            gender = ch.get("gender", "") or ch.get("notes", "")
+            eng = ch.get("translation", "") or ch.get("name", "")
+            notes = ch.get("notes", "")
             if orig:
                 entry_text = f"- {orig}"
                 if eng:
                     entry_text += f" → {eng}"
-                if gender:
-                    entry_text += f" ({gender})"
+                if notes:
+                    entry_text += f" ({notes})"
                 char_lines.append(entry_text)
         if len(char_lines) > 1:
             if glossary_block:

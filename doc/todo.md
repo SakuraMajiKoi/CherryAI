@@ -43,7 +43,7 @@ Run API Test: `python CherryAI.py test`
 
 MODULE COUNTS (Verified January 2026)
 
-- functions/: 37 modules (+ glossaries/ subfolder with 5 files)
+- functions/: 38 modules (+ glossaries/ subfolder with 5 files, + romanization.py)
 - modi/: 12 processing modes
 - formats/: 5 format handlers
 - gui/steps/: 10 workflow tabs
@@ -51,6 +51,92 @@ MODULE COUNTS (Verified January 2026)
 - gui/dialogs/: 3 dialog modules (global_options, project_dialog, loading_progress)
 
 =============================================================================
+
+=============================================================================
+
+COMPLETED - SESSION 31 (TASK 75 — Code DB Cleanup, Protagonist Detection, Romanization)
+
+### SESSION 31: TASK 75 — Code DB Cleanup, Protagonist Detection, Romanization ✅ DONE
+
+**Task 1 — Codedatabase.tsv single-file policy:**
+- `functions/glossaries/code_glossary_functions.py` — Removed `_archive_glossary_with_timestamp` import and call from `update_code_in_glossary()` NEW mode
+- `functions/glossary.py` — Removed archive call in `update_unified_glossary()` NEW mode
+- Deleted 374 timestamped `codedatabase.*.tsv` files from `user/` directory
+- Single `user/codedatabase.tsv` is now the only code database file; NEW mode overwrites directly
+
+**Task 2 — Remove Count/Source from Notes:**
+- `functions/glossaries/code_glossary_functions.py` — Removed `f"Count: {count}"` from Notes in NEW, ADD, and OVERWRITE modes; UPDATE mode strips legacy "Count:" prefix
+- `functions/glossaries/name_glossary_functions.py` — Changed `source="Analysis"` to `source=""` so Analysis source tag is not serialized into Notes column
+- Cleaned existing `user/codedatabase.tsv` rows (7 entries had Count: values in Notes)
+
+**Task 3 — Protagonist detection + POV re-run + prompt section:**
+- `functions/analysis.py` — Added:
+  - `get_protagonists_from_characters(characters)` — filters characters with "Protagonist" in notes
+  - `get_protagonists_from_code_database(code_patterns)` — filters code patterns with "Protagonist" in notes
+  - `run_pov_with_protagonists(lines, language, characters, code_patterns, context_markers)` — merges POV detection across all protagonist names
+  - `format_protagonist_prompt(characters, code_patterns, pov_result)` — builds `Protagonist: {Original} - {Translation} ({Details})\nNarration: {1st/2nd/3rd/Mixed} View` section
+- `gui/helpers/prompt_adapter.py` — Added protagonist import; new slot 4b between Tone and Summary; existing POV slot 7 skipped when protagonist section includes narration; new `code_patterns` parameter
+- `functions/prompt_builder.py` — Added `characters` and `code_patterns` attributes to PromptBuilder; imported `format_protagonist_prompt` and `POVResult`; added slot 4b; slot 6b conditional on protagonist section
+- `gui/steps/analysis.py` — `_set_speaker_role()` triggers `_rerun_pov_with_protagonists()` when Protagonist role is set; new method reads all lines, gathers protagonist names, runs merged POV detection, stores result in manifest `["POV"]`
+
+**Task 4 — Japanese romanization (Modified Hepburn):**
+- `functions/romanization.py` — New module (250 lines):
+  - Complete hiragana + katakana → rōmaji mapping tables
+  - Digraph/yōon combinations (きゃ→kya, しゃ→sha, チャ→cha, etc.)
+  - Extended katakana digraphs for foreign loan-words (ファ→fa, ティ→ti, etc.)
+  - Small tsu consonant doubling (っ→doubles next consonant)
+  - Long vowel mark extension (ー→extends previous vowel)
+  - Public API: `romanize(text)`, `contains_kana(text)`, `romanize_if_japanese(text)`
+- `functions/glossaries/name_glossary_functions.py` — Auto-romanizes kana speaker names into Translation field when no translation exists
+- `functions/glossaries/code_glossary_functions.py` — Auto-romanizes kana code patterns into Notes field (NEW, ADD, OVERWRITE modes)
+
+**New test file:** `dev/test_protagonist_romanization.py` — 40 tests:
+- TestProtagonistDetection (6): single/multiple/no/empty/case-insensitive/missing-notes
+- TestProtagonistsFromCodeDB (2): code pattern protagonist detection
+- TestRunPovWithProtagonists (4): 3rd person from protagonist, 1st person without, empty lines, no protagonist
+- TestFormatProtagonistPrompt (6): single/multiple protagonists, no protagonist, low POV, code patterns, no translation
+- TestRomanize (14): vowels, katakana, konnichiha, digraphs, small tsu, long vowel, mixed text, names, extended digraphs, dakuten, handakuten
+- TestContainsKana (5): hiragana, katakana, latin, empty, mixed
+- TestRomanizeIfJapanese (3): kana/non-kana/empty
+
+**Modified files:** functions/analysis.py, functions/prompt_builder.py, functions/romanization.py (NEW), functions/glossary.py, functions/glossaries/code_glossary_functions.py, functions/glossaries/name_glossary_functions.py, gui/helpers/prompt_adapter.py, gui/steps/analysis.py
+**Updated docs:** doc/features.md, doc/technical.md, doc/specs.md, doc/tests.md, doc/todo.md
+**Test results:** 40 new + 36 POV + 146 analysis + 88 dedup/functions/costs + 35 full/auto + 119 blacklist/config = 464 tests, 0 regressions
+
+=============================================================================
+
+COMPLETED - SESSION 30 (TASK 74 — Save System, Character Fields, Collapse Buttons)
+
+### SESSION 30: TASK 74 — Save System, Character Fields, Collapse Buttons ✅ DONE
+
+**Task 1 — JSON serialization fix:**
+- `gui/steps/analysis.py` — `on_enter()` uses `deepcopy()` for analysis_results to prevent shared-reference contamination when step data is mutated
+- `functions/manifest_manager.py` — Added `_SafeManifestEncoder` as safety net for non-serializable objects (coerces to `str`)
+- `Projects/UC8.CherryAI.json` — Fixed `rel_path` from wrong subdirectory
+
+**Task 2 — Autosave system unification:**
+- `functions/manifest_manager.py` — Fixed `_load_autosave_settings()` to read from `[session]` section with correct keys (`autosave`, `interval`); changed default interval from 15s to 60s; atomic saves via `.tmp` file + `os.fsync()` + `os.replace()`
+- `gui/state/store.py` — `start_autosave()`/`stop_autosave()` replaced with no-op stubs
+- `gui/app.py` — `_on_close()` now retries save up to 3 times with exponential backoff; on persistent failure prompts user to force-quit or retry
+
+**Task 3 — Character field consolidation:**
+- `CharacterInfo` dataclass simplified to 3 fields: `original_name`, `translation`, `notes`
+- Legacy fields (`name`, `gender`, `role`, `speaking_style`) auto-migrated in `from_dict()` and `load_character_notes()`
+- Analysis `_upsert_character_entry()` appends gender/role to notes (deduplicates, comma-separated)
+- Context menu on character treeview: Clear Notes, Edit..., Remove
+- Updated: information.py, analysis.py, manifest_fields.py, prompt_builder.py, prompt_adapter.py, glossary_adapter.py, translate.py + 7 test files
+
+**Task 4 — Collapse button redesign:**
+- New `_build_collapsible_labelframe()` helper: compact ▾/▸ button (width=2) + bold label as LabelFrame `labelwidget`
+- Applied to all 4 right-column sections: Glossary, Glossary Settings, Code Database, Global Database
+- `_toggle_collapsible()` swaps ▾/▸ icons instead of "Collapse"/"Display" text
+
+**Task 5 — Todo.md entry:**
+- Added "Redesign Glossary Settings Widget" to Information Step Future Enhancements
+
+**Modified files:** gui/steps/information.py, gui/steps/analysis.py, gui/steps/translate.py, gui/app.py, gui/state/store.py, gui/helpers/prompt_adapter.py, gui/helpers/glossary_adapter.py, functions/manifest_manager.py, functions/manifest_fields.py, functions/prompt_builder.py, Projects/UC8.CherryAI.json
+**Updated docs:** doc/features.md, doc/technical.md, doc/specs.md, doc/tests.md, doc/todo.md
+**Updated tests:** test_autosave.py, test_session_loading.py, test_prompt_builder_shared.py, test_gui_v2.py, test_manifest_fields.py, test_information_manifest.py, test_glossary_integration.py, test_edit_tlc_components.py
 
 =============================================================================
 
@@ -1172,6 +1258,7 @@ FUTURE IDEAS (No Phase Commitment)
 - **Glossary Import from File**: Direct import from external glossary files (CSV, JSON, TMX)
 - **Code Pattern Templates**: Pre-built code pattern sets for common game engines (RPG Maker, Unity, etc.)
 - **Project Templates**: Save/load entire Information step configurations as reusable templates
+- **Redesign Glossary Settings Widget**: Fold "Glossary Settings" into the "Global Glossary and Database" widget. Requiring a rework to remove, move and streamline to only ever export from the manifest to the global files.
 
 ### Preprocessing/Postprocessing Future Enhancements
 - [x] **Line Field Persistence (Task 3)**: Fixed critical bug where preprocessing, postprocessing, and wordwrap steps stored per-line results only in step_state but never wrote to manifest `lines[].prepro` / `lines[].postpro` / `lines[].wordwr` via `set_line_field()`. Also fixed `_mark_line_as_fixed()` calling nonexistent `update_line_field()` → `set_line_field()`. 39 tests in `dev/test_line_saving.py`.

@@ -114,36 +114,52 @@ class TonePreset(Enum):
 
 @dataclass
 class CharacterInfo:
-    """Information about a character."""
+    """Information about a character.
 
-    name: str
+    Attributes:
+        original_name: Source-language name (lookup key).
+        translation: Translated name in target language.
+        notes: Free-form notes (gender, role, speaking style, etc.).
+    """
+
     original_name: str = ""
-    gender: str = ""
-    role: str = ""
+    translation: str = ""
     notes: str = ""
-    speaking_style: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
-            "name": self.name,
             "original_name": self.original_name,
-            "gender": self.gender,
-            "role": self.role,
+            "translation": self.translation,
             "notes": self.notes,
-            "speaking_style": self.speaking_style,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "CharacterInfo":
-        """Create from dictionary."""
+        """Create from dictionary.
+
+        Supports legacy manifests that store the translated name under
+        ``name`` instead of ``translation`` and keep ``gender``,
+        ``role``, ``speaking_style`` as separate fields.
+        """
+        # Legacy: translated name was stored as "name"
+        translation = data.get("translation", "") or data.get("name", "")
+
+        # Merge legacy separate fields into a single notes string
+        parts: list[str] = []
+        for legacy_key in ("gender", "role", "speaking_style"):
+            val = data.get(legacy_key, "")
+            if val:
+                parts.append(val)
+        existing_notes = data.get("notes", "")
+        if existing_notes:
+            parts.append(existing_notes)
+        notes = ", ".join(parts)
+
         return cls(
-            name=data.get("name", ""),
             original_name=data.get("original_name", ""),
-            gender=data.get("gender", ""),
-            role=data.get("role", ""),
-            notes=data.get("notes", ""),
-            speaking_style=data.get("speaking_style", ""),
+            translation=translation,
+            notes=notes,
         )
 
 
@@ -715,10 +731,9 @@ class InformationStep(BaseStep):
         """Toggle collapsed/expanded state of a right-column widget.
 
         When collapsed, the content frame is hidden and only the
-        LabelFrame title with a 'Display' button remains visible.
-        When expanded, the content is shown and the button reads
-        'Collapse'.  Row weights are reconfigured so expanded widgets
-        share available vertical space.
+        LabelFrame title with a toggle button remains visible.
+        When expanded, the content is shown.  Row weights are
+        reconfigured so expanded widgets share available space.
 
         Args:
             widget_name: Key in ``_collapsible_state`` dict.
@@ -733,11 +748,11 @@ class InformationStep(BaseStep):
             if expanded:
                 content.grid()
                 if button:
-                    button.config(text="Collapse")
+                    button.config(text="▾")
             else:
                 content.grid_remove()
                 if button:
-                    button.config(text="Display")
+                    button.config(text="▸")
 
         self._reconfigure_right_column_weights()
 
@@ -759,6 +774,47 @@ class InformationStep(BaseStep):
             self._right_column.rowconfigure(
                 row, weight=1 if expanded else 0,
             )
+
+    def _build_collapsible_labelframe(
+        self,
+        parent: ttk.Frame,
+        title: str,
+        widget_name: str,
+        row: int,
+    ) -> ttk.LabelFrame:
+        """Create a ``LabelFrame`` with a compact ▾/▸ toggle in its header.
+
+        The toggle button is placed inside the ``labelwidget`` so it
+        appears directly in the section header bar, keeping the UI
+        compact.
+
+        Args:
+            parent: Parent frame (typically ``self._right_column``).
+            title: Section title text.
+            widget_name: Key used in ``_collapsible_state``.
+            row: Grid row in the parent.
+
+        Returns:
+            The created ``LabelFrame``.
+        """
+        header = ttk.Frame(parent)
+        collapse_btn = ttk.Button(
+            header,
+            text="▾",
+            width=2,
+            command=lambda: self._toggle_collapsible(widget_name),
+        )
+        collapse_btn.pack(side="left", padx=(4, 2))
+        ttk.Label(header, text=title, font=("", 9, "bold")).pack(
+            side="left",
+        )
+        self._collapsible_buttons[widget_name] = collapse_btn
+
+        frame = ttk.LabelFrame(parent, labelwidget=header)
+        frame.grid(row=row, column=0, sticky="nsew", padx=5, pady=5)
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        return frame
 
     def _build_project_section(self) -> None:
         """Build project name and title section.
@@ -1095,25 +1151,13 @@ class InformationStep(BaseStep):
         Placed in right column (row 0) with collapse/expand support.
         Table expands vertically to fill available space.
         """
-        frame = ttk.LabelFrame(self._right_column, text="Glossary")
-        frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
-        frame.rowconfigure(1, weight=1)
-        frame.columnconfigure(0, weight=1)
-
-        # Collapse/expand toggle bar
-        toggle_bar = ttk.Frame(frame)
-        toggle_bar.grid(row=0, column=0, sticky="ew", padx=5, pady=(2, 0))
-
-        collapse_btn = ttk.Button(
-            toggle_bar, text="Collapse", width=8,
-            command=lambda: self._toggle_collapsible("glossary"),
+        frame = self._build_collapsible_labelframe(
+            self._right_column, "Glossary", "glossary", row=0,
         )
-        collapse_btn.pack(side="right")
-        self._collapsible_buttons["glossary"] = collapse_btn
 
         # Content frame (collapsible)
         content = ttk.Frame(frame)
-        content.grid(row=1, column=0, sticky="nsew")
+        content.grid(row=0, column=0, sticky="nsew")
         content.rowconfigure(1, weight=1)
         content.columnconfigure(0, weight=1)
         self._collapsible_content["glossary"] = content
@@ -1191,6 +1235,8 @@ class InformationStep(BaseStep):
         self._char_tree.bind("<Double-1>", self._on_char_double_click)
         # Bind Delete key for row removal
         self._char_tree.bind("<Delete>", lambda e: self._remove_character())
+        # Bind right-click for context menu
+        self._char_tree.bind("<Button-3>", self._on_char_context_menu)
 
     def _build_glossary_settings_section(self) -> None:
         """Build Glossary Settings section (TASK 19 Phase 4).
@@ -1200,25 +1246,14 @@ class InformationStep(BaseStep):
         Placed in right column (row 1) with collapse/expand support.
         Table expands vertically to fill available space.
         """
-        frame = ttk.LabelFrame(self._right_column, text="Glossary Settings")
-        frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)
-        frame.rowconfigure(1, weight=1)
-        frame.columnconfigure(0, weight=1)
-
-        # Collapse/expand toggle bar
-        toggle_bar = ttk.Frame(frame)
-        toggle_bar.grid(row=0, column=0, sticky="ew", padx=5, pady=(2, 0))
-
-        collapse_btn = ttk.Button(
-            toggle_bar, text="Collapse", width=8,
-            command=lambda: self._toggle_collapsible("glossary_settings"),
+        frame = self._build_collapsible_labelframe(
+            self._right_column, "Glossary Settings", "glossary_settings",
+            row=1,
         )
-        collapse_btn.pack(side="right")
-        self._collapsible_buttons["glossary_settings"] = collapse_btn
 
         # Content frame (collapsible)
         content = ttk.Frame(frame)
-        content.grid(row=1, column=0, sticky="nsew")
+        content.grid(row=0, column=0, sticky="nsew")
         content.rowconfigure(2, weight=1)  # table row expands
         content.columnconfigure(0, weight=1)
         self._collapsible_content["glossary_settings"] = content
@@ -1339,25 +1374,13 @@ class InformationStep(BaseStep):
         Placed in right column (row 2) with collapse/expand support.
         Table expands vertically to fill available space.
         """
-        frame = ttk.LabelFrame(self._right_column, text="Code Database")
-        frame.grid(row=2, column=0, sticky="nsew", padx=5, pady=5)
-        frame.rowconfigure(1, weight=1)
-        frame.columnconfigure(0, weight=1)
-
-        # Collapse/expand toggle bar
-        toggle_bar = ttk.Frame(frame)
-        toggle_bar.grid(row=0, column=0, sticky="ew", padx=5, pady=(2, 0))
-
-        collapse_btn = ttk.Button(
-            toggle_bar, text="Collapse", width=8,
-            command=lambda: self._toggle_collapsible("code_database"),
+        frame = self._build_collapsible_labelframe(
+            self._right_column, "Code Database", "code_database", row=2,
         )
-        collapse_btn.pack(side="right")
-        self._collapsible_buttons["code_database"] = collapse_btn
 
         # Content frame (collapsible)
         content = ttk.Frame(frame)
-        content.grid(row=1, column=0, sticky="nsew")
+        content.grid(row=0, column=0, sticky="nsew")
         content.rowconfigure(1, weight=1)  # table row expands
         content.columnconfigure(0, weight=1)
         self._collapsible_content["code_database"] = content
@@ -1448,27 +1471,14 @@ class InformationStep(BaseStep):
         Placed in right column (row 3) with collapse/expand support.
         Table expands vertically to fill available space.
         """
-        frame = ttk.LabelFrame(
-            self._right_column, text="Global Glossary and Database",
+        frame = self._build_collapsible_labelframe(
+            self._right_column, "Global Glossary and Database",
+            "global_database", row=3,
         )
-        frame.grid(row=3, column=0, sticky="nsew", padx=5, pady=5)
-        frame.rowconfigure(1, weight=1)
-        frame.columnconfigure(0, weight=1)
-
-        # Collapse/expand toggle bar
-        toggle_bar = ttk.Frame(frame)
-        toggle_bar.grid(row=0, column=0, sticky="ew", padx=5, pady=(2, 0))
-
-        collapse_btn = ttk.Button(
-            toggle_bar, text="Collapse", width=8,
-            command=lambda: self._toggle_collapsible("global_database"),
-        )
-        collapse_btn.pack(side="right")
-        self._collapsible_buttons["global_database"] = collapse_btn
 
         # Content frame (collapsible)
         content = ttk.Frame(frame)
-        content.grid(row=1, column=0, sticky="nsew")
+        content.grid(row=0, column=0, sticky="nsew")
         content.rowconfigure(1, weight=1)  # table row expands
         content.columnconfigure(0, weight=1)
         self._collapsible_content["global_database"] = content
@@ -2077,9 +2087,14 @@ class InformationStep(BaseStep):
         # --- Build list of characters to check ---
         chars_to_check = []
         for char in self._metadata.characters:
-            if char.gender and char.gender != "Unknown":
+            # Skip if notes already contain a gender keyword
+            notes_lower = char.notes.lower() if char.notes else ""
+            has_gender = any(
+                g in notes_lower for g in ("male", "female", "non-binary")
+            )
+            if has_gender:
                 continue
-            name_to_check = char.original_name or char.name
+            name_to_check = char.original_name or char.translation
             if name_to_check:
                 chars_to_check.append((char, name_to_check))
 
@@ -2145,7 +2160,14 @@ class InformationStep(BaseStep):
                     confidence_threshold=0.5,
                 )
                 if inferred and inferred != "Unknown" and confidence >= 50:
-                    char.gender = inferred
+                    # Append gender to notes
+                    parts = [
+                        p.strip()
+                        for p in char.notes.split(",") if p.strip()
+                    ]
+                    if inferred not in parts:
+                        parts.insert(0, inferred)
+                    char.notes = ", ".join(parts)
                     updated_count += 1
             except Exception as e:
                 logger.debug("Gender inference failed for %s: %s", name_to_check, e)
@@ -2193,7 +2215,7 @@ class InformationStep(BaseStep):
         # Column order: original, translation, notes
         columns = ("original", "translation", "notes")
         # Map column names to dataclass fields
-        field_map = {"original": "original_name", "translation": "name",
+        field_map = {"original": "original_name", "translation": "translation",
                      "notes": "notes"}
         if col_idx < 0 or col_idx >= len(columns):
             return
@@ -2231,15 +2253,7 @@ class InformationStep(BaseStep):
         x, y, width, height = bbox
 
         if col_key == "notes":
-            # Notes column: show editable text with combined gender+role+notes
-            notes_parts: list[str] = []
-            if char.gender:
-                notes_parts.append(char.gender)
-            if char.role:
-                notes_parts.append(char.role)
-            if char.notes:
-                notes_parts.append(char.notes)
-            current_value = ", ".join(notes_parts)
+            current_value = char.notes
         else:
             current_value = getattr(char, field_key, "")
 
@@ -2253,15 +2267,8 @@ class InformationStep(BaseStep):
         def on_confirm(event=None):
             new_value = entry.get()
             entry.destroy()
-            if col_key == "notes":
-                # Parse combined notes back: store as single notes field,
-                # clear gender/role so there's no duplication
-                char.gender = ""
-                char.role = ""
-                char.notes = new_value
-            else:
-                if new_value != str(current_value):
-                    setattr(char, field_key, new_value)
+            if new_value != str(current_value):
+                setattr(char, field_key, new_value)
             self._refresh_character_list()
             self._save_characters_to_manifest()
 
@@ -2371,21 +2378,49 @@ class InformationStep(BaseStep):
             self._char_tree.delete(item)
 
         for char in self._metadata.characters:
-            # Build combined notes from gender, role, and notes
-            notes_parts: list[str] = []
-            if char.gender:
-                notes_parts.append(char.gender)
-            if char.role:
-                notes_parts.append(char.role)
-            if char.notes:
-                notes_parts.append(char.notes)
-            combined_notes = ", ".join(notes_parts)
             # Column order: original, translation, notes
             self._char_tree.insert(
                 "",
                 "end",
-                values=(char.original_name, char.name, combined_notes),
+                values=(char.original_name, char.translation, char.notes),
             )
+
+    def _on_char_context_menu(self, event: tk.Event) -> None:
+        """Show context menu on right-click in character treeview."""
+        item = self._char_tree.identify_row(event.y)
+        if not item:
+            return
+
+        # Select the item under cursor
+        self._char_tree.selection_set(item)
+
+        menu = tk.Menu(self._char_tree, tearoff=0)
+        menu.add_command(
+            label="Clear Notes",
+            command=lambda: self._clear_character_notes(item),
+        )
+        menu.add_separator()
+        menu.add_command(
+            label="Edit...",
+            command=lambda: self._on_char_double_click(event),
+        )
+        menu.add_command(
+            label="Remove",
+            command=self._remove_character,
+        )
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _clear_character_notes(self, item: str) -> None:
+        """Clear the notes field for the selected character."""
+        idx = self._char_tree.index(item)
+        if idx >= len(self._metadata.characters):
+            return
+        self._metadata.characters[idx].notes = ""
+        self._refresh_character_list()
+        self._save_characters_to_manifest()
 
     # ------------------------------------------------------------------
     # Analysis data access helper
@@ -2508,7 +2543,6 @@ class InformationStep(BaseStep):
                     continue
 
                 char = CharacterInfo(
-                    name="",
                     original_name=speaker_name,
                 )
                 self._metadata.characters.append(char)
@@ -3808,9 +3842,8 @@ class InformationStep(BaseStep):
         for name in list(speakers)[:5]:  # Limit to 5 characters
             result.characters.append(
                 CharacterInfo(
-                    name="",  # Translation left empty by default
                     original_name=name,
-                    role="Speaker",
+                    notes="Speaker",
                 )
             )
 
@@ -3846,9 +3879,13 @@ class InformationStep(BaseStep):
             self._style_var.set(result.style)
 
         # Add inferred characters (avoiding duplicates)
-        existing_names = {c.name for c in self._metadata.characters}
+        existing_names = {
+            c.original_name or c.translation
+            for c in self._metadata.characters
+        }
         for char in result.characters:
-            if char.name not in existing_names:
+            char_key = char.original_name or char.translation
+            if char_key and char_key not in existing_names:
                 self._metadata.characters.append(char)
 
         self._refresh_character_list()
@@ -4077,11 +4114,9 @@ class InformationStep(BaseStep):
                         logger.debug(f"Gender inference failed for {speaker_name}: {e}")
                     
                 # Create CharacterInfo from speaker
-                # Translation (name) left empty by default
                 char = CharacterInfo(
-                    name="",
                     original_name=speaker_name,
-                    gender=gender,
+                    notes=gender,
                 )
                 self._metadata.characters.append(char)
                 existing_originals.add(speaker_name)
@@ -4256,7 +4291,7 @@ class CharacterDialog(tk.Toplevel):
         super().__init__(parent)
         self.title(title)
         self.result: Optional[CharacterInfo] = None
-        self._character = character or CharacterInfo(name="")
+        self._character = character or CharacterInfo()
 
         self.geometry("400x350")
         self.resizable(False, False)
@@ -4304,17 +4339,10 @@ class CharacterDialog(tk.Toplevel):
 
     def _populate(self) -> None:
         """Populate fields from character."""
-        self._name_var.set(self._character.name)
+        self._name_var.set(self._character.translation)
         self._orig_var.set(self._character.original_name)
-        # Build combined notes from gender, role, and notes
-        notes_parts: list[str] = []
-        if self._character.gender:
-            notes_parts.append(self._character.gender)
-        if self._character.role:
-            notes_parts.append(self._character.role)
         if self._character.notes:
-            notes_parts.append(self._character.notes)
-        self._notes_text.insert("1.0", ", ".join(notes_parts))
+            self._notes_text.insert("1.0", self._character.notes)
 
     def _on_ok(self) -> None:
         """Handle OK button."""
@@ -4324,11 +4352,8 @@ class CharacterDialog(tk.Toplevel):
             return
 
         self.result = CharacterInfo(
-            name=self._name_var.get().strip(),  # Translation (may be empty)
+            translation=self._name_var.get().strip(),
             original_name=original_name,
-            gender="",   # Stored inside notes
-            role="",     # Stored inside notes
-            speaking_style="",
             notes=self._notes_text.get("1.0", "end-1c").strip(),
         )
         self.destroy()

@@ -882,16 +882,17 @@ class AnalysisStep(BaseStep):
     ) -> bool:
         """Add or update a character entry by original_name key.
 
-        If an entry with the same original_name already exists, its
-        fields are updated (only non-empty values overwrite).  Otherwise
-        a new entry is appended.
+        If an entry with the same ``original_name`` already exists its
+        fields are updated.  ``translation`` overwrites; ``gender``,
+        ``role``, and ``notes`` are **appended** to the existing notes
+        (de-duplicated) so no information is lost.
 
         Args:
             original_name: Source-language name (lookup key).
             translation: Translated name.
-            gender: Gender string (Male, Female, etc.).
-            role: Role string (Protagonist, etc.).
-            notes: Freeform notes.
+            gender: Gender string (Male, Female, etc.) — appended to notes.
+            role: Role string (Protagonist, etc.) — appended to notes.
+            notes: Freeform notes — appended.
 
         Returns:
             True on success.
@@ -904,21 +905,24 @@ class AnalysisStep(BaseStep):
 
         if existing:
             if translation:
-                existing["name"] = translation
-            if gender:
-                existing["gender"] = gender
-            if role:
-                existing["role"] = role
-            if notes:
-                existing["notes"] = notes
+                existing["translation"] = translation
+
+            # Append gender/role/notes to the existing notes field
+            current_notes = existing.get("notes", "")
+            current_parts = [
+                p.strip() for p in current_notes.split(",") if p.strip()
+            ]
+            for new_value in (gender, role, notes):
+                if new_value and new_value not in current_parts:
+                    current_parts.append(new_value)
+            existing["notes"] = ", ".join(current_parts)
         else:
+            # Build initial notes from provided fragments
+            parts = [v for v in (gender, role, notes) if v]
             characters.append({
-                "name": translation,
                 "original_name": original_name,
-                "gender": gender,
-                "role": role,
-                "notes": notes,
-                "speaking_style": "",
+                "translation": translation,
+                "notes": ", ".join(parts),
             })
 
         self._save_characters(characters)
@@ -944,17 +948,10 @@ class AnalysisStep(BaseStep):
         if not char:
             return ""
         parts: list[str] = []
-        if char.get("name"):
-            parts.append(char["name"])
-        detail_parts: list[str] = []
-        if char.get("gender"):
-            detail_parts.append(char["gender"])
-        if char.get("role"):
-            detail_parts.append(char["role"])
+        if char.get("translation"):
+            parts.append(char["translation"])
         if char.get("notes"):
-            detail_parts.append(char["notes"])
-        if detail_parts:
-            parts.append(", ".join(detail_parts))
+            parts.append(char["notes"])
         return " — ".join(parts) if parts else ""
 
     def _refresh_details_for_speakers(
@@ -1009,7 +1006,12 @@ class AnalysisStep(BaseStep):
             messagebox.showwarning("Failed", "Could not add speakers.")
 
     def _set_speaker_role(self, role: str) -> None:
-        """Set role for selected speakers in the character glossary."""
+        """Set role for selected speakers in the character glossary.
+
+        When setting the Protagonist role, POV detection is automatically
+        re-run with the new protagonist name(s) and the manifest is
+        updated with the new POV result.
+        """
         items = self._get_selected_items()
         speakers = [name for cat, name in items if cat == "Speakers"]
         if not speakers:
@@ -1030,6 +1032,62 @@ class AnalysisStep(BaseStep):
                 f"Set role '{role}' for {success_count} speaker(s).",
             )
             self._refresh_details_for_speakers(speakers)
+
+            # Task 75: Re-run POV detection when Protagonist role is set
+            if role == "Protagonist":
+                self._rerun_pov_with_protagonists()
+
+    def _rerun_pov_with_protagonists(self) -> None:
+        """Re-run POV detection with current protagonist names.
+
+        Called after a Protagonist role is set.  Reads all lines from
+        the input step, gathers protagonist characters, runs
+        :func:`run_pov_with_protagonists`, and stores the result in
+        the manifest under the ``POV`` key.
+        """
+        try:
+            from CherryAI.functions.analysis import run_pov_with_protagonists
+        except ImportError:
+            try:
+                from functions.analysis import run_pov_with_protagonists
+            except ImportError:
+                logger.warning("Cannot import run_pov_with_protagonists")
+                return
+
+        # Gather lines
+        loaded_files = self._get_loaded_files()
+        if not loaded_files:
+            return
+        all_lines: List[str] = []
+        for lf in loaded_files:
+            if hasattr(lf, "lines"):
+                all_lines.extend(lf.lines)
+        if not all_lines:
+            return
+
+        # Determine source language
+        language = ""
+        langs = self._analysis_results.get("languages", {})
+        if langs:
+            language = max(langs, key=lambda k: langs[k])
+
+        # Gather characters and code patterns
+        characters = self._load_characters()
+        code_patterns = self._load_code_patterns()
+
+        pov_result = run_pov_with_protagonists(
+            all_lines, language, characters, code_patterns,
+        )
+
+        # Store in manifest
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            mgr._manifest_data["POV"] = pov_result.to_dict()
+            mgr.mark_dirty()
+            logger.info(
+                "POV re-run with protagonists: %s (confidence=%s)",
+                pov_result.pov, pov_result.confidence,
+            )
 
     def _set_speaker_gender(self, gender: str) -> None:
         """Set gender for selected speakers in the character glossary."""
@@ -1558,8 +1616,9 @@ class AnalysisStep(BaseStep):
         # Pre-fill with existing data or defaults
         if existing_char:
             replacement_var.set(existing_char.get("original_name", ""))
-            gender_var.set(existing_char.get("gender", ""))
-            role_var.set(existing_char.get("role", ""))
+            # Gender/role are now stored inside notes — show notes as-is
+            gender_var.set("")
+            role_var.set("")
             notes_var.set(existing_char.get("notes", ""))
         else:
             _prefill("Character")
@@ -1781,7 +1840,11 @@ class AnalysisStep(BaseStep):
         # First, try to restore analysis results from session
         step_data = self.get_step_data()
         if step_data.get("analysis_results") and not self._analysis_results:
-            self._analysis_results = step_data["analysis_results"]
+            # TASK 74.1: Use deepcopy to avoid contaminating _manifest_data
+            # with non-serializable TableRow objects when findings are
+            # deserialized below.  get_step_data() returns a shared reference.
+            from copy import deepcopy
+            self._analysis_results = deepcopy(step_data["analysis_results"])
             # TASK 18.5: Deserialize findings from session storage
             # When saved to JSON, TableRow objects become dicts; need to convert back
             if "findings" in self._analysis_results:

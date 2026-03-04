@@ -663,13 +663,9 @@ def update_unified_glossary(
     Returns:
         Path to updated glossary file
     """
-    # Handle NEW mode: archive existing and start fresh
+    # Handle NEW mode: overwrite existing with fresh entries (no archiving)
     if update_mode == UPDATE_MODE_NEW:
-        glossary_path = _unified_glossary_path()
-        if glossary_path.exists():
-            archive_path = _archive_glossary_with_timestamp(glossary_path)
-            if archive_path:
-                logging.info("NEW mode: Archived existing glossary, creating fresh one")
+        logging.info("NEW mode: Overwriting glossary with fresh entries")
         # Create fresh glossary with only new entries
         fresh_entries: Dict[str, GlossaryEntry] = {}
         for entry in new_entries:

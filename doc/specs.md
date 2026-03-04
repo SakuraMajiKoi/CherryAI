@@ -106,7 +106,8 @@ The GUI is organized as:
 ### State Management
 
 All application state is stored in the Manifest (`.CherryAI.json`), not in GUI memory. For every translation project, a manifest file is created which loads all project data and saves all process steps. The ManifestManager handles:
-- Auto-save on step change, close, and periodic interval (15s default)
+- Auto-save on step change, close, and periodic interval (60s default)
+- Atomic saves: write to `.tmp`, fsync, `os.replace()` to prevent corruption
 - Skip-unchanged guard: `set_line_field()` returns early when new value equals existing (TASK 72)
 - Per-step data storage with automatic serialization
 - Line-by-line translation state tracking with per-line `tags` field (TASK 72)
@@ -395,9 +396,10 @@ The system prompt is assembled in the following fixed order. Empty sections are 
 | 2 | **System Instructions** | `metadata.custom_notes` / preset from `user/CherryAI.ini` | Always present |
 | 3 | **Style** | `metadata.style` (fallback: `CustomStyle`) | Skip when empty |
 | 4 | **Tone** | `metadata.tone` (fallback: `CustomTone`) | Skip when empty |
+| 4b | **Protagonist + Narration** | Characters + Code patterns + `manifest POV` | Skip when no protagonist tagged (Task 75) |
 | 5 | **Summary** | `metadata.summary` | Skip when empty |
 | 6 | **Genre** | `metadata.genre` (fallback: top-level `Genre`) | Skip when empty |
-| 7 | **POV** | `manifest POV` dict (`pov`, `confidence`) | Skip when confidence ≠ "high" |
+| 7 | **POV** | `manifest POV` dict (`pov`, `confidence`) | Skip when confidence ≠ "high" **or** when slot 4b has narration |
 | 8 | **Conditional Prompts** | `user/CherryAI.ini [prompts]` or `user/conditional_prompts.json` | Selective — injected only when [Input Lines] contain the trigger pattern |
 | 9 | **Glossary** | Manifest `Glossary` + `user/globalglossary.tsv` + `metadata.characters` | Selective — rows injected only when Original (or Translation) found in [Input Lines]; Characters always included |
 | 10 | **Rolling Context** | Preceding translated lines from manifest | Conditional — dialogue/unknown requests only; disabled for Menu/Choice |
@@ -406,6 +408,8 @@ The system prompt is assembled in the following fixed order. Empty sections are 
 **Notes on ordering:**
 - Slots 1-7 are non-selective (included when non-empty regardless of line content)
 - POV (slot 7) maps "1st"→"first person", "2nd"→"second person", "3rd"→"third person"
+- Slot 4b format: `Protagonist: {Original} - {Translation} ({Details})\nNarration: {1st/2nd/3rd/Mixed} View`
+- When slot 4b is present, slot 7 (POV) is skipped to avoid duplication
 - Slots 8-9 are selective/conditional (content-based or pattern-triggered)
 - Rolling Context (slot 10) appears just before Input Lines to maximise contextual proximity
 - Meta Settings (URL, key, model, temperature, etc.) are passed separately and never counted
@@ -739,6 +743,10 @@ PrettyWrap is the standard wrapping algorithm. Its priority rules:
 **Affects**: Analysis (Step 1), Translation (Step 5)
 
 **Status**: Implemented (Phase 54) — `functions/analysis.py` contains `_RAW_POV_PATTERNS` (Japanese, English, Chinese, Korean), `_get_pov_patterns()` with compiled caching, `POVResult` dataclass, and `detect_pov()` algorithm. Prompt integration via `PromptBuilder.pov_result` in `functions/prompt_builder.py`. Tests in `dev/test_pov_inference.py` (36 tests).
+
+**Task 75 Extension**: Protagonist-aware POV re-run — `get_protagonists_from_characters()`, `get_protagonists_from_code_database()`, `run_pov_with_protagonists()`, `format_protagonist_prompt()` in `functions/analysis.py`. GUI trigger: `_set_speaker_role("Protagonist")` → `_rerun_pov_with_protagonists()` stores updated POV in manifest. Prompt slot 4b between Tone and Summary. Tests in `dev/test_protagonist_romanization.py` (18 protagonist tests).
+
+**Task 75 Romanization**: `functions/romanization.py` — Modified Hepburn kana→rōmaji conversion. Auto-populates glossary Translation field and code database Notes for kana entries during Analysis. Tests in `dev/test_protagonist_romanization.py` (22 romanization tests).
 
 **Purpose**: Infer the narrative point of view from non-dialogue text to provide the LLM with accurate context for pronoun and perspective handling.
 
@@ -1964,7 +1972,8 @@ The Costs step has **two distinct estimation states** tracked separately:
 
 | Component | Type | Function |
 |-----------|------|----------|
-| Character Table | Treeview | Columns: Original, Translation, Notes (Gender/Role merged into Notes for parity with Glossary Settings) |
+| Character Table | Treeview | Columns: Original, Translation, Notes |
+| Context Menu | Right-click | Clear Notes, Edit..., Remove |
 | Add Character | Button | Add new character entry |
 | Edit | Button | Edit selected character via CharacterDialog (Notes field) |
 | Remove | Button | Remove selected character(s) |
@@ -1995,9 +2004,9 @@ Characters:
 | 4 | JSON View (hidden by default) | Hidden |
 
 **Collapsible Behavior**:
-- Each widget has a Collapse/Display toggle button in its LabelFrame header
+- Each widget has a compact ▾/▸ toggle button (width=2) + bold label embedded as the LabelFrame's `labelwidget` via `_build_collapsible_labelframe()` helper
 - Collapse hides content via `grid_remove()`, Display restores via `grid()`
-- Button text toggles between "Collapse" and "Display"
+- Button text toggles between "▾" (expanded) and "▸" (collapsed)
 - State tracked in `_collapsible_state` dict (bool per widget name)
 - `_reconfigure_right_column_weights()` sets row weight=1 for expanded, weight=0 for collapsed
 - Collapsed widgets show only their LabelFrame title bar
@@ -2049,8 +2058,8 @@ Characters:
 | Double-click table cell | Enables inline editing |
 | Import from Analysis | Populates Characters or Code Database from Analysis findings |
 | Toggle Use Global Glossary | Includes/excludes global entries during translation |
-| Click Collapse (right column) | Hides widget content, button changes to "Display", collapsed row weight=0 |
-| Click Display (right column) | Shows widget content, button changes to "Collapse", expanded row weight=1 |
+| Click ▾ (right column) | Collapses widget content, button changes to "▸", collapsed row weight=0 |
+| Click ▸ (right column) | Expands widget content, button changes to "▾", expanded row weight=1 |
 
 ---
 

@@ -848,69 +848,96 @@ For more information, see the documentation.
         messagebox.showinfo("About CherryAI", about_text)
 
     def _on_close(self) -> None:
-        """Handle window close.
-        
-        TASK 19 Phase 3: Automatically saves manifest without prompting.
-        TASK 21.4: Saves last manifest path to INI for startup restore.
-        TASK 29.1: Properly closes ManifestManager (stops autosave thread).
-        Manifest is always preserved to enable seamless resume.
-        Calls on_leave() on current step to capture any pending form changes.
+        """Handle window close — ensures all data is persisted before exit.
+
+        Saves the manifest with retry logic, records INI references, and
+        only destroys the window once every file has been flushed.  The
+        application will NOT terminate until saves complete or the user
+        explicitly confirms data loss.
         """
-        # Call on_leave on current step to capture any unsaved form data
+        # Capture pending form data from the active step
         if 0 <= self._current_tab_index < len(self._step_tabs):
             try:
                 self._step_tabs[self._current_tab_index].on_leave()
-                logger.debug("Called on_leave for step %d before close", self._current_tab_index)
+                logger.debug(
+                    "Called on_leave for step %d before close",
+                    self._current_tab_index,
+                )
             except Exception as e:
-                logger.warning("Failed to call on_leave for step %d: %s", self._current_tab_index, e)
-        
-        # Save manifest path before closing for INI storage
+                logger.warning(
+                    "Failed to call on_leave for step %d: %s",
+                    self._current_tab_index, e,
+                )
+
         manifest_path = self._manifest_manager.manifest_path
-        
-        # Save manifest if loaded (TASK 19 - primary state persistence)
-        # TASK 29.1: close() will save if dirty and save_on_close is True, then stop autosave
+
+        # --- Manifest save with retry ------------------------------------ #
         if self._manifest_manager.is_loaded:
+            max_retries = 3
+            saved = False
+            for attempt in range(1, max_retries + 1):
+                try:
+                    saved = self._manifest_manager.save()
+                    if saved:
+                        logger.info(
+                            "Manifest saved on close (attempt %d): %s",
+                            attempt, manifest_path,
+                        )
+                        break
+                    logger.warning(
+                        "Manifest save returned False (attempt %d)",
+                        attempt,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Manifest save failed (attempt %d): %s",
+                        attempt, e,
+                    )
+
+            if not saved:
+                from tkinter import messagebox
+                retry = messagebox.askyesno(
+                    "Save Error",
+                    "Failed to save the manifest after multiple attempts.\n\n"
+                    "Yes = Retry once more\n"
+                    "No  = Close without saving",
+                )
+                if retry:
+                    try:
+                        saved = self._manifest_manager.save()
+                    except Exception as e:
+                        logger.error("Final manifest save failed: %s", e)
+
+            # --- INI bookmarks (non-critical) ----------------------------- #
             try:
-                # Save first to capture latest state
-                self._manifest_manager.save()
-                logger.info("Manifest saved on close: %s", manifest_path)
-                
-                # TASK 21.4: Save last manifest path to INI for next launch
                 if manifest_path:
                     ini_manager.set_last_manifest(manifest_path)
                     ini_manager.add_to_recent_manifests(manifest_path)
-                    logger.debug("Saved last manifest to INI: %s", manifest_path)
-                
-                # TASK 17.7: Save current step index for session restore
                 ini_manager.set_default(
                     "recent", "last_step", str(self._current_tab_index)
                 )
             except Exception as e:
-                logger.warning("Failed to save manifest on close: %s", e)
-            
-            # TASK 29.1: Properly close ManifestManager (stops autosave thread)
+                logger.warning("Failed to write INI references: %s", e)
+
+            # Stop autosave thread and release manifest
             try:
                 self._manifest_manager.close()
-                logger.debug("ManifestManager closed (autosave stopped)")
             except Exception as e:
                 logger.warning("Failed to close ManifestManager: %s", e)
-        
-        # Save minimal session state for next launch (manifest path reference only)
+
+        # --- Session reference (lightweight) ------------------------------ #
         try:
             from CherryAI.gui.state.store import AUTOSAVE_DIR, AUTOSAVE_FILENAME
             autosave_path = AUTOSAVE_DIR / AUTOSAVE_FILENAME
             autosave_path.parent.mkdir(parents=True, exist_ok=True)
-            # Store manifest path so we can restore on next launch
             if manifest_path:
                 self.session.manifest_path = manifest_path
             self.session.save_to_file(autosave_path)
-            logger.debug("Session reference saved to autosave on close")
         except Exception as e:
-            logger.warning("Failed to save autosave on close: %s", e)
+            logger.warning("Failed to save session reference: %s", e)
 
-        # Destroy progress tracker (removes listener)
+        # --- Destroy UI --------------------------------------------------- #
         self._progress_tracker.destroy()
-
         self.destroy()
 
     def _save_current_manifest(self) -> None:

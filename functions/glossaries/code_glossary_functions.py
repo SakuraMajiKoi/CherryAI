@@ -595,21 +595,32 @@ def update_code_in_glossary(
         UPDATE_MODE_UPDATE,
         UPDATE_MODE_OVERWRITE,
         UPDATE_MODE_NEW,
-        _archive_glossary_with_timestamp,
         _code_glossary_path,
         diagnose_glossary_path,
     )
     from .code_glossary_db import read_all_rows as _db_read, write_all_rows as _db_write, init_db as _db_init
 
+    # Task 75: lazy-import romanization helper
+    _romanize_if_jp = None
+    try:
+        from ..romanization import romanize_if_japanese
+        _romanize_if_jp = romanize_if_japanese
+    except ImportError:
+        pass
+
+    def _auto_romanize_notes(pattern: str) -> str:
+        """Return romanized pattern for Notes if it contains kana."""
+        if _romanize_if_jp is None:
+            return ""
+        rom = _romanize_if_jp(pattern)
+        return rom if rom != pattern else ""
+
     code_path = _code_glossary_path()
     _db_init(code_path)  # ensure schema exists / migrate from CSV if needed
 
-    # Handle NEW mode: archive existing and start fresh
+    # Handle NEW mode: overwrite existing with fresh entries (no archiving)
     if update_mode == UPDATE_MODE_NEW:
-        if code_path.exists():
-            archive_path = _archive_glossary_with_timestamp(code_path)
-            if archive_path:
-                logging.info("NEW mode: Archived existing code glossary, creating fresh one")
+        logging.info("NEW mode: Overwriting code glossary with fresh entries")
         # Create fresh code glossary with only new entries (4 columns)
         # Group by normalized codes to avoid duplicates
         normalized_groups: Dict[str, Tuple[str, int]] = {}
@@ -626,7 +637,8 @@ def update_code_in_glossary(
         for normalized, (norm_code, total_count) in sorted(normalized_groups.items(), key=lambda x: x[1][1], reverse=True):
             code_type = classify_code_type(norm_code)
             regex_pattern = generate_regex_pattern(norm_code, code_type)
-            new_rows.append([norm_code, code_type, regex_pattern, f"Count: {total_count}"])
+            notes = _auto_romanize_notes(norm_code)
+            new_rows.append([norm_code, code_type, regex_pattern, notes])
         _db_write(new_rows, code_path)
         logging.info("Wrote fresh code glossary DB: %s (%d codes)", code_path, len(new_rows))
         return cast(Path, code_path)
@@ -652,12 +664,14 @@ def update_code_in_glossary(
             # New code: classify and add with normalized code as key
             code_type = classify_code_type(code)
             regex_pattern = generate_regex_pattern(normalized_code, code_type)
-            appended_rows.append([normalized_code, code_type, regex_pattern, f"Count: {count}"])
+            notes = _auto_romanize_notes(normalized_code)
+            appended_rows.append([normalized_code, code_type, regex_pattern, notes])
         elif update_mode == UPDATE_MODE_OVERWRITE:
             # Overwrite mode: reclassify and replace with fresh defaults
             code_type = classify_code_type(code)
             regex_pattern = generate_regex_pattern(normalized_code, code_type)
-            existing_codes[normalized_code] = [normalized_code, code_type, regex_pattern, f"Count: {count}"]
+            notes = _auto_romanize_notes(normalized_code)
+            existing_codes[normalized_code] = [normalized_code, code_type, regex_pattern, notes]
         elif update_mode == UPDATE_MODE_UPDATE:
             # Update mode: reclassify Type if empty, preserve Replacement/Notes
             existing_row = existing_codes[normalized_code]
@@ -666,9 +680,9 @@ def update_code_in_glossary(
             # Generate RegEx if empty
             if not existing_row[2]:  # RegEx is empty
                 existing_row[2] = generate_regex_pattern(normalized_code, existing_row[1])
-            # Update count in notes if it's tracked
-            if existing_row[3].startswith("Count:") or not existing_row[3]:
-                existing_row[3] = f"Count: {count}"
+            # Strip legacy Count from notes if present
+            if existing_row[3].startswith("Count:"):
+                existing_row[3] = ""
             existing_codes[normalized_code] = existing_row
         # else: ADD mode, skip existing entries
     
