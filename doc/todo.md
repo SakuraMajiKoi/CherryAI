@@ -54,6 +54,68 @@ MODULE COUNTS (Verified January 2026)
 
 =============================================================================
 
+COMPLETED - SESSION 33 (TASK 77 — Settings Restructure, Request Slicing, Estimation)
+
+### SESSION 33: TASK 77 — Global Options Restructure & Translation Pipeline Improvements ✅ DONE
+
+**Task 1 — Fix Request Preview display:**
+- `_plain_text()` regex changed from `[{}\[\]"]` to `[\[\]"]` — preserves curly braces `{}` for game text
+- Added `PreviewRequest._format_input_lines()` — parses JSON and displays each input line numbered on its own row
+- `build_full_request_text()` calls `_format_input_lines()` for input_lines key
+
+**Task 2 — Restructure Model Settings (Global Options → Connection → Model Settings):**
+- Chunk size spinbox limits changed from 5–100 to 1–99999
+- Removed Rolling Context, Speaker Dedup, Glossary Inclusion, Consistency Mode UI sections (moved to Translation Options)
+
+**Task 3 — Add TranslationSettings dataclass:**
+- New `TranslationSettings(overwrite_translation, skip_non_source_language, retry_strategy, request_slicing)` with `to_dict()`/`from_dict()`
+- Added `translation: TranslationSettings` field to `GlobalOptions` dataclass
+- Updated `GlobalOptions.to_dict()` and `from_dict()` to include translation
+
+**Task 4 — Restructure Translation Options (Global Options → Connection → Translation Options):**
+- Completely rewritten `_build_translation_section()` with: Overwrite Translation, Skip Non-Source Language, Rolling Context, Speaker Dedup, Retry Strategy, Request Slicing (Conservative/Efficient), Consistency System
+
+**Task 5 — Restructure Request Options widget (Translation step):**
+- Visible widgets: Key, Model, Model Settings Change…, Translation Options Change…, Character Whitelist, Character Blacklist, Ban Tokens
+- Old widgets (chunk, retries, cache, edit-before, skip-translated, skip-non-source, line-by-line, context-lines) kept as hidden `tk.*Var` instances for backward compat
+- Added `_whitelist_var`/`_whitelist_entry` and `_blacklist_var`/`_blacklist_entry` with manifest bindings to `RequestOptions.CharacterWhitelist` and `RequestOptions.CharacterBlacklist`
+
+**Task 6 — Fix Global Options persistence:**
+- New `_persist_to_ini()` method writes ALL settings sections to CherryAI.ini via `ini_manager.save_as_user_defaults()`
+- `_save_options()` now calls `_persist_to_ini()` — Apply/OK always persists to INI
+- `_on_save_as_default()` simplified to call `_save_options()` + show confirmation
+- `_load_initial_defaults()` loads translation settings from INI [translation] section
+
+**Task 7 — Update `_sync_from_global_options()` in translate.py:**
+- Now syncs: chunk_size, retry_strategy, skip_non_source, skip_translated (from overwrite_translation inverse), edit_before from RequestSettings and TranslationSettings
+
+**Task 8 — Fix Change… buttons:**
+- `_open_model_settings()` and `_open_translation_options()` now use `session.global_options` instead of `app._global_options` (which didn't exist)
+- Both pass proper `on_save` callback that updates session + calls `_sync_from_global_options()`
+
+**Task 9 — Implement Request Slicing:**
+- Added `request_slicing` field to `TranslationOptions` dataclass
+- `_build_chunks()` reads slicing mode: Conservative → `min_lines = max(2, chunk_size // 5)`, Efficient → `min_lines = max(5, chunk_size // 2)`
+- `_get_request_slicing_mode()` helper reads from GlobalOptions.translation
+
+**Task 10 — Wire whitelist/blacklist in translation pipeline:**
+- Added `_apply_char_filters()` method with regex-based character filtering
+- Whitelist: keeps only matching characters (+ whitespace); Blacklist: removes matching characters
+- Applied to translation output before persisting to manifest
+
+**Task 11 — Improve Estimation accuracy:**
+- `costs.py` now uses `_estimate_via_formation()` — same 4-step formation pipeline (prompt_builder.py) as Translation step
+- Syncs chunk_size from GlobalOptions at estimation time
+- Respects request_slicing mode for accurate request counting
+- Lines/Request spinbox range expanded to 1–99999
+
+**Modified files:** gui/dialogs/global_options.py, gui/steps/translate.py, gui/steps/costs.py, dev/test_request_preview.py
+**Test results:** 177 targeted tests pass (options dialog, costs, settings flow, request preview); 601 GUI v2 tests pass; 0 regressions from changes.
+
+=============================================================================
+
+=============================================================================
+
 COMPLETED - SESSION 32 (TASK 76 — Knowledge Base Widget, Collapsible Redesign)
 
 ### SESSION 32: TASK 76 — Knowledge Base Widget ✅ DONE

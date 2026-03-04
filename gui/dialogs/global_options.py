@@ -574,11 +574,53 @@ class PromptsSettings:
 
 
 @dataclass
+class TranslationSettings:
+    """Translation workflow settings stored under Translation Options.
+
+    Fields that were previously scattered across the UI are collected
+    here for proper persistence and coherent grouping.
+    """
+
+    overwrite_translation: bool = False
+    skip_non_source_language: bool = True
+    retry_strategy: str = "batch"
+    request_slicing: str = "conservative"
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "overwrite_translation": self.overwrite_translation,
+            "skip_non_source_language": self.skip_non_source_language,
+            "retry_strategy": self.retry_strategy,
+            "request_slicing": self.request_slicing,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "TranslationSettings":
+        """Create from dictionary."""
+        return cls(
+            overwrite_translation=bool(
+                data.get("overwrite_translation", False)
+            ),
+            skip_non_source_language=bool(
+                data.get("skip_non_source_language", True)
+            ),
+            retry_strategy=str(
+                data.get("retry_strategy", "batch")
+            ),
+            request_slicing=str(
+                data.get("request_slicing", "conservative")
+            ),
+        )
+
+
+@dataclass
 class GlobalOptions:
     """Container for all global options."""
 
     api: APISettings = field(default_factory=APISettings)
     request: RequestSettings = field(default_factory=RequestSettings)
+    translation: TranslationSettings = field(default_factory=TranslationSettings)
     caching: CachingSettings = field(default_factory=CachingSettings)
     logging: LoggingSettings = field(default_factory=LoggingSettings)
     session: SessionSettings = field(default_factory=SessionSettings)
@@ -602,6 +644,7 @@ class GlobalOptions:
         return {
             "api": self.api.to_dict(),
             "request": self.request.to_dict(),
+            "translation": self.translation.to_dict(),
             "caching": self.caching.to_dict(),
             "logging": self.logging.to_dict(),
             "session": self.session.to_dict(),
@@ -621,6 +664,9 @@ class GlobalOptions:
         return cls(
             api=APISettings.from_dict(data.get("api", {})),
             request=RequestSettings.from_dict(data.get("request", {})),
+            translation=TranslationSettings.from_dict(
+                data.get("translation", {})
+            ),
             caching=CachingSettings.from_dict(data.get("caching", {})),
             logging=LoggingSettings.from_dict(data.get("logging", {})),
             session=SessionSettings.from_dict(data.get("session", {})),
@@ -868,6 +914,20 @@ class GlobalOptionsDialog(tk.Toplevel):
         )
         self.consistency_mode_var = tk.StringVar(
             value=self.options.request.consistency_mode,
+        )
+
+        # Translation settings
+        self.overwrite_translation_var = tk.BooleanVar(
+            value=self.options.translation.overwrite_translation,
+        )
+        self.skip_non_source_var = tk.BooleanVar(
+            value=self.options.translation.skip_non_source_language,
+        )
+        self.retry_strategy_var = tk.StringVar(
+            value=self.options.translation.retry_strategy,
+        )
+        self.request_slicing_var = tk.StringVar(
+            value=self.options.translation.request_slicing,
         )
 
         # Caching settings
@@ -1186,8 +1246,8 @@ class GlobalOptionsDialog(tk.Toplevel):
         chunk_row.pack(fill=tk.X, pady=5)
 
         ttk.Label(chunk_row, text="Lines per Request:", width=18).pack(side=tk.LEFT)
-        ttk.Spinbox(chunk_row, from_=5, to=200, textvariable=self.chunk_size_var, width=10).pack(side=tk.LEFT, padx=5)
-        ttk.Label(chunk_row, text="(5-200, default: 50)", foreground="gray").pack(side=tk.LEFT, padx=5)
+        ttk.Spinbox(chunk_row, from_=1, to=99999, textvariable=self.chunk_size_var, width=10).pack(side=tk.LEFT, padx=5)
+        ttk.Label(chunk_row, text="(min 1, default: 50)", foreground="gray").pack(side=tk.LEFT, padx=5)
 
         # Timeout
         timeout_row = ttk.Frame(settings_frame)
@@ -1265,7 +1325,51 @@ class GlobalOptionsDialog(tk.Toplevel):
         )
         think_help.pack(anchor=tk.W, pady=(0, 5))
 
-        # Rolling Context (Task 43.9)
+    def _build_translation_section(self) -> None:
+        """Build the Translation Options section.
+
+        Contains workflow defaults, request-level knobs that affect
+        translation behaviour (rolling context, speaker dedup, retry
+        strategy, request slicing, consistency), and output toggles.
+        """
+        panel = ttk.Frame(self._content_frame, padding=15)
+        self._section_panels[OptionSection.TRANSLATION] = panel
+
+        # Section header
+        header = ttk.Label(
+            panel, text="Translation Options",
+            font=("TkDefaultFont", 12, "bold"),
+        )
+        header.pack(anchor="w", pady=(0, 5))
+
+        desc = ttk.Label(
+            panel,
+            text=SECTION_DESCRIPTIONS[OptionSection.TRANSLATION],
+            foreground="gray",
+        )
+        desc.pack(anchor="w", pady=(0, 15))
+
+        # --- Workflow Defaults ---
+        wf_frame = ttk.LabelFrame(panel, text="Workflow Defaults", padding=10)
+        wf_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Checkbutton(
+            wf_frame, text="Overwrite Translation (re-translate already translated lines)",
+            variable=self.overwrite_translation_var,
+        ).pack(anchor=tk.W, pady=2)
+
+        ttk.Checkbutton(
+            wf_frame, text="Skip Non-Source Language Lines",
+            variable=self.skip_non_source_var,
+        ).pack(anchor=tk.W, pady=2)
+
+        ttk.Label(
+            wf_frame,
+            text="These defaults apply when creating new projects.",
+            foreground="gray",
+        ).pack(anchor=tk.W, pady=(5, 0))
+
+        # --- Rolling Context (moved from Model Settings) ---
         ctx_frame = ttk.LabelFrame(panel, text="Rolling Context", padding=10)
         ctx_frame.pack(fill=tk.X, pady=(0, 10))
 
@@ -1276,18 +1380,18 @@ class GlobalOptionsDialog(tk.Toplevel):
             ctx_row, from_=0, to=10,
             textvariable=self.rolling_context_var, width=10,
         ).pack(side=tk.LEFT, padx=5)
-        ttk.Label(ctx_row, text="(0-10 preceding lines, default: 3)", foreground="gray").pack(
-            side=tk.LEFT, padx=5,
-        )
+        ttk.Label(
+            ctx_row, text="(0-10 preceding lines, default: 3)",
+            foreground="gray",
+        ).pack(side=tk.LEFT, padx=5)
 
-        ctx_help = ttk.Label(
+        ttk.Label(
             ctx_frame,
             text="Number of preceding translated lines included for context in each request.",
             foreground="gray",
-        )
-        ctx_help.pack(anchor=tk.W, pady=(0, 5))
+        ).pack(anchor=tk.W, pady=(0, 5))
 
-        # Speaker Dedup (Task 51.4)
+        # --- Speaker Dedup (moved from Model Settings) ---
         speaker_frame = ttk.LabelFrame(
             panel, text="Speaker Deduplication", padding=10,
         )
@@ -1305,30 +1409,50 @@ class GlobalOptionsDialog(tk.Toplevel):
             foreground="gray",
         ).pack(anchor=tk.W, pady=(0, 5))
 
-        # Glossary Filter (Task 52.3)
-        gloss_frame = ttk.LabelFrame(
-            panel, text="Glossary Inclusion", padding=10,
-        )
-        gloss_frame.pack(fill=tk.X, pady=(0, 10))
+        # --- Retry Strategy (moved from Request Options in Translation step) ---
+        retry_frame = ttk.LabelFrame(panel, text="Retry Strategy", padding=10)
+        retry_frame.pack(fill=tk.X, pady=(0, 10))
 
-        gloss_row = ttk.Frame(gloss_frame)
-        gloss_row.pack(fill=tk.X, pady=5)
-        ttk.Label(gloss_row, text="Filter Mode:", width=18).pack(side=tk.LEFT)
+        retry_row = ttk.Frame(retry_frame)
+        retry_row.pack(fill=tk.X, pady=5)
+        ttk.Label(retry_row, text="Strategy:", width=18).pack(side=tk.LEFT)
         ttk.Combobox(
-            gloss_row,
-            textvariable=self.glossary_filter_var,
-            values=["all", "original_only", "original_or_translation"],
+            retry_row,
+            textvariable=self.retry_strategy_var,
+            values=["batch", "line", "merge"],
             state="readonly",
             width=22,
         ).pack(side=tk.LEFT, padx=5)
 
         ttk.Label(
-            gloss_frame,
-            text="Selective: include only glossary entries whose terms appear in the chunk.",
+            retry_frame,
+            text="How failed chunks are retried: batch (resend), line (split), merge (recombine).",
             foreground="gray",
         ).pack(anchor=tk.W, pady=(0, 5))
 
-        # Consistency Mode (Phase 55)
+        # --- Request Slicing ---
+        slice_frame = ttk.LabelFrame(panel, text="Request Slicing", padding=10)
+        slice_frame.pack(fill=tk.X, pady=(0, 10))
+
+        slice_row = ttk.Frame(slice_frame)
+        slice_row.pack(fill=tk.X, pady=5)
+        ttk.Label(slice_row, text="Mode:", width=18).pack(side=tk.LEFT)
+        ttk.Combobox(
+            slice_row,
+            textvariable=self.request_slicing_var,
+            values=["conservative", "efficient"],
+            state="readonly",
+            width=22,
+        ).pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(
+            slice_frame,
+            text="Conservative keeps original chunking. Efficient merges small requests "
+            "to reduce API calls.",
+            foreground="gray",
+        ).pack(anchor=tk.W, pady=(0, 5))
+
+        # --- Consistency Mode (Phase 55) ---
         consist_frame = ttk.LabelFrame(
             panel, text="Consistency System", padding=10,
         )
@@ -1350,82 +1474,6 @@ class GlobalOptionsDialog(tk.Toplevel):
             text="Ensure recurring terms are translated consistently across all requests.",
             foreground="gray",
         ).pack(anchor=tk.W, pady=(0, 5))
-
-    def _build_translation_section(self) -> None:
-        """Build the Translation Options section.
-
-        Contains global defaults for translation behaviour such as
-        chunking strategy, auto-save, and output quality toggles.
-        """
-        panel = ttk.Frame(self._content_frame, padding=15)
-        self._section_panels[OptionSection.TRANSLATION] = panel
-
-        # Section header
-        header = ttk.Label(
-            panel, text="Translation Options",
-            font=("TkDefaultFont", 12, "bold"),
-        )
-        header.pack(anchor="w", pady=(0, 5))
-
-        desc = ttk.Label(
-            panel,
-            text=SECTION_DESCRIPTIONS[OptionSection.TRANSLATION],
-            foreground="gray",
-        )
-        desc.pack(anchor="w", pady=(0, 15))
-
-        # Workflow defaults
-        wf_frame = ttk.LabelFrame(panel, text="Workflow Defaults", padding=10)
-        wf_frame.pack(fill=tk.X, pady=(0, 10))
-
-        # Edit before translation default
-        self.edit_before_default_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            wf_frame, text="Edit Before Translation (show edit dialog)",
-            variable=self.edit_before_default_var,
-        ).pack(anchor=tk.W, pady=2)
-
-        # Skip already translated default
-        self.skip_translated_default_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            wf_frame, text="Skip Already Translated Lines",
-            variable=self.skip_translated_default_var,
-        ).pack(anchor=tk.W, pady=2)
-
-        # Skip non-source language default
-        self.skip_non_source_default_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            wf_frame, text="Skip Non-Source Language Lines",
-            variable=self.skip_non_source_default_var,
-        ).pack(anchor=tk.W, pady=2)
-
-        ttk.Label(
-            wf_frame,
-            text="These defaults apply when creating new projects.",
-            foreground="gray",
-        ).pack(anchor=tk.W, pady=(5, 0))
-
-        # Output quality
-        qual_frame = ttk.LabelFrame(panel, text="Output Quality", padding=10)
-        qual_frame.pack(fill=tk.X, pady=(0, 10))
-
-        self.auto_proofread_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            qual_frame, text="Auto-proofread after translation",
-            variable=self.auto_proofread_var,
-        ).pack(anchor=tk.W, pady=2)
-
-        self.preserve_formatting_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
-            qual_frame, text="Preserve original formatting and line breaks",
-            variable=self.preserve_formatting_var,
-        ).pack(anchor=tk.W, pady=2)
-
-        ttk.Label(
-            qual_frame,
-            text="Quality options affect post-processing of translated output.",
-            foreground="gray",
-        ).pack(anchor=tk.W, pady=(5, 0))
 
     def _build_caching_section(self) -> None:
         """Build the caching settings section."""
@@ -2912,9 +2960,12 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.destroy()
 
     def _on_save_as_default(self) -> None:
-        """Handle Save as Default button - save current values as user defaults."""
-        from CherryAI.functions import ini_manager
+        """Handle Save as Default button - save current values as user defaults.
 
+        Collects current form values into the options object, persists
+        everything to ``CherryAI.ini`` via ``_persist_to_ini()``, and
+        shows a confirmation message.
+        """
         response = messagebox.askyesno(
             "Save as Default",
             "Save current settings as your personal defaults?\n\n"
@@ -2924,88 +2975,12 @@ class GlobalOptionsDialog(tk.Toplevel):
             return
 
         try:
-            # Collect current values and save as user defaults
-            # API settings
-            api_defaults = {
-                "provider": self.provider_var.get(),
-                "model": self.model_var.get(),
-                "temperature": str(self.temperature_var.get()),
-            }
-            ini_manager.save_as_user_defaults("api", api_defaults)
-
-            # Request settings
-            request_defaults = {
-                "timeout": str(self.timeout_var.get()),
-                "retries": str(self.retries_var.get()),
-                "rate_limit_requests": str(self.rate_limit_var.get()),
-                "chunk_size": str(self.chunk_size_var.get()),
-            }
-            ini_manager.save_as_user_defaults("api", request_defaults)
-
-            # Caching settings
-            caching_defaults = {
-                "enabled": "true" if self.cache_enabled_var.get() else "false",
-                "dir": self.cache_dir_var.get(),
-                "age": str(self.cache_max_age_var.get()),
-                "size": str(self.cache_max_size_var.get()),
-                "mode": self.cache_mode_var.get(),
-            }
-            ini_manager.save_as_user_defaults("caching", caching_defaults)
-
-            # Logging settings
-            logging_defaults = {
-                "level": self.log_level_var.get(),
-                "location": self.log_file_var.get(),
-                "debug": "true" if self.debug_mode_var.get() else "false",
-                "api_log": "true" if self.log_api_calls_var.get() else "false",
-                "log_requests": "true" if self.log_requests_var.get() else "false",
-            }
-            ini_manager.save_as_user_defaults("log", logging_defaults)
-
-            # Session settings
-            session_defaults = {
-                "autosave": "true" if self.autosave_enabled_var.get() else "false",
-                "interval": str(self.autosave_interval_var.get()),
-                "theme": self.theme_var.get(),
-                "load_last": "true" if self.restore_on_launch_var.get() else "false",
-            }
-            ini_manager.save_as_user_defaults("session", session_defaults)
-
-            # Also sync load_last to [session] section for startup
-            ini_manager.set_restore_on_launch(self.restore_on_launch_var.get())
-
-            # Limit settings
-            limit_defaults = {
-                "banned": self.ban_tokens_var.get(),
-                "warnings": "true" if self.content_warning_var.get() else "false",
-                "output": str(self.max_output_tokens_var.get()),
-                "safe": "true" if self.safe_var.get() else "false",
-            }
-            ini_manager.save_as_user_defaults("limit", limit_defaults)
-
-            # File I/O settings
-            file_io_defaults = {
-                "encoding": self.encoding_var.get(),
-                "lines": self.line_ending_var.get(),
-                "preservebom": "true" if self.preserve_bom_var.get() else "false",
-                "backup": "true" if self.backup_originals_var.get() else "false",
-            }
-            ini_manager.save_as_user_defaults("fileio", file_io_defaults)
-
-            # Prompts settings
-            prompts_defaults = {
-                "edit": self._edit_prompt_text.get("1.0", tk.END).strip(),
-                "tlc": self._tlc_prompt_text.get("1.0", tk.END).strip(),
-                "dialogue": self._dialogue_prompt_text.get("1.0", tk.END).strip(),
-                "menu": self._menu_prompt_text.get("1.0", tk.END).strip(),
-                "choice": self._choice_prompt_text.get("1.0", tk.END).strip(),
-                "unknown": self._unknown_prompt_text.get("1.0", tk.END).strip(),
-            }
-            ini_manager.save_as_user_defaults("prompts", prompts_defaults)
-
-            messagebox.showinfo("Defaults Saved", "Your settings have been saved as defaults.")
+            self._save_options()
+            messagebox.showinfo(
+                "Defaults Saved",
+                "Your settings have been saved as defaults.",
+            )
             logger.info("User defaults saved successfully")
-
         except Exception as e:
             logger.error("Failed to save user defaults: %s", e)
             messagebox.showerror("Error", f"Failed to save defaults: {e}")
@@ -3155,6 +3130,21 @@ class GlobalOptionsDialog(tk.Toplevel):
             int(ini_manager.get_initial_default("api", "chunk_size", 50, int) or 50)
         )
 
+        # Translation defaults
+        self.overwrite_translation_var.set(
+            bool(ini_manager.get_initial_default("translation", "overwrite_translation", False, bool))
+        )
+        self.skip_non_source_var.set(
+            bool(ini_manager.get_initial_default("translation", "skip_non_source_language", True, bool))
+        )
+        self.retry_strategy_var.set(
+            ini_manager.get_initial_default("translation", "retry_strategy", "batch", str) or "batch"
+        )
+        self.request_slicing_var.set(
+            ini_manager.get_initial_default("translation", "request_slicing", "conservative", str)
+            or "conservative"
+        )
+
         # Caching defaults
         self.cache_enabled_var.set(
             bool(ini_manager.get_initial_default("caching", "enabled", True, bool))
@@ -3287,6 +3277,13 @@ class GlobalOptionsDialog(tk.Toplevel):
             consistency_mode=self.consistency_mode_var.get(),
         )
 
+        self.options.translation = TranslationSettings(
+            overwrite_translation=self.overwrite_translation_var.get(),
+            skip_non_source_language=self.skip_non_source_var.get(),
+            retry_strategy=self.retry_strategy_var.get(),
+            request_slicing=self.request_slicing_var.get(),
+        )
+
         self.options.caching = CachingSettings(
             enabled=self.cache_enabled_var.get(),
             dir=self.cache_dir_var.get(),
@@ -3347,18 +3344,121 @@ class GlobalOptionsDialog(tk.Toplevel):
         if self.on_save:
             self.on_save(self.options)
 
-        # Persist conditional prompts to INI immediately so prompt_builder.py
-        # can read them when building the next translation request.
+        # Persist all settings to INI so they survive application restart.
+        self._persist_to_ini()
+
+        logger.info("Global options saved")
+
+    def _persist_to_ini(self) -> None:
+        """Write current options to ``CherryAI.ini`` for persistence.
+
+        Called by both Apply/OK and Save-as-Default paths so the
+        settings always survive an application restart.
+        """
         try:
+            from CherryAI.functions import ini_manager
+
+            # API / Request settings → [api] section
+            api_vals = {
+                "provider": self.options.api.provider,
+                "model": self.options.api.model,
+                "temperature": str(self.options.api.temperature),
+                "timeout": str(self.options.request.timeout),
+                "retries": str(self.options.request.retries),
+                "rate_limit_requests": str(self.options.request.rate_limit),
+                "chunk_size": str(self.options.request.chunk_size),
+                "thinking_enabled": str(self.options.request.thinking_enabled).lower(),
+                "thinking_budget": str(self.options.request.thinking_budget),
+                "rolling_context_lines": str(self.options.request.rolling_context_lines),
+                "remove_duplicate_speakers": str(
+                    self.options.request.remove_duplicate_speakers
+                ).lower(),
+                "glossary_filter_mode": self.options.request.glossary_filter_mode,
+                "consistency_mode": self.options.request.consistency_mode,
+            }
+            ini_manager.save_as_user_defaults("api", api_vals)
+
+            # Translation settings → [translation] section
+            translation_vals = {
+                "overwrite_translation": str(
+                    self.options.translation.overwrite_translation
+                ).lower(),
+                "skip_non_source_language": str(
+                    self.options.translation.skip_non_source_language
+                ).lower(),
+                "retry_strategy": self.options.translation.retry_strategy,
+                "request_slicing": self.options.translation.request_slicing,
+            }
+            ini_manager.save_as_user_defaults("translation", translation_vals)
+
+            # Caching
+            caching_vals = {
+                "enabled": str(self.options.caching.enabled).lower(),
+                "dir": self.options.caching.dir,
+                "age": str(self.options.caching.age),
+                "size": str(self.options.caching.size),
+                "mode": self.options.caching.mode,
+            }
+            ini_manager.save_as_user_defaults("caching", caching_vals)
+
+            # Logging
+            logging_vals = {
+                "level": self.options.logging.level,
+                "location": self.options.logging.location,
+                "debug": str(self.options.logging.debug).lower(),
+                "api_log": str(self.options.logging.api_log).lower(),
+                "log_requests": str(self.options.logging.log_requests).lower(),
+            }
+            ini_manager.save_as_user_defaults("log", logging_vals)
+
+            # Session
+            session_vals = {
+                "autosave": str(self.options.session.autosave).lower(),
+                "interval": str(self.options.session.interval),
+                "theme": self.options.session.theme,
+                "load_last": str(self.options.session.load_last).lower(),
+            }
+            ini_manager.save_as_user_defaults("session", session_vals)
+            ini_manager.set_restore_on_launch(self.options.session.load_last)
+
+            # Limits
+            limit_vals = {
+                "banned": self.options.limit.banned,
+                "warnings": str(self.options.limit.warnings).lower(),
+                "output": str(self.options.limit.output),
+                "safe": str(self.options.limit.safe).lower(),
+            }
+            ini_manager.save_as_user_defaults("limit", limit_vals)
+
+            # File I/O
+            file_io_vals = {
+                "encoding": self.options.file_io.encoding,
+                "lines": self.options.file_io.lines,
+                "preservebom": str(self.options.file_io.preservebom).lower(),
+                "backup": str(self.options.file_io.backup).lower(),
+            }
+            ini_manager.save_as_user_defaults("fileio", file_io_vals)
+
+            # Prompts
+            prompts_vals = {
+                "edit": self.options.prompts.edit,
+                "tlc": self.options.prompts.tlc,
+                "dialogue": self.options.prompts.dialogue,
+                "menu": self.options.prompts.menu,
+                "choice": self.options.prompts.choice,
+                "unknown": self.options.prompts.unknown,
+            }
+            ini_manager.save_as_user_defaults("prompts", prompts_vals)
+
+            # Conditional prompts
             from CherryAI.functions.ini_manager import set_conditional_prompt
             set_conditional_prompt("dialogue", self.options.prompts.dialogue)
             set_conditional_prompt("menu", self.options.prompts.menu)
             set_conditional_prompt("choice", self.options.prompts.choice)
             set_conditional_prompt("unknown", self.options.prompts.unknown)
-        except Exception as _e:
-            logger.warning("Failed to persist conditional prompts to INI: %s", _e)
 
-        logger.info("Global options saved")
+        except Exception as exc:
+            logger.warning("Failed to persist settings to INI: %s", exc)
 
     # -------------------------------------------------------------------------
     # Public API

@@ -275,8 +275,8 @@ class CostsStep(BaseStep):
         self._chunk_var = tk.IntVar(value=30)
         self._chunk_spin = ttk.Spinbox(
             chunk_frame,
-            from_=5,
-            to=100,
+            from_=1,
+            to=99999,
             textvariable=self._chunk_var,
             width=6,
         )
@@ -717,7 +717,7 @@ class CostsStep(BaseStep):
             val = self._chunk_var.get()
         except (tk.TclError, ValueError):
             return
-        if val < 5 or val > 100:
+        if val < 1 or val > 99999:
             return
         if "RequestOptions" not in mgr._manifest_data:
             mgr._manifest_data["RequestOptions"] = {}
@@ -747,11 +747,36 @@ class CostsStep(BaseStep):
         thread.start()
 
     def _do_estimation(self) -> None:
-        """Perform estimation in background thread."""
+        """Perform estimation in background thread.
+
+        Uses the same 4-step formation pipeline as Translation (Step 5)
+        when available, so request counts match actual API usage.
+        """
         try:
             model_id = self._model_var.get()
             chunk_size = self._chunk_var.get()
             tokens_limit = self._tokens_var.get()
+
+            # Sync chunk_size from Global Options if available
+            go = getattr(self.session, "global_options", None)
+            if go is not None and hasattr(go, "request"):
+                try:
+                    go_chunk = int(go.request.chunk_size)
+                    if go_chunk >= 1:
+                        chunk_size = go_chunk
+                        self.after(
+                            0,
+                            lambda v=go_chunk: self._chunk_var.set(v),
+                        )
+                except (TypeError, ValueError, AttributeError):
+                    pass
+
+            # Read request slicing mode from Global Options
+            slicing = "conservative"
+            if go is not None and hasattr(go, "translation"):
+                slicing = getattr(
+                    go.translation, "request_slicing", "conservative",
+                )
 
             # Get prompt token overhead (included in each request)
             prompt_tokens = self._get_prompt_tokens()
@@ -766,18 +791,21 @@ class CostsStep(BaseStep):
             prep_input_tokens, prep_method = count_tokens(prep_text, model=model_id)
             prep_output_tokens = int(prep_input_tokens * OUTPUT_MULTIPLIER)
 
-            # Calculate request counts using hybrid mode (Task 40.2)
-            # Both lines and tokens limits are respected; whichever is
-            # reached first triggers a chunk boundary
+            # Try the formation pipeline for accurate request counting
+            prep_requests = self._estimate_via_formation(
+                self._lines_preprocessed, chunk_size, slicing,
+            )
+            if prep_requests is None:
+                # Fallback: simple estimation
+                prep_requests = estimate_chunks(
+                    self._lines_preprocessed,
+                    max_lines=chunk_size,
+                    max_tokens=tokens_limit,
+                    mode="hybrid",
+                    model=model_id,
+                )
             orig_requests = estimate_chunks(
                 self._lines_original,
-                max_lines=chunk_size,
-                max_tokens=tokens_limit,
-                mode="hybrid",
-                model=model_id,
-            )
-            prep_requests = estimate_chunks(
-                self._lines_preprocessed,
                 max_lines=chunk_size,
                 max_tokens=tokens_limit,
                 mode="hybrid",
@@ -877,6 +905,72 @@ class CostsStep(BaseStep):
             self.after(0, lambda: messagebox.showerror("Error", str(e)))
         finally:
             self.after(0, self._estimation_complete)
+
+    def _estimate_via_formation(
+        self,
+        lines: List[str],
+        chunk_size: int,
+        slicing: str = "conservative",
+    ) -> Optional[int]:
+        """Count requests using the 4-step formation pipeline.
+
+        Mirrors the logic in ``TranslateStep._build_chunks()`` so that
+        the estimation matches actual translation behaviour.
+
+        Args:
+            lines: Preprocessed line texts.
+            chunk_size: Max lines per request.
+            slicing: ``"conservative"`` or ``"efficient"``.
+
+        Returns:
+            Number of requests, or ``None`` if the pipeline is unavailable.
+        """
+        try:
+            from CherryAI.functions.prompt_builder import (
+                LineInfo, RequestFormationConfig, build_requests,
+            )
+        except ImportError:
+            return None
+
+        line_infos: list[LineInfo] = []
+        for idx, text in enumerate(lines):
+            is_invalid = (
+                not text.strip()
+                or "__DEDUP__" in text
+                or "__PROTECTED__" in text
+                or "__CUSTOM__" in text
+            )
+            line_infos.append(LineInfo(index=idx, text=text, is_invalid=is_invalid))
+
+        # Inject file-end markers from manifest
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            try:
+                filedir = mgr.get_filedir()
+                for entry in filedir:
+                    last = entry.last_idx
+                    line_infos.append(LineInfo(
+                        index=last + 1,
+                        text="",
+                        is_invalid=True,
+                        context_marker="file_end",
+                    ))
+            except Exception:
+                pass
+
+        line_infos.sort(key=lambda li: li.index)
+
+        if slicing == "efficient":
+            min_lines = max(5, chunk_size // 2)
+        else:
+            min_lines = max(2, chunk_size // 5)
+
+        config = RequestFormationConfig(
+            max_lines=chunk_size,
+            min_lines=min_lines,
+        )
+        requests = build_requests(line_infos, config)
+        return len(requests) if requests else max(1, len(lines) // chunk_size)
 
     def _update_ui(
         self,

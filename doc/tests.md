@@ -2933,7 +2933,7 @@ Thank you.
 | test_output_phase47.py | 51 | Output + Pipeline Completeness + Import Phase 47 |
 | test_pipeline_logging.py | 52 | Pipeline Logging System Phase 48 |
 | test_request_formation.py | 50 | Request Formation 4-Step Process Phase 49 |
-| test_request_preview.py | 40 | Preview Requests dialog: PreviewRequest dataclass, FILTER_PARTS, RequestPreviewDialog (Pure/Formatted/Plain views, Jump/Search/Filter), _build_preview_requests integration |
+| test_request_preview.py | 42 | Preview Requests dialog: PreviewRequest dataclass with _format_input_lines, FILTER_PARTS, RequestPreviewDialog (Pure/Formatted/Plain views preserving {}, Jump/Search/Filter), _build_preview_requests integration |
 | test_context_markers.py | 70 | Context Markers Full Implementation Phase 50 |
 | test_speaker_dedup.py | 47 | Speaker Duplicate Removal Phase 51 |
 | test_glossary_selective.py | 28 | Selective Glossary Per Chunk Phase 52 |
@@ -10662,7 +10662,7 @@ python -m pytest dev/test_request_preview.py -v --timeout=15
 |-------|-------|-------------|
 | `TestPreviewRequestDataclass` | 8 | `get_part()`, `build_full_request_text()` with/without filters, empty parts skipped, `build_pure_json()` valid JSON, temperature extraction, `line_count` |
 | `TestFilterParts` | 3 | 12 entries in `FILTER_PARTS`, unique keys, keys match dataclass field names |
-| `TestViewModes` | 4 | Pure returns valid JSON, Formatted has section headers (═══), Plain strips JSON syntax, Plain wraps long lines |
+| `TestViewModes` | 4 | Pure returns valid JSON, Formatted has section headers (═══), Plain preserves curly braces but strips brackets/quotes, Plain wraps long lines |
 | `TestRequestPreviewDialogCreation` | 5 | Dialog opens/closes, shows request count, Jump To navigates, clamp high, clamp low |
 | `TestRequestPreviewDialogSearch` | 4 | Search finds matches with highlighting, no-match shows "0 of 0", next wraps around, prev wraps around |
 | `TestRequestPreviewDialogFilter` | 3 | Deselect hides section from display, Select All restores, Deselect All clears |

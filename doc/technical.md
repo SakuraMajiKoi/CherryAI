@@ -189,10 +189,10 @@ TABLE OF CONTENTS
        - base.py - BaseStep abstract class (TASK 43.14: tab caching infra)
        - input_extract.py - Step 0: Input/Extraction 🔗formats/
        - analysis.py - Step 1: Analysis ❌NO shared imports
-       - costs.py - Step 4: Costs (renamed from estimate.py in Phase 40)
+       - costs.py - Step 4: Costs (renamed from estimate.py in Phase 40; _estimate_via_formation() uses 4-step prompt_builder pipeline for accurate request counting; syncs chunk_size from GlobalOptions; respects request_slicing mode)
        - information.py - Step 2: Information 🔗manifest_fields
        - preprocess.py - Step 3: Preprocessing 🔗manifest_fields
-       - translate.py - Step 5: Translation 🔗api_client, mock_translator, prompt_adapter, manifest_fields (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching; Preview Requests: PreviewRequest dataclass, FILTER_PARTS constant (12 entries: meta, language, system_instructions, style, tone, summary, genre, pov, conditional_prompts, glossary, rolling_context, input_lines), RequestPreviewDialog class with Pure/Formatted/Plain views and Jump/Search/Filter toolbar, _build_preview_requests() mirrors real translation request building; _build_system_prompt_from_manifest() reads from `step_state.Information.data.metadata`)
+       - translate.py - Step 5: Translation 🔗api_client, mock_translator, prompt_adapter, manifest_fields (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching; Preview Requests: PreviewRequest dataclass with _format_input_lines() for numbered line display, FILTER_PARTS constant (12 entries: meta, language, system_instructions, style, tone, summary, genre, pov, conditional_prompts, glossary, rolling_context, input_lines), RequestPreviewDialog class with Pure/Formatted/Plain views and Jump/Search/Filter toolbar, _plain_text() preserves curly braces for game text, _build_preview_requests() mirrors real translation request building; _build_system_prompt_from_manifest() reads from `step_state.Information.data.metadata`; Request Options: Key, Model, Model Settings/Translation Options Change… buttons, Character Whitelist/Blacklist (manifest-bound), Ban Tokens; _apply_char_filters() post-processes translations; _sync_from_global_options() syncs all hidden vars from GlobalOptions including TranslationSettings; _get_request_slicing_mode() reads slicing from GlobalOptions.translation)
        - postprocess.py - Step 6: Postprocess 🔗postprocess, manifest_fields; _FAILURE_POLICY_MAP for legacy enum mapping
        - wordwrap_overwrite.py - Step 7: Wordwrap 🔗wordwrap, manifest_fields; column "Latest" (renamed from "Original")
        - qa.py - Step 8: QA 🔗validation, manifest_fields; persists qa_overwrite field; column "Overwrite" (renamed from "Translated")
@@ -206,8 +206,10 @@ TABLE OF CONTENTS
        - __init__.py - Dialog exports
        - global_options.py - GlobalOptionsDialog with section panels:
          - OptionSection enum: API, REQUEST, TRANSLATION, CACHING, LOGGING, SESSION, LIMIT, FILE_IO, PROMPTS, SECURITY (10 sections)
-         - Settings dataclasses: APISettings, RequestSettings, CachingSettings, LoggingSettings,
+         - Settings dataclasses: APISettings, RequestSettings, TranslationSettings, CachingSettings, LoggingSettings,
            SessionSettings, LimitSettings (SafetySettings=alias), FileIOSettings, PromptsSettings
+         - TranslationSettings (NEW): overwrite_translation, skip_non_source_language, retry_strategy, request_slicing
+         - GlobalOptions container: all settings including `translation: TranslationSettings` + providers list; `safety` property is alias for `limit`
          - APIProviderEntry dataclass: name, provider_type, url, api_key, model (Task 43.6)
          - PROVIDER_PRESETS: 5 provider presets (Task 43.6)
          - _PresetPickerDialog helper dialog (Task 43.6)
@@ -227,6 +229,8 @@ TABLE OF CONTENTS
          - GlobalOptions container: all settings + providers list; `safety` property is alias for `limit`
          - RequestSettings: +thinking_enabled, +thinking_budget, +rolling_context_lines (Tasks 43.8, 43.9)
          - CachingSettings: fields renamed — dir, age (days), size (MB), mode; defaults 0=unlimited
+         - _persist_to_ini(): Writes ALL settings sections to CherryAI.ini on every Apply/OK
+         - _save_options() calls _persist_to_ini() for guaranteed persistence
          - Sections organized in CATEGORY_ORDER: Connection, Processing, Application
          - TASK 33.2: PromptsSettings for Edit/TLC custom prompts
            - edit: str - Custom prompt for Edit steps

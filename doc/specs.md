@@ -279,7 +279,19 @@ Global Options are application-wide settings accessed via Tools → Options. The
 | Timeout | int | 60 | Request timeout in seconds |
 | Retries | int | 3 | Max retry attempts |
 | Rate Limit | int | 60 | Requests per minute |
-| Chunk Size | int | 50 | Lines per API request |
+| Chunk Size | int | 50 | Lines per API request (1–99999) |
+
+#### Translation Settings (NEW)
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| Overwrite Translation | bool | false | Re-translate already translated lines (inverse of skip-translated) |
+| Skip Non-Source Language | bool | true | Skip lines not detected as source language |
+| Retry Strategy | enum | batch | Retry mode for failed chunks (batch/contextual/isolated/skip) |
+| Request Slicing | enum | conservative | Request formation aggressiveness (conservative/efficient) |
+
+**Request Slicing Modes:**
+- **Conservative** (default): `min_lines = max(2, chunk_size // 5)` — more granular requests, respects file boundaries strictly.
+- **Efficient**: `min_lines = max(5, chunk_size // 2)` — merges small requests more aggressively, reducing total API calls.
 
 #### Caching Settings
 | Setting | Type | Default | Description |
@@ -2745,6 +2757,16 @@ Deselecting a filter hides that section from the Formatted/Plain views and omits
 - Dropdown with presets: "None", "Clean English" (em_dash, smart_quotes), "Strict" (em_dash, smart_quotes, ellipsis_variants)
 - Applied via logit bias in the API request
 - Manifest Key: `RequestOptions.BanTokens`, `RequestOptions.BanTokenPreset`
+
+**Character Whitelist**:
+- Comma-separated character ranges allowed in translations (e.g. `a-z,A-Z,0-9`)
+- Characters not matching any range are stripped from translation output
+- Manifest Key: `RequestOptions.CharacterWhitelist`
+
+**Character Blacklist**:
+- Comma-separated characters/ranges removed from translations (e.g. `★,☆,♪`)
+- Applied after whitelist filtering
+- Manifest Key: `RequestOptions.CharacterBlacklist`
 
 ---
 

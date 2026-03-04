@@ -153,6 +153,8 @@ class TranslationOptions:
     edit_before_translation: bool = False  # Show edit dialog before API call
     # Skip already translated lines (Task 47.9)
     skip_already_translated: bool = False  # Skip lines with existing tl field
+    # Request slicing mode: conservative (default) or efficient
+    request_slicing: str = "conservative"
 
 
 @dataclass
@@ -776,7 +778,8 @@ class PreviewRequest:
 
         Section headers include informative descriptions so users
         understand which parts are sent to the API and where data
-        originates.
+        originates.  Input lines are displayed one-per-line for
+        readability while curly braces ``{`` / ``}`` are preserved.
 
         Args:
             active_parts: Set of part keys to include.  ``None`` = all.
@@ -794,6 +797,11 @@ class PreviewRequest:
             text = self.get_part(key)
             if not text:
                 continue
+
+            # Expand input_lines JSON so each line is on its own row
+            if key == "input_lines":
+                text = self._format_input_lines(text)
+
             desc = SECTION_DESCRIPTIONS.get(key, "")
             if desc:
                 header = f"=== {label} ({desc}) ==="
@@ -801,6 +809,31 @@ class PreviewRequest:
                 header = f"=== {label} ==="
             sections.append(f"{header}\n{text}")
         return "\n\n".join(sections)
+
+    @staticmethod
+    def _format_input_lines(raw_json: str) -> str:
+        """Pretty-format the input-lines JSON so every line gets a line break.
+
+        Preserves curly braces and other symbols that appear inside
+        the actual line content.
+
+        Args:
+            raw_json: JSON string, e.g. ``{"lines": [...]}``.
+
+        Returns:
+            Human-readable multiline representation.
+        """
+        try:
+            data = json.loads(raw_json)
+            lines = data.get("lines", [])
+            if not lines:
+                return raw_json
+            numbered: list[str] = []
+            for idx, line in enumerate(lines, 1):
+                numbered.append(f"  {idx:>3}. {line}")
+            return "{\n" + "\n".join(numbered) + "\n}"
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            return raw_json
 
     def build_pure_json(self) -> str:
         """Build a single-line JSON of the complete API request payload."""
@@ -1082,15 +1115,19 @@ class RequestPreviewDialog(tk.Toplevel):
     def _plain_text(raw: str) -> str:
         """Convert raw request text to plain readable text.
 
-        Strips JSON formatting characters and wraps long lines.
+        Strips only JSON structural tokens (brackets, quotes around
+        keys) while preserving curly braces ``{`` / ``}`` that appear
+        inside the actual content (e.g. RPG Maker control codes).
+        Each input line gets its own visual line break.
         """
         import textwrap
         import re as _re
 
-        # Remove JSON structure characters
         cleaned = raw
         cleaned = cleaned.replace("\\n", "\n")
-        cleaned = _re.sub(r'[{}\[\]"]', "", cleaned)
+
+        # Remove only square brackets and double-quotes (preserve { } )
+        cleaned = _re.sub(r'[\[\]"]', "", cleaned)
         cleaned = _re.sub(r",\s*$", "", cleaned, flags=_re.MULTILINE)
         cleaned = _re.sub(r"^\s*translations:\s*", "", cleaned, flags=_re.MULTILINE)
         cleaned = _re.sub(r"^\s*lines:\s*", "", cleaned, flags=_re.MULTILINE)
@@ -1532,7 +1569,14 @@ class TranslationStep(BaseStep):
         scrollable_frame.bind("<MouseWheel>", _on_mousewheel)
 
     def _build_request_options(self, parent: ttk.Frame) -> None:
-        """Build per-request options panel."""
+        """Build per-request options panel.
+
+        Visible widgets: Key, Model, Model Settings / Translation Options
+        Change… buttons, Character Whitelist, Character Blacklist, and
+        Ban Tokens.  Settings that moved to Global Options (chunk size,
+        retries, caching, retry strategy, line-by-line, etc.) are kept
+        as hidden variables for backward compatibility.
+        """
         frame = ttk.LabelFrame(parent, text="Request Options", padding=10)
         frame.pack(fill="x", padx=5, pady=5)
 
@@ -1583,7 +1627,7 @@ class TranslationStep(BaseStep):
             )
         )
 
-        # Model Settings — dropdown to view current preset + open GO dialog
+        # Model Settings — open Global Options dialog at Model Settings
         ms_frame = ttk.Frame(frame)
         ms_frame.pack(fill="x", pady=2)
 
@@ -1599,7 +1643,7 @@ class TranslationStep(BaseStep):
         )
         self._ms_label.pack(side="right", padx=5)
 
-        # Translation Options — dropdown to view current preset + open GO dialog
+        # Translation Options — open Global Options dialog at Translation Options
         to_frame = ttk.Frame(frame)
         to_frame.pack(fill="x", pady=2)
 
@@ -1615,270 +1659,104 @@ class TranslationStep(BaseStep):
         )
         self._to_label.pack(side="right", padx=5)
 
-        # Separator before per-request options
+        # Separator
         ttk.Separator(frame, orient="horizontal").pack(fill="x", pady=5)
 
-        # Temperature — kept as hidden variable for API client compatibility;
-        # the GUI control was moved to Global Options (Model Settings).
+        # --- Hidden variables (managed by Global Options, kept for compat) ---
         self._temp_var = tk.DoubleVar(value=self._translation_options.temperature)
-
-        # Chunk size
-        chunk_frame = ttk.Frame(frame)
-        chunk_frame.pack(fill="x", pady=2)
-
-        ttk.Label(chunk_frame, text="Lines/Chunk:").pack(side="left")
         self._chunk_var = tk.IntVar(value=self._translation_options.chunk_size)
-        self._chunk_spin = ttk.Spinbox(
-            chunk_frame,
-            from_=5,
-            to=100,
-            textvariable=self._chunk_var,
-            width=6,
+        self._retry_var = tk.StringVar(
+            value=self._translation_options.retry_strategy,
         )
-        self._chunk_spin.pack(side="right")
-
-        # Bind chunk size to manifest
-        self._manifest_bindings.append(
-            bind_spinbox_to_field(
-                spinbox=self._chunk_spin,
-                var=self._chunk_var,
-                manager_getter=lambda: self.manifest_manager,
-                field_key="LinesPerChunk",
-                min_val=5,
-                max_val=100,
-                default=30,
-                parent_key="RequestOptions",
-            )
-        )
-
-        # Retry strategy
-        retry_frame = ttk.Frame(frame)
-        retry_frame.pack(fill="x", pady=2)
-
-        ttk.Label(retry_frame, text="Retry Strategy:").pack(side="left")
-        self._retry_var = tk.StringVar(value=self._translation_options.retry_strategy)
-        self._retry_combo = ttk.Combobox(
-            retry_frame,
-            textvariable=self._retry_var,
-            values=[name for name, _ in self.RETRY_STRATEGIES],
-            state="readonly",
-            width=15,
-        )
-        self._retry_combo.pack(side="right")
-
-        # Bind retry strategy to manifest
-        self._manifest_bindings.append(
-            bind_combobox_to_field(
-                combobox=self._retry_combo,
-                var=self._retry_var,
-                manager_getter=lambda: self.manifest_manager,
-                field_key="RetryStrategy",
-                options=[name for name, _ in self.RETRY_STRATEGIES],
-                default="batch",
-                parent_key="RequestOptions",
-            )
-        )
-
-        # Max retries
-        retries_frame = ttk.Frame(frame)
-        retries_frame.pack(fill="x", pady=2)
-
-        ttk.Label(retries_frame, text="Max Retries:").pack(side="left")
         self._retries_var = tk.IntVar(value=self._translation_options.max_retries)
-        self._retries_spin = ttk.Spinbox(
-            retries_frame,
-            from_=0,
-            to=10,
-            textvariable=self._retries_var,
-            width=6,
+        self._cache_var = tk.BooleanVar(
+            value=self._translation_options.cache_enabled,
         )
-        self._retries_spin.pack(side="right")
-
-        # Bind max retries to manifest
-        self._manifest_bindings.append(
-            bind_spinbox_to_field(
-                spinbox=self._retries_spin,
-                var=self._retries_var,
-                manager_getter=lambda: self.manifest_manager,
-                field_key="MaxRetries",
-                min_val=0,
-                max_val=10,
-                default=3,
-                parent_key="RequestOptions",
-            )
-        )
-
-        # Cache enabled
-        cache_frame = ttk.Frame(frame)
-        cache_frame.pack(fill="x", pady=2)
-
-        self._cache_var = tk.BooleanVar(value=self._translation_options.cache_enabled)
-        cache_cb = ttk.Checkbutton(
-            cache_frame,
-            text="Enable Request Caching",
-            variable=self._cache_var,
-        )
-        cache_cb.pack(side="left")
-
-        # Bind cache enabled to manifest
-        self._manifest_bindings.append(
-            bind_checkbox_to_field(
-                checkbox=cache_cb,
-                var=self._cache_var,
-                manager_getter=lambda: self.manifest_manager,
-                field_key="EnableRequestCaching",
-                default=False,
-                parent_key="RequestOptions",
-            )
-        )
-
-        # Edit before translation (Task 33.1)
-        edit_frame = ttk.Frame(frame)
-        edit_frame.pack(fill="x", pady=2)
-
         self._edit_before_var = tk.BooleanVar(
-            value=self._translation_options.edit_before_translation
+            value=self._translation_options.edit_before_translation,
         )
-        edit_cb = ttk.Checkbutton(
-            edit_frame,
-            text="Edit Before Translation",
-            variable=self._edit_before_var,
-        )
-        edit_cb.pack(side="left")
-
-        # Bind edit before translation to manifest
-        self._manifest_bindings.append(
-            bind_checkbox_to_field(
-                checkbox=edit_cb,
-                var=self._edit_before_var,
-                manager_getter=lambda: self.manifest_manager,
-                field_key="EditBeforeTranslation",
-                default=False,
-                parent_key="RequestOptions",
-            )
-        )
-
-        # Skip Already Translated (Task 47.9)
-        skip_translated_frame = ttk.Frame(frame)
-        skip_translated_frame.pack(fill="x", pady=2)
-
         self._skip_translated_var = tk.BooleanVar(
-            value=self._translation_options.skip_already_translated
+            value=self._translation_options.skip_already_translated,
         )
-        skip_translated_cb = ttk.Checkbutton(
-            skip_translated_frame,
-            text="Skip Already Translated",
-            variable=self._skip_translated_var,
-        )
-        skip_translated_cb.pack(side="left")
-
-        # Bind skip already translated to manifest
-        self._manifest_bindings.append(
-            bind_checkbox_to_field(
-                checkbox=skip_translated_cb,
-                var=self._skip_translated_var,
-                manager_getter=lambda: self.manifest_manager,
-                field_key="SkipAlreadyTranslated",
-                default=False,
-                parent_key="RequestOptions",
-            )
-        )
-
-        # Skip Non-Source Language (Task 43.13)
-        skip_lang_frame = ttk.Frame(frame)
-        skip_lang_frame.pack(fill="x", pady=2)
-
         self._skip_non_source_var = tk.BooleanVar(value=False)
-        skip_lang_cb = ttk.Checkbutton(
-            skip_lang_frame,
-            text="Skip Non-Source Language Lines",
-            variable=self._skip_non_source_var,
+        self._line_by_line_var = tk.BooleanVar(
+            value=self._translation_options.line_by_line,
         )
-        skip_lang_cb.pack(side="left")
-
-        # Bind skip non-source to manifest
-        self._manifest_bindings.append(
-            bind_checkbox_to_field(
-                checkbox=skip_lang_cb,
-                var=self._skip_non_source_var,
-                manager_getter=lambda: self.manifest_manager,
-                field_key="SkipNonSourceLanguage",
-                default=False,
-                parent_key="RequestOptions",
-            )
+        self._context_lines_var = tk.IntVar(
+            value=self._translation_options.context_lines,
         )
-
-        # Separator before advanced options
-        ttk.Separator(frame, orient="horizontal").pack(fill="x", pady=10)
-
-        # Line-by-line mode
-        lbl_frame = ttk.Frame(frame)
-        lbl_frame.pack(fill="x", pady=2)
-
-        self._line_by_line_var = tk.BooleanVar(value=self._translation_options.line_by_line)
-        lbl_cb = ttk.Checkbutton(
-            lbl_frame,
-            text="Line-by-Line Mode",
-            variable=self._line_by_line_var,
-            command=self._on_line_by_line_toggle,
-        )
-        lbl_cb.pack(side="left")
-
-        # Bind line-by-line to manifest
-        self._manifest_bindings.append(
-            bind_checkbox_to_field(
-                checkbox=lbl_cb,
-                var=self._line_by_line_var,
-                manager_getter=lambda: self.manifest_manager,
-                field_key="LineByLineMode",
-                default=False,
-                parent_key="RequestOptions",
-            )
-        )
-
-        # Context lines (enabled only when line-by-line is on)
-        context_frame = ttk.Frame(frame)
-        context_frame.pack(fill="x", pady=2)
-
-        ttk.Label(context_frame, text="Context Lines:").pack(side="left", padx=(20, 0))
-        self._context_lines_var = tk.IntVar(value=self._translation_options.context_lines)
-        self._context_spin = ttk.Spinbox(
-            context_frame,
-            from_=0,
-            to=5,
-            textvariable=self._context_lines_var,
-            width=6,
-            state="disabled" if not self._translation_options.line_by_line else "normal",
-        )
-        self._context_spin.pack(side="right")
-
-        # Bind context lines to manifest
-        self._manifest_bindings.append(
-            bind_spinbox_to_field(
-                spinbox=self._context_spin,
-                var=self._context_lines_var,
-                manager_getter=lambda: self.manifest_manager,
-                field_key="ContextLines",
-                min_val=0,
-                max_val=5,
-                default=1,
-                parent_key="RequestOptions",
-            )
-        )
-
-        # Thinking/Budget — hidden variables only (managed in Global Options)
         self._thinking_var = tk.BooleanVar(
             value=self._translation_options.thinking_enabled,
         )
         self._thinking_budget_var = tk.IntVar(
             value=self._translation_options.thinking_budget,
         )
-        # No GUI widgets — these values are set via _sync_from_global_options
 
-        # Separator before Ban Tokens
-        ttk.Separator(frame, orient="horizontal").pack(fill="x", pady=10)
+        # --- Character Whitelist ---
+        wl_lf = ttk.LabelFrame(frame, text="Character Whitelist", padding=5)
+        wl_lf.pack(fill="x", pady=(0, 5))
 
-        # Ban Tokens (moved from Prompt Editor)
+        wl_row = ttk.Frame(wl_lf)
+        wl_row.pack(fill="x", pady=2)
+        ttk.Label(wl_row, text="Chars:").pack(side="left")
+        self._whitelist_var = tk.StringVar(value="")
+        self._whitelist_entry = ttk.Entry(
+            wl_row, textvariable=self._whitelist_var, width=30,
+        )
+        self._whitelist_entry.pack(side="left", padx=5, fill="x", expand=True)
+
+        ttk.Label(
+            wl_lf,
+            text="Only these characters are allowed in output. Leave empty = allow all.",
+            foreground=THEME.text_secondary,
+            font=("TkDefaultFont", 8),
+        ).pack(anchor="w")
+
+        # Bind whitelist to manifest
+        self._manifest_bindings.append(
+            bind_entry_to_field(
+                entry=self._whitelist_entry,
+                var=self._whitelist_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="CharacterWhitelist",
+                default="",
+                parent_key="RequestOptions",
+            )
+        )
+
+        # --- Character Blacklist ---
+        bl_lf = ttk.LabelFrame(frame, text="Character Blacklist", padding=5)
+        bl_lf.pack(fill="x", pady=(0, 5))
+
+        bl_row = ttk.Frame(bl_lf)
+        bl_row.pack(fill="x", pady=2)
+        ttk.Label(bl_row, text="Chars:").pack(side="left")
+        self._blacklist_var = tk.StringVar(value="")
+        self._blacklist_entry = ttk.Entry(
+            bl_row, textvariable=self._blacklist_var, width=30,
+        )
+        self._blacklist_entry.pack(side="left", padx=5, fill="x", expand=True)
+
+        ttk.Label(
+            bl_lf,
+            text="These characters are stripped from output. Comma-separated.",
+            foreground=THEME.text_secondary,
+            font=("TkDefaultFont", 8),
+        ).pack(anchor="w")
+
+        # Bind blacklist to manifest
+        self._manifest_bindings.append(
+            bind_entry_to_field(
+                entry=self._blacklist_entry,
+                var=self._blacklist_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="CharacterBlacklist",
+                default="",
+                parent_key="RequestOptions",
+            )
+        )
+
+        # --- Ban Tokens ---
         ban_lf = ttk.LabelFrame(frame, text="Ban Tokens", padding=5)
         ban_lf.pack(fill="x", pady=(0, 5))
 
@@ -1925,14 +1803,6 @@ class TranslationStep(BaseStep):
                 parent_key="RequestOptions",
             )
         )
-
-        # Help text
-        ttk.Label(
-            frame,
-            text="(Line-by-line translates individually)",
-            foreground=THEME.text_secondary,
-            font=("TkDefaultFont", 8),
-        ).pack(anchor="w", pady=(5, 0))
 
     def _build_prompt_editor(self, parent: ttk.Frame) -> None:
         """Initialize hidden compatibility variables (prompt editor removed).
@@ -2163,7 +2033,20 @@ class TranslationStep(BaseStep):
             thinking_enabled=self._thinking_var.get(),
             thinking_budget=self._thinking_budget_var.get(),
             edit_before_translation=self._edit_before_var.get(),
+            skip_already_translated=self._skip_translated_var.get(),
+            request_slicing=self._get_request_slicing_mode(),
         )
+
+    def _get_request_slicing_mode(self) -> str:
+        """Return current request slicing mode from Global Options.
+
+        Returns:
+            ``"conservative"`` or ``"efficient"``.
+        """
+        go = getattr(self.session, "global_options", None)
+        if go is not None and hasattr(go, "translation"):
+            return getattr(go.translation, "request_slicing", "conservative")
+        return "conservative"
 
     def _get_prompt_parts(self) -> Dict[str, str]:
         """Get prompt parts from UI.
@@ -2607,6 +2490,9 @@ class TranslationStep(BaseStep):
                         chunk, rolling_context_text=rolling_context_text,
                     )
 
+                    # Apply character whitelist/blacklist filters
+                    translations = self._apply_char_filters(translations)
+
                     # Apply translations
                     for line, translation in zip(chunk, translations):
                         line.translated = translation
@@ -2793,6 +2679,7 @@ class TranslationStep(BaseStep):
             List of chunks (each chunk is a list of TranslatableLine).
         """
         chunk_size = self._translation_options.chunk_size
+        slicing = getattr(self._translation_options, "request_slicing", "conservative")
 
         try:
             from CherryAI.functions.prompt_builder import (
@@ -2840,9 +2727,15 @@ class TranslationStep(BaseStep):
             # Sort by index (file_end markers slot between files)
             line_infos.sort(key=lambda li: li.index)
 
+            # Conservative: small min_lines → more granular requests
+            # Efficient: higher min_lines → fewer, larger requests
+            if slicing == "efficient":
+                min_lines = max(5, chunk_size // 2)
+            else:
+                min_lines = max(2, chunk_size // 5)
             config = RequestFormationConfig(
                 max_lines=chunk_size,
-                min_lines=max(2, chunk_size // 5),
+                min_lines=min_lines,
             )
             formation_requests = build_requests(line_infos, config)
 
@@ -2950,6 +2843,64 @@ class TranslationStep(BaseStep):
             )
 
         return translations
+
+    def _apply_char_filters(self, texts: List[str]) -> List[str]:
+        """Apply character whitelist/blacklist filtering to translations.
+
+        * **Whitelist** (comma-separated character ranges): only keep
+          characters that match any range.  Example: ``a-z,A-Z,0-9``.
+        * **Blacklist** (comma-separated characters/ranges): remove any
+          character that matches.  Example: ``★,☆,♪``.
+
+        Ranges use ``start-end`` syntax where start/end are single
+        characters.  Single characters are also accepted.
+
+        Args:
+            texts: Raw translation strings.
+
+        Returns:
+            Filtered translation strings.
+        """
+        whitelist = self._whitelist_var.get().strip()
+        blacklist = self._blacklist_var.get().strip()
+        if not whitelist and not blacklist:
+            return texts
+
+        import re
+
+        def _build_char_set(raw: str) -> str:
+            """Convert comma-separated items into a regex character class."""
+            parts: list[str] = []
+            for item in raw.split(","):
+                item = item.strip()
+                if not item:
+                    continue
+                if len(item) == 3 and item[1] == "-":
+                    parts.append(re.escape(item[0]) + "-" + re.escape(item[2]))
+                elif len(item) == 1:
+                    parts.append(re.escape(item))
+                else:
+                    # Treat as literal characters
+                    parts.extend(re.escape(c) for c in item)
+            return "".join(parts)
+
+        result: list[str] = list(texts)
+
+        if whitelist:
+            charset = _build_char_set(whitelist)
+            if charset:
+                keep_re = re.compile(f"[{charset}\\s]")
+                result = [
+                    "".join(keep_re.findall(t)) for t in result
+                ]
+
+        if blacklist:
+            charset = _build_char_set(blacklist)
+            if charset:
+                strip_re = re.compile(f"[{charset}]")
+                result = [strip_re.sub("", t) for t in result]
+
+        return result
 
     def _log_request_json(
         self,
@@ -3263,6 +3214,19 @@ class TranslationStep(BaseStep):
         # Task 43.9: Rolling context from Global Options
         if hasattr(go, "request"):
             self._context_lines_var.set(go.request.rolling_context_lines)
+            self._chunk_var.set(go.request.chunk_size)
+
+        # Translation settings from Global Options
+        if hasattr(go, "translation"):
+            tr = go.translation
+            self._retry_var.set(getattr(tr, "retry_strategy", "batch"))
+            self._skip_non_source_var.set(
+                getattr(tr, "skip_non_source_language", True),
+            )
+            # overwrite_translation inverts skip_translated
+            overwrite = getattr(tr, "overwrite_translation", False)
+            self._skip_translated_var.set(not overwrite)
+            self._edit_before_var.set(False)
 
     def on_leave(self) -> None:
         """Called when leaving step."""
@@ -3834,11 +3798,20 @@ class TranslationStep(BaseStep):
             from CherryAI.gui.dialogs.global_options import (
                 GlobalOptionsDialog, OptionSection,
             )
-            app = self.winfo_toplevel()
-            go = getattr(app, "_global_options", None)
+            go = getattr(self.session, "global_options", None)
             if go is None:
-                return
-            dlg = GlobalOptionsDialog(self, go)
+                from CherryAI.gui.dialogs.global_options import GlobalOptions
+                go = GlobalOptions()
+
+            def _on_save(options):
+                self.session.global_options = options
+                self._sync_from_global_options()
+
+            dlg = GlobalOptionsDialog(
+                self.winfo_toplevel(),
+                initial_options=go,
+                on_save=_on_save,
+            )
             dlg._show_panel(OptionSection.REQUEST)
         except Exception:
             logger.debug("Could not open Model Settings dialog", exc_info=True)
@@ -3849,11 +3822,20 @@ class TranslationStep(BaseStep):
             from CherryAI.gui.dialogs.global_options import (
                 GlobalOptionsDialog, OptionSection,
             )
-            app = self.winfo_toplevel()
-            go = getattr(app, "_global_options", None)
+            go = getattr(self.session, "global_options", None)
             if go is None:
-                return
-            dlg = GlobalOptionsDialog(self, go)
+                from CherryAI.gui.dialogs.global_options import GlobalOptions
+                go = GlobalOptions()
+
+            def _on_save(options):
+                self.session.global_options = options
+                self._sync_from_global_options()
+
+            dlg = GlobalOptionsDialog(
+                self.winfo_toplevel(),
+                initial_options=go,
+                on_save=_on_save,
+            )
             dlg._show_panel(OptionSection.TRANSLATION)
         except Exception:
             logger.debug(

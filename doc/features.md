@@ -902,6 +902,9 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - **Tokens/Request spinbox** (500-32000): alternative maximum alongside Lines/Request
     - Hybrid chunking mode: whichever limit is reached first triggers chunk boundary
   - **Prompt overhead calculation**: includes system prompt, summary, glossary, style tokens per request
+  - **Formation-based request counting**: Uses the same 4-step formation pipeline (prompt_builder.py) as Translation step for accurate request counting via `_estimate_via_formation()`
+  - **GlobalOptions sync**: Chunk size and request slicing mode read from Global Options at estimation time
+  - Lines/Request spinbox range expanded to 1–99999 to match Model Settings
   - Token counts panel: original vs preprocessed with savings
   - Cost estimate panel with input/output/total breakdown
   - **Model comparison table** with Price Original, Price Preprocessed, Savings columns
@@ -937,10 +940,14 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - **Request Options Panel:**
     - API Key selection from saved keys (populated from API.ini)
     - Model selection filtered by selected key's provider
-    - Chunk size (5-100 lines per request, default 30)
-    - Retry strategy: batch, contextual, isolated, skip
-    - Max retries (1-10, default 3)
-    - Request caching toggle
+    - Model Settings "Change…" button → opens Global Options at Model Settings panel
+    - Translation Options "Change…" button → opens Global Options at Translation Options panel
+    - Character Whitelist: comma-separated ranges of allowed characters (manifest-bound to `RequestOptions.CharacterWhitelist`)
+    - Character Blacklist: comma-separated characters stripped from translations (manifest-bound to `RequestOptions.CharacterBlacklist`)
+    - Ban Tokens entry with preset dropdown
+    - `_apply_char_filters()` post-processes each chunk's translations
+    - Hidden backward-compat variables for: chunk_size, retry, retries, cache, edit_before, skip_translated, skip_non_source, line_by_line, context_lines (no UI, synced from GlobalOptions)
+    - `_sync_from_global_options()` applies GlobalOptions overrides including TranslationSettings (overwrite_translation, skip_non_source_language, retry_strategy, request_slicing)
     - **Edit Before Translation (Task 33.1):**
       - Toggle to enable pre-translation editing
       - Shows EditPreviewDialog modal when enabled
@@ -1603,6 +1610,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - **Settings Dataclasses (with to_dict/from_dict):**
     - APISettings: provider, api_key, base_url, model, temperature
     - RequestSettings: timeout, retries, rate_limit, chunk_size, thinking_enabled, thinking_budget, rolling_context_lines
+    - TranslationSettings (NEW): overwrite_translation, skip_non_source_language, retry_strategy, request_slicing
     - CachingSettings: enabled, dir, age (days; 0=unlimited), size (MB; 0=unlimited), mode (strict/line/any/model_only/disabled)
     - LoggingSettings: level, location, debug, api_log
     - SessionSettings: autosave, interval, theme, load_last
@@ -1631,15 +1639,20 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Base URL entry (auto-filled from provider)
     - Default model per key: `get_default_model()` / `set_default_model()` in api_config.py (stored as `default_model_{provider}_{name}` in [api] section)
   - **Model Settings Section (renamed from Request Section):**
-    - Lines per request (chunk size)
+    - Lines per request (chunk size, 1–99999)
     - Timeout in seconds
     - Max retries
     - Rate limit (requests per minute)
     - Temperature slider (0.0-2.0, moved from API section)
-  - **Translation Section (new):**
+  - **Translation Section (restructured):**
     - OptionSection.TRANSLATION in CONNECTION category
-    - Workflow Defaults: edit-before-translate, skip-translated, skip-non-source
-    - Output Quality: auto-proofread, preserve-formatting
+    - Overwrite Translation checkbox (replaces Edit Before + Skip Translated)
+    - Skip Non-Source Language checkbox (default ON)
+    - Rolling Context (moved from Model Settings)
+    - Speaker Dedup (moved from Model Settings)
+    - Retry Strategy dropdown (batch/contextual/isolated/skip)
+    - Request Slicing dropdown (Conservative / Efficient)
+    - Consistency System dropdown
   - **Caching Section:**
     - Enable/disable caching toggle
     - Cache directory with browse button
