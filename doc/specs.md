@@ -1854,32 +1854,15 @@ The Costs step has **two distinct estimation states** tracked separately:
 
 ---
 
-#### Widget: Glossary Settings (Selective Glossary)
+#### Widget: Glossary Settings (Selective Glossary) — Merged into Knowledge Base (TASK 76)
 
-**Purpose**: Manage translation glossary with selective prompt inclusion.
+> **Note**: This section is historical. In TASK 76, the Glossary Settings widget was merged into the Knowledge Base widget (see below). The project glossary table with selective prompt inclusion remains in the Glossary (Characters) widget. The global glossary toggle and project-to-global export are now in the Knowledge Base widget.
 
-| Component | Type | Function |
-|-----------|------|----------|
-| Glossary Table | Treeview | 3 columns: Original, Translation, Notes |
-| Import from Analysis | Button | Import detected terms from Analysis step |
-| Add Entry | Button | Add new glossary entry |
-| Edit Entry | Button | Edit selected entry |
-| Remove Entry | Button | Remove selected entry(s) |
-
-**Table Behavior**:
-- Inline editing: Double-click any cell to edit directly (no separate dialog)
-- Multi-select support for bulk delete
-- Columns: Original (source term), Translation (target term), Notes (context/usage)
-
-**Selective Prompt Inclusion**:
+**Selective Prompt Inclusion** (unchanged):
 - Glossary entries only included in prompt when their Original term appears in the current chunk
 - Reduces token usage by excluding irrelevant entries
 - Format in prompt: `Glossary:\n- [Original]: [Translation] ([Notes])`
-
-**Project vs Global Glossary**:
-- Project glossary: Stored in manifest, project-specific
-- Global glossary: Stored in `user/globalglossary.tsv`, shared across projects (three columns: Original, Translation, Notes)
-- Analysis creates project-specific glossary entries
+- Entries with `active=False` are excluded from prompts entirely (TASK 76)
 
 **Manifest Key**: `Glossary.project_entries[]`
 
@@ -1892,7 +1875,7 @@ The Costs step has **two distinct estimation states** tracked separately:
 | Component | Type | Function |
 |-----------|------|----------|
 | Pattern Table | Treeview | Columns: Pattern, Category, Action, Code Examples |
-| Add Pattern | Button | Open pattern editor dialog |
+| +Add | Button | Open pattern editor dialog |
 | Edit | Button | Edit selected pattern |
 | Remove | Button | Remove selected pattern(s) |
 | Import from Analysis | Button | Import detected patterns (currently not working - needs fix) |
@@ -1926,41 +1909,58 @@ The Costs step has **two distinct estimation states** tracked separately:
 
 **Category Management**:
 - Users can type custom categories (instant add to dropdown)
-- Categories enable selective import/export from Global Database
+- Categories enable selective import/export from Knowledge Base
 
 **Manifest Key**: `CodeGlossary[]` (array of CodePattern objects)
 
 ---
 
-#### Widget: Global Glossary and Database (NEW)
+#### Widget: Knowledge Base (TASK 76 — replaces Glossary Settings + Global Glossary/Database)
 
-**Purpose**: Manage global resources shared across all projects.
+**Purpose**: Unified widget for managing global glossary and code database resources shared across all projects, with per-entry Active/Inactive toggle and Enabled/Disabled state for prompt inclusion.
 
-**Mode Switch**: Toggle between Glossary Mode and Code Mode
-
-**Glossary Mode**:
+**Header Widgets** (in collapsible header row):
 | Component | Type | Function |
 |-----------|------|----------|
-| Use Global Glossary | Checkbox | Include global glossary during translation |
-| Export to Global | Button | Export selected project entries (or all if none selected) to global |
-| Display Global | Button | Open window with interactive global glossary table |
+| Enabled/Disabled | Button | Toggle Knowledge Base on/off (controls `use_global_glossary` manifest flag) |
+| Copy Project → Global | Button | Export project glossary entries to global glossary file |
 
-**Code Mode**:
+**Body Layout**:
 | Component | Type | Function |
 |-----------|------|----------|
-| Category Filter | Combobox | Filter by category for selective import |
-| Import from Global | Button | Import filtered patterns to project |
-| Export to Global | Button | Export project patterns to global database |
-| Display Global | Button | Open searchable global code database window |
+| Mode Switch | Combobox | Toggle between "Glossary" and "Code Database" modes |
+| Search | Entry | Filter entries by text match across all visible columns |
+| Column Filter | Combobox | Filter by specific column value (e.g., Active=True entries only) |
+| Knowledge Base Table | Treeview | Columns vary by mode; includes Active (✓/✗), Original/Pattern, Translation/Action, Notes |
+| Entry Count | Label | Shows "X entries" with live count |
+| +Add | Button | Add new entry to the active mode's TSV file |
+| Edit | Button | Inline edit of selected entry (double-click also supported) |
+| Remove | Button | Remove selected entry(s) with multi-select support |
+| Activate/Deactivate | Button | Toggle Active state of selected entries; label updates dynamically |
 
-**Uniqueness Rules**:
-- Project Code Database: Same Code+Pattern can only exist once
-- Global Code Database: Same Code+Pattern can exist multiple times under different Categories
-- Global Database is searchable by pattern, code, category, notes
+**Mode: Glossary** (reads/writes `user/globalglossary.tsv`):
+- Columns: Active, Original, Translation, Notes
+- 4-column TSV file (TASK 76: added Active column, defaults "True")
+- Single-click toggles Active state; changes saved immediately
+
+**Mode: Code Database** (reads/writes `user/codedatabase.tsv`):
+- Columns: Active, Pattern, Type, Action, Notes (subset of 10-column TSV)
+- 10-column TSV file (TASK 76: added Active as 10th column, defaults "True")
+- Single-click toggles Active state; changes saved immediately
+
+**Mixed-Selection Failsafe**:
+- When selected entries have mixed Active states, clicking Activate/Deactivate shows a popup
+- Popup offers: "Activate All", "Deactivate All", or "Cancel"
+- Prevents accidental bulk state changes on heterogeneous selections
+
+**Enabled/Disabled Behavior**:
+- When Enabled: Global glossary entries with `active=True` are included in translation prompts
+- When Disabled: No global glossary entries are included (project glossary still used)
+- State persisted via `ManifestManager.set_use_global_glossary(bool)`
 
 **File Locations**:
-- Global Glossary: `user/globalglossary.tsv` (three columns: Original, Translation, Notes)
-- Global Code Database: `user/codedatabase.tsv` (Pattern, Type, RegEx, Notes, Visibility, extended properties)
+- Global Glossary: `user/globalglossary.tsv` (4 columns: Original, Translation, Notes, Active)
+- Global Code Database: `user/codedatabase.tsv` (10 columns: Pattern, Type, RegEx, Notes, Visible, IsInvisible, IsCouple, IsNumber, IsWord, Active)
 
 ---
 
@@ -1992,24 +1992,22 @@ Characters:
 
 #### Right Column Layout & Collapsible Widgets
 
-**Purpose**: All table-based widgets (Glossary, Glossary Settings, Code Database, Global Database) are in the right column with collapsible behavior and taller tables that fill available vertical space.
+**Purpose**: All table-based widgets (Glossary, Code Database, Knowledge Base) are in the right column with collapsible behavior and taller tables that fill available vertical space.
 
 **Grid Layout** (right column):
 | Row | Widget | Default State |
 |-----|--------|---------------|
 | 0 | Glossary (Characters) | Expanded |
-| 1 | Glossary Settings | Expanded |
-| 2 | Code Database | Expanded |
-| 3 | Global Glossary/Database | Expanded |
-| 4 | JSON View (hidden by default) | Hidden |
+| 1 | Code Database | Expanded |
+| 2 | Knowledge Base | Expanded |
 
 **Collapsible Behavior**:
-- Each widget has a compact ▾/▸ toggle button (width=2) + bold label embedded as the LabelFrame's `labelwidget` via `_build_collapsible_labelframe()` helper
-- Collapse hides content via `grid_remove()`, Display restores via `grid()`
+- Each widget uses `_build_collapsible_labelframe()` helper which creates a header row (▾/▸ toggle button + bold label + optional extra widgets + horizontal `ttk.Separator`) and a collapsible body Frame
+- Collapse hides body via `grid_remove()`, Display restores via `grid()`
 - Button text toggles between "▾" (expanded) and "▸" (collapsed)
 - State tracked in `_collapsible_state` dict (bool per widget name)
 - `_reconfigure_right_column_weights()` sets row weight=1 for expanded, weight=0 for collapsed
-- Collapsed widgets show only their LabelFrame title bar
+- Collapsed widgets show only their header bar (title + separator), not an empty bordered frame
 - Expanded widgets share available vertical space evenly
 
 **Taller Tables**:
@@ -5105,6 +5103,7 @@ When enabled, `_log_request_json()` writes to `logs/requests/request_{YYYYMMDD_H
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 3.2 | 2026-03-02 | Task 76 — Knowledge Base Widget: Merged Glossary Settings and Global Glossary/Database into unified Knowledge Base widget with Enabled/Disabled toggle, mode switch (Glossary/Code Database), per-entry Active column (✓/✗ toggle), mixed-selection Activate/Deactivate failsafe popup, search/column filter. Updated collapsible widgets from LabelFrame to header+separator design (no empty borders when collapsed). Right column reduced from 4 to 3 rows. TSV schemas updated: globalglossary.tsv 3→4 columns (added Active), codedatabase.tsv 9→10 columns (added Active). Button text standardized to +Add/Edit/Remove. 56 tests. |
 | 3.1 | 2026-03-02 | Task 74 — Request Preview Overhaul: Informative section headers (SECTION_DESCRIPTIONS dict, 12 keys), renamed custom_notes → system_instructions across 6 files, formation-based chunking (4-step build_requests pipeline integrated into _build_chunks), rolling context in translation loop (receives_context/provides_context flags, rolling_ctx_buffer), per-chunk selective glossary/conditional/character filtering (chunk_lines parameter), cross-request search (global match index navigation across all requests), request logging toggle (log_requests in LoggingSettings, JSON to logs/requests/). Fixed step index bugs (3→2) in metadata lookup. 110 tests passing (20 prompt_builder_shared + 42 request_preview + 50 request_formation). |
 | 3.0 | 2026-02-10 | Phase 17 Infrastructure: Added Batch API support (batch_tracker.py — JSONL builder, job persistence, submit/poll/cancel), Multi-Key Management (key_manager.py — key pools with sequential/even/priority rotation), Named API Profiles (project_config.py — display_name, system_prompt_tweak, rename/duplicate), Additional File Formats (markdown.py, json_lenient.py, translator_plus.py), Usage Analytics (usage_tracker.py — SQLite-backed token/cost tracking with CSV export), Agent-Assisted Modes (agent_modes.py — mode registry, sandboxed writes, audit logging), Estimation Engine (estimation.py — itemized billing, model comparison, persistence), i18n & Tooltips (i18n.py — JSON language files with fallback, tooltip.py — configurable Tk tooltips). Session persistence (app.py saves/restores last step). Bug fixes: estimate_rate_limit_time() missing params; SharedTable batch insertion duplicate item IDs (added _batch_insert_version counter). Added 339 new tests (5619 total). |
 | 2.8 | 2026-02-08 | Comprehensive rewrite of Step 9 (Output): Defined injection priority chain (9-level: overwrite → wordwrap → postprocessed → edit{N} → tlc{N} → translation → preedit → preprocessed → original). Added Dirty Flags system (Process flag set by preprocessing/cleared by postprocessing 100%, Wordwrap flag cleared when applied) with pre-export validation dialog. Non-destructive default (subfolder naming, no overwrite). Failure logging with per-file error tracking. Complete widget specifications with destination, format, naming, safety, and export extras sections. Settings received from Input (source_root, file_dir, encoding, format). Step 0 (Input): Added Import Translations button — imports translations from another manifest via exact `orig` line matching (sequential search, file/line-number agnostic, copies all processing fields). Step 5 (Translation): Added Skip Already Translated checkbox — skips lines with existing `tl` field for incremental translation workflows. Bug fixes: QA mousewheel TclError (try/except wrapper for race condition), output_inject `get_section` → `get_output_options()`, preprocess warning demoted to debug. |

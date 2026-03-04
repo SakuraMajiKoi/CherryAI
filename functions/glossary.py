@@ -49,11 +49,12 @@ from .glossaries.code_glossary_constants import (
 
 # ---------------- Unified glossary paths and constants ---------------- #
 
-# Header for unified glossary TSV (3-column design — Phase 62)
+# Header for unified glossary TSV (4-column design — Phase 76)
 UNIFIED_HEADER = [
     "Original",
     "Translation",
     "Notes",
+    "Active",
 ]
 
 # Legacy 8-column CSV header retained for backward-compat migration only
@@ -425,6 +426,7 @@ class GlossaryEntry:
         gender: str = "",
         refers_to_themself_as: str = "",
         referred_to_as: str = "",
+        active: bool = True,
     ):
         self.original = original
         self.translation = translation
@@ -434,11 +436,12 @@ class GlossaryEntry:
         self.gender = gender
         self.refers_to_themself_as = refers_to_themself_as
         self.referred_to_as = referred_to_as
+        self.active = active
 
     # --- TSV 3-column serialisation (Phase 62 canonical format) ---
 
     def to_tsv_row(self) -> List[str]:
-        """Encode entry as [Original, Translation, Notes] for TSV storage.
+        """Encode entry as [Original, Translation, Notes, Active] for TSV storage.
 
         Non-empty extended fields are appended to Notes as
         " (source=X; type=Y; gender=Z; refers_as=A; referred_as=B)".
@@ -459,14 +462,21 @@ class GlossaryEntry:
         if extras:
             suffix = "(" + "; ".join(extras) + ")"
             notes = (notes + " " + suffix).strip() if notes else suffix
-        return [self.original, self.translation, notes]
+        return [self.original, self.translation, notes,
+                "true" if self.active else "false"]
 
     @staticmethod
     def from_tsv_row(row: List[str]) -> "GlossaryEntry":
-        """Create entry from a 3-column TSV row; decode embedded metadata."""
+        """Create entry from a 3- or 4-column TSV row; decode embedded metadata.
+
+        The 4th column (Active) is optional.  Missing or empty defaults
+        to ``True`` for backward compatibility with 3-column TSV files.
+        """
         while len(row) < 3:
             row.append("")
         original, translation, raw_notes = row[0], row[1], row[2]
+        active_str = row[3].strip().lower() if len(row) > 3 else "true"
+        active = active_str != "false"
 
         # Parse optional "(key=value; ...)" metadata suffix
         source = entry_type = gender = refers = referred = ""
@@ -501,6 +511,7 @@ class GlossaryEntry:
             gender=gender,
             refers_to_themself_as=refers,
             referred_to_as=referred,
+            active=active,
         )
 
     # --- Legacy CSV compatibility (kept for internal migration only) ---

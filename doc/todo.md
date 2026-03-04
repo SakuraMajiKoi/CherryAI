@@ -28,7 +28,7 @@ TESTING REFERENCE
 
 For comprehensive test documentation, see `doc/tests.md`
 
-**Current Status:** 6222 tests passing (verified Q2 2026 via pytest)
+**Current Status:** 6278 tests passing (verified Q2 2026 via pytest)
 
 Two test types:
 - **Script Test**: pytest unit tests (fast, no LLM)
@@ -49,6 +49,51 @@ MODULE COUNTS (Verified January 2026)
 - gui/steps/: 10 workflow tabs
 - gui/helpers/: 6 adapter modules (mode, analysis, glossary, chunker, prompt, manifest_binding)
 - gui/dialogs/: 3 dialog modules (global_options, project_dialog, loading_progress)
+
+=============================================================================
+
+=============================================================================
+
+COMPLETED - SESSION 32 (TASK 76 — Knowledge Base Widget, Collapsible Redesign)
+
+### SESSION 32: TASK 76 — Knowledge Base Widget ✅ DONE
+
+**Collapsible Widget Redesign:**
+- Replaced LabelFrame-based collapsible sections with wrapper+header+body design
+- Header: collapse button ▾/▸ + bold title + horizontal Separator line
+- Body: grid_remove'd when collapsed — no empty LabelFrame borders
+- `_build_collapsible_labelframe()` now accepts optional `extra_header_widgets` callback
+- Applied to all 3 right-column sections: Glossary (row 0), Code Database (row 1), Knowledge Base (row 2)
+
+**Knowledge Base Widget (replaces Glossary Settings + Global Glossary/Database):**
+- Combined two old widgets into one unified "Knowledge Base" widget at row 2
+- Mode dropdown: Glossary / Code Database (switches between globalglossary.tsv and codedatabase.tsv)
+- Search field: filters entries in real-time
+- Column filter dropdown: Default / All / Active Only
+- Treeview table with Active (✓/✗), Original/Pattern, Translation/Type, Notes columns
+- Enabled/Disabled toggle button in header (replaces Use Global Glossary checkbox)
+- Per-entry Active/Inactive state stored in TSV files (not manifest)
+- Buttons: +Add, Remove, Activate/Deactivate, Copy from Project to Global
+- Activate/Deactivate failsafe: mixed selection shows popup with Activate All / Deactivate All / Invert / Cancel
+- Inline editing via double-click (text entry or dropdown for Code Database Type)
+
+**TSV Schema Changes:**
+- globalglossary.tsv: 3→4 columns (added Active column)
+- codedatabase.tsv: 9→10 columns (added Active column)
+- GlossaryEntry class: added `active: bool = True` field
+- `to_tsv_row()` / `from_tsv_row()` handle 4th column; backward-compatible with 3-column files
+
+**Button Text Cleanup:**
+- "+Add Character" → "+Add", "+Add Pattern" → "+Add", "+Add Entry" → "+Add"
+- "Remove Selected" → "Remove"
+
+**Right Column Layout:** 3 widgets (was 4)
+- Row 0: Glossary (characters)
+- Row 1: Code Database (project code patterns)
+- Row 2: Knowledge Base (global glossary + code database management)
+
+**Tests:** 56 new tests in `dev/test_knowledge_base.py`
+**Existing tests:** Updated `test_glossary.py` (4-column header, .tsv paths), `test_information_step_phase41.py`
 
 =============================================================================
 
@@ -1258,7 +1303,7 @@ FUTURE IDEAS (No Phase Commitment)
 - **Glossary Import from File**: Direct import from external glossary files (CSV, JSON, TMX)
 - **Code Pattern Templates**: Pre-built code pattern sets for common game engines (RPG Maker, Unity, etc.)
 - **Project Templates**: Save/load entire Information step configurations as reusable templates
-- **Redesign Glossary Settings Widget**: Fold "Glossary Settings" into the "Global Glossary and Database" widget. Requiring a rework to remove, move and streamline to only ever export from the manifest to the global files.
+- ~~**Redesign Glossary Settings Widget**: Fold "Glossary Settings" into the "Global Glossary and Database" widget. Requiring a rework to remove, move and streamline to only ever export from the manifest to the global files.~~ ✅ DONE (TASK 76 — replaced both widgets with unified "Knowledge Base" widget)
 
 ### Preprocessing/Postprocessing Future Enhancements
 - [x] **Line Field Persistence (Task 3)**: Fixed critical bug where preprocessing, postprocessing, and wordwrap steps stored per-line results only in step_state but never wrote to manifest `lines[].prepro` / `lines[].postpro` / `lines[].wordwr` via `set_line_field()`. Also fixed `_mark_line_as_fixed()` calling nonexistent `update_line_field()` → `set_line_field()`. 39 tests in `dev/test_line_saving.py`.

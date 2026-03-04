@@ -75,7 +75,7 @@ TABLE OF CONTENTS
    3.12 dedup.py ✅ - Deduplication with aggressive mode
    3.13 dependencies.py ✅ - Dependency checks
    3.14 glossary.py ✅ - Unified glossary system (Phase 62 complete)
-        * Global glossary file: `user/globalglossary.tsv` (3 columns: Original, Translation, Notes)
+        * Global glossary file: `user/globalglossary.tsv` (4 columns: Original, Translation, Notes, Active)
         * Auto-migration on first access: glossary.csv → GlobalGlossary.csv → globalglossary.tsv; global_glossary.json merged then renamed .migrated
         * GlossaryEntry: original, translation, notes, source, entry_type, gender, refers_to_themself_as, referred_to_as
         * Metadata encoded in Notes as "(source=X; type=Y; gender=Z)" for TSV compatibility
@@ -462,11 +462,11 @@ TABLE OF CONTENTS
          - Code Database actions in prompt_builder: Preserve="Do not translate", Translate="Translate as", Remove=filtered out
          - Code Database multi-select removal with reverse-index batch deletion (Phase 60)
          - Code Database auto-populate: prefers `individual_codes` over grouped `code_patterns` (Phase 60)
-         - Global Glossary/Database widget: mode switch, search filter, import/export TSV/JSON
-         - Files: user/globalglossary.tsv (3-col TSV) and user/codedatabase.tsv (9-col TSV) ✅ Phase 62 complete
-         - Selective glossary: active field (bool) in manifest GlossaryEntries, defaults True
-         - **Collapsible right-column widgets:** `_collapsible_state`, `_collapsible_content`, `_collapsible_buttons` dicts track collapse state; `_build_collapsible_labelframe(parent, title, widget_name, row)` helper creates compact LabelFrame with embedded header (▾/▸ toggle button width=2 + bold label as `labelwidget`); `_toggle_collapsible(widget_name)` toggles `grid()`/`grid_remove()` on content frames and swaps button text between "▾"/"▸"; `_reconfigure_right_column_weights()` sets row weight=1 for expanded, weight=0 for collapsed; applies to Glossary (row 0), Glossary Settings (row 1), Code Database (row 2), Global Database (row 3)
-         - **Glossary moved to right column:** `_build_character_section()` now builds into `self._right_column` (grid row 0) instead of `self._left_column`; uses grid layout with sticky="nsew" for expansion
+         - Knowledge Base widget: unified mode switch (Glossary / Code Database), search/column filter, inline Active toggle, Enabled/Disabled button, mixed-selection Activate/Deactivate failsafe
+         - Files: user/globalglossary.tsv (4-col TSV) and user/codedatabase.tsv (10-col TSV) ✅ Phase 62 + TASK 76 complete
+         - Selective glossary: active field (bool) in TSV and manifest GlossaryEntries, defaults True
+         - **Collapsible right-column widgets:** `_collapsible_state` dict tracks collapse state; `_build_collapsible_labelframe(parent, title, widget_name, row, extra_header_widgets)` helper creates header row (▾/▸ toggle button + bold label + optional extra widgets + horizontal `ttk.Separator`) and collapsible body Frame; `_toggle_collapsible(widget_name)` toggles `grid()`/`grid_remove()` on body frames and swaps button text between "▾"/"▸"; `_reconfigure_right_column_weights()` sets row weight=1 for expanded, weight=0 for collapsed; applies to Glossary (row 0), Code Database (row 1), Knowledge Base (row 2)
+         - **Glossary moved to right column:** `_build_character_section()` now builds into `self._right_column` (grid row 0) instead of `self._left_column`; uses grid layout with sticky="nsew" for expansion; Code Database at row 1, Knowledge Base at row 2
          - **Taller tables:** All right-column Treeview widgets use height=8 (up from 4-5); parent frames use `rowconfigure(weight=1)` and `sticky="nsew"`; canvas `<Configure>` binding stretches inner frame to viewport height
          - **Style/Tone text display:** `_ensure_style_tone_text()` called at end of `on_enter()` populates empty text fields from preset; `_populate_form()` falls back to preset text when metadata style/tone is empty
          - **Style/Tone compact display:** ScrolledText height=1 (down from 3); Delete button width=10 (up from 8)
@@ -4558,19 +4558,19 @@ GLOSSARY (CSV)
 
 GLOBAL GLOSSARY (TSV)
 
-Location: user/globalglossary.tsv  [Session 26: renamed from GlobalGlossary.csv; changing to TSV with 3-column design]
+Location: user/globalglossary.tsv  [Session 26: renamed from GlobalGlossary.csv; changing to TSV with 4-column design (TASK 76: added Active)]
 ⚠️ CONFLICT: gui/steps/information.py::_global_db_path() currently returns user/global_glossary.json
    for the Global Glossary widget. Both systems must be consolidated into globalglossary.tsv (Phase 62).
 
 ```tsv
-Original	Translation	Notes
-イオリ	Iori	Female protagonist. API.女性. 私と言う。ちゃんと呼ばれる
-メイド	Maid	Occupation term
-<color>		Control code — preserve as-is
+Original	Translation	Notes	Active
+イオリ	Iori	Female protagonist. API.女性. 私と言う。ちゃんと呼ばれる	True
+メイド	Maid	Occupation term	True
+<color>		Control code — preserve as-is	True
 ```
 
 Note: The Notes column carries all additional context (gender, role, source, pronouns) as plain text
-within a single field. No extra CSV columns. Three columns only.
+within a single field. No extra CSV columns. Four columns (TASK 76 added Active column, defaults to True).
 
 CODE DATABASE (TSV)
 
@@ -4581,15 +4581,14 @@ Location: user/codedatabase.tsv  [Session 26: replaces codeglossary.db SQLite an
    This module must be replaced with TSV-based I/O (Phase 62).
 
 ```tsv
-Pattern	Type	RegEx	Notes	Visible	IsInvisible	IsCouple	IsNumber	IsWord
-\V[\d+]	RPGMakerVariable	\\V\[\d+\]	Game variable reference	1	0	0	1	0
-\c[\d+]	ColorCode	\\c\[\d+\]	Color control code	0	1	0	0	0
+Pattern	Type	RegEx	Notes	Visible	IsInvisible	IsCouple	IsNumber	IsWord	Active
+\V[\d+]	RPGMakerVariable	\\V\[\d+\]	Game variable reference	1	0	0	1	0	True
+\c[\d+]	ColorCode	\\c\[\d+\]	Color control code	0	1	0	0	0	True
 ```
 
 Note: Visibility and extended property columns (IsInvisible, IsCouple, IsNumber, IsWord)
 are the explicit in-file representation of the Code Database Extended Properties (see §5.7).
-Purpose: Non-meta settings only. General config, presets, UI state, and all non-meta prompt content
-(system instructions defaults, style/tone presets, conditional prompts, caching, logging, limits).
+Active column (TASK 76) defaults to True; entries with active=False are excluded from prompts.
 
 ```ini
 [session]

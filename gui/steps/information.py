@@ -594,9 +594,8 @@ class InformationStep(BaseStep):
         # Collapsible widget state (right column widgets)
         self._collapsible_state: Dict[str, bool] = {
             "glossary": True,
-            "glossary_settings": True,
             "code_database": True,
-            "global_database": True,
+            "knowledge_base": True,
         }
         self._collapsible_content: Dict[str, ttk.Frame] = {}
         self._collapsible_buttons: Dict[str, ttk.Button] = {}
@@ -705,7 +704,7 @@ class InformationStep(BaseStep):
         self._right_column = ttk.Frame(columns_frame)
         self._right_column.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
         self._right_column.columnconfigure(0, weight=1)
-        for i in range(4):
+        for i in range(3):
             self._right_column.rowconfigure(i, weight=1)
 
         # Build sections in their respective columns
@@ -717,9 +716,8 @@ class InformationStep(BaseStep):
         self._build_notes_section()
         # Right column sections (all collapsible):
         self._build_character_section()
-        self._build_glossary_settings_section()
         self._build_code_glossary_section()
-        self._build_global_database_section()
+        self._build_knowledge_base_section()
         self._build_inference_section()  # Variables only, UI removed
         self._build_json_section()
 
@@ -730,10 +728,9 @@ class InformationStep(BaseStep):
     def _toggle_collapsible(self, widget_name: str) -> None:
         """Toggle collapsed/expanded state of a right-column widget.
 
-        When collapsed, the content frame is hidden and only the
-        LabelFrame title with a toggle button remains visible.
-        When expanded, the content is shown.  Row weights are
-        reconfigured so expanded widgets share available space.
+        When collapsed, the body frame is grid-removed so the section
+        shrinks to just the header bar (button + title + separator line).
+        When expanded, the body is shown and row weights are reconfigured.
 
         Args:
             widget_name: Key in ``_collapsible_state`` dict.
@@ -747,12 +744,11 @@ class InformationStep(BaseStep):
         if content is not None:
             if expanded:
                 content.grid()
-                if button:
-                    button.config(text="▾")
             else:
                 content.grid_remove()
-                if button:
-                    button.config(text="▸")
+
+        if button:
+            button.config(text="▾" if expanded else "▸")
 
         self._reconfigure_right_column_weights()
 
@@ -765,10 +761,14 @@ class InformationStep(BaseStep):
         """
         name_to_row = {
             "glossary": 0,
-            "glossary_settings": 1,
-            "code_database": 2,
-            "global_database": 3,
+            "code_database": 1,
+            "knowledge_base": 2,
         }
+        # Legacy compat: keep old names mapped if they still exist
+        if "glossary_settings" in self._collapsible_state:
+            name_to_row["glossary_settings"] = 1
+        if "global_database" in self._collapsible_state:
+            name_to_row["global_database"] = 3
         for name, row in name_to_row.items():
             expanded = self._collapsible_state.get(name, True)
             self._right_column.rowconfigure(
@@ -781,40 +781,70 @@ class InformationStep(BaseStep):
         title: str,
         widget_name: str,
         row: int,
-    ) -> ttk.LabelFrame:
-        """Create a ``LabelFrame`` with a compact ▾/▸ toggle in its header.
+        extra_header_widgets: Optional[Callable[["ttk.Frame"], None]] = None,
+    ) -> ttk.Frame:
+        """Create a collapsible section with a thin header bar and body.
 
-        The toggle button is placed inside the ``labelwidget`` so it
-        appears directly in the section header bar, keeping the UI
-        compact.
+        Structure:
+            wrapper (grid in parent at *row*)
+              ├── header  (row 0, always visible: ▾ button + title + separator)
+              └── body    (row 1, hidden when collapsed)
+
+        When collapsed the body is ``grid_remove``-d so only the
+        header bar remains — no empty LabelFrame borders.
 
         Args:
             parent: Parent frame (typically ``self._right_column``).
             title: Section title text.
             widget_name: Key used in ``_collapsible_state``.
             row: Grid row in the parent.
+            extra_header_widgets: Optional callable that receives the
+                header frame and can pack additional widgets (e.g. an
+                Enabled/Disabled button) into it.
 
         Returns:
-            The created ``LabelFrame``.
+            The body ``Frame`` where callers should place content.
         """
-        header = ttk.Frame(parent)
+        # Outer wrapper sits in the parent grid
+        wrapper = ttk.Frame(parent)
+        wrapper.grid(row=row, column=0, sticky="nsew", padx=5, pady=2)
+        wrapper.columnconfigure(0, weight=1)
+        wrapper.rowconfigure(1, weight=1)
+
+        # Header bar (always visible)
+        header = ttk.Frame(wrapper)
+        header.grid(row=0, column=0, sticky="ew")
+
         collapse_btn = ttk.Button(
             header,
             text="▾",
             width=2,
             command=lambda: self._toggle_collapsible(widget_name),
         )
-        collapse_btn.pack(side="left", padx=(4, 2))
+        collapse_btn.pack(side="left", padx=(0, 4))
         ttk.Label(header, text=title, font=("", 9, "bold")).pack(
             side="left",
         )
+
+        # Allow callers to inject extra widgets into the header
+        if extra_header_widgets is not None:
+            extra_header_widgets(header)
+
+        # Horizontal separator extending to fill remaining width
+        ttk.Separator(header, orient="horizontal").pack(
+            side="left", fill="x", expand=True, padx=(8, 0), pady=6,
+        )
+
         self._collapsible_buttons[widget_name] = collapse_btn
 
-        frame = ttk.LabelFrame(parent, labelwidget=header)
-        frame.grid(row=row, column=0, sticky="nsew", padx=5, pady=5)
-        frame.rowconfigure(0, weight=1)
-        frame.columnconfigure(0, weight=1)
-        return frame
+        # Body frame (collapsible)
+        body = ttk.Frame(wrapper)
+        body.grid(row=1, column=0, sticky="nsew")
+        body.rowconfigure(0, weight=1)
+        body.columnconfigure(0, weight=1)
+        self._collapsible_content[widget_name] = body
+
+        return body
 
     def _build_project_section(self) -> None:
         """Build project name and title section.
@@ -1151,16 +1181,10 @@ class InformationStep(BaseStep):
         Placed in right column (row 0) with collapse/expand support.
         Table expands vertically to fill available space.
         """
-        frame = self._build_collapsible_labelframe(
+        content = self._build_collapsible_labelframe(
             self._right_column, "Glossary", "glossary", row=0,
         )
-
-        # Content frame (collapsible)
-        content = ttk.Frame(frame)
-        content.grid(row=0, column=0, sticky="nsew")
         content.rowconfigure(1, weight=1)
-        content.columnconfigure(0, weight=1)
-        self._collapsible_content["glossary"] = content
 
         # Toolbar
         toolbar = ttk.Frame(content)
@@ -1168,7 +1192,7 @@ class InformationStep(BaseStep):
 
         ttk.Button(
             toolbar,
-            text="+ Add Character",
+            text="+Add",
             command=self._add_character,
         ).pack(side="left")
 
@@ -1246,17 +1270,11 @@ class InformationStep(BaseStep):
         Placed in right column (row 1) with collapse/expand support.
         Table expands vertically to fill available space.
         """
-        frame = self._build_collapsible_labelframe(
+        content = self._build_collapsible_labelframe(
             self._right_column, "Glossary Settings", "glossary_settings",
             row=1,
         )
-
-        # Content frame (collapsible)
-        content = ttk.Frame(frame)
-        content.grid(row=0, column=0, sticky="nsew")
         content.rowconfigure(2, weight=1)  # table row expands
-        content.columnconfigure(0, weight=1)
-        self._collapsible_content["glossary_settings"] = content
 
         # Use Global Glossary checkbox
         self._use_global_glossary_var = tk.BooleanVar(value=True)
@@ -1357,7 +1375,7 @@ class InformationStep(BaseStep):
 
         ttk.Button(
             gloss_btn_frame,
-            text="+ Add Entry",
+            text="+Add",
             command=self._add_glossary_entry,
         ).pack(side="left")
 
@@ -1371,19 +1389,13 @@ class InformationStep(BaseStep):
         """Build Code Database section in right column (TASK 18.5).
 
         TASK 41.1: Renamed from 'Code Glossary' to 'Code Database'.
-        Placed in right column (row 2) with collapse/expand support.
+        Placed in right column (row 1) with collapse/expand support.
         Table expands vertically to fill available space.
         """
-        frame = self._build_collapsible_labelframe(
-            self._right_column, "Code Database", "code_database", row=2,
+        content = self._build_collapsible_labelframe(
+            self._right_column, "Code Database", "code_database", row=1,
         )
-
-        # Content frame (collapsible)
-        content = ttk.Frame(frame)
-        content.grid(row=0, column=0, sticky="nsew")
         content.rowconfigure(1, weight=1)  # table row expands
-        content.columnconfigure(0, weight=1)
-        self._collapsible_content["code_database"] = content
 
         # Toolbar
         toolbar = ttk.Frame(content)
@@ -1391,7 +1403,7 @@ class InformationStep(BaseStep):
 
         ttk.Button(
             toolbar,
-            text="+ Add Pattern",
+            text="+Add",
             command=self._add_code_pattern,
         ).pack(side="left")
 
@@ -1471,17 +1483,11 @@ class InformationStep(BaseStep):
         Placed in right column (row 3) with collapse/expand support.
         Table expands vertically to fill available space.
         """
-        frame = self._build_collapsible_labelframe(
+        content = self._build_collapsible_labelframe(
             self._right_column, "Global Glossary and Database",
             "global_database", row=3,
         )
-
-        # Content frame (collapsible)
-        content = ttk.Frame(frame)
-        content.grid(row=0, column=0, sticky="nsew")
         content.rowconfigure(1, weight=1)  # table row expands
-        content.columnconfigure(0, weight=1)
-        self._collapsible_content["global_database"] = content
 
         # Top row: Mode switch, search, import/export
         top_row = ttk.Frame(content)
@@ -1556,17 +1562,733 @@ class InformationStep(BaseStep):
         btn_row.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 5))
 
         ttk.Button(
-            btn_row, text="+ Add Entry",
+            btn_row, text="+Add",
             command=self._add_global_db_entry,
         ).pack(side="left")
         ttk.Button(
-            btn_row, text="Remove Selected",
+            btn_row, text="Remove",
             command=self._remove_global_db_entry,
         ).pack(side="left", padx=5)
         ttk.Button(
             btn_row, text="Clear All",
             command=self._clear_global_database,
         ).pack(side="left")
+
+    def _build_knowledge_base_section(self) -> None:
+        """Build Knowledge Base widget (replaces Glossary Settings + Global Database).
+
+        Manages global glossary (globalglossary.tsv) and global code database
+        (codedatabase.tsv) with Active/Inactive per-entry state stored in TSV.
+
+        Layout:
+            Header: Collapse ▾ — Knowledge Base — Enabled|Disabled — separator
+            Row 0: Mode dropdown — Search entry — Column Filter dropdown
+            Row 1: Treeview table (flexible, mode-dependent columns)
+            Row 2: +Add — Remove — Activate|Deactivate
+            Row 3: Copy {Glossary|Code} from Project to Global
+
+        Placed in right column (row 2) with collapse/expand support.
+        """
+        # State variables
+        self._kb_enabled_var = tk.BooleanVar(value=True)
+        self._kb_mode_var = tk.StringVar(value="Glossary")
+        self._kb_search_var = tk.StringVar()
+        self._kb_col_filter_var = tk.StringVar(value="Default")
+
+        def _add_enabled_btn(header: ttk.Frame) -> None:
+            """Pack the Enabled/Disabled toggle into the header bar."""
+            self._kb_enabled_btn = ttk.Button(
+                header, text="Enabled", width=8,
+                command=self._toggle_kb_enabled,
+            )
+            self._kb_enabled_btn.pack(side="left", padx=(8, 0))
+
+        content = self._build_collapsible_labelframe(
+            self._right_column, "Knowledge Base", "knowledge_base",
+            row=2, extra_header_widgets=_add_enabled_btn,
+        )
+        content.rowconfigure(1, weight=1)   # table expands
+
+        # --- Row 0: Mode + Search + Column Filter ---
+        top_row = ttk.Frame(content)
+        top_row.grid(row=0, column=0, sticky="ew", padx=10, pady=5)
+
+        ttk.Label(top_row, text="Mode:").pack(side="left", padx=(0, 3))
+        mode_combo = ttk.Combobox(
+            top_row, textvariable=self._kb_mode_var,
+            values=["Glossary", "Code Database"],
+            state="readonly", width=13,
+        )
+        mode_combo.pack(side="left", padx=(0, 8))
+        mode_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_kb())
+
+        ttk.Label(top_row, text="Search:").pack(side="left", padx=(0, 3))
+        search_entry = ttk.Entry(
+            top_row, textvariable=self._kb_search_var, width=12,
+        )
+        search_entry.pack(side="left", padx=(0, 8))
+        self._kb_search_var.trace_add("write", lambda *_a: self._refresh_kb())
+
+        ttk.Label(top_row, text="Columns:").pack(side="left", padx=(0, 3))
+        self._kb_col_combo = ttk.Combobox(
+            top_row, textvariable=self._kb_col_filter_var,
+            values=["Default", "All", "Active Only"],
+            state="readonly", width=10,
+        )
+        self._kb_col_combo.pack(side="left")
+        self._kb_col_combo.bind(
+            "<<ComboboxSelected>>", lambda _e: self._refresh_kb(),
+        )
+
+        # --- Row 1: Treeview ---
+        table_frame = ttk.Frame(content)
+        table_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 5))
+        table_frame.rowconfigure(0, weight=1)
+        table_frame.columnconfigure(0, weight=1)
+
+        # Glossary default columns
+        kb_cols = ("active", "original", "translation", "notes")
+        self._kb_tree = ttk.Treeview(
+            table_frame, columns=kb_cols, show="headings", height=8,
+            selectmode="extended",
+        )
+        self._kb_tree.heading("active", text="Active")
+        self._kb_tree.heading("original", text="Original")
+        self._kb_tree.heading("translation", text="Translation")
+        self._kb_tree.heading("notes", text="Notes")
+
+        self._kb_tree.column("active", width=45, anchor="center")
+        self._kb_tree.column("original", width=100)
+        self._kb_tree.column("translation", width=100)
+        self._kb_tree.column("notes", width=100)
+
+        kb_scroll = ttk.Scrollbar(
+            table_frame, orient="vertical", command=self._kb_tree.yview,
+        )
+        self._kb_tree.configure(yscrollcommand=kb_scroll.set)
+        self._kb_tree.grid(row=0, column=0, sticky="nsew")
+        kb_scroll.grid(row=0, column=1, sticky="ns")
+
+        # Bindings
+        self._kb_tree.bind("<Button-1>", self._on_kb_click)
+        self._kb_tree.bind("<Double-1>", self._on_kb_double_click)
+        self._kb_tree.bind("<Delete>", lambda _e: self._remove_kb_entry())
+
+        # Entry count label
+        self._kb_count_var = tk.StringVar(value="Entries: 0")
+        ttk.Label(
+            content, textvariable=self._kb_count_var,
+            font=("Segoe UI", 8), foreground="gray",
+        ).grid(row=1, column=0, sticky="se", padx=20, pady=0)
+
+        # --- Row 2: +Add / Remove / Activate|Deactivate ---
+        btn_row = ttk.Frame(content)
+        btn_row.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 3))
+
+        ttk.Button(
+            btn_row, text="+Add", command=self._add_kb_entry,
+        ).pack(side="left")
+        ttk.Button(
+            btn_row, text="Remove", command=self._remove_kb_entry,
+        ).pack(side="left", padx=5)
+
+        self._kb_activate_btn = ttk.Button(
+            btn_row, text="Activate", command=self._toggle_kb_active,
+        )
+        self._kb_activate_btn.pack(side="left", padx=5)
+
+        # --- Row 3: Copy to Global ---
+        copy_row = ttk.Frame(content)
+        copy_row.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 5))
+
+        self._kb_copy_btn = ttk.Button(
+            copy_row, text="Copy Glossary from Project to Global",
+            command=self._copy_project_to_global,
+        )
+        self._kb_copy_btn.pack(side="left")
+
+        # Initial load
+        self._refresh_kb()
+
+    # ------------------------------------------------------------------
+    # Knowledge Base helpers
+    # ------------------------------------------------------------------
+
+    def _toggle_kb_enabled(self) -> None:
+        """Toggle the Enabled/Disabled state of the Knowledge Base.
+
+        Controls whether global databases are used in API request building.
+        Persists the setting via ManifestManager.set_use_global_glossary().
+        """
+        enabled = not self._kb_enabled_var.get()
+        self._kb_enabled_var.set(enabled)
+        self._kb_enabled_btn.config(text="Enabled" if enabled else "Disabled")
+
+        # Persist to manifest
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            mgr.set_use_global_glossary(enabled)
+        logger.debug("Knowledge Base enabled: %s", enabled)
+
+    def _refresh_kb(self) -> None:
+        """Reload the Knowledge Base treeview based on current mode and search."""
+        for child in self._kb_tree.get_children():
+            self._kb_tree.delete(child)
+
+        mode = self._kb_mode_var.get()
+        search = self._kb_search_var.get().strip().lower()
+        col_filter = self._kb_col_filter_var.get()
+
+        # Update Copy button text
+        label = "Glossary" if mode == "Glossary" else "Code"
+        self._kb_copy_btn.config(text=f"Copy {label} from Project to Global")
+
+        # Configure columns based on mode and filter
+        self._configure_kb_columns(mode, col_filter)
+
+        # Load entries
+        entries = self._load_kb_entries(mode)
+        count = 0
+        for entry in entries:
+            if search:
+                combined = " ".join(str(v) for v in entry.values()).lower()
+                if search not in combined:
+                    continue
+            active_str = entry.get("active", "true")
+            is_active = str(active_str).lower() != "false"
+
+            if col_filter == "Active Only" and not is_active:
+                continue
+
+            active_display = "✓" if is_active else "✗"
+
+            if mode == "Code Database":
+                vals = (
+                    active_display,
+                    entry.get("pattern", ""),
+                    entry.get("translation", entry.get("type", "")),
+                    entry.get("notes", ""),
+                )
+            else:
+                vals = (
+                    active_display,
+                    entry.get("original", ""),
+                    entry.get("translation", ""),
+                    entry.get("notes", ""),
+                )
+            self._kb_tree.insert("", "end", values=vals)
+            count += 1
+
+        self._kb_count_var.set(f"Entries: {count}")
+
+    def _configure_kb_columns(self, mode: str, col_filter: str) -> None:
+        """Reconfigure Treeview columns for the current mode/filter."""
+        if mode == "Code Database":
+            self._kb_tree.heading("original", text="Pattern")
+            self._kb_tree.heading("translation", text="Type")
+            self._kb_tree.heading("notes", text="Notes")
+        else:
+            self._kb_tree.heading("original", text="Original")
+            self._kb_tree.heading("translation", text="Translation")
+            self._kb_tree.heading("notes", text="Notes")
+
+        # Show/hide columns based on filter
+        if col_filter == "All":
+            self._kb_tree["displaycolumns"] = ("active", "original",
+                                                "translation", "notes")
+        elif col_filter == "Active Only":
+            self._kb_tree["displaycolumns"] = ("active", "original",
+                                                "translation", "notes")
+        else:  # Default
+            self._kb_tree["displaycolumns"] = ("active", "original",
+                                                "translation")
+
+    def _load_kb_entries(self, mode: str) -> List[Dict[str, str]]:
+        """Load entries from the global TSV file for Knowledge Base display.
+
+        Args:
+            mode: ``"Glossary"`` or ``"Code Database"``.
+
+        Returns:
+            List of dicts with keys: original/pattern, translation/type,
+            notes, active.
+        """
+        try:
+            if mode == "Code Database":
+                from CherryAI.functions.glossaries import code_glossary_db
+                rows = code_glossary_db.read_all_rows_extended()
+                return [
+                    {
+                        "pattern": r[0] if len(r) > 0 else "",
+                        "type": r[1] if len(r) > 1 else "",
+                        "translation": r[1] if len(r) > 1 else "",
+                        "notes": r[3] if len(r) > 3 else "",
+                        "active": r[9] if len(r) > 9 else "true",
+                    }
+                    for r in rows
+                ]
+            else:
+                from CherryAI.functions.glossary import read_unified_glossary
+                glossary = read_unified_glossary()
+                return [
+                    {
+                        "original": e.original,
+                        "translation": e.translation,
+                        "notes": e.notes,
+                        "active": "true" if e.active else "false",
+                    }
+                    for e in glossary.values()
+                ]
+        except Exception as exc:
+            logger.warning("Failed to load KB entries (%s): %s", mode, exc)
+            return []
+
+    def _save_kb_entries(self) -> None:
+        """Persist current KB Treeview contents to the global TSV file."""
+        mode = self._kb_mode_var.get()
+        try:
+            if mode == "Code Database":
+                from CherryAI.functions.glossaries import code_glossary_db
+                # Read full extended rows, update active flag
+                all_rows = code_glossary_db.read_all_rows_extended()
+                # Build pattern → active map from tree
+                active_map: Dict[str, bool] = {}
+                for child in self._kb_tree.get_children():
+                    vals = self._kb_tree.item(child, "values")
+                    pattern = vals[1] if len(vals) > 1 else ""
+                    is_active = (vals[0] == "✓") if vals else True
+                    if pattern:
+                        active_map[pattern] = is_active
+
+                # Update rows
+                updated: List[List[str]] = []
+                for row in all_rows:
+                    row = list(row)
+                    while len(row) < 10:
+                        row.append("")
+                    pattern = row[0]
+                    if pattern in active_map:
+                        row[9] = "true" if active_map[pattern] else "false"
+                    updated.append(row)
+
+                # Also add new entries that aren't in the original
+                existing = {r[0] for r in all_rows}
+                for child in self._kb_tree.get_children():
+                    vals = self._kb_tree.item(child, "values")
+                    pattern = vals[1] if len(vals) > 1 else ""
+                    if pattern and pattern not in existing:
+                        is_active = (vals[0] == "✓") if vals else True
+                        ttype = vals[2] if len(vals) > 2 else ""
+                        notes = vals[3] if len(vals) > 3 else ""
+                        new_row = [""] * 10
+                        new_row[0] = pattern
+                        new_row[1] = ttype
+                        new_row[3] = notes
+                        new_row[9] = "true" if is_active else "false"
+                        updated.append(new_row)
+
+                code_glossary_db.write_all_rows(updated)
+            else:
+                from CherryAI.functions.glossary import (
+                    read_unified_glossary,
+                    write_unified_glossary,
+                    GlossaryEntry,
+                )
+                existing = read_unified_glossary()
+                new_glossary: dict[str, GlossaryEntry] = {}
+                for child in self._kb_tree.get_children():
+                    vals = self._kb_tree.item(child, "values")
+                    is_active = (vals[0] == "✓") if vals else True
+                    original = vals[1] if len(vals) > 1 else ""
+                    translation = vals[2] if len(vals) > 2 else ""
+                    notes = vals[3] if len(vals) > 3 else ""
+                    if not original.strip():
+                        continue
+                    if original in existing:
+                        e = existing[original]
+                        e.translation = translation
+                        e.notes = notes
+                        e.active = is_active
+                        new_glossary[original] = e
+                    else:
+                        new_glossary[original] = GlossaryEntry(
+                            original=original,
+                            translation=translation,
+                            notes=notes,
+                            active=is_active,
+                        )
+                write_unified_glossary(new_glossary)
+        except Exception as exc:
+            logger.error("Failed to save KB entries (%s): %s", mode, exc)
+
+    def _add_kb_entry(self) -> None:
+        """Add a blank entry to the Knowledge Base."""
+        self._kb_tree.insert("", "end", values=("✓", "", "", ""))
+        children = self._kb_tree.get_children()
+        if children:
+            last = children[-1]
+            self._kb_tree.selection_set(last)
+            self._kb_tree.see(last)
+        self._save_kb_entries()
+        self._refresh_kb()
+
+    def _remove_kb_entry(self) -> None:
+        """Remove selected entries from the Knowledge Base."""
+        selection = self._kb_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Select entries to remove.")
+            return
+        count = len(selection)
+        msg = f"Remove {count} selected entries?" if count > 1 else "Remove selected entry?"
+        if not confirm_action(self, "remove_kb_entry", "Confirm", msg):
+            return
+        for item in selection:
+            self._kb_tree.delete(item)
+        self._save_kb_entries()
+        self._refresh_kb()
+
+    def _on_kb_click(self, event: tk.Event) -> None:
+        """Handle single click in KB treeview (toggle Active column).
+
+        Also updates the Activate/Deactivate button text based on selection.
+        """
+        region = self._kb_tree.identify_region(event.x, event.y)
+        if region == "cell":
+            column = self._kb_tree.identify_column(event.x)
+            item = self._kb_tree.identify_row(event.y)
+            if item:
+                col_idx = int(column.replace("#", "")) - 1
+                if col_idx == 0:  # Active column
+                    vals = list(self._kb_tree.item(item, "values"))
+                    vals[0] = "✗" if vals[0] == "✓" else "✓"
+                    self._kb_tree.item(item, values=vals)
+                    self._save_kb_entries()
+
+        # Schedule button text update after click processes
+        self.after(50, self._update_kb_activate_btn)
+
+    def _on_kb_double_click(self, event: tk.Event) -> None:
+        """Handle double-click for inline editing in KB treeview.
+
+        Skips Active column (col 0) — toggled by single click.
+        """
+        region = self._kb_tree.identify_region(event.x, event.y)
+        if region != "cell":
+            return
+        column = self._kb_tree.identify_column(event.x)
+        item = self._kb_tree.identify_row(event.y)
+        if not item:
+            return
+        col_idx = int(column.replace("#", "")) - 1
+        if col_idx <= 0:
+            return  # Skip Active column
+
+        col_keys = ("active", "original", "translation", "notes")
+        if col_idx >= len(col_keys):
+            return
+
+        mode = self._kb_mode_var.get()
+        # For Code Database, column 2 is "Type" but same edit behavior
+        self._start_kb_inline_edit(item, col_keys[col_idx], col_idx, mode)
+
+    def _start_kb_inline_edit(
+        self, item: str, col_key: str, col_idx: int, mode: str,
+    ) -> None:
+        """Start inline editing of a Knowledge Base cell.
+
+        For Code Database Type/Action columns, uses a dropdown.
+        For everything else, uses a text entry.
+        """
+        columns = ("active", "original", "translation", "notes")
+        try:
+            bbox = self._kb_tree.bbox(item, columns[col_idx])
+            if not bbox:
+                return
+        except tk.TclError:
+            return
+
+        x, y, width, height = bbox
+        current_values = self._kb_tree.item(item, "values")
+        current = current_values[col_idx] if col_idx < len(current_values) else ""
+
+        # For code db Type column, show dropdown
+        if mode == "Code Database" and col_key == "translation":
+            options = ["code", "variable", "control", "tag", "markup", "other"]
+            combo = ttk.Combobox(self._kb_tree, values=options, state="readonly")
+            combo.set(current)
+            combo.place(x=x, y=y, width=width, height=height)
+            combo.focus_set()
+
+            def on_select(event: Optional[tk.Event] = None) -> None:
+                new_val = combo.get()
+                combo.destroy()
+                if new_val != current:
+                    vals = list(self._kb_tree.item(item, "values"))
+                    while len(vals) <= col_idx:
+                        vals.append("")
+                    vals[col_idx] = new_val
+                    self._kb_tree.item(item, values=vals)
+                    self._save_kb_entries()
+
+            combo.bind("<<ComboboxSelected>>", on_select)
+            combo.bind("<Return>", on_select)
+            combo.bind("<Escape>", lambda _: combo.destroy())
+            combo.bind("<FocusOut>", on_select)
+            return
+
+        entry = ttk.Entry(self._kb_tree)
+        entry.insert(0, str(current))
+        entry.select_range(0, "end")
+        entry.place(x=x, y=y, width=width, height=height)
+        entry.focus_set()
+
+        def on_confirm(event: Optional[tk.Event] = None) -> None:
+            new_value = entry.get()
+            entry.destroy()
+            if new_value != str(current):
+                vals = list(self._kb_tree.item(item, "values"))
+                while len(vals) <= col_idx:
+                    vals.append("")
+                vals[col_idx] = new_value
+                self._kb_tree.item(item, values=vals)
+                self._save_kb_entries()
+
+        def on_cancel(event: Optional[tk.Event] = None) -> None:
+            entry.destroy()
+
+        entry.bind("<Return>", on_confirm)
+        entry.bind("<Tab>", on_confirm)
+        entry.bind("<Escape>", on_cancel)
+        entry.bind("<FocusOut>", on_confirm)
+
+    def _update_kb_activate_btn(self) -> None:
+        """Update the Activate/Deactivate button text based on selection."""
+        selection = self._kb_tree.selection()
+        if not selection:
+            self._kb_activate_btn.config(text="Activate")
+            return
+
+        has_active = False
+        has_inactive = False
+        for item in selection:
+            vals = self._kb_tree.item(item, "values")
+            if vals and vals[0] == "✓":
+                has_active = True
+            else:
+                has_inactive = True
+
+        if has_active and has_inactive:
+            self._kb_activate_btn.config(text="Activate | Deactivate")
+        elif has_active:
+            self._kb_activate_btn.config(text="Deactivate")
+        else:
+            self._kb_activate_btn.config(text="Activate")
+
+    def _toggle_kb_active(self) -> None:
+        """Toggle Active state for selected KB entries.
+
+        When selection contains both active and inactive entries,
+        shows a popup with Activate All / Deactivate All / Invert / Cancel.
+        """
+        selection = self._kb_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Select entries first.")
+            return
+
+        # Check if Enabled is on
+        if not self._kb_enabled_var.get():
+            messagebox.showinfo(
+                "Disabled",
+                "Knowledge Base is disabled. Enable it first.",
+            )
+            return
+
+        has_active = False
+        has_inactive = False
+        for item in selection:
+            vals = self._kb_tree.item(item, "values")
+            if vals and vals[0] == "✓":
+                has_active = True
+            else:
+                has_inactive = True
+
+        if has_active and has_inactive:
+            # Mixed selection — show popup
+            self._show_mixed_activate_popup(selection)
+        elif has_active:
+            # All active → deactivate
+            for item in selection:
+                vals = list(self._kb_tree.item(item, "values"))
+                vals[0] = "✗"
+                self._kb_tree.item(item, values=vals)
+            self._save_kb_entries()
+        else:
+            # All inactive → activate
+            for item in selection:
+                vals = list(self._kb_tree.item(item, "values"))
+                vals[0] = "✓"
+                self._kb_tree.item(item, values=vals)
+            self._save_kb_entries()
+
+        self._update_kb_activate_btn()
+
+    def _show_mixed_activate_popup(self, selection: tuple) -> None:
+        """Show popup for mixed active/inactive selection.
+
+        Four buttons: Activate All, Deactivate All, Invert Selection, Cancel.
+        """
+        popup = tk.Toplevel(self)
+        popup.title("Activate / Deactivate")
+        popup.resizable(False, False)
+        popup.transient(self.winfo_toplevel())
+        popup.grab_set()
+
+        ttk.Label(
+            popup,
+            text="Selection contains both active and inactive entries.",
+            wraplength=280,
+        ).pack(padx=15, pady=(10, 5))
+
+        btn_frame = ttk.Frame(popup, padding=10)
+        btn_frame.pack(fill="x")
+
+        def activate_all() -> None:
+            for item in selection:
+                vals = list(self._kb_tree.item(item, "values"))
+                vals[0] = "✓"
+                self._kb_tree.item(item, values=vals)
+            self._save_kb_entries()
+            popup.destroy()
+            self._update_kb_activate_btn()
+
+        def deactivate_all() -> None:
+            for item in selection:
+                vals = list(self._kb_tree.item(item, "values"))
+                vals[0] = "✗"
+                self._kb_tree.item(item, values=vals)
+            self._save_kb_entries()
+            popup.destroy()
+            self._update_kb_activate_btn()
+
+        def invert() -> None:
+            for item in selection:
+                vals = list(self._kb_tree.item(item, "values"))
+                vals[0] = "✗" if vals[0] == "✓" else "✓"
+                self._kb_tree.item(item, values=vals)
+            self._save_kb_entries()
+            popup.destroy()
+            self._update_kb_activate_btn()
+
+        ttk.Button(btn_frame, text="Activate All", command=activate_all).pack(
+            side="left", padx=3,
+        )
+        ttk.Button(btn_frame, text="Deactivate All", command=deactivate_all).pack(
+            side="left", padx=3,
+        )
+        ttk.Button(btn_frame, text="Invert", command=invert).pack(
+            side="left", padx=3,
+        )
+        ttk.Button(btn_frame, text="Cancel", command=popup.destroy).pack(
+            side="left", padx=3,
+        )
+
+        # Center popup
+        popup.update_idletasks()
+        px = self.winfo_rootx() + (self.winfo_width() - popup.winfo_width()) // 2
+        py = self.winfo_rooty() + (self.winfo_height() - popup.winfo_height()) // 2
+        popup.geometry(f"+{max(px, 0)}+{max(py, 0)}")
+
+    def _copy_project_to_global(self) -> None:
+        """Copy project glossary/code data to the global TSV database.
+
+        Writes manifest characters (original_name, translation, notes) to
+        globalglossary.tsv, or manifest code_patterns to codedatabase.tsv,
+        depending on current mode.
+        """
+        mode = self._kb_mode_var.get()
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            messagebox.showwarning(
+                "No Project",
+                "Load or create a project first.",
+            )
+            return
+
+        try:
+            if mode == "Code Database":
+                from CherryAI.functions.glossaries import code_glossary_db
+                patterns = self._metadata.code_patterns
+                if not patterns:
+                    messagebox.showinfo(
+                        "No Patterns",
+                        "No code patterns in the current project to copy.",
+                    )
+                    return
+
+                existing_rows = code_glossary_db.read_all_rows_extended()
+                existing_keys = {r[0] for r in existing_rows}
+                added = 0
+                for p in patterns:
+                    if p.pattern not in existing_keys:
+                        new_row = [""] * 10
+                        new_row[0] = p.pattern
+                        new_row[1] = p.category
+                        new_row[3] = p.notes
+                        new_row[9] = "true"
+                        existing_rows.append(new_row)
+                        added += 1
+
+                code_glossary_db.write_all_rows(existing_rows)
+                self._refresh_kb()
+                messagebox.showinfo(
+                    "Copy Complete",
+                    f"Copied {added} new patterns to Global Code Database.",
+                )
+            else:
+                from CherryAI.functions.glossary import (
+                    read_unified_glossary,
+                    write_unified_glossary,
+                    GlossaryEntry,
+                )
+                characters = self._metadata.characters
+                if not characters:
+                    messagebox.showinfo(
+                        "No Characters",
+                        "No characters in the current project to copy.",
+                    )
+                    return
+
+                existing = read_unified_glossary()
+                added = 0
+                for ch in characters:
+                    key = ch.original_name
+                    if not key:
+                        continue
+                    if key not in existing:
+                        existing[key] = GlossaryEntry(
+                            original=key,
+                            translation=ch.translation,
+                            notes=ch.notes,
+                            active=True,
+                        )
+                        added += 1
+                    else:
+                        # Update translation/notes for existing entries
+                        e = existing[key]
+                        if ch.translation:
+                            e.translation = ch.translation
+                        if ch.notes:
+                            e.notes = ch.notes
+
+                write_unified_glossary(existing)
+                self._refresh_kb()
+                messagebox.showinfo(
+                    "Copy Complete",
+                    f"Copied {added} new entries to Global Glossary.",
+                )
+        except Exception as exc:
+            logger.error("Failed to copy to global: %s", exc)
+            messagebox.showerror("Error", f"Copy failed: {exc}")
 
     def _build_notes_section(self) -> None:
         """Build System Instructions section with preset management.
@@ -2898,25 +3620,15 @@ class InformationStep(BaseStep):
             messagebox.showerror("Import Error", f"Failed to import: {e}")
 
     def _on_use_global_glossary_changed(self) -> None:
-        """Handle Use Global Glossary checkbox change (TASK 19 Phase 4)."""
-        use_global = self._use_global_glossary_var.get()
-        
-        # Update ManifestManager if available
-        mgr = self.manifest_manager
-        if mgr is not None and mgr.is_loaded:
-            mgr.set_use_global_glossary(use_global)
-        
-        # Update info label
-        if use_global:
-            self._glossary_info_label.config(
-                text="Global glossary entries will be applied during translation."
-            )
+        """Handle Use Global Glossary change — delegated to KB toggle.
+
+        Legacy method kept for backward compatibility.  Delegates to
+        ``_toggle_kb_enabled`` if the Knowledge Base widget is built.
+        """
+        if hasattr(self, "_kb_enabled_var"):
+            self._toggle_kb_enabled()
         else:
-            self._glossary_info_label.config(
-                text="Only project-specific glossary entries will be used."
-            )
-        
-        logger.debug("Use global glossary changed to: %s", use_global)
+            logger.debug("KB not built yet; use_global change ignored.")
 
     def _on_copy_from_global_glossary(self) -> None:
         """Copy entries from global glossary to project glossary (TASK 19 Phase 4)."""
@@ -3684,28 +4396,22 @@ class InformationStep(BaseStep):
         self._refresh_glossary_settings()  # TASK 19 Phase 4
 
     def _refresh_glossary_settings(self) -> None:
-        """Refresh glossary settings from ManifestManager (TASK 19 Phase 4).
+        """Refresh glossary settings from manifest and reload Knowledge Base.
 
-        TASK 41.5: Also reloads the inline-editable glossary table.
+        TASK 76: Reads ``use_global_glossary`` from manifest and syncs
+        the Knowledge Base Enabled/Disabled button.  Then reloads the KB
+        treeview from the global TSV files.
         """
         mgr = self.manifest_manager
         if mgr is not None and mgr.is_loaded:
             config = mgr.get_glossary_config()
-            self._use_global_glossary_var.set(config.use_global)
-            self._project_glossary_count_var.set(
-                f"Project entries: {len(config.project_entries)}"
-            )
-            # Update info label
-            if config.use_global:
-                self._glossary_info_label.config(
-                    text="Global glossary entries will be applied during translation."
+            if hasattr(self, "_kb_enabled_var"):
+                self._kb_enabled_var.set(config.use_global)
+                self._kb_enabled_btn.config(
+                    text="Enabled" if config.use_global else "Disabled",
                 )
-            else:
-                self._glossary_info_label.config(
-                    text="Only project-specific glossary entries will be used."
-                )
-            # TASK 41.5: Refresh the editable table
-            self._refresh_glossary_entries()
+        if hasattr(self, "_kb_tree"):
+            self._refresh_kb()
 
     def _save_metadata(self) -> None:
         """Save metadata to session state."""

@@ -3,9 +3,9 @@
 Phase 62: Replaces the legacy SQLite ``codeglossary.db`` with a plain-text
 TSV file at ``user/codedatabase.tsv``.
 
-Schema — 9 columns (tab-separated, UTF-8, with header row):
+Schema — 10 columns (tab-separated, UTF-8, with header row):
 
-    Pattern  Type  RegEx  Notes  Visible  IsInvisible  IsCouple  IsNumber  IsWord
+    Pattern  Type  RegEx  Notes  Visible  IsInvisible  IsCouple  IsNumber  IsWord  Active
 
 Migration
 ---------
@@ -43,14 +43,14 @@ logger = logging.getLogger(__name__)
 
 HEADER: List[str] = [
     "Pattern", "Type", "RegEx", "Notes",
-    "Visible", "IsInvisible", "IsCouple", "IsNumber", "IsWord",
+    "Visible", "IsInvisible", "IsCouple", "IsNumber", "IsWord", "Active",
 ]
 
 _LEGACY_CSV_NAME = "codeglossary.csv"
 _LEGACY_DB_NAME  = "codeglossary.db"
 _TSV_NAME        = "codedatabase.tsv"
 
-_NUM_COLS = len(HEADER)  # 9
+_NUM_COLS = len(HEADER)  # 10
 
 
 # ---------------------------------------------------------------------------
@@ -264,9 +264,11 @@ def read_all_rows(db_path: Optional[Path] = None) -> List[List[str]]:
 
 
 def read_all_rows_extended(db_path: Optional[Path] = None) -> List[List[str]]:
-    """Return every data row with all 9 columns (Phase 62).
+    """Return every data row with all 10 columns (Phase 76).
 
-    The header row is excluded.  Each row is guaranteed 9 elements.
+    The header row is excluded.  Each row is guaranteed 10 elements.
+    The 10th column (Active) defaults to empty string (= active) for
+    backward compatibility with 9-column TSV files.
     """
     path = init_db(db_path)
     rows: List[List[str]] = []

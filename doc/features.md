@@ -1456,11 +1456,11 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Code Database actions: Preserve ("Do not translate"), Translate ("Translate as"), Remove (filtered from prompt)
     - Code Database mass removal: multi-select (selectmode="extended") with batch reverse-index deletion
     - Code Database auto-populate: prefers `individual_codes` (per-code detail) over grouped `code_patterns` when available
-    - Global Glossary and Database widget: mode switch, search/filter, import/export JSON/CSV, stored in user/ directory
-    - Selective glossary: Active column with ✓/✗ toggle, only active entries included in prompt
-    - **Collapsible right-column widgets**: All four right-column sections (Glossary, Glossary Settings, Code Database, Global Glossary/Database) use `_build_collapsible_labelframe()` helper — a compact ▾/▸ toggle button (width=2) + bold label embedded as the LabelFrame's `labelwidget`; collapsed widgets hide content via `grid_remove()`, expanded widgets share space via row weight=1; `_reconfigure_right_column_weights()` dynamically adjusts grid weights; `_toggle_collapsible()` swaps button text between "▾" (expanded) and "▸" (collapsed)
+    - Knowledge Base widget: unified mode switch (Glossary / Code Database), search/filter, inline Active column toggle, stored in `user/` directory
+    - Selective glossary: Active column with ✓/✗ toggle per entry, only active entries included in prompt; mixed-selection failsafe popup for Activate/Deactivate
+    - **Collapsible right-column widgets**: All three right-column sections (Glossary, Code Database, Knowledge Base) use `_build_collapsible_labelframe()` helper — a header row with ▾/▸ toggle button + bold label + optional extra widgets + horizontal `ttk.Separator`; collapsed widgets hide body via `grid_remove()`, expanded widgets share space via row weight=1; `_reconfigure_right_column_weights()` dynamically adjusts grid weights; `_toggle_collapsible()` swaps button text between "▾" (expanded) and "▸" (collapsed)
     - **Taller tables**: All right-column Treeview widgets use height=8 (up from 4-5) with `sticky="nsew"` and parent `rowconfigure(weight=1)` for vertical expansion; canvas `<Configure>` binding stretches inner frame to viewport height so tables fill available space when window is maximized
-    - **Glossary moved to right column**: Glossary (formerly Character Notes) relocated from left column to right column row 0, grouped with Glossary Settings (row 1), Code Database (row 2), and Global Database (row 3)
+    - **Glossary moved to right column**: Glossary (formerly Character Notes) relocated from left column to right column row 0, grouped with Code Database (row 1) and Knowledge Base (row 2)
     - **Style/Tone text display fix**: `_ensure_style_tone_text()` populates text fields from preset when empty on step entry; `_populate_form()` also falls back to preset text
     - **Style/Tone single-line height**: ScrolledText height reduced from 3 to 1 for compact display
     - **Delete button width**: Style/Tone Delete buttons widened from width=8 to width=10 to prevent text clipping
@@ -2249,13 +2249,14 @@ The v3.0 manifest format extends v2.0 with GUI state management:
 - No background autosave thread (reduces complexity)
 
 **Glossary Options (Information Step):**
-- **Use Global Glossary**: Toggle between global `globalglossary.tsv` and project manifest
-- **Copy from Global**: Import entries from global glossary into project
+- **Knowledge Base Enabled/Disabled**: Toggle button enables or disables the Knowledge Base; when enabled, global `globalglossary.tsv` entries are included in translation prompts
+- **Copy Project → Global**: Export project glossary entries to global glossary file
 - **Project-specific glossary**: Stored in manifest, travels with project
 - **Selective Glossary (Phase 41)**: Active/inactive toggle per entry; only active entries sent to prompt
-- **Global Glossary and Database Widget (Phase 41 / Phase 62)**: Manage cross-project glossary (`user/globalglossary.tsv`) and code patterns (`user/codedatabase.tsv`) with search, import/export (TSV/JSON)
-  - ✅ **Phase 62 complete**: Widget reads/writes `globalglossary.tsv` (3-column TSV) and `codedatabase.tsv` (9-column TSV); auto-migrates from legacy JSON/CSV/SQLite on first access
-- **Glossary Entries include `active` field** (Phase 41): Persisted in manifest, defaults to True for backward compatibility
+- **Knowledge Base Widget (Phase 41 / Phase 62 / TASK 76)**: Unified widget replacing separate Glossary Settings and Global Glossary/Database widgets; manages cross-project glossary (`user/globalglossary.tsv`, 4-column TSV) and code patterns (`user/codedatabase.tsv`, 10-column TSV) with mode switch, search/filter, column filter, inline Active toggle, and mixed-selection Activate/Deactivate failsafe
+  - ✅ **Phase 62 complete**: Widget reads/writes same TSV files; auto-migrates from legacy JSON/CSV/SQLite on first access
+  - ✅ **TASK 76 complete**: Added Active column to both TSV files; unified into single Knowledge Base widget with Enabled/Disabled toggle
+- **Glossary Entries include `active` field** (Phase 41 / TASK 76): Persisted in TSV and manifest, defaults to True for backward compatibility
 
 **Project Creation Flow:**
 1. Load source files (Input step)

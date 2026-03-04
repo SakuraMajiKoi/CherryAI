@@ -2941,8 +2941,9 @@ Thank you.
 | test_manifest_metadata.py | 28 | Manifest metadata consolidation (Task 1) |
 | test_source_root.py | 27 | source_root simplification (Task 2) |
 | test_line_saving.py | 39 | Line field saving across all steps (Task 3) |
+| test_knowledge_base.py | 56 | Knowledge Base widget, Active columns, collapsible design, prompt adapter (TASK 76) |
 | smoke_test/*.py | 5+ | Smoke tests |
-| **Total Script Tests** | **3626** | (+94 manifest task tests) |
+| **Total Script Tests** | **3682** | (+94 manifest task tests, +56 TASK 76) |
 | One_Click_Test.py | 7 stages | API integration |
 
 ### TASK 11: Integration Test - 200 Lines (Completed)
@@ -10683,3 +10684,91 @@ python -m pytest dev/test_request_preview.py -v --timeout=15
 (language, genre, rolling_context). Updated header assertions for `=== Label (desc) ===` format.
 Updated `_make_request` helper with language/genre/rolling_context fields.
 Updated glossary test for selective per-chunk filtering (source terms in input lines).
+
+---
+
+### dev/test_knowledge_base.py (56 tests)
+
+**Purpose**: Comprehensive tests for the Knowledge Base widget (TASK 76), covering Active column support in TSV files, collapsible widget redesign, Knowledge Base widget structure, prompt adapter integration, and button text standardization.
+
+**Test Classes**:
+
+#### TestGlossaryEntryActive (10 tests)
+- `test_default_active_true` — GlossaryEntry defaults active=True
+- `test_active_false` — GlossaryEntry(active=False) stores False
+- `test_to_tsv_row_active_true` — to_tsv_row() includes "True" as 4th element
+- `test_to_tsv_row_active_false` — to_tsv_row() includes "False" as 4th element
+- `test_from_tsv_row_active_true` — from_tsv_row(["a","b","c","True"]) sets active=True
+- `test_from_tsv_row_active_false` — from_tsv_row(["a","b","c","False"]) sets active=False
+- `test_from_tsv_row_missing_active` — 3-element row defaults active=True (backward compat)
+- `test_roundtrip_active_true` — to_tsv_row → from_tsv_row preserves active=True
+- `test_roundtrip_active_false` — to_tsv_row → from_tsv_row preserves active=False
+- `test_active_in_repr` — repr(GlossaryEntry) includes active field
+
+#### TestUnifiedGlossaryActiveIO (3 tests)
+- `test_write_includes_active_column` — Written TSV header has 4 columns including Active
+- `test_read_preserves_active_false` — Read-back of written file preserves active=False
+- `test_legacy_3col_defaults_active` — Old 3-column TSV rows default active=True
+
+#### TestCodeDatabaseActive (5 tests)
+- `test_header_has_active` — HEADER list includes "Active" as last column
+- `test_num_cols_is_10` — _NUM_COLS == 10
+- `test_pad_row_9col_gets_active` — 9-element legacy row padded to 10 columns
+- `test_pad_row_10col_unchanged` — 10-element row passes through unchanged
+- `test_write_read_roundtrip_active` — Full write → read roundtrip preserves Active column
+
+#### TestUnifiedHeader (2 tests)
+- `test_unified_header_has_4_columns` — UNIFIED_HEADER has exactly 4 elements
+- `test_unified_header_contains_active` — "Active" is in UNIFIED_HEADER
+
+#### TestCollapsibleDesign (4 tests)
+- `test_no_labelframe_in_collapsible_builder` — Source code does not use ttk.LabelFrame
+- `test_separator_in_collapsible_builder` — Source uses ttk.Separator in header
+- `test_extra_header_widgets_param` — Method signature accepts extra_header_widgets
+- `test_collapsible_returns_body` — Method returns a Frame (the body)
+
+#### TestKnowledgeBaseStructure (8 tests)
+- `test_build_method_exists` — `_build_knowledge_base_section` exists on InformationStep
+- `test_kb_mode_switch_exists` — `_kb_mode_var` attribute created
+- `test_kb_tree_exists` — `_kb_tree` Treeview attribute created
+- `test_kb_search_exists` — `_kb_search_var` attribute created
+- `test_kb_enabled_var_exists` — `_kb_enabled_var` BooleanVar attribute created
+- `test_kb_count_var_exists` — `_kb_count_var` StringVar attribute created
+- `test_kb_activate_btn_exists` — `_kb_activate_btn` button exists
+- `test_kb_copy_btn_exists` — `_kb_copy_btn` button exists
+
+#### TestKnowledgeBaseHelpers (12 tests)
+- `test_toggle_kb_enabled_method` — `_toggle_kb_enabled` method exists
+- `test_refresh_kb_method` — `_refresh_kb` method exists
+- `test_configure_kb_columns_method` — `_configure_kb_columns` method exists
+- `test_load_kb_entries_method` — `_load_kb_entries` method exists
+- `test_save_kb_entries_method` — `_save_kb_entries` method exists
+- `test_add_kb_entry_method` — `_add_kb_entry` method exists
+- `test_remove_kb_entry_method` — `_remove_kb_entry` method exists
+- `test_on_kb_click_method` — `_on_kb_click` method exists
+- `test_on_kb_double_click_method` — `_on_kb_double_click` method exists
+- `test_start_kb_inline_edit_method` — `_start_kb_inline_edit` method exists
+- `test_update_kb_activate_btn_method` — `_update_kb_activate_btn` method exists
+- `test_toggle_kb_active_method` — `_toggle_kb_active` method exists
+
+#### TestMixedActivateFailsafe (2 tests)
+- `test_show_mixed_activate_popup_method` — `_show_mixed_activate_popup` method exists
+- `test_copy_project_to_global_method` — `_copy_project_to_global` method exists
+
+#### TestButtonText (4 tests)
+- `test_add_button_text_compact` — "+Add" appears in source (not "+Add Character" etc.)
+- `test_remove_button_text_compact` — "Remove" appears (not "Remove Selected")
+- `test_edit_button_text` — "Edit" button text used
+- `test_no_remove_selected_text` — "Remove Selected" does NOT appear in _build_knowledge_base_section
+
+#### TestEnabledDisabledPrompt (3 tests)
+- `test_prompt_adapter_filters_inactive` — build_full_system_prompt() excludes inactive glossary entries
+- `test_prompt_adapter_includes_active` — Active entries are included in prompt
+- `test_prompt_adapter_default_active` — Entries without explicit active field default to included
+
+#### TestCollapsibleState (2 tests)
+- `test_collapsible_state_three_keys` — _collapsible_state has exactly 3 keys
+- `test_collapsible_state_key_names` — Keys are "glossary", "code_database", "knowledge_base"
+
+#### TestKnowledgeBaseTestCount (1 test)
+- `test_knowledge_base_tests_count` — Self-validation: at least 56 tests in file
