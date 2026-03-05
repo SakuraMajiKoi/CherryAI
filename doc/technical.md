@@ -2468,9 +2468,11 @@ Purpose: Constructs dynamic system prompts with game context, glossary, translat
 
 Classes:
 - RequestBatch: Dataclass holding lines, indices, context, and prompt for a single API request.
-- RollingContextConfig: Dataclass for rolling context settings (enabled, lines_before, scene_markers, use_translated).
+- RollingContextConfig: Dataclass for rolling context settings (enabled, lines_before, lines_between, lines_after, scene_markers, use_translated).
 - PromptBuilder: Main class for generating prompts with project context.
 - ConditionalPromptManager: Pattern-triggered instruction injection.
+- RequestFormationConfig: 4+1 step formation settings (max_lines, min_lines, max_tokens, model, efficient_merge, rolling_context_between, rolling_context_after).
+- TranslationRequest: Request produced by `build_requests()` with `_merge_boundaries` and `is_merged` for Step 5 efficient merge.
 
 Constructor:
 ```python
@@ -2489,7 +2491,8 @@ Key Features:
 - Dynamic Batching: Splits text into batches based on size limits and context markers (e.g., scene changes).
 - Selective Glossary Injection: Scans batch text and only includes glossary terms actually present in the lines, reducing token usage.
 - Context Injection: Appends character lists and metadata to the prompt.
-- Rolling Context: Prepares slots for preceding lines (original or translated) to maintain coherence (TASK 7).
+- Rolling Context: Prepares slots for preceding, interspersed, and following lines (original or translated) to maintain coherence (TASK 7, extended TASK 78).
+- Between/After Context: Collects skipped lines within chunk range and already-translated lines following the chunk (TASK 78).
 - Scene Marker Detection: Resets rolling context at scene breaks.
 - Token Estimation: Provides estimates for prompt + content size.
 - Conditional Prompts: Pattern-detected instructions for token handling.
@@ -2557,6 +2560,7 @@ Key Methods:
 - `ConditionalPrompt.get_dynamic_instruction(matched_patterns)` - Generate instruction with relevant examples only
 - `ConditionalPromptManager.evaluate_batch(lines)` - Evaluate which conditions match
 - `ConditionalPromptManager.build_conditional_instructions(lines)` - Build dynamic instruction block
+- `build_merged_request_instruction(merge_boundaries)` - Generate block-relatedness text for Step 5 merged requests (TASK 78)
 
 Built-in Conditional Prompts (with dynamic examples):
 | Pattern | Purpose | Priority | Example When Matched |

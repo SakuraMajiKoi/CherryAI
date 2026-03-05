@@ -362,6 +362,66 @@ CONDITION_NEWLINE = ConditionalPrompt(
 
 
 # ============================================================================
+# Merged Request Instruction (Step 5 — Efficient Mode)
+# ============================================================================
+
+
+def build_merged_request_instruction(merge_boundaries: List[int]) -> str:
+    """Build a conditional instruction describing line relatedness in a
+    merged request.
+
+    When Efficient mode merges small requests across file boundaries
+    (Step 5), the resulting request contains blocks of lines from
+    different files.  This function generates a human-readable
+    description so the model understands the block structure.
+
+    Args:
+        merge_boundaries: List of line counts for each original block,
+            e.g. ``[2, 1, 3]`` means three merged blocks of 2, 1, and
+            3 lines.
+
+    Returns:
+        Instruction string, or empty string when not a merged request.
+
+    Examples:
+        >>> build_merged_request_instruction([1, 1, 1])
+        'All lines are unrelated to each other.'
+        >>> build_merged_request_instruction([3, 2])
+        ('This request has lines unrelated to each other. '
+         'The first block ends with line 3. '
+         'The next block starts at line 4.')
+    """
+    if not merge_boundaries or len(merge_boundaries) < 2:
+        return ""
+
+    # All single-line blocks → every line is unrelated
+    if all(b == 1 for b in merge_boundaries):
+        return "All lines are unrelated to each other."
+
+    # Mixed: describe block boundaries with relative line numbers
+    parts: List[str] = [
+        "This request has lines unrelated to each other.",
+    ]
+    offset = 0
+    for idx, size in enumerate(merge_boundaries):
+        block_start = offset + 1
+        block_end = offset + size
+        if idx == 0:
+            parts.append(f"The first block ends with line {block_end}.")
+        elif idx == len(merge_boundaries) - 1:
+            parts.append(
+                f"The last block starts at line {block_start}.",
+            )
+        else:
+            parts.append(
+                f"The next block is lines {block_start}\u2013{block_end}.",
+            )
+        offset += size
+
+    return " ".join(parts)
+
+
+# ============================================================================
 # Built-in Conditions Registry
 # ============================================================================
 

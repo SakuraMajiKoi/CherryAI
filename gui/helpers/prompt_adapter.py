@@ -350,6 +350,8 @@ class RollingContextView:
 
     enabled: bool = True
     lines_before: int = DEFAULT_ROLLING_CONTEXT_LINES
+    lines_between: int = 0
+    lines_after: int = 0
     scene_markers: List[str] = field(default_factory=lambda: ["=====", "-----", "***"])
     use_translated: bool = True
 
@@ -358,6 +360,8 @@ class RollingContextView:
         return {
             "enabled": self.enabled,
             "lines_before": self.lines_before,
+            "lines_between": self.lines_between,
+            "lines_after": self.lines_after,
             "scene_markers": self.scene_markers,
             "use_translated": self.use_translated,
         }
@@ -368,6 +372,8 @@ class RollingContextView:
         return cls(
             enabled=bool(data.get("enabled", True)),
             lines_before=int(data.get("lines_before", DEFAULT_ROLLING_CONTEXT_LINES)),
+            lines_between=int(data.get("lines_between", 0)),
+            lines_after=int(data.get("lines_after", 0)),
             scene_markers=data.get("scene_markers", ["=====", "-----", "***"]),
             use_translated=bool(data.get("use_translated", True)),
         )
@@ -940,6 +946,7 @@ def build_full_system_prompt(
     config_dir: Optional[Path] = None,
     chunk_lines: Optional[List[str]] = None,
     code_patterns: Optional[List[Dict[str, Any]]] = None,
+    merge_instruction: str = "",
 ) -> Tuple[str, Dict[str, int]]:
     """Build the full system prompt following spec §5.2 injection order.
 
@@ -957,6 +964,7 @@ def build_full_system_prompt(
         6. Genre
         7. POV (narrative perspective) — skipped when 4b has narration
         8. Conditional Prompts (selective per-chunk)
+        8b. Merged-request instruction (Efficient mode Step 5)
         9. Glossary + Characters (selective per-chunk)
         10. Rolling Context (conditional)
 
@@ -983,6 +991,9 @@ def build_full_system_prompt(
             filtering of glossary, characters, and conditional prompts.
         code_patterns: Code patterns from manifest for protagonist
             detection (optional, Task 75).
+        merge_instruction: Instruction text describing block relatedness
+            for merged requests (Step 5 Efficient mode).  Injected as
+            §5.2 item 8b.
 
     Returns:
         Tuple of (assembled_prompt, token_breakdown) where
@@ -1071,6 +1082,13 @@ def build_full_system_prompt(
         )
         if cond_text and cond_text.strip():
             _add("conditional", cond_text.strip())
+
+    # --- 8b. Merged-request instruction (Efficient mode Step 5) ---
+    if merge_instruction and merge_instruction.strip():
+        _add(
+            "merge_instruction",
+            f"# Request Structure\n{merge_instruction.strip()}",
+        )
 
     # --- 9. Glossary + Characters (selective per-chunk) ---
     # When chunk_lines is provided, only include entries whose source

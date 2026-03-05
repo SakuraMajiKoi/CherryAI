@@ -227,7 +227,10 @@ class RequestSettings:
     chunk_size: int = 50
     thinking_enabled: bool = False  # Task 43.8
     thinking_budget: int = 10000  # Task 43.8
-    rolling_context_lines: int = 3  # Task 43.9
+    rolling_context_lines: int = 3  # Task 43.9 — "Lines (Before)"
+    rolling_context_between: int = 0  # Task 78 — "Lines (Between)"
+    rolling_context_after: int = 0  # Task 78 — "Lines (After)"
+    use_translated_context: bool = True  # Task 78 — prefer tl over orig
     remove_duplicate_speakers: bool = False  # Task 51.4
     glossary_filter_mode: str = "all"  # Task 52.3
     consistency_mode: str = "disabled"  # Phase 55
@@ -242,6 +245,9 @@ class RequestSettings:
             "thinking_enabled": self.thinking_enabled,
             "thinking_budget": self.thinking_budget,
             "rolling_context_lines": self.rolling_context_lines,
+            "rolling_context_between": self.rolling_context_between,
+            "rolling_context_after": self.rolling_context_after,
+            "use_translated_context": self.use_translated_context,
             "remove_duplicate_speakers": self.remove_duplicate_speakers,
             "glossary_filter_mode": self.glossary_filter_mode,
             "consistency_mode": self.consistency_mode,
@@ -258,6 +264,9 @@ class RequestSettings:
             thinking_enabled=bool(data.get("thinking_enabled", False)),
             thinking_budget=int(data.get("thinking_budget", 10000)),
             rolling_context_lines=int(data.get("rolling_context_lines", 3)),
+            rolling_context_between=int(data.get("rolling_context_between", 0)),
+            rolling_context_after=int(data.get("rolling_context_after", 0)),
+            use_translated_context=bool(data.get("use_translated_context", True)),
             remove_duplicate_speakers=bool(
                 data.get("remove_duplicate_speakers", False)
             ),
@@ -921,6 +930,15 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.rolling_context_var = tk.IntVar(
             value=self.options.request.rolling_context_lines,
         )
+        self.rolling_context_between_var = tk.IntVar(
+            value=self.options.request.rolling_context_between,
+        )
+        self.rolling_context_after_var = tk.IntVar(
+            value=self.options.request.rolling_context_after,
+        )
+        self.use_translated_context_var = tk.BooleanVar(
+            value=self.options.request.use_translated_context,
+        )
         self.remove_dup_speakers_var = tk.BooleanVar(
             value=self.options.request.remove_duplicate_speakers,
         )
@@ -1448,23 +1466,49 @@ class GlobalOptionsDialog(tk.Toplevel):
         ctx_frame = ttk.LabelFrame(panel, text="Rolling Context", padding=10)
         ctx_frame.pack(fill=tk.X, pady=(0, 10))
 
-        ctx_row = ttk.Frame(ctx_frame)
-        ctx_row.pack(fill=tk.X, pady=5)
-        ttk.Label(ctx_row, text="Context Lines:", width=18).pack(side=tk.LEFT)
+        # Lines (Before)
+        ctx_row_before = ttk.Frame(ctx_frame)
+        ctx_row_before.pack(fill=tk.X, pady=2)
+        ttk.Label(ctx_row_before, text="Lines (Before):", width=18).pack(side=tk.LEFT)
         ttk.Spinbox(
-            ctx_row, from_=0, to=10,
+            ctx_row_before, from_=0, to=10,
             textvariable=self.rolling_context_var, width=10,
         ).pack(side=tk.LEFT, padx=5)
+
+        # Lines (Between)
+        ctx_row_between = ttk.Frame(ctx_frame)
+        ctx_row_between.pack(fill=tk.X, pady=2)
+        ttk.Label(ctx_row_between, text="Lines (Between):", width=18).pack(side=tk.LEFT)
+        ttk.Spinbox(
+            ctx_row_between, from_=0, to=10,
+            textvariable=self.rolling_context_between_var, width=10,
+        ).pack(side=tk.LEFT, padx=5)
         ttk.Label(
-            ctx_row, text="(0-10 preceding lines, default: 3)",
+            ctx_row_between,
+            text="(skipped lines inserted between input lines)",
             foreground="gray",
         ).pack(side=tk.LEFT, padx=5)
 
+        # Lines (After)
+        ctx_row_after = ttk.Frame(ctx_frame)
+        ctx_row_after.pack(fill=tk.X, pady=2)
+        ttk.Label(ctx_row_after, text="Lines (After):", width=18).pack(side=tk.LEFT)
+        ttk.Spinbox(
+            ctx_row_after, from_=0, to=10,
+            textvariable=self.rolling_context_after_var, width=10,
+        ).pack(side=tk.LEFT, padx=5)
         ttk.Label(
-            ctx_frame,
-            text="Number of preceding translated lines included for context in each request.",
+            ctx_row_after,
+            text="(following translated lines appended for forward context)",
             foreground="gray",
-        ).pack(anchor=tk.W, pady=(0, 5))
+        ).pack(side=tk.LEFT, padx=5)
+
+        # Prefer Translated
+        ttk.Checkbutton(
+            ctx_frame,
+            text="Prefer translated lines over originals for context",
+            variable=self.use_translated_context_var,
+        ).pack(anchor=tk.W, pady=(5, 0))
 
         # --- Speaker Dedup (moved from Model Settings) ---
         speaker_frame = ttk.LabelFrame(
@@ -3235,6 +3279,20 @@ class GlobalOptionsDialog(tk.Toplevel):
             int(ini_manager.get_initial_default("api", "chunk_size", 50, int) or 50)
         )
 
+        # Rolling context defaults
+        self.rolling_context_var.set(
+            int(ini_manager.get_initial_default("request", "rolling_context_lines", 3, int) or 3)
+        )
+        self.rolling_context_between_var.set(
+            int(ini_manager.get_initial_default("request", "rolling_context_between", 0, int) or 0)
+        )
+        self.rolling_context_after_var.set(
+            int(ini_manager.get_initial_default("request", "rolling_context_after", 0, int) or 0)
+        )
+        self.use_translated_context_var.set(
+            bool(ini_manager.get_initial_default("request", "use_translated_context", True, bool))
+        )
+
         # Translation defaults
         self.overwrite_translation_var.set(
             bool(ini_manager.get_initial_default("translation", "overwrite_translation", False, bool))
@@ -3386,6 +3444,9 @@ class GlobalOptionsDialog(tk.Toplevel):
             thinking_enabled=self.thinking_enabled_var.get(),
             thinking_budget=self.thinking_budget_var.get(),
             rolling_context_lines=self.rolling_context_var.get(),
+            rolling_context_between=self.rolling_context_between_var.get(),
+            rolling_context_after=self.rolling_context_after_var.get(),
+            use_translated_context=self.use_translated_context_var.get(),
             remove_duplicate_speakers=self.remove_dup_speakers_var.get(),
             glossary_filter_mode=self.glossary_filter_var.get(),
             consistency_mode=self.consistency_mode_var.get(),
@@ -3487,6 +3548,11 @@ class GlobalOptionsDialog(tk.Toplevel):
                 "thinking_enabled": str(self.options.request.thinking_enabled).lower(),
                 "thinking_budget": str(self.options.request.thinking_budget),
                 "rolling_context_lines": str(self.options.request.rolling_context_lines),
+                "rolling_context_between": str(self.options.request.rolling_context_between),
+                "rolling_context_after": str(self.options.request.rolling_context_after),
+                "use_translated_context": str(
+                    self.options.request.use_translated_context
+                ).lower(),
                 "remove_duplicate_speakers": str(
                     self.options.request.remove_duplicate_speakers
                 ).lower(),

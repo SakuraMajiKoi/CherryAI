@@ -491,17 +491,25 @@ SYSTEM INSTRUCTIONS
 - translate.py `_build_system_prompt_from_manifest()` reads `custom_notes` from `step_state.Information.data.metadata` and includes in system prompt
 - Global Options → Restore Defaults → System Instructions resets `[system_instructions]` section and re-seeds Default preset
 
-ROLLING CONTEXT (NEW - TASK 7)
-- Provides previous lines as context for each translation batch
+ROLLING CONTEXT (NEW - TASK 7, extended TASK 78)
+- Provides surrounding lines as context for each translation batch
 - Helps AI maintain continuity and context awareness
 - Configuration in `CherryAI.ini` under `[rolling_context]`:
   - `enabled`: true/false to enable/disable
-  - `lines_before`: number of lines to include (default: 3)
+  - `lines_before`: number of preceding lines to include (default: 3)
+  - `lines_between`: number of skipped/interspersed lines within chunk range (default: 0)
+  - `lines_after`: number of following already-translated lines (default: 0)
   - `scene_markers`: comma-separated patterns that indicate scene breaks (e.g., "=====,-----,***")
-  - `use_translated`: true to use translated text, false for source text
+  - `use_translated`: true to prefer translated text, false for source text (default: true)
+- Three rolling context types:
+  - **Lines (Before)**: Classic preceding-lines context from prior request
+  - **Lines (Between)**: Skipped lines within the chunk's index range (already translated / non-source)
+  - **Lines (After)**: Already-translated lines following the chunk (forward context)
+- All three context types block Efficient-mode cross-file merging
 - Scene markers reset context (new scene = fresh start)
 - Context is prefixed to user message with clear "do not re-translate" warning
 - Dynamic updates: context can be replaced with actual translated lines after each batch
+- Global Options UI: separate "Lines (Before)", "Lines (Between)", "Lines (After)" spinboxes + "Prefer translated lines" checkbox
 
 MODEL PRESETS (NEW - TASK 8)
 - Quick-switch between different AI model configurations

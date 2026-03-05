@@ -413,6 +413,7 @@ The system prompt is assembled in the following fixed order. Empty sections are 
 | 6 | **Genre** | `metadata.genre` (fallback: top-level `Genre`) | Skip when empty |
 | 7 | **POV** | `manifest POV` dict (`pov`, `confidence`) | Skip when confidence ≠ "high" **or** when slot 4b has narration |
 | 8 | **Conditional Prompts** | `user/CherryAI.ini [prompts]` or `user/conditional_prompts.json` | Selective — injected only when [Input Lines] contain the trigger pattern |
+| 8b | **Merged-Request Instruction** | `_merge_boundaries` from formation | Efficient mode only — describes block relatedness for Step 5 merged requests |
 | 9 | **Glossary** | Manifest `Glossary` + `user/globalglossary.tsv` + `metadata.characters` | Selective — rows injected only when Original (or Translation) found in [Input Lines]; Characters always included |
 | 10 | **Rolling Context** | Preceding translated lines from manifest | Conditional — dialogue/unknown requests only; disabled for Menu/Choice |
 | 11 | **Input Lines** | Manifest `lines[].prepro` (fallback: `orig`) | Always present |
@@ -435,7 +436,7 @@ The system prompt is assembled in the following fixed order. Empty sections are 
 - When both lines and tokens limits exist, whichever is reached first triggers the chunk boundary
 - **Maximum** and **Minimum** can be the same, **Minimum** can not exceed **Maximum**
 
-#### Request Formation (4-Step Process)
+#### Request Formation (4+1 Step Process)
 
 Invalid lines (placeholders, deduplicated, context markers) are never counted and are excluded from the final request.
 
@@ -446,6 +447,8 @@ Invalid lines (placeholders, deduplicated, context markers) are never counted an
 **Step 3**: Apply the Maximum Request Size to split any oversized First Dialogue Splits. Balance line counts within each resulting Second Dialogue Split where necessary to avoid very uneven chunks.
 
 **Step 4**: Smartly merge Second Dialogue Splits below Minimum Request Size with other requests, up to the Maximum Request Size. In a merge, the 2nd request onwards must not have any rolling context that could be provided.
+
+**Step 5** *(Efficient mode only)*: After Steps 1-4, merge small requests **across file boundaries** when they carry no rolling context. Merge candidates are requests with `receives_context=False` whose next request also has `receives_context=False` (i.e. singleton file sections). Merging is blocked when `Lines (Between)` or `Lines (After)` are configured and a line-index gap exists. Original block sizes are tracked in `_merge_boundaries` so that the merged-request conditional prompt (slot 8b) can describe block relatedness.
 
 #### Request Content Selection
 
@@ -521,14 +524,19 @@ This ensures cost estimates are never out of sync with translation behaviour.
 
 **Affects**: Translation (Step 5), Costs (Step 2)
 
-**Purpose**: Provide preceding lines as context to the LLM for each translation request to improve coherence and consistency.
+**Purpose**: Provide surrounding lines as context to the LLM for each translation request to improve coherence and consistency.
 
 #### Rules
 
-- **Dialogue only**: Rolling Context is only applied to Dialogue and Unknow requests (not Menu or Choice)
-- **Enabled by default**: Global Option with a configurable line length (default: 3 lines)
-- **Use Translated vs Use Original**: Global Option controlling whether rolling context uses already-translated lines or original lines. Default: "Use Translated". Cannot be used with Batch API usage automatically falls back to "Use Original"
-- **File boundary**: Rolling context does not cross file boundaries (respects File End context markers)
+- **Dialogue only**: Rolling Context is only applied to Dialogue and Unknown requests (not Menu or Choice)
+- **Enabled by default**: Global Option with configurable line counts (default: Before=3, Between=0, After=0)
+- **Three context types**:
+  - **Lines (Before)**: Preceding translated lines from the prior request (classic rolling context)
+  - **Lines (Between)**: Skipped/already-translated lines _within_ the chunk's index range (gaps)
+  - **Lines (After)**: Already-translated lines _following_ the chunk in the manifest (forward context)
+- **Prefer translated vs original**: Global Option controlling whether rolling context uses already-translated lines or original lines. Default: "Prefer translated". Batch API automatically falls back to original
+- **File boundary**: "Before" context does not cross file boundaries (respects File End context markers)
+- **Merge blocking**: All three context types block Efficient-mode Step 5 merging for affected requests
 
 #### Split Request Logic
 
@@ -542,12 +550,19 @@ After the first step of request formation (§5.2), the system determines which r
 | Single request (not split) | No | No |
 
 - **Gets**: The request will include preceding lines from the previous request as rolling context in the prompt
-- **Provides**: The last N lines of this request are stored for the next request to use as rolling context
+- **Provides**: The last N lines of this request are stored for the next request to use as rolling context. When "Prefer translated" is enabled (default), stores translated output; otherwise stores original/preprocessed text.
+
+#### Between / After Context Collection
+
+- **Between**: At translation time, for each chunk, manifest lines between the chunk's first and last index that were skipped (already translated or non-source language) are collected up to the configured limit
+- **After**: Manifest lines following the chunk's last index that already have translations are collected up to the configured limit
+- Both types respect the "Prefer translated" global option
+- Both types are formatted with distinct labels ("Interspersed context" / "Following context") and appended after the before-context in the prompt
 
 #### Fallback Rules
 
-- When "Use Translated" is selected but the previous request's translation is not yet available (e.g., during the first pass), falls back to using original lines
-- When rolling context is disabled (line length = 0), no context is included regardless of request type
+- When "Prefer translated" is selected but the previous request's translation is not yet available (e.g., during the first pass), falls back to using original lines
+- When rolling context is fully disabled (all line counts = 0), no context is included regardless of request type
 
 ---
 

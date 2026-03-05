@@ -188,19 +188,30 @@ class LineInfo:
 
 @dataclass
 class RequestFormationConfig:
-    """Configuration for the 4-step request formation process.
+    """Configuration for the 4-step (+1) request formation process.
 
     Attributes:
         max_lines: Hard maximum lines per request.
         min_lines: Soft minimum — requests below this are merged (Step 4).
         max_tokens: Token limit per request (0 = no token limit).
         model: Model name for token counting.
+        efficient_merge: When ``True``, runs a post-formation Step 5 that
+            merges small requests **across** file boundaries and context
+            types when they carry no rolling context.  Activated by
+            ``request_slicing = "efficient"`` in Global Options.
+        rolling_context_between: Lines (Between) setting; when > 0, blocks
+            merging of requests that would gain between-context.
+        rolling_context_after: Lines (After) setting; when > 0, blocks
+            merging of requests that would gain after-context.
     """
 
     max_lines: int = 50
     min_lines: int = 10
     max_tokens: int = 0
     model: str = "gpt-4o"
+    efficient_merge: bool = False
+    rolling_context_between: int = 0
+    rolling_context_after: int = 0
 
 
 @dataclass
@@ -223,11 +234,23 @@ class TranslationRequest:
     provides_context: bool = True
     receives_context: bool = True
     _file_section: int = 0  # Internal: file-section id (Step 2 groups)
+    _merge_boundaries: List[int] = field(default_factory=list)
+    """Line-count boundaries of original requests that were merged.
+
+    E.g. ``[1, 1, 3]`` means three original requests with 1, 1, and 3 lines
+    were merged into a single request of 5 lines.  Empty when the request
+    was not produced by merging.
+    """
 
     @property
     def line_count(self) -> int:
         """Number of translatable lines in this request."""
         return len(self.lines)
+
+    @property
+    def is_merged(self) -> bool:
+        """True when this request is the result of merging multiple requests."""
+        return len(self._merge_boundaries) > 1
 
 
 # ---- Step helpers ----------------------------------------------------------
@@ -495,21 +518,128 @@ def _step4_merge_short_requests(
     return merged
 
 
+def _step5_efficient_merge(
+    requests: List[TranslationRequest],
+    config: RequestFormationConfig,
+) -> List[TranslationRequest]:
+    """Step 5 — cross-file merge of small context-free requests.
+
+    Only runs when ``config.efficient_merge`` is ``True`` (Efficient
+    request-slicing mode).  Merges consecutive requests that carry **no**
+    rolling context, regardless of file section or context type, up to the
+    configured ``max_lines`` / ``max_tokens`` limits.
+
+    A request is considered a *merge candidate* when:
+
+    * ``receives_context`` is ``False`` (no before-context dependency).
+    * The *next* request in document order also has ``receives_context``
+      ``False`` — meaning this request does not feed a context chain.
+    * It is not a ``"menu"`` or ``"choice"`` context type.
+
+    In practice this targets singleton file-section requests (one request
+    per file) which are common in Efficient mode with large chunk sizes.
+
+    If ``rolling_context_between`` or ``rolling_context_after`` are
+    configured and there is a line-index gap between two candidate
+    requests, the merge is blocked to preserve the runtime context.
+
+    Merged requests record original block sizes in ``_merge_boundaries``
+    so that a conditional prompt can describe block relatedness.
+
+    Args:
+        requests: Ordered requests from Steps 1–4.
+        config: Formation configuration.
+
+    Returns:
+        Optimised list with small context-free requests merged.
+    """
+    if not requests or not config.efficient_merge:
+        return requests
+
+    n = len(requests)
+
+    def _is_candidate(idx: int) -> bool:
+        req = requests[idx]
+        if req.context_type in ("menu", "choice"):
+            return False
+        if req.receives_context:
+            return False
+        # If the *next* request depends on this one for rolling context,
+        # merging would break the chain.
+        if idx + 1 < n and requests[idx + 1].receives_context:
+            return False
+        return True
+
+    candidate_set = {i for i in range(n) if _is_candidate(i)}
+    if not candidate_set:
+        return requests
+
+    merged: List[TranslationRequest] = []
+    prev_is_candidate = False
+
+    for i, req in enumerate(requests):
+        is_cand = i in candidate_set
+
+        if is_cand and prev_is_candidate and merged:
+            prev = merged[-1]
+            combined = prev.line_count + req.line_count
+            fits = combined <= config.max_lines
+
+            # Block merge when between/after context configured and a gap
+            # exists (skipped lines between the two requests).
+            gap_blocked = False
+            if fits and (
+                config.rolling_context_between > 0
+                or config.rolling_context_after > 0
+            ):
+                prev_last = (
+                    max(prev.line_indices) if prev.line_indices else -1
+                )
+                req_first = (
+                    min(req.line_indices) if req.line_indices else -1
+                )
+                if req_first - prev_last > 1:
+                    gap_blocked = True
+
+            token_ok = True
+            if config.max_tokens > 0 and fits and not gap_blocked:
+                combined_tokens = _count_tokens_for_lines(
+                    prev.lines + req.lines, config.model,
+                )
+                token_ok = combined_tokens <= config.max_tokens
+
+            if fits and not gap_blocked and token_ok:
+                if not prev._merge_boundaries:
+                    prev._merge_boundaries = [prev.line_count]
+                prev._merge_boundaries.append(req.line_count)
+                prev.lines.extend(req.lines)
+                prev.line_indices.extend(req.line_indices)
+                prev.is_split = False
+                continue
+
+        merged.append(req)
+        prev_is_candidate = is_cand
+
+    return merged
+
+
 def build_requests(
     line_infos: List[LineInfo],
     config: Optional[RequestFormationConfig] = None,
 ) -> List[TranslationRequest]:
-    """Build translation requests using the 4-step formation process.
+    """Build translation requests using the 4+1 step formation process.
 
     This is the shared builder called by both **Estimation** (Step 2) and
     **Translation** (Step 5) to guarantee cost estimates match actual usage.
 
-    The four steps are:
+    The steps are:
 
     1. Split Menu/Choice blocks into dedicated requests.
     2. Split remaining lines at file-end boundaries.
     3. Apply max-size limits and balance sub-groups.
     4. Merge short requests below the minimum size.
+    5. *(Efficient mode only)* Merge small context-free requests across
+       file boundaries — see :func:`_step5_efficient_merge`.
 
     Invalid lines (placeholders, dedup, context markers) are excluded
     automatically.
@@ -579,7 +709,13 @@ def build_requests(
     all_requests = mc_requests + dialogue_requests
 
     # Sort by first line index to maintain document order
-    all_requests.sort(key=lambda r: r.line_indices[0] if r.line_indices else 0)
+    all_requests.sort(
+        key=lambda r: r.line_indices[0] if r.line_indices else 0,
+    )
+
+    # Step 5 — efficient cross-file merge (only in Efficient mode)
+    if config.efficient_merge:
+        all_requests = _step5_efficient_merge(all_requests, config)
 
     return all_requests
 
@@ -938,20 +1074,30 @@ def format_style_for_prompt(style: str) -> str:
     return f"\n\n# Translation Style Guidelines\n{style.strip()}"
 
 
-def format_rolling_context(context_lines: List[str], is_translated: bool = True) -> str:
+def format_rolling_context(
+    context_lines: List[str],
+    is_translated: bool = True,
+    context_type: str = "before",
+) -> str:
     """Format rolling context for prompt injection.
-    
+
     Args:
-        context_lines: Previous lines to include as context
-        is_translated: Whether the lines are already translated
-        
+        context_lines: Lines to include as context.
+        is_translated: Whether the lines are already translated.
+        context_type: One of ``"before"``, ``"between"``, ``"after"``.
+
     Returns:
-        Formatted context block for user message.
+        Formatted context block for the prompt.
     """
     if not context_lines:
         return ""
-    
-    label = "Previous translations" if is_translated else "Previous lines"
+
+    _labels = {
+        "before": ("Previous translations" if is_translated else "Previous lines"),
+        "between": "Translated lines interspersed in this batch",
+        "after": ("Following translations" if is_translated else "Following lines"),
+    }
+    label = _labels.get(context_type, _labels["before"])
     context_text = "\n".join(f"  {line}" for line in context_lines)
     return f"\n[{label} for context - do not re-translate these:]\n{context_text}\n\n"
 
@@ -961,24 +1107,46 @@ class RequestBatch:
     """A batch of lines to be sent to the API."""
     lines: List[str]
     indices: List[int]  # Original line indices
-    context_before: List[str] = field(default_factory=list)  # Rolling context (translated)
+    context_before: List[str] = field(default_factory=list)  # Rolling context (before)
+    context_between: List[str] = field(default_factory=list)  # Rolling context (between)
+    context_after: List[str] = field(default_factory=list)  # Rolling context (after)
     system_prompt: str = ""
-    quote_info: List[StrippedQuoteInfo] = field(default_factory=list)  # For quote restoration
-    
+    quote_info: List[StrippedQuoteInfo] = field(default_factory=list)
+
     @property
     def line_count(self) -> int:
         return len(self.lines)
-    
+
     def get_context_prefix(self) -> str:
         """Get formatted rolling context prefix for user message."""
-        return format_rolling_context(self.context_before)
+        return format_rolling_context(self.context_before, context_type="before")
+
+    @property
+    def has_rolling_context(self) -> bool:
+        """True when any rolling-context slot is populated."""
+        return bool(self.context_before or self.context_between or self.context_after)
 
 
 @dataclass
 class RollingContextConfig:
-    """Configuration for rolling context feature."""
+    """Configuration for rolling context feature.
+
+    Attributes:
+        enabled: Master toggle for rolling context.
+        lines_before: Preceding translated lines included for context.
+        lines_between: Translated lines inserted *between* input lines
+            when lines in the request were skipped (already-translated
+            or non-source-language).  Default 0 (off).
+        lines_after: Following translated lines appended after input
+            lines for forward context.  Default 0 (off).
+        scene_markers: Patterns that reset rolling context.
+        use_translated: Prefer translated text over originals when both
+            exist.  Falls back to original when translated is unavailable.
+    """
     enabled: bool = True
     lines_before: int = 3
+    lines_between: int = 0
+    lines_after: int = 0
     scene_markers: List[str] = field(default_factory=lambda: ["=====", "-----", "***"])
     use_translated: bool = True
     
@@ -1009,15 +1177,21 @@ class RollingContextConfig:
             enabled_val = env_enabled.lower() == "true"
         if env_use_translated:
             use_translated_val = env_use_translated.lower() == "true"
-        # Parse lines_before robustly (accept int or numeric string; fallback to default 3)
-        lines_before_raw = rc_section.get("lines_before", 3)
-        try:
-            lines_before_val = int(lines_before_raw) if lines_before_raw is not None else 3
-        except Exception:
-            lines_before_val = 3
+        # Parse integer fields robustly
+        def _int(val: Any, default: int) -> int:
+            try:
+                return int(val) if val is not None else default
+            except Exception:
+                return default
+
+        lines_before_val = _int(rc_section.get("lines_before", 3), 3)
+        lines_between_val = _int(rc_section.get("lines_between", 0), 0)
+        lines_after_val = _int(rc_section.get("lines_after", 0), 0)
         return cls(
             enabled=enabled_val,
             lines_before=lines_before_val,
+            lines_between=lines_between_val,
+            lines_after=lines_after_val,
             scene_markers=markers,
             use_translated=use_translated_val,
         )

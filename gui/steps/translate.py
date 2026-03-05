@@ -2088,6 +2088,7 @@ class TranslationStep(BaseStep):
         self,
         rolling_context_text: str = "",
         chunk_lines: Optional[List[str]] = None,
+        merge_instruction: str = "",
     ) -> str:
         """Build the system prompt from manifest Information step metadata.
 
@@ -2100,6 +2101,8 @@ class TranslationStep(BaseStep):
             chunk_lines: When provided, enables per-chunk selective
                 filtering of glossary, characters, and conditional
                 prompts (only terms present in these lines are included).
+            merge_instruction: Optional instruction describing block
+                relatedness for merged requests (Step 5).
 
         Returns:
             Assembled system prompt string.
@@ -2146,6 +2149,7 @@ class TranslationStep(BaseStep):
                 rolling_context_text=rolling_context_text,
                 pov_data=pov_data,
                 chunk_lines=chunk_lines,
+                merge_instruction=merge_instruction,
             )
 
             if prompt_text:
@@ -2458,6 +2462,29 @@ class TranslationStep(BaseStep):
                 ) if go else 3
             except (TypeError, ValueError, AttributeError):
                 rolling_ctx_max = 3
+
+            try:
+                rolling_ctx_between = int(
+                    go.request.rolling_context_between,
+                ) if go else 0
+            except (TypeError, ValueError, AttributeError):
+                rolling_ctx_between = 0
+
+            try:
+                rolling_ctx_after = int(
+                    go.request.rolling_context_after,
+                ) if go else 0
+            except (TypeError, ValueError, AttributeError):
+                rolling_ctx_after = 0
+
+            use_translated_ctx = True
+            try:
+                use_translated_ctx = bool(
+                    go.request.use_translated_context,
+                ) if go else True
+            except (TypeError, ValueError, AttributeError):
+                use_translated_ctx = True
+
             rolling_ctx_buffer: list[str] = []
 
             # Process each chunk
@@ -2502,10 +2529,48 @@ class TranslationStep(BaseStep):
                     tail = rolling_ctx_buffer[-rolling_ctx_max:]
                     rolling_context_text = "\n".join(tail)
 
+                # Build "between" context: skipped lines interspersed
+                # within this chunk's index range.
+                between_context_text = ""
+                if rolling_ctx_between > 0 and self._manifest_manager is not None:
+                    between_lines = self._collect_between_context(
+                        chunk, rolling_ctx_between, use_translated_ctx,
+                    )
+                    if between_lines:
+                        between_context_text = "\n".join(between_lines)
+
+                # Build "after" context: already-translated lines
+                # that follow this chunk in the manifest.
+                after_context_text = ""
+                if rolling_ctx_after > 0 and self._manifest_manager is not None:
+                    after_lines = self._collect_after_context(
+                        chunk, chunks, chunk_idx, rolling_ctx_after,
+                        use_translated_ctx,
+                    )
+                    if after_lines:
+                        after_context_text = "\n".join(after_lines)
+
+                # Combine all rolling context parts
+                full_context_text = rolling_context_text
+                if between_context_text:
+                    from CherryAI.functions.prompt_builder import format_rolling_context
+                    full_context_text += format_rolling_context(
+                        between_context_text.split("\n"),
+                        is_translated=use_translated_ctx,
+                        context_type="between",
+                    )
+                if after_context_text:
+                    from CherryAI.functions.prompt_builder import format_rolling_context
+                    full_context_text += format_rolling_context(
+                        after_context_text.split("\n"),
+                        is_translated=use_translated_ctx,
+                        context_type="after",
+                    )
+
                 # Translate chunk
                 try:
                     translations = self._translate_chunk(
-                        chunk, rolling_context_text=rolling_context_text,
+                        chunk, rolling_context_text=full_context_text,
                     )
 
                     # Apply character whitelist/blacklist filters
@@ -2534,7 +2599,13 @@ class TranslationStep(BaseStep):
                         if formation_ctx else True
                     )
                     if provides_context:
-                        rolling_ctx_buffer.extend(translations)
+                        if use_translated_ctx:
+                            rolling_ctx_buffer.extend(translations)
+                        else:
+                            rolling_ctx_buffer.extend(
+                                line.edited_prepro or line.preprocessed
+                                for line in chunk
+                            )
 
                 except Exception as e:
                     self._log_progress(f"Chunk {chunk_idx + 1} failed: {e}")
@@ -2682,6 +2753,111 @@ class TranslationStep(BaseStep):
 
         return kept
 
+    def _collect_between_context(
+        self,
+        chunk: List[TranslatableLine],
+        max_between: int,
+        use_translated: bool,
+    ) -> List[str]:
+        """Collect skipped/already-translated lines interspersed within a chunk.
+
+        "Between" context gathers lines that appear *between* the chunk's
+        first and last manifest index but were skipped (already translated
+        or non-source language).  These give the LLM visibility into gaps.
+
+        Args:
+            chunk: The current chunk being translated.
+            max_between: Maximum number of between-context lines to include.
+            use_translated: Prefer ``tl`` over ``orig`` when available.
+
+        Returns:
+            List of context line strings (may be empty).
+        """
+        if max_between <= 0 or not chunk:
+            return []
+
+        mgr = self._manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            return []
+
+        first_idx = chunk[0].idx
+        last_idx = chunk[-1].idx
+        chunk_indices = {line.idx for line in chunk}
+
+        between: list[str] = []
+        for idx in range(first_idx, last_idx + 1):
+            if idx in chunk_indices:
+                continue
+            entry = mgr.get_line(idx)
+            if entry is None:
+                continue
+            text = ""
+            if use_translated:
+                text = (entry.get("tl", "") or "").strip()
+            if not text:
+                text = (
+                    entry.get("prepro", "") or entry.get("orig", "") or ""
+                ).strip()
+            if text:
+                between.append(text)
+            if len(between) >= max_between:
+                break
+
+        return between
+
+    def _collect_after_context(
+        self,
+        chunk: List[TranslatableLine],
+        all_chunks: List[List[TranslatableLine]],
+        chunk_idx: int,
+        max_after: int,
+        use_translated: bool,
+    ) -> List[str]:
+        """Collect already-translated lines that follow this chunk.
+
+        "After" context provides forward-looking context from lines that
+        have already been translated (useful for re-translation / update
+        scenarios).  Only lines with existing translations are included.
+
+        Args:
+            chunk: The current chunk.
+            all_chunks: All chunks in the translation run.
+            chunk_idx: Index of the current chunk.
+            max_after: Maximum number of after-context lines.
+            use_translated: Prefer ``tl`` over ``orig`` when available.
+
+        Returns:
+            List of context line strings (may be empty).
+        """
+        if max_after <= 0 or not chunk:
+            return []
+
+        mgr = self._manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            return []
+
+        last_idx = chunk[-1].idx
+        after: list[str] = []
+
+        # Scan manifest lines after the chunk's last index
+        idx = last_idx + 1
+        while len(after) < max_after:
+            entry = mgr.get_line(idx)
+            if entry is None:
+                break
+            text = ""
+            if use_translated:
+                text = (entry.get("tl", "") or "").strip()
+            if not text:
+                text = (
+                    entry.get("prepro", "") or entry.get("orig", "") or ""
+                ).strip()
+            if text:
+                after.append(text)
+            idx += 1
+
+        return after
+
     def _build_chunks(self, lines: List[TranslatableLine]) -> List[List[TranslatableLine]]:
         """Build translation chunks using the 4-step formation pipeline.
 
@@ -2756,9 +2932,27 @@ class TranslationStep(BaseStep):
                 min_lines = max(5, chunk_size // 2)
             else:
                 min_lines = max(2, chunk_size // 5)
+
+            # Fetch rolling-context settings for Step 5 merge blocking
+            rc_between = 0
+            rc_after = 0
+            go = getattr(self.session, "global_options", None)
+            if go is not None:
+                try:
+                    rc_between = int(go.request.rolling_context_between)
+                except (TypeError, ValueError, AttributeError):
+                    pass
+                try:
+                    rc_after = int(go.request.rolling_context_after)
+                except (TypeError, ValueError, AttributeError):
+                    pass
+
             config = RequestFormationConfig(
                 max_lines=chunk_size,
                 min_lines=min_lines,
+                efficient_merge=(slicing == "efficient"),
+                rolling_context_between=rc_between,
+                rolling_context_after=rc_after,
             )
             formation_requests = build_requests(line_infos, config)
 
@@ -2776,6 +2970,7 @@ class TranslationStep(BaseStep):
                         "receives_context": req.receives_context,
                         "provides_context": req.provides_context,
                         "context_type": req.context_type,
+                        "merge_boundaries": req._merge_boundaries,
                     }
                     chunks.append(chunk_lines)
 
@@ -2844,9 +3039,26 @@ class TranslationStep(BaseStep):
         ]
 
         # Build system prompt with per-chunk selective filtering
+        # Include merged-request instruction when merge_boundaries exist
+        merge_instruction = ""
+        formation_ctx = getattr(chunk[0], "_formation_ctx", None) if chunk else None
+        if formation_ctx:
+            boundaries = formation_ctx.get("merge_boundaries", [])
+            if boundaries and len(boundaries) > 1:
+                try:
+                    from CherryAI.functions.conditional_prompts import (
+                        build_merged_request_instruction,
+                    )
+                    merge_instruction = build_merged_request_instruction(
+                        boundaries,
+                    )
+                except ImportError:
+                    pass
+
         system_prompt = self._build_system_prompt_from_manifest(
             rolling_context_text=rolling_context_text,
             chunk_lines=filtered_for_api,
+            merge_instruction=merge_instruction,
         )
 
         # Log outgoing request when enabled in Global Options

@@ -54,6 +54,61 @@ MODULE COUNTS (Verified January 2026)
 
 =============================================================================
 
+COMPLETED - SESSION 34 (TASK 78 — Rolling Context Extensions & Efficient Merge)
+
+### SESSION 34: TASK 78 — Rolling Context Between/After, Efficient Merge, Merged-Request Prompt ✅ DONE
+
+**Task 1 — Data model fields for between/after context:**
+- `RollingContextConfig`: added `lines_between: int = 0`, `lines_after: int = 0`
+- `RequestBatch`: added `context_between`, `context_after` lists; `has_rolling_context` property
+- `TranslationRequest`: added `_merge_boundaries` list; `is_merged` property
+- `RequestSettings`: added `rolling_context_between`, `rolling_context_after`, `use_translated_context`
+- `RollingContextView`: added `lines_between`, `lines_after` with serialization
+
+**Task 2 — Prefer translated context option:**
+- `use_translated_context: bool = True` in `RequestSettings`
+- Rolling context buffer stores translations (default) or originals based on preference
+
+**Task 3 — GlobalOptions UI restructure:**
+- Replaced single "Context Lines" spinbox with "Lines (Before)", "Lines (Between)", "Lines (After)"
+- Added "Prefer translated lines" checkbox
+- INI persistence for all new fields
+
+**Task 4 — Between/after context pipeline:**
+- `_collect_between_context()`: reads skipped manifest lines within chunk index range
+- `_collect_after_context()`: reads already-translated manifest lines following chunk
+- Combined context text assembled before `_translate_chunk()` call
+
+**Task 5 — Skipped lines feed into between/after context:**
+- Between: lines skipped due to already-translated or non-source status
+- After: lines following chunk that already have translations
+- Both respect `use_translated_context` preference
+
+**Task 6 — Efficient mode Step 5 cross-file merge:**
+- `RequestFormationConfig`: added `efficient_merge`, `rolling_context_between`, `rolling_context_after`
+- `_step5_efficient_merge()`: merges singleton file sections across boundaries when no rolling context
+- Merge candidates: `receives_context=False` AND next request also `receives_context=False`
+- Gap blocking: between/after context configured + non-contiguous indices prevents merge
+- Updates `build_requests()` to call Step 5 conditionally after sorting
+- `_build_chunks()` passes `efficient_merge` flag and rolling context settings to config
+
+**Task 7 — Merged request conditional prompt:**
+- `build_merged_request_instruction(merge_boundaries)` in `conditional_prompts.py`
+- "All lines are unrelated to each other." (all single-line blocks)
+- "This request has lines unrelated to each other. The first block ends with line N..." (mixed blocks)
+- Injected as prompt slot 8b via `build_full_system_prompt(merge_instruction=...)`
+
+**Task 8 — Runtime translated RC replacement:**
+- Before-context buffer stores translated output (default) or original text based on `use_translated_context`
+
+**Modified files:** functions/prompt_builder.py, functions/conditional_prompts.py, gui/helpers/prompt_adapter.py, gui/steps/translate.py, gui/dialogs/global_options.py
+**New test file:** dev/test_rolling_context_merge.py (37 tests)
+**Test results:** 37 new tests pass; 91 existing rolling context/formation/slicing tests pass; 0 regressions.
+
+=============================================================================
+
+=============================================================================
+
 COMPLETED - SESSION 33 (TASK 77 — Settings Restructure, Request Slicing, Estimation)
 
 ### SESSION 33: TASK 77 — Global Options Restructure & Translation Pipeline Improvements ✅ DONE

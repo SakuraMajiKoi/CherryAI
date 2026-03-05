@@ -2945,6 +2945,7 @@ Thank you.
 | test_estimation_skip.py | 41 | Estimation skip logic Phase 78 (Task 3) |
 | test_costs_step_phase40.py | 57 | Costs step Phase 40+78 improvements (rename, dual estimation, dual ticks, concurrent time, prepro lines, prompt overhead format, request preview tokens) |
 | test_rolling_context_phase78.py | 10 | Rolling context file-boundary fix Phase 78 (Task 7) |
+| test_rolling_context_merge.py | 37 | Rolling context between/after, Step 5 efficient merge, merged-request conditional prompt (Task 78) |
 | test_slicing_phase78.py | 11 | Slicing efficient mode Phase 78 (Task 8) |
 | test_char_filter_phase78.py | 32 | Blacklist/whitelist validation Phase 78 (Task 5): parse_filter_entries, check_filter_violations, exchange/retry/flag strategies |
 | smoke_test/*.py | 5+ | Smoke tests |
@@ -10802,6 +10803,59 @@ overwrite-off skips existing translations, symbol-only dialogue, generic placeho
 
 #### TestRollingContextPhase78Count (1 test)
 - Self-validation: at least 10 tests in file
+
+### dev/test_rolling_context_merge.py (37 tests) — Task 78 Rolling Context Extensions & Efficient Merge
+
+#### TestRollingContextConfigFields (2 tests)
+- Default values for `lines_between` and `lines_after`
+- Custom values round-trip through constructor
+
+#### TestFormatRollingContextType (4 tests)
+- Default context_type produces "before" label
+- `context_type="between"` / `"after"` produce distinct labels
+- Empty input returns empty string
+
+#### TestRequestFormationConfigExtended (2 tests)
+- `efficient_merge` defaults to False
+- `rolling_context_between` / `rolling_context_after` defaults to 0
+
+#### TestTranslationRequestMerge (3 tests)
+- Not merged by default (empty `_merge_boundaries`)
+- `is_merged` True when boundaries have >1 entry
+- Single boundary → not merged
+
+#### TestStep5EfficientMerge (11 tests)
+- Disabled when `efficient_merge=False`
+- Merges singleton file sections across boundaries
+- Respects `max_lines` limit
+- Skips menu/choice requests
+- Skips requests with `receives_context=True`
+- Blocks when next request has `receives_context=True`
+- Gap blocked when `rolling_context_between > 0`
+- Contiguous merges even with between-context configured
+- Three-way merge tracks all boundaries
+- `_merge_boundaries` records original block sizes
+- Empty input returns empty
+
+#### TestBuildRequestsEfficientMerge (3 tests)
+- Integration: singleton files merge in efficient mode
+- Multi-request files keep internal context chain
+- Conservative mode skips Step 5
+
+#### TestBuildMergedRequestInstruction (6 tests)
+- Empty / single boundary returns empty
+- All single-line blocks → "All lines are unrelated to each other."
+- Two blocks → describes first/last block boundaries
+- Three mixed blocks → describes all boundaries
+- Two single lines → all-unrelated message
+
+#### TestRequestSettingsSerialization (2 tests)
+- Round-trip for `rolling_context_between`, `rolling_context_after`, `use_translated_context`
+- Default values
+
+#### TestRequestBatchContext (4 tests)
+- Empty context fields, `has_rolling_context` False
+- `has_rolling_context` True for before/between/after
 
 ### dev/test_slicing_phase78.py (11 tests) — Phase 78 Slicing Efficient Mode
 
