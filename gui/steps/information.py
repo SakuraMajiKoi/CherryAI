@@ -1785,7 +1785,7 @@ class InformationStep(BaseStep):
         """Reconfigure Treeview columns for the current mode/filter."""
         if mode == "Code Database":
             self._kb_tree.heading("original", text="Pattern")
-            self._kb_tree.heading("translation", text="Type")
+            self._kb_tree.heading("translation", text="Translation")
             self._kb_tree.heading("notes", text="Notes")
         else:
             self._kb_tree.heading("original", text="Original")
@@ -1820,10 +1820,10 @@ class InformationStep(BaseStep):
                 return [
                     {
                         "pattern": r[0] if len(r) > 0 else "",
-                        "type": r[1] if len(r) > 1 else "",
+                        "category": r[2] if len(r) > 2 else "",
                         "translation": r[1] if len(r) > 1 else "",
-                        "notes": r[3] if len(r) > 3 else "",
-                        "active": r[9] if len(r) > 9 else "true",
+                        "notes": r[4] if len(r) > 4 else "",
+                        "active": r[10] if len(r) > 10 else "true",
                     }
                     for r in rows
                 ]
@@ -1864,11 +1864,11 @@ class InformationStep(BaseStep):
                 updated: List[List[str]] = []
                 for row in all_rows:
                     row = list(row)
-                    while len(row) < 10:
+                    while len(row) < 11:
                         row.append("")
                     pattern = row[0]
                     if pattern in active_map:
-                        row[9] = "true" if active_map[pattern] else "false"
+                        row[10] = "true" if active_map[pattern] else "false"
                     updated.append(row)
 
                 # Also add new entries that aren't in the original
@@ -1878,13 +1878,12 @@ class InformationStep(BaseStep):
                     pattern = vals[1] if len(vals) > 1 else ""
                     if pattern and pattern not in existing:
                         is_active = (vals[0] == "✓") if vals else True
-                        ttype = vals[2] if len(vals) > 2 else ""
+                        translation = vals[2] if len(vals) > 2 else ""
                         notes = vals[3] if len(vals) > 3 else ""
-                        new_row = [""] * 10
+                        new_row = [""] * 11
                         new_row[0] = pattern
-                        new_row[1] = ttype
-                        new_row[3] = notes
-                        new_row[9] = "true" if is_active else "false"
+                        new_row[1] = translation
+                        new_row[10] = "true" if is_active else "false"
                         updated.append(new_row)
 
                 code_glossary_db.write_all_rows(updated)
@@ -2230,11 +2229,11 @@ class InformationStep(BaseStep):
                 added = 0
                 for p in patterns:
                     if p.pattern not in existing_keys:
-                        new_row = [""] * 10
+                        new_row = [""] * 11
                         new_row[0] = p.pattern
-                        new_row[1] = p.category
-                        new_row[3] = p.notes
-                        new_row[9] = "true"
+                        new_row[2] = p.category
+                        new_row[4] = p.notes
+                        new_row[10] = "true"
                         existing_rows.append(new_row)
                         added += 1
 
@@ -4048,8 +4047,8 @@ class InformationStep(BaseStep):
                 rows = code_glossary_db.read_all_rows()
                 return [
                     {"col1": r[0] if len(r) > 0 else "",
-                     "col2": r[1] if len(r) > 1 else "",
-                     "col3": r[3] if len(r) > 3 else ""}  # Pattern, Type, Notes
+                     "col2": r[2] if len(r) > 2 else "",
+                     "col3": r[4] if len(r) > 4 else ""}  # Pattern, Category, Notes
                     for r in rows
                 ]
             else:  # Glossary
@@ -4079,7 +4078,7 @@ class InformationStep(BaseStep):
             if mode == "Code Database":
                 from CherryAI.functions.glossaries import code_glossary_db
                 rows = [
-                    [e.get("col1", ""), e.get("col2", ""), "", e.get("col3", "")]
+                    [e.get("col1", ""), "", e.get("col2", ""), "", e.get("col3", "")]
                     for e in entries
                 ]
                 code_glossary_db.write_all_rows(rows)

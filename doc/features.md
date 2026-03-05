@@ -3202,6 +3202,71 @@ switches between requests when matches span boundaries.
 timestamped JSON file to `logs/requests/` containing model, temperature, system prompt,
 and input lines — useful for comparing Preview Requests against actual requests.
 
+## Phase 78 Improvements
+
+**Manifest Sample Removal (Task 1)**: Manifests no longer store redundant
+`SampleText` / `SampleTranslation` fields.  Existing manifests are migrated
+transparently on load; the fields are dropped from the data dictionary and
+never written back.
+
+**Speaker Replacement Fix (Task 2)**: Speaker name replacement now operates
+on the resolved dialogue portion only, preventing false matches inside stage
+directions or narration blocks.
+
+**Improved Estimation Skip Logic (Task 3)**: The preprocessed estimation
+shares the formation pipeline with the actual translation but applies
+additional skip rules: lines matching "Skip Non-Source Language Lines",
+"Overwrite Translation", symbol-only dialogue (e.g. `Rin: "..."`), and
+generic placeholders (`__PLACEHOLDER__`, `__DEDUP__`) are excluded via the
+`_get_skip_indices()` helper.
+
+**Prompt Overhead Display (Task 4)**: The costs step now shows
+`~Z total (Y Requests, ~X per)` instead of the old
+`~X tokens/request × Y requests = ~Z total` format.  Request Preview
+computes separate prompt-token and input-token counts using `count_tokens()`
+instead of the `len // 4` heuristic.
+
+**Blacklist / Whitelist Validation (Task 5)**: Filters no longer strip
+offending characters.  Instead the translation is validated and three
+configurable strategies determine the response:
+
+* **Exchange Forbidden Characters** (default on) — replaces violations via
+  the manifest's Autofix Map.
+* **Flag for QA Review** (default on) — marks lines that still have
+  violations with status `NEEDS_REVIEW` so later steps can surface them.
+* **Retry Lines with Forbidden Characters** (default off) — blanks the
+  translation and resets the line to `PENDING` for another API attempt.
+
+Entries now support `re=<pattern>` for regex matching, `\,` for literal
+commas, and plain words — all comma-separated.  Three new checkboxes appear
+in Global Options → Translation → Character Validation.
+
+**Romanization + Code DB (Task 6)**: The Analysis step exposes a
+"Romanize" button that fills the `translation` column for characters,
+speakers, and glossary entries using the existing romanization engine.  The
+Code Database TSV gains a `Translation` column (between Pattern and the
+former Type column, now renamed `Category`).
+
+**Rolling Context Fix (Task 7)**: The first request of each file section
+now receives `receives_context=False`, preventing stale context from a
+prior file from bleeding into the next.  The rolling-context buffer is
+cleared at file boundaries.  Preview Requests shows actual original lines
+instead of placeholder text.
+
+**Slicing Efficient Mode Fix (Task 8)**: Efficient-mode slicing uses
+`min_lines = max(5, chunk_size // 2)` vs conservative's
+`max(2, chunk_size // 5)`.  With the rolling-context fix (Task 7) ensuring
+correct file-boundary detection, efficient mode now merges aggressively
+within file sections while respecting section boundaries.
+
+**Global Options Scrolling (Task 9)**: The Global Options dialog sections
+now scroll correctly when content overflows the visible area.
+
+**Model Settings Lines/Request (Task 10)**: The `_chunk_var` used by the
+costs step and the translation step are fully decoupled, so changing the
+lines-per-request slider in Model Settings no longer affects translation
+chunk sizes and vice-versa.
+
 =============================================================================
 
 END OF USER GUIDE

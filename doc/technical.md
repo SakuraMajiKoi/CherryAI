@@ -5250,3 +5250,61 @@ Updated across 6 files: `ProjectMetadata` dataclass + to_dict/from_dict in infor
 `ProjectInfo` dataclass + pascal_map "Prompt" mapping in manifest_manager.py (migration reads
 both keys), `metadata.get()` calls in prompt_adapter.py and translate.py,
 `"system_instructions"` key in test_prompt_builder_shared.py.
+
+## Phase 78 — Estimation, Validation & Formation Fixes
+
+### functions/validation.py Changes
+
+**`FilterEntry` dataclass:** Represents a parsed blacklist/whitelist entry.
+Fields: `raw` (original text), `pattern` (compiled regex or None), `is_regex`.
+Method `matches(text)` checks if the text contains the entry.
+
+**`parse_filter_entries(raw)`:** Splits a comma-separated filter string into
+`FilterEntry` objects.  `\,` escapes a literal comma; `re=<pattern>` compiles
+as a regex; plain tokens match literally.
+
+**`check_filter_violations(text, wl, bl)`:** Returns a list of human-readable
+violation strings when *text* contains blacklisted entries or characters not
+covered by the whitelist.
+
+### gui/steps/translate.py Changes
+
+**`LineStatus.NEEDS_REVIEW`:** New enum value for lines flagged during character
+validation.  Displayed as `⚠ Review` in the translation table.
+
+**`_apply_char_filters()` rewrite:** No longer strips characters.  Parses
+entries via `parse_filter_entries`, checks via `check_filter_violations`, then
+applies the three configurable strategies (exchange → retry → flag).  Accepts
+optional `line_objects` parameter to set line status.
+
+**Caller update (translation loop):** Passes `line_objects=chunk` to
+`_apply_char_filters`.  Preserves `NEEDS_REVIEW` / `PENDING` status set by
+the filter instead of unconditionally marking `COMPLETED`.
+
+### gui/dialogs/global_options.py Changes
+
+**`TranslationSettings` new fields:** `exchange_forbidden_chars: bool = True`,
+`flag_for_qa_review: bool = True`, `retry_forbidden_chars: bool = False`.
+Serialized via `to_dict()` / `from_dict()`.
+
+**New BooleanVars:** `exchange_forbidden_var`, `flag_qa_review_var`,
+`retry_forbidden_var` — initialized from `TranslationSettings`, written back
+in `_collect` and loaded in `_load_initial_defaults`.
+
+**Character Validation LabelFrame:** Three checkboxes added to the Translation
+section between Request Slicing and Consistency System.
+
+### functions/prompt_builder.py Changes
+
+**`build_requests()` file-section tagging:** Tracks `first_in_section` per
+file group.  The first request of each file section gets
+`receives_context=False`, preventing stale rolling context from prior files.
+
+### gui/steps/costs.py Changes
+
+**`_update_ui()` prompt overhead format:** Changed from
+`~X tokens/request × Y requests = ~Z total` to
+`~Z total (Y Requests, ~X per)`.
+
+**`_render_current_request()` token counting:** Uses `count_tokens()` for
+separate prompt-token and input-token counts instead of `len // 4`.

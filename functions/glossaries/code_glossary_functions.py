@@ -608,8 +608,8 @@ def update_code_in_glossary(
     except ImportError:
         pass
 
-    def _auto_romanize_notes(pattern: str) -> str:
-        """Return romanized pattern for Notes if it contains kana."""
+    def _auto_romanize_translation(pattern: str) -> str:
+        """Return romanized pattern for Translation column if it contains kana."""
         if _romanize_if_jp is None:
             return ""
         rom = _romanize_if_jp(pattern)
@@ -618,16 +618,14 @@ def update_code_in_glossary(
     code_path = _code_glossary_path()
     _db_init(code_path)  # ensure schema exists / migrate from CSV if needed
 
-    # Handle NEW mode: overwrite existing with fresh entries (no archiving)
+    # Handle NEW mode: overwrite existing with fresh entries
     if update_mode == UPDATE_MODE_NEW:
         logging.info("NEW mode: Overwriting code glossary with fresh entries")
-        # Create fresh code glossary with only new entries (4 columns)
         # Group by normalized codes to avoid duplicates
         normalized_groups: Dict[str, Tuple[str, int]] = {}
         for code, count in code_counts.items():
             normalized = _normalize_code_segment(code)
             if normalized in normalized_groups:
-                # Accumulate counts for same normalized code
                 _, existing_count = normalized_groups[normalized]
                 normalized_groups[normalized] = (normalized, existing_count + count)
             else:
@@ -637,52 +635,48 @@ def update_code_in_glossary(
         for normalized, (norm_code, total_count) in sorted(normalized_groups.items(), key=lambda x: x[1][1], reverse=True):
             code_type = classify_code_type(norm_code)
             regex_pattern = generate_regex_pattern(norm_code, code_type)
-            notes = _auto_romanize_notes(norm_code)
-            new_rows.append([norm_code, code_type, regex_pattern, notes])
+            translation = _auto_romanize_translation(norm_code)
+            new_rows.append([norm_code, translation, code_type, regex_pattern, ""])
         _db_write(new_rows, code_path)
         logging.info("Wrote fresh code glossary DB: %s (%d codes)", code_path, len(new_rows))
         return cast(Path, code_path)
 
-    # Read existing code glossary entries
-    # Use NORMALIZED codes as keys for grouping variations
+    # Read existing code glossary entries (5-column compat: pattern, translation, category, regex, notes)
     existing_codes: Dict[str, List[str]] = {}
     for row in _db_read(code_path):
-        # Rows from DB are already 4-column, no header, no migration needed
-        while len(row) < 4:
+        while len(row) < 5:
             row.append("")
         normalized_key = _normalize_code_segment(row[0])
         row[0] = normalized_key
         existing_codes[normalized_key] = row
-    
+
     # Process codes based on update mode
-    # Use NORMALIZED codes as keys to group variations
     appended_rows: List[List[str]] = []
     for code, count in sorted(code_counts.items(), key=lambda x: x[1], reverse=True):
         normalized_code = _normalize_code_segment(code)
-        
+
         if normalized_code not in existing_codes:
-            # New code: classify and add with normalized code as key
             code_type = classify_code_type(code)
             regex_pattern = generate_regex_pattern(normalized_code, code_type)
-            notes = _auto_romanize_notes(normalized_code)
-            appended_rows.append([normalized_code, code_type, regex_pattern, notes])
+            translation = _auto_romanize_translation(normalized_code)
+            appended_rows.append([normalized_code, translation, code_type, regex_pattern, ""])
         elif update_mode == UPDATE_MODE_OVERWRITE:
-            # Overwrite mode: reclassify and replace with fresh defaults
             code_type = classify_code_type(code)
             regex_pattern = generate_regex_pattern(normalized_code, code_type)
-            notes = _auto_romanize_notes(normalized_code)
-            existing_codes[normalized_code] = [normalized_code, code_type, regex_pattern, notes]
+            translation = _auto_romanize_translation(normalized_code)
+            existing_codes[normalized_code] = [normalized_code, translation, code_type, regex_pattern, ""]
         elif update_mode == UPDATE_MODE_UPDATE:
-            # Update mode: reclassify Type if empty, preserve Replacement/Notes
             existing_row = existing_codes[normalized_code]
-            if not existing_row[1]:  # Type is empty
-                existing_row[1] = classify_code_type(code)
-            # Generate RegEx if empty
-            if not existing_row[2]:  # RegEx is empty
-                existing_row[2] = generate_regex_pattern(normalized_code, existing_row[1])
+            if not existing_row[2]:  # Category is empty
+                existing_row[2] = classify_code_type(code)
+            if not existing_row[3]:  # RegEx is empty
+                existing_row[3] = generate_regex_pattern(normalized_code, existing_row[2])
             # Strip legacy Count from notes if present
-            if existing_row[3].startswith("Count:"):
-                existing_row[3] = ""
+            if existing_row[4].startswith("Count:"):
+                existing_row[4] = ""
+            # Fill translation if empty
+            if not existing_row[1]:
+                existing_row[1] = _auto_romanize_translation(normalized_code)
             existing_codes[normalized_code] = existing_row
         # else: ADD mode, skip existing entries
     

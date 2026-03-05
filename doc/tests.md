@@ -2870,7 +2870,7 @@ Thank you.
 | test_session_persistence.py | 40 | Session auto-save/load, step persistence, file restoration (Release Stabilization) |
 | test_folder_loading.py | 23 | Folder loading in InputExtractionStep |
 | test_input_step_phase39.py | 38 | Input step Phase 39 improvements (unified selector, treeview, format filtering, progress) |
-| test_costs_step_phase40.py | 52 | Costs step Phase 40 improvements (rename, dual estimation, dual ticks, concurrent time, prepro lines) |
+| test_costs_step_phase40.py | 57 | Costs step Phase 40+78 improvements (rename, dual estimation, dual ticks, concurrent time, prepro lines, prompt overhead, preview tokens) |
 | test_estimate_manifest.py | 33 | Estimation/Analysis manifest integration (TASK 25.1, 25.2) |
 | test_qa_manifest.py | 17 | QA step manifest integration (TASK 26.1) |
 | test_translate_manifest.py | 47 | Translation step manifest integration (TASK 26.2) |
@@ -2942,8 +2942,13 @@ Thank you.
 | test_source_root.py | 27 | source_root simplification (Task 2) |
 | test_line_saving.py | 39 | Line field saving across all steps (Task 3) |
 | test_knowledge_base.py | 56 | Knowledge Base widget, Active columns, collapsible design, prompt adapter (TASK 76) |
+| test_estimation_skip.py | 41 | Estimation skip logic Phase 78 (Task 3) |
+| test_costs_step_phase40.py | 57 | Costs step Phase 40+78 improvements (rename, dual estimation, dual ticks, concurrent time, prepro lines, prompt overhead format, request preview tokens) |
+| test_rolling_context_phase78.py | 10 | Rolling context file-boundary fix Phase 78 (Task 7) |
+| test_slicing_phase78.py | 11 | Slicing efficient mode Phase 78 (Task 8) |
+| test_char_filter_phase78.py | 32 | Blacklist/whitelist validation Phase 78 (Task 5): parse_filter_entries, check_filter_violations, exchange/retry/flag strategies |
 | smoke_test/*.py | 5+ | Smoke tests |
-| **Total Script Tests** | **3682** | (+94 manifest task tests, +56 TASK 76) |
+| **Total Script Tests** | **3833** | (+151 Phase 78 tests) |
 | One_Click_Test.py | 7 stages | API integration |
 
 ### TASK 11: Integration Test - 200 Lines (Completed)
@@ -10772,3 +10777,85 @@ Updated glossary test for selective per-chunk filtering (source terms in input l
 
 #### TestKnowledgeBaseTestCount (1 test)
 - `test_knowledge_base_tests_count` — Self-validation: at least 56 tests in file
+
+### dev/test_estimation_skip.py (41 tests) — Phase 78 Estimation Skip Logic
+
+Tests for `_get_skip_indices()` in the costs step: skip non-source language lines,
+overwrite-off skips existing translations, symbol-only dialogue, generic placeholders
+(`__PLACEHOLDER__`, `__DEDUP__`).
+
+### dev/test_rolling_context_phase78.py (10 tests) — Phase 78 Rolling Context
+
+#### TestFormationReceivesContext (4 tests)
+- First request of file section gets `receives_context=False`
+- Subsequent requests get `receives_context=True`
+- Multiple file sections each reset `receives_context`
+- Single-file formation keeps first request without context
+
+#### TestTranslationBufferReset (2 tests)
+- Buffer cleared at file boundaries
+- Buffer preserved within same file section
+
+#### TestPreviewRollingContext (3 tests)
+- Preview shows actual original lines from manifest
+- File-first-idx respected in preview
+
+#### TestRollingContextPhase78Count (1 test)
+- Self-validation: at least 10 tests in file
+
+### dev/test_slicing_phase78.py (11 tests) — Phase 78 Slicing Efficient Mode
+
+#### TestSlicingMinLines (3 tests)
+- Efficient mode: `min_lines = max(5, chunk_size // 2)`
+- Conservative mode: `min_lines = max(2, chunk_size // 5)`
+- Both modes respect chunk_size upper bound
+
+#### TestSlicingMergeEffect (3 tests)
+- Efficient merges aggressively within file sections
+- Conservative preserves more separate requests
+- File boundaries prevent cross-file merges
+
+#### TestSlicingInCosts / TestSlicingInTranslation (4 tests)
+- Costs step and translation step respect slicing mode independently
+
+#### TestSlicingPhase78Count (1 test)
+- Self-validation: at least 11 tests in file
+
+### dev/test_char_filter_phase78.py (32 tests) — Phase 78 Blacklist/Whitelist Validation
+
+#### TestParseFilterEntries (11 tests)
+- Empty/whitespace → empty list
+- Single token, multiple tokens, whitespace trimmed
+- `\,` literal comma, `re=` regex entries, invalid regex skipped
+- Plain token matching, mixed entries
+
+#### TestCheckFilterViolations (7 tests)
+- No filters → no violations
+- Blacklist match / no match / regex
+- Whitelist violation, whitespace allowed, both filters combined
+
+#### TestTranslationSettingsCharValidation (3 tests)
+- Default values, custom values, roundtrip via to_dict/from_dict
+
+#### TestApplyCharFiltersExchange (3 tests)
+- Exchange replaces blacklisted chars via autofix map
+- No autofix match leaves text, flags instead
+- Exchange disabled skips replacement
+
+#### TestApplyCharFiltersRetry (2 tests)
+- Retry empties text and resets line to PENDING
+- No retry for clean lines
+
+#### TestApplyCharFiltersFlag (2 tests)
+- Flag sets NEEDS_REVIEW status on violation
+- Flag disabled preserves original status
+
+#### TestApplyCharFiltersRegex (2 tests)
+- Regex blacklist triggers flagging
+- Literal comma in entry matches correctly
+
+#### TestApplyCharFiltersNoFilter (1 test)
+- Empty filters pass through unchanged
+
+#### TestCharFilterPhase78Count (1 test)
+- Self-validation: at least 25 tests in file

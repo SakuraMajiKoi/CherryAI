@@ -21,6 +21,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 
 from CherryAI.gui.components.table import ColumnDef, SharedTable, TableRow
+from CherryAI.gui.helpers.chunker_adapter import count_tokens
 from CherryAI.gui.steps.base import BaseStep
 from CherryAI.gui.theme.colors import THEME
 
@@ -76,6 +77,7 @@ class LineStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
+    NEEDS_REVIEW = "needs_review"
 
 
 class TranslationState(Enum):
@@ -1091,14 +1093,24 @@ class RequestPreviewDialog(tk.Toplevel):
         self._text.insert("1.0", content)
         self._text.configure(state="disabled")
 
-        # Info label
-        est_tokens = len(content) // 4
+        # Info label — count the actual API payload, not the display
+        prompt_text = req.full_system_prompt or ""
+        input_text = req.input_lines or ""
+        try:
+            prompt_tok, _ = count_tokens(prompt_text)
+        except Exception:
+            prompt_tok = len(prompt_text) // 4
+        try:
+            input_tok, _ = count_tokens(input_text)
+        except Exception:
+            input_tok = len(input_text) // 4
         self._info_label.configure(
             text=(
                 f"Request {self._current_idx + 1} of "
                 f"{len(self._requests)}  |  "
                 f"{req.line_count} lines  |  "
-                f"~{est_tokens:,} tokens"
+                f"~{prompt_tok + input_tok:,} tokens "
+                f"(~{prompt_tok:,} prompt, ~{input_tok:,} input)"
             ),
         )
 
@@ -1983,6 +1995,7 @@ class TranslationStep(BaseStep):
                 LineStatus.COMPLETED: "✓ Done",
                 LineStatus.FAILED: "✗ Failed",
                 LineStatus.SKIPPED: "⊘ Skipped",
+                LineStatus.NEEDS_REVIEW: "⚠ Review",
             }.get(line.status, "?")
 
             # TASK 43.3: Merge column resolution order
@@ -2479,6 +2492,11 @@ class TranslationStep(BaseStep):
                     if formation_ctx else (chunk_idx > 0)
                 )
 
+                # Reset buffer at file boundaries (first chunk of a
+                # file section never receives prior context).
+                if not receives_context:
+                    rolling_ctx_buffer.clear()
+
                 rolling_context_text = ""
                 if receives_context and rolling_ctx_buffer and rolling_ctx_max > 0:
                     tail = rolling_ctx_buffer[-rolling_ctx_max:]
@@ -2491,12 +2509,17 @@ class TranslationStep(BaseStep):
                     )
 
                     # Apply character whitelist/blacklist filters
-                    translations = self._apply_char_filters(translations)
+                    translations = self._apply_char_filters(
+                        translations, line_objects=chunk,
+                    )
 
                     # Apply translations
                     for line, translation in zip(chunk, translations):
                         line.translated = translation
-                        line.status = LineStatus.COMPLETED
+                        if line.status not in (
+                            LineStatus.NEEDS_REVIEW, LineStatus.PENDING,
+                        ):
+                            line.status = LineStatus.COMPLETED
                         self._progress.translated_lines += 1
                         # Persist to manifest
                         if self._manifest_manager is not None:
@@ -2844,61 +2867,96 @@ class TranslationStep(BaseStep):
 
         return translations
 
-    def _apply_char_filters(self, texts: List[str]) -> List[str]:
-        """Apply character whitelist/blacklist filtering to translations.
+    def _apply_char_filters(
+        self,
+        texts: List[str],
+        line_objects: Optional[List[Any]] = None,
+    ) -> List[str]:
+        """Validate translations against character whitelist/blacklist.
 
-        * **Whitelist** (comma-separated character ranges): only keep
-          characters that match any range.  Example: ``a-z,A-Z,0-9``.
-        * **Blacklist** (comma-separated characters/ranges): remove any
-          character that matches.  Example: ``★,☆,♪``.
-
-        Ranges use ``start-end`` syntax where start/end are single
-        characters.  Single characters are also accepted.
+        Instead of stripping characters, this method:
+        1. Parses entries supporting ``re=`` regex and ``\\,`` literal commas.
+        2. Checks each text for violations.
+        3. If *exchange* is enabled, applies the autofix map to fix what it can.
+        4. Re-checks after exchange; remaining violations are handled by
+           *retry* (revert to original) or *flag* (mark ``NEEDS_REVIEW``).
 
         Args:
             texts: Raw translation strings.
+            line_objects: Optional list of ``TranslatableLine`` objects
+                corresponding to *texts* (used for setting status).
 
         Returns:
-            Filtered translation strings.
+            The (possibly exchanged) translation strings.
         """
-        whitelist = self._whitelist_var.get().strip()
-        blacklist = self._blacklist_var.get().strip()
-        if not whitelist and not blacklist:
+        from CherryAI.functions.validation import (
+            parse_filter_entries,
+            check_filter_violations,
+            apply_autofix,
+        )
+
+        whitelist_raw = self._whitelist_var.get().strip()
+        blacklist_raw = self._blacklist_var.get().strip()
+        if not whitelist_raw and not blacklist_raw:
             return texts
 
-        import re
+        wl_entries = parse_filter_entries(whitelist_raw)
+        bl_entries = parse_filter_entries(blacklist_raw)
+        if not wl_entries and not bl_entries:
+            return texts
 
-        def _build_char_set(raw: str) -> str:
-            """Convert comma-separated items into a regex character class."""
-            parts: list[str] = []
-            for item in raw.split(","):
-                item = item.strip()
-                if not item:
-                    continue
-                if len(item) == 3 and item[1] == "-":
-                    parts.append(re.escape(item[0]) + "-" + re.escape(item[2]))
-                elif len(item) == 1:
-                    parts.append(re.escape(item))
-                else:
-                    # Treat as literal characters
-                    parts.extend(re.escape(c) for c in item)
-            return "".join(parts)
+        # Read strategy settings from global options
+        go = getattr(self.session, "global_options", None)
+        exchange = True
+        flag_qa = True
+        retry = False
+        if go is not None:
+            ts = getattr(go, "translation", None)
+            if ts is not None:
+                exchange = getattr(ts, "exchange_forbidden_chars", True)
+                flag_qa = getattr(ts, "flag_for_qa_review", True)
+                retry = getattr(ts, "retry_forbidden_chars", False)
 
-        result: list[str] = list(texts)
+        # Load autofix map from manifest when exchange is enabled
+        autofix_map: Dict[str, str] = {}
+        if exchange:
+            mgr = getattr(self, "manifest_manager", None) or getattr(
+                self, "_manifest_manager", None,
+            )
+            if mgr is not None:
+                try:
+                    autofix_map = mgr.get_autofix_map()
+                except Exception:
+                    autofix_map = {}
 
-        if whitelist:
-            charset = _build_char_set(whitelist)
-            if charset:
-                keep_re = re.compile(f"[{charset}\\s]")
-                result = [
-                    "".join(keep_re.findall(t)) for t in result
-                ]
+        result: List[str] = list(texts)
+        for i, text in enumerate(texts):
+            violations = check_filter_violations(text, wl_entries, bl_entries)
+            if not violations:
+                continue
 
-        if blacklist:
-            charset = _build_char_set(blacklist)
-            if charset:
-                strip_re = re.compile(f"[{charset}]")
-                result = [strip_re.sub("", t) for t in result]
+            # Strategy 1: Exchange forbidden characters via autofix map
+            if exchange and autofix_map:
+                fixed, _count = apply_autofix(text, autofix_map)
+                if _count > 0:
+                    result[i] = fixed
+                    # Re-check after exchange
+                    violations = check_filter_violations(
+                        fixed, wl_entries, bl_entries,
+                    )
+                    if not violations:
+                        continue
+
+            # Strategy 2: Retry — revert to empty so caller retries
+            if retry:
+                result[i] = ""
+                if line_objects and i < len(line_objects):
+                    line_objects[i].status = LineStatus.PENDING
+                continue
+
+            # Strategy 3: Flag for QA review
+            if flag_qa and line_objects and i < len(line_objects):
+                line_objects[i].status = LineStatus.NEEDS_REVIEW
 
         return result
 
@@ -3524,10 +3582,10 @@ class TranslationStep(BaseStep):
                 chunk_lines=filtered_lines,
             )
 
-            # Rolling context preview hint — the actual rolling context
-            # is populated at translation time from prior chunk results,
-            # so we show a descriptive placeholder for chunks that will
-            # receive it.
+            # Rolling context preview — show actual orig lines for
+            # chunks that will receive rolling context.  At runtime the
+            # option to use tl instead of orig is applied; the preview
+            # always shows orig lines.
             formation_ctx = getattr(chunk[0], "_formation_ctx", None)
             receives_ctx = (
                 formation_ctx.get("receives_context", False)
@@ -3535,11 +3593,34 @@ class TranslationStep(BaseStep):
             )
             rolling_ctx_hint = ""
             if receives_ctx and rolling_ctx_max > 0:
-                rolling_ctx_hint = (
-                    f"[Rolling context: last {rolling_ctx_max} translated "
-                    f"lines from previous chunk will be inserted here at "
-                    f"translation time]"
-                )
+                # Find previous orig lines up to the file's first_idx
+                first_line_idx = chunk[0].idx
+                file_first_idx = 0
+                if mgr is not None and mgr.is_loaded:
+                    try:
+                        for fd in mgr.get_filedir():
+                            if fd.first_idx <= first_line_idx <= fd.last_idx:
+                                file_first_idx = fd.first_idx
+                                break
+                    except Exception:
+                        pass
+                start = max(file_first_idx, first_line_idx - rolling_ctx_max)
+                ctx_lines: list[str] = []
+                if mgr is not None and mgr.is_loaded and start < first_line_idx:
+                    m_lines = mgr.get_lines()
+                    for ci in range(start, first_line_idx):
+                        if 0 <= ci < len(m_lines):
+                            ctx_lines.append(
+                                m_lines[ci].get("orig", ""),
+                            )
+                if ctx_lines:
+                    rolling_ctx_hint = "\n".join(ctx_lines)
+                else:
+                    rolling_ctx_hint = (
+                        f"[Rolling context: last {rolling_ctx_max} "
+                        f"translated lines will be inserted at "
+                        f"translation time]"
+                    )
 
             user_content = json.dumps(
                 {"lines": filtered_lines}, ensure_ascii=False,

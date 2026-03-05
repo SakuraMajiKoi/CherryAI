@@ -558,10 +558,15 @@ def build_requests(
             continue
         # Count how many requests belong to this group
         group_indices = {li.index for li in group}
+        first_in_section = True
         while req_idx < len(dialogue_requests):
             r = dialogue_requests[req_idx]
             if r.line_indices and r.line_indices[0] in group_indices:
                 r._file_section = section_id
+                # First request of a file section has no prior context
+                if first_in_section:
+                    r.receives_context = False
+                    first_in_section = False
                 req_idx += 1
             else:
                 break

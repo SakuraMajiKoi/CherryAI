@@ -49,6 +49,7 @@ from CherryAI.functions.manifest_fields import (
     load_custom_placeholders,
     save_anchor_removal,
     load_anchor_removal,
+    load_character_notes,
 )
 
 if TYPE_CHECKING:
@@ -1037,6 +1038,13 @@ class PreprocessingStep(BaseStep):
                 )
 
             # TASK 16.5: Use apply_preprocessing for comprehensive processing
+            # Inject character data for speaker name replacement
+            if self._config.get("speaker_replacement_enabled", False):
+                mgr = self.manifest_manager
+                if mgr is not None and mgr.is_loaded:
+                    self._config["characters"] = load_character_notes(mgr)
+                else:
+                    self._config["characters"] = []
             processed, stats = apply_preprocessing(
                 lines, self._config, progress_cb=_on_progress,
             )

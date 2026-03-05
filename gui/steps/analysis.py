@@ -54,6 +54,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_translation(text: str) -> str:
+    """Sanitize a translation value for safe TSV storage.
+
+    Replaces tab characters with spaces and literal newlines with ``/n``.
+    """
+    return text.replace("\t", " ").replace("\r\n", "/n").replace("\n", "/n")
+
+
 class AnalysisStep(BaseStep):
     """Analysis step for static file analysis.
 
@@ -105,6 +113,13 @@ class AnalysisStep(BaseStep):
             command=self._run_analysis,
         )
         self._analyze_btn.pack(side="right", padx=(5, 0))
+
+        # Romanize button
+        ttk.Button(
+            header,
+            text="Romanize",
+            command=self._romanize_entries,
+        ).pack(side="right", padx=(5, 0))
 
         # Export button
         ttk.Button(
@@ -320,7 +335,6 @@ class AnalysisStep(BaseStep):
         results["speakers"] = analysis.get("speakers", {})
         results["code_patterns"] = analysis.get("code_patterns", {})
         results["duplicates"] = analysis.get("duplicates", {})
-        results["speaker_samples"] = analysis.get("speaker_samples", {})
         results["individual_codes"] = analysis.get("individual_codes", {})
 
         # Build findings list
@@ -443,23 +457,16 @@ class AnalysisStep(BaseStep):
             )
             for code_key, code_info in codes_sorted:
                 friendly_type = code_info.get("type", "Unknown")
-                examples = code_info.get("examples", [])
-                example_str = ", ".join(examples[:3])
-                details = friendly_type
-                if example_str and example_str != code_key:
-                    details = f"{friendly_type} — {example_str}"
                 findings.append(TableRow(
                     id=row_id,
                     values={
                         "category": "Code Patterns",
                         "item": code_key,
                         "count": code_info["count"],
-                        "details": details,
+                        "details": friendly_type,
                     },
                     meta={
                         "raw_type": code_info.get("raw_type", "UNKNOWN"),
-                        "examples": examples,
-                        "sample_line": code_info.get("sample", ""),
                     },
                 ))
                 row_id += 1
@@ -654,6 +661,75 @@ class AnalysisStep(BaseStep):
 
         # Use the table's export function
         self._findings_table._export_csv()
+
+    def _romanize_entries(self) -> None:
+        """Romanize kana names in characters and code database.
+
+        Fills the ``translation`` field for characters and the Translation
+        column for code database entries when the original/pattern contains
+        Japanese kana and the translation is currently empty.  Tab and
+        newline characters are sanitized in all translation values.
+        """
+        from CherryAI.functions.romanization import romanize_if_japanese
+
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            messagebox.showwarning("No Project", "Load a project first.")
+            return
+
+        updated_chars = 0
+        updated_codes = 0
+
+        # --- Romanize character translations ---
+        characters = load_character_notes(mgr)
+        for ch in characters:
+            name = ch.get("original_name", "")
+            if name and not ch.get("translation", "").strip():
+                rom = romanize_if_japanese(name)
+                if rom != name:
+                    ch["translation"] = _sanitize_translation(rom)
+                    updated_chars += 1
+
+        if updated_chars:
+            save_character_notes(mgr, characters)
+
+        # --- Romanize code database Translation column ---
+        try:
+            from CherryAI.functions.glossaries.code_glossary_db import (
+                read_all_rows_extended,
+                write_all_rows,
+            )
+            rows = read_all_rows_extended()
+            changed = False
+            for row in rows:
+                pattern = row[0] if row else ""
+                translation = row[1] if len(row) > 1 else ""
+                if pattern and not translation.strip():
+                    rom = romanize_if_japanese(pattern)
+                    if rom != pattern:
+                        row[1] = _sanitize_translation(rom)
+                        updated_codes += 1
+                        changed = True
+            if changed:
+                write_all_rows(rows)
+        except Exception as exc:
+            logger.warning("Code DB romanization failed: %s", exc)
+
+        parts = []
+        if updated_chars:
+            parts.append(f"{updated_chars} character(s)")
+        if updated_codes:
+            parts.append(f"{updated_codes} code pattern(s)")
+        if parts:
+            messagebox.showinfo(
+                "Romanization Complete",
+                f"Romanized {' and '.join(parts)}.",
+            )
+        else:
+            messagebox.showinfo(
+                "Romanization Complete",
+                "No entries needed romanization (all already filled or no kana detected).",
+            )
     # =========================================================================
     # TASK 59.3: Category-Aware Findings Table Context Menu
     # =========================================================================
@@ -1269,7 +1345,7 @@ class AnalysisStep(BaseStep):
                 "pattern": pattern,
                 "category": category or meta_info.get("type", ""),
                 "action": action or "preserve",
-                "example": example or meta_info.get("sample_line", ""),
+                "example": example or "",
                 "notes": notes or "",
             })
 
@@ -1282,15 +1358,13 @@ class AnalysisStep(BaseStep):
             pattern: Normalized code pattern string.
 
         Returns:
-            Dict with type, sample_line, examples from analysis results.
+            Dict with type and raw_type from analysis results.
         """
         individual_codes = self._analysis_results.get("individual_codes", {})
         info = individual_codes.get(pattern, {})
         return {
             "type": info.get("type", "Unknown"),
             "raw_type": info.get("raw_type", "UNKNOWN"),
-            "sample_line": info.get("sample", ""),
-            "examples": info.get("examples", []),
         }
 
     # Code pattern actions

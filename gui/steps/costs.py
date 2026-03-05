@@ -708,6 +708,71 @@ class CostsStep(BaseStep):
         else:
             self._lines_saved_label.configure(text="0")
 
+    def _get_skip_indices(self, lines: List[str]) -> frozenset:
+        """Determine which line indices should be skipped from estimation.
+
+        Applies the same rules as the Translation step (§5.4):
+
+        * **Mandatory** — empty, context markers, dedup-only,
+          protected-only, comment-only lines.
+        * **Optional** — already-translated lines (when
+          ``overwrite_translation`` is *False*), non-source-language
+          and symbol-only lines (when ``skip_non_source_language`` is
+          *True*).
+
+        Args:
+            lines: Line texts (original or preprocessed).
+
+        Returns:
+            Frozenset of 0-based indices to exclude from estimation.
+        """
+        from CherryAI.functions.validation import SkipReason, validate_line_pre
+
+        go = getattr(self.session, "global_options", None)
+        skip_translated = True
+        skip_non_source = True
+        if go is not None and hasattr(go, "translation"):
+            skip_translated = not getattr(
+                go.translation, "overwrite_translation", False,
+            )
+            skip_non_source = getattr(
+                go.translation, "skip_non_source_language", True,
+            )
+
+        # Collect existing translations when skip-translated is active
+        existing_tls: List[Optional[str]] = []
+        if skip_translated:
+            mgr = self.manifest_manager
+            if mgr is not None and mgr.is_loaded:
+                manifest_lines = mgr.get_lines()
+                if manifest_lines:
+                    existing_tls = [
+                        ml.get("tl", "") for ml in manifest_lines
+                    ]
+
+        skip: set[int] = set()
+        for i, line in enumerate(lines):
+            existing = (
+                existing_tls[i]
+                if skip_translated and i < len(existing_tls)
+                else None
+            )
+            vr = validate_line_pre(line, existing_translation=existing)
+
+            if vr.is_valid:
+                continue
+
+            # Respect the skip_non_source setting for language-based skips
+            if not skip_non_source and vr.skip_reason in (
+                SkipReason.NO_JAPANESE,
+                SkipReason.SYMBOL_ONLY,
+            ):
+                continue
+
+            skip.add(i)
+
+        return frozenset(skip)
+
     def _on_chunk_changed(self, *_args: object) -> None:
         """Sync chunk size to manifest when changed (Task 43.12)."""
         mgr = self.manifest_manager
@@ -781,31 +846,58 @@ class CostsStep(BaseStep):
             # Get prompt token overhead (included in each request)
             prompt_tokens = self._get_prompt_tokens()
 
-            # Count tokens for original using chunker adapter
-            orig_text = "\n".join(self._lines_original)
+            # §5.4: Filter out lines that would be skipped during
+            # translation (empty, dedup, protected, already translated,
+            # non-source language, symbol-only).
+            orig_skip = self._get_skip_indices(self._lines_original)
+            prep_skip = self._get_skip_indices(self._lines_preprocessed)
+            orig_translatable = [
+                l for i, l in enumerate(self._lines_original)
+                if i not in orig_skip
+            ]
+            prep_translatable = [
+                l for i, l in enumerate(self._lines_preprocessed)
+                if i not in prep_skip
+            ]
+
+            # Update line count labels with translatable counts
+            n_orig = len(orig_translatable)
+            n_prep = len(prep_translatable)
+            n_saved = n_orig - n_prep
+            self.after(0, lambda: (
+                self._lines_orig_label.configure(text=str(n_orig)),
+                self._lines_prep_label.configure(text=str(n_prep)),
+                self._lines_saved_label.configure(
+                    text=f"-{n_saved}" if n_saved > 0 else "0",
+                ),
+            ))
+
+            # Count tokens for translatable original lines only
+            orig_text = "\n".join(orig_translatable)
             orig_input_tokens, orig_method = count_tokens(orig_text, model=model_id)
             orig_output_tokens = int(orig_input_tokens * OUTPUT_MULTIPLIER)
 
-            # Count tokens for preprocessed
-            prep_text = "\n".join(self._lines_preprocessed)
+            # Count tokens for translatable preprocessed lines only
+            prep_text = "\n".join(prep_translatable)
             prep_input_tokens, prep_method = count_tokens(prep_text, model=model_id)
             prep_output_tokens = int(prep_input_tokens * OUTPUT_MULTIPLIER)
 
             # Try the formation pipeline for accurate request counting
             prep_requests = self._estimate_via_formation(
                 self._lines_preprocessed, chunk_size, slicing,
+                skip_indices=prep_skip,
             )
             if prep_requests is None:
                 # Fallback: simple estimation
                 prep_requests = estimate_chunks(
-                    self._lines_preprocessed,
+                    prep_translatable,
                     max_lines=chunk_size,
                     max_tokens=tokens_limit,
                     mode="hybrid",
                     model=model_id,
                 )
             orig_requests = estimate_chunks(
-                self._lines_original,
+                orig_translatable,
                 max_lines=chunk_size,
                 max_tokens=tokens_limit,
                 mode="hybrid",
@@ -911,6 +1003,7 @@ class CostsStep(BaseStep):
         lines: List[str],
         chunk_size: int,
         slicing: str = "conservative",
+        skip_indices: Optional[frozenset] = None,
     ) -> Optional[int]:
         """Count requests using the 4-step formation pipeline.
 
@@ -921,6 +1014,8 @@ class CostsStep(BaseStep):
             lines: Preprocessed line texts.
             chunk_size: Max lines per request.
             slicing: ``"conservative"`` or ``"efficient"``.
+            skip_indices: Indices of lines to mark as invalid
+                (already translated, non-source language, etc.).
 
         Returns:
             Number of requests, or ``None`` if the pipeline is unavailable.
@@ -932,6 +1027,8 @@ class CostsStep(BaseStep):
         except ImportError:
             return None
 
+        _skip = skip_indices or frozenset()
+
         line_infos: list[LineInfo] = []
         for idx, text in enumerate(lines):
             is_invalid = (
@@ -939,6 +1036,7 @@ class CostsStep(BaseStep):
                 or "__DEDUP__" in text
                 or "__PROTECTED__" in text
                 or "__CUSTOM__" in text
+                or idx in _skip
             )
             line_infos.append(LineInfo(index=idx, text=text, is_invalid=is_invalid))
 
@@ -1014,8 +1112,9 @@ class CostsStep(BaseStep):
 
         # Update prompt overhead label
         if prompt_tokens > 0:
+            total_overhead = prompt_tokens * prep_requests
             self._prompt_tokens_label.configure(
-                text=f"~{prompt_tokens:,} tokens/request × {prep_requests} requests = ~{prompt_tokens * prep_requests:,} total"
+                text=f"~{total_overhead:,} total ({prep_requests} Requests, ~{prompt_tokens:,} per)"
             )
         else:
             self._prompt_tokens_label.configure(text="(no prompt data available)")

@@ -571,6 +571,54 @@ def apply_aggressive_dedup_batch(
     return result, changes, changed_indices, aggr_map, aggr_numbers
 
 
+def _apply_speaker_replacement_batch(
+    lines: List[str],
+    characters: List[Dict[str, Any]],
+) -> Tuple[List[str], int, List[int]]:
+    """Replace speaker names in Speaker: Dialogue lines using character glossary.
+
+    For each line starting with ``OriginalName:`` or ``OriginalName：``,
+    replaces the speaker name with its translation from the characters list.
+
+    Args:
+        lines: Lines to process.
+        characters: Character dicts with ``original_name`` and ``translation``.
+
+    Returns:
+        Tuple of (processed_lines, change_count, changed_indices).
+    """
+    import re as _re
+
+    repl_map: Dict[str, str] = {}
+    for char in characters:
+        orig = char.get("original_name", "").strip()
+        trans = char.get("translation", "").strip()
+        if orig and trans and orig != trans:
+            repl_map[orig] = trans
+
+    if not repl_map:
+        return lines, 0, []
+
+    result = list(lines)
+    name_alt = "|".join(
+        sorted((_re.escape(n) for n in repl_map), key=len, reverse=True)
+    )
+    pat = _re.compile(rf"^(\s*)(?P<name>{name_alt})\s*(?P<sep>[:：])")
+    changed = 0
+    indices: List[int] = []
+    for i, ln in enumerate(result):
+        m = pat.match(ln)
+        if not m:
+            continue
+        new_name = repl_map.get(m.group("name"), m.group("name"))
+        new = f"{m.group(1)}{new_name}{m.group('sep')}" + ln[m.end():]
+        if new != ln:
+            result[i] = new
+            changed += 1
+            indices.append(i)
+    return result, changed, indices
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Unified Preprocessing Pipeline
 # ─────────────────────────────────────────────────────────────────────────────
@@ -678,6 +726,17 @@ def apply_preprocessing(
             stats["total_changes"] += count
             stats["changed_lines"].update(indices)
             _tag_indices(indices, "symbol_conversion")
+
+    # P40. Speaker Name Replacement
+    _report("Speaker Name Replacement", 0.38)
+    if config.get("speaker_replacement_enabled", False):
+        characters = config.get("characters", [])
+        result, count, indices = _apply_speaker_replacement_batch(result, characters)
+        if count:
+            stats["changes_by_rule"]["speaker"] = count
+            stats["total_changes"] += count
+            stats["changed_lines"].update(indices)
+            _tag_indices(indices, "speaker")
 
     # P60. PROTECTED compression (after PROTECTED tokens are created)
     _report("Protect Code Patterns", 0.45)

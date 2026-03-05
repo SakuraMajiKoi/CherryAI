@@ -585,6 +585,9 @@ class TranslationSettings:
     skip_non_source_language: bool = True
     retry_strategy: str = "batch"
     request_slicing: str = "conservative"
+    exchange_forbidden_chars: bool = True
+    flag_for_qa_review: bool = True
+    retry_forbidden_chars: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -593,6 +596,9 @@ class TranslationSettings:
             "skip_non_source_language": self.skip_non_source_language,
             "retry_strategy": self.retry_strategy,
             "request_slicing": self.request_slicing,
+            "exchange_forbidden_chars": self.exchange_forbidden_chars,
+            "flag_for_qa_review": self.flag_for_qa_review,
+            "retry_forbidden_chars": self.retry_forbidden_chars,
         }
 
     @classmethod
@@ -610,6 +616,15 @@ class TranslationSettings:
             ),
             request_slicing=str(
                 data.get("request_slicing", "conservative")
+            ),
+            exchange_forbidden_chars=bool(
+                data.get("exchange_forbidden_chars", True)
+            ),
+            flag_for_qa_review=bool(
+                data.get("flag_for_qa_review", True)
+            ),
+            retry_forbidden_chars=bool(
+                data.get("retry_forbidden_chars", False)
             ),
         )
 
@@ -929,6 +944,15 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.request_slicing_var = tk.StringVar(
             value=self.options.translation.request_slicing,
         )
+        self.exchange_forbidden_var = tk.BooleanVar(
+            value=self.options.translation.exchange_forbidden_chars,
+        )
+        self.flag_qa_review_var = tk.BooleanVar(
+            value=self.options.translation.flag_for_qa_review,
+        )
+        self.retry_forbidden_var = tk.BooleanVar(
+            value=self.options.translation.retry_forbidden_chars,
+        )
 
         # Caching settings
         self.cache_enabled_var = tk.BooleanVar(value=self.options.caching.enabled)
@@ -1119,6 +1143,58 @@ class GlobalOptionsDialog(tk.Toplevel):
             self._nav_tree.selection_set(f"sec_{section.value}")
         finally:
             self._selecting = False
+
+    def _create_scrollable_panel(
+        self, section: OptionSection,
+    ) -> ttk.Frame:
+        """Create a scrollable panel for a section.
+
+        Returns the inner frame where widgets should be packed. The outer
+        panel (with canvas + scrollbar) is registered in ``_section_panels``.
+
+        Args:
+            section: The option section this panel belongs to.
+
+        Returns:
+            The inner scrollable frame.
+        """
+        outer = ttk.Frame(self._content_frame)
+        self._section_panels[section] = outer
+
+        canvas = tk.Canvas(outer, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(outer, orient=tk.VERTICAL, command=canvas.yview)
+        inner = ttk.Frame(canvas, padding=15)
+
+        inner.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        # Resize inner frame width to canvas width
+        def _on_canvas_configure(event: tk.Event) -> None:
+            canvas.itemconfig(canvas.find_withtag("all")[0], width=event.width)
+
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        # Mouse wheel scrolling
+        def _on_mousewheel(event: tk.Event) -> None:
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        def _bind_wheel(event: tk.Event) -> None:
+            canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        def _unbind_wheel(event: tk.Event) -> None:
+            canvas.unbind_all("<MouseWheel>")
+
+        canvas.bind("<Enter>", _bind_wheel)
+        canvas.bind("<Leave>", _unbind_wheel)
+
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        return inner
 
     def _build_api_section(self) -> None:
         """Build the API settings section."""
@@ -1332,8 +1408,7 @@ class GlobalOptionsDialog(tk.Toplevel):
         translation behaviour (rolling context, speaker dedup, retry
         strategy, request slicing, consistency), and output toggles.
         """
-        panel = ttk.Frame(self._content_frame, padding=15)
-        self._section_panels[OptionSection.TRANSLATION] = panel
+        panel = self._create_scrollable_panel(OptionSection.TRANSLATION)
 
         # Section header
         header = ttk.Label(
@@ -1449,6 +1524,37 @@ class GlobalOptionsDialog(tk.Toplevel):
             slice_frame,
             text="Conservative keeps original chunking. Efficient merges small requests "
             "to reduce API calls.",
+            foreground="gray",
+        ).pack(anchor=tk.W, pady=(0, 5))
+
+        # --- Character Validation (Phase 78) ---
+        charval_frame = ttk.LabelFrame(
+            panel, text="Character Validation", padding=10,
+        )
+        charval_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Checkbutton(
+            charval_frame,
+            text="Exchange forbidden characters via Autofix Map",
+            variable=self.exchange_forbidden_var,
+        ).pack(anchor=tk.W, pady=2)
+
+        ttk.Checkbutton(
+            charval_frame,
+            text="Flag lines with forbidden characters for QA review",
+            variable=self.flag_qa_review_var,
+        ).pack(anchor=tk.W, pady=2)
+
+        ttk.Checkbutton(
+            charval_frame,
+            text="Retry lines that contain forbidden characters",
+            variable=self.retry_forbidden_var,
+        ).pack(anchor=tk.W, pady=2)
+
+        ttk.Label(
+            charval_frame,
+            text="Controls how blacklisted/whitelisted character violations are handled "
+            "after translation.",
             foreground="gray",
         ).pack(anchor=tk.W, pady=(0, 5))
 
@@ -1796,8 +1902,7 @@ class GlobalOptionsDialog(tk.Toplevel):
 
     def _build_prompts_section(self) -> None:
         """Build the prompts settings section for Edit and TLC steps."""
-        panel = ttk.Frame(self._content_frame, padding=15)
-        self._section_panels[OptionSection.PROMPTS] = panel
+        panel = self._create_scrollable_panel(OptionSection.PROMPTS)
 
         # Section header
         header = ttk.Label(panel, text="Custom Prompts", font=("TkDefaultFont", 12, "bold"))
@@ -3144,6 +3249,15 @@ class GlobalOptionsDialog(tk.Toplevel):
             ini_manager.get_initial_default("translation", "request_slicing", "conservative", str)
             or "conservative"
         )
+        self.exchange_forbidden_var.set(
+            bool(ini_manager.get_initial_default("translation", "exchange_forbidden_chars", True, bool))
+        )
+        self.flag_qa_review_var.set(
+            bool(ini_manager.get_initial_default("translation", "flag_for_qa_review", True, bool))
+        )
+        self.retry_forbidden_var.set(
+            bool(ini_manager.get_initial_default("translation", "retry_forbidden_chars", False, bool))
+        )
 
         # Caching defaults
         self.cache_enabled_var.set(
@@ -3282,6 +3396,9 @@ class GlobalOptionsDialog(tk.Toplevel):
             skip_non_source_language=self.skip_non_source_var.get(),
             retry_strategy=self.retry_strategy_var.get(),
             request_slicing=self.request_slicing_var.get(),
+            exchange_forbidden_chars=self.exchange_forbidden_var.get(),
+            flag_for_qa_review=self.flag_qa_review_var.get(),
+            retry_forbidden_chars=self.retry_forbidden_var.get(),
         )
 
         self.options.caching = CachingSettings(

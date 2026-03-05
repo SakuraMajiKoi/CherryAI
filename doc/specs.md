@@ -5121,10 +5121,45 @@ When enabled, `_log_request_json()` writes to `logs/requests/request_{YYYYMMDD_H
 
 =============================================================================
 
+## Phase 78 — Estimation, Validation & Formation Fixes
+
+### Character Validation Spec (Task 5)
+
+**Entry Syntax:** Comma-separated tokens.  `\,` for literal comma.
+`re=<pattern>` for regex.  Plain text for literal matching.
+
+**Strategies** (Global Options → Translation → Character Validation):
+
+| Setting | Default | Behaviour |
+|---------|---------|-----------|
+| Exchange Forbidden Characters | On | Replace via Autofix Map |
+| Flag for QA Review | On | Set line status to `NEEDS_REVIEW` |
+| Retry Lines with Forbidden Characters | Off | Blank translation, reset to `PENDING` |
+
+Strategies are applied in order: exchange first, then retry, then flag.
+If exchange resolves all violations the line is accepted normally.
+
+### Prompt Overhead Spec (Task 4)
+
+Display format: `~Z total (Y Requests, ~X per)`.
+Token counts use `count_tokens()` (tiktoken-based) not `len // 4`.
+
+### Formation Receives-Context Spec (Task 7)
+
+First request of each file section: `receives_context = False`.
+`rolling_ctx_buffer.clear()` at every file boundary.
+
+### Estimation Skip Spec (Task 3)
+
+`_get_skip_indices()` returns indices to exclude from preprocessed estimation:
+skip non-source, skip already translated (when overwrite off), skip
+symbol-only dialogue, skip generic placeholders.
+
 ## Document Revision History
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 3.3 | 2026-03-03 | Phase 78 — 10 tasks: manifest sample removal, speaker replacement fix, estimation skip logic, prompt overhead display, blacklist/whitelist validation rewrite (parse_filter_entries, check_filter_violations, 3-strategy _apply_char_filters, NEEDS_REVIEW status, 3 new TranslationSettings fields + UI checkboxes), romanization + Code DB Translation column, rolling context file-boundary fix, slicing efficient mode fix, global options scrolling fix, model settings lines/request decoupling. New test files: test_estimation_skip.py (41), test_costs_step_phase40.py (57), test_rolling_context_phase78.py (10), test_slicing_phase78.py (11), test_char_filter_phase78.py (32). |
 | 3.2 | 2026-03-02 | Task 76 — Knowledge Base Widget: Merged Glossary Settings and Global Glossary/Database into unified Knowledge Base widget with Enabled/Disabled toggle, mode switch (Glossary/Code Database), per-entry Active column (✓/✗ toggle), mixed-selection Activate/Deactivate failsafe popup, search/column filter. Updated collapsible widgets from LabelFrame to header+separator design (no empty borders when collapsed). Right column reduced from 4 to 3 rows. TSV schemas updated: globalglossary.tsv 3→4 columns (added Active), codedatabase.tsv 9→10 columns (added Active). Button text standardized to +Add/Edit/Remove. 56 tests. |
 | 3.1 | 2026-03-02 | Task 74 — Request Preview Overhaul: Informative section headers (SECTION_DESCRIPTIONS dict, 12 keys), renamed custom_notes → system_instructions across 6 files, formation-based chunking (4-step build_requests pipeline integrated into _build_chunks), rolling context in translation loop (receives_context/provides_context flags, rolling_ctx_buffer), per-chunk selective glossary/conditional/character filtering (chunk_lines parameter), cross-request search (global match index navigation across all requests), request logging toggle (log_requests in LoggingSettings, JSON to logs/requests/). Fixed step index bugs (3→2) in metadata lookup. 110 tests passing (20 prompt_builder_shared + 42 request_preview + 50 request_formation). |
 | 3.0 | 2026-02-10 | Phase 17 Infrastructure: Added Batch API support (batch_tracker.py — JSONL builder, job persistence, submit/poll/cancel), Multi-Key Management (key_manager.py — key pools with sequential/even/priority rotation), Named API Profiles (project_config.py — display_name, system_prompt_tweak, rename/duplicate), Additional File Formats (markdown.py, json_lenient.py, translator_plus.py), Usage Analytics (usage_tracker.py — SQLite-backed token/cost tracking with CSV export), Agent-Assisted Modes (agent_modes.py — mode registry, sandboxed writes, audit logging), Estimation Engine (estimation.py — itemized billing, model comparison, persistence), i18n & Tooltips (i18n.py — JSON language files with fallback, tooltip.py — configurable Tk tooltips). Session persistence (app.py saves/restores last step). Bug fixes: estimate_rate_limit_time() missing params; SharedTable batch insertion duplicate item IDs (added _batch_insert_version counter). Added 339 new tests (5619 total). |

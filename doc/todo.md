@@ -2801,6 +2801,53 @@ gui/steps/costs.py
 **Updated test files:** dev/test_prompt_builder_shared.py (20 tests),
 dev/test_request_preview.py (42 tests, +2 cross-request search tests)
 
+## Phase 78 — Estimation, Validation & Formation Fixes (10 Tasks)
+
+**Task 1 — Remove manifest samples:** ✅ (45 tests, test_manifest_v2.py)
+Dropped `SampleText`/`SampleTranslation` from manifests with transparent migration.
+
+**Task 2 — Fix speaker replacement:** ✅ (13 tests, test_speaker_format.py)
+Speaker name replacement now targets resolved dialogue only.
+
+**Task 3 — Improve estimation skip logic:** ✅ (41 tests, test_estimation_skip.py)
+`_get_skip_indices()`: skip non-source, overwrite-off, symbol-only, placeholders.
+
+**Task 4 — Prompt overhead display:** ✅ (57 tests, test_costs_step_phase40.py)
+Format `~Z total (Y Requests, ~X per)`. Request Preview uses `count_tokens()`.
+
+**Task 5 — Blacklist/whitelist validation:** ✅ (32 tests, test_char_filter_phase78.py)
+`_apply_char_filters` validates instead of stripping. Three strategies:
+exchange (autofix map), retry (blank + PENDING), flag (NEEDS_REVIEW).
+`parse_filter_entries()` supports `re=`, `\,`, comma-separated tokens.
+Three new TranslationSettings fields + UI checkboxes in Character Validation.
+
+**Task 6 — Romanization + Code DB:** ✅ (22 tests)
+"Romanize" button in Analysis, Code DB gains Translation column, Type→Category.
+
+**Task 7 — Rolling context fix:** ✅ (10 tests, test_rolling_context_phase78.py)
+First request per file section: `receives_context=False`, buffer cleared.
+
+**Task 8 — Slicing efficient mode:** ✅ (11 tests, test_slicing_phase78.py)
+Efficient `min_lines = max(5, chunk_size // 2)`, correct file-boundary merging.
+
+**Task 9 — Global Options scrolling:** ✅ (16 tests)
+Section panels scroll properly when content overflows.
+
+**Task 10 — Model settings lines/request:** ✅ (prior session)
+Decoupled `_chunk_var` between costs and translation steps.
+
+**Modified files:** functions/validation.py (FilterEntry, parse_filter_entries,
+check_filter_violations), functions/prompt_builder.py (first_in_section tagging),
+gui/steps/translate.py (NEEDS_REVIEW status, _apply_char_filters rewrite,
+rolling context buffer clear, preview orig lines), gui/steps/costs.py
+(overhead format, count_tokens), gui/dialogs/global_options.py
+(TranslationSettings 3 new fields, Character Validation LabelFrame,
+exchange_forbidden_var, flag_qa_review_var, retry_forbidden_var).
+
+**New test files:** test_estimation_skip.py (41), test_costs_step_phase40.py (57),
+test_rolling_context_phase78.py (10), test_slicing_phase78.py (11),
+test_char_filter_phase78.py (32). Total: 151 new tests.
+
 =============================================================================
 END OF ROADMAP
 =============================================================================

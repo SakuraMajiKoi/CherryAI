@@ -1,11 +1,16 @@
 """TSV persistence layer for the CherryAI Code Database.
 
-Phase 62: Replaces the legacy SQLite ``codeglossary.db`` with a plain-text
-TSV file at ``user/codedatabase.tsv``.
+Phase 62 → Phase 78: Replaces the legacy SQLite ``codeglossary.db`` with a
+plain-text TSV file at ``user/codedatabase.tsv``.
 
-Schema — 10 columns (tab-separated, UTF-8, with header row):
+Schema — 11 columns (tab-separated, UTF-8, with header row):
 
-    Pattern  Type  RegEx  Notes  Visible  IsInvisible  IsCouple  IsNumber  IsWord  Active
+    Pattern  Translation  Category  RegEx  Notes  Visible  IsInvisible  IsCouple  IsNumber  IsWord  Active
+
+Phase 78 changes:
+- Renamed ``Type`` → ``Category``.
+- Inserted ``Translation`` column at index 1.
+- Old 10-column TSV files are auto-migrated on first load.
 
 Migration
 ---------
@@ -14,15 +19,16 @@ On first access the module will automatically:
    and the TSV does not yet.
 2. Migrate ``codeglossary.csv`` entries if present.
 3. Merge ``global_codes.json`` entries (from the legacy GUI widget) if present.
+4. Migrate old 10-column (Pattern, Type, …) → 11-column layout.
 
 Public API  (same surface as the old SQLite version)
 ----------
 - :func:`get_db_path`            – canonical path to ``codedatabase.tsv``
 - :func:`init_db`                – ensure file + header exist, run migrations
-- :func:`read_all_rows`          – return rows as ``[[pattern, type, regex, notes], …]``
-                                    (4-column compat view – columns 0-3 only)
-- :func:`read_all_rows_extended` – return full 9-column rows (Phase 62)
-- :func:`write_all_rows`         – overwrite entire table (accepts 4- or 9-column rows)
+- :func:`read_all_rows`          – return rows as ``[[pattern, translation, category, regex, notes], …]``
+                                    (5-column compat view – columns 0-4 only)
+- :func:`read_all_rows_extended` – return full 11-column rows (Phase 78)
+- :func:`write_all_rows`         – overwrite entire table (accepts 5- or 11-column rows)
 - :func:`upsert_rows`            – insert or update rows (key = Pattern column)
 - :func:`delete_row`             – remove one entry by pattern key
 """
@@ -42,6 +48,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 HEADER: List[str] = [
+    "Pattern", "Translation", "Category", "RegEx", "Notes",
+    "Visible", "IsInvisible", "IsCouple", "IsNumber", "IsWord", "Active",
+]
+
+# Old 10-column header before Phase 78 (Type → Category, no Translation).
+_OLD_10_HEADER: List[str] = [
     "Pattern", "Type", "RegEx", "Notes",
     "Visible", "IsInvisible", "IsCouple", "IsNumber", "IsWord", "Active",
 ]
@@ -50,7 +62,7 @@ _LEGACY_CSV_NAME = "codeglossary.csv"
 _LEGACY_DB_NAME  = "codeglossary.db"
 _TSV_NAME        = "codedatabase.tsv"
 
-_NUM_COLS = len(HEADER)  # 10
+_NUM_COLS = len(HEADER)  # 11
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +137,8 @@ def _migrate_from_sqlite(db_path: Path, tsv_path: Path) -> None:
     for row in rows:
         while len(row) < 4:
             row.append("")
-        tsv_rows.append(_pad_row(row[:4]))
+        # SQLite had [pattern, type, regex, notes] → insert empty Translation
+        tsv_rows.append(_pad_row([row[0], "", row[1], row[2], row[3]]))
     _write_tsv(tsv_path, tsv_rows)
     logger.info(
         "Migrated %d code entries: %s → %s", len(rows), db_path.name, tsv_path.name
@@ -152,7 +165,8 @@ def _migrate_from_legacy_csv(csv_path: Path, tsv_path: Path) -> None:
     for row in rows:
         while len(row) < 4:
             row.append("")
-        tsv_rows.append(_pad_row(row[:4]))
+        # CSV had [pattern, type, regex, notes] → insert empty Translation
+        tsv_rows.append(_pad_row([row[0], "", row[1], row[2], row[3]]))
     _write_tsv(tsv_path, tsv_rows)
     logger.info(
         "Migrated %d code entries: %s → %s", len(rows), csv_path.name, tsv_path.name
@@ -186,9 +200,10 @@ def _merge_json_codes(json_path: Path, tsv_path: Path) -> None:
             continue
         new_entries.append(_pad_row([
             pattern,
-            str(item.get("col2", "")),
-            "",
-            str(item.get("col3", "")),
+            "",                              # Translation (empty)
+            str(item.get("col2", "")),      # Category (was Type)
+            "",                              # RegEx
+            str(item.get("col3", "")),      # Notes
         ]))
 
     if new_entries:
@@ -242,10 +257,31 @@ def init_db(db_path: Optional[Path] = None) -> Path:
                 logger.warning("global_codes.json merge failed: %s", exc)
 
     else:
-        # File exists — ensure header row is present
+        # File exists — ensure header row is present and schema is current
         existing = _read_tsv(path)
         if not existing or existing[0] != HEADER:
-            data_rows = [r for r in existing if r and r[0].strip() and r[0].strip().lower() not in ("pattern", "code")]
+            # Check for old 10-column layout (Phase 62) and migrate
+            needs_migration = (
+                existing
+                and existing[0]
+                and existing[0][0].strip().lower() in ("pattern", "code")
+                and len(existing[0]) == len(_OLD_10_HEADER)
+            )
+            data_rows = [
+                r for r in existing
+                if r and r[0].strip()
+                and r[0].strip().lower() not in ("pattern", "code")
+            ]
+            if needs_migration:
+                # Insert empty Translation column at index 1
+                data_rows = [
+                    _pad_row([r[0], ""] + list(r[1:]))
+                    for r in data_rows
+                ]
+                logger.info(
+                    "Migrated %d rows from 10-col to 11-col schema",
+                    len(data_rows),
+                )
             _write_tsv(path, [HEADER] + data_rows)
 
     return path
@@ -256,19 +292,19 @@ def init_db(db_path: Optional[Path] = None) -> Path:
 # ---------------------------------------------------------------------------
 
 def read_all_rows(db_path: Optional[Path] = None) -> List[List[str]]:
-    """Return every data row as ``[pattern, type, regex, notes]`` (4-column compat).
+    """Return every data row as ``[pattern, translation, category, regex, notes]`` (5-column compat).
 
-    The header row is excluded.  Backward-compatible with the old SQLite API.
+    The header row is excluded.  Phase 78: now returns 5 columns (was 4).
     """
-    return [row[:4] for row in read_all_rows_extended(db_path)]
+    return [row[:5] for row in read_all_rows_extended(db_path)]
 
 
 def read_all_rows_extended(db_path: Optional[Path] = None) -> List[List[str]]:
-    """Return every data row with all 10 columns (Phase 76).
+    """Return every data row with all 11 columns (Phase 78).
 
-    The header row is excluded.  Each row is guaranteed 10 elements.
-    The 10th column (Active) defaults to empty string (= active) for
-    backward compatibility with 9-column TSV files.
+    The header row is excluded.  Each row is guaranteed 11 elements.
+    The 11th column (Active) defaults to empty string (= active) for
+    backward compatibility with older TSV files.
     """
     path = init_db(db_path)
     rows: List[List[str]] = []
@@ -285,8 +321,8 @@ def read_all_rows_extended(db_path: Optional[Path] = None) -> List[List[str]]:
 def write_all_rows(rows: List[List[str]], db_path: Optional[Path] = None) -> None:
     """Overwrite the entire code database with *rows*.
 
-    *rows* must NOT include a header row.  Each element may be 4-column
-    (legacy compat) or 9-column.  Empty / header rows are silently skipped.
+    *rows* must NOT include a header row.  Each element may be 5-column
+    (compat) or 11-column.  Empty / header rows are silently skipped.
     """
     path = init_db(db_path)
     tsv_rows: List[List[str]] = [HEADER]

@@ -1936,3 +1936,107 @@ def group_findings_by_token(
             grouped[finding.offending_token] = []
         grouped[finding.offending_token].append(finding)
     return grouped
+
+
+@dataclass
+class FilterEntry:
+    """A parsed blacklist/whitelist entry.
+
+    Supports plain text tokens, character ranges (``a-z``), and regex
+    patterns (``re=<pattern>``).  Literal commas are represented by
+    ``\\,`` in the raw input.
+    """
+
+    raw: str
+    pattern: Optional[re.Pattern] = field(default=None, repr=False)
+    is_regex: bool = False
+
+    def matches(self, text: str) -> bool:
+        """Return *True* if *text* contains this entry."""
+        if self.pattern is not None:
+            return self.pattern.search(text) is not None
+        return self.raw in text
+
+
+def parse_filter_entries(raw: str) -> List[FilterEntry]:
+    """Parse a comma-separated filter string into :class:`FilterEntry` items.
+
+    Syntax rules:
+
+    * Entries are separated by ``,`` (comma).
+    * A literal comma is written as ``\\,``.
+    * An entry prefixed with ``re=`` is compiled as a regex pattern.
+    * Plain entries are matched literally.
+
+    Args:
+        raw: The raw filter string (e.g. from the whitelist/blacklist field).
+
+    Returns:
+        List of parsed filter entries.
+    """
+    if not raw or not raw.strip():
+        return []
+
+    # Replace escaped commas with a placeholder
+    _COMMA_PH = "\x00COMMA\x00"
+    safe = raw.replace("\\,", _COMMA_PH)
+
+    entries: List[FilterEntry] = []
+    for part in safe.split(","):
+        token = part.strip().replace(_COMMA_PH, ",")
+        if not token:
+            continue
+        if token.startswith("re="):
+            regex_src = token[3:]
+            try:
+                compiled = re.compile(regex_src)
+            except re.error:
+                continue  # skip invalid regex silently
+            entries.append(FilterEntry(raw=token, pattern=compiled, is_regex=True))
+        else:
+            entries.append(FilterEntry(raw=token))
+    return entries
+
+
+def check_filter_violations(
+    text: str,
+    whitelist_entries: List[FilterEntry],
+    blacklist_entries: List[FilterEntry],
+) -> List[str]:
+    """Return tokens that violate whitelist/blacklist rules.
+
+    * **Blacklist** entries: each match is a violation.
+    * **Whitelist** entries: if the list is non-empty, every character in
+      *text* that is not matched by at least one entry is a violation.
+
+    Args:
+        text: The translation string to check.
+        whitelist_entries: Parsed whitelist entries.
+        blacklist_entries: Parsed blacklist entries.
+
+    Returns:
+        List of human-readable violation descriptions.
+    """
+    violations: List[str] = []
+
+    for entry in blacklist_entries:
+        if entry.matches(text):
+            violations.append(f"blacklisted: {entry.raw}")
+
+    if whitelist_entries:
+        allowed_chars: Set[str] = set()
+        allowed_patterns: List[re.Pattern] = []
+        for entry in whitelist_entries:
+            if entry.pattern is not None:
+                allowed_patterns.append(entry.pattern)
+            else:
+                allowed_chars.update(entry.raw)
+
+        for ch in text:
+            if ch in allowed_chars or ch.isspace():
+                continue
+            if any(p.search(ch) for p in allowed_patterns):
+                continue
+            violations.append(f"not whitelisted: {ch}")
+
+    return violations

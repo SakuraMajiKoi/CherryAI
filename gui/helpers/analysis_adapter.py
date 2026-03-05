@@ -315,8 +315,6 @@ def detect_individual_codes_batch(
             'count': int,
             'type': str (friendly name),
             'raw_type': str (internal type constant),
-            'sample': str (first line containing this code, truncated),
-            'examples': List[str] (actual raw code instances, max 5),
         }
     """
     codes: Dict[str, Dict[str, Any]] = {}
@@ -331,8 +329,6 @@ def detect_individual_codes_batch(
                         "count": 0,
                         "type": pat,
                         "raw_type": "UNKNOWN",
-                        "sample": line.strip()[:80],
-                        "examples": [],
                     }
                 codes[pat]["count"] += 1
         return codes
@@ -351,15 +347,8 @@ def detect_individual_codes_batch(
                         "count": 0,
                         "type": _friendly_code_type(raw_type),
                         "raw_type": raw_type,
-                        "sample": line.strip()[:80],
-                        "examples": [],
                     }
                 codes[normalized]["count"] += 1
-                if (
-                    raw_code not in codes[normalized]["examples"]
-                    and len(codes[normalized]["examples"]) < 5
-                ):
-                    codes[normalized]["examples"].append(raw_code)
         except Exception as e:
             logger.debug("detect_code failed for line: %s", e)
 
@@ -587,13 +576,6 @@ def analyze_lines(
     # Speaker detection
     if include_speakers:
         results["speakers"] = detect_speakers_batch(lines)
-        # Build speaker sample lines for details column
-        speaker_samples: Dict[str, str] = {}
-        for line in lines:
-            speaker = detect_speaker_in_line(line)
-            if speaker and speaker not in speaker_samples:
-                speaker_samples[speaker] = line.strip()[:80]
-        results["speaker_samples"] = speaker_samples
 
     # Code pattern detection
     if include_code_patterns:

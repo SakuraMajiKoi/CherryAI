@@ -67,10 +67,10 @@ RPGM_ACTOR_RE = re.compile(r"\\N\[(\d+)\]")
 
 # ---------------- CSV headers ---------------- #
 
-# Header for code glossary CSV
+# Header for code glossary CSV (legacy 4-column compat)
 CODE_GLOSSARY_HEADER = [
     "Code",
-    "Type",
+    "Category",
     "RegEx",
     "Notes",
 ]
