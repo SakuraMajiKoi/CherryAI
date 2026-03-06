@@ -739,12 +739,10 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - Full undo/redo stack with 50-action limit
   - UndoAction dataclass stores before/after state snapshots
   - All step changes are undoable (status, skip, rollback, presets)
-  - Keyboard shortcuts: Ctrl+Z (undo), Ctrl+Y (redo)
   - get_undo_description() / get_redo_description() for UI hints
 - **Project Persistence (Phase 4, Enhanced with Manifest v3.0):**
   - **Manifest-first architecture**: All state saved to manifest file
-  - **File menu**: New Project, Open Project, Open Files, Exit
-  - **Manual save**: Ctrl+S saves current manifest state
+  - **File menu**: New Project, Open Project, Exit
   - **Auto-save on step change**: Manifest saved when navigating between steps
   - **Atomic saves**: Manifest written to `.tmp` file, fsynced, then atomically renamed via `os.replace()` to prevent corruption on crash
   - **Deep-copy safety**: `get_step_data()` callers that mutate data use `deepcopy()` to prevent shared-reference contamination; `_SafeManifestEncoder` handles non-serializable objects as a safety net

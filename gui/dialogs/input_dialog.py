@@ -59,25 +59,17 @@ class UnifiedInputDialog(tk.Toplevel):
         parent: tk.Widget,
         format_filter: str = "auto",
         encoding: str = "auto",
+        auto_pipeline: str = "3: Preprocess",
         initial_dir: Optional[str] = None,
         on_load: Optional[Callable[[List[Path], str, str], None]] = None,
         show_project_name: bool = False,
         suggested_project_name: str = "",
     ) -> None:
-        """Initialize the unified input dialog.
-
-        Args:
-            parent: Parent window.
-            format_filter: Format filter to apply (auto = all formats).
-            encoding: Encoding to use for loading.
-            initial_dir: Initial directory to show. If None, uses last used or home.
-            on_load: Callback when Load is clicked with (paths, format, encoding).
-            show_project_name: Whether to show project name field (PHASE 58.12).
-            suggested_project_name: Suggested project name (PHASE 58.12).
-        """
+        """Initialize the unified input dialog."""
         super().__init__(parent)
         self._format_filter = format_filter
         self._encoding = encoding
+        self._auto_pipeline = auto_pipeline
         self._on_load_callback = on_load
         self._show_project_name = show_project_name
         
@@ -96,8 +88,8 @@ class UnifiedInputDialog(tk.Toplevel):
         self._suggested_project_name = suggested_project_name
         self._project_name: str = ""
         
-        # Result - now includes project_name
-        self.result: Optional[Tuple[List[Path], str, str, str]] = None
+        # Result - now includes project_name and auto_pipeline
+        self.result: Optional[Tuple[List[Path], str, str, str, str]] = None
         
         self.title("Select Files or Folders")
         self.transient(parent)
@@ -155,14 +147,22 @@ class UnifiedInputDialog(tk.Toplevel):
         frame = ttk.LabelFrame(parent, text="Browse Files and Folders", padding=5)
 
         # Current path display
+        import string
+        drives = [f"{d}:\\" for d in string.ascii_uppercase if os.path.exists(f"{d}:\\")]
+
         path_frame = ttk.Frame(frame)
         path_frame.pack(fill="x", pady=(0, 5))
 
         ttk.Label(path_frame, text="Location:").pack(side="left")
         self._path_var = tk.StringVar(value=self._initial_dir)
-        path_entry = ttk.Entry(path_frame, textvariable=self._path_var)
+        path_entry = ttk.Combobox(
+            path_frame, 
+            textvariable=self._path_var,
+            values=drives,
+        )
         path_entry.pack(side="left", fill="x", expand=True, padx=5)
         path_entry.bind("<Return>", lambda e: self._navigate_to_path())
+        path_entry.bind("<<ComboboxSelected>>", lambda e: self._navigate_to_path())
 
         go_btn = ttk.Button(path_frame, text="Go", command=self._navigate_to_path, width=5)
         go_btn.pack(side="left")
@@ -311,6 +311,24 @@ class UnifiedInputDialog(tk.Toplevel):
         )
         encoding_cb.pack(side="left")
 
+        # Auto-Pipeline
+        ttk.Label(options_frame, text="Auto-Pipeline:").pack(side="left", padx=(20, 5))
+        self._pipeline_var = tk.StringVar(value=self._auto_pipeline)
+        pipeline_cb = ttk.Combobox(
+            options_frame,
+            textvariable=self._pipeline_var,
+            values=[
+                "0: Manual",
+                "1: Analyze",
+                "2: Estimate Original",
+                "3: Preprocess",
+                "4: Mock Translate",
+            ],
+            width=18,
+            state="readonly",
+        )
+        pipeline_cb.pack(side="left")
+
     def _build_button_panel(self, parent: ttk.Frame) -> None:
         """Build the button panel."""
         btn_frame = ttk.Frame(parent)
@@ -341,6 +359,7 @@ class UnifiedInputDialog(tk.Toplevel):
 
     def _populate_browser(self, path: Path) -> None:
         """Populate the browser tree with contents of the given directory."""
+        path = path.resolve()
         # Clear existing items
         for item in self._browser_tree.get_children():
             self._browser_tree.delete(item)
@@ -404,13 +423,13 @@ class UnifiedInputDialog(tk.Toplevel):
 
     def _navigate_to_path(self) -> None:
         """Navigate to the path in the path entry."""
-        path = Path(self._path_var.get())
+        path = Path(self._path_var.get()).resolve()
         if path.exists() and path.is_dir():
             self._populate_browser(path)
 
     def _go_up(self) -> None:
         """Navigate to parent directory."""
-        current = Path(self._path_var.get())
+        current = Path(self._path_var.get()).resolve()
         parent = current.parent
         if parent != current:  # Not at root
             self._populate_browser(parent)
@@ -567,12 +586,12 @@ class UnifiedInputDialog(tk.Toplevel):
                 return
         
         # PHASE 58.12: Save last used directory
-        current_dir = Path(self._path_var.get())
+        current_dir = Path(self._path_var.get()).resolve()
         if current_dir.exists() and current_dir.is_dir():
             from CherryAI.functions import ini_manager
             ini_manager.set_last_input_dir(current_dir)
 
-        self.result = (list(self._selected_paths), format_filter, encoding, project_name)
+        self.result = (list(self._selected_paths), format_filter, encoding, project_name, self._pipeline_var.get())
 
         if self._on_load_callback:
             self._on_load_callback(self._selected_paths, format_filter, encoding)
@@ -584,7 +603,7 @@ class UnifiedInputDialog(tk.Toplevel):
         self.result = None
         self.destroy()
 
-    def show(self) -> Optional[Tuple[List[Path], str, str, str]]:
+    def show(self) -> Optional[Tuple[List[Path], str, str, str, str]]:
         """Show the dialog and wait for result.
 
         PHASE 58.12: Result now includes project name.

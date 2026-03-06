@@ -39,18 +39,15 @@ class WelcomeDialog(tk.Toplevel):
     def __init__(
         self,
         parent: tk.Tk,
-        show_skip: bool = True,
         last_manifest_name: Optional[str] = None,
     ) -> None:
         """Initialize the welcome dialog.
 
         Args:
             parent: Parent window.
-            show_skip: Whether to show "Start Fresh" option.
             last_manifest_name: Name of last manifest (shows "Resume" option if set).
         """
         super().__init__(parent)
-        self._show_skip = show_skip
         self._last_manifest_name = last_manifest_name
         self._result: str = self.RESULT_CANCEL
         
@@ -100,7 +97,7 @@ class WelcomeDialog(tk.Toplevel):
 
         subtitle_label = ttk.Label(
             title_frame,
-            text="Professional Translation Toolkit",
+            text="Comprehensive Translation Toolkit",
             font=("Segoe UI", 11),
             foreground=THEME.text_secondary,
         )
@@ -110,23 +107,23 @@ class WelcomeDialog(tk.Toplevel):
         options_frame = ttk.Frame(main_frame)
         options_frame.pack(fill="x", pady=20)
 
+        # New project button
+        new_btn = ttk.Button(
+            options_frame,
+            text="✨ Create New Project",
+            command=self._on_new,
+            style="Accent.TButton",
+        )
+        new_btn.pack(fill="x", pady=5, ipady=8)
+
         # Resume last project (if available)
         if self._last_manifest_name:
             resume_btn = ttk.Button(
                 options_frame,
                 text=f"📂 Resume: {self._last_manifest_name}",
                 command=self._on_resume,
-                style="Accent.TButton",
             )
             resume_btn.pack(fill="x", pady=5, ipady=8)
-
-        # New project button
-        new_btn = ttk.Button(
-            options_frame,
-            text="✨ Create New Project",
-            command=self._on_new,
-        )
-        new_btn.pack(fill="x", pady=5, ipady=8)
 
         # Load existing project button
         load_btn = ttk.Button(
@@ -135,15 +132,6 @@ class WelcomeDialog(tk.Toplevel):
             command=self._on_load,
         )
         load_btn.pack(fill="x", pady=5, ipady=8)
-
-        # Start fresh (skip) option
-        if self._show_skip:
-            skip_btn = ttk.Button(
-                options_frame,
-                text="⏭️ Start Fresh (No Project)",
-                command=self._on_skip,
-            )
-            skip_btn.pack(fill="x", pady=5, ipady=8)
 
         # Auto-load tickbox — always visible so users can opt in/out
         auto_load_frame = ttk.Frame(main_frame)
@@ -212,19 +200,6 @@ class WelcomeDialog(tk.Toplevel):
     def _on_load(self) -> None:
         """Handle Load Project button click."""
         self._result = self.RESULT_LOAD
-        self.destroy()
-
-    def _on_skip(self) -> None:
-        """Handle Start Fresh button click.
-        
-        PHASE 58.11: Disables auto-load since user chose to start fresh.
-        """
-        try:
-            from CherryAI.functions import ini_manager
-            ini_manager.set_restore_on_launch(False)
-        except Exception:
-            pass
-        self._result = self.RESULT_SKIP
         self.destroy()
 
     def _on_cancel(self) -> None:

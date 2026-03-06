@@ -160,8 +160,9 @@ class InputExtractionStep(BaseStep):
         self._tree_item_to_index: Dict[str, int] = {}
 
         # UI variables
-        self._encoding_var: Optional[tk.StringVar] = None
-        self._format_var: Optional[tk.StringVar] = None
+        self._encoding_var = tk.StringVar(value="auto")
+        self._format_var = tk.StringVar(value="auto")
+        self._pipeline_var = tk.StringVar(value="3: Preprocess")
 
         super().__init__(parent, session, **kwargs)
 
@@ -219,54 +220,7 @@ class InputExtractionStep(BaseStep):
         # TASK 39.2: "Load Manifest" and "Clear All" buttons removed from toolbar.
         # Use File → Open Project... and File → New Project menus instead.
 
-        # Separator
-        ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=10)
 
-        # Options panel
-        options_frame = ttk.LabelFrame(toolbar, text="Options")
-        options_frame.pack(side="left", padx=5)
-
-        # Encoding selection (TASK 39.3: "auto" added as first/default option)
-        ttk.Label(options_frame, text="Encoding:").pack(side="left", padx=2)
-        self._encoding_var = tk.StringVar(value="auto")
-        encoding_cb = ttk.Combobox(
-            options_frame,
-            textvariable=self._encoding_var,
-            values=["auto", "utf-8", "utf-8-sig", "shift_jis", "cp932", "latin-1", "utf-16"],
-            width=10,
-            state="readonly",
-        )
-        encoding_cb.pack(side="left", padx=2)
-
-        # Format override (TASK 39.3: rpgmaker and image added)
-        ttk.Label(options_frame, text="Format:").pack(side="left", padx=5)
-        self._format_var = tk.StringVar(value="auto")
-        format_cb = ttk.Combobox(
-            options_frame,
-            textvariable=self._format_var,
-            values=["auto", "txt", "csv", "tsv", "json", "xlsx", "rpgmaker", "image"],
-            width=8,
-            state="readonly",
-        )
-        format_cb.pack(side="left", padx=2)
-
-        # PHASE 58.2: Auto-Pipeline dropdown
-        ttk.Label(options_frame, text="Auto-Pipeline:").pack(side="left", padx=5)
-        self._pipeline_var = tk.StringVar(value="3: Preprocess")
-        pipeline_cb = ttk.Combobox(
-            options_frame,
-            textvariable=self._pipeline_var,
-            values=[
-                "0: Manual",
-                "1: Analyze",
-                "2: Estimate Original",
-                "3: Preprocess",
-                "4: Mock Translate",
-            ],
-            width=16,
-            state="readonly",
-        )
-        pipeline_cb.pack(side="left", padx=2)
 
     def _build_content(self) -> None:
         """Build the main content area with file list and preview."""
@@ -322,9 +276,6 @@ class InputExtractionStep(BaseStep):
             label="Collapse All", command=self._on_collapse_all_tree,
         )
         self._file_tree.bind("<Button-3>", self._on_file_listbox_right_click)
-
-        # Delete key removes selected items
-        self._file_tree.bind("<Delete>", lambda e: self._on_remove_selected_file())
 
         file_scroll = ttk.Scrollbar(
             list_frame,
@@ -437,10 +388,12 @@ class InputExtractionStep(BaseStep):
         show_project_name = (mgr is None or not mgr.is_loaded)
 
         # Show unified input dialog
+        pipeline_val = self._pipeline_var.get() if self._pipeline_var else "3: Preprocess"
         dialog = UnifiedInputDialog(
             self,
             format_filter=format_override,
             encoding=encoding,
+            auto_pipeline=pipeline_val,
             initial_dir=initial_dir,
             show_project_name=show_project_name,
         )
@@ -449,16 +402,18 @@ class InputExtractionStep(BaseStep):
         if result is None:
             return
 
-        # PHASE 58.12: Unpack 4-tuple result
-        selected_paths, format_filter, enc, project_name = result
+        # Unpack 5-tuple result
+        selected_paths, format_filter, enc, project_name, pipeline = result
         if not selected_paths:
             return
 
-        # Update format and encoding vars
+        # Update vars
         if self._format_var:
             self._format_var.set(format_filter)
         if self._encoding_var:
             self._encoding_var.set(enc)
+        if self._pipeline_var:
+            self._pipeline_var.set(pipeline)
 
         # PHASE 58.12: Process with optional project name
         self._load_selected_paths(selected_paths, enc, format_filter, project_name)
@@ -1297,9 +1252,20 @@ class InputExtractionStep(BaseStep):
                         indices_to_remove.append(self._tree_item_to_index[child])
 
         indices_to_remove = sorted(set(indices_to_remove), reverse=True)
+        
+        mgr = self.manifest_manager
+
         for idx in indices_to_remove:
             if 0 <= idx < len(self._loaded_files):
                 removed = self._loaded_files[idx]
+                
+                # Remove from manifest manager if loaded
+                if mgr is not None and mgr.is_loaded:
+                    for entry in mgr.get_filedir():
+                        if Path(entry.rel_path).name == removed.path.name:
+                            mgr.remove_file(entry.rel_path)
+                            break
+
                 del self._loaded_files[idx]
                 if self.session is not None and idx < len(self.session.loaded_files):
                     del self.session.loaded_files[idx]
@@ -1317,6 +1283,9 @@ class InputExtractionStep(BaseStep):
 
         if not self._loaded_files:
             self.set_status("not-started")
+            
+        if mgr is not None and mgr.is_loaded:
+            mgr.save()
 
     def _on_file_select(self, event: tk.Event) -> None:
         """Handle file selection in tree."""

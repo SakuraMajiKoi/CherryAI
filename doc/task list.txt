@@ -1,0 +1,31 @@
+Task: It has been found that maximum tokens needs to be respected too (not just maximum lines) lest particularly long lines like scrolling text make requests to long. 
+As such in the Global Options -  Model Settings add a new entry and function that determines the maximum token count. Once done document the changes and additions.
+The Costs Steps also needs a setting for the Estimation to determine the maximum tokens.
+Maximum Tokens must be only the Token count of the Input Lines and not the whole request.
+
+Task: The lack of maximum tokens has also shown another flaw in the Estimation feature for the prompt overhead. 
+#The flaw is two-fold: It does calculate the prompt size with the input lines (even though they are already the exclusive part of the Input calculation) 
+and the calculation seemingly takes the biggest request and multiplies it by the number of requests which awfully skewed the costs. 
+Both can be fixed by token counting each request individually and the input lines are not counted. The approximated request size then becomes total/number of requests. 
+Once done document the changes and additions.
+
+Read all documentation (features,md, technical.md, specs.md and tests.md). Then read specs.md and respect its directives to get a grasp on the project with the goal of translating text with high flexibility and detail with LLM technology. Focus on the Main Window, Input Step Tab with its Files and Folders Window and and the window that appears after launching the application (Welcome to CherryAI). These are interwoven with the following tasks.
+
+Tasks: Fixing Launch, Input and Main Window.
+From Welcome to CherryAI window remove the redundant Start Fresh (No Project) Button.
+From Welcome to CherryAI window and anywhere replace any mention of 'Professional' with a context aware 'Comprehensive' or similar.
+In Welcome to CherryAI window have the button Create New Project execute the same function as the Input button in the first gui step also called Input to open the custom Files and Folders Window.
+Dynamically change the window name to add on the project_name of the currently loaded manifest (CherryAI - {project_name}) and remove the version number.
+Fix loading the last manifest from the CherryAI.ini since the function randomly works or replaces the top button in the Welcome to CherryAI window.
+Fix deleting files in Input - Loaded files so that the respective entries (file dir, idx) are removed and existing rewritten (idx)
+From Input copy the Option Spinbox 'Auto-Pipeline' to the Select Files and Folders Window that already has the two other options (Encoding and Format). Then after making sure that Encoding and Format work, remove the Options entirely from Input.
+In the Select Files and Folders Window fix the Up button and the file address bar. It should always display the whole path and the storage drive selection. It either stops at the same drive or is even restricted to a folder. The latter and the broken window is seemingly only present when files were already selected once.
+Fix the New Project menu entry in the top bar of the main window. Nothing happens when instead it should unload the current manifest completely and open the File Selection.
+Remove Open Files and Glossary Manager menu entry in the top bar of the main window.
+Completely remove Shortcuts mentions and functions from CherryAI.
+Hide the Progress Sidebar and add it to the todo.md for a rework (for automatic completition detection, detailed tasks and having it properly collapse without being blank)
+
+Divide the above tasks into manageable tasks and order them depending on dependency and how they affect each other. Each task must include tests and updated documentation. Then do all tasks and after all tasks are completed and tested successfully, again review and update features,md, technical.md, tests.md, specs.md and todo.md with their relevant information, implementation and changes. 
+
+
+

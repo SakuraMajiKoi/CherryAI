@@ -54,6 +54,34 @@ MODULE COUNTS (Verified January 2026)
 
 =============================================================================
 
+============================================================================= 
+
+COMPLETED - SESSION 40 (GUI Cleanup, Launch Fixes, Input Dialog Enhancements)
+
+### SESSION 40: GUI Cleanup, Launch Fixes, Input Dialog Enhancements ✅ DONE
+
+**Task 1 — Removal of start/menu/shortcut remnants:**
+- Removed "Start Fresh" button from the project dialog
+- Removed global window shortcuts (CTRL+S, keys for undo/redo)
+- Removed "Options" and "Glossary Manager" items from app menus
+- Altered Welcome dialogue prompt text to mention "Comprehensive Translation Toolkit"
+
+**Task 2 — GUI Dynamic Window Features & Hiding Sidebar:**
+- Implemented _update_window_title in app.py to dynamically add project name. 
+- Removed version number from Title.
+- Commented out the ProgressTracker element to hide it pending a full rework.
+
+**Task 3 — Unified Input Workflow:**
+- Routed "New Project" to directly hook into InputExtractionStep _on_unified_input()
+- Replaced custom entry fields with auto-resolving Windows Drive Combobox widget in input_dialog.py 
+- Changed pathlib.Path.parent with .resolve() to properly traverse and navigate nested roots.
+- Transferred Auto-Pipeline spinbox directly into the Unified Select Files screen.
+
+**Task 4 — Fixed File Deletion with Manifest Integration:**
+- Established ManifestManager.remove_file(rel_path) to strip ranges, recalculate subsequent indices, and update iledir.
+- Bound the backend logic to InputExtractionStep._on_remove_selected_file() to seamlessly prune LoadedFiles from the persistent project model.
+
+
 COMPLETED - SESSION 35 (Term Translation, Addon Management, Global Options Extensions)
 
 ### SESSION 35: Term Translation Multi-Mode, Addon Management, Global Options Extensions ✅ DONE
@@ -918,6 +946,20 @@ Goal: Implement Refresh button to fetch latest model data from providers.
 =============================================================================
 
 PENDING TASKS - UI
+
+TASK: Progress Sidebar Rework
+
+   Goal: Rework the Progress Sidebar for automatic completion detection, detailed tasks, and proper collapsing without being blank.
+   Files: `gui/app.py`, `gui/tracker.py`
+   Priority: HIGH
+   Effort: 3-5 hours
+
+   Details:
+   - Ensure the Sidebar automatically updates and tracks step completion.
+   - Show detailed tasks inside the steps.
+   - Properly collapse/hide when not in use, without leaving a blank area.
+
+---
 
 TASK: Single/Double Click Editing for Model Comparison
 
@@ -2974,3 +3016,5 @@ test_char_filter_phase78.py (32). Total: 151 new tests.
 =============================================================================
 END OF ROADMAP
 =============================================================================
+
+

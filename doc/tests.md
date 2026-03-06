@@ -10934,3 +10934,27 @@ overwrite-off skips existing translations, symbol-only dialogue, generic placeho
 
 #### TestCharFilterPhase78Count (1 test)
 - Self-validation: at least 25 tests in file
+---
+
+### 	est_gui_cleanup_phase40.py (Phase 40 GUI Cleanup & Refactor)
+
+**Overview:** Confirms that application UI routing, window titling dynamically adapts to manifest context, and checks the architectural logic decoupling from legacy constraints.
+**Test Classes:**
+- TestGUIPhase40 (3 tests)
+  - _Test Update Window Title_: Confirms App window extracts project name correctly or falls back gracefully without project.
+  - _Test Input Dialog Tuple Structure_: Ensures UnifiedInputDialog returns a well-formed 5-element tuple (paths, fmt, enc, proj, pipeline) for input configurations.
+  - _Test On Remove Selected File_: Confirms that deleting a file dynamically targets the underlying ManifestManager.remove_file(rel_path) bypassing frontend trees.
+
+---
+
+### `test_manifest_remove.py` (Phase 40 Manifest Deletion Routing)
+
+**Overview:** Validates that manipulating project datasets through coordinate intersections shifts arrays correctly natively inside JSON representations before file writes.
+**Test Classes:**
+- TestManifestRemove (4 tests)
+  - _Remove Not Found_: Gracefully ignores missed path strings.
+  - _Remove Middle File_: Confirms lines are deleted accurately and subsequent indices loop and subtract correctly down to lower indices, shifting ranges and idx.
+  - _Remove First File_: Validates front-load shifting. 
+  - _Remove Last File_: Validates end truncation behavior without throwing key out-of-bounds errors on empty trails.
+
+

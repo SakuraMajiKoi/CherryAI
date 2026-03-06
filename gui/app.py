@@ -90,7 +90,7 @@ class App(tk.Tk):
         super().__init__()
 
         # Window setup
-        self.title(f"{APP_NAME} v{APP_VERSION}")
+        self.title(APP_NAME)
         self.geometry(f"{DEFAULT_WIDTH}x{DEFAULT_HEIGHT}")
         self.minsize(MIN_WIDTH, MIN_HEIGHT)
 
@@ -154,9 +154,6 @@ class App(tk.Tk):
         self._build_menu()
         self._build_main_layout()
         self._build_status_bar()
-
-        # Bind keyboard shortcuts
-        self._bind_shortcuts()
 
         # Protocol handlers
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -242,8 +239,6 @@ class App(tk.Tk):
         file_menu.add_command(label="New Project", command=self._on_new_session)
         file_menu.add_command(label="Open Project...", command=self._on_load_manifest)
         file_menu.add_separator()
-        file_menu.add_command(label="Open Files...", command=self._on_open_files)
-        file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self._on_close)
 
         # Edit menu
@@ -252,25 +247,21 @@ class App(tk.Tk):
         edit_menu.add_command(
             label="Undo",
             command=self._on_undo,
-            accelerator="Ctrl+Z",
         )
         edit_menu.add_command(
             label="Redo",
             command=self._on_redo,
-            accelerator="Ctrl+Y",
         )
         edit_menu.add_separator()
         edit_menu.add_command(
             label="Mark Step Done",
             command=self._on_mark_done,
-            accelerator="Ctrl+D",
         )
 
         # Tools menu
         tools_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Tools", menu=tools_menu)
         tools_menu.add_command(label="Options...", command=self._on_options)
-        tools_menu.add_command(label="Glossary Manager...", command=self._on_glossary)
         tools_menu.add_separator()
         tools_menu.add_command(label="Run CLI Test", command=self._on_cli_test)
 
@@ -278,7 +269,6 @@ class App(tk.Tk):
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Help", menu=help_menu)
         help_menu.add_command(label="Documentation", command=self._on_help)
-        help_menu.add_command(label="Keyboard Shortcuts", command=self._on_shortcuts_help)
         help_menu.add_separator()
         help_menu.add_command(label="About", command=self._on_about)
 
@@ -381,13 +371,13 @@ class App(tk.Tk):
         # Bind tab change event
         self._notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
-        # Right side: Progress tracker
+        # Right side: Progress tracker (Hidden for now, see todo.md)
         self._progress_tracker = ProgressTracker(
             self._paned,
             self.session,
             on_step_click=self._on_progress_step_click,
         )
-        self._paned.add(self._progress_tracker, weight=1)
+        # self._paned.add(self._progress_tracker, weight=1)
 
     def _build_status_bar(self) -> None:
         """Build the status bar at the bottom."""
@@ -416,18 +406,6 @@ class App(tk.Tk):
 
         # Separator above status bar
         ttk.Separator(self, orient="horizontal").pack(fill="x", side="bottom")
-
-    def _bind_shortcuts(self) -> None:
-        """Bind keyboard shortcuts."""
-        self.bind("<Control-d>", lambda e: self._on_mark_done())
-        self.bind("<Control-D>", lambda e: self._on_mark_done())
-        self.bind("<Control-z>", lambda e: self._on_undo())
-        self.bind("<Control-Z>", lambda e: self._on_undo())
-        self.bind("<Control-y>", lambda e: self._on_redo())
-        self.bind("<Control-Y>", lambda e: self._on_redo())
-        # TASK 19 Phase 3: Ctrl+S now triggers manual manifest save
-        self.bind("<Control-s>", lambda e: self._on_manual_save())
-        self.bind("<Control-S>", lambda e: self._on_manual_save())
 
     # ----------------------------- Event Handlers ----------------------------- #
 
@@ -485,16 +463,15 @@ class App(tk.Tk):
         # Show welcome dialog
         dialog = WelcomeDialog(
             self,
-            show_skip=True,
             last_manifest_name=last_name,
         )
-        
+
         # Wait for dialog
         self.wait_window(dialog)
-        
+
         result = dialog.result
         logger.debug("Welcome dialog result: %s", result)
-        
+
         if result == "resume" and last_manifest and last_manifest.exists():
             # Resume last project
             self._load_manifest_from_path(last_manifest)
@@ -503,15 +480,10 @@ class App(tk.Tk):
             # User wants to create new project - go to input step
             self._notebook.select(0)
             self._set_status("Create new project - load files to begin")
+            self._step_tabs[0]._on_unified_input()
         elif result == WelcomeDialog.RESULT_LOAD:
             # Show load manifest dialog
             self._on_load_manifest()
-        elif result == WelcomeDialog.RESULT_SKIP:
-            # Start fresh
-            self._set_status("Ready - load files or open a project")
-        else:
-            # Cancelled or closed
-            self._set_status("Ready")
 
     def _load_manifest_from_path(self, manifest_path: Path) -> bool:
         """Load a manifest from a file path.
@@ -551,7 +523,8 @@ class App(tk.Tk):
         
         # Refresh UI
         self._progress_tracker.refresh()
-        
+        self._update_window_title()
+
         project_name = self._manifest_manager.project_name or manifest_path.stem
         logger.info("Loaded project: %s from %s", project_name, manifest_path)
         
@@ -594,7 +567,9 @@ class App(tk.Tk):
         self._current_tab_index = 0
         self._step_tabs[0].on_enter()
         self._progress_tracker.refresh()
+        self._update_window_title()
         self._set_status("New project - load files to begin")
+        self._step_tabs[0]._on_unified_input()
 
     def _on_open_files(self) -> None:
         """Handle Open Files menu item."""
@@ -979,6 +954,15 @@ For more information, see the documentation.
             raise
 
     # ----------------------------- Helper Methods ----------------------------- #
+
+    def _update_window_title(self) -> None:
+        """Update the window title dynamically based on the current project."""
+        if self._manifest_manager and self._manifest_manager.is_loaded:
+            project_name = self._manifest_manager.project_name
+            if project_name:
+                self.title(f"{APP_NAME} - {project_name}")
+                return
+        self.title(APP_NAME)
 
     def _set_status(self, message: str) -> None:
         """Set status bar message.

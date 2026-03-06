@@ -1870,6 +1870,63 @@ class ManifestManager:
         """Clear all file directory entries."""
         self._manifest_data["filedir"] = []
         self._mark_dirty()
+
+    def remove_file(self, rel_path: str) -> bool:
+        """Remove a file and its lines from the manifest, shifting subsequent indices.
+        
+        Args:
+            rel_path: Relative path of the file to remove.
+            
+        Returns:
+            True if removed, False if not found.
+        """
+        entries = self.get_filedir()
+        target_entry = None
+        target_index = -1
+        for i, entry in enumerate(entries):
+            if entry.rel_path == rel_path:
+                target_entry = entry
+                target_index = i
+                break
+                
+        if not target_entry:
+            return False
+            
+        line_count = target_entry.last_idx - target_entry.first_idx + 1
+        
+        # 1. Remove lines and shift existing
+        new_lines = []
+        for line in self._manifest_data.get("lines", []):
+            idx = line.get("idx", 0)
+            if target_entry.first_idx <= idx <= target_entry.last_idx:
+                continue
+            if idx > target_entry.last_idx:
+                line["idx"] = idx - line_count
+            new_lines.append(line)
+        self._manifest_data["lines"] = new_lines
+        
+        # 2. Update subsequent filedir entries
+        new_entries = []
+        for i, entry in enumerate(entries):
+            if i == target_index:
+                continue
+            if i > target_index:
+                entry.first_idx -= line_count
+                entry.last_idx -= line_count
+            new_entries.append(entry)
+            
+        self.set_filedir(new_entries)
+        
+        # 3. Update total line counts
+        if "metadata" in self._manifest_data:
+            old_total = self._manifest_data["metadata"].get("total_lines", 0)
+            if old_total >= line_count:
+                self._manifest_data["metadata"]["total_lines"] = old_total - line_count
+        
+        self._mark_dirty()
+        # Save immediately to prevent desync
+        self.save()
+        return True
     
     def get_filedir_entry_for_idx(self, idx: int) -> Optional[FileDirEntry]:
         """Get the FileDirEntry that contains the given line index.
