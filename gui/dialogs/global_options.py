@@ -38,6 +38,7 @@ class OptionSection(Enum):
     API = "api"
     REQUEST = "request"          # displayed as "Model Settings"
     TRANSLATION = "translation"  # Translation Options
+    UTILITY = "utility"          # Term Translation utility
     CACHING = "caching"
     LOGGING = "logging"
     SESSION = "session"
@@ -45,6 +46,7 @@ class OptionSection(Enum):
     FILE_IO = "file_io"
     PROMPTS = "prompts"
     SECURITY = "security"
+    ADDONS = "addons"            # Addon management
 
 
 class OptionCategory(Enum):
@@ -639,12 +641,37 @@ class TranslationSettings:
 
 
 @dataclass
+class UtilitySettings:
+    """Utility settings for term translation mode.
+
+    Attributes:
+        term_translation_mode: Active mode — 'Simple', 'MTL', or 'LLM'.
+    """
+
+    term_translation_mode: str = "Simple"
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return {"term_translation_mode": self.term_translation_mode}
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "UtilitySettings":
+        """Create from dictionary."""
+        return cls(
+            term_translation_mode=str(
+                data.get("term_translation_mode", "Simple")
+            ),
+        )
+
+
+@dataclass
 class GlobalOptions:
     """Container for all global options."""
 
     api: APISettings = field(default_factory=APISettings)
     request: RequestSettings = field(default_factory=RequestSettings)
     translation: TranslationSettings = field(default_factory=TranslationSettings)
+    utility: UtilitySettings = field(default_factory=UtilitySettings)
     caching: CachingSettings = field(default_factory=CachingSettings)
     logging: LoggingSettings = field(default_factory=LoggingSettings)
     session: SessionSettings = field(default_factory=SessionSettings)
@@ -669,6 +696,7 @@ class GlobalOptions:
             "api": self.api.to_dict(),
             "request": self.request.to_dict(),
             "translation": self.translation.to_dict(),
+            "utility": self.utility.to_dict(),
             "caching": self.caching.to_dict(),
             "logging": self.logging.to_dict(),
             "session": self.session.to_dict(),
@@ -691,6 +719,7 @@ class GlobalOptions:
             translation=TranslationSettings.from_dict(
                 data.get("translation", {})
             ),
+            utility=UtilitySettings.from_dict(data.get("utility", {})),
             caching=CachingSettings.from_dict(data.get("caching", {})),
             logging=LoggingSettings.from_dict(data.get("logging", {})),
             session=SessionSettings.from_dict(data.get("session", {})),
@@ -729,6 +758,7 @@ SECTION_DESCRIPTIONS: Dict[OptionSection, str] = {
     OptionSection.API: "Configure API provider, model, and authentication settings.",
     OptionSection.REQUEST: "Model-level settings: temperature, thinking, timeouts, and rate limits.",
     OptionSection.TRANSLATION: "Translation-level options: chunking, retries, caching, and output.",
+    OptionSection.UTILITY: "Configure Term Translation mode (Simple, MTL, or LLM).",
     OptionSection.CACHING: "Configure request caching to reduce API calls.",
     OptionSection.LOGGING: "Set logging level and debug options.",
     OptionSection.SESSION: "Configure session autosave and UI preferences.",
@@ -736,13 +766,14 @@ SECTION_DESCRIPTIONS: Dict[OptionSection, str] = {
     OptionSection.FILE_IO: "Set default file encoding and format options.",
     OptionSection.PROMPTS: "Configure custom prompts for Edit and TLC steps.",
     OptionSection.SECURITY: "Manage the master password that encrypts stored API keys.",
+    OptionSection.ADDONS: "Manage optional add-on components installed in user/addons.",
 }
 
 
 CATEGORY_ORDER: List[Tuple[OptionCategory, List[OptionSection]]] = [
-    (OptionCategory.CONNECTION, [OptionSection.API, OptionSection.REQUEST, OptionSection.TRANSLATION]),
+    (OptionCategory.CONNECTION, [OptionSection.API, OptionSection.REQUEST, OptionSection.TRANSLATION, OptionSection.UTILITY]),
     (OptionCategory.PROCESSING, [OptionSection.CACHING, OptionSection.LIMIT, OptionSection.PROMPTS]),
-    (OptionCategory.APPLICATION, [OptionSection.SESSION, OptionSection.LOGGING, OptionSection.FILE_IO, OptionSection.SECURITY]),
+    (OptionCategory.APPLICATION, [OptionSection.SESSION, OptionSection.LOGGING, OptionSection.FILE_IO, OptionSection.SECURITY, OptionSection.ADDONS]),
 ]
 
 
@@ -756,6 +787,7 @@ SECTION_NAMES: Dict[OptionSection, str] = {
     OptionSection.API: "API Provider",
     OptionSection.REQUEST: "Model Settings",
     OptionSection.TRANSLATION: "Translation Options",
+    OptionSection.UTILITY: "Utility",
     OptionSection.CACHING: "Caching",
     OptionSection.LOGGING: "Logging",
     OptionSection.SESSION: "Session",
@@ -763,6 +795,7 @@ SECTION_NAMES: Dict[OptionSection, str] = {
     OptionSection.FILE_IO: "File I/O",
     OptionSection.PROMPTS: "Prompts",
     OptionSection.SECURITY: "Security",
+    OptionSection.ADDONS: "Add-ons",
 }
 
 
@@ -1054,6 +1087,8 @@ class GlobalOptionsDialog(tk.Toplevel):
         self._build_request_section()
         print("DEBUG: Building Translation section")
         self._build_translation_section()
+        print("DEBUG: Building Utility section")
+        self._build_utility_section()
         print("DEBUG: Building Caching section")
         self._build_caching_section()
         print("DEBUG: Building Logging section")
@@ -1068,6 +1103,8 @@ class GlobalOptionsDialog(tk.Toplevel):
         self._build_prompts_section()
         print("DEBUG: Building Security section")
         self._build_security_section()
+        print("DEBUG: Building Addons section")
+        self._build_addons_section()
 
         # Bottom: Buttons
         print("DEBUG: Building buttons")
@@ -2357,6 +2394,147 @@ class GlobalOptionsDialog(tk.Toplevel):
         else:
             messagebox.showerror("Error", msg, parent=self)
 
+    def _build_utility_section(self) -> None:
+        """Build the Utility settings panel (Term Translation mode)."""
+        panel = ttk.Frame(self._content_frame, padding=15)
+        self._section_panels[OptionSection.UTILITY] = panel
+
+        # Header
+        ttk.Label(
+            panel, text="Utility", font=("TkDefaultFont", 12, "bold")
+        ).pack(anchor="w", pady=(0, 5))
+        ttk.Label(
+            panel,
+            text=SECTION_DESCRIPTIONS[OptionSection.UTILITY],
+            foreground="gray",
+        ).pack(anchor="w", pady=(0, 15))
+
+        # Term Translation Mode
+        mode_frame = ttk.LabelFrame(
+            panel, text="Term Translation", padding=12,
+        )
+        mode_frame.pack(fill=tk.X, pady=(0, 12))
+
+        row = ttk.Frame(mode_frame)
+        row.pack(fill=tk.X, pady=5)
+        ttk.Label(row, text="Mode:", width=15).pack(side=tk.LEFT)
+        self._term_mode_var = tk.StringVar(
+            value=self._options.utility.term_translation_mode,
+        )
+        ttk.Combobox(
+            row,
+            textvariable=self._term_mode_var,
+            values=["Simple", "MTL", "LLM"],
+            state="readonly",
+            width=18,
+        ).pack(side=tk.LEFT)
+
+        # Description of each mode
+        desc_frame = ttk.Frame(mode_frame)
+        desc_frame.pack(fill=tk.X, pady=(5, 0))
+        ttk.Label(
+            desc_frame,
+            text=(
+                "Simple — Modified Hepburn romanization (built-in, no dependencies).\n"
+                "MTL — Machine translation via EasyNMT / opus-mt (auto-downloaded on first use).\n"
+                "LLM — Uses the active LLM API provider to translate terms."
+            ),
+            font=("Segoe UI", 8),
+            foreground="gray",
+            wraplength=450,
+            justify="left",
+        ).pack(anchor="w")
+
+    def _build_addons_section(self) -> None:
+        """Build the Add-ons management panel."""
+        panel = ttk.Frame(self._content_frame, padding=15)
+        self._section_panels[OptionSection.ADDONS] = panel
+
+        # Header
+        ttk.Label(
+            panel, text="Add-ons", font=("TkDefaultFont", 12, "bold")
+        ).pack(anchor="w", pady=(0, 5))
+        ttk.Label(
+            panel,
+            text=SECTION_DESCRIPTIONS[OptionSection.ADDONS],
+            foreground="gray",
+        ).pack(anchor="w", pady=(0, 15))
+
+        # Addon list table
+        list_frame = ttk.Frame(panel)
+        list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        list_frame.rowconfigure(0, weight=1)
+        list_frame.columnconfigure(0, weight=1)
+
+        cols = ("name", "size")
+        self._addons_tree = ttk.Treeview(
+            list_frame, columns=cols, show="headings", height=8,
+        )
+        self._addons_tree.heading("name", text="Add-on")
+        self._addons_tree.heading("size", text="Size")
+        self._addons_tree.column("name", width=250)
+        self._addons_tree.column("size", width=100)
+
+        addon_scroll = ttk.Scrollbar(
+            list_frame, orient="vertical",
+            command=self._addons_tree.yview,
+        )
+        self._addons_tree.configure(yscrollcommand=addon_scroll.set)
+        self._addons_tree.grid(row=0, column=0, sticky="nsew")
+        addon_scroll.grid(row=0, column=1, sticky="ns")
+
+        # Buttons
+        btn_row = ttk.Frame(panel)
+        btn_row.pack(fill=tk.X)
+        ttk.Button(
+            btn_row, text="Delete Selected",
+            command=self._delete_selected_addon,
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            btn_row, text="Refresh",
+            command=self._refresh_addons_list,
+        ).pack(side=tk.LEFT, padx=5)
+
+        self._refresh_addons_list()
+
+    def _refresh_addons_list(self) -> None:
+        """Reload the add-ons treeview from user/addons."""
+        for child in self._addons_tree.get_children():
+            self._addons_tree.delete(child)
+        try:
+            from CherryAI.functions.addon_manager import list_addons
+            for addon in list_addons():
+                self._addons_tree.insert(
+                    "", "end",
+                    values=(addon["name"], addon["size"]),
+                )
+        except Exception as exc:
+            logger.warning("Failed to list addons: %s", exc)
+
+    def _delete_selected_addon(self) -> None:
+        """Delete the selected add-on from user/addons."""
+        selection = self._addons_tree.selection()
+        if not selection:
+            messagebox.showwarning(
+                "No Selection", "Select an add-on to delete.", parent=self,
+            )
+            return
+        name = self._addons_tree.item(selection[0], "values")[0]
+        if not messagebox.askyesno(
+            "Confirm Delete",
+            f"Delete add-on '{name}'?\nThis cannot be undone.",
+            parent=self,
+        ):
+            return
+        try:
+            from CherryAI.functions.addon_manager import delete_addon
+            delete_addon(name)
+            self._refresh_addons_list()
+        except Exception as exc:
+            messagebox.showerror(
+                "Error", f"Failed to delete addon: {exc}", parent=self,
+            )
+
     def _build_buttons(self, parent: ttk.Frame) -> None:
         """Build the action buttons at the bottom."""
         button_frame = ttk.Frame(parent)
@@ -3462,6 +3640,10 @@ class GlobalOptionsDialog(tk.Toplevel):
             retry_forbidden_chars=self.retry_forbidden_var.get(),
         )
 
+        self.options.utility = UtilitySettings(
+            term_translation_mode=self._term_mode_var.get(),
+        )
+
         self.options.caching = CachingSettings(
             enabled=self.cache_enabled_var.get(),
             dir=self.cache_dir_var.get(),
@@ -3573,6 +3755,12 @@ class GlobalOptionsDialog(tk.Toplevel):
                 "request_slicing": self.options.translation.request_slicing,
             }
             ini_manager.save_as_user_defaults("translation", translation_vals)
+
+            # Utility
+            utility_vals = {
+                "term_translation_mode": self.options.utility.term_translation_mode,
+            }
+            ini_manager.save_as_user_defaults("utility", utility_vals)
 
             # Caching
             caching_vals = {

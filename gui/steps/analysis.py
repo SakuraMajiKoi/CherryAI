@@ -114,11 +114,11 @@ class AnalysisStep(BaseStep):
         )
         self._analyze_btn.pack(side="right", padx=(5, 0))
 
-        # Romanize button
+        # Translate Terms button
         ttk.Button(
             header,
-            text="Romanize",
-            command=self._romanize_entries,
+            text="Translate Terms",
+            command=self._translate_terms,
         ).pack(side="right", padx=(5, 0))
 
         # Export button
@@ -662,15 +662,16 @@ class AnalysisStep(BaseStep):
         # Use the table's export function
         self._findings_table._export_csv()
 
-    def _romanize_entries(self) -> None:
-        """Romanize kana names in characters and code database.
+    def _translate_terms(self) -> None:
+        """Translate terms in characters and code database.
 
-        Fills the ``translation`` field for characters and the Translation
-        column for code database entries when the original/pattern contains
-        Japanese kana and the translation is currently empty.  Tab and
-        newline characters are sanitized in all translation values.
+        Uses the Term Translation mode configured in Global Options
+        (Simple / MTL / LLM).  Fills the ``translation`` field for
+        characters and the Translation column for code database entries
+        when the original/pattern is non-empty and translation is
+        currently blank.  Tab and newline characters are sanitized.
         """
-        from CherryAI.functions.romanization import romanize_if_japanese
+        from CherryAI.functions.term_translation import translate_term
 
         mgr = self.manifest_manager
         if mgr is None or not mgr.is_loaded:
@@ -680,20 +681,20 @@ class AnalysisStep(BaseStep):
         updated_chars = 0
         updated_codes = 0
 
-        # --- Romanize character translations ---
+        # --- Translate character terms ---
         characters = load_character_notes(mgr)
         for ch in characters:
             name = ch.get("original_name", "")
             if name and not ch.get("translation", "").strip():
-                rom = romanize_if_japanese(name)
-                if rom != name:
-                    ch["translation"] = _sanitize_translation(rom)
+                result = translate_term(name)
+                if result != name:
+                    ch["translation"] = _sanitize_translation(result)
                     updated_chars += 1
 
         if updated_chars:
             save_character_notes(mgr, characters)
 
-        # --- Romanize code database Translation column ---
+        # --- Translate code database terms ---
         try:
             from CherryAI.functions.glossaries.code_glossary_db import (
                 read_all_rows_extended,
@@ -705,15 +706,15 @@ class AnalysisStep(BaseStep):
                 pattern = row[0] if row else ""
                 translation = row[1] if len(row) > 1 else ""
                 if pattern and not translation.strip():
-                    rom = romanize_if_japanese(pattern)
-                    if rom != pattern:
-                        row[1] = _sanitize_translation(rom)
+                    result = translate_term(pattern)
+                    if result != pattern:
+                        row[1] = _sanitize_translation(result)
                         updated_codes += 1
                         changed = True
             if changed:
                 write_all_rows(rows)
         except Exception as exc:
-            logger.warning("Code DB romanization failed: %s", exc)
+            logger.warning("Code DB term translation failed: %s", exc)
 
         parts = []
         if updated_chars:
@@ -722,13 +723,13 @@ class AnalysisStep(BaseStep):
             parts.append(f"{updated_codes} code pattern(s)")
         if parts:
             messagebox.showinfo(
-                "Romanization Complete",
-                f"Romanized {' and '.join(parts)}.",
+                "Term Translation Complete",
+                f"Translated {' and '.join(parts)}.",
             )
         else:
             messagebox.showinfo(
-                "Romanization Complete",
-                "No entries needed romanization (all already filled or no kana detected).",
+                "Term Translation Complete",
+                "No entries needed translation (all already filled or no kana detected).",
             )
     # =========================================================================
     # TASK 59.3: Category-Aware Findings Table Context Menu

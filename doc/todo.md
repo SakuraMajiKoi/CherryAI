@@ -43,12 +43,80 @@ Run API Test: `python CherryAI.py test`
 
 MODULE COUNTS (Verified January 2026)
 
-- functions/: 38 modules (+ glossaries/ subfolder with 5 files, + romanization.py)
+- functions/: 40 modules (+ glossaries/ subfolder with 5 files, + romanization.py, + term_translation.py, + addon_manager.py)
 - modi/: 12 processing modes
 - formats/: 5 format handlers
 - gui/steps/: 10 workflow tabs
 - gui/helpers/: 6 adapter modules (mode, analysis, glossary, chunker, prompt, manifest_binding)
 - gui/dialogs/: 3 dialog modules (global_options, project_dialog, loading_progress)
+
+=============================================================================
+
+=============================================================================
+
+COMPLETED - SESSION 35 (Term Translation, Addon Management, Global Options Extensions)
+
+### SESSION 35: Term Translation Multi-Mode, Addon Management, Global Options Extensions ✅ DONE
+
+**Task 1 — Rename Romanization → Term Translation (UI):**
+- `gui/steps/analysis.py` — "Romanize" button renamed to "Translate Terms"
+- `_romanize_entries()` method renamed to `_translate_terms()`
+- All UI messages updated: "Romanization Complete" → "Term Translation Complete"
+- Now calls `term_translation.translate_term()` dispatcher instead of direct romanize
+
+**Task 2 — Fix broken Code Database tables:**
+- `gui/steps/information.py` — Added `translation: str = ""` to `CodePattern` dataclass
+- Updated `to_dict()` / `from_dict()` for Translation field
+- Added "Translation" column to Code Database treeview (4 cols: Pattern, Translation, Category, Action)
+- Fixed `_refresh_code_pattern_list()` to show translation value
+- Fixed `_load_global_db()` Code DB mode: col2 now reads Translation (r[1]) not Category (r[2])
+- Fixed `_save_global_db()` Code DB mode: writes [Pattern, Translation, Category] correctly
+- Fixed `_refresh_global_database()` Code DB headings: Pattern/Translation/Category
+- Updated `CodePatternDialog` with Translation field, `_populate()`, and `_on_ok()`
+
+**Task 3 — Add capitalize_name to romanization:**
+- `functions/romanization.py` — Added `capitalize_name(text)` function
+- Title-cases romanized output; hyphens treated as word separators (e.g. "ko-no-ha" → "Ko-No-Ha")
+
+**Task 4 — Add Utility section in Global Options:**
+- `gui/dialogs/global_options.py` — Added `UTILITY = "utility"` to `OptionSection` enum
+- Created `UtilitySettings` dataclass with `term_translation_mode: str = "Simple"`
+- Added `utility: UtilitySettings` to `GlobalOptions` dataclass
+- Updated `CATEGORY_ORDER`, `SECTION_NAMES`, `SECTION_DESCRIPTIONS`
+- Added `_build_utility_section()` — Term Translation Mode dropdown (Simple/MTL/LLM) with descriptions
+- Wired into `_build_ui()`, `_save_options()`, `_persist_to_ini()`
+
+**Task 5 — Implement MTL mode (EasyNMT/opus-mt):**
+- `functions/term_translation.py` (NEW) — `_translate_mtl()` and `_translate_mtl_batch()`
+- Lazy pip install via `ensure_mtl_ready()`; loads opus-mt model as singleton
+- Supports 150+ languages; ~300 MB per direction (auto-downloaded)
+- Auto-registers in addon.ini via `addon_manager.register_addon()`
+
+**Task 6 — Implement LLM mode (API-based):**
+- `functions/term_translation.py` — `_translate_llm_batch()` sends structured JSON prompt
+- Uses active provider from ini_manager; OpenAI-compatible client
+- Parses `{"translations": [...]}` response; pads/truncates on mismatch
+
+**Task 7 — Add Add-ons section in Global Options:**
+- `gui/dialogs/global_options.py` — Added `ADDONS = "addons"` to `OptionSection` enum
+- Added `_build_addons_section()` — Treeview with Name/Size columns, Delete/Refresh buttons
+- Added `_refresh_addons_list()` and `_delete_selected_addon()` helper methods
+
+**Task 8 — Create addon.ini management:**
+- `functions/addon_manager.py` (NEW) — 160 lines
+- Manages `user/addons/` directory and `user/addons/addon.ini` registry
+- Public API: `list_addons()`, `is_installed()`, `register_addon()`, `delete_addon()`, `get_addon_path()`
+
+**Task 9 — Tests:**
+- `dev/test_term_translation.py` (NEW) — 46 tests, all passing
+- TestCapitalizeName (9), TestTermTranslationSimple (7), TestUtilitySettings (5),
+  TestGlobalOptionsUtility (4), TestOptionSectionEnums (6), TestCodePatternTranslation (6),
+  TestAddonManager (7), TestSectionDescriptions (2)
+
+**Modified files:** gui/steps/analysis.py, gui/steps/information.py, gui/dialogs/global_options.py, functions/romanization.py
+**New files:** functions/term_translation.py, functions/addon_manager.py, dev/test_term_translation.py
+**Updated docs:** doc/features.md, doc/technical.md, doc/tests.md, doc/specs.md, doc/todo.md
+**Test results:** 46 new + 40 existing romanization = 86 targeted tests pass; 193 passed in full suite; 0 regressions
 
 =============================================================================
 

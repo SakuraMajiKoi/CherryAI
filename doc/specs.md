@@ -773,7 +773,7 @@ PrettyWrap is the standard wrapping algorithm. Its priority rules:
 
 **Task 75 Extension**: Protagonist-aware POV re-run — `get_protagonists_from_characters()`, `get_protagonists_from_code_database()`, `run_pov_with_protagonists()`, `format_protagonist_prompt()` in `functions/analysis.py`. GUI trigger: `_set_speaker_role("Protagonist")` → `_rerun_pov_with_protagonists()` stores updated POV in manifest. Prompt slot 4b between Tone and Summary. Tests in `dev/test_protagonist_romanization.py` (18 protagonist tests).
 
-**Task 75 Romanization**: `functions/romanization.py` — Modified Hepburn kana→rōmaji conversion. Auto-populates glossary Translation field and code database Notes for kana entries during Analysis. Tests in `dev/test_protagonist_romanization.py` (22 romanization tests).
+**Task 75 Romanization + Term Translation**: `functions/romanization.py` — Modified Hepburn kana→rōmaji conversion with `capitalize_name()`. `functions/term_translation.py` — unified dispatcher supporting Simple (romanize), MTL (EasyNMT/opus-mt), and LLM (OpenAI-compatible) modes. `functions/addon_manager.py` — manages `user/addons/` for optional components. GUI button renamed to "Translate Terms". Auto-populates glossary Translation field and code database Translation column. Mode configurable in Global Options → Utility. Tests in `dev/test_protagonist_romanization.py` (22 romanization tests) and `dev/test_term_translation.py` (46 tests).
 
 **Purpose**: Infer the narrative point of view from non-dialogue text to provide the LLM with accurate context for pronoun and perspective handling.
 
@@ -1357,7 +1357,7 @@ When user right-clicks on rows where Category = "Speakers":
 - Role/Gender submenu applies to all selected speakers
 
 **Inference Details** (Add to Glossary with Inference — future enhancement):
-1. Speaker name is sent to configured LLM with prompt: "Provide a likely English translation/romanization for this Japanese name: {name}"
+1. Speaker name is sent to configured LLM with prompt: "Provide a likely English translation for this Japanese name: {name}"
 2. Response is parsed and placed in Translation field
 3. Entry is marked with `source: "analysis_inference"` for tracking
 4. If inference fails, falls back to standard Add to Glossary (empty Translation)

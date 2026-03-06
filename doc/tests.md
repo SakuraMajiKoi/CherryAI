@@ -10175,6 +10175,27 @@ python -m pytest CherryAI/dev/test_pov_inference.py -v --timeout=10
 python -m pytest CherryAI/dev/test_protagonist_romanization.py -v --timeout=10
 ```
 
+### Term Translation, Addon Management & Global Options Extensions (46 tests)
+
+**File:** `dev/test_term_translation.py`
+**Baseline:** 6278+ passed
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestCapitalizeName | 9 | Simple name, multi-word, hyphenated segments, empty string, single char, all-caps, already capitalized, whitespace, mixed delimiters |
+| TestTermTranslationSimple | 7 | Kana translation, non-kana passthrough, empty term, katakana name, mode override, mixed text, whitespace |
+| TestUtilitySettings | 5 | Default mode, roundtrip, invalid mode fallback, from_dict defaults, to_dict |
+| TestGlobalOptionsUtility | 4 | GlobalOptions has utility field, default utility settings, roundtrip serialization, utility in to_dict |
+| TestOptionSectionEnums | 6 | UTILITY enum exists, ADDONS enum exists, utility in SECTION_NAMES, addons in SECTION_NAMES, utility in SECTION_DESCRIPTIONS, addons in SECTION_DESCRIPTIONS |
+| TestCodePatternTranslation | 6 | Default empty translation, to_dict includes translation, from_dict reads translation, roundtrip, legacy from_dict without translation, translation in display |
+| TestAddonManager | 7 | get_addons_dir creates directory, register and list addon, is_installed check, delete addon, delete nonexistent raises, get_addon_path, dir_size_human |
+| TestSectionDescriptions | 2 | SECTION_DESCRIPTIONS completeness, all OptionSection values have descriptions |
+
+```bash
+# Run term translation tests
+python -m pytest CherryAI/dev/test_term_translation.py -v --timeout=10
+```
+
 ### Phase 55: Consistency System (60 tests)
 
 **File:** `dev/test_consistency.py`

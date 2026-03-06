@@ -259,6 +259,33 @@ def romanize_if_japanese(text: str) -> str:
     return text
 
 
+def capitalize_name(text: str) -> str:
+    """Title-case a romanized name for glossary display.
+
+    Each whitespace-separated word has its first letter capitalized;
+    the rest stays lower-case.  Hyphens are treated as word separators
+    (e.g. ``"ko-no-ha"`` → ``"Ko-No-Ha"``).
+
+    Args:
+        text: Romanized text to capitalize.
+
+    Returns:
+        Title-cased string.
+    """
+    if not text:
+        return ""
+    parts = text.split(" ")
+    capped: list[str] = []
+    for part in parts:
+        if "-" in part:
+            capped.append("-".join(
+                seg.capitalize() for seg in part.split("-")
+            ))
+        else:
+            capped.append(part.capitalize())
+    return " ".join(capped)
+
+
 # ============================================================================
 # Internal helpers
 # ============================================================================

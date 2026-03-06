@@ -15,7 +15,7 @@ When implementing or modifying features:
 - Cross-reference with `technical.md` for implementation details
 
 VERIFIED MODULE COUNTS (January 2026):
-- functions/: 38 modules (+ glossaries/ subfolder with 6 files)
+- functions/: 40 modules (+ glossaries/ subfolder with 6 files)
 - modi/: 12 processing modes
 - formats/: 5 format handlers
 - gui/steps/: 10 workflow tabs
@@ -2090,7 +2090,7 @@ PROTAGONIST DETECTION + POV RE-RUN (Implemented — Task 75)
 
 JAPANESE ROMANIZATION — MODIFIED HEPBURN (Implemented — Task 75)
 - Converts Japanese hiragana and katakana to Latin-letter rōmaji
-- **Module:** `functions/romanization.py` (250 lines, dependency-free)
+- **Module:** `functions/romanization.py` (250+ lines, dependency-free)
 - **Mapping Tables:**
   - 46 hiragana base characters + dakuten + handakuten
   - 46 katakana base characters + dakuten + handakuten
@@ -2104,9 +2104,38 @@ JAPANESE ROMANIZATION — MODIFIED HEPBURN (Implemented — Task 75)
   - `romanize(text)` — converts kana to rōmaji
   - `contains_kana(text)` — returns True if text has any kana
   - `romanize_if_japanese(text)` — romanize only if kana detected, otherwise pass through
+  - `capitalize_name(text)` — title-case romanized output, treating hyphens as word separators (e.g. "ko-no-ha" → "Ko-No-Ha")
 - **Glossary Integration:** `name_glossary_functions.py` auto-fills Translation field with romanization when no translation exists and name contains kana
 - **Code DB Integration:** `code_glossary_functions.py` auto-fills Notes field with romanization for kana code patterns (NEW, ADD, OVERWRITE modes)
 - Test suite: `dev/test_protagonist_romanization.py` (22 romanization tests)
+
+TERM TRANSLATION — MULTI-MODE DISPATCHER (Implemented)
+- Unified term translation system replacing the standalone "Romanize" button with "Translate Terms"
+- **Module:** `functions/term_translation.py` — dispatches to Simple, MTL, or LLM mode
+- **Three modes** (configurable in Global Options → Utility → Term Translation Mode):
+  - `Simple` (default) — Uses the built-in Modified Hepburn romanization engine, then title-cases the result. Zero dependencies.
+  - `MTL` — Machine Translation via EasyNMT/opus-mt. Supports 150+ languages, ~300 MB per language pair (auto-downloaded). Lazy-installs via `pip install easynmt` on first use.
+  - `LLM` — Uses the active LLM API provider (OpenAI-compatible). Sends a structured JSON prompt requesting batch translations; parses `{"translations": [...]}` response.
+- **Public API:**
+  - `translate_term(term, source_lang, target_lang, *, mode, context)` — translate one term
+  - `translate_terms(terms, source_lang, target_lang, *, mode, context)` — batch-translate (MTL and LLM modes batch for efficiency)
+  - `get_current_mode()` — read configured mode from INI
+  - `ensure_mtl_ready()` — lazy-install EasyNMT and register in addon.ini
+- **GUI Integration:** Analysis step "Translate Terms" button calls `translate_term()` dispatcher for characters, speakers, and Code DB entries
+- **Addon Registration:** MTL mode auto-registers in `user/addons/addon.ini` via `addon_manager`
+- Test suite: `dev/test_term_translation.py` (46 tests)
+
+ADDON MANAGEMENT (Implemented)
+- Manages optional components in `user/addons/` directory
+- **Module:** `functions/addon_manager.py`
+- **Registry:** `user/addons/addon.ini` tracks installed addons with metadata
+- **Public API:**
+  - `list_addons()` — returns list of dicts with `name` and `size`
+  - `is_installed(name)` — check if an addon is registered
+  - `register_addon(name, **metadata)` — record a new addon
+  - `delete_addon(name)` — remove addon directory and INI entry
+  - `get_addon_path(name)` — path to addon subdirectory
+- **GUI Integration:** Global Options → Application → Add-ons section shows installed addons in a treeview with Delete and Refresh buttons
 
 CONSISTENCY SYSTEM (Implemented)
 - Ensures consistent translation of recurring terms across all requests
@@ -2774,7 +2803,7 @@ Optional LLM Enhancement:
 
 For speaker names specifically, CherryAI can use an AI model to suggest:
 
-- **Name romanization**: Convert Japanese name to romaji (e.g., イオリ → Iori)
+- **Name translation**: Convert Japanese name to target language (e.g., イオリ → Iori)
 - **Gender inference**: Determine likely gender from speech patterns (Male/Female/Neutral/Unknown)
 - **Context notes**: Infer role or relationship from dialogue context
 
@@ -2789,14 +2818,14 @@ How it works:
 Example:
 
 File has a character "イオリ" who uses feminine pronouns (私). Analysis with AI:
-- Suggests romanization: "Iori"
+- Suggests translation: "Iori"
 - Infers gender: "Female" (based on pronouns and speech patterns)
 - Glossary automatically updated
 - Next file: Tool knows this character is female and uses correct pronouns
 
 Benefits:
 
-- **Speed**: No manual research needed for name romanization
+- **Speed**: No manual research needed for name translation
 - **Consistency**: AI suggestions help maintain character consistency
 - **Learning**: Each file teaches the glossary more about your characters
 - **Flexibility**: You can always edit suggestions or turn off AI enhancement
@@ -3249,10 +3278,11 @@ Entries now support `re=<pattern>` for regex matching, `\,` for literal
 commas, and plain words — all comma-separated.  Three new checkboxes appear
 in Global Options → Translation → Character Validation.
 
-**Romanization + Code DB (Task 6)**: The Analysis step exposes a
-"Romanize" button that fills the `translation` column for characters,
-speakers, and glossary entries using the existing romanization engine.  The
-Code Database TSV gains a `Translation` column (between Pattern and the
+**Term Translation + Code DB (Task 6)**: The Analysis step exposes a
+"Translate Terms" button that fills the `translation` column for characters,
+speakers, and glossary entries using the configured term translation mode
+(Simple/MTL/LLM, set in Global Options → Utility).  The
+Code Database TSV has a `Translation` column (between Pattern and the
 former Type column, now renamed `Category`).
 
 **Rolling Context Fix (Task 7)**: The first request of each file section

@@ -19,7 +19,7 @@ GUI CODE RULES:
 - Formats handlers manage all file I/O operations
 
 MODULE AWARENESS (Always check these when implementing features):
-- functions/    : 46 modules - core shared functionality (+ glossaries/ subfolder with 5 files)
+- functions/    : 48 modules - core shared functionality (+ glossaries/ subfolder with 5 files)
 - modi/         : 12 processing modes - pre/post-processing plugins
 - formats/      : 8 format handlers - file I/O for CSV, TXT, JSON, etc.
 - gui/steps/    : 10 workflow tabs - display and user interaction only
@@ -122,8 +122,10 @@ TABLE OF CONTENTS
    3.44 process_order.py ✅🔗 - Pre/post processing order management (Phase 26)
    3.45 usage_tracker.py ✅ - API usage analytics and tracking (Phase 17.5)
    3.46 estimation.py ✅ - Token estimation utilities (legacy CLI support)
+   3.47 term_translation.py ✅🔗 - Unified term translation dispatcher (Simple/MTL/LLM modes)
+   3.48 addon_manager.py ✅🔗 - Addon directory and INI registry management (user/addons/)
    
-   3.47 glossaries/ (subfolder - 6 files)
+   3.49 glossaries/ (subfolder - 6 files)
         - __init__.py - Package exports
         - code_glossary_constants.py - Code pattern definitions
         - code_glossary_functions.py - Code detection/classification (updated: uses TSV via code_glossary_db)
@@ -136,7 +138,7 @@ TABLE OF CONTENTS
         - name_glossary_constants.py - Speaker patterns, romanization
         - name_glossary_functions.py - Speaker detection, gender inference
 
-   3.48 api_config.py ✅ — Encrypted API configuration manager (user/API.ini); Phase 62 extended
+   3.50 api_config.py ✅ — Encrypted API configuration manager (user/API.ini); Phase 62 extended
         * Single source of ALL API meta information: provider profiles, model, temperature, URL, timeout, rate limits, encrypted keys
         * ✅ Phase 62: api_profiles.ini consolidated; `[translation]` and `[glossary]` sections added
         * Key management: set_password(), verify_password(), is_password_set(), set_api_key(provider, key, password, name), get_api_key(provider, password, name), change_password(), migrate_from_ini(), disable_password(current_password), reset_password(), set_api_key_plain(provider, key, name), get_api_key_plain(provider, name)
@@ -205,9 +207,9 @@ TABLE OF CONTENTS
    6.6 gui/dialogs/ (6 files - 5 dialog modules)
        - __init__.py - Dialog exports
        - global_options.py - GlobalOptionsDialog with section panels:
-         - OptionSection enum: API, REQUEST, TRANSLATION, CACHING, LOGGING, SESSION, LIMIT, FILE_IO, PROMPTS, SECURITY (10 sections)
+         - OptionSection enum: API, REQUEST, TRANSLATION, CACHING, LOGGING, SESSION, LIMIT, FILE_IO, PROMPTS, SECURITY, UTILITY, ADDONS (12 sections)
          - Settings dataclasses: APISettings, RequestSettings, TranslationSettings, CachingSettings, LoggingSettings,
-           SessionSettings, LimitSettings (SafetySettings=alias), FileIOSettings, PromptsSettings
+           SessionSettings, LimitSettings (SafetySettings=alias), FileIOSettings, PromptsSettings, UtilitySettings
          - TranslationSettings (NEW): overwrite_translation, skip_non_source_language, retry_strategy, request_slicing
          - GlobalOptions container: all settings including `translation: TranslationSettings` + providers list; `safety` property is alias for `limit`
          - APIProviderEntry dataclass: name, provider_type, url, api_key, model (Task 43.6)
@@ -231,7 +233,10 @@ TABLE OF CONTENTS
          - CachingSettings: fields renamed — dir, age (days), size (MB), mode; defaults 0=unlimited
          - _persist_to_ini(): Writes ALL settings sections to CherryAI.ini on every Apply/OK
          - _save_options() calls _persist_to_ini() for guaranteed persistence
-         - Sections organized in CATEGORY_ORDER: Connection, Processing, Application
+         - Sections organized in CATEGORY_ORDER: Connection (incl. Utility), Processing, Application (incl. Add-ons)
+         - UtilitySettings: term_translation_mode (Simple/MTL/LLM) — controls term translation dispatcher
+         - UTILITY section: _build_utility_section() — Term Translation Mode dropdown with mode descriptions
+         - ADDONS section: _build_addons_section() — Treeview of installed addons (name/size), Delete/Refresh buttons
          - TASK 33.2: PromptsSettings for Edit/TLC custom prompts
            - edit: str - Custom prompt for Edit steps
            - tlc: str - Custom prompt for TLC steps  
@@ -838,7 +843,7 @@ CherryAI/
 │   │   └── table.py        SharedTable, ColumnDef, TableRow
 │   ├── dialogs/            Modal dialogs
 │   │   ├── __init__.py     Dialog exports
-│   │   ├── global_options.py GlobalOptionsDialog (9 sections incl. Security)
+│   │   ├── global_options.py GlobalOptionsDialog (12 sections incl. Security, Utility, Add-ons)
 │   │   └── password_dialog.py SetPasswordDialog, ChangePasswordDialog, VerifyPasswordDialog
 │   ├── widgets/            Reusable standalone widgets [NEW 2026]
 │   │   ├── __init__.py
@@ -891,6 +896,8 @@ CherryAI/
 │   ├── prompt_builder.py   Dynamic prompt construction with game summary
 │   ├── project_config.py   Project-level configuration (game summary, API profiles)
 │   ├── romanization.py     Japanese kana → rōmaji (Modified Hepburn, Task 75)
+│   ├── term_translation.py Unified term translation dispatcher (Simple/MTL/LLM)
+│   ├── addon_manager.py    Addon directory and INI registry (user/addons/)
 │   ├── wordwrap.py         Text analysis and wordwrap
 │   ├── postanalysis.py     Post-processing analysis
 │   ├── glossaries/         Glossary detection modules
@@ -3872,10 +3879,53 @@ Public API:
 - romanize(text) → str: Convert kana to rōmaji; digraphs before singles; small tsu doubles next consonant; long vowel extends; non-kana passed through
 - contains_kana(text) → bool: True if text contains any hiragana/katakana
 - romanize_if_japanese(text) → str: Romanize only if kana detected, else return unchanged
+- capitalize_name(text) → str: Title-case romanized output; hyphens treated as word separators (e.g. "ko-no-ha" → "Ko-No-Ha")
 
 Integration:
 - name_glossary_functions.py: Auto-fills GlossaryEntry.translation with romanize_if_japanese(name) when translation is empty
 - code_glossary_functions.py: Auto-fills Notes with _auto_romanize_notes(pattern) for kana code patterns
+
+TERM_TRANSLATION.PY (Unified Term Translation Dispatcher)
+
+Purpose: Route term translation through the mode configured in Global Options → Utility.
+
+Constants:
+- MODES: ("Simple", "MTL", "LLM") — valid mode identifiers
+
+Mode Detection:
+- get_current_mode() → str: Reads term_translation_mode from INI [utility] section; falls back to "Simple"
+
+Public API:
+- translate_term(term, source_lang, target_lang, *, mode, context) → str: Translate a single term
+- translate_terms(terms, source_lang, target_lang, *, mode, context) → List[str]: Batch-translate (MTL/LLM batch for efficiency)
+- ensure_mtl_ready() → None: Lazy-install EasyNMT via pip; load opus-mt model; register in addon.ini
+
+Internal:
+- _translate_simple(term): romanize_if_japanese + capitalize_name
+- _translate_mtl(term, src, tgt): EasyNMT single term translation
+- _translate_mtl_batch(terms, src, tgt): EasyNMT batch translation
+- _translate_llm(term, src, tgt, ctx): Single-term LLM call (delegates to batch)
+- _translate_llm_batch(terms, src, tgt, ctx): OpenAI-compatible API call; structured JSON prompt → {"translations": [...]}
+- _get_api_key(): Retrieves active API key from api_config or ini_manager
+
+ADDON_MANAGER.PY (Optional Component Management)
+
+Purpose: Manage optional CherryAI components installed in user/addons/.
+
+Paths:
+- get_addons_dir() → Path: Canonical user/addons/ directory (created if missing)
+- get_addon_ini() → Path: user/addons/addon.ini registry file
+
+Public API:
+- list_addons() → List[Dict[str, str]]: Returns name and human-readable size for each registered addon
+- is_installed(name) → bool: True if addon has an INI section
+- register_addon(name, **metadata) → None: Add/update INI section with arbitrary key-value metadata
+- delete_addon(name) → None: Remove addon directory (shutil.rmtree) and INI section
+- get_addon_path(name) → Path: user/addons/<name>/ (created if missing)
+
+Internal:
+- _read_ini() / _write_ini(cfg): configparser-based INI read/write
+- _dir_size_human(path) → str: Recursive directory size in B/KB/MB/GB
 
 CONSISTENCY.PY (Consistency System - Phase 55)
 

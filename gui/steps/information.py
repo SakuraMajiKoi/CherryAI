@@ -172,6 +172,7 @@ class CodePattern:
     
     Attributes:
         pattern: The code pattern regex or string.
+        translation: Translated term for this pattern.
         category: Category like 'RPG Maker Variable', 'Ruby Code', etc.
         action: How to handle: 'preserve', 'translate', 'remove'.
         example: Example occurrence from the source text.
@@ -179,6 +180,7 @@ class CodePattern:
     """
 
     pattern: str
+    translation: str = ""
     category: str = ""
     action: str = "preserve"
     example: str = ""
@@ -188,6 +190,7 @@ class CodePattern:
         """Convert to dictionary for serialization."""
         return {
             "pattern": self.pattern,
+            "translation": self.translation,
             "category": self.category,
             "action": self.action,
             "example": self.example,
@@ -199,6 +202,7 @@ class CodePattern:
         """Create from dictionary."""
         return cls(
             pattern=data.get("pattern", ""),
+            translation=data.get("translation", ""),
             category=data.get("category", ""),
             action=data.get("action", "preserve"),
             example=data.get("example", ""),
@@ -1432,7 +1436,7 @@ class InformationStep(BaseStep):
         list_frame.rowconfigure(0, weight=1)
         list_frame.columnconfigure(0, weight=1)
 
-        columns = ("pattern", "category", "action")
+        columns = ("pattern", "translation", "category", "action")
         self._code_tree = ttk.Treeview(
             list_frame,
             columns=columns,
@@ -1441,11 +1445,13 @@ class InformationStep(BaseStep):
             selectmode="extended",
         )
         self._code_tree.heading("pattern", text="Pattern")
+        self._code_tree.heading("translation", text="Translation")
         self._code_tree.heading("category", text="Category")
         self._code_tree.heading("action", text="Action")
 
-        self._code_tree.column("pattern", width=150)
-        self._code_tree.column("category", width=100)
+        self._code_tree.column("pattern", width=130)
+        self._code_tree.column("translation", width=110)
+        self._code_tree.column("category", width=90)
         self._code_tree.column("action", width=70)
 
         code_scroll = ttk.Scrollbar(
@@ -3367,7 +3373,7 @@ class InformationStep(BaseStep):
 
         # Get column index (1-based from identify_column)
         col_idx = int(column.replace("#", "")) - 1
-        columns = ("pattern", "category", "action")
+        columns = ("pattern", "translation", "category", "action")
         if col_idx < 0 or col_idx >= len(columns):
             return
 
@@ -3386,11 +3392,11 @@ class InformationStep(BaseStep):
         
         Args:
             item: Treeview item ID.
-            col_key: Column key (pattern, category, action).
+            col_key: Column key (pattern, translation, category, action).
             col_idx: Column index.
             pattern: Code pattern being edited.
         """
-        columns = ("pattern", "category", "action")
+        columns = ("pattern", "translation", "category", "action")
         try:
             bbox = self._code_tree.bbox(item, columns[col_idx])
             if not bbox:
@@ -3483,7 +3489,12 @@ class InformationStep(BaseStep):
             self._code_tree.insert(
                 "",
                 "end",
-                values=(pattern.pattern, pattern.category, pattern.action),
+                values=(
+                    pattern.pattern,
+                    pattern.translation,
+                    pattern.category,
+                    pattern.action,
+                ),
             )
 
     def _on_import_code_patterns(self) -> None:
@@ -4047,8 +4058,8 @@ class InformationStep(BaseStep):
                 rows = code_glossary_db.read_all_rows()
                 return [
                     {"col1": r[0] if len(r) > 0 else "",
-                     "col2": r[2] if len(r) > 2 else "",
-                     "col3": r[4] if len(r) > 4 else ""}  # Pattern, Category, Notes
+                     "col2": r[1] if len(r) > 1 else "",
+                     "col3": r[2] if len(r) > 2 else ""}  # Pattern, Translation, Category
                     for r in rows
                 ]
             else:  # Glossary
@@ -4078,7 +4089,7 @@ class InformationStep(BaseStep):
             if mode == "Code Database":
                 from CherryAI.functions.glossaries import code_glossary_db
                 rows = [
-                    [e.get("col1", ""), "", e.get("col2", ""), "", e.get("col3", "")]
+                    [e.get("col1", ""), e.get("col2", ""), e.get("col3", "")]
                     for e in entries
                 ]
                 code_glossary_db.write_all_rows(rows)
@@ -4126,8 +4137,8 @@ class InformationStep(BaseStep):
         # Adjust headings per mode
         if mode == "Code Database":
             self._global_db_tree.heading("col1", text="Pattern")
-            self._global_db_tree.heading("col2", text="Category")
-            self._global_db_tree.heading("col3", text="Action")
+            self._global_db_tree.heading("col2", text="Translation")
+            self._global_db_tree.heading("col3", text="Category")
         else:
             self._global_db_tree.heading("col1", text="Original")
             self._global_db_tree.heading("col2", text="Translation")
@@ -5129,6 +5140,15 @@ class CodePatternDialog(tk.Toplevel):
             side="left", fill="x", expand=True
         )
 
+        # Translation
+        row1b = ttk.Frame(main)
+        row1b.pack(fill="x", pady=5)
+        ttk.Label(row1b, text="Translation:", width=15).pack(side="left")
+        self._translation_var = tk.StringVar()
+        ttk.Entry(row1b, textvariable=self._translation_var).pack(
+            side="left", fill="x", expand=True
+        )
+
         # Category
         row2 = ttk.Frame(main)
         row2.pack(fill="x", pady=5)
@@ -5195,6 +5215,7 @@ class CodePatternDialog(tk.Toplevel):
     def _populate(self) -> None:
         """Populate fields from pattern."""
         self._pattern_var.set(self._pattern.pattern)
+        self._translation_var.set(self._pattern.translation)
         self._category_var.set(self._pattern.category)
         self._action_var.set(self._pattern.action)
         self._example_var.set(self._pattern.example)
@@ -5209,6 +5230,7 @@ class CodePatternDialog(tk.Toplevel):
 
         self.result = CodePattern(
             pattern=pattern,
+            translation=self._translation_var.get().strip(),
             category=self._category_var.get().strip(),
             action=self._action_var.get().strip() or "preserve",
             example=self._example_var.get().strip(),
