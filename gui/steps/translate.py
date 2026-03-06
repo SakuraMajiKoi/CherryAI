@@ -2947,9 +2947,18 @@ class TranslationStep(BaseStep):
                 except (TypeError, ValueError, AttributeError):
                     pass
 
+            # Fetch max_input_tokens setting for token-based splitting
+            max_input_tokens = 0
+            if go is not None:
+                try:
+                    max_input_tokens = int(go.request.max_input_tokens)
+                except (TypeError, ValueError, AttributeError):
+                    pass
+
             config = RequestFormationConfig(
                 max_lines=chunk_size,
                 min_lines=min_lines,
+                max_tokens=max_input_tokens,
                 efficient_merge=(slicing == "efficient"),
                 rolling_context_between=rc_between,
                 rolling_context_after=rc_after,

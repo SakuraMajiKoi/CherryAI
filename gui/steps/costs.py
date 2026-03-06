@@ -77,6 +77,20 @@ OUTPUT_MULTIPLIER = OUTPUT_TOKEN_MULTIPLIER
 
 
 @dataclass
+class FormationResult:
+    """Result from the 4-step formation pipeline.
+
+    Attributes:
+        num_requests: Number of translation requests.
+        request_line_lists: Per-request translatable line texts
+            (for per-chunk prompt overhead calculation).
+    """
+
+    num_requests: int
+    request_line_lists: List[List[str]]
+
+
+@dataclass
 class EstimationResult:
     """Result of a token/cost estimation."""
 
@@ -692,6 +706,75 @@ class CostsStep(BaseStep):
             logger.debug("Error calculating prompt tokens: %s", e)
             return 0
 
+    def _compute_per_request_prompt_overhead(
+        self,
+        request_line_lists: List[List[str]],
+    ) -> Tuple[int, int]:
+        """Compute prompt overhead by building each request's prompt individually.
+
+        Instead of building one maximum-sized prompt and multiplying by
+        the number of requests, this builds the selective prompt for each
+        request's chunk lines (applying glossary/conditional filtering)
+        and sums the individual token counts.
+
+        Args:
+            request_line_lists: Per-request translatable line texts
+                from :class:`FormationResult`.
+
+        Returns:
+            Tuple of (total_prompt_tokens, average_per_request).
+        """
+        if not request_line_lists:
+            return 0, 0
+
+        try:
+            info_data = self.session.get_step(2).data
+            metadata = info_data.get("metadata", {})
+
+            glossary_entries: list[dict] = []
+            mgr = self.manifest_manager
+            if mgr is not None and mgr.is_loaded:
+                try:
+                    from CherryAI.functions.manifest_fields import (
+                        load_glossary_entries,
+                    )
+                    glossary_entries = load_glossary_entries(mgr)
+                except ImportError:
+                    pass
+
+            characters = metadata.get("characters", [])
+            if not characters and mgr is not None and mgr.is_loaded:
+                characters = mgr._manifest_data.get("characters", [])
+
+            pov_data: dict = {}
+            if mgr is not None and mgr.is_loaded:
+                pov_data = mgr._manifest_data.get("POV", {})
+
+            total_tokens = 0
+            for chunk_lines in request_line_lists:
+                prompt_text, _ = build_full_system_prompt(
+                    metadata=metadata,
+                    glossary_entries=glossary_entries,
+                    characters=characters,
+                    chunk_lines=chunk_lines,
+                    pov_data=pov_data,
+                )
+                if not prompt_text:
+                    continue
+                try:
+                    tok, _ = count_tokens(prompt_text)
+                except Exception:
+                    tok = len(prompt_text) // 4
+                total_tokens += tok
+
+            num = len(request_line_lists)
+            avg = total_tokens // num if num > 0 else 0
+            return total_tokens, avg
+
+        except Exception as e:
+            logger.debug("Error computing per-request prompt overhead: %s", e)
+            return 0, 0
+
     def _refresh_lines(self) -> None:
         """Refresh lines from previous steps."""
         self._lines_original, self._lines_preprocessed = self._get_lines()
@@ -835,6 +918,17 @@ class CostsStep(BaseStep):
                         )
                 except (TypeError, ValueError, AttributeError):
                     pass
+                # Sync max_input_tokens from Global Options
+                try:
+                    go_tokens = int(go.request.max_input_tokens)
+                    if go_tokens >= 0:
+                        tokens_limit = go_tokens
+                        self.after(
+                            0,
+                            lambda v=go_tokens: self._tokens_var.set(v),
+                        )
+                except (TypeError, ValueError, AttributeError):
+                    pass
 
             # Read request slicing mode from Global Options
             slicing = "conservative"
@@ -883,11 +977,20 @@ class CostsStep(BaseStep):
             prep_output_tokens = int(prep_input_tokens * OUTPUT_MULTIPLIER)
 
             # Try the formation pipeline for accurate request counting
-            prep_requests = self._estimate_via_formation(
+            prep_formation = self._estimate_via_formation(
                 self._lines_preprocessed, chunk_size, slicing,
                 skip_indices=prep_skip,
+                max_input_tokens=tokens_limit,
             )
-            if prep_requests is None:
+            if prep_formation is not None:
+                prep_requests = prep_formation.num_requests
+                # Per-request prompt overhead (selective glossary/conditional)
+                prep_prompt_total, prep_prompt_avg = (
+                    self._compute_per_request_prompt_overhead(
+                        prep_formation.request_line_lists,
+                    )
+                )
+            else:
                 # Fallback: simple estimation
                 prep_requests = estimate_chunks(
                     prep_translatable,
@@ -896,6 +999,11 @@ class CostsStep(BaseStep):
                     mode="hybrid",
                     model=model_id,
                 )
+                # Fallback prompt: single prompt estimate × requests
+                fallback_prompt = self._get_prompt_tokens()
+                prep_prompt_total = fallback_prompt * prep_requests
+                prep_prompt_avg = fallback_prompt
+
             orig_requests = estimate_chunks(
                 orig_translatable,
                 max_lines=chunk_size,
@@ -903,10 +1011,12 @@ class CostsStep(BaseStep):
                 mode="hybrid",
                 model=model_id,
             )
+            # Original uses simple estimation — flat per-request overhead
+            orig_fallback_prompt = self._get_prompt_tokens()
+            orig_prompt_overhead = orig_fallback_prompt * orig_requests
 
-            # Add prompt overhead to total input tokens (prompt sent with each request)
-            orig_prompt_overhead = prompt_tokens * orig_requests
-            prep_prompt_overhead = prompt_tokens * prep_requests
+            # Add prompt overhead to total input tokens
+            prep_prompt_overhead = prep_prompt_total
             orig_total_input = orig_input_tokens + orig_prompt_overhead
             prep_total_input = prep_input_tokens + prep_prompt_overhead
 
@@ -987,7 +1097,8 @@ class CostsStep(BaseStep):
             # Update UI on main thread
             self.after(0, lambda: self._update_ui(
                 original, preprocessed, orig_requests, prep_requests,
-                orig_time, prep_time, model_id, rate_limits.rpm, prompt_tokens
+                orig_time, prep_time, model_id, rate_limits.rpm,
+                prep_prompt_total, prep_prompt_avg,
             ))
             # Task 40.5: Update dual ticks on progress tracker
             self.after(0, self._update_dual_ticks)
@@ -1004,7 +1115,8 @@ class CostsStep(BaseStep):
         chunk_size: int,
         slicing: str = "conservative",
         skip_indices: Optional[frozenset] = None,
-    ) -> Optional[int]:
+        max_input_tokens: int = 0,
+    ) -> Optional[FormationResult]:
         """Count requests using the 4-step formation pipeline.
 
         Mirrors the logic in ``TranslateStep._build_chunks()`` so that
@@ -1016,9 +1128,12 @@ class CostsStep(BaseStep):
             slicing: ``"conservative"`` or ``"efficient"``.
             skip_indices: Indices of lines to mark as invalid
                 (already translated, non-source language, etc.).
+            max_input_tokens: Maximum tokens for input lines per request
+                (0 = no limit).
 
         Returns:
-            Number of requests, or ``None`` if the pipeline is unavailable.
+            FormationResult with request count and per-request line lists,
+            or ``None`` if the pipeline is unavailable.
         """
         try:
             from CherryAI.functions.prompt_builder import (
@@ -1066,9 +1181,19 @@ class CostsStep(BaseStep):
         config = RequestFormationConfig(
             max_lines=chunk_size,
             min_lines=min_lines,
+            max_tokens=max_input_tokens,
         )
         requests = build_requests(line_infos, config)
-        return len(requests) if requests else max(1, len(lines) // chunk_size)
+        if not requests:
+            fallback_count = max(1, len(lines) // chunk_size)
+            return FormationResult(
+                num_requests=fallback_count,
+                request_line_lists=[],
+            )
+        return FormationResult(
+            num_requests=len(requests),
+            request_line_lists=[req.lines for req in requests],
+        )
 
     def _update_ui(
         self,
@@ -1080,7 +1205,8 @@ class CostsStep(BaseStep):
         prep_time: Dict[str, Any],
         model_id: str,
         rate_limit_rpm: int = DEFAULT_RPM,
-        prompt_tokens: int = 0,
+        prompt_tokens_total: int = 0,
+        prompt_tokens_avg: int = 0,
     ) -> None:
         """Update UI with estimation results.
 
@@ -1093,7 +1219,8 @@ class CostsStep(BaseStep):
             prep_time: Preprocessed time estimate dict.
             model_id: Model identifier.
             rate_limit_rpm: Model-specific rate limit (requests per minute).
-            prompt_tokens: Token count for system prompt.
+            prompt_tokens_total: Total prompt overhead across all requests.
+            prompt_tokens_avg: Average prompt overhead per request.
         """
         # Update token labels
         self._input_orig_label.configure(text=f"{original.input_tokens:,}")
@@ -1111,10 +1238,13 @@ class CostsStep(BaseStep):
         )
 
         # Update prompt overhead label
-        if prompt_tokens > 0:
-            total_overhead = prompt_tokens * prep_requests
+        if prompt_tokens_total > 0:
             self._prompt_tokens_label.configure(
-                text=f"~{total_overhead:,} total ({prep_requests} Requests, ~{prompt_tokens:,} per)"
+                text=(
+                    f"~{prompt_tokens_total:,} total "
+                    f"({prep_requests} Requests, "
+                    f"~{prompt_tokens_avg:,} avg/request)"
+                )
             )
         else:
             self._prompt_tokens_label.configure(text="(no prompt data available)")

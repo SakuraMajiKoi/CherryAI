@@ -56,6 +56,85 @@ MODULE COUNTS (Verified January 2026)
 
 ============================================================================= 
 
+COMPLETED - SESSION 42 (Per-Request Prompt Overhead Fix)
+
+### SESSION 42: TASK 42 — Per-Request Prompt Overhead ✅ DONE
+
+**Problem:** Estimation built one maximum-sized prompt (no selective glossary/
+conditional filtering) and multiplied it by every request, heavily skewing costs.
+
+**Task 1 — FormationResult dataclass:**
+- Added `FormationResult(num_requests, request_line_lists)` dataclass to costs.py
+- `_estimate_via_formation()` now returns `FormationResult` instead of `Optional[int]`
+
+**Task 2 — Per-request prompt overhead method:**
+- Created `_compute_per_request_prompt_overhead(request_line_lists)` on CostsStep
+- Iterates each request's chunk_lines, calls `build_full_system_prompt(chunk_lines=...)`
+- Counts tokens individually per request, sums for total, averages for display
+
+**Task 3 — Refactored _do_estimation:**
+- Removed old pattern: `prompt_tokens * prep_requests`
+- Now uses `_compute_per_request_prompt_overhead()` for preprocessed requests
+- Passes per-request total and average to `_update_ui()`
+
+**Task 4 — Updated _update_ui display:**
+- Format changed from `~Z total (Y Requests, ~X per)` to `~Z total (Y Requests, ~X avg/request)`
+- Signature: `prompt_tokens_total` and `prompt_tokens_avg` parameters
+
+**Task 5 — Tests:**
+- Created `dev/test_prompt_overhead_fix.py` with 29 tests across 8 test classes
+- Updated 4 existing tests in `test_costs_step_phase40.py` for new format string
+- Coverage: FormationResult, return type, per-request method, selective filtering, UI format, sum vs flat multiplication, edge cases
+
+**Task 6 — Documentation:**
+- Updated specs.md (§5.2 prompt overhead spec, revision history, output fields, widget descriptions)
+- Updated features.md (prompt overhead calculation description)
+- Updated technical.md (costs.py changes section)
+- Updated tests.md (new test file entry, total count)
+
+=============================================================================
+
+============================================================================= 
+
+COMPLETED - SESSION 41 (Max Input Tokens — Global Options & Estimation)
+
+### SESSION 41: TASK 41 — Max Input Tokens Setting ✅ DONE
+
+**Task 1 — RequestSettings dataclass:**
+- Added `max_input_tokens: int = 0` field to `RequestSettings` (0 = no limit, input lines only)
+- Updated `to_dict()` and `from_dict()` for serialization/deserialization
+- Modified: gui/dialogs/global_options.py
+
+**Task 2 — Global Options UI:**
+- Added "Max Input Tokens" spinbox (0–128000, increment 500) in Model Settings section
+- Help text: "(0 = no limit, input lines only)"
+- Modified: gui/dialogs/global_options.py
+
+**Task 3 — INI persistence:**
+- Wired `max_input_tokens` into `_save_options()`, `_persist_to_ini()` (INI key: `max_input_tokens` in `[api]`), and INI defaults loading
+- Modified: gui/dialogs/global_options.py
+
+**Task 4 — RequestFormationConfig mapping:**
+- Confirmed existing `RequestFormationConfig.max_tokens` in prompt_builder.py maps to `max_input_tokens`
+- `_step3_split_and_balance()` already uses `max_tokens` for token-based splitting — no changes needed
+
+**Task 5 — Translation step wiring:**
+- `_build_chunks()` now reads `max_input_tokens` from GlobalOptions and passes to `RequestFormationConfig(max_tokens=...)`
+- Modified: gui/steps/translate.py
+
+**Task 6 — Costs step wiring:**
+- `_estimate_via_formation()` now accepts and passes `max_input_tokens` to `RequestFormationConfig`
+- `_do_estimation()` syncs `max_input_tokens` from GlobalOptions to the Tokens/Request spinbox
+- Modified: gui/steps/costs.py
+
+**Task 7 — Tests:**
+- Created `dev/test_max_input_tokens.py` with 34 tests across 8 test classes
+- Coverage: dataclass field, GlobalOptions, config plumbing, build_requests splitting, costs estimation, edge cases, INI persistence
+
+=============================================================================
+
+============================================================================= 
+
 COMPLETED - SESSION 40 (GUI Cleanup, Launch Fixes, Input Dialog Enhancements)
 
 ### SESSION 40: GUI Cleanup, Launch Fixes, Input Dialog Enhancements ✅ DONE

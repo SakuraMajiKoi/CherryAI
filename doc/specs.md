@@ -280,6 +280,7 @@ Global Options are application-wide settings accessed via Tools → Options. The
 | Retries | int | 3 | Max retry attempts |
 | Rate Limit | int | 60 | Requests per minute |
 | Chunk Size | int | 50 | Lines per API request (1–99999) |
+| Max Input Tokens | int | 0 | Maximum token count for input lines per request (0 = no limit; counts input lines only, not prompt/meta) |
 
 #### Translation Settings (NEW)
 | Setting | Type | Default | Description |
@@ -431,9 +432,10 @@ The system prompt is assembled in the following fixed order. Empty sections are 
 #### Request Size
 
 - Requests have a configurable **Minimum** and **Maximum** request size
-- **Maximum**: Hard limit — no request exceeds this (controlled by Lines/Chunk and Tokens/Chunk)
+- **Maximum**: Hard limit — no request exceeds this (controlled by Lines/Chunk, Max Input Tokens, and Tokens/Chunk)
 - **Minimum**: Soft target — requests below this are merged with adjacent requests when possible (see Step 4 of Formation)
 - When both lines and tokens limits exist, whichever is reached first triggers the chunk boundary
+- **Max Input Tokens** counts only input line tokens (not prompt, glossary, or meta tokens). When set to 0, the token limit is disabled and only the line limit applies.
 - **Maximum** and **Minimum** can be the same, **Minimum** can not exceed **Maximum**
 
 #### Request Formation (4+1 Step Process)
@@ -444,7 +446,7 @@ Invalid lines (placeholders, deduplicated, context markers) are never counted an
 
 **Step 2**: Using File Ending Context Markers only, perform the First Dialogue Split. Remove invalid lines from count. Each file boundary produces a separate request candidate.
 
-**Step 3**: Apply the Maximum Request Size to split any oversized First Dialogue Splits. Balance line counts within each resulting Second Dialogue Split where necessary to avoid very uneven chunks.
+**Step 3**: Apply the Maximum Request Size (line count and/or token count via `max_tokens`) to split any oversized First Dialogue Splits. When `max_tokens > 0`, input line tokens are counted and chunks are split when the token budget is reached. Balance line counts within each resulting Second Dialogue Split where necessary to avoid very uneven chunks.
 
 **Step 4**: Smartly merge Second Dialogue Splits below Minimum Request Size with other requests, up to the Maximum Request Size. In a merge, the 2nd request onwards must not have any rolling context that could be provided.
 
@@ -1510,7 +1512,7 @@ The Analysis step is functional and provides valuable information. Phase 59 adds
 | Refresh Button | Button | Fetch latest model data from providers (OpenAI, Gemini, Claude, Mistral, Grok, DeepSeek) |
 | **Token Counts Panel** | LabelFrame | Display token breakdown |
 | Token Grid | Frame | Shows Original, Preprocessed, and Saved columns for Lines, Input Tokens, Output Tokens |
-| Prompt Overhead Label | Label | Shows token cost of system prompt per request |
+| Prompt Overhead Label | Label | Shows total and average prompt overhead per request (per-request selective filtering) |
 | **Cost Estimate Panel** | LabelFrame | Display cost projection |
 | Cost Labels | Labels | Input cost, Output cost, Total cost for selected model |
 | **Time Estimate Panel** | LabelFrame | Display time projection |
@@ -1552,7 +1554,7 @@ Displays token breakdown in a grid format:
 | Lines | X | Y | Z |
 | Input Tokens | X | Y | Z |
 | Output Tokens (est) | X | Y | Z |
-| Prompt Overhead | - per request - |
+| Prompt Overhead | - total + avg/request - |
 
 **Current Issues**:
 - Only counts original lines, does not include prompt tokens
@@ -1681,7 +1683,7 @@ The Costs step has **two distinct estimation states** tracked separately:
 - `input_tokens_preprocessed: int` - Input tokens after preprocessing (saved in manifest)
 - `output_tokens_original: int` - Estimated output tokens from original (saved in manifest)
 - `output_tokens_preprocessed: int` - Estimated output tokens from preprocessed (saved in manifest)
-- `prompt_overhead: int` - Tokens per request from system prompt
+- `prompt_overhead: int` - Total prompt overhead across all requests (per-request selective filtering)
 - `cost_original: float` - Cost before preprocessing (not saved — calculated on display)
 - `cost_preprocessed: float` - Cost after preprocessing (not saved — calculated on display)
 - `cost_saved: float` - Savings from preprocessing (not saved — calculated on display)
@@ -5082,7 +5084,7 @@ without any hardcoded cloud provider data.
 `_build_chunks()` uses the 4-step pipeline from `prompt_builder.py`:
 1. `TranslatableLine` → `LineInfo` conversion (index, text, is_invalid for __DEDUP__/__PROTECTED__/__CUSTOM__)
 2. `file_end` markers injected from `mgr.get_filedir()` FileDirEntry.last_idx
-3. `build_requests(line_infos, RequestFormationConfig(max_lines=chunk_size, min_lines=max(2, chunk_size//5)))` called
+3. `build_requests(line_infos, RequestFormationConfig(max_lines=chunk_size, min_lines=max(2, chunk_size//5), max_tokens=max_input_tokens))` called
 4. `TranslationRequest.line_indices` mapped back to `List[List[TranslatableLine]]`
 
 Each chunk's first line gets `_formation_ctx` dict: `{receives_context, provides_context, context_type}`.
@@ -5154,9 +5156,15 @@ When enabled, `_log_request_json()` writes to `logs/requests/request_{YYYYMMDD_H
 Strategies are applied in order: exchange first, then retry, then flag.
 If exchange resolves all violations the line is accepted normally.
 
-### Prompt Overhead Spec (Task 4)
+### Prompt Overhead Spec (Task 4, updated Task 42)
 
-Display format: `~Z total (Y Requests, ~X per)`.
+Per-request prompt overhead: Each request's prompt is built individually
+using `build_full_system_prompt(chunk_lines=request.lines)` so that
+selective glossary/conditional filtering applies per chunk.  Token counts
+are summed across all requests for the total overhead; the average is
+`total // num_requests`.
+
+Display format: `~Z total (Y Requests, ~X avg/request)`.
 Token counts use `count_tokens()` (tiktoken-based) not `len // 4`.
 
 ### Formation Receives-Context Spec (Task 7)
@@ -5174,6 +5182,8 @@ symbol-only dialogue, skip generic placeholders.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 3.5 | 2026-03-05 | Task 42 — Per-Request Prompt Overhead: `_estimate_via_formation()` returns `FormationResult` dataclass (num_requests + request_line_lists). New `_compute_per_request_prompt_overhead()` builds each request's prompt individually via `build_full_system_prompt(chunk_lines=...)` for selective glossary/conditional filtering, sums token counts. Display format changed from `~Z total (Y Requests, ~X per)` to `~Z total (Y Requests, ~X avg/request)`. 29 new tests (test_prompt_overhead_fix.py). |
+| 3.4 | 2026-03-04 | Task 41 — Max Input Tokens: Added `max_input_tokens` field to RequestSettings (0 = no limit, input lines only), Global Options spinbox (0–128000, increment 500), INI persistence (`[api].max_input_tokens`), wired into translate.py `_build_chunks()` and costs.py `_estimate_via_formation()` via `RequestFormationConfig.max_tokens`. 34 new tests (test_max_input_tokens.py). |
 | 3.3 | 2026-03-03 | Phase 78 — 10 tasks: manifest sample removal, speaker replacement fix, estimation skip logic, prompt overhead display, blacklist/whitelist validation rewrite (parse_filter_entries, check_filter_violations, 3-strategy _apply_char_filters, NEEDS_REVIEW status, 3 new TranslationSettings fields + UI checkboxes), romanization + Code DB Translation column, rolling context file-boundary fix, slicing efficient mode fix, global options scrolling fix, model settings lines/request decoupling. New test files: test_estimation_skip.py (41), test_costs_step_phase40.py (57), test_rolling_context_phase78.py (10), test_slicing_phase78.py (11), test_char_filter_phase78.py (32). |
 | 3.2 | 2026-03-02 | Task 76 — Knowledge Base Widget: Merged Glossary Settings and Global Glossary/Database into unified Knowledge Base widget with Enabled/Disabled toggle, mode switch (Glossary/Code Database), per-entry Active column (✓/✗ toggle), mixed-selection Activate/Deactivate failsafe popup, search/column filter. Updated collapsible widgets from LabelFrame to header+separator design (no empty borders when collapsed). Right column reduced from 4 to 3 rows. TSV schemas updated: globalglossary.tsv 3→4 columns (added Active), codedatabase.tsv 9→10 columns (added Active). Button text standardized to +Add/Edit/Remove. 56 tests. |
 | 3.1 | 2026-03-02 | Task 74 — Request Preview Overhaul: Informative section headers (SECTION_DESCRIPTIONS dict, 12 keys), renamed custom_notes → system_instructions across 6 files, formation-based chunking (4-step build_requests pipeline integrated into _build_chunks), rolling context in translation loop (receives_context/provides_context flags, rolling_ctx_buffer), per-chunk selective glossary/conditional/character filtering (chunk_lines parameter), cross-request search (global match index navigation across all requests), request logging toggle (log_requests in LoggingSettings, JSON to logs/requests/). Fixed step index bugs (3→2) in metadata lookup. 110 tests passing (20 prompt_builder_shared + 42 request_preview + 50 request_formation). |

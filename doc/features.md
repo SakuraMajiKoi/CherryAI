@@ -907,9 +907,9 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Gemini 1.5 Pro, Gemini 1.5 Flash, Gemini 2.0 Flash, Gemini 2.0 Flash Lite
   - **Tokens/Request spinbox** (500-32000): alternative maximum alongside Lines/Request
     - Hybrid chunking mode: whichever limit is reached first triggers chunk boundary
-  - **Prompt overhead calculation**: includes system prompt, summary, glossary, style tokens per request
+  - **Prompt overhead calculation**: per-request prompt overhead with selective glossary/conditional filtering via `_compute_per_request_prompt_overhead()`. Each request's prompt is built individually using `build_full_system_prompt(chunk_lines=...)`, token counts are summed for total, average = total // num_requests. Display: `~Z total (Y Requests, ~X avg/request)`
   - **Formation-based request counting**: Uses the same 4-step formation pipeline (prompt_builder.py) as Translation step for accurate request counting via `_estimate_via_formation()`
-  - **GlobalOptions sync**: Chunk size and request slicing mode read from Global Options at estimation time
+  - **GlobalOptions sync**: Chunk size, max input tokens, and request slicing mode read from Global Options at estimation time
   - Lines/Request spinbox range expanded to 1–99999 to match Model Settings
   - Token counts panel: original vs preprocessed with savings
   - Cost estimate panel with input/output/total breakdown
@@ -1615,7 +1615,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - See doc/passwords.md for full details
   - **Settings Dataclasses (with to_dict/from_dict):**
     - APISettings: provider, api_key, base_url, model, temperature
-    - RequestSettings: timeout, retries, rate_limit, chunk_size, thinking_enabled, thinking_budget, rolling_context_lines
+    - RequestSettings: timeout, retries, rate_limit, chunk_size, max_input_tokens, thinking_enabled, thinking_budget, rolling_context_lines
     - TranslationSettings (NEW): overwrite_translation, skip_non_source_language, retry_strategy, request_slicing
     - CachingSettings: enabled, dir, age (days; 0=unlimited), size (MB; 0=unlimited), mode (strict/line/any/model_only/disabled)
     - LoggingSettings: level, location, debug, api_log
@@ -1646,6 +1646,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Default model per key: `get_default_model()` / `set_default_model()` in api_config.py (stored as `default_model_{provider}_{name}` in [api] section)
   - **Model Settings Section (renamed from Request Section):**
     - Lines per request (chunk size, 1–99999)
+    - Max Input Tokens (0–128000, increment 500; 0 = no limit, input lines only)
     - Timeout in seconds
     - Max retries
     - Rate limit (requests per minute)

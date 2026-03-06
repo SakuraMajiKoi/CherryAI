@@ -227,6 +227,7 @@ class RequestSettings:
     retries: int = 3
     rate_limit: int = 60
     chunk_size: int = 50
+    max_input_tokens: int = 0  # Task 41 — 0 = no limit (input lines only)
     thinking_enabled: bool = False  # Task 43.8
     thinking_budget: int = 10000  # Task 43.8
     rolling_context_lines: int = 3  # Task 43.9 — "Lines (Before)"
@@ -244,6 +245,7 @@ class RequestSettings:
             "retries": self.retries,
             "rate_limit": self.rate_limit,
             "chunk_size": self.chunk_size,
+            "max_input_tokens": self.max_input_tokens,
             "thinking_enabled": self.thinking_enabled,
             "thinking_budget": self.thinking_budget,
             "rolling_context_lines": self.rolling_context_lines,
@@ -263,6 +265,7 @@ class RequestSettings:
             retries=int(data.get("retries", 3)),
             rate_limit=int(data.get("rate_limit", 60)),
             chunk_size=int(data.get("chunk_size", 50)),
+            max_input_tokens=int(data.get("max_input_tokens", 0)),
             thinking_enabled=bool(data.get("thinking_enabled", False)),
             thinking_budget=int(data.get("thinking_budget", 10000)),
             rolling_context_lines=int(data.get("rolling_context_lines", 3)),
@@ -954,6 +957,9 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.retries_var = tk.IntVar(value=self.options.request.retries)
         self.rate_limit_var = tk.IntVar(value=self.options.request.rate_limit)
         self.chunk_size_var = tk.IntVar(value=self.options.request.chunk_size)
+        self.max_input_tokens_var = tk.IntVar(
+            value=self.options.request.max_input_tokens,
+        )
         self.thinking_enabled_var = tk.BooleanVar(
             value=self.options.request.thinking_enabled,
         )
@@ -1379,6 +1385,21 @@ class GlobalOptionsDialog(tk.Toplevel):
         ttk.Label(chunk_row, text="Lines per Request:", width=18).pack(side=tk.LEFT)
         ttk.Spinbox(chunk_row, from_=1, to=99999, textvariable=self.chunk_size_var, width=10).pack(side=tk.LEFT, padx=5)
         ttk.Label(chunk_row, text="(min 1, default: 50)", foreground="gray").pack(side=tk.LEFT, padx=5)
+
+        # Max input tokens per request (Task 41)
+        tokens_row = ttk.Frame(settings_frame)
+        tokens_row.pack(fill=tk.X, pady=5)
+
+        ttk.Label(tokens_row, text="Max Input Tokens:", width=18).pack(side=tk.LEFT)
+        ttk.Spinbox(
+            tokens_row, from_=0, to=128000, increment=500,
+            textvariable=self.max_input_tokens_var, width=10,
+        ).pack(side=tk.LEFT, padx=5)
+        ttk.Label(
+            tokens_row,
+            text="(0 = no limit, input lines only)",
+            foreground="gray",
+        ).pack(side=tk.LEFT, padx=5)
 
         # Timeout
         timeout_row = ttk.Frame(settings_frame)
@@ -3456,6 +3477,9 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.chunk_size_var.set(
             int(ini_manager.get_initial_default("api", "chunk_size", 50, int) or 50)
         )
+        self.max_input_tokens_var.set(
+            int(ini_manager.get_initial_default("api", "max_input_tokens", 0, int) or 0)
+        )
 
         # Rolling context defaults
         self.rolling_context_var.set(
@@ -3619,6 +3643,7 @@ class GlobalOptionsDialog(tk.Toplevel):
             retries=self.retries_var.get(),
             rate_limit=self.rate_limit_var.get(),
             chunk_size=self.chunk_size_var.get(),
+            max_input_tokens=self.max_input_tokens_var.get(),
             thinking_enabled=self.thinking_enabled_var.get(),
             thinking_budget=self.thinking_budget_var.get(),
             rolling_context_lines=self.rolling_context_var.get(),
@@ -3727,6 +3752,7 @@ class GlobalOptionsDialog(tk.Toplevel):
                 "retries": str(self.options.request.retries),
                 "rate_limit_requests": str(self.options.request.rate_limit),
                 "chunk_size": str(self.options.request.chunk_size),
+                "max_input_tokens": str(self.options.request.max_input_tokens),
                 "thinking_enabled": str(self.options.request.thinking_enabled).lower(),
                 "thinking_budget": str(self.options.request.thinking_budget),
                 "rolling_context_lines": str(self.options.request.rolling_context_lines),

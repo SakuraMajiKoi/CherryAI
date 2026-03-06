@@ -191,7 +191,7 @@ TABLE OF CONTENTS
        - base.py - BaseStep abstract class (TASK 43.14: tab caching infra)
        - input_extract.py - Step 0: Input/Extraction 🔗formats/
        - analysis.py - Step 1: Analysis ❌NO shared imports
-       - costs.py - Step 4: Costs (renamed from estimate.py in Phase 40; _estimate_via_formation() uses 4-step prompt_builder pipeline for accurate request counting; syncs chunk_size from GlobalOptions; respects request_slicing mode)
+       - costs.py - Step 4: Costs (renamed from estimate.py in Phase 40; _estimate_via_formation() returns FormationResult with per-request line lists; _compute_per_request_prompt_overhead() builds each request's prompt individually via build_full_system_prompt(chunk_lines=...) for selective glossary/conditional filtering; syncs chunk_size from GlobalOptions; respects request_slicing mode)
        - information.py - Step 2: Information 🔗manifest_fields
        - preprocess.py - Step 3: Preprocessing 🔗manifest_fields
        - translate.py - Step 5: Translation 🔗api_client, mock_translator, prompt_adapter, manifest_fields (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching; Preview Requests: PreviewRequest dataclass with _format_input_lines() for numbered line display, FILTER_PARTS constant (12 entries: meta, language, system_instructions, style, tone, summary, genre, pov, conditional_prompts, glossary, rolling_context, input_lines), RequestPreviewDialog class with Pure/Formatted/Plain views and Jump/Search/Filter toolbar, _plain_text() preserves curly braces for game text, _build_preview_requests() mirrors real translation request building; _build_system_prompt_from_manifest() reads from `step_state.Information.data.metadata`; Request Options: Key, Model, Model Settings/Translation Options Change… buttons, Character Whitelist/Blacklist (manifest-bound), Ban Tokens; _apply_char_filters() post-processes translations; _sync_from_global_options() syncs all hidden vars from GlobalOptions including TranslationSettings; _get_request_slicing_mode() reads slicing from GlobalOptions.translation)
@@ -229,7 +229,7 @@ TABLE OF CONTENTS
          - TRANSLATION section: Workflow Defaults + Output Quality settings
          - API key entry with inline Save button between key entry and Show checkbox
          - GlobalOptions container: all settings + providers list; `safety` property is alias for `limit`
-         - RequestSettings: +thinking_enabled, +thinking_budget, +rolling_context_lines (Tasks 43.8, 43.9)
+         - RequestSettings: +thinking_enabled, +thinking_budget, +rolling_context_lines (Tasks 43.8, 43.9), +max_input_tokens (Task 41)
          - CachingSettings: fields renamed — dir, age (days), size (MB), mode; defaults 0=unlimited
          - _persist_to_ini(): Writes ALL settings sections to CherryAI.ini on every Apply/OK
          - _save_options() calls _persist_to_ini() for guaranteed persistence
@@ -615,7 +615,7 @@ TABLE OF CONTENTS
       6.17 Request Formation 4-Step Process (Phase 49)
          - Data Model:
            - LineInfo dataclass: index, text, is_invalid, context_marker fields
-           - RequestFormationConfig dataclass: max_lines, min_lines, max_tokens, model
+           - RequestFormationConfig dataclass: max_lines, min_lines, max_tokens, model (max_tokens wired from RequestSettings.max_input_tokens — Task 41)
            - TranslationRequest dataclass: lines, line_indices, context_type, is_split, provides_context, receives_context
          - build_requests(line_infos, config) → shared builder for Estimation + Translation
          - Step 1: _step1_split_menu_choice() → groups consecutive menu/choice lines into dedicated requests (no rolling context)
@@ -5356,9 +5356,17 @@ file group.  The first request of each file section gets
 
 ### gui/steps/costs.py Changes
 
+**Per-request prompt overhead (Task 42):** `_estimate_via_formation()`
+returns `FormationResult` dataclass (num_requests, request_line_lists).
+New `_compute_per_request_prompt_overhead()` iterates each request's lines,
+calls `build_full_system_prompt(chunk_lines=...)` for selective glossary/
+conditional filtering, counts tokens individually, and sums them.  Replaces
+the old pattern of building one maximum-sized prompt and multiplying by
+all requests.
+
 **`_update_ui()` prompt overhead format:** Changed from
 `~X tokens/request × Y requests = ~Z total` to
-`~Z total (Y Requests, ~X per)`.
+`~Z total (Y Requests, ~X avg/request)`.
 
 **`_render_current_request()` token counting:** Uses `count_tokens()` for
 separate prompt-token and input-token counts instead of `len // 4`.

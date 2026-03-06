@@ -2948,8 +2948,10 @@ Thank you.
 | test_rolling_context_merge.py | 37 | Rolling context between/after, Step 5 efficient merge, merged-request conditional prompt (Task 78) |
 | test_slicing_phase78.py | 11 | Slicing efficient mode Phase 78 (Task 8) |
 | test_char_filter_phase78.py | 32 | Blacklist/whitelist validation Phase 78 (Task 5): parse_filter_entries, check_filter_violations, exchange/retry/flag strategies |
+| test_max_input_tokens.py | 34 | Max Input Tokens (Task 41): RequestSettings field, GlobalOptions integration, RequestFormationConfig plumbing, build_requests token splitting, costs estimation, edge cases, INI persistence |
+| test_prompt_overhead_fix.py | 29 | Per-Request Prompt Overhead (Task 42): FormationResult dataclass, _estimate_via_formation return type, _compute_per_request_prompt_overhead, selective filtering per chunk, _update_ui avg/request format, sum vs flat multiplication, edge cases |
 | smoke_test/*.py | 5+ | Smoke tests |
-| **Total Script Tests** | **3833** | (+151 Phase 78 tests) |
+| **Total Script Tests** | **3862** | (+29 Task 42 per-request prompt overhead tests) |
 | One_Click_Test.py | 7 stages | API integration |
 
 ### TASK 11: Integration Test - 200 Lines (Completed)
@@ -10956,5 +10958,29 @@ overwrite-off skips existing translations, symbol-only dialogue, generic placeho
   - _Remove Middle File_: Confirms lines are deleted accurately and subsequent indices loop and subtract correctly down to lower indices, shifting ranges and idx.
   - _Remove First File_: Validates front-load shifting. 
   - _Remove Last File_: Validates end truncation behavior without throwing key out-of-bounds errors on empty trails.
+
+---
+
+### Task 41: Max Input Tokens (test_max_input_tokens.py)
+
+**File:** `dev/test_max_input_tokens.py`
+**Test Count:** 34
+**Coverage:** RequestSettings.max_input_tokens field, GlobalOptions integration, RequestFormationConfig.max_tokens plumbing, build_requests token enforcement, costs estimation, edge cases, INI persistence
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestRequestSettingsMaxInputTokens | 7 | Default value, custom value, to_dict, from_dict, missing key default, roundtrip |
+| TestGlobalOptionsMaxInputTokens | 4 | GlobalOptions default, to_dict, from_dict, roundtrip |
+| TestRequestFormationConfigMaxTokens | 3 | Default zero, custom, coexistence with max_lines |
+| TestBuildRequestsMaxTokens | 7 | No limit single request, token limit splitting, token tighter than lines, lines tighter than tokens, zero means no limit, all lines preserved, file boundaries |
+| TestStep3TokenSplitting | 3 | Split by tokens, no split below limit, balanced splitting |
+| TestCostsStepMaxInputTokens | 2 | Hybrid estimation with tokens, EstimationResult dataclass |
+| TestMaxInputTokensEdgeCases | 6 | Zero no limit, single line exceeds limit, all short single request, empty lines skipped, negative treated as no limit, negative defaults to zero |
+| TestINIPersistence | 2 | Persist key name, field roundtrip |
+
+```bash
+# Run Task 41 tests
+python -m pytest CherryAI/dev/test_max_input_tokens.py -v --timeout=10
+```
 
 
