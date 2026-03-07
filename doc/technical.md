@@ -122,7 +122,7 @@ TABLE OF CONTENTS
    3.44 process_order.py ✅🔗 - Pre/post processing order management (Phase 26)
    3.45 usage_tracker.py ✅ - API usage analytics and tracking (Phase 17.5)
    3.46 estimation.py ✅ - Token estimation utilities (legacy CLI support)
-   3.47 term_translation.py ✅🔗 - Unified term translation dispatcher (Simple/MTL/LLM modes)
+   3.47 term_translation.py ✅🔗 - Unified term translation dispatcher (Romaji/MTL/LLM modes)
    3.48 addon_manager.py ✅🔗 - Addon directory and INI registry management (user/addons/)
    
    3.49 glossaries/ (subfolder - 6 files)
@@ -234,7 +234,7 @@ TABLE OF CONTENTS
          - _persist_to_ini(): Writes ALL settings sections to CherryAI.ini on every Apply/OK
          - _save_options() calls _persist_to_ini() for guaranteed persistence
          - Sections organized in CATEGORY_ORDER: Connection (incl. Utility), Processing, Application (incl. Add-ons)
-         - UtilitySettings: term_translation_mode (Simple/MTL/LLM) — controls term translation dispatcher
+         - UtilitySettings: term_translation_mode (Romaji/MTL/LLM) — controls term translation dispatcher
          - UTILITY section: _build_utility_section() — Term Translation Mode dropdown with mode descriptions
          - ADDONS section: _build_addons_section() — Treeview of installed addons (name/size), Delete/Refresh buttons
          - TASK 33.2: PromptsSettings for Edit/TLC custom prompts
@@ -900,7 +900,7 @@ CherryAI/
 │   ├── prompt_builder.py   Dynamic prompt construction with game summary
 │   ├── project_config.py   Project-level configuration (game summary, API profiles)
 │   ├── romanization.py     Japanese kana → rōmaji (Modified Hepburn, Task 75)
-│   ├── term_translation.py Unified term translation dispatcher (Simple/MTL/LLM)
+│   ├── term_translation.py Unified term translation dispatcher (Romaji/MTL/LLM)
 │   ├── addon_manager.py    Addon directory and INI registry (user/addons/)
 │   ├── wordwrap.py         Text analysis and wordwrap
 │   ├── postanalysis.py     Post-processing analysis
@@ -3894,10 +3894,10 @@ TERM_TRANSLATION.PY (Unified Term Translation Dispatcher)
 Purpose: Route term translation through the mode configured in Global Options → Utility.
 
 Constants:
-- MODES: ("Simple", "MTL", "LLM") — valid mode identifiers
+- MODES: ("Romaji", "MTL", "LLM") — valid mode identifiers
 
 Mode Detection:
-- get_current_mode() → str: Reads term_translation_mode from INI [utility] section; falls back to "Simple"
+- get_current_mode() → str: Reads term_translation_mode from INI [utility] section; falls back to "Romaji"
 
 Public API:
 - translate_term(term, source_lang, target_lang, *, mode, context) → str: Translate a single term

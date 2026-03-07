@@ -3,7 +3,7 @@
 Routes term translation requests through the mode selected in
 Global Options → Utility → Term Translation Mode:
 
-- **Simple** — Modified Hepburn romanization (built-in).
+- **Romaji** — Modified Hepburn romanization (built-in, kana only).
 - **MTL** — Machine translation via EasyNMT / opus-mt.
 - **LLM** — Uses the active LLM API provider.
 
@@ -23,7 +23,7 @@ from typing import List, Optional
 logger = logging.getLogger(__name__)
 
 # Valid modes
-MODES = ("Simple", "MTL", "LLM")
+MODES = ("Romaji", "MTL", "LLM")
 
 
 # ============================================================================
@@ -34,16 +34,19 @@ def get_current_mode() -> str:
     """Return the Term Translation mode from Global Options (default: Simple).
 
     Returns:
-        One of ``'Simple'``, ``'MTL'``, or ``'LLM'``.
+        One of ``'Romaji'``, ``'MTL'``, or ``'LLM'``.
     """
     try:
         from CherryAI.functions import ini_manager
         mode = ini_manager.get_user_default("utility", "term_translation_mode")
         if mode and mode in MODES:
             return mode
+        # Migrate legacy "Simple" to "Romaji"
+        if mode == "Simple":
+            return "Romaji"
     except Exception:
         pass
-    return "Simple"
+    return "Romaji"
 
 
 # ============================================================================
@@ -79,7 +82,7 @@ def translate_term(
         return _translate_mtl(term, source_lang, target_lang)
     if active == "LLM":
         return _translate_llm(term, source_lang, target_lang, context)
-    # Default: Simple (romanization)
+    # Default: Romaji (romanization)
     return _translate_simple(term)
 
 
@@ -119,7 +122,7 @@ def translate_terms(
 
 
 # ============================================================================
-# Simple mode (romanization)
+# Romaji mode (romanization)
 # ============================================================================
 
 def _translate_simple(term: str) -> str:

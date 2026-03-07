@@ -1689,6 +1689,7 @@ FUTURE IDEAS (No Phase Commitment)
 - **Export Formats**: Support additional export formats (JSON, XLSX) for findings
 - **Visual Charts**: Charts/graphs for language distribution and pattern frequency
 - **Diff Analysis**: Compare against previous analysis when files change
+- **Code Patterns Consolidation**: The findings table currently writes to a dedicated code patterns table. Rework so findings write directly to the Code Database and Glossary in the Information step, eliminating the intermediate table. This reduces duplication and keeps a single source of truth for all patterns.
 
 ### Information Step Future Enhancements
 - **Summary Generation via API**: Button to auto-generate summary using LLM analysis of loaded content
@@ -1713,6 +1714,7 @@ FUTURE IDEAS (No Phase Commitment)
 - **Functions Not Visible in GUI**: Restore additional processing functions that exist in code but lack GUI exposure
 - **Context-Aware Deduplication**: Use semantic similarity rather than exact match for deduplication
 - **Deduplication Variants Database**: Create database of pattern variants that should be treated as duplicates
+- **Deduplication Tag-Based Rework**: Replace the current dedup_map file with inline tags (e.g. ``dedup,D3516``) embedded in each line. This removes the need for a separate mapping file, simplifies the restore step, and makes dedup state visible during translation and QA. Requires changes to the dedup pipeline, restore logic, and manifest line schema.
 - **Queue for Retry (Postprocessing)**: When a postprocessing recovery fails, queue the line for re-translation with stricter one-line instructions. Requires retry pipeline integration with Translation Step (Step 5) and a prompt template designed for recovery-focused re-translation. Currently hidden from Failure Handling widget.
 
 ### Translation Step Future Enhancements

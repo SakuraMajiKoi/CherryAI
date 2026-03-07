@@ -1128,6 +1128,7 @@ def save_code_glossary(
         if isinstance(pat, dict):
             cleaned.append({
                 "pattern": str(pat.get("pattern", "")),
+                "translation": str(pat.get("translation", "")),
                 "category": str(pat.get("category", "")),
                 "action": str(pat.get("action", "preserve")),
                 "example": str(pat.get("example", "")),
@@ -1168,6 +1169,7 @@ def load_code_glossary(
         if isinstance(pat, dict):
             result.append({
                 "pattern": str(pat.get("pattern", "")),
+                "translation": str(pat.get("translation", "")),
                 "category": str(pat.get("category", "")),
                 "action": str(pat.get("action", "preserve")),
                 "example": str(pat.get("example", "")),

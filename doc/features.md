@@ -2102,17 +2102,18 @@ JAPANESE ROMANIZATION — MODIFIED HEPBURN (Implemented — Task 75)
 - **Public API:**
   - `romanize(text)` — converts kana to rōmaji
   - `contains_kana(text)` — returns True if text has any kana
-  - `romanize_if_japanese(text)` — romanize only if kana detected, otherwise pass through
-  - `capitalize_name(text)` — title-case romanized output, treating hyphens as word separators (e.g. "ko-no-ha" → "Ko-No-Ha")
+  - `romanize_if_japanese(text)` — romanize only if kana detected and no kanji present, otherwise pass through
+  - `capitalize_name(text)` — capitalize only the first letter of the text (e.g. "ko-no-ha" → "Ko-no-ha")
+  - `contains_kanji(text)` — returns True if text contains CJK ideographs (skips mixed kanji+kana terms to avoid garbled romanization)
 - **Glossary Integration:** `name_glossary_functions.py` auto-fills Translation field with romanization when no translation exists and name contains kana
 - **Code DB Integration:** `code_glossary_functions.py` auto-fills Notes field with romanization for kana code patterns (NEW, ADD, OVERWRITE modes)
 - Test suite: `dev/test_protagonist_romanization.py` (22 romanization tests)
 
 TERM TRANSLATION — MULTI-MODE DISPATCHER (Implemented)
 - Unified term translation system replacing the standalone "Romanize" button with "Translate Terms"
-- **Module:** `functions/term_translation.py` — dispatches to Simple, MTL, or LLM mode
+- **Module:** `functions/term_translation.py` — dispatches to Romaji, MTL, or LLM mode
 - **Three modes** (configurable in Global Options → Utility → Term Translation Mode):
-  - `Simple` (default) — Uses the built-in Modified Hepburn romanization engine, then title-cases the result. Zero dependencies.
+  - `Romaji` (default) — Uses the built-in Modified Hepburn romanization engine, then capitalizes the first letter. Skips terms containing kanji. Zero dependencies.
   - `MTL` — Machine Translation via EasyNMT/opus-mt. Supports 150+ languages, ~300 MB per language pair (auto-downloaded). Lazy-installs via `pip install easynmt` on first use.
   - `LLM` — Uses the active LLM API provider (OpenAI-compatible). Sends a structured JSON prompt requesting batch translations; parses `{"translations": [...]}` response.
 - **Public API:**
@@ -2120,9 +2121,9 @@ TERM TRANSLATION — MULTI-MODE DISPATCHER (Implemented)
   - `translate_terms(terms, source_lang, target_lang, *, mode, context)` — batch-translate (MTL and LLM modes batch for efficiency)
   - `get_current_mode()` — read configured mode from INI
   - `ensure_mtl_ready()` — lazy-install EasyNMT and register in addon.ini
-- **GUI Integration:** Analysis step "Translate Terms" button calls `translate_term()` dispatcher for characters, speakers, and Code DB entries
+- **GUI Integration:** Analysis step "Translate Terms" button calls `translate_term()` dispatcher for characters, speakers, and Code DB entries. After translation, the findings table Details column updates immediately. Code pattern translations are synced to the manifest for cross-tab persistence.
 - **Addon Registration:** MTL mode auto-registers in `user/addons/addon.ini` via `addon_manager`
-- Test suite: `dev/test_term_translation.py` (46 tests)
+- Test suite: `dev/test_term_translation.py` (67 tests)
 
 ADDON MANAGEMENT (Implemented)
 - Manages optional components in `user/addons/` directory
@@ -3280,9 +3281,10 @@ in Global Options → Translation → Character Validation.
 **Term Translation + Code DB (Task 6)**: The Analysis step exposes a
 "Translate Terms" button that fills the `translation` column for characters,
 speakers, and glossary entries using the configured term translation mode
-(Simple/MTL/LLM, set in Global Options → Utility).  The
+(Romaji/MTL/LLM, set in Global Options → Utility).  The
 Code Database TSV has a `Translation` column (between Pattern and the
-former Type column, now renamed `Category`).
+former Type column, now renamed `Category`).  Code pattern translations
+are synced to the manifest `code_patterns` for cross-tab persistence.
 
 **Rolling Context Fix (Task 7)**: The first request of each file section
 now receives `receives_context=False`, preventing stale context from a

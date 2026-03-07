@@ -162,6 +162,9 @@ _LONG_VOWEL = "ー"
 # katakana U+30A0‒U+30FF, katakana-hw U+FF65‒U+FF9F)
 _KANA_RE = re.compile(r"[\u3040-\u309F\u30A0-\u30FF\uFF65-\uFF9F]")
 
+# Regex for detecting CJK Unified Ideographs (kanji)
+_KANJI_RE = re.compile(r"[\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF]")
+
 
 # ============================================================================
 # Public API
@@ -241,49 +244,43 @@ def contains_kana(text: str) -> bool:
     return bool(_KANA_RE.search(text))
 
 
-def romanize_if_japanese(text: str) -> str:
-    """Romanize *text* only if it contains kana characters.
+def contains_kanji(text: str) -> bool:
+    """Return ``True`` if *text* contains any CJK ideograph (kanji)."""
+    return bool(_KANJI_RE.search(text))
 
-    Convenience wrapper that avoids generating an identical copy when
-    the input has no Japanese script characters.
+
+def romanize_if_japanese(text: str) -> str:
+    """Romanize *text* only if it contains kana and no kanji.
+
+    Terms containing kanji mixed with kana cannot be fully romanized
+    (kanji pass through unchanged, producing garbled output like
+    ``釣ri好kinoojisan``).  Such terms are returned unchanged so that
+    MTL or LLM modes can handle them instead.
 
     Args:
         text: Input string.
 
     Returns:
-        Romanized string if kana was detected, otherwise the
+        Romanized string if only kana was detected, otherwise the
         original string unchanged.
     """
-    if contains_kana(text):
+    if contains_kana(text) and not contains_kanji(text):
         return romanize(text)
     return text
 
 
 def capitalize_name(text: str) -> str:
-    """Title-case a romanized name for glossary display.
-
-    Each whitespace-separated word has its first letter capitalized;
-    the rest stays lower-case.  Hyphens are treated as word separators
-    (e.g. ``"ko-no-ha"`` → ``"Ko-No-Ha"``).
+    """Capitalize only the first letter of a romanized name.
 
     Args:
         text: Romanized text to capitalize.
 
     Returns:
-        Title-cased string.
+        String with only the first letter uppercased.
     """
     if not text:
         return ""
-    parts = text.split(" ")
-    capped: list[str] = []
-    for part in parts:
-        if "-" in part:
-            capped.append("-".join(
-                seg.capitalize() for seg in part.split("-")
-            ))
-        else:
-            capped.append(part.capitalize())
-    return " ".join(capped)
+    return text[0].upper() + text[1:]
 
 
 # ============================================================================

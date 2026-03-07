@@ -648,10 +648,10 @@ class UtilitySettings:
     """Utility settings for term translation mode.
 
     Attributes:
-        term_translation_mode: Active mode — 'Simple', 'MTL', or 'LLM'.
+        term_translation_mode: Active mode — 'Romaji', 'MTL', or 'LLM'.
     """
 
-    term_translation_mode: str = "Simple"
+    term_translation_mode: str = "Romaji"
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -660,11 +660,11 @@ class UtilitySettings:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "UtilitySettings":
         """Create from dictionary."""
-        return cls(
-            term_translation_mode=str(
-                data.get("term_translation_mode", "Simple")
-            ),
-        )
+        mode = str(data.get("term_translation_mode", "Romaji"))
+        # Migrate legacy "Simple" to "Romaji"
+        if mode == "Simple":
+            mode = "Romaji"
+        return cls(term_translation_mode=mode)
 
 
 @dataclass
@@ -2440,12 +2440,12 @@ class GlobalOptionsDialog(tk.Toplevel):
         row.pack(fill=tk.X, pady=5)
         ttk.Label(row, text="Mode:", width=15).pack(side=tk.LEFT)
         self._term_mode_var = tk.StringVar(
-            value=self._options.utility.term_translation_mode,
+            value=self.options.utility.term_translation_mode,
         )
         ttk.Combobox(
             row,
             textvariable=self._term_mode_var,
-            values=["Simple", "MTL", "LLM"],
+            values=["Romaji", "MTL", "LLM"],
             state="readonly",
             width=18,
         ).pack(side=tk.LEFT)
@@ -2456,7 +2456,7 @@ class GlobalOptionsDialog(tk.Toplevel):
         ttk.Label(
             desc_frame,
             text=(
-                "Simple — Modified Hepburn romanization (built-in, no dependencies).\n"
+                "Romaji — Modified Hepburn romanization (built-in, kana-only terms).\n"
                 "MTL — Machine translation via EasyNMT / opus-mt (auto-downloaded on first use).\n"
                 "LLM — Uses the active LLM API provider to translate terms."
             ),

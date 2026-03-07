@@ -666,10 +666,14 @@ class AnalysisStep(BaseStep):
         """Translate terms in characters and code database.
 
         Uses the Term Translation mode configured in Global Options
-        (Simple / MTL / LLM).  Fills the ``translation`` field for
+        (Romaji / MTL / LLM).  Fills the ``translation`` field for
         characters and the Translation column for code database entries
         when the original/pattern is non-empty and translation is
         currently blank.  Tab and newline characters are sanitized.
+
+        After translation, refreshes the findings table Details column
+        and syncs code pattern translations to the manifest so the
+        Information tab sees them on next enter.
         """
         from CherryAI.functions.term_translation import translate_term
 
@@ -680,6 +684,7 @@ class AnalysisStep(BaseStep):
 
         updated_chars = 0
         updated_codes = 0
+        translated_speakers: list[str] = []
 
         # --- Translate character terms ---
         characters = load_character_notes(mgr)
@@ -690,11 +695,13 @@ class AnalysisStep(BaseStep):
                 if result != name:
                     ch["translation"] = _sanitize_translation(result)
                     updated_chars += 1
+                    translated_speakers.append(name)
 
         if updated_chars:
             save_character_notes(mgr, characters)
 
         # --- Translate code database terms ---
+        translated_patterns: dict[str, str] = {}
         try:
             from CherryAI.functions.glossaries.code_glossary_db import (
                 read_all_rows_extended,
@@ -711,10 +718,26 @@ class AnalysisStep(BaseStep):
                         row[1] = _sanitize_translation(result)
                         updated_codes += 1
                         changed = True
+                        translated_patterns[pattern] = row[1]
             if changed:
                 write_all_rows(rows)
+
+                # Sync translations to manifest code_patterns
+                tsv_map = {r[0]: r[1] for r in rows if len(r) > 1}
+                manifest_pats = load_code_glossary(mgr)
+                for pat in manifest_pats:
+                    t = tsv_map.get(pat.get("pattern", ""), "")
+                    if t:
+                        pat["translation"] = t
+                save_code_glossary(mgr, manifest_pats)
         except Exception as exc:
             logger.warning("Code DB term translation failed: %s", exc)
+
+        # --- Refresh findings table Details column ---
+        if translated_speakers:
+            self._refresh_details_for_speakers(translated_speakers)
+        if translated_patterns:
+            self._refresh_details_for_code_patterns(translated_patterns)
 
         parts = []
         if updated_chars:
@@ -1054,6 +1077,31 @@ class AnalysisStep(BaseStep):
             item_name = vals[1] if len(vals) > 1 else ""
             if category == "Speakers" and item_name in speakers:
                 new_details = self._get_character_details(item_name)
+                tree.set(item_id, "details", new_details)
+
+    def _refresh_details_for_code_patterns(
+        self, translations: Dict[str, str]
+    ) -> None:
+        """Update the Details column for code patterns after translation.
+
+        Appends ``→ translation`` to existing details text so the user
+        sees the result immediately.
+
+        Args:
+            translations: Mapping of pattern → translated text.
+        """
+        if not hasattr(self, "_findings_table") or self._findings_table is None:
+            return
+        tree = self._findings_table._tree
+        for item_id in tree.get_children():
+            vals = tree.item(item_id, "values")
+            if not vals:
+                continue
+            category = vals[0] if len(vals) > 0 else ""
+            item_name = vals[1] if len(vals) > 1 else ""
+            if category == "Code Patterns" and item_name in translations:
+                old_details = vals[3] if len(vals) > 3 else ""
+                new_details = f"{old_details} → {translations[item_name]}"
                 tree.set(item_id, "details", new_details)
 
     # Speaker actions
