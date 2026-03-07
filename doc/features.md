@@ -708,10 +708,12 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Chinese-only: CJK without kana, 30% threshold rule
     - Korean: Hangul detection, excluded from JP/CN threshold
   - Language detection (Japanese, Chinese, etc.)
-  - Code/pattern detection: individual normalized patterns with count, type, and examples
+  - Code/pattern detection: individual normalized patterns with count, type, and concrete instances (raw variants that normalize to the same pattern)
   - Speaker detection: ALL speakers listed with frequency counts (no truncation)
   - **Findings Table Enhancements:**
     - Individual code patterns shown with normalized form, occurrence count, type, and examples in Details
+    - Patterns with instances (aggregated) display **[+]/[-] collapsible** sub-rows showing each concrete variant and its per-instance count; double-click to toggle expansion
+    - Patterns with instances sort above same-count patterns without instances
     - Speaker rows show character glossary info (translation, notes) in Details column
     - **Count Filter:** Filter bar includes Count field supporting `<X`, `>X`, `<=X`, `>=X`, `=X` syntax; toggle button (≥/≤) switches default bare-number comparison mode
   - **Findings Table Context Menu (Phase 59.3-59.5):**
@@ -1468,8 +1470,9 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Import from Analysis: choice dialog (Top N with spinbox / All) for each import; code patterns import as "Detected" category; speakers import as character entries; non-destructive merge (skips duplicates); reads data from manifest via `_get_analysis_step_data()` helper
     - Code Database actions: Preserve ("Do not translate"), Translate ("Translate as"), Remove (filtered from prompt)
     - Code Database mass removal: multi-select (selectmode="extended") with batch reverse-index deletion
-    - Code Database auto-populate: prefers `individual_codes` (per-code detail) over grouped `code_patterns` when available
-    - Knowledge Base widget: unified mode switch (Glossary / Code Database), search/filter, inline Active column toggle, stored in `user/` directory
+    - Code Database auto-populate: reads from unified `code_patterns` list with per-pattern count, raw_type, instances, and instance_counts
+    - **Code Database collapsible instances**: Patterns with instances display [+]/[-] prefix; double-click on pattern column toggles expansion to show indented instance sub-rows with per-instance counts; patterns with instances sort before those without; instance sub-rows use tag-based index lookup (`pat_{idx}` tags) for correct edit/remove operations
+    - Knowledge Base widget: unified mode switch (Glossary / Code Database), search/filter, inline Active column toggle, stored in `user/` directory; Knowledge Base reads only patterns (no instances) from `codedatabase.tsv`
     - Selective glossary: Active column with ✓/✗ toggle per entry, only active entries included in prompt; mixed-selection failsafe popup for Activate/Deactivate
     - **Collapsible right-column widgets**: All three right-column sections (Glossary, Code Database, Knowledge Base) use `_build_collapsible_labelframe()` helper — a header row with ▾/▸ toggle button + bold label + optional extra widgets + horizontal `ttk.Separator`; collapsed widgets hide body via `grid_remove()`, expanded widgets share space via row weight=1; `_reconfigure_right_column_weights()` dynamically adjusts grid weights; `_toggle_collapsible()` swaps button text between "▾" (expanded) and "▸" (collapsed)
     - **Taller tables**: All right-column Treeview widgets use height=8 (up from 4-5) with `sticky="nsew"` and parent `rowconfigure(weight=1)` for vertical expansion; canvas `<Configure>` binding stretches inner frame to viewport height so tables fill available space when window is maximized
@@ -2038,6 +2041,8 @@ AGGRESSIVE DEDUPLICATION (Implemented)
 - Runs last in preprocessing (after all normalization is complete)
 - Variant-deduplicated lines receive the postprocessed result of their unique original
 - Implemented in `functions/dedup.py`
+- **Per-line tags replace dedup_map:** Dedup state is now stored directly on `LineEntry.tags` as comma-separated strings (`"dedup,D{source_idx}"`) instead of a separate `dedup_by_doc` mapping dict. Only the top `MAX_DEDUP_GROUPS` (10) duplicate groups are processed — the rest are left as-is to bound manifest size. Tag-based restoration in `deduplicate_post()` with legacy `dedup_by_doc` fallback for backward compatibility.
+- **Instance tracking:** `detect_individual_codes_batch()` tracks concrete raw code instances per normalized pattern (e.g. `\V[1]`, `\V[2]` under `\V[<NUM>]`) with per-instance occurrence counts. Patterns store `instances: List[str]` and serialized count `[total, inst1_count, inst2_count, ...]` in manifest.
 - **GUI Pipeline Integration (TASK 73):**
   - Standard Dedup (`apply_dedup_batch`) at P10 (first in pre) and Aggressive Dedup
     (`apply_aggressive_dedup_batch`) at P90 (last in pre) in `gui/helpers/mode_adapter.py`
@@ -2284,8 +2289,8 @@ The v3.0 manifest format extends v2.0 with GUI state management:
 - `step_state`: Completion status, skipped flags, metadata per GUI step (includes project metadata in `Information.data.metadata`)
 - `project_info`: **Removed** — now lives in `step_state.Information.data.metadata`
 - `glossary`: Project-specific glossary entries (alternative to global glossary.json)
-- `characters`: Speaker database with gender, context, and aliases
-- `code_patterns`: Protected regex patterns and custom placeholders
+- `characters`: Speaker database with gender, context, aliases, and occurrence count
+- `code_patterns`: Unified code pattern list with count (int or `[total, inst1_ct, ...]`), raw_type, instances, and instance_counts; replaces the former separate `individual_codes` and `findings` dicts
 
 **File Menu Operations:**
 - **New Project**: Creates fresh manifest, clears all state, resets to Information tab via `on_enter()` (Phase 60)

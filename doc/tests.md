@@ -1480,7 +1480,7 @@ PHASE 37: Edit/TLC Prompt Components (Configurable Input Sources). Tests for com
 
 ---
 
-### dev/test_manifest_fields.py (181 tests)
+### dev/test_manifest_fields.py (188 tests)
 
 Manifest field type helpers for Task 22.1 and 22.2. Reusable save/load operations for different field types and complex data structures.
 
@@ -1813,11 +1813,16 @@ Manifest field type helpers for Task 22.1 and 22.2. Reusable save/load operation
 | `test_load_missing_returns_empty` | Missing key returns empty list |
 | `test_load_fills_defaults` | Missing fields filled with defaults |
 
-#### TestCodeGlossaryRoundtrip (1 test)
+#### TestCodeGlossaryRoundtrip (6 tests)
 
 | Test | Purpose |
 |------|---------|
 | `test_roundtrip_preserves_data` | Roundtrip preserves all data |
+| `test_roundtrip_with_count_and_instances` | Roundtrip preserves count, raw_type, instances |
+| `test_roundtrip_omits_empty_instances_in_manifest` | Empty instances not stored in manifest |
+| `test_load_legacy_without_count` | Legacy patterns without count get defaults |
+| `test_roundtrip_with_instance_counts` | instance_counts via list count format |
+| `test_roundtrip_no_instance_counts_stays_int` | Count stays int without instance_counts |
 
 #### TestProtectCodePatternsSave (3 tests)
 
@@ -2854,7 +2859,7 @@ Thank you.
 | test_common_errors.py | 31 | Common error handling |
 | test_conditional_prompts.py | 45 | Conditional prompts with dynamic examples (TASK 5) |
 | test_config.py | 23 | Config management |
-| test_dedup.py | 26 | Deduplication |
+| test_dedup.py | 34 | Deduplication + tag storage + top-N limit |
 | test_dependencies.py | 17 | Dependency checking (TASK 15.1) |
 | test_formats.py | 57 | Formats module handlers (TASK 15.7) |
 | test_functions_v2.py | 15 | Functions integration |
@@ -2923,7 +2928,7 @@ Thank you.
 | test_glossary_integration.py | 12 | Analysis→Information integration (TASK 18.4) |
 | test_gui_layout.py | 12 | 2-column layout tests (TASK 18.2) |
 | test_subtask_tracking.py | 14 | Subtask progress tracking (TASK 18.3) |
-| test_code_glossary_display.py | 12 | Code glossary widget (TASK 18.5) |
+| test_code_glossary_display.py | 27 | Code glossary widget + instance counts (TASK 18.5) |
 | test_information_step_phase41.py | 57 | Information step Phase 41 UI enhancements |
 | test_preprocess_phase42.py | 80 | Preprocessing & Postprocessing Phase 42 |
 | test_translation_phase43.py | 48 | Translation Tab Overhaul Phase 43 |
@@ -3451,9 +3456,10 @@ Dependency checking module tests validating hash computation, caching, and insta
 
 ---
 
-### dev/test_dedup.py (26 tests)
+### dev/test_dedup.py (34 tests)
 
-Deduplication module tests validating placeholder tokens, normalization, and roundtrips.
+Deduplication module tests validating placeholder tokens, normalization, roundtrips,
+per-line tag storage, and top-N group limiting.
 
 #### TestPlaceholderTokens (4 tests)
 
@@ -3525,6 +3531,24 @@ Deduplication module tests validating placeholder tokens, normalization, and rou
 |------|---------|
 | `test_migrate_int_entries_to_dict` | int → dict migration |
 | `test_migrate_already_dict_no_change` | Already-migrated unchanged |
+
+#### TestDedupTagging (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_tags_set_on_duplicate_lines` | Duplicate lines get dedup,D{idx} tags |
+| `test_no_tags_on_unique_lines` | Unique lines get no dedup tags |
+| `test_tag_based_roundtrip` | Pre→Post via tags roundtrip |
+| `test_multiple_groups_tagged` | Multiple dedup groups each get own D{idx} |
+| `test_read_dedup_tags_helper` | _read_dedup_tags parses correctly |
+| `test_legacy_post_still_works` | Legacy dict-based post still restores |
+
+#### TestTopNGroupLimit (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_top_10_limit` | Only top MAX_DEDUP_GROUPS groups kept |
+| `test_all_groups_when_under_limit` | All groups kept when under limit |
 
 ---
 
@@ -7825,11 +7849,11 @@ Tests for subtask tracking in ProgressTracker.
 | `test_clear_subtasks_method_exists` | API method exists |
 | `test_total_test_count` | Test count verification |
 
-### dev/test_code_glossary_display.py (12 tests) - TASK 18.5
+### dev/test_code_glossary_display.py (27 tests) - TASK 18.5
 
-Tests for Code Glossary widget in Information tab.
+Tests for Code Glossary widget in Information tab, CodePattern dataclass, instance counts.
 
-#### TestCodePatternDataClass (4 tests)
+#### TestCodePatternDataClass (11 tests)
 
 | Test | Purpose |
 |------|---------|
@@ -7837,6 +7861,13 @@ Tests for Code Glossary widget in Information tab.
 | `test_code_pattern_to_dict` | Serialization |
 | `test_code_pattern_from_dict` | Deserialization |
 | `test_code_pattern_default_action` | Default is 'preserve' |
+| `test_code_pattern_count_field` | Count field present |
+| `test_code_pattern_raw_type_field` | raw_type field present |
+| `test_code_pattern_instances_field` | instances field present |
+| `test_code_pattern_to_dict_with_new_fields` | New fields serialized |
+| `test_code_pattern_to_dict_omits_empty_instances` | Empty instances omitted |
+| `test_code_pattern_from_dict_with_new_fields` | New fields deserialized |
+| `test_code_pattern_from_dict_legacy` | Legacy format compat |
 
 #### TestProjectMetadataIntegration (4 tests)
 
@@ -7855,6 +7886,19 @@ Tests for Code Glossary widget in Information tab.
 | `test_code_pattern_dialog_has_actions` | ACTIONS constant |
 | `test_code_pattern_dialog_has_categories` | CATEGORIES constant |
 | `test_information_step_has_code_methods` | Management methods exist |
+
+#### TestCodePatternInstanceCounts (8 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_instance_counts_default_empty` | instance_counts defaults to [] |
+| `test_instance_counts_creation` | instance_counts created with values |
+| `test_to_dict_count_as_list_when_instance_counts` | count serialized as [total, inst1, ...] |
+| `test_to_dict_count_as_int_when_no_instance_counts` | count stays int without instances |
+| `test_from_dict_list_count` | List count split into count + instance_counts |
+| `test_from_dict_int_count_no_instance_counts` | Int count gives empty instance_counts |
+| `test_roundtrip_with_instance_counts` | Full roundtrip with instance_counts |
+| `test_from_dict_empty_list_count` | Edge case: [5] with no sub-counts |
 
 ---
 
@@ -10483,22 +10527,25 @@ Tests for speaker and code pattern context menu actions.
 python -m pytest CherryAI/dev/test_analysis_actions.py -v --timeout=10
 ```
 
-#### test_analysis_findings.py (34 tests) - Findings Enhancements
+#### test_analysis_findings.py (54 tests) - Findings Enhancements
 
 Tests for individual code detection, count filtering, code pattern action persistence,
-protagonist variable handling, no-truncation, details population, and category consistency.
+protagonist variable handling, no-truncation, details population, category consistency,
+instance tracking, and collapsible instance expansion.
 
 | Test Class | Count | Coverage |
 |-----------|-------|----------|
-| TestDetectIndividualCodesBatch | 6 | Returns dict, empty lines, br tag, count accumulation, examples, sample line |
-| TestCountFilterParsing | 10 | Empty, bare number, >X, <X, >=X, <=X, =X, invalid, whitespace, zero |
+| TestDetectIndividualCodesBatch | 6 | Returns dict, empty lines, br tag, count accumulation, no examples, no sample |
+| TestCountFilterParsing | 10 | Empty, bare number gte/lte, equals explicit, >X, <X, >=X, <=X, =X, invalid, whitespace, zero |
 | TestCodePatternActionPersistence | 5 | New entry, update existing, valid actions, type in notes, replacement in notes |
 | TestProtagonistNames | 6 | Male name, female name, single-token first, single-token surname, glossary format, code pattern entry |
 | TestNoSpeakerTruncation | 3 | 50 speakers, 100 speakers, ordering preserved |
-| TestDetailsPopulation | 3 | Speaker details from character glossary, code type, code examples |
+| TestDetailsPopulation | 3 | Speaker details from character glossary, code type, code type only |
 | TestCategoryStringConsistency | 4 | Plural speaker, plural code pattern, matches builder, matches handler |
 | TestFriendlyCodeType | 3 | Known types mapped, unknown passthrough, variable number |
 | TestCodePatternMenuOptions | 3 | Has protagonist option, action options exclusive, type options exclusive |
+| TestInstanceTracking | 4 | instances dict present, tracks raw codes, empty when no normalization, fallback path |
+| TestFindingsInstanceExpansion | 5 | Expandable [+] prefix, non-expandable no prefix, instance children stored, instances-sort-first, expandable meta set |
 
 ```bash
 python -m pytest CherryAI/dev/test_analysis_findings.py -v --timeout=10

@@ -1025,6 +1025,7 @@ def save_character_notes(
     - original_name: str (source-language name, lookup key)
     - translation: str (translated name)
     - notes: str (free-form — gender, role, speaking style, etc.)
+    - count: int (occurrence count from analysis speaker detection)
 
     Args:
         manager: ManifestManager instance.
@@ -1045,6 +1046,7 @@ def save_character_notes(
                 "original_name": str(char.get("original_name", "")),
                 "translation": translation,
                 "notes": str(char.get("notes", "")),
+                "count": int(char.get("count", 0)),
             })
         elif hasattr(char, "to_dict"):
             cleaned.append(char.to_dict())
@@ -1060,7 +1062,7 @@ def load_character_notes(
     """Load character notes from manifest.
 
     Returns list of character dicts with fields:
-    original_name, translation, notes.
+    original_name, translation, notes, count.
 
     Transparently migrates legacy manifests that still have separate
     ``name``, ``gender``, ``role``, ``speaking_style`` keys.
@@ -1098,6 +1100,7 @@ def load_character_notes(
                 "original_name": str(char.get("original_name", "")),
                 "translation": translation,
                 "notes": notes,
+                "count": int(char.get("count", 0)),
             })
 
     return result
@@ -1108,25 +1111,31 @@ def save_code_glossary(
     patterns: List[Dict[str, Any]]
 ) -> None:
     """Save code glossary patterns to manifest.
-    
+
     Code glossary stores patterns detected during analysis:
     - pattern: str (the code pattern regex or string)
     - category: str (RPG Maker Variable, Ruby Code, etc.)
     - action: str (preserve, translate, remove)
     - example: str (example occurrence from source)
     - notes: str (user notes)
-    
+    - count: int or list (total, or [total, inst1_ct, inst2_ct, ...])
+    - raw_type: str (internal type constant from detection)
+    - instances: list (concrete instances for aggregated patterns)
+
+    When ``instance_counts`` is present in the input dict, ``count`` is
+    serialized as ``[total, inst1_count, inst2_count, ...]``.
+
     Args:
         manager: ManifestManager instance.
         patterns: List of code pattern dictionaries.
     """
     if not isinstance(patterns, list):
         patterns = []
-    
+
     cleaned = []
     for pat in patterns:
         if isinstance(pat, dict):
-            cleaned.append({
+            entry: Dict[str, Any] = {
                 "pattern": str(pat.get("pattern", "")),
                 "translation": str(pat.get("translation", "")),
                 "category": str(pat.get("category", "")),
@@ -1136,11 +1145,26 @@ def save_code_glossary(
                 # TASK 42.7: Code spacing integration fields
                 "visible": bool(pat.get("visible", True)),
                 "spacing": str(pat.get("spacing", "preserve")),
-            })
+                "raw_type": str(pat.get("raw_type", "")),
+            }
+            # Serialize count: merge instance_counts into list form
+            count_val = pat.get("count", 0)
+            inst_counts = pat.get("instance_counts", [])
+            if isinstance(count_val, list):
+                # Already in list form (e.g. from CodePattern.to_dict)
+                entry["count"] = count_val
+            elif inst_counts and isinstance(inst_counts, list):
+                entry["count"] = [int(count_val)] + [int(c) for c in inst_counts]
+            else:
+                entry["count"] = int(count_val)
+            instances = pat.get("instances", [])
+            if instances and isinstance(instances, list):
+                entry["instances"] = list(instances)
+            cleaned.append(entry)
         elif hasattr(pat, "to_dict"):
             # Support CodePattern dataclass
             cleaned.append(pat.to_dict())
-    
+
     manager._manifest_data["code_patterns"] = cleaned
     manager._mark_dirty()
     logger.debug("Saved %d code glossary patterns", len(cleaned))
@@ -1150,24 +1174,28 @@ def load_code_glossary(
     manager: "ManifestManager"
 ) -> List[Dict[str, Any]]:
     """Load code glossary patterns from manifest.
-    
+
     Returns list of pattern dicts with fields:
-    pattern, category, action, example, notes
-    
+    pattern, category, action, example, notes, count, raw_type, instances,
+    instance_counts.
+
+    When ``count`` is stored as ``[total, inst1_ct, ...]``, it is split into
+    ``count`` (int) and ``instance_counts`` (list[int]).
+
     Args:
         manager: ManifestManager instance.
-        
+
     Returns:
         List of code pattern dictionaries.
     """
     patterns = manager._manifest_data.get("code_patterns", [])
     if not isinstance(patterns, list):
         return []
-    
+
     result = []
     for pat in patterns:
         if isinstance(pat, dict):
-            result.append({
+            entry: Dict[str, Any] = {
                 "pattern": str(pat.get("pattern", "")),
                 "translation": str(pat.get("translation", "")),
                 "category": str(pat.get("category", "")),
@@ -1177,8 +1205,23 @@ def load_code_glossary(
                 # TASK 42.7: Code spacing integration fields
                 "visible": bool(pat.get("visible", True)),
                 "spacing": str(pat.get("spacing", "preserve")),
-            })
-    
+                "raw_type": str(pat.get("raw_type", "")),
+            }
+            # Deserialize count: may be int or [total, inst1_ct, ...]
+            count_val = pat.get("count", 0)
+            if isinstance(count_val, list):
+                entry["count"] = int(count_val[0]) if count_val else 0
+                entry["instance_counts"] = [int(c) for c in count_val[1:]]
+            else:
+                entry["count"] = int(count_val)
+                entry["instance_counts"] = []
+            instances = pat.get("instances", [])
+            if instances and isinstance(instances, list):
+                entry["instances"] = list(instances)
+            else:
+                entry["instances"] = []
+            result.append(entry)
+
     return result
 
 

@@ -21,7 +21,6 @@ from CherryAI.gui.helpers.analysis_adapter import (
     analyze_lines,
     count_duplicates,
     detect_code_patterns,
-    detect_individual_codes_batch,
     detect_language,
     detect_speakers_batch,
     summarize_lines,
@@ -93,6 +92,9 @@ class AnalysisStep(BaseStep):
         # Initialize instance variables BEFORE super().__init__ since it calls _build_ui()
         self._analysis_results: Dict[str, Any] = {}
         self._is_analyzing = False
+        self._instance_rows: Dict[int, List[TableRow]] = {}
+        self._expanded_parents: set = set()
+        self._findings_rows: List[TableRow] = []
         super().__init__(parent, session, manifest_manager=manifest_manager)
         # NOTE: Do NOT call _build_ui() here - BaseStep.__init__() already calls it
 
@@ -192,6 +194,9 @@ class AnalysisStep(BaseStep):
 
         # TASK 59.3: Add right-click context menu binding
         self._findings_table._tree.bind("<Button-3>", self._on_findings_right_click)
+
+        # Double-click to toggle instance expansion
+        self._findings_table._tree.bind("<Double-1>", self._on_findings_toggle)
 
         # Initialize context menus
         self._speaker_menu: Optional[tk.Menu] = None
@@ -298,8 +303,10 @@ class AnalysisStep(BaseStep):
             "duplicate_count": 0,
             "duplicates": {},
             "languages": {},
-            "speakers": {},
-            "code_patterns": {},
+            "characters": [],
+            "speaker_count": 0,
+            "code_patterns": [],
+            "category_counts": {},
             "findings": [],
         }
 
@@ -332,10 +339,79 @@ class AnalysisStep(BaseStep):
 
         # Get detailed results from adapter
         results["languages"] = analysis.get("languages", {})
-        results["speakers"] = analysis.get("speakers", {})
-        results["code_patterns"] = analysis.get("code_patterns", {})
         results["duplicates"] = analysis.get("duplicates", {})
-        results["individual_codes"] = analysis.get("individual_codes", {})
+
+        # Unified speakers: merge adapter speakers into manifest characters[]
+        detected_speakers = analysis.get("speakers", {})
+        existing_chars = self._load_characters()
+        char_lookup = {c["original_name"]: c for c in existing_chars}
+
+        unified_chars: List[Dict[str, Any]] = []
+        for speaker_name, speaker_count in detected_speakers.items():
+            existing = char_lookup.pop(speaker_name, None)
+            if existing:
+                existing["count"] = speaker_count
+                unified_chars.append(existing)
+            else:
+                unified_chars.append({
+                    "original_name": speaker_name,
+                    "translation": "",
+                    "notes": "",
+                    "count": speaker_count,
+                })
+
+        # Keep user-added characters that weren't detected this run
+        for remaining in char_lookup.values():
+            remaining["count"] = 0
+            unified_chars.append(remaining)
+
+        self._save_characters(unified_chars)
+        results["characters"] = unified_chars
+        results["speaker_count"] = len(detected_speakers)
+
+        # Unified code_patterns: merge adapter individual_codes into manifest
+        # code_patterns list, preserving user edits (translation, action, etc.)
+        individual_codes = analysis.get("individual_codes", {})
+        category_counts = analysis.get("code_patterns", {})
+        existing_patterns = self._load_code_patterns()
+        pattern_lookup = {p["pattern"]: p for p in existing_patterns}
+
+        unified: List[Dict[str, Any]] = []
+        for code_key, code_info in individual_codes.items():
+            inst_map = code_info.get("instances", {})
+            existing = pattern_lookup.pop(code_key, None)
+            if existing:
+                existing["count"] = code_info["count"]
+                existing["raw_type"] = code_info.get("raw_type", "")
+                existing["instances"] = list(inst_map.keys())
+                existing["instance_counts"] = list(inst_map.values())
+                if not existing.get("category"):
+                    existing["category"] = code_info.get("type", "")
+                unified.append(existing)
+            else:
+                unified.append({
+                    "pattern": code_key,
+                    "count": code_info["count"],
+                    "category": code_info.get("type", ""),
+                    "raw_type": code_info.get("raw_type", ""),
+                    "instances": list(inst_map.keys()),
+                    "instance_counts": list(inst_map.values()),
+                    "action": "preserve",
+                    "translation": "",
+                    "example": "",
+                    "notes": "",
+                    "visible": True,
+                    "spacing": "preserve",
+                })
+
+        # Keep user-added patterns that weren't detected this run
+        for remaining in pattern_lookup.values():
+            remaining["count"] = 0
+            unified.append(remaining)
+
+        self._save_code_patterns(unified)
+        results["code_patterns"] = unified
+        results["category_counts"] = category_counts
 
         # Build findings list
         results["findings"] = self._build_findings(results)
@@ -432,48 +508,105 @@ class AnalysisStep(BaseStep):
             ))
             row_id += 1
 
-        # ALL Speakers ordered by count descending (no truncation)
-        speakers_sorted = sorted(
-            results["speakers"].items(), key=lambda x: x[1], reverse=True
-        )
-        for speaker, count in speakers_sorted:
-            details = self._get_character_details(speaker)
-            findings.append(TableRow(
-                id=row_id,
-                values={
-                    "category": "Speakers",
-                    "item": speaker,
-                    "count": count,
-                    "details": details,
-                },
-            ))
-            row_id += 1
-
-        # Individual code patterns ordered by count descending
-        individual_codes = results.get("individual_codes", {})
-        if individual_codes:
-            codes_sorted = sorted(
-                individual_codes.items(), key=lambda x: x[1]["count"], reverse=True
+        # ALL Speakers from unified characters[], ordered by count descending
+        characters = results.get("characters", [])
+        if isinstance(characters, list) and characters:
+            chars_sorted = sorted(
+                characters, key=lambda x: x.get("count", 0), reverse=True
             )
-            for code_key, code_info in codes_sorted:
-                friendly_type = code_info.get("type", "Unknown")
+            for char in chars_sorted:
+                name = char.get("original_name", "")
+                count = char.get("count", 0)
+                if not name or count == 0:
+                    continue
+                details = self._get_character_details(name)
+                findings.append(TableRow(
+                    id=row_id,
+                    values={
+                        "category": "Speakers",
+                        "item": name,
+                        "count": count,
+                        "details": details,
+                    },
+                ))
+                row_id += 1
+        elif isinstance(characters, dict):
+            # Legacy fallback: speakers dict (name→count)
+            speakers_sorted = sorted(
+                characters.items(), key=lambda x: x[1], reverse=True
+            )
+            for speaker, count in speakers_sorted:
+                details = self._get_character_details(speaker)
+                findings.append(TableRow(
+                    id=row_id,
+                    values={
+                        "category": "Speakers",
+                        "item": speaker,
+                        "count": count,
+                        "details": details,
+                    },
+                ))
+                row_id += 1
+
+        # Code patterns from unified code_patterns list, ordered by count
+        # Patterns with instances sort before those without at equal count
+        code_patterns = results.get("code_patterns", [])
+        self._instance_rows.clear()
+        self._expanded_parents.clear()
+        if isinstance(code_patterns, list) and code_patterns:
+            codes_sorted = sorted(
+                code_patterns,
+                key=lambda x: (
+                    x.get("count", 0),
+                    1 if x.get("instances") else 0,
+                ),
+                reverse=True,
+            )
+            for entry in codes_sorted:
+                pattern = entry.get("pattern", "")
+                count = entry.get("count", 0)
+                if not pattern or count == 0:
+                    continue
+                friendly_type = entry.get("category", "Unknown")
+                instances = entry.get("instances", [])
+                inst_counts = entry.get("instance_counts", [])
+                has_instances = bool(instances)
+                prefix = "[+] " if has_instances else ""
                 findings.append(TableRow(
                     id=row_id,
                     values={
                         "category": "Code Patterns",
-                        "item": code_key,
-                        "count": code_info["count"],
+                        "item": prefix + pattern,
+                        "count": count,
                         "details": friendly_type,
                     },
                     meta={
-                        "raw_type": code_info.get("raw_type", "UNKNOWN"),
+                        "raw_type": entry.get("raw_type", "UNKNOWN"),
+                        "expandable": has_instances,
                     },
                 ))
+                if has_instances:
+                    children = []
+                    for i, inst in enumerate(instances):
+                        child_count = (
+                            inst_counts[i] if i < len(inst_counts) else 0
+                        )
+                        children.append(TableRow(
+                            id=10000 + row_id * 100 + i,
+                            values={
+                                "category": "",
+                                "item": f"    {inst}",
+                                "count": child_count,
+                                "details": "",
+                            },
+                            tags=["instance"],
+                        ))
+                    self._instance_rows[row_id] = children
                 row_id += 1
-        else:
-            # Fallback: use grouped code patterns if individual detection unavailable
+        elif isinstance(code_patterns, dict):
+            # Legacy fallback: grouped category→count dict
             for pattern_type, count in sorted(
-                results["code_patterns"].items(), key=lambda x: x[1], reverse=True
+                code_patterns.items(), key=lambda x: x[1], reverse=True
             ):
                 findings.append(TableRow(
                     id=row_id,
@@ -599,20 +732,21 @@ class AnalysisStep(BaseStep):
                 ).pack(side="right")
 
         # Speaker count
-        if results.get("speakers"):
+        if results.get("speaker_count"):
             ttk.Separator(self._stats_frame, orient="horizontal").pack(
                 fill="x", padx=10, pady=10
             )
 
             ttk.Label(
                 self._stats_frame,
-                text=f"Speakers Detected: {len(results['speakers'])}",
+                text=f"Speakers Detected: {results['speaker_count']}",
                 font=("Segoe UI", 10, "bold"),
                 foreground=THEME.text_primary,
             ).pack(anchor="w", padx=10, pady=(5, 2))
 
-        # Code patterns
-        if results.get("code_patterns"):
+        # Code patterns (category summary)
+        category_counts = results.get("category_counts", {})
+        if category_counts:
             ttk.Separator(self._stats_frame, orient="horizontal").pack(
                 fill="x", padx=10, pady=10
             )
@@ -625,7 +759,7 @@ class AnalysisStep(BaseStep):
             ).pack(anchor="w", padx=10, pady=(5, 2))
 
             for pattern, count in sorted(
-                results["code_patterns"].items(), key=lambda x: x[1], reverse=True
+                category_counts.items(), key=lambda x: x[1], reverse=True
             ):
                 frame = ttk.Frame(self._stats_frame)
                 frame.pack(fill="x", padx=20, pady=1)
@@ -643,7 +777,8 @@ class AnalysisStep(BaseStep):
                 ).pack(side="right")
 
         # Update findings table
-        self._findings_table.set_data(results.get("findings", []))
+        self._findings_rows = results.get("findings", [])
+        self._refresh_findings_display()
 
     def _show_error(self, message: str) -> None:
         """Show error message.
@@ -652,6 +787,42 @@ class AnalysisStep(BaseStep):
             message: Error message.
         """
         messagebox.showerror("Analysis Error", f"Analysis failed:\n{message}")
+
+    def _refresh_findings_display(self) -> None:
+        """Rebuild findings table rows incorporating expanded instances."""
+        display: List[TableRow] = []
+        for row in self._findings_rows:
+            rid = row.id
+            expandable = row.meta.get("expandable", False)
+            if expandable:
+                expanded = rid in self._expanded_parents
+                prefix = "[-] " if expanded else "[+] "
+                item_text = row.values.get("item", "")
+                if item_text.startswith("[+] ") or item_text.startswith("[-] "):
+                    item_text = item_text[4:]
+                row.values["item"] = prefix + item_text
+            display.append(row)
+            if expandable and rid in self._expanded_parents:
+                display.extend(self._instance_rows.get(rid, []))
+        self._findings_table.set_data(display)
+
+    def _on_findings_toggle(self, event: "tk.Event") -> None:
+        """Handle double-click to toggle instance expansion."""
+        tree = self._findings_table._tree
+        iid = tree.identify_row(event.y)
+        if not iid:
+            return
+        try:
+            row_id = int(iid)
+        except (ValueError, TypeError):
+            return
+        if row_id not in self._instance_rows:
+            return
+        if row_id in self._expanded_parents:
+            self._expanded_parents.discard(row_id)
+        else:
+            self._expanded_parents.add(row_id)
+        self._refresh_findings_display()
 
     def _export_findings(self) -> None:
         """Export findings to CSV."""
@@ -1409,12 +1580,15 @@ class AnalysisStep(BaseStep):
         Returns:
             Dict with type and raw_type from analysis results.
         """
-        individual_codes = self._analysis_results.get("individual_codes", {})
-        info = individual_codes.get(pattern, {})
-        return {
-            "type": info.get("type", "Unknown"),
-            "raw_type": info.get("raw_type", "UNKNOWN"),
-        }
+        code_patterns = self._analysis_results.get("code_patterns", [])
+        if isinstance(code_patterns, list):
+            for entry in code_patterns:
+                if isinstance(entry, dict) and entry.get("pattern") == pattern:
+                    return {
+                        "type": entry.get("category", "Unknown"),
+                        "raw_type": entry.get("raw_type", "UNKNOWN"),
+                    }
+        return {"type": "Unknown", "raw_type": "UNKNOWN"}
 
     # Code pattern actions
     def _set_pattern_action(self, action: str) -> None:

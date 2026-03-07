@@ -110,7 +110,7 @@ TABLE OF CONTENTS
         * set_last_manifest / get_last_manifest — persist last opened manifest
         * add_to_recent_manifests / get_recent_manifests — manifest history
    3.34 manifest_manager.py ✅🔗 - Unified manifest state management (TASK 19)
-   3.35 manifest_fields.py ✅ - Manifest field type helpers (TASK 22.1) + special format helpers (TASK 22.2) + shared priority resolution API: resolve_line_field(), resolve_line_field_from(), get_latest_line_text(), get_all_lines_resolved(); PIPELINE_FIELDS chain: qa_overwrite → wordwr → postpro → tl → prepro → orig
+   3.35 manifest_fields.py ✅ - Manifest field type helpers (TASK 22.1) + special format helpers (TASK 22.2) + shared priority resolution API: resolve_line_field(), resolve_line_field_from(), get_latest_line_text(), get_all_lines_resolved(); PIPELINE_FIELDS chain: qa_overwrite → wordwr → postpro → tl → prepro → orig; save_code_glossary/load_code_glossary support count as int or `[total, inst1_ct, ...]` list with instance_counts deserialization; save_character_notes/load_character_notes with count field
    3.36 preset_manager.py ✅ - Preset save/load/delete operations (TASK 30.1)
    3.37 mock_translator.py ✅ - Mock translation engine with flaw injection (Phase 56)
    3.38 consistency.py ✅ - Consistency system for term translation tracking (Phase 55)
@@ -286,7 +286,7 @@ TABLE OF CONTENTS
        - __init__.py - Helper exports
        - mode_adapter.py - Bridge between GUI config and modi/ modules (TASK 16.5; TASK 72: tags_by_line tracking, progress_cb parameter; TASK 73: apply_dedup_batch, apply_aggressive_dedup_batch, DEDUP_PLACEHOLDER, aggressive helper fallbacks)
        - analysis_adapter.py - Bridge between GUI and functions/analysis.py (TASK 16.6)
-         - detect_individual_codes_batch(): Individual code patterns with counts, types, samples
+         - detect_individual_codes_batch(): Individual code patterns with counts, types, and instances dict (raw_code → occurrence count per normalized pattern)
          - analyze_lines(): Full analysis with speaker_samples and individual_codes
          - _friendly_code_type(): Internal type constant → display name mapping
        - glossary_adapter.py - Bridge between GUI and glossary/config/style modules (TASK 16.7)
@@ -3958,18 +3958,23 @@ Dependencies:
 
 DEDUP.PY (Deduplication Logic)
 
-Purpose: Identify and handle duplicate lines
+Purpose: Identify and handle duplicate lines via per-line tags
 
 Functions:
-- deduplicate_pre(text, manifest) → deduplicated text with mappings
-- deduplicate_post(text, manifest) → expanded with duplicates restored
+- deduplicate_pre(processor) → tags LineEntry with "dedup,D{source_idx}" for top MAX_DEDUP_GROUPS (10) groups
+- deduplicate_post(processor) → tag-based restoration (primary), legacy dedup_by_doc fallback
+- _tag_dedup_line(processor, idx, source_idx) → writes dedup tags to LineEntry
+- _read_dedup_tags(processor, line_count) → reads dedup source mappings from tags → Dict[int, int]
+- _restore_from_legacy_mappings(processor) → legacy dedup_by_doc restoration path
+- _restore_aggressive_numbers(processor) → aggressive number restoration
 - aggressive_normalize_line(line) → line with numbers masked
 - normalize_dedup_entries(manifest) → clean old dedup format
 
 Features:
-- Exact-line deduplication
-- Aggressive dedup (mask numbers before comparison)
-- Token-based mapping for restoration
+- Two-pass deduplicate_pre: collect all dup groups → rank by count → process top MAX_DEDUP_GROUPS
+- Per-line tags (comma-separated on LineEntry.tags) replace dedup_by_doc mapping dict
+- Tag-based restoration in deduplicate_post with legacy fallback for backward compatibility
+- Exact-line deduplication and aggressive dedup (mask numbers before comparison)
 
 Dependencies:
 - Stdlib: re, json

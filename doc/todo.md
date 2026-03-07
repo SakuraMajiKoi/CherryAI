@@ -2509,6 +2509,37 @@ appear.
 
 **Tests:**
 - `dev/test_analysis_actions.py` - Pattern action options, multi-select, code glossary
+
+---
+
+COMPLETED - SESSION 33 (Manifest Rework — Tasks 5-7)
+
+### SESSION 33: Manifest Rework Pt.3 — Instance Tracking, Collapsible UI, Documentation ✅ DONE
+
+**Task 5 — Aggressive dedup instance tracking:**
+- `gui/steps/information.py` — Added `instance_counts: List[int]` to CodePattern, `to_dict()` serializes count as `[total, inst1_ct, ...]` when instance_counts non-empty, `from_dict()` splits list count back
+- `gui/helpers/analysis_adapter.py` — `detect_individual_codes_batch()` now includes `instances: {}` dict tracking raw_code → occurrence count per normalized pattern
+- `gui/steps/analysis.py` — `_perform_analysis()` propagates instances and instance_counts from detection results to unified code_patterns
+- `functions/manifest_fields.py` — `save_code_glossary()` merges count as `[int(count)] + inst_counts` when present; `load_code_glossary()` splits list count into count (int) + instance_counts (list), always returns `instances` and `instance_counts` keys
+
+**Task 6 — Collapsible [+]/[-] instances UI:**
+- `gui/steps/analysis.py` — Findings table: `_instance_rows`, `_expanded_parents`, `_findings_rows` state; `_build_findings()` adds [+] prefix for expandable patterns with instances, sorts instances-first; `_refresh_findings_display()` rebuilds with expansion state; `_on_findings_toggle()` double-click handler; `<Double-1>` bound to findings table
+- `gui/steps/information.py` — Code Database: `_code_expanded` set; `_refresh_code_pattern_list()` rewritten with `pat_{idx}` tags, [+]/[-] prefix, instance sub-rows; `_on_code_double_click()` rewritten for expansion toggle vs inline editing; `_get_code_pattern_idx()` helper for tag-based index extraction; `_edit_code_pattern()` and `_remove_code_pattern()` updated to use tag-based lookup
+- Knowledge Base: No changes needed — reads from TSV, not manifest code_patterns
+
+**Task 7 — Documentation updates:**
+- `doc/features.md` — Findings table enhancements, dedup section, manifest fields, code database
+- `doc/technical.md` — analysis_adapter.py, dedup.py, manifest_fields.py entries
+- `doc/specs.md` — dedup_map output, findings table collapsible instances
+- `doc/tests.md` — Updated test counts: test_code_glossary_display 12→27, test_analysis_findings 34→54, test_manifest_fields 181→188, test_dedup 26→34; added TestCodePatternInstanceCounts, TestInstanceTracking, TestFindingsInstanceExpansion, TestDedupTagging, TestTopNGroupLimit, TestCodeGlossaryRoundtrip expanded
+- `doc/todo.md` — This session entry
+
+**Tests added (Session 33):**
+- `dev/test_code_glossary_display.py` — TestCodePatternInstanceCounts (8 tests): instance_counts default, creation, to_dict list/int, from_dict list/int, roundtrip, empty list
+- `dev/test_manifest_fields.py` — TestCodeGlossaryRoundtrip expanded (+5 tests): count+instances roundtrip, empty instances omission, legacy compat, instance_counts via list format, int count without instance_counts
+- `dev/test_analysis_findings.py` — TestInstanceTracking (4 tests): instances dict present, tracks raw codes, empty when no normalization, fallback path; TestFindingsInstanceExpansion (5 tests): expandable [+] prefix, non-expandable no prefix, instance children stored, instances-sort-first, expandable meta set
+
+**All 7 manifest rework tasks complete.** Tests verified: 303 passing (27+54+188+34).
 - `dev/test_analysis_findings.py` - Persistence logic, protagonist names, type mapping
 
 ---

@@ -1330,6 +1330,7 @@ If the category-aware context menu proves too complex to implement cleanly, use 
 - Individual code patterns shown (normalized) instead of type summaries
 - Details column shows character glossary info (translation + notes) for speakers, and code type/examples for code patterns
 - Count Filter field in filter bar: supports `<X`, `>X`, `<=X`, `>=X`, `=X` syntax; toggle button (≥/≤) switches default bare-number comparison mode
+- **Collapsible instance rows**: Code patterns with multiple raw-code instances show `[+]` prefix. Double-click to expand/collapse sub-rows showing each instance variant and its per-instance count. Patterns with instances sort above same-count patterns without. Expanded rows show `[-]` prefix; instance children are indented with `  └ ` prefix and tagged with "instance" tag.
 
 ---
 
@@ -2532,7 +2533,7 @@ The Preprocessing tab is organized into three sections:
 **Outputs**:
 - `prepro: List[str]` - Preprocessed lines ready for translation
 - `prepro_ops: List[List[Dict]]` - Restoration metadata per line, per process
-- `dedup_map: Dict[str, List[int]]` - Line text → list of duplicate indices
+- `dedup_map: Dict[str, List[int]]` - (Legacy) Line text → duplicate indices; new dedup stores tags on `lines[].tags` ("dedup,D{source_idx}") for top MAX_DEDUP_GROUPS (10) groups
 - `change_count: int` - Total lines modified
 - `protected_count: int` - Lines with `__PROTECTED__` tokens
 - `anchored_count: int` - Lines with anchor removals

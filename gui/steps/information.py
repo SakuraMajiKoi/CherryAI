@@ -120,11 +120,13 @@ class CharacterInfo:
         original_name: Source-language name (lookup key).
         translation: Translated name in target language.
         notes: Free-form notes (gender, role, speaking style, etc.).
+        count: Occurrence count from analysis speaker detection.
     """
 
     original_name: str = ""
     translation: str = ""
     notes: str = ""
+    count: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -132,6 +134,7 @@ class CharacterInfo:
             "original_name": self.original_name,
             "translation": self.translation,
             "notes": self.notes,
+            "count": self.count,
         }
 
     @classmethod
@@ -160,16 +163,17 @@ class CharacterInfo:
             original_name=data.get("original_name", ""),
             translation=translation,
             notes=notes,
+            count=int(data.get("count", 0)),
         )
 
 
 @dataclass
 class CodePattern:
     """Information about a code pattern for glossary (TASK 18.5).
-    
+
     Represents code patterns detected during Analysis that should be
     preserved during translation (e.g., variables, control codes).
-    
+
     Attributes:
         pattern: The code pattern regex or string.
         translation: Translated term for this pattern.
@@ -177,6 +181,10 @@ class CodePattern:
         action: How to handle: 'preserve', 'translate', 'remove'.
         example: Example occurrence from the source text.
         notes: User notes about this pattern.
+        count: Total occurrence count from analysis.
+        raw_type: Internal type constant from detection engine.
+        instances: Concrete instances for aggregated patterns.
+        instance_counts: Per-instance occurrence counts (parallel to instances).
     """
 
     pattern: str
@@ -185,21 +193,48 @@ class CodePattern:
     action: str = "preserve"
     example: str = ""
     notes: str = ""
+    count: int = 0
+    raw_type: str = ""
+    instances: List[str] = field(default_factory=list)
+    instance_counts: List[int] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for serialization."""
-        return {
+        """Convert to dictionary for serialization.
+
+        When instances exist, ``count`` is serialized as
+        ``[total, inst1_count, inst2_count, ...]``.
+        """
+        result: Dict[str, Any] = {
             "pattern": self.pattern,
             "translation": self.translation,
             "category": self.category,
             "action": self.action,
             "example": self.example,
             "notes": self.notes,
+            "raw_type": self.raw_type,
         }
+        if self.instance_counts:
+            result["count"] = [self.count] + list(self.instance_counts)
+        else:
+            result["count"] = self.count
+        if self.instances:
+            result["instances"] = list(self.instances)
+        return result
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "CodePattern":
         """Create from dictionary."""
+        instances = data.get("instances", [])
+        if not isinstance(instances, list):
+            instances = []
+        # count can be int or [total, inst1_count, inst2_count, ...]
+        count_val = data.get("count", 0)
+        if isinstance(count_val, list):
+            count = int(count_val[0]) if count_val else 0
+            instance_counts = [int(c) for c in count_val[1:]]
+        else:
+            count = int(count_val)
+            instance_counts = []
         return cls(
             pattern=data.get("pattern", ""),
             translation=data.get("translation", ""),
@@ -207,6 +242,10 @@ class CodePattern:
             action=data.get("action", "preserve"),
             example=data.get("example", ""),
             notes=data.get("notes", ""),
+            count=count,
+            raw_type=str(data.get("raw_type", "")),
+            instances=instances,
+            instance_counts=instance_counts,
         )
 
 
@@ -1468,6 +1507,9 @@ class InformationStep(BaseStep):
         self._code_tree.bind("<Double-1>", self._on_code_double_click)
         # Bind Delete key for row removal
         self._code_tree.bind("<Delete>", lambda e: self._remove_code_pattern())
+
+        # Instance expansion state for code database
+        self._code_expanded: set = set()
 
         # Hint
         ttk.Label(
@@ -2807,7 +2849,17 @@ class InformationStep(BaseStep):
         try:
             analysis_data = self._get_analysis_step_data()
             analysis_results = analysis_data.get("analysis_results", {})
-            speaker_counts = analysis_results.get("speakers", {})
+            characters_data = analysis_results.get("characters", [])
+            if isinstance(characters_data, list):
+                for entry in characters_data:
+                    if isinstance(entry, dict):
+                        name = entry.get("original_name", "")
+                        cnt = entry.get("count", 0)
+                        if name and cnt > 0:
+                            speaker_counts[name] = cnt
+            elif isinstance(characters_data, dict):
+                # Legacy fallback: speakers dict
+                speaker_counts = characters_data
         except Exception:
             pass
 
@@ -3183,16 +3235,31 @@ class InformationStep(BaseStep):
         """Handle Import from Analysis button click.
 
         Imports speakers detected in Analysis step as characters.
-        Shows a dialog letting the user choose how many of the most
-        common speakers to import (non-destructive: existing entries
-        are never overwritten).
+        Reads from the unified ``characters`` list which contains
+        per-speaker counts.  Shows a dialog letting the user choose
+        how many to import (non-destructive: existing entries are never
+        overwritten).
         """
         try:
             analysis_step_data = self._get_analysis_step_data()
             analysis_results = analysis_step_data.get("analysis_results", {})
-            speakers = analysis_results.get("speakers", {})
+            characters_data = analysis_results.get("characters", [])
 
-            if not speakers:
+            # Build list from unified characters (list of dicts with count)
+            items_list: list = []
+            if isinstance(characters_data, list):
+                for entry in characters_data:
+                    if isinstance(entry, dict) and entry.get("count", 0) > 0:
+                        items_list.append((
+                            entry.get("original_name", ""),
+                            entry.get("count", 0),
+                        ))
+            elif isinstance(characters_data, dict):
+                # Legacy fallback: speakers dict (name→count)
+                for name, cnt in characters_data.items():
+                    items_list.append((name, cnt))
+
+            if not items_list:
                 messagebox.showinfo(
                     "No Speakers",
                     "No speakers were detected in Analysis.\n\n"
@@ -3200,7 +3267,8 @@ class InformationStep(BaseStep):
                 )
                 return
 
-            speaker_count = len(speakers)
+            items_list.sort(key=lambda x: x[1], reverse=True)
+            speaker_count = len(items_list)
 
             # --- choice dialog ---
             dlg = tk.Toplevel(self)
@@ -3261,16 +3329,14 @@ class InformationStep(BaseStep):
             existing_originals = {
                 c.original_name for c in self._metadata.characters
             }
-            sorted_speakers = sorted(
-                speakers.items(), key=lambda x: x[1], reverse=True,
-            )[:n]
 
-            for speaker_name, count in sorted_speakers:
+            for speaker_name, count in items_list[:n]:
                 if speaker_name in existing_originals:
                     continue
 
                 char = CharacterInfo(
                     original_name=speaker_name,
+                    count=count,
                 )
                 self._metadata.characters.append(char)
                 existing_originals.add(speaker_name)
@@ -3311,6 +3377,19 @@ class InformationStep(BaseStep):
             self._refresh_code_pattern_list()
             self._save_code_patterns_to_manifest()  # TASK 23.3
 
+    def _get_code_pattern_idx(self, item: str) -> int:
+        """Extract code pattern index from treeview item tags.
+
+        Returns -1 if the item is an instance sub-row or has no valid tag.
+        """
+        for tag in self._code_tree.item(item, "tags"):
+            if isinstance(tag, str) and tag.startswith("pat_"):
+                try:
+                    return int(tag[4:])
+                except ValueError:
+                    pass
+        return -1
+
     def _edit_code_pattern(self) -> None:
         """Edit selected code pattern."""
         selection = self._code_tree.selection()
@@ -3320,8 +3399,8 @@ class InformationStep(BaseStep):
             )
             return
 
-        idx = self._code_tree.index(selection[0])
-        if idx < len(self._metadata.code_patterns):
+        idx = self._get_code_pattern_idx(selection[0])
+        if 0 <= idx < len(self._metadata.code_patterns):
             pattern = self._metadata.code_patterns[idx]
             dialog = CodePatternDialog(self, "Edit Code Pattern", pattern)
             if dialog.result:
@@ -3333,7 +3412,8 @@ class InformationStep(BaseStep):
         """Remove selected code pattern(s).
 
         Supports multi-select via Ctrl/Shift click.  Deletes in
-        reverse index order to avoid index shifting.
+        reverse index order to avoid index shifting.  Instance sub-rows
+        are ignored.
         """
         selection = self._code_tree.selection()
         if not selection:
@@ -3342,7 +3422,14 @@ class InformationStep(BaseStep):
             )
             return
 
-        count = len(selection)
+        indices = sorted(
+            {self._get_code_pattern_idx(s) for s in selection} - {-1},
+            reverse=True,
+        )
+        if not indices:
+            return
+
+        count = len(indices)
         msg = (
             f"Remove {count} selected patterns?"
             if count > 1
@@ -3351,17 +3438,20 @@ class InformationStep(BaseStep):
         if not confirm_action(self, "remove_code_pattern", "Confirm", msg):
             return
 
-        indices = sorted(
-            (self._code_tree.index(s) for s in selection), reverse=True,
-        )
         for idx in indices:
             if idx < len(self._metadata.code_patterns):
+                self._code_expanded.discard(idx)
                 del self._metadata.code_patterns[idx]
         self._refresh_code_pattern_list()
         self._save_code_patterns_to_manifest()  # TASK 23.3
 
     def _on_code_double_click(self, event: tk.Event) -> None:
-        """Handle double-click on code pattern tree for inline editing."""
+        """Handle double-click on code pattern tree for inline editing.
+
+        If the clicked row is an instance sub-row, ignore.  If it is an
+        expandable parent row on the pattern column, toggle expansion.
+        Otherwise proceed with inline editing.
+        """
         region = self._code_tree.identify_region(event.x, event.y)
         if region != "cell":
             return
@@ -3371,18 +3461,41 @@ class InformationStep(BaseStep):
         if not item:
             return
 
+        # Skip instance sub-rows
+        item_tags = self._code_tree.item(item, "tags")
+        if "instance_row" in item_tags:
+            return
+
         # Get column index (1-based from identify_column)
         col_idx = int(column.replace("#", "")) - 1
         columns = ("pattern", "translation", "category", "action")
         if col_idx < 0 or col_idx >= len(columns):
             return
 
-        col_key = columns[col_idx]
-        idx = self._code_tree.index(item)
-        if idx >= len(self._metadata.code_patterns):
+        # Find pattern index from tags
+        idx = -1
+        for tag in item_tags:
+            if isinstance(tag, str) and tag.startswith("pat_"):
+                try:
+                    idx = int(tag[4:])
+                except ValueError:
+                    pass
+                break
+        if idx < 0 or idx >= len(self._metadata.code_patterns):
             return
 
         pattern = self._metadata.code_patterns[idx]
+
+        # Toggle expansion when clicking pattern column of expandable row
+        col_key = columns[col_idx]
+        if col_key == "pattern" and pattern.instances:
+            if idx in self._code_expanded:
+                self._code_expanded.discard(idx)
+            else:
+                self._code_expanded.add(idx)
+            self._refresh_code_pattern_list()
+            return
+
         self._start_code_inline_edit(item, col_key, col_idx, pattern)
 
     def _start_code_inline_edit(
@@ -3481,45 +3594,85 @@ class InformationStep(BaseStep):
         combo.bind("<FocusOut>", on_select)
 
     def _refresh_code_pattern_list(self) -> None:
-        """Refresh code pattern treeview."""
+        """Refresh code pattern treeview with collapsible instances.
+
+        Patterns that have instances are prefixed with [+] or [-] in the
+        pattern column.  When expanded, instance sub-rows are shown indented
+        below the parent.  Patterns with instances sort before those without.
+        """
         for item in self._code_tree.get_children():
             self._code_tree.delete(item)
 
-        for pattern in self._metadata.code_patterns:
+        # Sort: patterns with instances first, then alphabetical
+        patterns = list(enumerate(self._metadata.code_patterns))
+        patterns.sort(
+            key=lambda x: (
+                0 if x[1].instances else 1,
+                -x[1].count,
+                x[1].pattern,
+            )
+        )
+
+        for idx, pattern in patterns:
+            has_inst = bool(pattern.instances)
+            expanded = idx in self._code_expanded
+            if has_inst:
+                prefix = "[-] " if expanded else "[+] "
+            else:
+                prefix = ""
             self._code_tree.insert(
                 "",
                 "end",
+                tags=(f"pat_{idx}",),
                 values=(
-                    pattern.pattern,
+                    prefix + pattern.pattern,
                     pattern.translation,
                     pattern.category,
                     pattern.action,
                 ),
             )
+            if has_inst and expanded:
+                for i, inst in enumerate(pattern.instances):
+                    inst_count = (
+                        pattern.instance_counts[i]
+                        if i < len(pattern.instance_counts) else 0
+                    )
+                    self._code_tree.insert(
+                        "",
+                        "end",
+                        tags=("instance_row",),
+                        values=(
+                            f"    {inst}",
+                            f"({inst_count})" if inst_count else "",
+                            "",
+                            "",
+                        ),
+                    )
 
     def _on_import_code_patterns(self) -> None:
-        """Import individual code patterns from Analysis step.
+        """Import code patterns from Analysis step.
 
-        Prefers ``individual_codes`` for per-code detail; falls back to
-        grouped ``code_patterns``.  Shows a choice dialog for how many
-        to import (non-destructive).
+        Reads from the unified ``code_patterns`` list which contains
+        per-pattern detail with counts.  Shows a choice dialog for how
+        many to import (non-destructive).
         """
         try:
             analysis_step_data = self._get_analysis_step_data()
             analysis_results = analysis_step_data.get("analysis_results", {})
-            individual_codes = analysis_results.get("individual_codes", {})
-            code_patterns = analysis_results.get("code_patterns", {})
+            code_patterns = analysis_results.get("code_patterns", [])
 
-            # Build a unified list: [(pattern_text, count, type_label)]
+            # Build list: [(pattern_text, count, type_label)]
             items_list: list = []
-            if individual_codes:
-                for code_key, info in individual_codes.items():
-                    items_list.append((
-                        code_key,
-                        info.get("count", 0),
-                        info.get("type", "Detected"),
-                    ))
-            elif code_patterns:
+            if isinstance(code_patterns, list):
+                for entry in code_patterns:
+                    if isinstance(entry, dict) and entry.get("count", 0) > 0:
+                        items_list.append((
+                            entry.get("pattern", ""),
+                            entry.get("count", 0),
+                            entry.get("category", "Detected"),
+                        ))
+            elif isinstance(code_patterns, dict):
+                # Legacy fallback: category→count dict
                 for cat, cnt in code_patterns.items():
                     items_list.append((cat, cnt, "Detected"))
 
@@ -3600,6 +3753,7 @@ class InformationStep(BaseStep):
                     pattern=pat_text,
                     category=type_label,
                     action="preserve",
+                    count=count,
                     notes=f"Imported from Analysis ({count} occurrences)",
                 )
                 self._metadata.code_patterns.append(pattern)
@@ -3902,9 +4056,23 @@ class InformationStep(BaseStep):
         try:
             analysis_step_data = self._get_analysis_step_data()
             analysis_results = analysis_step_data.get("analysis_results", {})
-            speakers = analysis_results.get("speakers", {})
+            characters_data = analysis_results.get("characters", [])
 
-            if not speakers:
+            # Build sorted list: [(name, count)]
+            items_list: list = []
+            if isinstance(characters_data, list):
+                for entry in characters_data:
+                    if isinstance(entry, dict) and entry.get("count", 0) > 0:
+                        items_list.append((
+                            entry.get("original_name", ""),
+                            entry.get("count", 0),
+                        ))
+            elif isinstance(characters_data, dict):
+                # Legacy fallback: speakers dict
+                for name, cnt in characters_data.items():
+                    items_list.append((name, cnt))
+
+            if not items_list:
                 messagebox.showinfo(
                     "No Speakers",
                     "No speakers were detected in Analysis.\n\n"
@@ -3912,7 +4080,8 @@ class InformationStep(BaseStep):
                 )
                 return
 
-            speaker_count = len(speakers)
+            items_list.sort(key=lambda x: x[1], reverse=True)
+            speaker_count = len(items_list)
 
             # --- choice dialog ---
             dlg = tk.Toplevel(self)
@@ -3978,11 +4147,7 @@ class InformationStep(BaseStep):
                     existing.add(str(vals[1]))
 
             imported_count = 0
-            sorted_speakers = sorted(
-                speakers.items(), key=lambda x: x[1], reverse=True,
-            )[:n]
-
-            for name, count in sorted_speakers:
+            for name, count in items_list[:n]:
                 if name in existing:
                     continue
                 self._glossary_tree.insert("", "end", values=(
@@ -4771,7 +4936,7 @@ class InformationStep(BaseStep):
 
     def _import_analysis_speakers(self) -> None:
         """Import detected speakers from Analysis step into Character Notes.
-        
+
         This implements Task 18.4: Analysis to Information Glossary Integration.
         Transfers characters found during Analysis to the Character Notes widget,
         including gender inference based on speaker names.
@@ -4780,15 +4945,29 @@ class InformationStep(BaseStep):
             # Get analysis results (prefers manifest, falls back to session)
             analysis_step_data = self._get_analysis_step_data()
             analysis_results = analysis_step_data.get("analysis_results", {})
-            speakers = analysis_results.get("speakers", {})
-            
-            if not speakers:
+            characters_data = analysis_results.get("characters", [])
+
+            # Build speaker list from unified characters
+            speaker_items: list = []
+            if isinstance(characters_data, list):
+                for entry in characters_data:
+                    if isinstance(entry, dict) and entry.get("count", 0) > 0:
+                        speaker_items.append((
+                            entry.get("original_name", ""),
+                            entry.get("count", 0),
+                        ))
+            elif isinstance(characters_data, dict):
+                # Legacy fallback: speakers dict
+                for name, cnt in characters_data.items():
+                    speaker_items.append((name, cnt))
+
+            if not speaker_items:
                 return
-            
+
             # Check if we should import (only if no characters exist yet)
             if self._metadata.characters:
                 return  # Don't overwrite existing characters
-            
+
             # Try to import gender inference function
             infer_gender_fn = None
             try:
@@ -4800,15 +4979,15 @@ class InformationStep(BaseStep):
                 infer_gender_fn = infer_gender_comprehensive
             except ImportError:
                 logger.debug("Gender inference not available")
-            
+
             # Import top speakers as characters
             imported_count = 0
             existing_originals = {c.original_name for c in self._metadata.characters}
-            
+
             # Sort by count, take top 20
-            sorted_speakers = sorted(speakers.items(), key=lambda x: x[1], reverse=True)[:20]
-            
-            for speaker_name, count in sorted_speakers:
+            speaker_items.sort(key=lambda x: x[1], reverse=True)
+
+            for speaker_name, count in speaker_items[:20]:
                 if speaker_name in existing_originals:
                     continue
                 
@@ -4833,6 +5012,7 @@ class InformationStep(BaseStep):
                 char = CharacterInfo(
                     original_name=speaker_name,
                     notes=gender,
+                    count=count,
                 )
                 self._metadata.characters.append(char)
                 existing_originals.add(speaker_name)
@@ -4888,10 +5068,9 @@ class InformationStep(BaseStep):
     def _auto_import_code_patterns(self) -> None:
         """Auto-import code patterns from Analysis if none exist.
 
-        Silently imports individual code patterns detected during
-        Analysis to the Code Database when no patterns are currently
-        defined.  Prefers ``individual_codes`` for per-code detail;
-        falls back to grouped ``code_patterns``.
+        Silently imports code patterns detected during Analysis to the
+        Code Database when no patterns are currently defined.  Reads
+        from the unified ``code_patterns`` list.
         """
         # Only auto-import if no patterns exist
         if self._metadata.code_patterns:
@@ -4901,22 +5080,24 @@ class InformationStep(BaseStep):
             # Get code patterns from Analysis step (step 1)
             analysis_step_data = self._get_analysis_step_data()
             analysis_results = analysis_step_data.get("analysis_results", {})
-            individual_codes = analysis_results.get("individual_codes", {})
-            code_patterns = analysis_results.get("code_patterns", {})
+            code_patterns = analysis_results.get("code_patterns", [])
 
-            # Prefer individual codes for per-pattern detail
             imported_count = 0
-            if individual_codes:
-                for code_key, info in individual_codes.items():
-                    pattern = CodePattern(
-                        pattern=code_key,
-                        category=info.get("type", "Detected"),
-                        action="preserve",
-                        notes="",
-                    )
-                    self._metadata.code_patterns.append(pattern)
-                    imported_count += 1
-            elif code_patterns:
+            if isinstance(code_patterns, list):
+                for entry in code_patterns:
+                    if isinstance(entry, dict) and entry.get("count", 0) > 0:
+                        pattern = CodePattern(
+                            pattern=entry.get("pattern", ""),
+                            category=entry.get("category", "Detected"),
+                            action="preserve",
+                            count=entry.get("count", 0),
+                            raw_type=entry.get("raw_type", ""),
+                            notes="",
+                        )
+                        self._metadata.code_patterns.append(pattern)
+                        imported_count += 1
+            elif isinstance(code_patterns, dict):
+                # Legacy fallback: category→count dict
                 for category, count in code_patterns.items():
                     pattern = CodePattern(
                         pattern=category,

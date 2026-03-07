@@ -301,11 +301,11 @@ def _friendly_code_type(raw_type: str) -> str:
 def detect_individual_codes_batch(
     lines: List[str],
 ) -> Dict[str, Dict[str, Any]]:
-    """Detect individual code patterns with counts, types, and sample lines.
+    """Detect individual code patterns with counts, types, and instances.
 
     Instead of grouping by type category, this returns each unique normalized
-    code pattern with its occurrence count, type classification, and a sample
-    line for context.
+    code pattern with its occurrence count, type classification, and concrete
+    instances (raw variants that normalized to this pattern).
 
     Args:
         lines: Lines to analyze.
@@ -315,6 +315,7 @@ def detect_individual_codes_batch(
             'count': int,
             'type': str (friendly name),
             'raw_type': str (internal type constant),
+            'instances': dict (raw_code -> occurrence count),
         }
     """
     codes: Dict[str, Dict[str, Any]] = {}
@@ -329,6 +330,7 @@ def detect_individual_codes_batch(
                         "count": 0,
                         "type": pat,
                         "raw_type": "UNKNOWN",
+                        "instances": {},
                     }
                 codes[pat]["count"] += 1
         return codes
@@ -347,8 +349,13 @@ def detect_individual_codes_batch(
                         "count": 0,
                         "type": _friendly_code_type(raw_type),
                         "raw_type": raw_type,
+                        "instances": {},
                     }
                 codes[normalized]["count"] += 1
+                # Track concrete instance when raw differs from normalized
+                if raw_code != normalized:
+                    inst = codes[normalized]["instances"]
+                    inst[raw_code] = inst.get(raw_code, 0) + 1
         except Exception as e:
             logger.debug("detect_code failed for line: %s", e)
 
