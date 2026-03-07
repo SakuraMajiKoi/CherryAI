@@ -164,6 +164,55 @@ def get_context_prompt(context_type: str) -> str:
 
 
 # =============================================================================
+# PLACEHOLDER DETECTION (shared by Formation, Estimation, and Translation)
+# =============================================================================
+
+# Matches any placeholder token produced by CherryAI's preprocessing pipeline.
+# All tool-generated placeholders follow the ``__WORD__`` convention:
+# ``__PROTECTED__``, ``__PROTECTED_1__``, ``__COLOR__``, ``__FONT_2__``,
+# ``__CODE_PROTECTED_5__``, ``__DEDUP__``, ``__CUSTOM__``, ``__NAME__``,
+# ``__TEMPREPL_0_1__``, ``__PROT__`` (legacy), and any user-defined token.
+_PLACEHOLDER_TOKEN_RE = re.compile(
+    r"__[A-Z][A-Z0-9_]*__",
+    re.IGNORECASE,
+)
+
+
+def is_placeholder_only(text: str) -> bool:
+    """Return ``True`` when *text* consists entirely of placeholder tokens.
+
+    A line is "placeholder-only" when, after removing every recognised
+    placeholder token (any ``__UPPERCASE_WORD__`` pattern such as
+    ``__PROTECTED__``, ``__DEDUP__``, ``__COLOR__``, ``__FONT__``,
+    ``__TEMPREPL_0_1__``, and user-defined tokens), nothing but
+    whitespace remains.
+
+    Empty / whitespace-only strings return ``False`` (they are handled
+    separately as "empty lines").
+
+    Examples::
+
+        >>> is_placeholder_only("__PROTECTED__")
+        True
+        >>> is_placeholder_only("__DEDUP__  __PROTECTED__")
+        True
+        >>> is_placeholder_only("__COLOR__ __FONT_1__")
+        True
+        >>> is_placeholder_only("Text __PROTECTED__")
+        False
+        >>> is_placeholder_only("[ __PROTECTED__ ]")
+        False
+        >>> is_placeholder_only("")
+        False
+    """
+    stripped = text.strip()
+    if not stripped:
+        return False
+    remaining = _PLACEHOLDER_TOKEN_RE.sub("", stripped)
+    return not remaining.strip()
+
+
+# =============================================================================
 # REQUEST FORMATION (4-STEP PROCESS) — Phase 49
 # =============================================================================
 
@@ -752,10 +801,6 @@ def build_line_infos(
     """
     import re as _re
 
-    _PLACEHOLDER_RE = _re.compile(
-        r"^(?:__PROTECTED__\d*|__DEDUP_\d+__|__CUSTOM__\d*)$"
-    )
-
     n = len(entries)
     result: List[LineInfo] = []
 
@@ -781,7 +826,7 @@ def build_line_infos(
 
         # Determine if invalid
         is_marker = getattr(entry, "is_context_marker", lambda: False)()
-        is_placeholder = bool(_PLACEHOLDER_RE.match(text.strip())) if text else False
+        is_placeholder = is_placeholder_only(text) if text else False
         is_empty = not text.strip()
         invalid = is_marker or is_placeholder or is_empty
 

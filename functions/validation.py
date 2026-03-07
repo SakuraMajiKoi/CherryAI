@@ -124,7 +124,9 @@ SYMBOL_NORMALIZATION: Dict[str, str] = {
 
 # Patterns for lines that should be skipped
 DEDUP_PATTERN = re.compile(r"^\s*_{1,2}DEDUP_{1,2}\s*$", re.IGNORECASE)
-PROT_PATTERN = re.compile(r"^\s*__\s*PROT\s*__\s*$", re.IGNORECASE)
+PROT_PATTERN = re.compile(
+    r"^\s*__\s*(?:PROTECTED|PROT)(?:_\d+)?\s*__(?:\d*)\s*$", re.IGNORECASE,
+)
 COMMENT_PATTERN = re.compile(r"^\s*__COMMENT__")
 CONTEXT_MARKER_PATTERN = re.compile(
     r"^\s*__(DIALOGUE|MENU|CHOICE|FILE)__\s*$", re.IGNORECASE
@@ -754,6 +756,12 @@ def validate_line_pre(
     Context markers (``__DIALOGUE__``, ``__MENU__``, ``__CHOICE__``,
     ``__FILE__``) are metadata-only and skipped from translation.
     
+    Language detection (step 7) operates on ``line`` directly — the same
+    text that will be sent to the LLM.  When preprocessing replaces CJK
+    with ``__PROTECTED__``, the remaining text is detected as either
+    source or non-source: if CJK remains, the line is kept for
+    translation; if only non-source text remains, the line is skipped.
+    
     Args:
         line: The preprocessed line to validate
         existing_translation: If the line already has a translation
@@ -795,6 +803,15 @@ def validate_line_pre(
     
     # 5. Lines containing only __PROTECTED__ placeholder
     if PROT_PATTERN.match(stripped):
+        return ValidationResult(
+            is_valid=False,
+            skip_reason=SkipReason.PROT_ONLY,
+        )
+    
+    # 5b. Lines consisting entirely of ANY placeholder tokens (broader check
+    #     covering __COLOR__, __FONT__, __TEMPREPL__, __NAME__, etc.)
+    from CherryAI.functions.prompt_builder import is_placeholder_only
+    if is_placeholder_only(stripped):
         return ValidationResult(
             is_valid=False,
             skip_reason=SkipReason.PROT_ONLY,

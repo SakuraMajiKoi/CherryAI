@@ -510,15 +510,18 @@ This ensures cost estimates are never out of sync with translation behaviour.
 |------|------|---------|-------------|
 | Skip already translated | Global Option | On | Lines with a non-empty `tl` field are not re-translated |
 | Skip non-source language | Global Option | On | Lines detected as not being in the configured source language are skipped |
-| No Placeholders | Mandatory | Always | Lines consisting entirely of `__PROTECTED__`, `__DEDUP__`, `__CUSTOM__` tokens are skipped |
+| No Placeholders | Mandatory | Always | Lines consisting entirely of placeholder tokens (any ``__TOKEN__`` type) are skipped |
 | No Deduplicated | Mandatory | Always | Lines marked as deduplicated (`__DEDUP_{idx}__`) are skipped |
 | No Context Markers | Mandatory | Always | Context Marker lines are metadata and are never translated |
 
 #### Behaviour
 
 - The mandatory rules cannot be disabled — placeholder-only lines, deduplicated lines, and context markers must never be sent to the LLM
+- **Placeholder-only** is determined by ``is_placeholder_only()`` in ``prompt_builder.py`` which strips all placeholder tokens and checks if anything remains.  A line like ``攻撃力+__PROTECTED__`` is **not** placeholder-only because it contains CJK content alongside the placeholder
 - The optional Global Option rules provide user control over incremental translation and language filtering
+- **Language detection** for the "Skip non-source language" rule operates on the **prioritized** text (``edited_prepro → preprocessed → original``) with placeholder tokens stripped before classification.  Placeholder token names (``PROTECTED``, ``COLOR``, etc.) are Latin letters that would skew ratio-based script detection, so they are removed first.  After stripping, the remaining text is correctly detected as either source or non-source: if CJK content remains the line is kept for translation; if only non-source text remains the line is skipped
 - Lines that are skipped are marked accordingly in the Translation step status column (e.g., "Skipped (already translated)", "Skipped (wrong language)")
+- All three callers — Request Preview, Estimate, and Start Translation — apply the same filtering rules via shared functions: ``is_placeholder_only()`` for mandatory placeholder checks and ``validate_line_pre()`` for optional language checks
 
 ---
 

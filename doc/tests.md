@@ -2950,6 +2950,7 @@ Thank you.
 | test_char_filter_phase78.py | 32 | Blacklist/whitelist validation Phase 78 (Task 5): parse_filter_entries, check_filter_violations, exchange/retry/flag strategies |
 | test_max_input_tokens.py | 34 | Max Input Tokens (Task 41): RequestSettings field, GlobalOptions integration, RequestFormationConfig plumbing, build_requests token splitting, costs estimation, edge cases, INI persistence |
 | test_prompt_overhead_fix.py | 29 | Per-Request Prompt Overhead (Task 42): FormationResult dataclass, _estimate_via_formation return type, _compute_per_request_prompt_overhead, selective filtering per chunk, _update_ui avg/request format, sum vs flat multiplication, edge cases |
+| test_request_building_unification.py | 75 | Request Building Unification: is_placeholder_only (all placeholder types), PROT_PATTERN fix, build_line_infos placeholder handling, validate_line_pre (no detection_text), _count_formation_input_tokens, formation pipeline for both orig/prep, preview language skip, _apply_language_skip prioritized text with placeholder stripping, _get_skip_indices (no original_lines override), placeholder stripping regression guard |
 | smoke_test/*.py | 5+ | Smoke tests |
 | **Total Script Tests** | **3862** | (+29 Task 42 per-request prompt overhead tests) |
 | One_Click_Test.py | 7 stages | API integration |

@@ -2713,6 +2713,13 @@ class TranslationStep(BaseStep):
 
         Lines shorter than 3 non-whitespace characters are never skipped.
 
+        Placeholder tokens (``__PROTECTED__``, ``__COLOR__``, etc.) are
+        stripped before detection because the token *names* are Latin
+        letters that would skew ratio-based script classification.  After
+        stripping, the remaining text represents the actual language
+        content: if CJK characters remain the line is kept for
+        translation; if only non-source text remains it is skipped.
+
         Args:
             lines: Pending lines to filter.
 
@@ -2720,6 +2727,7 @@ class TranslationStep(BaseStep):
             Lines that should still be translated.
         """
         from CherryAI.functions.analysis import detect_line_script
+        from CherryAI.functions.prompt_builder import _PLACEHOLDER_TOKEN_RE
 
         # Determine expected source script from manifest
         source_lang = "Japanese"
@@ -2737,8 +2745,20 @@ class TranslationStep(BaseStep):
         kept: list[TranslatableLine] = []
         skipped = 0
         for line in lines:
-            text = line.preprocessed or line.original
-            script = detect_line_script(text)
+            # Use the prioritized text (what actually gets sent to the LLM)
+            # for language detection. After preprocessing, CJK may be replaced
+            # by __PROTECTED__ — if only non-source text remains, skip it.
+            text = line.edited_prepro or line.preprocessed or line.original
+            # Strip placeholder tokens before detection: their character
+            # names (PROTECTED, COLOR, …) are Latin letters that skew the
+            # ratio-based script classifier.
+            clean = _PLACEHOLDER_TOKEN_RE.sub("", text).strip()
+            if not clean:
+                # Line is all placeholders — keep here; caught by
+                # is_placeholder_only() in _build_chunks() later.
+                kept.append(line)
+                continue
+            script = detect_line_script(clean)
             if script == "unknown" or script == "mixed" or script == expected_script:
                 kept.append(line)
             else:
@@ -2883,6 +2903,7 @@ class TranslationStep(BaseStep):
         try:
             from CherryAI.functions.prompt_builder import (
                 LineInfo, RequestFormationConfig, build_requests,
+                is_placeholder_only,
             )
 
             # Build LineInfo objects from TranslatableLine objects
@@ -2896,9 +2917,7 @@ class TranslationStep(BaseStep):
                 )
                 is_invalid = (
                     not text.strip()
-                    or "__DEDUP__" in text
-                    or "__PROTECTED__" in text
-                    or "__CUSTOM__" in text
+                    or is_placeholder_only(text)
                 )
                 line_infos.append(LineInfo(
                     index=line.idx,
@@ -3619,6 +3638,12 @@ class TranslationStep(BaseStep):
         ]
         if not pending:
             pending = list(self._lines)
+
+        # Apply the same language skip as the real translation flow so
+        # that non-source-language lines (e.g. English in a JP project)
+        # do not appear in the preview.
+        if self._skip_non_source_var.get():
+            pending = self._apply_language_skip(pending)
 
         # Chunk the lines the same way translation does
         chunks = self._build_chunks(pending)

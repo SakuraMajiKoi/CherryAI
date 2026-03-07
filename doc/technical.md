@@ -517,7 +517,7 @@ TABLE OF CONTENTS
          - Retry Refinement: RETRY_STRATEGIES (2: Batch+Contextual for UI), ALL_RETRY_STRATEGIES (4 for CLI), min retries=0
          - Prompt Editor: Preview-only button, Ban Tokens LabelFrame with _BAN_PRESETS (None/Clean English/Strict)
          - Chunk Sync: costs.py reads/writes LinesPerChunk to manifest RequestOptions
-         - Language Skip: detect_line_script() in analysis.py, _LANG_SCRIPT_MAP, _apply_language_skip()
+         - Language Skip: detect_line_script() in analysis.py, _LANG_SCRIPT_MAP, _apply_language_skip() — strips placeholder tokens (via _PLACEHOLDER_TOKEN_RE) before ratio-based script detection so CJK lines with placeholders are not wrongly classified as 'latin'
          - Tab Caching: BaseStep._compute_cache_hash/_is_cache_valid/_update_cache/_invalidate_cache/_force_refresh
          - Performance: SharedTable batch insertion (2000-row batches), bulk *children delete, page-based display (5000 rows/page, TASK 72), _refresh_lines() batch manifest dict read
          - TASK 71: Removed redundant all_lines/processed_lines/postprocessed_lines/files from step_data; manifest migration strips on load; new ManifestManager.get_all_orig_lines() API
@@ -617,6 +617,9 @@ TABLE OF CONTENTS
            - LineInfo dataclass: index, text, is_invalid, context_marker fields
            - RequestFormationConfig dataclass: max_lines, min_lines, max_tokens, model (max_tokens wired from RequestSettings.max_input_tokens — Task 41)
            - TranslationRequest dataclass: lines, line_indices, context_type, is_split, provides_context, receives_context
+         - Shared Functions:
+           - is_placeholder_only(text) → bool: strips all placeholder tokens (any ``__TOKEN__`` pattern — ``__PROTECTED__``, ``__COLOR__``, ``__FONT__``, ``__DEDUP__``, ``__CUSTOM__``, ``__TEMPREPL__``, ``__NAME__``, and indexed variants) and returns True only when nothing remains; lines with CJK + placeholder are NOT placeholder-only
+           - _PLACEHOLDER_TOKEN_RE: compiled regex ``__[A-Z][A-Z0-9_]*__`` matching any uppercase double-underscore placeholder token (case-insensitive)
          - build_requests(line_infos, config) → shared builder for Estimation + Translation
          - Step 1: _step1_split_menu_choice() → groups consecutive menu/choice lines into dedicated requests (no rolling context)
          - Step 2: _step2_split_at_file_boundaries() → splits at file_end markers, drops marker lines
@@ -624,9 +627,10 @@ TABLE OF CONTENTS
          - Step 4: _step4_merge_short_requests() → merges below-min same-type requests up to max_lines; menu/choice never merged
          - _extract_valid_lines() → separates valid from invalid (placeholder/dedup/marker) lines
          - _count_tokens_for_lines() → uses analysis.count_tokens for token estimation
+         - Callers (Costs _estimate_via_formation, Translation _build_chunks, Preview _build_preview_requests) all import is_placeholder_only for the is_invalid flag — no inline substring checks
          - Results sorted by first line index to maintain document order
          - Modified: functions/prompt_builder.py
-         - Test file: dev/test_request_formation.py (50 tests)
+         - Test file: dev/test_request_formation.py (50 tests), dev/test_request_building_unification.py (68 tests)
 
    6.18 Context Markers Full Implementation (Phase 50)
          - Data Model (Task 50.1):
@@ -647,7 +651,7 @@ TABLE OF CONTENTS
            - build_line_infos(entries, detected_markers) → List[LineInfo]: converts LineEntry to LineInfo
            - Context propagation: marker entries → is_invalid=True; subsequent lines inherit active type
            - file_end does not propagate as content type (resets to "unknown")
-           - Placeholder and empty lines flagged as invalid
+           - Placeholder-only and empty lines flagged as invalid via is_placeholder_only()
            - build_requests() passes file_end markers to Step 2 for boundary splitting
            - _file_section tracking prevents Step 4 from merging across file boundaries
            - Modified: functions/prompt_builder.py

@@ -56,6 +56,98 @@ MODULE COUNTS (Verified January 2026)
 
 ============================================================================= 
 
+COMPLETED - SESSION 43 (Request Building Unification)
+
+### SESSION 43: TASK 43 — Request Building Unification ✅ DONE
+
+**Problem:** Request Preview, Start Translation, and Estimate buttons diverged in
+how they decided which lines to translate and how they counted tokens. UC5 manifest
+(55,604 lines) showed 7,123 lines wrongly excluded because `"__PROTECTED__" in text`
+substring check matched mixed CJK+placeholder lines. Language detection ran on
+preprocessed text (where CJK was replaced by `__PROTECTED__`), causing false skips.
+Preview didn't apply language skip at all. Estimation used simple divider instead of
+formation pipeline and counted tokens by joining all lines into one string.
+
+**Task 1 — Fix is_invalid placeholder logic:**
+- `functions/prompt_builder.py` — Added `_PLACEHOLDER_TOKEN_RE` regex and
+  `is_placeholder_only()` function. Strips all placeholder tokens (`__PROTECTED__`,
+  `__PROT__`, `__DEDUP__`, `__CUSTOM__` + numbered variants), returns True only when
+  nothing but whitespace remains. Empty/whitespace-only returns False (handled separately).
+- `gui/steps/translate.py` — `_build_chunks()` uses `is_placeholder_only(text)` instead
+  of inline `"__DEDUP__" in text or "__PROTECTED__" in text or "__CUSTOM__" in text`.
+- `gui/steps/costs.py` — `_estimate_via_formation()` uses `is_placeholder_only(text)`
+  instead of the same inline check.
+- `functions/validation.py` — `PROT_PATTERN` updated from `r"^\s*__\s*PROT\s*__\s*$"`
+  to `r"^\s*__\s*(?:PROTECTED|PROT)(?:_\d+)?\s*__(?:\d*)\s*$"` to match all variants.
+
+**Task 2 — Fix language skip on preprocessed text:**
+- `functions/validation.py` — `validate_line_pre()` gains `detection_text: Optional[str]`
+  parameter. Step 7 (language detection) uses `detection_text` when provided instead of
+  the (possibly preprocessed) line itself.
+- `gui/steps/costs.py` — `_get_skip_indices()` gains `original_lines: Optional[List[str]]`
+  parameter. Passes original text as `detection_text` to `validate_line_pre()`.
+- `gui/steps/translate.py` — `_apply_language_skip()` uses `line.original` for script
+  detection instead of `line.preprocessed or line.original`.
+
+**Task 3 — Apply language skip in preview:**
+- `gui/steps/translate.py` — `_build_preview_requests()` now calls
+  `_apply_language_skip(pending)` before `_build_chunks(pending)` when
+  `_skip_non_source_var` is checked, matching Start Translation behavior.
+
+**Task 4 — Fix token counting in estimation:**
+- `gui/steps/costs.py` — Added `_count_formation_input_tokens()` static method.
+  Formats each request's lines as `json.dumps({"lines": chunk_lines})` and counts
+  tokens individually. `_do_estimation()` now uses formation pipeline for BOTH
+  original and preprocessed columns with per-request token counting.
+
+**Task 5 — Tests:**
+- Created `dev/test_request_building_unification.py` with 68 tests across 12 classes:
+  TestIsPlaceholderOnly (18), TestValidateLinePreAllPlaceholders (7),
+  TestProtPattern (6), TestBuildLineInfosPlaceholder (4),
+  TestLanguageDetectionOnPreprocessedText (6), TestCountFormationInputTokens (5),
+  TestEstimationFormationFixed (3), TestPreviewLanguageSkip (2),
+  TestLanguageSkipPrioritizedText (2), TestGetSkipIndicesNoDetectionOverride (2),
+  TestEstimationUsesFormationForBoth (4).
+
+**Task 6 — Documentation:**
+- Updated specs.md §5.4 (is_placeholder_only semantics, language detection on prioritized text).
+- Updated technical.md §6.17–6.18 (shared functions, caller unification, broader regex).
+- Updated tests.md (test file entry with 68 tests).
+- Updated CHANGELOG.md (5 fix entries).
+
+**Modified files:** functions/prompt_builder.py, functions/validation.py,
+gui/steps/translate.py, gui/steps/costs.py
+
+**Test file:** dev/test_request_building_unification.py (68 tests)
+
+CORRECTIONS applied (Session 43b):
+- **Reverted language detection to use prioritized text:** Language detection now
+  uses `edited_prepro → preprocessed → original` (matching what the LLM receives),
+  not `line.original`. A line like `__PROTECTED__ ON` is correctly detected as
+  non-source and skipped because the LLM would receive no translatable content.
+- **Broadened `_PLACEHOLDER_TOKEN_RE`:** Changed from
+  `r"__(?:PROTECTED|PROT|DEDUP|CUSTOM)(?:_\d+)?__(?:\d*)"` to
+  `r"__[A-Z][A-Z0-9_]*__"` — now recognises ALL tool placeholder types
+  (`__COLOR__`, `__FONT__`, `__TEMPREPL__`, `__NAME__`, `__CODE_PROTECTED__`, etc.).
+- **Added step 5b in `validate_line_pre()`:** Catch-all `is_placeholder_only()` check
+  after the specific DEDUP/PROT patterns, covering `__COLOR__`-only, `__FONT__`-only,
+  etc.
+- **Removed `detection_text` parameter from `validate_line_pre()`:** Was unnecessary
+  indirection — the caller already controls which text to validate.
+- **Removed `original_lines` parameter from `_get_skip_indices()`:** Language detection
+  runs on the lines passed to it directly (same text the LLM will receive).
+- **Fixed `_apply_language_skip()` placeholder stripping (Session 43c):**
+  `detect_line_script()` is ratio-based — placeholder token names (PROTECTED, COLOR,
+  etc.) are Latin letters that diluted the CJK ratio below 30%, causing lines like
+  `こんにちは __PROTECTED__` to be wrongly classified as "latin" and skipped.  Fix:
+  strip `_PLACEHOLDER_TOKEN_RE` tokens before calling `detect_line_script()`.  After
+  stripping, if CJK content remains the line is kept; if only non-source text remains
+  the line is skipped.  Added 7 new tests (75 total in test file).
+
+=============================================================================
+
+============================================================================= 
+
 COMPLETED - SESSION 42 (Per-Request Prompt Overhead Fix)
 
 ### SESSION 42: TASK 42 — Per-Request Prompt Overhead ✅ DONE

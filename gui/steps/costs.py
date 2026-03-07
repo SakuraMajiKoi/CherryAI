@@ -706,6 +706,42 @@ class CostsStep(BaseStep):
             logger.debug("Error calculating prompt tokens: %s", e)
             return 0
 
+    @staticmethod
+    def _count_formation_input_tokens(
+        request_line_lists: List[List[str]],
+        model: str = "",
+    ) -> int:
+        """Count user-message (input) tokens per request using JSON format.
+
+        Mirrors the Request Preview: each request's user message is
+        ``json.dumps({"lines": chunk_lines}, ensure_ascii=False)``.
+        Summing the token counts across all requests gives the total
+        input token estimate that matches what the Preview reports.
+
+        Args:
+            request_line_lists: Per-request translatable line texts
+                from :class:`FormationResult`.
+            model: Model name for tokeniser selection.
+
+        Returns:
+            Total input tokens across all requests.
+        """
+        import json as _json
+
+        total = 0
+        for chunk_lines in request_line_lists:
+            if not chunk_lines:
+                continue
+            payload = _json.dumps(
+                {"lines": chunk_lines}, ensure_ascii=False,
+            )
+            try:
+                tok, _ = count_tokens(payload, model=model)
+            except Exception:
+                tok = max(1, len(payload) // 4)
+            total += tok
+        return total
+
     def _compute_per_request_prompt_overhead(
         self,
         request_line_lists: List[List[str]],
@@ -791,17 +827,27 @@ class CostsStep(BaseStep):
         else:
             self._lines_saved_label.configure(text="0")
 
-    def _get_skip_indices(self, lines: List[str]) -> frozenset:
+    def _get_skip_indices(
+        self,
+        lines: List[str],
+    ) -> frozenset:
         """Determine which line indices should be skipped from estimation.
 
         Applies the same rules as the Translation step (§5.4):
 
         * **Mandatory** — empty, context markers, dedup-only,
-          protected-only, comment-only lines.
+          placeholder-only, comment-only lines.
         * **Optional** — already-translated lines (when
           ``overwrite_translation`` is *False*), non-source-language
           and symbol-only lines (when ``skip_non_source_language`` is
           *True*).
+
+        Language detection runs on *lines* directly — the same text that
+        will be sent to the LLM.  When called with preprocessed lines,
+        CJK replaced by ``__PROTECTED__`` makes the remaining text
+        detectable as either source or non-source: if CJK content
+        remains the line is kept; if only non-source text remains
+        the line is skipped.
 
         Args:
             lines: Line texts (original or preprocessed).
@@ -840,7 +886,10 @@ class CostsStep(BaseStep):
                 if skip_translated and i < len(existing_tls)
                 else None
             )
-            vr = validate_line_pre(line, existing_translation=existing)
+            vr = validate_line_pre(
+                line,
+                existing_translation=existing,
+            )
 
             if vr.is_valid:
                 continue
@@ -943,6 +992,8 @@ class CostsStep(BaseStep):
             # §5.4: Filter out lines that would be skipped during
             # translation (empty, dedup, protected, already translated,
             # non-source language, symbol-only).
+            # Language detection runs on each column's own text — the same
+            # text that the LLM would receive.
             orig_skip = self._get_skip_indices(self._lines_original)
             prep_skip = self._get_skip_indices(self._lines_preprocessed)
             orig_translatable = [
@@ -966,32 +1017,63 @@ class CostsStep(BaseStep):
                 ),
             ))
 
-            # Count tokens for translatable original lines only
-            orig_text = "\n".join(orig_translatable)
-            orig_input_tokens, orig_method = count_tokens(orig_text, model=model_id)
-            orig_output_tokens = int(orig_input_tokens * OUTPUT_MULTIPLIER)
-
-            # Count tokens for translatable preprocessed lines only
-            prep_text = "\n".join(prep_translatable)
-            prep_input_tokens, prep_method = count_tokens(prep_text, model=model_id)
-            prep_output_tokens = int(prep_input_tokens * OUTPUT_MULTIPLIER)
-
-            # Try the formation pipeline for accurate request counting
+            # ── Formation pipeline for BOTH original and preprocessed ──
+            # Use the same 4+1 step pipeline as Translation (Step 5) for
+            # accurate request counts and per-request token counting that
+            # matches the values shown in Request Preview.
+            orig_formation = self._estimate_via_formation(
+                self._lines_original, chunk_size, slicing,
+                skip_indices=orig_skip,
+                max_input_tokens=tokens_limit,
+            )
             prep_formation = self._estimate_via_formation(
                 self._lines_preprocessed, chunk_size, slicing,
                 skip_indices=prep_skip,
                 max_input_tokens=tokens_limit,
             )
+
+            # ── Original estimation ──
+            if orig_formation is not None:
+                orig_requests = orig_formation.num_requests
+                orig_input_tokens = self._count_formation_input_tokens(
+                    orig_formation.request_line_lists, model_id,
+                )
+                orig_prompt_total, _ = (
+                    self._compute_per_request_prompt_overhead(
+                        orig_formation.request_line_lists,
+                    )
+                )
+                orig_method = "formation"
+            else:
+                orig_requests = estimate_chunks(
+                    orig_translatable,
+                    max_lines=chunk_size,
+                    max_tokens=tokens_limit,
+                    mode="hybrid",
+                    model=model_id,
+                )
+                orig_text = "\n".join(orig_translatable)
+                orig_input_tokens, orig_method = count_tokens(
+                    orig_text, model=model_id,
+                )
+                orig_prompt_total = self._get_prompt_tokens() * orig_requests
+
+            orig_output_tokens = int(orig_input_tokens * OUTPUT_MULTIPLIER)
+            orig_total_input = orig_input_tokens + orig_prompt_total
+
+            # ── Preprocessed estimation ──
             if prep_formation is not None:
                 prep_requests = prep_formation.num_requests
-                # Per-request prompt overhead (selective glossary/conditional)
+                prep_input_tokens = self._count_formation_input_tokens(
+                    prep_formation.request_line_lists, model_id,
+                )
                 prep_prompt_total, prep_prompt_avg = (
                     self._compute_per_request_prompt_overhead(
                         prep_formation.request_line_lists,
                     )
                 )
+                prep_method = "formation"
             else:
-                # Fallback: simple estimation
                 prep_requests = estimate_chunks(
                     prep_translatable,
                     max_lines=chunk_size,
@@ -999,26 +1081,16 @@ class CostsStep(BaseStep):
                     mode="hybrid",
                     model=model_id,
                 )
-                # Fallback prompt: single prompt estimate × requests
+                prep_text = "\n".join(prep_translatable)
+                prep_input_tokens, prep_method = count_tokens(
+                    prep_text, model=model_id,
+                )
                 fallback_prompt = self._get_prompt_tokens()
                 prep_prompt_total = fallback_prompt * prep_requests
                 prep_prompt_avg = fallback_prompt
 
-            orig_requests = estimate_chunks(
-                orig_translatable,
-                max_lines=chunk_size,
-                max_tokens=tokens_limit,
-                mode="hybrid",
-                model=model_id,
-            )
-            # Original uses simple estimation — flat per-request overhead
-            orig_fallback_prompt = self._get_prompt_tokens()
-            orig_prompt_overhead = orig_fallback_prompt * orig_requests
-
-            # Add prompt overhead to total input tokens
-            prep_prompt_overhead = prep_prompt_total
-            orig_total_input = orig_input_tokens + orig_prompt_overhead
-            prep_total_input = prep_input_tokens + prep_prompt_overhead
+            prep_output_tokens = int(prep_input_tokens * OUTPUT_MULTIPLIER)
+            prep_total_input = prep_input_tokens + prep_prompt_total
 
             # Estimate costs (including prompt overhead)
             orig_cost = estimate_cost(orig_total_input, orig_output_tokens, model_id)
@@ -1138,6 +1210,7 @@ class CostsStep(BaseStep):
         try:
             from CherryAI.functions.prompt_builder import (
                 LineInfo, RequestFormationConfig, build_requests,
+                is_placeholder_only,
             )
         except ImportError:
             return None
@@ -1148,9 +1221,7 @@ class CostsStep(BaseStep):
         for idx, text in enumerate(lines):
             is_invalid = (
                 not text.strip()
-                or "__DEDUP__" in text
-                or "__PROTECTED__" in text
-                or "__CUSTOM__" in text
+                or is_placeholder_only(text)
                 or idx in _skip
             )
             line_infos.append(LineInfo(index=idx, text=text, is_invalid=is_invalid))
