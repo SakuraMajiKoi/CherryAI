@@ -407,9 +407,6 @@ def list_api_keys() -> list[tuple[str, str]]:
         if ", " in option:
             provider, name = option.split(", ", 1)
             result.append((provider.strip(), name.strip()))
-        else:
-            # Legacy single-name keys (provider only, no name)
-            result.append((option.strip(), "default"))
     return result
 
 
@@ -561,109 +558,6 @@ def get_all_profile_settings(profile: str) -> dict[str, str]:
     if not cfg.has_section(sec):
         return {}
     return dict(cfg.items(sec))
-
-
-def migrate_profiles_ini(profiles_ini_path: Path) -> int:
-    """Migrate ``api_profiles.ini`` non-secret settings into ``user/API.ini``.
-
-    For each section in *profiles_ini_path* the non-secret fields (provider,
-    base_url, model, temperature, timeout, retries, rate_limit_requests,
-    chunk_size, display_name, system_prompt_tweak) are written to the
-    matching section in API.ini.
-
-    The ``api_key`` field is intentionally excluded (it is handled by
-    ``set_api_key()`` with encryption).
-
-    After migration the source file is renamed to ``api_profiles.ini.migrated``.
-
-    Returns:
-        Number of settings migrated (0 if file absent or already migrated).
-    """
-    if not profiles_ini_path.exists():
-        return 0
-
-    src = configparser.ConfigParser()
-    src.optionxform = str
-    try:
-        src.read(str(profiles_ini_path), encoding="utf-8")
-    except Exception as exc:
-        logger.warning("Cannot read api_profiles.ini for migration: %s", exc)
-        return 0
-
-    cfg = _load()
-    count = 0
-    _NON_SECRET_KEYS = {
-        "provider", "base_url", "model", "temperature", "timeout",
-        "retries", "rate_limit_requests", "chunk_size",
-        "display_name", "system_prompt_tweak",
-    }
-    for section in src.sections():
-        sec = section.lower()
-        if not cfg.has_section(sec):
-            cfg.add_section(sec)
-        for key, value in src.items(section):
-            if key.lower() == "api_key":
-                continue  # encrypted separately — don't migrate plain-text key
-            if key.lower() not in _NON_SECRET_KEYS:
-                continue
-            cfg.set(sec, key, value)
-            count += 1
-
-    if count:
-        _save(cfg)
-        try:
-            profiles_ini_path.rename(profiles_ini_path.with_suffix(".ini.migrated"))
-        except Exception as exc:
-            logger.warning("Could not rename api_profiles.ini: %s", exc)
-        logger.info("Migrated %d settings from api_profiles.ini → API.ini", count)
-
-    return count
-
-
-# ---------------------------------------------------------------------------
-# Legacy migration helpers
-# ---------------------------------------------------------------------------
-
-def migrate_from_ini(source_ini_path: Path, password: Optional[str] = None) -> int:
-    """Migrate API settings from a legacy CherryAI.ini to API.ini.
-
-    Reads ``[api]`` and ``[api_presets]`` sections from *source_ini_path*
-    and copies all non-secret settings.  If *password* is provided, the
-    ``api_key`` value is encrypted and stored; otherwise it is discarded.
-
-    Returns the number of settings migrated.
-    """
-    src = configparser.ConfigParser()
-    src.optionxform = str
-    src.read(str(source_ini_path), encoding="utf-8")
-
-    cfg = _load()
-    count = 0
-
-    # Migrate [api] → [api] (skip api_key which needs encryption)
-    if src.has_section("api"):
-        for key, val in src.items("api"):
-            if key.lower() == "api_key":
-                continue  # handle separately below
-            cfg.set("api", key, val)
-            count += 1
-        # Migrate api_key if password provided
-        raw_key = src.get("api", "api_key", fallback="").strip()
-        if raw_key and password and verify_password(password):
-            enc = _encrypt_value(raw_key, password, cfg)
-            provider = src.get("api", "provider", fallback="default").strip()
-            cfg.set("api_keys", provider.lower(), enc)
-            count += 1
-
-    # Migrate [api_presets]
-    if src.has_section("api_presets"):
-        for name, val in src.items("api_presets"):
-            cfg.set("api_presets", name, val)
-            count += 1
-
-    _save(cfg)
-    logger.info("Migrated %d settings from %s → API.ini", count, source_ini_path)
-    return count
 
 
 # ---------------------------------------------------------------------------

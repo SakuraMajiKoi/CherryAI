@@ -510,22 +510,10 @@ def save_project_config_to_ini(
 def load_api_profiles() -> Dict[str, APIProfile]:
     """Load all API profiles from ``user/API.ini`` (Phase 62).
 
-    On first call this function automatically migrates any legacy
-    ``api_profiles.ini`` file found in the project root into the secure
-    ``user/API.ini`` store and renames the source file to
-    ``api_profiles.ini.migrated``.
-
     Returns:
         Dict mapping profile name to APIProfile.
     """
-    # Phase 62: one-time migration from api_profiles.ini → API.ini
     from . import api_config as _api_cfg
-    profiles_path = _get_api_profiles_path()
-    if profiles_path.exists():
-        try:
-            _api_cfg.migrate_profiles_ini(profiles_path)
-        except Exception as exc:
-            logging.warning("api_profiles.ini migration failed: %s", exc)
 
     # Read profiles from API.ini
     profiles: Dict[str, APIProfile] = {}

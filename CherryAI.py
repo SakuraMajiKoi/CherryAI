@@ -68,8 +68,6 @@ if __package__:
 	from .modi import load_modes, MODE_REGISTRY
 	from .functions.modehelper import EMPTY_LINE_PLACEHOLDER
 	from .functions.mainhelper import Operation, Manifest, Processor, MANIFEST_VERSION
-	# Analysis module
-	from .functions.analysis import analyze_file
 	# App state helpers (IO consolidated in mainhelper)
 	from .functions.mainhelper import (
 		load_app_state,
@@ -86,8 +84,6 @@ else:
 	from CherryAI.modi import load_modes, MODE_REGISTRY
 	from CherryAI.functions.modehelper import EMPTY_LINE_PLACEHOLDER
 	from CherryAI.functions.mainhelper import Operation, Manifest, Processor, MANIFEST_VERSION
-	# Analysis module
-	from CherryAI.functions.analysis import analyze_file
 	# App state helpers (IO consolidated in mainhelper)
 	from CherryAI.functions.mainhelper import (
 		load_app_state,
@@ -346,50 +342,6 @@ def main() -> None:
 	app.mainloop()
 
 
-def run_smoke_test_cli(path: Optional[str] = None) -> int:
-	"""CLI helper that runs the smoke test runner located in dev/smoke_test.
-
-	If path is None, the runner scans the smoke_test folder for a manifest and an
-	input file. Returns subprocess-like exit code.
-	"""
-	# import locally to avoid top-level dependency when importing module
-	try:
-		from CherryAI.dev.smoke_test.run_smoke import run_smoke_test
-	except Exception:
-		try:
-			# package relative import when running as module
-			from .dev.smoke_test.run_smoke import run_smoke_test
-		except Exception as exc:
-			print("Smoke runner module not available:", exc)
-			return 2
-	return run_smoke_test(path)
-
-
-def run_analysis_cli(input_path: Optional[str]) -> int:
-	"""CLI helper to run analysis on the given input file.
-
-	Returns subprocess-like exit code.
-	"""
-	if not input_path:
-		print("--analyze requires a path to an input file")
-		return 2
-	try:
-		from pathlib import Path
-		# Ensure logging is initialized via mainhelper
-		if __package__:
-			from .functions.mainhelper import setup_logger
-		else:
-			from CherryAI.functions.mainhelper import setup_logger
-		log_path = LOGS_DIR / f"{Path(input_path).stem}.analysis.log"
-		setup_logger(log_path, LOGS_DIR)
-		analyze_file(Path(input_path), LOGS_DIR)
-		print("Analysis completed. See logs folder for details.")
-		return 0
-	except Exception as exc:
-		print("Analysis failed:", exc)
-		return 1
-
-
 def _cli_entry() -> None:
 	import argparse
 
@@ -410,10 +362,6 @@ def _cli_entry() -> None:
 		epilog="Use 'CherryAI help' or 'CherryAI help <command>' for more info."
 	)
 	subparsers = parser.add_subparsers(dest="command", help="CLI commands")
-
-	# Legacy flags
-	parser.add_argument("--run-smoke", nargs="?", const=".", help="Run smoke test in dev/smoke_test (optional path)")
-	parser.add_argument("--analyze", nargs="?", help="Analyze an input file and write summary logs")
 
 	# Estimate command
 	est_parser = subparsers.add_parser("estimate", help="Estimate translation cost for file or folder")
@@ -817,13 +765,6 @@ def _cli_entry() -> None:
 			print(f"Failed to import CLI module: {e}")
 			sys.exit(1)
 
-	if args.run_smoke is not None:
-		rc = run_smoke_test_cli(args.run_smoke)
-		raise SystemExit(rc)
-	if args.analyze is not None:
-		rc = run_analysis_cli(args.analyze)
-		raise SystemExit(rc)
-	
 	main()
 
 

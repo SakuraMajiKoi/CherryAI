@@ -236,20 +236,11 @@ def _summarize_lines(lines: List[str]) -> Dict[str, Any]:
 
 # Import pricing from centralized config (TASK 16.4)
 from CherryAI.functions.config import (
-    MODEL_PRICING,
     DEFAULT_PRICING_MODEL,
     OUTPUT_TOKEN_MULTIPLIER,
     estimate_cost,
     get_model_pricing,
 )
-
-# Backward compatibility re-exports
-# These constants are deprecated - use the functions instead
-PRICE_GPT41_INPUT_PER_MTOK = MODEL_PRICING.get("gpt-4.1", {}).get("input", 2.0)
-PRICE_GPT41_OUTPUT_PER_MTOK = MODEL_PRICING.get("gpt-4.1", {}).get("output", 8.0)
-
-# Heuristic multiplier for JP→EN output token count vs input
-JP_TO_EN_OUTPUT_MULTIPLIER = OUTPUT_TOKEN_MULTIPLIER
 
 _tiktoken_encoder = None  # lazy-loaded encoder
 # Toggle controlling whether line/occurrence sample lists are collected and returned.
@@ -417,14 +408,12 @@ def _build_selected_glossary_block(input_text: str, cfg_dir: Optional[Path] = No
     """Return (printable_block, token_count, selected_items). If none selected, returns ("", 0, []).
 
     Selected items are those whose 'original' occurs in the input_text.
-    First tries unified glossary, then falls back to legacy JSON.
     
     The printable format is:
     Glossary (Input-Output-Note):\n
     original-translation-notes\n
     ...
     """
-    # Try unified glossary first
     read_gloss_fn: Optional[Callable[[], Dict[str, Any]]] = None
     try:
         from .glossary import read_unified_glossary as _read_unified_glossary
@@ -438,7 +427,6 @@ def _build_selected_glossary_block(input_text: str, cfg_dir: Optional[Path] = No
     
     selected: List[Dict[str, Any]] = []
     
-    # Try unified glossary
     if read_gloss_fn is not None:
         try:
             entries = read_gloss_fn()
@@ -473,65 +461,14 @@ def _build_selected_glossary_block(input_text: str, cfg_dir: Optional[Path] = No
         except Exception as exc:
             logging.debug("Failed to build glossary block from unified: %s", exc)
     
-    # Fall back to legacy JSON format
-    dirp = cfg_dir or _get_config_dir()
-    gp = dirp / GLOSSARY_FILENAME
-    if not gp.exists():
-        return "", 0, []
-    try:
-        try:
-            gtext = read_text(gp)
-        except Exception:
-            gtext = gp.read_text(encoding="utf-8")
-        items = json.loads(gtext)
-        if not isinstance(items, list):
-            return "", 0, []
-    except Exception:
-        return "", 0, []
-
-    selected = []
-    for it in items:
-        try:
-            src = str(it.get("in", ""))
-        except Exception:
-            src = ""
-        if not src:
-            continue
-        # Skip glossary entries that are blacklisted (generic or sensitive tokens)
-        blacklist_substrs = {"人", "男", "女", "生徒", "入浴", "入浴客", "？", "?", "？？？"}
-        skip = False
-        for sub in blacklist_substrs:
-            if sub and sub in src:
-                skip = True
-                break
-        if skip:
-            continue
-        if src in input_text:
-            selected.append(it)
-
-    if not selected:
-        return "", 0, []
-
-    lines = ["Glossary (Input-Output-Note):"]
-    for it in selected:
-        ins = str(it.get("in", ""))
-        outs = str(it.get("out", ""))
-        note = str(it.get("note", ""))
-        lines.append(f"{ins}-{outs}-{note}")
-    block = "\n".join(lines)
-    tks, _m = count_tokens(block)
-    return block, tks, selected
+    return "", 0, []
 
 
 def _load_glossary_index(cfg_dir: Optional[Path] = None) -> Dict[str, Tuple[str, str]]:
     """Return a mapping of glossary 'original' -> (translation, notes).
 
-    First tries to load from unified glossary (user/glossary.csv),
-    then falls back to legacy config/glossary.json if needed.
-    
     Used for enriching speaker rows and building API prompts.
     """
-    # Try unified glossary first
     read_gloss_fn: Optional[Callable[[], Dict[str, Any]]] = None
     try:
         from .glossary import read_unified_glossary as _read_unified_glossary
@@ -554,33 +491,7 @@ def _load_glossary_index(cfg_dir: Optional[Path] = None) -> Dict[str, Tuple[str,
         except Exception as exc:
             logging.debug("Failed to load unified glossary: %s", exc)
     
-    # Fall back to legacy JSON format
-    dirp = cfg_dir or _get_config_dir()
-    gp = dirp / GLOSSARY_FILENAME
-    out: Dict[str, Tuple[str, str]] = {}
-    if not gp.exists():
-        return out
-    try:
-        try:
-            gtext = read_text(gp)
-        except Exception:
-            gtext = gp.read_text(encoding="utf-8")
-        items = json.loads(gtext)
-        if not isinstance(items, list):
-            return out
-        for it in items:
-            try:
-                key = str(it.get("in", ""))
-            except Exception:
-                key = ""
-            if not key:
-                continue
-            val_out = str(it.get("out", ""))
-            val_note = str(it.get("note", ""))
-            out[key] = (val_out, val_note)
-    except Exception:
-        return {}
-    return out
+    return {}
 
 
 def _try_load_encoder() -> Optional[Any]:
@@ -1313,7 +1224,7 @@ def analyze_file(input_path: Path, logs_dir: Path) -> Dict[str, Any]:
     
     # Load estimation config (auto-creates if missing) and assets
     cfg = _load_or_create_config()
-    jp_to_en_multiplier = cfg.jp_to_en_multiplier or JP_TO_EN_OUTPUT_MULTIPLIER
+    jp_to_en_multiplier = cfg.jp_to_en_multiplier or OUTPUT_TOKEN_MULTIPLIER
     est_output_tokens = math.ceil(total_tokens * jp_to_en_multiplier)
     price = estimate_cost(total_tokens, est_output_tokens)
 

@@ -478,7 +478,7 @@ TRANSLATION STYLE GUIDE
   - Save/Delete buttons for managing user presets
   - All presets (built-in and user) stored in `user/CherryAI.ini` under `[style]` and `[tone]` sections
   - Built-in presets are seeded automatically on first run and are never overwritten
-- Style/Tone values stored in manifest keys `CustomStyle`, `CustomTone`, `StylePreset`, `TonePreset` (migrated into `step_state.Information.data.metadata` by `consolidate_project_info()` on load)
+- Style/Tone values stored in `step_state.Information.data.metadata` under keys `style`, `tone`, `style_preset`, `tone_preset`
 - translate.py `_build_system_prompt_from_manifest()` reads from `step_state.Information.data.metadata` and appends to system prompt as `# Translation Style Guidelines\n...` and `# Translation Tone\n...` sections
 - Helps maintain consistent translation style across the project
 

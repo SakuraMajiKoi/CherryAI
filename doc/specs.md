@@ -1848,7 +1848,7 @@ The Costs step has **two distinct estimation states** tracked separately:
 
 **Manifest Keys**: `StylePreset`, `CustomStyle`, `TonePreset`, `CustomTone`
 
-**Data Flow**: translate.py `_build_system_prompt_from_manifest()` reads style and tone from `step_state.Information.data.metadata` (keys: `style`, `tone`). If non-empty, they are appended to the system prompt as `# Translation Style Guidelines\n...` and `# Translation Tone\n...` sections. The method also reads language direction, system instructions, summary, genre, glossary, characters, and rolling context from the same metadata dict. Values are saved/loaded via manifest bindings (`bind_text_to_field` for CustomStyle/CustomTone, `bind_combobox_to_field` for StylePreset/TonePreset). Top-level keys are migrated into metadata by `ManifestManager.consolidate_project_info()` on manifest load.
+**Data Flow**: translate.py `_build_system_prompt_from_manifest()` reads style and tone from `step_state.Information.data.metadata` (keys: `style`, `tone`). If non-empty, they are appended to the system prompt as `# Translation Style Guidelines\n...` and `# Translation Tone\n...` sections. The method also reads language direction, system instructions, summary, genre, glossary, characters, and rolling context from the same metadata dict. Values are saved/loaded via manifest bindings (`bind_text_to_field` for CustomStyle/CustomTone, `bind_combobox_to_field` for StylePreset/TonePreset).
 
 ---
 
@@ -2071,9 +2071,7 @@ Characters:
 
 **Stored In**:
 - Manifest: `step_state.Information.data.metadata{}` (source_language, target_language, genre, style, tone, summary, custom_notes, characters, code_patterns, system_instructions)
-- Legacy compat: `project_info{}`, `Glossary{}`, `CodeGlossary[]`, `CharacterNotes[]`
 - Step data: `Information.{fields...}`
-- Top-level keys (`SourceLanguage`, `TargetLanguage`, `Genre`, etc.) are migrated into metadata by `ManifestManager.consolidate_project_info()` on load
 
 ---
 
@@ -3973,9 +3971,7 @@ The manifest (`.CherryAI.json`) is the single source of truth for project state.
 **Note:** `project_info` and `project_name` are no longer top-level keys.
 All project metadata lives in `step_state.Information.data.metadata`.
 The `ManifestManager.get_info_metadata()` / `set_info_metadata_field()` helpers
-provide the canonical read/write API.  Legacy top-level keys (`ProjectName`,
-`SourceLanguage`, `Genre`, etc.) are migrated by `consolidate_project_info()`
-on load.
+provide the canonical read/write API.
 
 ### 8.2 LineEntry Structure
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 import logging
 from collections import deque
-from typing import List, Tuple, Any, Dict, Optional
+from typing import Any, Dict, List, Tuple
 import sqlite3
 import hashlib
 import time
@@ -205,53 +205,6 @@ def apply_pre(processor, lines: List[str], op, stats: Dict[str, int]) -> int:
         logging.exception("Standard mode: commonlines scan failed")
 
     return changes
-
-
-def _deduplicate_pre(processor, lines: List[str], threshold: int) -> int:
-    """Collapse consecutive identical non-empty lines beyond threshold.
-    Records collapsed entries under manifest.mappings['dedup_lines'] as a list
-    of records. New record format (backwards-compatible):
-      - {'idx': <int>, 'text': '<original line text>'}
-    Older manifests may contain a list of ints; the post-phase will accept both.
-    Returns number of collapsed replacements made.
-    """
-        # NOTE: This is a thin wrapper used by the Standard Helpers pre-phase.
-        # Called from: `CherryAI.functions.mainhelper.Processor.process_pre`
-        #                 -> this module's `apply_pre` -> `_deduplicate_pre`
-        # Delegates to: `CherryAI.functions.dedup.deduplicate_pre` when available.
-        # Rationale: keep a local wrapper so the standard-mode API remains stable and
-        # the implementation can be centralized in `functions/dedup.py`.
-    dedup_entries: List[Any] = processor.manifest.mappings.setdefault("dedup_lines", [])
-    changes = 0
-    run_value = None
-    run_count = 0
-    run_start_idx: Optional[int] = None
-    # Accept processor-provided sentinel, default to the canonical double-underscore form
-    placeholder = getattr(processor, "DEDUP_PLACEHOLDER", "__DEDUP__")
-    # Deduplication is now the responsibility of `functions.dedup` and is
-    # orchestrated by the Processor. This wrapper is retained for API
-    # compatibility but intentionally does nothing to avoid double-calling.
-    return 0
-
-
-def _deduplicate_post(processor, lines: List[str]) -> int:
-    """Expand placeholder entries recorded in manifest.mappings['dedup_lines'].
-
-    This function is the post-phase companion to `_deduplicate_pre` and is
-    intentionally a small delegating wrapper. It is invoked from:
-      - This module's `apply_post` (called by the Processor post phase), and
-      - Indirectly by `CherryAI.functions.mainhelper.Processor.process_post`.
-
-    Implementation: delegate to `CherryAI.functions.dedup.deduplicate_post` if
-    available; otherwise behave as a tolerant no-op (to avoid breaking processing).
-    Returns the number of restored placeholders.
-    """
-    # Deduplication restore is handled centrally by the Processor (post).
-    # Keep a no-op wrapper here for backward compatibility with code/tests
-    # that may import the symbol, but the actual restore will have been
-    # performed by Processor.process_post.
-    return 0
-
 
 
 def apply_post(processor, lines: List[str], op, stats: Dict[str, int]) -> int:

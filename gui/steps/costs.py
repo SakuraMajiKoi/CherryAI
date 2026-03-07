@@ -32,9 +32,9 @@ from CherryAI.functions.manifest_fields import (
 
 # Import pricing from centralized config (TASK 16.4)
 from CherryAI.functions.config import (
-    MODEL_PRICING,
     DEFAULT_PRICING_MODEL,
     OUTPUT_TOKEN_MULTIPLIER,
+    get_all_model_pricing,
     get_model_pricing,
     get_model_names,
     get_model_display_name,
@@ -69,11 +69,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-
-# Backward compatibility re-exports (for tests and external imports)
-# These constants now come from config.py
-DEFAULT_MODEL = DEFAULT_PRICING_MODEL
-OUTPUT_MULTIPLIER = OUTPUT_TOKEN_MULTIPLIER
 
 
 @dataclass
@@ -119,7 +114,7 @@ class ComparisonResult:
 def estimate_cost(
     input_tokens: int,
     output_tokens: int,
-    model_id: str = DEFAULT_MODEL,
+    model_id: str = DEFAULT_PRICING_MODEL,
 ) -> Dict[str, float]:
     """Estimate cost for tokens using model pricing.
 
@@ -131,7 +126,7 @@ def estimate_cost(
     Returns:
         Dict with input_usd, output_usd, total_usd.
     """
-    pricing = MODEL_PRICING.get(model_id, MODEL_PRICING[DEFAULT_MODEL])
+    pricing = get_model_pricing(model_id)
     input_rate = pricing["input"]
     output_rate = pricing["output"]
 
@@ -270,11 +265,11 @@ class CostsStep(BaseStep):
         model_frame.pack(side="left")
 
         ttk.Label(model_frame, text="Primary Model:").pack(side="left", padx=(0, 5))
-        self._model_var = tk.StringVar(value=DEFAULT_MODEL)
+        self._model_var = tk.StringVar(value=DEFAULT_PRICING_MODEL)
         self._model_combo = ttk.Combobox(
             model_frame,
             textvariable=self._model_var,
-            values=list(MODEL_PRICING.keys()),
+            values=get_model_names(),
             state="readonly",
             width=20,
         )
@@ -558,7 +553,7 @@ class CostsStep(BaseStep):
         """Update the model comparison table with current estimation."""
         rows: List[TableRow] = []
 
-        for idx, (model_id, pricing) in enumerate(MODEL_PRICING.items()):
+        for idx, (model_id, pricing) in enumerate(get_all_model_pricing().items()):
             # Calculate costs if we have estimation data
             if self._estimation_result:
                 orig = self._estimation_result.original
@@ -1058,7 +1053,7 @@ class CostsStep(BaseStep):
                 )
                 orig_prompt_total = self._get_prompt_tokens() * orig_requests
 
-            orig_output_tokens = int(orig_input_tokens * OUTPUT_MULTIPLIER)
+            orig_output_tokens = int(orig_input_tokens * OUTPUT_TOKEN_MULTIPLIER)
             orig_total_input = orig_input_tokens + orig_prompt_total
 
             # ── Preprocessed estimation ──
@@ -1089,7 +1084,7 @@ class CostsStep(BaseStep):
                 prep_prompt_total = fallback_prompt * prep_requests
                 prep_prompt_avg = fallback_prompt
 
-            prep_output_tokens = int(prep_input_tokens * OUTPUT_MULTIPLIER)
+            prep_output_tokens = int(prep_input_tokens * OUTPUT_TOKEN_MULTIPLIER)
             prep_total_input = prep_input_tokens + prep_prompt_total
 
             # Estimate costs (including prompt overhead)
@@ -1146,7 +1141,7 @@ class CostsStep(BaseStep):
             rate_limits = get_model_rate_limits(model_id)
 
             # Task 40.7: Get concurrent requests and token speed from pricing
-            pricing = MODEL_PRICING.get(model_id, MODEL_PRICING[DEFAULT_MODEL])
+            pricing = get_model_pricing(model_id)
             concurrent = pricing.get("concurrent", 1)
             token_spd = pricing.get("token_speed", 50)
 
@@ -1321,7 +1316,7 @@ class CostsStep(BaseStep):
             self._prompt_tokens_label.configure(text="(no prompt data available)")
 
         # Update cost labels
-        pricing = MODEL_PRICING.get(model_id, MODEL_PRICING[DEFAULT_MODEL])
+        pricing = get_model_pricing(model_id)
         self._model_label.configure(text=f"{pricing['name']} ({model_id})")
 
         self._cost_input_orig_label.configure(text=f"${original.input_cost:.2f}")
@@ -1502,7 +1497,3 @@ class CostsStep(BaseStep):
                 "cost_saved": self._estimation_result.cost_saved,
                 "savings_percent": self._estimation_result.savings_percent,
             }
-
-
-# Backward compatibility alias (Task 40.1)
-EstimationStep = CostsStep

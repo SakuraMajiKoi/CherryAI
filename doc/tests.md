@@ -322,12 +322,11 @@ Core Manifest v2.0 unit tests validating LineEntry and Manifest classes.
 
 ---
 
-### dev/test_manifest_metadata.py (28 tests)
+### dev/test_manifest_metadata.py (23 tests)
 
-Task 1 consolidation: project metadata single source of truth in
+Task 1 metadata: project metadata single source of truth in
 `step_state.Information.data.metadata`. Tests info metadata CRUD,
-`consolidate_project_info` migration, `project_name` property, and
-absence of legacy top-level keys.
+`project_name` property, and absence of legacy top-level keys.
 
 #### TestInfoMetadata (4 tests)
 
@@ -345,16 +344,6 @@ absence of legacy top-level keys.
 | `test_reads_from_metadata` | Reads from info metadata |
 | `test_fallback_to_manifest_stem` | Falls back to filename |
 | `test_no_top_level_project_name` | Not stored at top level |
-
-#### TestConsolidateProjectInfo (5 tests)
-
-| Test | Purpose |
-|------|---------|
-| `test_migrates_project_info_dict` | Migrates and deletes project_info |
-| `test_migrates_top_level_project_name` | Migrates and deletes project_name |
-| `test_migrates_pascal_case_keys` | Migrates PascalCase keys |
-| `test_removes_source_files` | Removes source_files |
-| `test_no_overwrite_existing_metadata` | Existing metadata preserved |
 
 #### TestProjectInfoOps (3 tests)
 
@@ -787,8 +776,6 @@ Manifest initialization and backward compatibility tests for Manifest 3.0.
 | `test_get_manifest_defaults` | _get_manifest_defaults works |
 | `test_get_builtin_defaults` | _get_builtin_defaults works |
 | `test_parse_list_default` | _parse_list_default works |
-| `test_ensure_all_fields_present` | _ensure_all_fields_present works |
-| `test_ensure_nested_fields` | _ensure_nested_fields works |
 | `test_create_project_info_defaults` | _create_project_info_defaults works |
 | `test_empty_manifest_complete` | _create_empty_manifest complete |
 
@@ -3383,7 +3370,7 @@ Manifest initialization and defaults tests validating v3.0 field population from
 | `test_custom_placeholders_is_list` | CustomPlaceholders parsed as list |
 | `test_ignore_patterns_is_list` | IgnorePatterns parsed as list |
 
-#### TestHelperMethods (7 tests)
+#### TestHelperMethods (5 tests)
 
 | Test | Purpose |
 |------|---------|
@@ -3391,8 +3378,6 @@ Manifest initialization and defaults tests validating v3.0 field population from
 | `test_parse_list_default_single_item` | Single item becomes [item] |
 | `test_parse_list_default_multiple_items` | Multiple items parsed |
 | `test_parse_list_default_strips_whitespace` | Whitespace stripped |
-| `test_ensure_nested_fields_creates_missing_parent` | Creates parent dict |
-| `test_ensure_nested_fields_fills_missing_children` | Fills missing children |
 | `test_get_manifest_defaults_returns_dict` | Returns defaults dict |
 
 #### TestFieldCountVerification (6 tests)
@@ -4009,23 +3994,9 @@ Standard mode tests for symbol conversion, ellipsis compression, PROTECTED handl
 
 ---
 
-### dev/test_cli_languages.py (32 tests)
+### dev/test_cli_languages.py (23 tests)
 
 CLI language selection and normalization tests.
-
-#### TestSupportedLanguages (9 tests)
-
-| Test | Purpose |
-|------|---------|
-| `test_japanese_defined` | Japanese (ja) in SUPPORTED_LANGUAGES |
-| `test_english_defined` | English (en) in SUPPORTED_LANGUAGES |
-| `test_chinese_simplified_defined` | Chinese Simplified (zh-CN) defined |
-| `test_chinese_traditional_defined` | Chinese Traditional (zh-TW) defined |
-| `test_korean_defined` | Korean (ko) in SUPPORTED_LANGUAGES |
-| `test_german_defined` | German (de) in SUPPORTED_LANGUAGES |
-| `test_french_defined` | French (fr) in SUPPORTED_LANGUAGES |
-| `test_spanish_defined` | Spanish (es) in SUPPORTED_LANGUAGES |
-| `test_all_languages_have_required_fields` | name, native, description present |
 
 #### TestNormalizeLanguageCode (10 tests)
 
@@ -4349,23 +4320,13 @@ in `functions/options.py` with imports from global_options.py and CLI.py.
 | `test_returns_correct_name` | Returns correct names |
 | `test_returns_key_for_invalid_provider` | Returns key for unknown |
 
-#### TestAPIProvidesConsolidation (4 tests) - Critical
+#### TestAPIProvidesConsolidation (3 tests) - Critical
 
 | Test | Purpose |
 |------|---------|
 | `test_options_and_global_options_same_object` | Identity check (same object) |
-| `test_cli_known_urls_matches_options` | CLI URLs from options.py |
-| `test_cli_known_models_matches_options` | CLI models from options.py |
+| `test_cli_providers_accessible` | CLI uses options.py functions for provider data |
 | `test_no_duplicate_definitions` | No duplicate definitions |
-
-#### TestCLIBackwardCompatibility (4 tests)
-
-| Test | Purpose |
-|------|---------|
-| `test_known_api_urls_exists` | KNOWN_API_URLS still exists |
-| `test_known_models_exists` | KNOWN_MODELS still exists |
-| `test_known_api_urls_has_expected_providers` | Has all 6 providers |
-| `test_known_models_has_expected_providers` | Has all 6 providers |
 
 #### TestAPIUrlFormats (4 tests)
 
@@ -10672,7 +10633,7 @@ python -m pytest dev/test_model_registry.py -v --timeout=30
 | `TestGetPricingDict` | 7 | Backward-compat keys, all 3 providers, float prices, no INI fallback |
 | `TestStaleCache` | 6 | Timestamp logic, is_data_fresh before/after save/old-timestamp |
 | `TestRegistrySummary` | 4 | All providers, required keys, count matches, freshness |
-| `TestConfigModelPricingProxy` | 10 | Dict-like interface, openai/google/mistral models, estimate_cost |
+| `TestConfigModelPricingFunctions` | 4 | get_all_model_pricing returns dict, openai/google/mistral models present |
 | `TestOptionsAPIProvidersProxy` | 10 | All providers present, get_provider_models for 3 cloud providers, reload |
 | `TestEndToEndFlow` | 3 | Fresh INI → populate → read; pricing dict from INI; shared data |
 | `TestLiveFetch` | 4 | **SKIPPED** unless `CHERRYAI_TEST_LIVE=1` — live OpenAI/Google/Mistral fetch |
@@ -10682,7 +10643,6 @@ python -m pytest dev/test_model_registry.py -v --timeout=30
 - `test_save_load_round_trip` — `save_to_ini()` → `load_from_ini()` preserves all models and pricing
 - `test_refresh_with_no_keys_uses_fallback` — no-key path writes all 3 providers to INI
 - `test_pricing_dict_has_expected_keys` — ensures `name`/`input`/`output`/`concurrent`/`token_speed` keys
-- `test_model_pricing_proxy_estimate_cost` — `estimate_cost()` works transparently through proxy
 - `test_end_to_end_analysis_translation_same_data` — Analysis and Translation steps use same model data
 
 **Live test prerequisites** (for `TestLiveFetch`):

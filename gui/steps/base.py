@@ -3,7 +3,6 @@
 Abstract base class for all workflow step tabs.
 
 TASK 19: Updated to support ManifestManager for unified state persistence.
-The session parameter is kept for backward compatibility during migration.
 TASK 43.14: Added tab caching infrastructure.
 """
 

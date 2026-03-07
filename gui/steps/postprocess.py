@@ -1388,17 +1388,9 @@ class PostprocessingStep(BaseStep):
         self._pp_options.enable_symbol_conversion = self._symbol_var.get()
         self._pp_options.convert_fullwidth_to_halfwidth = self._fullwidth_var.get()
         self._pp_options.convert_halfwidth_to_fullwidth = self._halfwidth_var.get()
-        # Map legacy or PascalCase values to current enum values
-        _FAILURE_POLICY_MAP = {
-            "FlagForReview": "flag",
-            "Flag": "flag",
-            "Write": "write",
-            "Retry": "retry",
-        }
         raw = self._failure_var.get()
-        mapped = _FAILURE_POLICY_MAP.get(raw, raw)
         try:
-            self._pp_options.failure_policy = FailurePolicy(mapped)
+            self._pp_options.failure_policy = FailurePolicy(raw)
         except ValueError:
             logger.warning("Unknown failure policy %r, defaulting to WRITE", raw)
             self._pp_options.failure_policy = FailurePolicy.WRITE

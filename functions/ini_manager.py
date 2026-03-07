@@ -93,7 +93,7 @@ post_restore_code_characters = true
 post_restore_linebreaks = true
 post_enable_symbol_conversion = true
 post_fullwidth_to_halfwidth = true
-post_failure_handling = FlagForReview
+post_failure_handling = flag
 wordwrap_mode = Manual
 wordwrap_width = 48
 wordwrap_break_char =
@@ -105,7 +105,7 @@ wordwrap_ignore_patterns = Angle,Square,Curly,En
 wordwrap_typography = Western
 output_preserve_folder_structure = true
 output_pair_mode = translated_only
-output_file_naming = PutInSubfolder
+output_file_naming = subfolder
 output_text_option = translated
 output_overwrite_existing_files = false
 output_backup = Timestamp
@@ -1097,7 +1097,7 @@ def _get_builtin_manifest_defaults() -> Dict[str, Any]:
         "post_restore_linebreaks": True,
         "post_enable_symbol_conversion": True,
         "post_fullwidth_to_halfwidth": True,
-        "post_failure_handling": "FlagForReview",
+        "post_failure_handling": "flag",
         # Wordwrap Settings
         "wordwrap_mode": "Manual",
         "wordwrap_width": 48,
@@ -1111,7 +1111,7 @@ def _get_builtin_manifest_defaults() -> Dict[str, Any]:
         # Output Format
         "output_preserve_folder_structure": True,
         "output_pair_mode": "translated_only",
-        "output_file_naming": "PutInSubfolder",
+        "output_file_naming": "subfolder",
         "output_text_option": "translated",
         "output_overwrite_existing_files": False,
         "output_backup": "Timestamp",

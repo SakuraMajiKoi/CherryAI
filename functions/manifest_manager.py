@@ -612,7 +612,7 @@ class ManifestManager:
                 "RestoreLinebreaks": defaults.get("post_restore_linebreaks", True),
                 "EnableSymbolConversion": defaults.get("post_enable_symbol_conversion", True),
                 "FullwidthToHalfwidth": defaults.get("post_fullwidth_to_halfwidth", True),
-                "FailureHandling": defaults.get("post_failure_handling", "FlagForReview"),
+                "FailureHandling": defaults.get("post_failure_handling", "flag"),
             },
             
             # === v3.0 Wordwrap Settings ===
@@ -636,7 +636,7 @@ class ManifestManager:
                 "Format": "",  # Auto-detect from input
                 "PairMode": defaults.get("output_pair_mode", "translated_only"),
                 "Encoding": "",  # Auto-detect
-                "FileNaming": defaults.get("output_file_naming", "PutInSubfolder"),
+                "FileNaming": defaults.get("output_file_naming", "subfolder"),
                 "TextOption": defaults.get("output_text_option", "translated"),
                 "OverwriteExistingFiles": defaults.get("output_overwrite_existing_files", False),
                 "Backup": defaults.get("output_backup", "Timestamp"),
@@ -705,7 +705,7 @@ class ManifestManager:
             "post_restore_linebreaks": True,
             "post_enable_symbol_conversion": True,
             "post_fullwidth_to_halfwidth": True,
-            "post_failure_handling": "FlagForReview",
+            "post_failure_handling": "flag",
             "wordwrap_mode": "Manual",
             "wordwrap_width": 48,
             "wordwrap_break_char": "",
@@ -717,7 +717,7 @@ class ManifestManager:
             "wordwrap_typography": "Western",
             "output_preserve_folder_structure": True,
             "output_pair_mode": "translated_only",
-            "output_file_naming": "PutInSubfolder",
+            "output_file_naming": "subfolder",
             "output_text_option": "translated",
             "output_overwrite_existing_files": False,
             "output_backup": "Timestamp",
@@ -783,54 +783,6 @@ class ManifestManager:
                 if key:
                     result[key] = val
         return result
-    
-    def _ensure_all_fields_present(self) -> None:
-        """Ensure all v3.1 fields are present in loaded manifest.
-        
-        TASK 21.2: Called after load() to add missing fields with defaults.
-        TASK 35.1: Added filedir field support.
-        This ensures old manifests get upgraded to v3.1 field set.
-        """
-        defaults = self._get_manifest_defaults()
-        empty = self._create_empty_manifest()
-        
-        # Add missing top-level fields
-        for key, default_value in empty.items():
-            if key not in self._manifest_data:
-                self._manifest_data[key] = default_value
-                logger.debug("Added missing field: %s", key)
-        
-        # Ensure nested objects have all fields
-        self._ensure_nested_fields("ValidationRules", empty.get("ValidationRules", {}))
-        self._ensure_nested_fields("QAOptions", empty.get("QAOptions", {}))
-        self._ensure_nested_fields("RequestOptions", empty.get("RequestOptions", {}))
-        self._ensure_nested_fields("PostProcessing", empty.get("PostProcessing", {}))
-        self._ensure_nested_fields("WordwrapSettings", empty.get("WordwrapSettings", {}))
-        self._ensure_nested_fields("OutputFormat", empty.get("OutputFormat", {}))
-        
-        # TASK 35.1: Ensure filedir exists
-        if "filedir" not in self._manifest_data:
-            self._manifest_data["filedir"] = []
-    
-    def _ensure_nested_fields(self, parent_key: str, defaults: Dict[str, Any]) -> None:
-        """Ensure nested dict has all required fields.
-        
-        Args:
-            parent_key: Key of the nested dict in manifest.
-            defaults: Default values for the nested dict.
-        """
-        if parent_key not in self._manifest_data:
-            self._manifest_data[parent_key] = defaults
-            return
-        
-        if not isinstance(self._manifest_data[parent_key], dict):
-            self._manifest_data[parent_key] = defaults
-            return
-        
-        for key, value in defaults.items():
-            if key not in self._manifest_data[parent_key]:
-                self._manifest_data[parent_key][key] = value
-                logger.debug("Added missing nested field: %s.%s", parent_key, key)
     
     def _mark_dirty(self) -> None:
         """Mark the manifest as having unsaved changes."""
@@ -1110,12 +1062,6 @@ class ManifestManager:
             
             self._manifest_path = manifest_path
             self._manifest_data = data
-            
-            # Ensure all v3.0 fields are present (backward compatibility)
-            self._ensure_all_fields_present()
-            
-            # Consolidate top-level project_info into Information metadata
-            self.consolidate_project_info()
             
             self._current_step = data.get("current_step", 0)
             self._dirty = False
@@ -1436,78 +1382,6 @@ class ManifestManager:
         self._dirty = False
         self._current_step = 0
     
-    # ========================== Project Info Consolidation ========================== #
-
-    def consolidate_project_info(self) -> bool:
-        """Migrate legacy top-level fields into Information metadata.
-
-        Moves ``project_info``, ``project_name``, ``SourceLanguage``,
-        ``TargetLanguage``, ``Genre``, ``StylePreset``, ``TonePreset``,
-        ``ProjectName``, ``Title``, ``source_files`` and other redundant
-        top-level keys into ``step_state.Information.data.metadata``.
-        Legacy keys are deleted after migration.
-
-        Returns:
-            True if any fields were migrated, False otherwise.
-        """
-        if not self.is_loaded:
-            return False
-
-        metadata = self.get_info_metadata()
-        changed = False
-
-        # --- Migrate top-level project_info dict ---
-        pi = self._manifest_data.pop("project_info", None)
-        if isinstance(pi, dict) and pi:
-            for k, v in pi.items():
-                if v and not metadata.get(k):
-                    metadata[k] = v
-                    changed = True
-
-        # --- Migrate top-level project_name ---
-        pn = self._manifest_data.pop("project_name", None)
-        if pn and not metadata.get("project_name"):
-            metadata["project_name"] = pn
-            changed = True
-
-        # --- Migrate PascalCase top-level keys ---
-        pascal_map: dict[str, str] = {
-            "SourceLanguage": "source_language",
-            "TargetLanguage": "target_language",
-            "Genre": "genre",
-            "StylePreset": "style_preset",
-            "TonePreset": "tone_preset",
-            "ProjectName": "project_name",
-            "Title": "game_title",
-            "Summary": "summary",
-            "CustomStyle": "custom_style",
-            "CustomTone": "custom_tone",
-            "SIPreset": "si_preset",
-            "Prompt": "system_instructions",
-        }
-        for top_key, meta_key in pascal_map.items():
-            top_val = self._manifest_data.pop(top_key, None)
-            if top_val and not metadata.get(meta_key):
-                metadata[meta_key] = top_val
-                changed = True
-
-        # --- Migrate source_files (remove entirely) ---
-        self._manifest_data.pop("source_files", None)
-
-        # Migrate custom_notes → system_instructions
-        if "custom_notes" in metadata and "system_instructions" not in metadata:
-            metadata["system_instructions"] = metadata.pop("custom_notes")
-            changed = True
-        elif "custom_notes" in metadata:
-            metadata.pop("custom_notes")
-            changed = True
-
-        if changed:
-            self.set_info_metadata(metadata)
-            logger.info("Consolidated legacy fields into Information metadata")
-
-        return changed
-
     # ========================== Information Metadata Access ======================== #
 
     def get_info_metadata(self) -> Dict[str, Any]:
@@ -2584,7 +2458,7 @@ class ManifestManager:
             "RestoreLinebreaks": True,
             "EnableSymbolConversion": True,
             "FullwidthToHalfwidth": True,
-            "FailureHandling": "FlagForReview",
+            "FailureHandling": "flag",
         }))
     
     def set_postprocessing_options(self, options: Dict[str, Any]) -> None:
@@ -2645,7 +2519,7 @@ class ManifestManager:
             "Format": "",
             "PairMode": "translated_only",
             "Encoding": "",
-            "FileNaming": "PutInSubfolder",
+            "FileNaming": "subfolder",
             "TextOption": "translated",
             "OverwriteExistingFiles": False,
             "Backup": "Timestamp",

@@ -63,21 +63,10 @@ class NamingStrategy(Enum):
     SUBFOLDER = "subfolder"
 
 
-# Map legacy PascalCase names to current enum values
-_NAMING_STRATEGY_MAP: Dict[str, str] = {
-    "PutInSubfolder": "subfolder",
-    "Subfolder": "subfolder",
-    "Suffix": "suffix",
-    "Prefix": "prefix",
-    "Replace": "replace",
-}
-
-
 def _safe_naming_strategy(raw: str) -> NamingStrategy:
-    """Parse a NamingStrategy from *raw*, handling legacy PascalCase values."""
-    mapped = _NAMING_STRATEGY_MAP.get(raw, raw)
+    """Parse a NamingStrategy from *raw*."""
     try:
-        return NamingStrategy(mapped)
+        return NamingStrategy(raw)
     except ValueError:
         logger.warning("Unknown naming strategy %r, defaulting to SUFFIX", raw)
         return NamingStrategy.SUFFIX

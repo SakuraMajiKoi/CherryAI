@@ -480,46 +480,9 @@ class AutoPipeline:
             manifest.options.pov = pov
 
     def _step_estimate_original(self) -> None:
-        """Step 6: Run estimation on original lines."""
-        step_name = "estimate_original"
-        self._notify_start(step_name)
-
-        try:
-            from .estimation import estimate_lines
-
-            mm = self._context.manifest_manager
-            manifest = mm.current
-
-            if manifest is None:
-                logger.warning("No manifest loaded, skipping estimation")
-                self._notify_complete(step_name, True)
-                return
-
-            # Get lines from manifest
-            lines = getattr(manifest, "lines", [])
-            if not lines:
-                logger.debug("No lines to estimate")
-                self._notify_complete(step_name, True)
-                return
-
-            # Run estimation
-            estimation = estimate_lines(lines, stage="original")
-            self._result.original_estimation = estimation
-
-            # Store in manifest
-            if hasattr(manifest, "estimations"):
-                manifest.estimations["original"] = estimation
-            else:
-                manifest.estimations = {"original": estimation}
-
-            self._notify_complete(step_name, True)
-
-        except ImportError as e:
-            logger.warning("Estimation module not available: %s", e)
-            self._notify_complete(step_name, True)
-
-        except Exception as e:
-            raise PipelineError(step_name, str(e)) from e
+        """Step 6: Estimation placeholder (handled by Costs GUI step)."""
+        self._notify_start("estimate_original")
+        self._notify_complete("estimate_original", True)
 
     def _step_run_preprocessing(self) -> None:
         """Step 7: Run default preprocessing."""
@@ -613,49 +576,9 @@ class AutoPipeline:
         }
 
     def _step_estimate_preprocessed(self) -> None:
-        """Step 8: Run estimation on preprocessed lines."""
-        step_name = "estimate_preprocessed"
-        self._notify_start(step_name)
-
-        try:
-            from .estimation import estimate_lines
-
-            mm = self._context.manifest_manager
-            manifest = mm.current
-
-            if manifest is None:
-                logger.warning("No manifest loaded, skipping estimation")
-                self._notify_complete(step_name, True)
-                return
-
-            # Get preprocessed lines
-            lines = getattr(manifest, "preprocessed_lines", None)
-            if lines is None:
-                lines = getattr(manifest, "lines", [])
-
-            if not lines:
-                logger.debug("No lines to estimate")
-                self._notify_complete(step_name, True)
-                return
-
-            # Run estimation
-            estimation = estimate_lines(lines, stage="preprocessed")
-            self._result.preprocessed_estimation = estimation
-
-            # Store in manifest
-            if hasattr(manifest, "estimations"):
-                manifest.estimations["preprocessed"] = estimation
-            else:
-                manifest.estimations = {"preprocessed": estimation}
-
-            self._notify_complete(step_name, True)
-
-        except ImportError as e:
-            logger.warning("Estimation module not available: %s", e)
-            self._notify_complete(step_name, True)
-
-        except Exception as e:
-            raise PipelineError(step_name, str(e)) from e
+        """Step 8: Estimation placeholder (handled by Costs GUI step)."""
+        self._notify_start("estimate_preprocessed")
+        self._notify_complete("estimate_preprocessed", True)
 
     def _step_mock_translation(self) -> None:
         """Step 9: Run mock translation (no API calls).

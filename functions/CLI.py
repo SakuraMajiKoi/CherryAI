@@ -267,9 +267,7 @@ from .languages import (
     is_valid_language,
 )
 
-# For backward compatibility - these are now derived from languages.py
-SUPPORTED_LANGUAGES: Dict[str, Dict[str, str]] = get_language_dict()
-LANGUAGE_ALIASES: Dict[str, str] = build_language_aliases()
+
 
 # =============================================================================
 # API PROVIDERS AND MODELS
@@ -284,9 +282,7 @@ from .options import (
     get_provider_names,
 )
 
-# For backward compatibility - these are now derived from API_PROVIDERS
-KNOWN_API_URLS: Dict[str, str] = get_api_urls()
-KNOWN_MODELS: Dict[str, List[str]] = get_all_provider_models()
+
 
 # =============================================================================
 # IO FORMAT CONFIGURATION
@@ -345,7 +341,7 @@ CONFIG_OPTIONS: Dict[str, Dict[str, Any]] = {
         "key": "base_url",
         "description": "API base URL (e.g., OpenAI, Gemini, local)",
         "type": "url",
-        "known_values": KNOWN_API_URLS,
+        "known_values": get_api_urls(),
     },
     "api_key": {
         "section": "api",
@@ -390,14 +386,14 @@ CONFIG_OPTIONS: Dict[str, Dict[str, Any]] = {
         "key": "source_lang",
         "description": "Default source language for translation",
         "type": "language",
-        "known_values": SUPPORTED_LANGUAGES,
+        "known_values": get_language_dict(),
     },
     "target_lang": {
         "section": "api",
         "key": "target_lang",
         "description": "Default target language for translation",
         "type": "language",
-        "known_values": SUPPORTED_LANGUAGES,
+        "known_values": get_language_dict(),
     },
     "preset": {
         "section": "api_presets",
@@ -618,7 +614,7 @@ def _print_languages_table() -> None:
     print("  " + "-" * 56)
     print(f"  {'Code':<8} {'Name':<20} {'Native':<15}")
     print("  " + "-" * 56)
-    for code, info in SUPPORTED_LANGUAGES.items():
+    for code, info in get_language_dict().items():
         print(f"  {code:<8} {info['name']:<20} {info['native']:<15}")
     print("  " + "-" * 56)
 
@@ -1405,7 +1401,7 @@ def run_list_languages_cli() -> int:
     
     print("\n  CherryAI supports the following languages for translation:\n")
     
-    for code, info in SUPPORTED_LANGUAGES.items():
+    for code, info in get_language_dict().items():
         print(f"  {code:<8}  {info['name']:<25}  {info['native']}")
         print(f"           {info['description']}")
         print()
@@ -1547,10 +1543,10 @@ def _show_config_option_details(option: str, opt_info: Dict[str, Any]) -> int:
     if option == "model":
         base_url = section.get("base_url", "")
         provider = _detect_provider_from_url(base_url)
-        if provider and provider in KNOWN_MODELS:
+        if provider and provider in get_all_provider_models():
             print(f"\n  Known models for {provider}:")
             print("  " + "-" * 50)
-            for i, model in enumerate(KNOWN_MODELS[provider], 1):
+            for i, model in enumerate(get_all_provider_models()[provider], 1):
                 marker = " ←" if model == current else ""
                 print(f"  [{i}] {model}{marker}")
             print("  " + "-" * 50)
@@ -1623,9 +1619,9 @@ def _set_config_value(option: str, opt_info: Dict[str, Any], value: str) -> int:
     if option == "model" and value.isdigit():
         base_url = config.get("api", {}).get("base_url", "")
         provider = _detect_provider_from_url(base_url)
-        if provider and provider in KNOWN_MODELS:
+        if provider and provider in get_all_provider_models():
             idx = int(value) - 1
-            models = KNOWN_MODELS[provider]
+            models = get_all_provider_models()[provider]
             if 0 <= idx < len(models):
                 value = models[idx]
             else:

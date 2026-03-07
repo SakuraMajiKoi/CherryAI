@@ -139,30 +139,11 @@ class CharacterInfo:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "CharacterInfo":
-        """Create from dictionary.
-
-        Supports legacy manifests that store the translated name under
-        ``name`` instead of ``translation`` and keep ``gender``,
-        ``role``, ``speaking_style`` as separate fields.
-        """
-        # Legacy: translated name was stored as "name"
-        translation = data.get("translation", "") or data.get("name", "")
-
-        # Merge legacy separate fields into a single notes string
-        parts: list[str] = []
-        for legacy_key in ("gender", "role", "speaking_style"):
-            val = data.get(legacy_key, "")
-            if val:
-                parts.append(val)
-        existing_notes = data.get("notes", "")
-        if existing_notes:
-            parts.append(existing_notes)
-        notes = ", ".join(parts)
-
+        """Create from dictionary."""
         return cls(
             original_name=data.get("original_name", ""),
-            translation=translation,
-            notes=notes,
+            translation=data.get("translation", ""),
+            notes=data.get("notes", ""),
             count=int(data.get("count", 0)),
         )
 
@@ -299,14 +280,7 @@ class ProjectMetadata:
             CodePattern.from_dict(p) for p in data.get("code_patterns", [])
         ]
         style_preset = data.get("style_preset", "Natural")
-        # Legacy enum value migration
-        if style_preset in ("natural", "literal", "creative", "formal",
-                            "casual", "technical", "literary"):
-            style_preset = style_preset.capitalize()
         tone_preset = data.get("tone_preset", "Neutral")
-        if tone_preset in ("neutral", "serious", "humorous", "dramatic",
-                           "lighthearted", "dark", "romantic", "action"):
-            tone_preset = tone_preset.capitalize()
         return cls(
             project_name=data.get("project_name", ""),
             game_title=data.get("game_title", ""),
@@ -472,9 +446,8 @@ def _get_default_system_instructions() -> str:
 DEFAULT_SUMMARY_TEXT: str = _get_default_summary()
 DEFAULT_SYSTEM_INSTRUCTIONS: str = _get_default_system_instructions()
 
-# SI presets path (legacy JSON kept for backward compat — SI presets migrate lazily).
+# SI presets directory.
 _USER_PRESETS_DIR = ini_manager.get_user_dir() / "presets"
-_SI_PRESETS_FILE = _USER_PRESETS_DIR / "system_instructions_presets.json"
 
 # Default SI preset dict shown in the SI preset combobox.
 DEFAULT_SI_PRESETS: Dict[str, str] = {
@@ -493,55 +466,12 @@ def _unique_preset_name(name: str, existing: Dict[str, str]) -> str:
 
 
 def _load_si_presets() -> Dict[str, str]:
-    """Load System Instructions presets fully from INI (via ini_manager).
+    """Load System Instructions presets from INI (via ini_manager).
 
     Returns ordered dict: Custom first, Default second, then alphabetical
-    user presets.  Migrates any legacy JSON file on first call.
+    user presets.
     """
-    # One-time migration: import user presets from legacy JSON into INI.
-    if _SI_PRESETS_FILE.exists():
-        try:
-            data = json.loads(_SI_PRESETS_FILE.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                for preset_name, preset_text in data.items():
-                    if preset_name not in (CUSTOM_PRESET_NAME, "Default"):
-                        ini_manager.set_si_preset(preset_name, str(preset_text))
-            _SI_PRESETS_FILE.rename(_SI_PRESETS_FILE.with_suffix(".json.migrated"))
-            logger.info("Migrated legacy SI presets JSON to INI")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("SI presets JSON migration failed: %s", exc)
     return ini_manager.get_all_si_presets()
-
-
-def _save_si_presets_to_file(presets: Dict[str, str]) -> None:  # noqa: ARG001
-    """Deprecated stub — SI presets are now stored in INI, not JSON."""
-    # Retained for import-compat during transition; callers have been updated to
-    # use ini_manager.set_si_preset() / ini_manager.delete_si_preset() directly.
-
-
-# Legacy compat: keep old dicts so existing code that references them doesn't crash.
-STYLE_DESCRIPTIONS: Dict[StylePreset, str] = {
-    StylePreset.LITERAL: DEFAULT_STYLE_PRESETS["Literal"],
-    StylePreset.NATURAL: DEFAULT_STYLE_PRESETS["Natural"],
-    StylePreset.CREATIVE: DEFAULT_STYLE_PRESETS["Creative"],
-    StylePreset.FORMAL: DEFAULT_STYLE_PRESETS["Formal"],
-    StylePreset.CASUAL: DEFAULT_STYLE_PRESETS["Casual"],
-    StylePreset.TECHNICAL: DEFAULT_STYLE_PRESETS["Technical"],
-    StylePreset.LITERARY: DEFAULT_STYLE_PRESETS["Literary"],
-    StylePreset.CUSTOM: "",
-}
-
-TONE_DESCRIPTIONS: Dict[TonePreset, str] = {
-    TonePreset.NEUTRAL: DEFAULT_TONE_PRESETS["Neutral"],
-    TonePreset.SERIOUS: DEFAULT_TONE_PRESETS["Serious"],
-    TonePreset.HUMOROUS: DEFAULT_TONE_PRESETS["Humorous"],
-    TonePreset.DRAMATIC: DEFAULT_TONE_PRESETS["Dramatic"],
-    TonePreset.LIGHTHEARTED: DEFAULT_TONE_PRESETS["Lighthearted"],
-    TonePreset.DARK: DEFAULT_TONE_PRESETS["Dark"],
-    TonePreset.ROMANTIC: DEFAULT_TONE_PRESETS["Romantic"],
-    TonePreset.ACTION: DEFAULT_TONE_PRESETS["Action"],
-    TonePreset.CUSTOM: "",
-}
 
 
 COMMON_GENRES: List[str] = [
@@ -807,11 +737,6 @@ class InformationStep(BaseStep):
             "code_database": 1,
             "knowledge_base": 2,
         }
-        # Legacy compat: keep old names mapped if they still exist
-        if "glossary_settings" in self._collapsible_state:
-            name_to_row["glossary_settings"] = 1
-        if "global_database" in self._collapsible_state:
-            name_to_row["global_database"] = 3
         for name, row in name_to_row.items():
             expanded = self._collapsible_state.get(name, True)
             self._right_column.rowconfigure(
@@ -2832,13 +2757,6 @@ class InformationStep(BaseStep):
             mgr = self.manifest_manager
             if mgr is not None and mgr.is_loaded:
                 all_lines = mgr.get_all_orig_lines()
-            if not all_lines:
-                # Legacy fallback: old session step data (pre-v3.3)
-                if self.session is not None:
-                    input_data = self.session.get_step(0).data
-                else:
-                    input_data = {}
-                all_lines = input_data.get("all_lines", [])
         except Exception:
             pass
 
@@ -2857,9 +2775,6 @@ class InformationStep(BaseStep):
                         cnt = entry.get("count", 0)
                         if name and cnt > 0:
                             speaker_counts[name] = cnt
-            elif isinstance(characters_data, dict):
-                # Legacy fallback: speakers dict
-                speaker_counts = characters_data
         except Exception:
             pass
 
@@ -3206,29 +3121,17 @@ class InformationStep(BaseStep):
     # ------------------------------------------------------------------
 
     def _get_analysis_step_data(self) -> Dict[str, Any]:
-        """Read the Analysis step's stored data.
-
-        Prefers ManifestManager (new system), falls back to session
-        state (legacy).  Returns an empty dict on failure.
+        """Read the Analysis step's stored data from ManifestManager.
 
         Returns:
             Analysis step data dictionary.
         """
-        # Try manifest manager first (same path Analysis uses to save)
         mgr = self.manifest_manager
         if mgr is not None and mgr.is_loaded:
             try:
                 return mgr.get_step_data(1)
             except Exception:
                 pass
-
-        # Fall back to session state
-        if self.session is not None:
-            try:
-                return self.session.get_step(1).data
-            except (AttributeError, KeyError, IndexError):
-                pass
-
         return {}
 
     def _on_import_from_analysis(self) -> None:
@@ -3254,10 +3157,6 @@ class InformationStep(BaseStep):
                             entry.get("original_name", ""),
                             entry.get("count", 0),
                         ))
-            elif isinstance(characters_data, dict):
-                # Legacy fallback: speakers dict (name→count)
-                for name, cnt in characters_data.items():
-                    items_list.append((name, cnt))
 
             if not items_list:
                 messagebox.showinfo(
@@ -3671,10 +3570,6 @@ class InformationStep(BaseStep):
                             entry.get("count", 0),
                             entry.get("category", "Detected"),
                         ))
-            elif isinstance(code_patterns, dict):
-                # Legacy fallback: category→count dict
-                for cat, cnt in code_patterns.items():
-                    items_list.append((cat, cnt, "Detected"))
 
             if not items_list:
                 messagebox.showinfo(
@@ -4067,10 +3962,6 @@ class InformationStep(BaseStep):
                             entry.get("original_name", ""),
                             entry.get("count", 0),
                         ))
-            elif isinstance(characters_data, dict):
-                # Legacy fallback: speakers dict
-                for name, cnt in characters_data.items():
-                    items_list.append((name, cnt))
 
             if not items_list:
                 messagebox.showinfo(
@@ -4655,16 +4546,13 @@ class InformationStep(BaseStep):
         thread.start()
 
     def _get_sample_lines(self) -> List[str]:
-        """Get sample lines from input step."""
+        """Get sample lines from manifest."""
         try:
-            # Primary: manifest orig lines
             mgr = self.manifest_manager
             if mgr is not None and mgr.is_loaded:
                 all_lines = mgr.get_all_orig_lines()
             else:
-                # Legacy fallback (pre-v3.3)
-                input_step_data = self.session.get_step(0).data
-                all_lines = input_step_data.get("all_lines", [])
+                all_lines = []
             sample_count = self._sample_lines_var.get()
             return all_lines[:sample_count]
         except Exception as e:
@@ -4956,10 +4844,6 @@ class InformationStep(BaseStep):
                             entry.get("original_name", ""),
                             entry.get("count", 0),
                         ))
-            elif isinstance(characters_data, dict):
-                # Legacy fallback: speakers dict
-                for name, cnt in characters_data.items():
-                    speaker_items.append((name, cnt))
 
             if not speaker_items:
                 return
@@ -5096,17 +4980,6 @@ class InformationStep(BaseStep):
                         )
                         self._metadata.code_patterns.append(pattern)
                         imported_count += 1
-            elif isinstance(code_patterns, dict):
-                # Legacy fallback: category→count dict
-                for category, count in code_patterns.items():
-                    pattern = CodePattern(
-                        pattern=category,
-                        category=category,
-                        action="preserve",
-                        notes="",
-                    )
-                    self._metadata.code_patterns.append(pattern)
-                    imported_count += 1
 
             if imported_count > 0:
                 self._refresh_code_pattern_list()

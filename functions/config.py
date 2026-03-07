@@ -33,9 +33,6 @@ MODEL_ENCODINGS: Dict[str, str] = {
     # GPT-3.5 family (cl100k_base encoding)
     "gpt-3.5-turbo": "cl100k_base",
     "gpt-3.5-turbo-16k": "cl100k_base",
-    # Legacy Davinci models (p50k_base encoding)
-    "text-davinci-003": "p50k_base",
-    "text-davinci-002": "p50k_base",
     # Note: Claude, Gemini, and other models use DEFAULT_ENCODING as approximation
 }
 
@@ -145,58 +142,6 @@ def reload_model_pricing() -> None:
     """
     global _MODEL_PRICING_CACHE
     _MODEL_PRICING_CACHE = None
-
-
-# Backward-compat property: ``MODEL_PRICING`` can still be imported as a dict.
-# It evaluates lazily so that tests can patch model_registry without issues.
-class _ModelPricingProxy(dict):
-    """A dict subclass that forwards attribute/item access to the live cache.
-
-    This lets existing code that does ``from functions.config import MODEL_PRICING``
-    and then uses ``MODEL_PRICING[key]`` or ``MODEL_PRICING.get(key)`` continue
-    to work without modification — while transparently pulling from the dynamic
-    registry.
-    """
-
-    def _sync(self) -> None:
-        cache = _get_model_pricing_cache()
-        self.clear()
-        self.update(cache)
-
-    def __contains__(self, key: object) -> bool:
-        self._sync()
-        return super().__contains__(key)
-
-    def __getitem__(self, key: Any) -> Any:
-        self._sync()
-        return super().__getitem__(key)
-
-    def get(self, key: Any, default: Any = None) -> Any:  # type: ignore[override]
-        self._sync()
-        return super().get(key, default)
-
-    def keys(self) -> Any:
-        self._sync()
-        return super().keys()
-
-    def values(self) -> Any:
-        self._sync()
-        return super().values()
-
-    def items(self) -> Any:
-        self._sync()
-        return super().items()
-
-    def __iter__(self) -> Any:
-        self._sync()
-        return super().__iter__()
-
-    def __len__(self) -> int:
-        self._sync()
-        return super().__len__()
-
-
-MODEL_PRICING: Dict[str, Dict[str, Any]] = _ModelPricingProxy()
 
 
 def get_model_pricing(model: str) -> Dict[str, Any]:

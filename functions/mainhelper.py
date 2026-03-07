@@ -1695,15 +1695,9 @@ class Processor:
         # diagnostics so incident reporting sees the restored lines.
         try:
             try:
-                from .dedup import deduplicate_post, migrate_legacy_dedup_inplace
+                from .dedup import deduplicate_post
             except Exception:
                 deduplicate_post = None  # type: ignore[assignment]
-                migrate_legacy_dedup_inplace = None  # type: ignore[assignment]
-            if migrate_legacy_dedup_inplace is not None:
-                try:
-                    migrate_legacy_dedup_inplace(self.manifest)
-                except Exception:
-                    pass
             if deduplicate_post is not None:
                 try:
                     d_restored = deduplicate_post(self, lines)

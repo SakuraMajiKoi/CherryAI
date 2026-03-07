@@ -279,138 +279,10 @@ def deduplicate_post(processor, lines: List[str]) -> int:
                     changes += 1
                     break
                 j -= 1
-    else:
-        # --- Legacy path: dedup_by_doc / dedup_lines mappings ---
-        changes += _restore_from_legacy_mappings(processor, lines)
 
     # --- Restore aggressive-masked numbers ---
     changes += _restore_aggressive_numbers(processor, lines)
 
-    return changes
-
-
-def _restore_from_legacy_mappings(
-    processor: Any, lines: List[str],
-) -> int:
-    """Restore dedup placeholders using legacy ``dedup_by_doc`` mappings.
-
-    This is the backward-compatible path for manifests created before the
-    per-line tag system was introduced.
-    """
-    doc_id = None
-    try:
-        doc_id = str(processor.manifest.metadata.get("current_doc_id"))
-    except Exception:
-        doc_id = None
-    per_doc = processor.manifest.mappings.get("dedup_by_doc", {})
-    raw: List[Any] = []
-    if isinstance(per_doc, dict) and per_doc:
-        toks = placeholder_tokens(processor)
-
-        def _score_doc(did: str) -> int:
-            score = 0
-            try:
-                entries = per_doc.get(did, []) or []
-                for itm in entries:
-                    try:
-                        if isinstance(itm, dict):
-                            idx_val = itm.get("idx")
-                            idx = int(idx_val) if idx_val is not None else -1
-                        else:
-                            idx = int(itm)
-                    except Exception:
-                        continue
-                    if 0 <= idx < len(lines) and (lines[idx] in toks):
-                        score += 1
-            except Exception:
-                score = 0
-            return score
-
-        scores: Dict[str, int] = {
-            did: _score_doc(did) for did in per_doc.keys()
-        }
-        candidate_doc = doc_id if (doc_id in per_doc) else None
-        best_doc = (
-            max(scores.items(), key=lambda kv: kv[1])[0] if scores else None
-        )
-        chosen = candidate_doc or best_doc
-        if (
-            candidate_doc
-            and best_doc
-            and scores.get(best_doc, 0) > scores.get(candidate_doc, 0)
-        ):
-            chosen = best_doc
-        if chosen is None and len(per_doc) == 1:
-            chosen = next(iter(per_doc.keys()))
-        if chosen is None and doc_id in per_doc:
-            chosen = doc_id
-        if chosen is None:
-            chosen = next(iter(per_doc.keys()))
-        raw = per_doc.get(chosen, []) or []
-
-    if not raw:
-        raw = processor.manifest.mappings.get("dedup_lines", [])
-
-    entries: List[Dict[str, Any]] = []
-    try:
-        for itm in raw or []:
-            if isinstance(itm, dict) and "idx" in itm:
-                entries.append({
-                    "idx": int(itm.get("idx", -1)),
-                    "text": itm.get("text"),
-                    "source_idx": itm.get("source_idx"),
-                })
-            else:
-                try:
-                    entries.append({"idx": int(itm)})
-                except Exception:
-                    continue
-    except Exception:
-        entries = []
-
-    entries.sort(key=lambda x: int(x.get("idx", -1)))
-    changes = 0
-    for entry in entries:
-        try:
-            idx_val = entry.get("idx", -1)
-            idx = int(idx_val) if idx_val is not None else -1
-        except Exception:
-            continue
-        if idx < 0 or idx >= len(lines):
-            continue
-        if not is_dedup_placeholder(lines[idx], processor):
-            continue
-        orig_text = entry.get("text") if isinstance(entry, dict) else None
-        src_idx = None
-        try:
-            src_idx_val = (
-                entry.get("source_idx") if isinstance(entry, dict) else None
-            )
-            src_idx = int(src_idx_val) if src_idx_val is not None else None
-        except Exception:
-            src_idx = None
-        if src_idx is not None and 0 <= src_idx < len(lines):
-            cand = lines[src_idx]
-            if cand.strip() and not is_dedup_placeholder(cand, processor):
-                lines[idx] = cand
-                changes += 1
-                continue
-        # Nearest previous
-        j = idx - 1
-        prev = None
-        while j >= 0:
-            cand = lines[j]
-            if cand.strip() and not is_dedup_placeholder(cand, processor):
-                prev = cand
-                break
-            j -= 1
-        if prev is not None:
-            lines[idx] = prev
-            changes += 1
-            continue
-        if orig_text:
-            lines[idx] = orig_text
-            changes += 1
     return changes
 
 
@@ -539,15 +411,12 @@ def _restore_aggressive_numbers(
 # ----------------------------- Public helper API ----------------------------- #
 
 def placeholder_tokens(processor: Any) -> Set[str]:
-    """Return the tolerated set of dedup placeholder tokens.
-
-    Includes the canonical token and legacy variants for backward compatibility.
-    """
+    """Return the set of recognized dedup placeholder tokens."""
     try:
         canon = getattr(processor, "DEDUP_PLACEHOLDER", "__DEDUP__")
     except Exception:
         canon = "__DEDUP__"
-    return {canon, "__DEDUP__", "_DEDUP__"}
+    return {canon, "__DEDUP__"}
 
 
 def is_dedup_placeholder(text: str, processor: Any) -> bool:
@@ -555,15 +424,7 @@ def is_dedup_placeholder(text: str, processor: Any) -> bool:
     toks = placeholder_tokens(processor)
     try:
         s = (text or "")
-        if s in toks:
-            return True
-        # Also accept a tolerant form with optional spaces inside underscores: '__ DEDUP __'
-        # and tolerate single-leading underscore legacy forms with spaces: '_ DEDUP __'
-        # Case-insensitive match on the token core.
-        try:
-            return bool(_re.fullmatch(r"_+\s*DEDUP\s*_+", s, flags=_re.IGNORECASE))
-        except Exception:
-            return False
+        return s in toks
     except Exception:
         return False
 
@@ -723,57 +584,6 @@ def normalize_dedup_entries(manifest: Any) -> List[Dict[str, Any]]:
         pass
     out.sort(key=lambda x: int(x.get("idx", -1) or -1))
     return out
-
-
-def migrate_legacy_dedup_inplace(manifest: Any) -> int:
-    """Rewrite any legacy int-only dedup_lines entries into dict records in-place.
-
-    Uses manifest.mappings['original_lines'] or the runtime snapshot '_pre_lines_runtime'
-    (if present) to populate the 'text' field when possible. 'source_idx' is left as None
-    because it cannot be reliably reconstructed post-hoc. Returns the number of migrated
-    entries (i.e., entries that were converted to dicts).
-    """
-    try:
-        mappings = manifest.mappings
-    except Exception:
-        return 0
-    raw = mappings.get("dedup_lines", []) or []
-    # fast path: already dict form
-    if not raw or all(isinstance(x, dict) for x in raw):
-        return 0
-    # Find a best-effort source for the original text
-    orig_lines: Optional[List[str]] = None
-    try:
-        ol = mappings.get("original_lines")
-        if isinstance(ol, list):
-            orig_lines = [str(x) for x in ol]
-    except Exception:
-        orig_lines = None
-    if orig_lines is None:
-        try:
-            runtime = getattr(manifest, "_pre_lines_runtime", None)
-            if isinstance(runtime, list):
-                orig_lines = [str(x) for x in runtime]
-        except Exception:
-            orig_lines = None
-    migrated: List[Any] = []
-    changed = 0
-    for itm in raw:
-        if isinstance(itm, dict) and "idx" in itm:
-            migrated.append(itm)
-            continue
-        try:
-            idx = int(itm)
-        except Exception:
-            # Drop unparseable legacy items
-            continue
-        text = None
-        if orig_lines is not None and 0 <= idx < len(orig_lines):
-            text = orig_lines[idx]
-        migrated.append({"idx": idx, "text": text, "source_idx": None})
-        changed += 1
-    mappings["dedup_lines"] = migrated
-    return changed
 
 
 # ---------------------- Aggressive dedup (estimation helpers) ---------------------- #

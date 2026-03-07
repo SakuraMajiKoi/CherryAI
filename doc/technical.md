@@ -311,8 +311,6 @@ TABLE OF CONTENTS
        - Dataclasses: ProjectInfo, StepStateData, ManifestState
        - Loads/saves extended manifest v3.0 format
        - TASK 21.2: Creates manifests with ALL v3.0 fields from INI defaults
-       - _ensure_all_fields_present() upgrades v2.x manifests on load
-       - consolidate_project_info(): Migrates top-level keys (SourceLanguage, TargetLanguage, Genre, StylePreset, TonePreset, ProjectName, Title) into `step_state.Information.data.metadata`; Information metadata takes priority; also ensures `system_instructions` key exists; called automatically during `load()` after `_ensure_all_fields_present()`
        - TASK 21.3: Settings helper methods for processing functions
        - TASK 32.1: Absolute path storage:
          - create_new() computes folder name for source_root, copies files to Original/
@@ -483,7 +481,7 @@ TABLE OF CONTENTS
          - **System Instructions preset system:** mirrors Style/Tone pattern — `_SI_PRESETS_FILE` in `user/presets/`, `DEFAULT_SI_PRESETS` dict, `_load_si_presets()`, Combobox (Default/Custom/user), Save/Delete buttons, `_on_si_preset_changed()`, `_save_si_preset()`, `_delete_si_preset()` methods; manifest key `SIPreset` for preset name, `Prompt` for text content; `DEFAULT_SYSTEM_INSTRUCTIONS` loaded from `temp/example.txt`
          - **Hint labels removed:** Description labels removed from Summary and System Instructions widgets
          - **Project Name source fix:** `_apply_suggested_project_name()` now prefers manifest `ProjectName` (set during Input step) over step data `suggested_project_name` (folder name)
-         - **Style/Tone translation integration:** translate.py `_build_system_prompt_from_manifest()` reads all prompt data from `step_state.Information.data.metadata` via `mgr.get_step_data_value(3, "metadata", {})`; reads `style`, `tone`, `summary`, `custom_notes`, `genre`, `characters`, `source_language`, `target_language`; appends `# Translation Style Guidelines\n...` and `# Translation Tone\n...` to system prompt; also reads glossary entries and characters from metadata; `consolidate_project_info()` migrates top-level keys on load
+         - **Style/Tone translation integration:** translate.py `_build_system_prompt_from_manifest()` reads all prompt data from `step_state.Information.data.metadata` via `mgr.get_step_data_value(3, "metadata", {})`; reads `style`, `tone`, `summary`, `custom_notes`, `genre`, `characters`, `source_language`, `target_language`; appends `# Translation Style Guidelines\n...` and `# Translation Tone\n...` to system prompt; also reads glossary entries and characters from metadata
          - **Analysis→Glossary data flow:** `_show_nameable_dialog._apply()` in analysis.py now creates glossary entry with source=replacement_name and notes="Gender: X; Role: Y; custom_notes" when assigning variable codes to characters
        - **Phase 60 Integration:** Confirmation opt-out, File menu fixes, WelcomeDialog update:
          - `gui/helpers/confirmations.py`: confirm_action(), is_suppressed(), suppress(), reset_all_suppressions()
