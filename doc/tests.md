@@ -8711,6 +8711,50 @@ Output step manifest integration tests. Verifies that OutputInjectStep binds all
 
 #### TestOutputManifestBindings (27 tests) - TASK 28.2
 
+---
+
+### dev/test_new_project_flush.py (45 tests)
+
+Validates that File → New Project fully flushes all cached state from every step tab,
+preventing old project data from leaking into a new session.
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestManifestManagerClose | 7 | ManifestManager.close() resets path, dirty, step, lines, filedir, characters, code_patterns |
+| TestResetManifestManager | 3 | reset_manifest_manager() returns new instance with empty state |
+| TestBaseStepOnNewProject | 1 | BaseStep.on_new_project() invalidates cache hash |
+| TestInputStepNewProject | 7 | InputExtractionStep clears _loaded_files, _current_file_index, _folder_root, _tree_item_to_index, _pending_project_name; calls UI stubs; invalidates cache |
+| TestAnalysisStepNewProject | 5 | AnalysisStep clears _analysis_results, _is_analyzing, _instance_rows, _expanded_parents, _findings_rows |
+| TestCostsStepNewProject | 5 | CostsStep clears _estimation_result, _is_estimating, _lines_original, _lines_preprocessed, resets _estimation_state |
+| TestTranslationStepNewProject | 5 | TranslationStep clears _lines, _cancel_requested, _pause_requested, _api_client, _manifest_bindings |
+| TestPostprocessStepNewProject | 3 | PostprocessStep clears _lines, _selected_line_idx, _validation_result |
+| TestWordwrapStepNewProject | 2 | WordwrapStep clears _lines, _selected_line_idx |
+| TestQAStepNewProject | 2 | QAStep clears _lines, _selected_line_idx |
+| TestOutputStepNewProject | 3 | OutputStep clears _files, _cancel_requested, _selected_file_idx |
+| TestNewProjectFlushIntegration | 2 | All steps have on_new_project(); ManifestManager empty after reset |
+
+```bash
+# Run New Project flush tests
+python -m pytest CherryAI/dev/test_new_project_flush.py -v --timeout=10
+```
+
+---
+
+### dev/test_input_dialog_ui.py (5 tests)
+
+Source-level inspection tests that validate UI fixes in UnifiedInputDialog without
+requiring a Tkinter display (no GUI instantiation needed).
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestUpButtonText | 2 | Up button uses plain Unicode arrow ↑ (U+2191), not emoji ⬆️; text is compact with single space |
+| TestAutoPipelineHidden | 3 | Pipeline widgets not packed (hidden); _pipeline_var created; pipeline_cb combobox created |
+
+```bash
+# Run Input Dialog UI tests
+python -m pytest CherryAI/dev/test_input_dialog_ui.py -v --timeout=10
+```
+
 | Test | Purpose |
 |------|---------|
 | `test_output_step_has_manifest_bindings_list` | Has _manifest_bindings |
@@ -10203,6 +10247,54 @@ python -m pytest CherryAI/dev/test_protagonist_romanization.py -v --timeout=10
 ```bash
 # Run term translation tests
 python -m pytest CherryAI/dev/test_term_translation.py -v --timeout=10
+```
+
+### Utility Settings Unit Tests (53 tests)
+
+**File:** `dev/test_utility_settings.py`
+
+Tests for the expanded UtilitySettings dataclass (17 fields), term translation
+batch splitting, mode detection, API key resolution, gender inference confidence
+logic, error abort behaviour, prompt-type routing, configurable prompts,
+`_normalize_gender` mapping, and JSON-schema validation.
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestUtilitySettings | 6 | Defaults (all 17 fields), to_dict/from_dict roundtrip, empty dict defaults, legacy mode migration (Simple/MTL → Romaji), invalid gender mode fallback, to_dict key completeness |
+| TestTermTranslationMode | 7 | LLM mode, Romaji mode, legacy Simple → Romaji, legacy MTL → Romaji, batch size reading, batch size default, batch size clamp to 1 |
+| TestTranslateTerm | 4 | Empty term passthrough, empty list passthrough, Romaji dispatch, LLM batch splitting (batch size = 2) |
+| TestLLMBatchErrorAbort | 2 | Missing API key raises RuntimeError, API timeout raises RuntimeError |
+| TestGenderInferenceConsensus | 5 | Empty results, not enough votes, consensus reached, consensus with mixed votes, no consensus when evenly split |
+| TestInferGenderLLM | 3 | Male consensus (mocked), missing key raises RuntimeError, insufficient lines |
+| TestPromptsSettingsUtilityFields | 5 | Defaults match constants, to_dict includes utility keys, from_dict roundtrip, missing keys use defaults, default prompts contain lang placeholders |
+| TestPromptTypeRouting | 3 | translate_term passes prompt_type to LLM, translate_terms passes prompt_type, default prompt_type is glossary |
+| TestGetPromptTemplate | 4 | Returns ini value for glossary, returns ini value for code, fallback to default glossary, fallback to default code |
+| TestNormalizeGender | 8 | Female passthrough, Male passthrough, Non-Binary passthrough, Unsure → Unknown, Unknown → Unknown, Neutral → Non-Binary, garbage → Unknown, empty → Unknown |
+| TestGenderInferenceSchema | 3 | Schema has correct gender enum (Female/Male/Non-Binary/Unsure), schema is strict, schema disallows additionalProperties |
+| TestTermTranslationSchema | 3 | Schema is strict, schema has translations array, schema disallows additionalProperties |
+
+```bash
+# Run utility settings tests
+python -m pytest CherryAI/dev/test_utility_settings.py -v --timeout=10
+```
+
+### Utility Integration Tests — GPT 4.1 Nano (7 tests)
+
+**File:** `dev/test_utility_integration.py`
+
+Live API integration tests using the real OpenAI key from `user/API.ini` and
+the `gpt-4.1-nano` model. Tests are skipped when no API key is available.
+Uses synthesised Japanese dialogue with known-answer speakers (太郎 = Male,
+花子 = Female).
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestTermTranslationLLM | 4 | Single term (太郎 → Taro), batch of 2, batch size = 2 splitting across 5 terms, RuntimeError on bad key |
+| TestGenderInferenceLLM | 3 | Male speaker (太郎 → Male >50%), Female speaker (花子 → Female >50%), RuntimeError on bad key |
+
+```bash
+# Run integration tests (requires API key + network)
+python -m pytest CherryAI/dev/test_utility_integration.py -v -s --timeout=60
 ```
 
 ### Phase 55: Consistency System (60 tests)

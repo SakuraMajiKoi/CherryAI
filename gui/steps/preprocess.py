@@ -1634,6 +1634,14 @@ class PreprocessingStep(BaseStep):
 
         messagebox.showinfo("Common Patterns", msg)
 
+    def on_new_project(self) -> None:
+        """Reset cached state for a fresh project."""
+        super().on_new_project()
+        self._preview_lines.clear()
+        self._is_processing = False
+        self._manifest_bindings.clear()
+        logger.debug("Preprocessing step reset for new project")
+
     def on_enter(self) -> None:
         """Called when entering this step.
         

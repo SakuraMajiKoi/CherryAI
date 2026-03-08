@@ -260,6 +260,17 @@ class BaseStep(ABC, ttk.Frame):
         self._invalidate_cache()
         self.on_enter()
 
+    def on_new_project(self) -> None:
+        """Reset all cached state when a new project is created.
+
+        Called by ``App._on_new_session()`` to ensure every step tab
+        starts with a clean slate.  Subclasses should override to clear
+        their own instance-level data caches (e.g. ``_loaded_files``,
+        ``_lines``, ``_analysis_results``).  Always call ``super()``
+        first so the cache hash is invalidated.
+        """
+        self._invalidate_cache()
+
 
 class PlaceholderStep(BaseStep):
     """Placeholder step for unimplemented tabs.

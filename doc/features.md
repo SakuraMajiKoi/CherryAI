@@ -2119,14 +2119,20 @@ TERM TRANSLATION — MULTI-MODE DISPATCHER (Implemented)
 - **Module:** `functions/term_translation.py` — dispatches to Romaji or LLM mode
 - **Two modes** (configurable in Global Options → Utility → Term Translation Mode):
   - `Romaji` (default) — Uses the built-in Modified Hepburn romanization engine, then capitalizes the first letter. Skips terms containing kanji. Zero dependencies.
-  - `LLM` — Uses the active LLM API provider (OpenAI-compatible). Sends a structured JSON prompt requesting batch translations; parses `{"translations": [...]}` response.
+  - `LLM` — Uses the API key and model configured in the Utility section. Reads provider/key_name/model from API.ini `[term_translation]` profile.
+- **Structured Output**: LLM mode uses strict JSON-schema (`response_format=json_schema`) enforcing `{"translations": [...]}`. Output capped with `max_tokens` and `store=False` to minimise token waste.
+- **Two prompt types**: `prompt_type="glossary"` for character name/glossary terms (succinct translation) and `prompt_type="code"` for code pattern labels (succinct explanation). Analysis step routes each type automatically.
+- **Configurable prompts**: Global Options → Prompts shows "Translate Terms — Glossary" and "Translate Terms — Code" sections. Templates use `{source_lang}`, `{target_lang}`, and `{count}` placeholders. Stored in CherryAI.ini `[prompts]` section with compiled-in defaults as fallback.
+- **API key/model selection**: Global Options → Utility provides dropdowns to select any API key saved in API.ini and an editable model field. Settings are persisted to API.ini `[term_translation]` section.
+- **Batch size**: Configurable spinbox (1–100, default 10) controls how many terms are sent per LLM request. Large term lists are automatically split into batches.
+- **Error abort**: LLM mode raises `RuntimeError` on API failure instead of silently returning untranslated terms. The Analysis step shows a messagebox with the error message and aborts.
 - **Public API:**
-  - `translate_term(term, source_lang, target_lang, *, mode, context)` — translate one term
-  - `translate_terms(terms, source_lang, target_lang, *, mode, context)` — batch-translate (LLM mode batches for efficiency)
+  - `translate_term(term, source_lang, target_lang, *, mode, context, prompt_type)` — translate one term
+  - `translate_terms(terms, source_lang, target_lang, *, mode, context, prompt_type)` — batch-translate (LLM mode respects batch_size)
   - `get_current_mode()` — read configured mode from INI
 - **Progress Dialog:** Clicking "Translate Terms" opens a modal progress dialog showing mode, a determinate progress bar, and per-term status (e.g. "5 / 42 — 店員"). Translation runs in a background thread so the GUI stays responsive. A Cancel button lets the user stop early; already-translated terms are saved.
-- **GUI Integration:** Analysis step "Translate Terms" button reads source/target language from manifest metadata, calls `translate_term()` with correct language pair. After translation, the findings table Details column updates immediately. Code pattern translations are synced to the manifest for cross-tab persistence.
-- Test suite: `dev/test_term_translation.py` (52 tests)
+- **GUI Integration:** Analysis step "Translate Terms" button reads source/target language from manifest metadata, calls `translate_term()` with correct language pair and `prompt_type`. After translation, the findings table Details column updates immediately. Code pattern translations are synced to the manifest for cross-tab persistence.
+- Test suite: `dev/test_term_translation.py` (52 tests), `dev/test_utility_settings.py` (53 tests), `dev/test_utility_integration.py` (7 live API tests)
 
 CONSISTENCY SYSTEM (Implemented)
 - Ensures consistent translation of recurring terms across all requests
@@ -2279,7 +2285,7 @@ The v3.0 manifest format extends v2.0 with GUI state management:
 - `code_patterns`: Unified code pattern list with count (int or `[total, inst1_ct, ...]`), raw_type, instances, and instance_counts; replaces the former separate `individual_codes` and `findings` dicts
 
 **File Menu Operations:**
-- **New Project**: Creates fresh manifest, clears all state, resets to Information tab via `on_enter()` (Phase 60)
+- **New Project**: Creates fresh manifest via `reset_manifest_manager()`, then calls `on_new_project()` on ALL 10 step tabs to flush cached instance state (loaded files, analysis results, lines, estimation data, etc.). Prevents old project data from leaking into a new session. Resets to Input tab via `on_enter()`.
 - **Open Project**: Checks for unsaved changes ("Save?"/"Don't Save"/"Cancel" dialog) before loading a different manifest; restores all step states (Phase 60)
 - **Open Files**: Load source files into current project
 - **Save (Ctrl+S)**: Manually save current manifest state
@@ -2763,6 +2769,23 @@ This system is fully integrated into the analysis workflow - when you analyze
 a file, speakers are automatically processed through comprehensive gender
 inference before being added to the glossary.
 
+**Two modes** (configurable in Global Options → Utility → Gender Inference):
+
+- **Script only** (default) — Built-in script analysis using pronouns, honorifics, and explicit markers. No API required.
+- **Script + LLM** — Runs script first, then uses the configured LLM API to resolve remaining unknowns via dialogue excerpt analysis.
+
+**Structured Output**: LLM mode uses strict JSON-schema (`response_format=json_schema`) with a gender enum of `[Female, Male, Non-Binary, Unsure]`. Output capped with `max_tokens=150` and `store=False` to minimise token waste. "Unsure" maps to "Unknown" internally.
+
+**Configurable prompt**: Global Options → Prompts shows a "Gender Inference" section. The template uses `{name}` and `{excerpt}` placeholders. Stored in CherryAI.ini `[prompts] gender_inference` with a compiled-in default as fallback.
+
+**API key/model selection**: Like Term Translation, the Gender Inference section in Global Options → Utility provides dropdowns for API key and model. Settings are persisted to API.ini `[gender_inference]` section.
+
+**Confidence controls**:
+- **Script Confidence**: Two spinboxes (minimum / maximum) control how many script checks run and how many must agree. "Ignore Unknown" excludes no-result checks from the count. "Do all Requests" forces all maximum checks to run (vs. early stop on consensus).
+- **LLM Confidence**: Same spinbox pair for LLM checks. Defaults: minimum=3, maximum=5, Ignore Unknown=True, Do all Requests=False (early stop on consensus).
+
+**Error abort**: LLM mode raises `RuntimeError` on API failure (missing key, network error) and shows a messagebox instead of silently skipping.
+
 1. **Explicit Gender Detection** (highest priority)
    - Detects status cards: "名前：リリィ、性別：女性" (Name: Lily, Gender: Female)
    - Recognizes transformation narrative: "リリィは女性になった" (Lily became female)
@@ -2778,6 +2801,12 @@ inference before being added to the glossary.
    - Weighted by occurrence count
    - 75% confidence threshold for automatic assignment
 
+4. **LLM excerpt analysis** (Script + LLM mode only)
+   - Constructs dialogue excerpts where the character appears as speaker
+   - Sends each excerpt to the configured LLM with a structured JSON prompt
+   - Runs up to maximum checks, needs minimum agreements for consensus
+   - Returns gender and confidence percentage
+
 Edge Case Example (リリィ / Lily):
 - Uses 俺様 (arrogant male pronoun) → would suggest Male
 - But status card shows 性別：女性 → explicit Female
@@ -2787,7 +2816,7 @@ Edge Case Example (リリィ / Lily):
 Workflow Integration:
 - `update_glossaries_from_analysis()` passes full file content for comprehensive inference
 - Speakers are analyzed with all three detection methods before glossary update
-- API-based gender enrichment (Gemini/OpenAI) remains as optional fallback
+- API-based gender enrichment (Gemini/OpenAI) is now configurable via Global Options → Utility
 - No translation should proceed without assured gender for all speakers
 
 Optional LLM Enhancement:
@@ -2795,16 +2824,16 @@ Optional LLM Enhancement:
 For speaker names specifically, CherryAI can use an AI model to suggest:
 
 - **Name translation**: Convert Japanese name to target language (e.g., イオリ → Iori)
-- **Gender inference**: Determine likely gender from speech patterns (Male/Female/Neutral/Unknown)
+- **Gender inference**: Determine likely gender from speech patterns (Female/Male/Non-Binary/Unsure → maps internally to Unknown)
 - **Context notes**: Infer role or relationship from dialogue context
 
 How it works:
 
-1. Enable in options: "Use AI to enhance glossary" (optional, off by default)
-2. Provide API key: OpenAI, Gemini, or compatible endpoint
-3. During analysis: AI examines dialogue to suggest translations and gender
+1. Configure in Global Options → Utility: Select API key and model for Gender Inference
+2. Set mode to "Script + LLM"
+3. During analysis: Script runs first, LLM resolves unknowns via dialogue excerpts
 4. You review suggestions: Accept, edit, or reject
-5. Glossary entries are updated with AI-suggested values
+5. Glossary entries are updated with inferred values
 
 Example:
 

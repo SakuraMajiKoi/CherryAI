@@ -484,6 +484,35 @@ DEFAULT_UNKNOWN_PROMPT = (
     "Maintain formatting and keep menu/choice items concise."
 )
 
+# Default prompts for Term Translation and Gender Inference utility features
+DEFAULT_TERM_GLOSSARY_PROMPT = (
+    "You are a professional {source_lang}-to-{target_lang} translator. "
+    "Translate each term succinctly. These are character names or glossary "
+    "terms from a video game. "
+    "Return ONLY a JSON object: {{\"translations\": [...]}} with exactly "
+    "{count} translated strings in the same order as the input."
+)
+
+DEFAULT_TERM_CODE_PROMPT = (
+    "You are a professional {source_lang}-to-{target_lang} translator. "
+    "For each code pattern label, provide a succinct {target_lang} explanation "
+    "of what the code represents. "
+    "Return ONLY a JSON object: {{\"translations\": [...]}} with exactly "
+    "{count} strings in the same order as the input."
+)
+
+DEFAULT_GENDER_INFERENCE_PROMPT = (
+    "Infer the gender of the speaker \"{name}\" from the dialogue excerpt "
+    "below. Base your answer on how others address this speaker, their "
+    "speech patterns, and contextual clues.\n\n"
+    "Excerpt:\n{excerpt}\n\n"
+    "Return a JSON object with exactly these fields:\n"
+    "- name: the original name\n"
+    "- romaji: romanized reading (repeat if already Latin)\n"
+    "- gender: exactly one of Female, Male, Non-Binary, Unsure\n"
+    "- note: one-word role (e.g. teacher, parent) or empty string"
+)
+
 
 # PHASE 37: Edit/TLC prompt component toggles
 class EditInputPolicy(Enum):
@@ -508,6 +537,11 @@ class TLCInputPolicy(Enum):
 class PromptsSettings:
     """Custom prompts for Edit, TLC, and context-type steps (TASK 37.1)."""
 
+    # Utility prompts (Term Translation + Gender Inference)
+    term_glossary: str = DEFAULT_TERM_GLOSSARY_PROMPT
+    term_code: str = DEFAULT_TERM_CODE_PROMPT
+    gender_inference: str = DEFAULT_GENDER_INFERENCE_PROMPT
+    # Edit / TLC step prompts
     edit: str = DEFAULT_EDIT_PROMPT
     tlc: str = DEFAULT_TLC_PROMPT
     # Conditional (context-type) prompts injected based on content type
@@ -531,6 +565,9 @@ class PromptsSettings:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
+            "term_glossary": self.term_glossary,
+            "term_code": self.term_code,
+            "gender_inference": self.gender_inference,
             "edit": self.edit,
             "tlc": self.tlc,
             "dialogue": self.dialogue,
@@ -552,6 +589,15 @@ class PromptsSettings:
     def from_dict(cls, data: Dict[str, Any]) -> "PromptsSettings":
         """Create from dictionary."""
         return cls(
+            term_glossary=str(
+                data.get("term_glossary", DEFAULT_TERM_GLOSSARY_PROMPT),
+            ),
+            term_code=str(
+                data.get("term_code", DEFAULT_TERM_CODE_PROMPT),
+            ),
+            gender_inference=str(
+                data.get("gender_inference", DEFAULT_GENDER_INFERENCE_PROMPT),
+            ),
             edit=str(data.get("edit", DEFAULT_EDIT_PROMPT)),
             tlc=str(data.get("tlc", DEFAULT_TLC_PROMPT)),
             dialogue=str(data.get("dialogue", DEFAULT_DIALOGUE_PROMPT)),
@@ -644,26 +690,96 @@ class TranslationSettings:
 
 @dataclass
 class UtilitySettings:
-    """Utility settings for term translation mode.
+    """Utility settings for term translation and gender inference.
 
     Attributes:
         term_translation_mode: Active mode — 'Romaji' or 'LLM'.
+        term_api_key_provider: Provider for term translation API key.
+        term_api_key_name: Name of saved API key for term translation.
+        term_model: Model identifier for term translation LLM.
+        term_batch_size: Number of terms per LLM request.
+        gender_inference_mode: 'Script only' or 'Script + LLM'.
+        gender_api_key_provider: Provider for gender inference API key.
+        gender_api_key_name: Name of saved API key for gender inference.
+        gender_model: Model identifier for gender inference LLM.
+        gender_script_minimum: Min agreements for script checks (minimumscript).
+        gender_script_maximum: Max script checks (maximumscript).
+        gender_script_ignore_unknown: Unknown results don't count toward max.
+        gender_script_do_all: Always run max checks vs. early stop.
+        gender_llm_minimum: Min agreements for LLM checks (minimumLLM).
+        gender_llm_maximum: Max LLM checks (maximumLLM).
+        gender_llm_ignore_unknown: Unknown results don't count toward max.
+        gender_llm_do_all: Always run max checks vs. early stop.
     """
 
     term_translation_mode: str = "Romaji"
+    term_api_key_provider: str = ""
+    term_api_key_name: str = ""
+    term_model: str = ""
+    term_batch_size: int = 10
+    gender_inference_mode: str = "Script only"
+    gender_api_key_provider: str = ""
+    gender_api_key_name: str = ""
+    gender_model: str = ""
+    gender_script_minimum: int = 30
+    gender_script_maximum: int = 50
+    gender_script_ignore_unknown: bool = True
+    gender_script_do_all: bool = True
+    gender_llm_minimum: int = 3
+    gender_llm_maximum: int = 5
+    gender_llm_ignore_unknown: bool = True
+    gender_llm_do_all: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
-        return {"term_translation_mode": self.term_translation_mode}
+        return {
+            "term_translation_mode": self.term_translation_mode,
+            "term_api_key_provider": self.term_api_key_provider,
+            "term_api_key_name": self.term_api_key_name,
+            "term_model": self.term_model,
+            "term_batch_size": self.term_batch_size,
+            "gender_inference_mode": self.gender_inference_mode,
+            "gender_api_key_provider": self.gender_api_key_provider,
+            "gender_api_key_name": self.gender_api_key_name,
+            "gender_model": self.gender_model,
+            "gender_script_minimum": self.gender_script_minimum,
+            "gender_script_maximum": self.gender_script_maximum,
+            "gender_script_ignore_unknown": self.gender_script_ignore_unknown,
+            "gender_script_do_all": self.gender_script_do_all,
+            "gender_llm_minimum": self.gender_llm_minimum,
+            "gender_llm_maximum": self.gender_llm_maximum,
+            "gender_llm_ignore_unknown": self.gender_llm_ignore_unknown,
+            "gender_llm_do_all": self.gender_llm_do_all,
+        }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "UtilitySettings":
         """Create from dictionary."""
         mode = str(data.get("term_translation_mode", "Romaji"))
-        # Migrate legacy values to "Romaji"
         if mode in ("Simple", "MTL"):
             mode = "Romaji"
-        return cls(term_translation_mode=mode)
+        gi_mode = str(data.get("gender_inference_mode", "Script only"))
+        if gi_mode not in ("Script only", "Script + LLM"):
+            gi_mode = "Script only"
+        return cls(
+            term_translation_mode=mode,
+            term_api_key_provider=str(data.get("term_api_key_provider", "")),
+            term_api_key_name=str(data.get("term_api_key_name", "")),
+            term_model=str(data.get("term_model", "")),
+            term_batch_size=int(data.get("term_batch_size", 10)),
+            gender_inference_mode=gi_mode,
+            gender_api_key_provider=str(data.get("gender_api_key_provider", "")),
+            gender_api_key_name=str(data.get("gender_api_key_name", "")),
+            gender_model=str(data.get("gender_model", "")),
+            gender_script_minimum=int(data.get("gender_script_minimum", 30)),
+            gender_script_maximum=int(data.get("gender_script_maximum", 50)),
+            gender_script_ignore_unknown=bool(data.get("gender_script_ignore_unknown", True)),
+            gender_script_do_all=bool(data.get("gender_script_do_all", True)),
+            gender_llm_minimum=int(data.get("gender_llm_minimum", 3)),
+            gender_llm_maximum=int(data.get("gender_llm_maximum", 5)),
+            gender_llm_ignore_unknown=bool(data.get("gender_llm_ignore_unknown", True)),
+            gender_llm_do_all=bool(data.get("gender_llm_do_all", False)),
+        )
 
 
 @dataclass
@@ -760,7 +876,7 @@ SECTION_DESCRIPTIONS: Dict[OptionSection, str] = {
     OptionSection.API: "Configure API provider, model, and authentication settings.",
     OptionSection.REQUEST: "Model-level settings: temperature, thinking, timeouts, and rate limits.",
     OptionSection.TRANSLATION: "Translation-level options: chunking, retries, caching, and output.",
-    OptionSection.UTILITY: "Configure Term Translation mode (Romaji or LLM).",
+    OptionSection.UTILITY: "Configure Term Translation and Gender Inference settings.",
     OptionSection.CACHING: "Configure request caching to reduce API calls.",
     OptionSection.LOGGING: "Set logging level and debug options.",
     OptionSection.SESSION: "Configure session autosave and UI preferences.",
@@ -1044,6 +1160,16 @@ class GlobalOptionsDialog(tk.Toplevel):
         # Prompts settings
         self.edit_prompt_var = tk.StringVar(value=self.options.prompts.edit)
         self.tlc_prompt_var = tk.StringVar(value=self.options.prompts.tlc)
+        # Utility prompts (Term Translation + Gender Inference)
+        self.term_glossary_prompt_var = tk.StringVar(
+            value=self.options.prompts.term_glossary,
+        )
+        self.term_code_prompt_var = tk.StringVar(
+            value=self.options.prompts.term_code,
+        )
+        self.gender_inference_prompt_var = tk.StringVar(
+            value=self.options.prompts.gender_inference,
+        )
         # Conditional (context-type) prompt vars
         self.dialogue_prompt_var = tk.StringVar(value=self.options.prompts.dialogue)
         self.menu_prompt_var = tk.StringVar(value=self.options.prompts.menu)
@@ -2017,9 +2143,69 @@ class GlobalOptionsDialog(tk.Toplevel):
         )
         placeholder_info.pack(anchor="w", pady=(0, 10))
 
-        # Edit prompt frame
+        # ── Utility Prompts (Term Translation + Gender Inference) ─────────
+        _util_entries = [
+            (
+                "Translate Terms — Glossary",
+                "Prompt sent when translating character names / glossary terms.",
+                self.term_glossary_prompt_var,
+                "_term_glossary_prompt_text",
+                DEFAULT_TERM_GLOSSARY_PROMPT,
+            ),
+            (
+                "Translate Terms — Code",
+                "Prompt sent when translating code-pattern labels.",
+                self.term_code_prompt_var,
+                "_term_code_prompt_text",
+                DEFAULT_TERM_CODE_PROMPT,
+            ),
+            (
+                "Gender Inference",
+                "Prompt sent for LLM-based gender inference of speakers.",
+                self.gender_inference_prompt_var,
+                "_gender_inference_prompt_text",
+                DEFAULT_GENDER_INFERENCE_PROMPT,
+            ),
+        ]
+
+        for _label, _desc_text, _var, _attr, _default in _util_entries:
+            uf = ttk.LabelFrame(panel, text=_label, padding=10)
+            uf.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+            ttk.Label(uf, text=_desc_text, foreground="gray").pack(
+                anchor="w", pady=(0, 5),
+            )
+
+            tc = ttk.Frame(uf)
+            tc.pack(fill=tk.BOTH, expand=True, pady=5)
+
+            tw = tk.Text(tc, height=4, width=60, wrap=tk.WORD)
+            tw.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            tw.insert("1.0", _var.get())
+            setattr(self, _attr, tw)
+
+            sb = ttk.Scrollbar(tc, orient=tk.VERTICAL, command=tw.yview)
+            sb.pack(side=tk.RIGHT, fill=tk.Y)
+            tw.config(yscrollcommand=sb.set)
+
+            def _make_reset(widget: tk.Text, default: str) -> Any:
+                def _reset() -> None:
+                    widget.delete("1.0", tk.END)
+                    widget.insert("1.0", default)
+                return _reset
+
+            br = ttk.Frame(uf)
+            br.pack(anchor="w", pady=(5, 0))
+            ttk.Button(
+                br, text="Reset to Default",
+                command=_make_reset(tw, _default),
+            ).pack(side=tk.LEFT)
+
+        # ── Edit Step Prompt (hidden — kept for data round-trip) ──────────
+        # The widgets are created but *not* packed so _on_apply can still
+        # read their contents.  The edit prompt text is populated invisibly.
         edit_frame = ttk.LabelFrame(panel, text="Edit Step Prompt", padding=10)
-        edit_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        # edit_frame intentionally NOT packed — hidden per user request
 
         edit_desc = ttk.Label(
             edit_frame,
@@ -2071,7 +2257,7 @@ class GlobalOptionsDialog(tk.Toplevel):
 
         # TLC prompt frame
         tlc_frame = ttk.LabelFrame(panel, text="TLC Step Prompt", padding=10)
-        tlc_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        # tlc_frame intentionally NOT packed — hidden per user request
 
         tlc_desc = ttk.Label(
             tlc_frame,
@@ -2411,54 +2597,293 @@ class GlobalOptionsDialog(tk.Toplevel):
             messagebox.showerror("Error", msg, parent=self)
 
     def _build_utility_section(self) -> None:
-        """Build the Utility settings panel (Term Translation mode)."""
+        """Build the Utility settings panel (Term Translation + Gender Inference)."""
+        from CherryAI.functions import api_config as _api_config
+
         panel = ttk.Frame(self._content_frame, padding=15)
         self._section_panels[OptionSection.UTILITY] = panel
 
+        # Scrollable canvas for long content
+        canvas = tk.Canvas(panel, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(panel, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas)
+        inner.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Mouse-wheel scrolling
+        def _on_mousewheel(event: tk.Event) -> None:
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
         # Header
         ttk.Label(
-            panel, text="Utility", font=("TkDefaultFont", 12, "bold")
+            inner, text="Utility", font=("TkDefaultFont", 12, "bold"),
         ).pack(anchor="w", pady=(0, 5))
         ttk.Label(
-            panel,
+            inner,
             text=SECTION_DESCRIPTIONS[OptionSection.UTILITY],
             foreground="gray",
         ).pack(anchor="w", pady=(0, 15))
 
-        # Term Translation Mode
-        mode_frame = ttk.LabelFrame(
-            panel, text="Term Translation", padding=12,
-        )
-        mode_frame.pack(fill=tk.X, pady=(0, 12))
+        # -- Gather API key list for comboboxes --
+        api_keys = _api_config.list_api_keys()  # [(provider, name), ...]
+        key_labels = [f"{p} / {n}" for p, n in api_keys]
 
-        row = ttk.Frame(mode_frame)
-        row.pack(fill=tk.X, pady=5)
+        def _key_label(provider: str, name: str) -> str:
+            if provider and name:
+                return f"{provider} / {name}"
+            return ""
+
+        # =====================================================================
+        # Term Translation
+        # =====================================================================
+        tt_frame = ttk.LabelFrame(inner, text="Term Translation", padding=12)
+        tt_frame.pack(fill=tk.X, pady=(0, 12))
+
+        # Mode
+        row = ttk.Frame(tt_frame)
+        row.pack(fill=tk.X, pady=3)
         ttk.Label(row, text="Mode:", width=15).pack(side=tk.LEFT)
         self._term_mode_var = tk.StringVar(
             value=self.options.utility.term_translation_mode,
         )
-        ttk.Combobox(
-            row,
-            textvariable=self._term_mode_var,
-            values=["Romaji", "LLM"],
-            state="readonly",
-            width=18,
+        term_mode_cb = ttk.Combobox(
+            row, textvariable=self._term_mode_var,
+            values=["Romaji", "LLM"], state="readonly", width=18,
+        )
+        term_mode_cb.pack(side=tk.LEFT)
+
+        # API Key
+        row = ttk.Frame(tt_frame)
+        row.pack(fill=tk.X, pady=3)
+        ttk.Label(row, text="API Key:", width=15).pack(side=tk.LEFT)
+        self._term_api_provider_var = tk.StringVar(
+            value=self.options.utility.term_api_key_provider,
+        )
+        self._term_api_name_var = tk.StringVar(
+            value=self.options.utility.term_api_key_name,
+        )
+        self._term_key_combo_var = tk.StringVar(
+            value=_key_label(
+                self.options.utility.term_api_key_provider,
+                self.options.utility.term_api_key_name,
+            ),
+        )
+        self._term_key_cb = ttk.Combobox(
+            row, textvariable=self._term_key_combo_var,
+            values=key_labels, state="readonly", width=30,
+        )
+        self._term_key_cb.pack(side=tk.LEFT)
+
+        def _on_term_key_change(_event: tk.Event = None) -> None:
+            val = self._term_key_combo_var.get()
+            if " / " in val:
+                p, n = val.split(" / ", 1)
+                self._term_api_provider_var.set(p)
+                self._term_api_name_var.set(n)
+                # Auto-fill model from default model for this key
+                default_model = _api_config.get_default_model(p, n)
+                if default_model and not self._term_model_var.get():
+                    self._term_model_var.set(default_model)
+
+        self._term_key_cb.bind("<<ComboboxSelected>>", _on_term_key_change)
+
+        # Model
+        row = ttk.Frame(tt_frame)
+        row.pack(fill=tk.X, pady=3)
+        ttk.Label(row, text="Model:", width=15).pack(side=tk.LEFT)
+        self._term_model_var = tk.StringVar(
+            value=self.options.utility.term_model,
+        )
+        ttk.Entry(row, textvariable=self._term_model_var, width=32).pack(
+            side=tk.LEFT,
+        )
+
+        # Batch Size
+        row = ttk.Frame(tt_frame)
+        row.pack(fill=tk.X, pady=3)
+        ttk.Label(row, text="Batch Size:", width=15).pack(side=tk.LEFT)
+        self._term_batch_size_var = tk.IntVar(
+            value=self.options.utility.term_batch_size,
+        )
+        ttk.Spinbox(
+            row, textvariable=self._term_batch_size_var,
+            from_=1, to=100, width=6,
+        ).pack(side=tk.LEFT)
+        ttk.Label(
+            row, text="terms per LLM request", foreground="gray",
+        ).pack(side=tk.LEFT, padx=(6, 0))
+
+        # Mode description
+        ttk.Label(
+            tt_frame,
+            text=(
+                "Romaji — Modified Hepburn romanization (built-in, kana-only).\n"
+                "LLM — Uses the selected API key and model to translate terms."
+            ),
+            font=("Segoe UI", 8), foreground="gray",
+            wraplength=450, justify="left",
+        ).pack(anchor="w", pady=(6, 0))
+
+        # =====================================================================
+        # Gender Inference
+        # =====================================================================
+        gi_frame = ttk.LabelFrame(inner, text="Gender Inference", padding=12)
+        gi_frame.pack(fill=tk.X, pady=(0, 12))
+
+        # Mode
+        row = ttk.Frame(gi_frame)
+        row.pack(fill=tk.X, pady=3)
+        ttk.Label(row, text="Mode:", width=15).pack(side=tk.LEFT)
+        self._gender_mode_var = tk.StringVar(
+            value=self.options.utility.gender_inference_mode,
+        )
+        gender_mode_cb = ttk.Combobox(
+            row, textvariable=self._gender_mode_var,
+            values=["Script only", "Script + LLM"], state="readonly", width=18,
+        )
+        gender_mode_cb.pack(side=tk.LEFT)
+
+        # API Key
+        row = ttk.Frame(gi_frame)
+        row.pack(fill=tk.X, pady=3)
+        ttk.Label(row, text="API Key:", width=15).pack(side=tk.LEFT)
+        self._gender_api_provider_var = tk.StringVar(
+            value=self.options.utility.gender_api_key_provider,
+        )
+        self._gender_api_name_var = tk.StringVar(
+            value=self.options.utility.gender_api_key_name,
+        )
+        self._gender_key_combo_var = tk.StringVar(
+            value=_key_label(
+                self.options.utility.gender_api_key_provider,
+                self.options.utility.gender_api_key_name,
+            ),
+        )
+        self._gender_key_cb = ttk.Combobox(
+            row, textvariable=self._gender_key_combo_var,
+            values=key_labels, state="readonly", width=30,
+        )
+        self._gender_key_cb.pack(side=tk.LEFT)
+
+        def _on_gender_key_change(_event: tk.Event = None) -> None:
+            val = self._gender_key_combo_var.get()
+            if " / " in val:
+                p, n = val.split(" / ", 1)
+                self._gender_api_provider_var.set(p)
+                self._gender_api_name_var.set(n)
+                default_model = _api_config.get_default_model(p, n)
+                if default_model and not self._gender_model_var.get():
+                    self._gender_model_var.set(default_model)
+
+        self._gender_key_cb.bind("<<ComboboxSelected>>", _on_gender_key_change)
+
+        # Model
+        row = ttk.Frame(gi_frame)
+        row.pack(fill=tk.X, pady=3)
+        ttk.Label(row, text="Model:", width=15).pack(side=tk.LEFT)
+        self._gender_model_var = tk.StringVar(
+            value=self.options.utility.gender_model,
+        )
+        ttk.Entry(row, textvariable=self._gender_model_var, width=32).pack(
+            side=tk.LEFT,
+        )
+
+        # --- Script Confidence ---
+        sc_frame = ttk.LabelFrame(gi_frame, text="Script Confidence", padding=8)
+        sc_frame.pack(fill=tk.X, pady=(8, 4))
+
+        sc_row = ttk.Frame(sc_frame)
+        sc_row.pack(fill=tk.X, pady=2)
+        self._gender_script_min_var = tk.IntVar(
+            value=self.options.utility.gender_script_minimum,
+        )
+        ttk.Spinbox(
+            sc_row, textvariable=self._gender_script_min_var,
+            from_=1, to=100, width=5,
+        ).pack(side=tk.LEFT)
+        ttk.Label(sc_row, text=" of ").pack(side=tk.LEFT)
+        self._gender_script_max_var = tk.IntVar(
+            value=self.options.utility.gender_script_maximum,
+        )
+        ttk.Spinbox(
+            sc_row, textvariable=self._gender_script_max_var,
+            from_=1, to=100, width=5,
         ).pack(side=tk.LEFT)
 
-        # Description of each mode
-        desc_frame = ttk.Frame(mode_frame)
-        desc_frame.pack(fill=tk.X, pady=(5, 0))
+        self._gender_script_ign_var = tk.BooleanVar(
+            value=self.options.utility.gender_script_ignore_unknown,
+        )
+        ttk.Checkbutton(
+            sc_row, text="Ignore Unknown",
+            variable=self._gender_script_ign_var,
+        ).pack(side=tk.LEFT, padx=(12, 0))
+
+        self._gender_script_doall_var = tk.BooleanVar(
+            value=self.options.utility.gender_script_do_all,
+        )
+        ttk.Checkbutton(
+            sc_row, text="Do all Requests",
+            variable=self._gender_script_doall_var,
+        ).pack(side=tk.LEFT, padx=(8, 0))
+
+        # --- LLM Confidence ---
+        lc_frame = ttk.LabelFrame(gi_frame, text="LLM Confidence", padding=8)
+        lc_frame.pack(fill=tk.X, pady=(4, 4))
+
+        lc_row = ttk.Frame(lc_frame)
+        lc_row.pack(fill=tk.X, pady=2)
+        self._gender_llm_min_var = tk.IntVar(
+            value=self.options.utility.gender_llm_minimum,
+        )
+        ttk.Spinbox(
+            lc_row, textvariable=self._gender_llm_min_var,
+            from_=1, to=100, width=5,
+        ).pack(side=tk.LEFT)
+        ttk.Label(lc_row, text=" of ").pack(side=tk.LEFT)
+        self._gender_llm_max_var = tk.IntVar(
+            value=self.options.utility.gender_llm_maximum,
+        )
+        ttk.Spinbox(
+            lc_row, textvariable=self._gender_llm_max_var,
+            from_=1, to=100, width=5,
+        ).pack(side=tk.LEFT)
+
+        self._gender_llm_ign_var = tk.BooleanVar(
+            value=self.options.utility.gender_llm_ignore_unknown,
+        )
+        ttk.Checkbutton(
+            lc_row, text="Ignore Unknown",
+            variable=self._gender_llm_ign_var,
+        ).pack(side=tk.LEFT, padx=(12, 0))
+
+        self._gender_llm_doall_var = tk.BooleanVar(
+            value=self.options.utility.gender_llm_do_all,
+        )
+        ttk.Checkbutton(
+            lc_row, text="Do all Requests",
+            variable=self._gender_llm_doall_var,
+        ).pack(side=tk.LEFT, padx=(8, 0))
+
+        # Mode description
         ttk.Label(
-            desc_frame,
+            gi_frame,
             text=(
-                "Romaji — Modified Hepburn romanization (built-in, kana-only terms).\n"
-                "LLM — Uses the active LLM API provider to translate terms."
+                "Script only — Uses built-in script analysis (pronouns, "
+                "honorifics, markers).\n"
+                "Script + LLM — Runs script first, then LLM for remaining "
+                "unknowns."
             ),
-            font=("Segoe UI", 8),
-            foreground="gray",
-            wraplength=450,
-            justify="left",
-        ).pack(anchor="w")
+            font=("Segoe UI", 8), foreground="gray",
+            wraplength=450, justify="left",
+        ).pack(anchor="w", pady=(6, 0))
 
     def _build_buttons(self, parent: ttk.Frame) -> None:
         """Build the action buttons at the bottom."""
@@ -3493,7 +3918,32 @@ class GlobalOptionsDialog(tk.Toplevel):
             bool(ini_manager.get_initial_default("fileio", "backup", True, bool))
         )
 
-        # Prompts defaults
+        # Prompts defaults — utility prompts
+        _util_prompt_defaults = {
+            "term_glossary": (
+                DEFAULT_TERM_GLOSSARY_PROMPT,
+                self._term_glossary_prompt_text,
+            ),
+            "term_code": (
+                DEFAULT_TERM_CODE_PROMPT,
+                self._term_code_prompt_text,
+            ),
+            "gender_inference": (
+                DEFAULT_GENDER_INFERENCE_PROMPT,
+                self._gender_inference_prompt_text,
+            ),
+        }
+        for _key, (_default, _widget) in _util_prompt_defaults.items():
+            _val = (
+                ini_manager.get_initial_default(
+                    "prompts", _key, _default, str,
+                )
+                or _default
+            )
+            _widget.delete("1.0", tk.END)
+            _widget.insert("1.0", _val)
+
+        # Prompts defaults — Edit / TLC
         edit_prompt = (
             ini_manager.get_initial_default("prompts", "edit", DEFAULT_EDIT_PROMPT, str)
             or DEFAULT_EDIT_PROMPT
@@ -3571,6 +4021,49 @@ class GlobalOptionsDialog(tk.Toplevel):
 
         self.options.utility = UtilitySettings(
             term_translation_mode=self._term_mode_var.get(),
+            term_api_key_provider=self._term_api_provider_var.get(),
+            term_api_key_name=self._term_api_name_var.get(),
+            term_model=self._term_model_var.get(),
+            term_batch_size=self._term_batch_size_var.get(),
+            gender_inference_mode=self._gender_mode_var.get(),
+            gender_api_key_provider=self._gender_api_provider_var.get(),
+            gender_api_key_name=self._gender_api_name_var.get(),
+            gender_model=self._gender_model_var.get(),
+            gender_script_minimum=self._gender_script_min_var.get(),
+            gender_script_maximum=self._gender_script_max_var.get(),
+            gender_script_ignore_unknown=self._gender_script_ign_var.get(),
+            gender_script_do_all=self._gender_script_doall_var.get(),
+            gender_llm_minimum=self._gender_llm_min_var.get(),
+            gender_llm_maximum=self._gender_llm_max_var.get(),
+            gender_llm_ignore_unknown=self._gender_llm_ign_var.get(),
+            gender_llm_do_all=self._gender_llm_doall_var.get(),
+        )
+
+        # Persist utility API settings to API.ini profiles
+        from CherryAI.functions import api_config as _api_cfg
+        _api_cfg.set_profile_setting(
+            "term_translation", "provider",
+            self.options.utility.term_api_key_provider,
+        )
+        _api_cfg.set_profile_setting(
+            "term_translation", "key_name",
+            self.options.utility.term_api_key_name,
+        )
+        _api_cfg.set_profile_setting(
+            "term_translation", "model",
+            self.options.utility.term_model,
+        )
+        _api_cfg.set_profile_setting(
+            "gender_inference", "provider",
+            self.options.utility.gender_api_key_provider,
+        )
+        _api_cfg.set_profile_setting(
+            "gender_inference", "key_name",
+            self.options.utility.gender_api_key_name,
+        )
+        _api_cfg.set_profile_setting(
+            "gender_inference", "model",
+            self.options.utility.gender_model,
         )
 
         self.options.caching = CachingSettings(
@@ -3611,6 +4104,15 @@ class GlobalOptionsDialog(tk.Toplevel):
         )
 
         self.options.prompts = PromptsSettings(
+            term_glossary=self._term_glossary_prompt_text.get(
+                "1.0", tk.END,
+            ).strip(),
+            term_code=self._term_code_prompt_text.get(
+                "1.0", tk.END,
+            ).strip(),
+            gender_inference=self._gender_inference_prompt_text.get(
+                "1.0", tk.END,
+            ).strip(),
             edit=self._edit_prompt_text.get("1.0", tk.END).strip(),
             tlc=self._tlc_prompt_text.get("1.0", tk.END).strip(),
             dialogue=self._dialogue_prompt_text.get("1.0", tk.END).strip(),
@@ -3689,8 +4191,61 @@ class GlobalOptionsDialog(tk.Toplevel):
             # Utility
             utility_vals = {
                 "term_translation_mode": self.options.utility.term_translation_mode,
+                "term_batch_size": str(self.options.utility.term_batch_size),
+                "gender_inference_mode": self.options.utility.gender_inference_mode,
+                "gender_script_minimum": str(
+                    self.options.utility.gender_script_minimum,
+                ),
+                "gender_script_maximum": str(
+                    self.options.utility.gender_script_maximum,
+                ),
+                "gender_script_ignore_unknown": str(
+                    self.options.utility.gender_script_ignore_unknown,
+                ).lower(),
+                "gender_script_do_all": str(
+                    self.options.utility.gender_script_do_all,
+                ).lower(),
+                "gender_llm_minimum": str(
+                    self.options.utility.gender_llm_minimum,
+                ),
+                "gender_llm_maximum": str(
+                    self.options.utility.gender_llm_maximum,
+                ),
+                "gender_llm_ignore_unknown": str(
+                    self.options.utility.gender_llm_ignore_unknown,
+                ).lower(),
+                "gender_llm_do_all": str(
+                    self.options.utility.gender_llm_do_all,
+                ).lower(),
             }
             ini_manager.save_as_user_defaults("utility", utility_vals)
+
+            # Save API-related utility settings to API.ini profiles
+            from CherryAI.functions import api_config as _api_cfg
+            _api_cfg.set_profile_setting(
+                "term_translation", "provider",
+                self.options.utility.term_api_key_provider,
+            )
+            _api_cfg.set_profile_setting(
+                "term_translation", "key_name",
+                self.options.utility.term_api_key_name,
+            )
+            _api_cfg.set_profile_setting(
+                "term_translation", "model",
+                self.options.utility.term_model,
+            )
+            _api_cfg.set_profile_setting(
+                "gender_inference", "provider",
+                self.options.utility.gender_api_key_provider,
+            )
+            _api_cfg.set_profile_setting(
+                "gender_inference", "key_name",
+                self.options.utility.gender_api_key_name,
+            )
+            _api_cfg.set_profile_setting(
+                "gender_inference", "model",
+                self.options.utility.gender_model,
+            )
 
             # Caching
             caching_vals = {
@@ -3742,6 +4297,9 @@ class GlobalOptionsDialog(tk.Toplevel):
 
             # Prompts
             prompts_vals = {
+                "term_glossary": self.options.prompts.term_glossary,
+                "term_code": self.options.prompts.term_code,
+                "gender_inference": self.options.prompts.gender_inference,
                 "edit": self.options.prompts.edit,
                 "tlc": self.options.prompts.tlc,
                 "dialogue": self.options.prompts.dialogue,

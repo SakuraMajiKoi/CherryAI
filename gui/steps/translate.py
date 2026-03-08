@@ -3337,6 +3337,16 @@ class TranslationStep(BaseStep):
             text=f"Completed: {completed}, Failed: {failed}"
         )
 
+    def on_new_project(self) -> None:
+        """Reset cached state for a fresh project."""
+        super().on_new_project()
+        self._lines.clear()
+        self._cancel_requested = False
+        self._pause_requested = False
+        self._api_client = None
+        self._manifest_bindings.clear()
+        logger.debug("Translation step reset for new project")
+
     def on_enter(self) -> None:
         """Called when step becomes active."""
         # TASK 43.6: Update model list from Global Options

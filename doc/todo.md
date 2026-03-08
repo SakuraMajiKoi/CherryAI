@@ -58,6 +58,55 @@ MODULE COUNTS (Verified January 2026)
 
 PENDING TASKS - Costs TAB
 
+### BUG FIX: New Project Manifest Flush
+**Priority:** CRITICAL | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: File → New Project must fully flush all cached state from every step tab.
+
+**Root Cause:** `_on_new_session()` reset ManifestManager and SessionState but did NOT
+clear instance-level cached state in step tabs (e.g., `_loaded_files`, `_lines`,
+`_analysis_results`). Old project data leaked into new sessions.
+
+**Solution:** Added `on_new_project()` lifecycle method to `BaseStep` (invalidates cache)
+with overrides in all 10 step tabs clearing their specific cached attributes. Called from
+`_on_new_session()` in `gui/app.py` before `on_enter()`.
+
+**Files Modified:**
+- `gui/steps/base.py` - Added `on_new_project()` method
+- `gui/steps/input_extract.py` through `gui/steps/output_inject.py` - Added overrides
+- `gui/app.py` - Updated `_on_new_session()` to call `tab.on_new_project()`
+
+**Tests:** `dev/test_new_project_flush.py` — 45 tests (all passing)
+
+---
+
+### BUG FIX: Up Button Emoji Spacing
+**Priority:** LOW | **Status:** ✅ COMPLETE | **Effort:** 10 minutes
+
+Goal: Fix excessive spacing between arrow symbol and "Up" text in UnifiedInputDialog.
+
+**Root Cause:** The Up button used emoji `⬆️` (U+2B06 + U+FE0F variation selector) which
+renders wider than expected on Windows due to emoji presentation.
+
+**Solution:** Replaced with plain Unicode arrow `↑` (U+2191) in `gui/dialogs/input_dialog.py`.
+
+**Tests:** `dev/test_input_dialog_ui.py::TestUpButtonText` — 2 tests (all passing)
+
+---
+
+### BUG FIX: Hide Auto-Pipeline Option
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 10 minutes
+
+Goal: Auto-Pipeline dropdown must be hidden (not removed) in UnifiedInputDialog pending rework.
+
+**Solution:** In `gui/dialogs/input_dialog.py` `_build_options_panel()`, the pipeline Label
+and Combobox are still created (for future rework) but their `.pack()` calls are commented out.
+The `_pipeline_var` remains functional so existing code referencing it won't break.
+
+**Tests:** `dev/test_input_dialog_ui.py::TestAutoPipelineHidden` — 3 tests (all passing)
+
+---
+
 ### TASK 25.1: Analysis Results Storage
 **Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
 
@@ -716,7 +765,7 @@ button that opens a combined file/folder selection window.
 ---
 
 ### TASK 58.2: Auto-Pipeline Dropdown
-**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+**Priority:** HIGH | **Status:** ✅ COMPLETE (hidden pending rework) | **Effort:** 2 hours
 
 Goal: Add dropdown to Options Panel for selecting automation level (0-4).
 
@@ -921,7 +970,92 @@ appear.
 
 [Archived: Session 30 TASK 74 + Phase 78 + Dynamic Registry + API Keys → see doc/archived.md]
 
+---
+
+### TASK 75+: Utility Section Expansion — Term Translation & Gender Inference
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** Session
+
+Goal: Expand Global Options → Utility section with per-feature API key/model
+selection, batch size control, configurable gender inference modes, and error
+abort on API failure.
+
+**Term Translation:**
+- Mode dropdown: Romaji / LLM (legacy Simple/MTL migrate to Romaji)
+- API key provider + key name dropdowns populated from API.ini [api_keys]
+- Model dropdown from api_config.get_default_model()
+- Batch size spinbox (1–100, default 10)
+- API.ini [term_translation] profile stores provider/key_name/model
+- RuntimeError on missing key or API failure, caught in analysis.py
+
+**Gender Inference:**
+- Mode dropdown: Script only / Script + LLM
+- "Script only" runs heuristic pass with configurable confidence (min/max)
+- "Script + LLM" runs script first, then LLM on remaining unknowns
+- Separate API key/model controls (stored in API.ini [gender_inference])
+- LLM confidence spinboxes (min/max, default 3/5)
+- ignore_unknown / do_all checkboxes for both script and LLM
+- RuntimeError on LLM failure shown via messagebox
+
+**UtilitySettings dataclass:** Expanded from 1 to 17 fields with full
+to_dict/from_dict roundtrip and legacy mode migration.
+
+**Files Modified:**
+- `gui/dialogs/global_options.py` — UtilitySettings, _build_utility_section, _on_apply, save defaults
+- `functions/term_translation.py` — Rewritten: batch splitting, API.ini profile, RuntimeError
+- `functions/API2Glossary.py` — infer_gender_llm(), _has_consensus(), _call_api_for_excerpt_custom()
+- `gui/steps/analysis.py` — try/except RuntimeError in _worker()
+- `gui/steps/information.py` — Rewritten _infer_character_genders() with two modes
+
+**Tests:**
+- `dev/test_utility_settings.py` — 27 unit tests (dataclass, batching, consensus, error abort)
+- `dev/test_utility_integration.py` — 7 live API tests with gpt-4.1-nano
+- `dev/test_term_translation.py` — Updated assertion (52 tests, all pass)
+
+---
+
+### TASK 75++: Structured Output, Configurable Prompts & Token Efficiency
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** Session
+
+Goal: Minimise output-token waste (previously 2k input → 33k output in 15
+requests) by enforcing strict JSON-schema structured output, adding `max_tokens`
+caps and `store=False`. Make prompts for Term Translation and Gender Inference
+configurable in Global Options → Prompts. Hide Edit/TLC prompt sections.
+
+**Structured Output (json_schema):**
+- `term_translation.py` — `_TERM_TRANSLATION_SCHEMA` with strict `{"translations": [...]}` schema
+- `API2Glossary.py` — `RESPONSE_SCHEMA` with gender enum `[Female, Male, Non-Binary, Unsure]`
+- Both use `store=False` (prevents storing requests for model training)
+- `term_translation.py` — `max_tokens=max(100, len(terms) * 20)`
+- `API2Glossary.py` — `max_tokens=150`
+
+**Configurable Prompts (Global Options → Prompts):**
+- Three new PromptsSettings fields: `term_glossary`, `term_code`, `gender_inference`
+- Three new DEFAULT constants with `{source_lang}`, `{target_lang}`, `{count}` (term) and `{name}`, `{excerpt}` (gender) placeholders
+- `_get_prompt_template(prompt_type)` in term_translation.py reads from CherryAI.ini `[prompts]`
+- `_get_gender_prompt(name, excerpt)` in API2Glossary.py reads from CherryAI.ini `[prompts]`
+- Fallback to compiled-in defaults when ini has no value
+
+**Prompt Type Routing:**
+- `translate_term()` and `translate_terms()` accept `prompt_type="glossary"|"code"` kwarg
+- `analysis.py _translate_terms()` passes `prompt_type="glossary"` for characters, `"code"` for code patterns
+
+**Gender Normalization:**
+- `_normalize_gender()` maps API output: Unsure→Unknown, Neutral→Non-Binary
+- All API result handlers use `_normalize_gender()` for consistent downstream values
+
+**UI Changes (Global Options → Prompts):**
+- Three utility prompt LabelFrames at top: Glossary, Code, Gender Inference
+- Each has a Text widget + scrollbar + "Reset to Default" button
+- Edit Step Prompt and TLC Step Prompt sections hidden (widgets exist for data round-trip)
+
+**Files Modified:**
+- `gui/dialogs/global_options.py` — PromptsSettings + 3 new defaults + UI sections + hide Edit/TLC
+- `functions/term_translation.py` — json_schema, store=False, max_tokens, prompt_type, configurable prompt
+- `functions/API2Glossary.py` — json_schema gender enum, store=False, max_tokens=150, _normalize_gender, configurable prompt
+- `gui/steps/analysis.py` — prompt_type="glossary" / "code" pass-through
+
+**Tests:**
+- `dev/test_utility_settings.py` — Expanded to 53 tests (+26 new: PromptsSettings fields, prompt_type routing, _get_prompt_template, _normalize_gender, schema validation)
+
 END OF ROADMAP
 =============================================================================
-
-

@@ -62,7 +62,7 @@ TABLE OF CONTENTS
    ✅ = Verified exists | ⚠️ = Needs documentation | 🔗 = GUI integrated
    
    3.1  analysis.py ✅ - File analysis, metrics, glossary extraction
-   3.2  API2Glossary.py ✅ - Extract glossary terms via LLM
+   3.2  API2Glossary.py ✅ - LLM gender inference with json_schema structured output, configurable prompt
    3.3  api_client.py ✅🔗 - LLM API communication (Step 5)
    3.4  auto_tagger.py ✅ - Automatic line tagging/classification
    3.5  chunker.py ✅ - Text chunking for API batches
@@ -122,7 +122,7 @@ TABLE OF CONTENTS
    3.44 process_order.py ✅🔗 - Pre/post processing order management (Phase 26)
    3.45 usage_tracker.py ✅ - API usage analytics and tracking (Phase 17.5)
    3.46 estimation.py ✅ - Token estimation utilities (legacy CLI support)
-   3.47 term_translation.py ✅🔗 - Unified term translation dispatcher (Romaji/LLM modes)
+   3.47 term_translation.py ✅🔗 - Unified term translation dispatcher (Romaji/LLM); json_schema structured output, prompt_type, configurable prompts
    
    3.48 glossaries/ (subfolder - 6 files)
         - __init__.py - Package exports
@@ -187,7 +187,7 @@ TABLE OF CONTENTS
    
    6.4 gui/steps/ (10 files - 10 workflow tabs)
        - __init__.py - Step exports
-       - base.py - BaseStep abstract class (TASK 43.14: tab caching infra)
+       - base.py - BaseStep abstract class (TASK 43.14: tab caching infra; on_new_project() lifecycle method for state flush)
        - input_extract.py - Step 0: Input/Extraction 🔗formats/
        - analysis.py - Step 1: Analysis ❌NO shared imports
        - costs.py - Step 4: Costs (renamed from estimate.py in Phase 40; _estimate_via_formation() returns FormationResult with per-request line lists; _compute_per_request_prompt_overhead() builds each request's prompt individually via build_full_system_prompt(chunk_lines=...) for selective glossary/conditional filtering; syncs chunk_size from GlobalOptions; respects request_slicing mode)
@@ -233,14 +233,28 @@ TABLE OF CONTENTS
          - _persist_to_ini(): Writes ALL settings sections to CherryAI.ini on every Apply/OK
          - _save_options() calls _persist_to_ini() for guaranteed persistence
          - Sections organized in CATEGORY_ORDER: Connection (incl. Utility), Processing, Application (incl. Add-ons)
-         - UtilitySettings: term_translation_mode (Romaji/MTL/LLM) — controls term translation dispatcher
-         - UTILITY section: _build_utility_section() — Term Translation Mode dropdown with mode descriptions
+         - UtilitySettings: 17 fields for Term Translation and Gender Inference configuration
+           - Term Translation: mode (Romaji/LLM), api_key_provider, api_key_name, model, batch_size
+           - Gender Inference: mode (Script only/Script + LLM), api_key_provider, api_key_name, model
+           - Script Confidence: minimum, maximum, ignore_unknown, do_all (defaults 30/50/True/True)
+           - LLM Confidence: minimum, maximum, ignore_unknown, do_all (defaults 3/5/True/False)
+           - API settings persisted to API.ini [term_translation] and [gender_inference] sections
+           - Non-API settings persisted to CherryAI.ini [utility] section
+         - UTILITY section: _build_utility_section() — Term Translation and Gender Inference panels
+           - Term Translation: Mode dropdown, API Key combobox (from list_api_keys()), Model entry, Batch Size spinbox
+           - Gender Inference: Mode dropdown, API Key combobox, Model entry, Script/LLM Confidence sub-panels
+           - Each Confidence sub-panel: min/max spinboxes + Ignore Unknown + Do all Requests checkboxes
          - ADDONS section: _build_addons_section() — Treeview of installed addons (name/size), Delete/Refresh buttons
-         - TASK 33.2: PromptsSettings for Edit/TLC custom prompts
-           - edit: str - Custom prompt for Edit steps
-           - tlc: str - Custom prompt for TLC steps  
-           - Supports {source_lang} and {target_lang} placeholders
+         - TASK 33.2: PromptsSettings for Edit/TLC custom prompts + Utility prompts
+           - term_glossary: str - Configurable prompt for translating glossary/character terms
+           - term_code: str - Configurable prompt for explaining code pattern labels
+           - gender_inference: str - Configurable prompt for LLM gender inference
+           - edit: str - Custom prompt for Edit steps (hidden from UI)
+           - tlc: str - Custom prompt for TLC steps (hidden from UI)
+           - Supports {source_lang} and {target_lang} placeholders (term prompts add {count})
+           - Gender prompt uses {name} and {excerpt} placeholders
            - Stored in [prompts] section of CherryAI.ini (factory defaults embedded in ini_manager._FACTORY_DEFAULTS_INI_TEXT)
+           - PROMPTS section UI: Utility prompts at top (Glossary, Code, Gender Inference); Edit/TLC hidden
          - **Session 24+: Conditional Prompts in PromptsSettings (dialogue/menu/choice/unknown):**
            - PromptsSettings gains 4 new fields: dialogue, menu, choice, unknown
            - DEFAULT_DIALOGUE_PROMPT / DEFAULT_MENU_PROMPT / DEFAULT_CHOICE_PROMPT / DEFAULT_UNKNOWN_PROMPT constants
@@ -486,7 +500,7 @@ TABLE OF CONTENTS
          - `gui/helpers/confirmations.py`: confirm_action(), is_suppressed(), suppress(), reset_all_suppressions()
          - INI `[confirmations]` section stores suppressed dialog keys
          - `ini_manager.remove_section()`: removes entire INI section
-         - App._on_new_session(): calls on_enter() on tab 0 after reset
+         - App._on_new_session(): calls tab.on_new_project() on ALL tabs then on_enter() on tab 0 after reset; fully flushes cached state (loaded files, analysis results, lines, etc.) via BaseStep.on_new_project() overrides in each step
          - App._on_load_manifest(): unsaved-changes check (askyesnocancel) before loading
          - WelcomeDialog: auto-load checkbox always visible, saves on toggle
          - Global Options Session: reset buttons for confirmations and presets
@@ -516,6 +530,7 @@ TABLE OF CONTENTS
          - Chunk Sync: costs.py reads/writes LinesPerChunk to manifest RequestOptions
          - Language Skip: detect_line_script() in analysis.py, _LANG_SCRIPT_MAP, _apply_language_skip() — strips placeholder tokens (via _PLACEHOLDER_TOKEN_RE) before ratio-based script detection so CJK lines with placeholders are not wrongly classified as 'latin'
          - Tab Caching: BaseStep._compute_cache_hash/_is_cache_valid/_update_cache/_invalidate_cache/_force_refresh
+         - New Project Lifecycle: BaseStep.on_new_project() invalidates cache; each step override clears instance-level cached state (_loaded_files, _lines, _analysis_results, etc.) to prevent old project data from leaking into a new session
          - Performance: SharedTable batch insertion (2000-row batches), bulk *children delete, page-based display (5000 rows/page, TASK 72), _refresh_lines() batch manifest dict read
          - TASK 71: Removed redundant all_lines/processed_lines/postprocessed_lines/files from step_data; manifest migration strips on load; new ManifestManager.get_all_orig_lines() API
          - TASK 72: Per-line tags in mode_adapter (tags_by_line dict); preprocessing progress bar; skip unchanged prepro writes; tag-based filter dropdown (12 entries); pagination (5000 rows/page); "Search:" label; show_count_filter=False for 6 step tables; set_line_field skip-unchanged guard; wordwrap/QA on_leave skip unchanged lines

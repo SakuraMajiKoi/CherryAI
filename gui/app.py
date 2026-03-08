@@ -556,11 +556,12 @@ class App(tk.Tk):
         self.session = reset_session()
         self._session_path = None
 
-        # Update all components with new state
+        # Update all components with new state and flush cached data
         self._progress_tracker.session = self.session
         for tab in self._step_tabs:
             tab.session = self.session
             tab._manifest_manager = self._manifest_manager
+            tab.on_new_project()
 
         # Select first tab and refresh its widgets
         self._notebook.select(0)

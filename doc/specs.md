@@ -90,6 +90,7 @@ CherryAI is designed to achieve high-quality translation using LLMs through exte
 
 The GUI is organized as:
 - **Menu Bar**: File, Edit, Tools, Help dropdowns (File contains New Project, Open Project)
+  - **New Project** (`_on_new_session`): Resets ManifestManager (creates empty manifest), resets SessionState, and calls `on_new_project()` on ALL step tabs to flush cached instance state (loaded files, analysis results, lines, estimation data, etc.). Prevents old project data from leaking into the new session.
 - **Step Tabs**: 10 workflow tabs (Steps 0-9) progressing from Input to Output
 - **Global Options**: Application-wide settings accessed via Tools → Options
 - **Progress Tracker**: Visual indicator showing completion status of each step
@@ -778,7 +779,7 @@ PrettyWrap is the standard wrapping algorithm. Its priority rules:
 
 **Task 75 Extension**: Protagonist-aware POV re-run — `get_protagonists_from_characters()`, `get_protagonists_from_code_database()`, `run_pov_with_protagonists()`, `format_protagonist_prompt()` in `functions/analysis.py`. GUI trigger: `_set_speaker_role("Protagonist")` → `_rerun_pov_with_protagonists()` stores updated POV in manifest. Prompt slot 4b between Tone and Summary. Tests in `dev/test_protagonist_romanization.py` (18 protagonist tests).
 
-**Task 75 Romanization + Term Translation**: `functions/romanization.py` — Modified Hepburn kana→rōmaji conversion with `capitalize_name()` (first-letter-only capitalization) and `contains_kanji()` (skips mixed kanji+kana terms to avoid garbled output). `functions/term_translation.py` — unified dispatcher supporting Romaji (romanize) and LLM (OpenAI-compatible) modes. GUI button renamed to "Translate Terms". `_translate_terms()` runs in a background thread with a modal progress dialog (determinate progress bar, per-term status label, Cancel button) for all modes. Auto-populates glossary Translation field and code database Translation column. Code pattern translations are synced to the manifest `code_patterns` field for cross-tab persistence. After translation, the findings table Details column updates immediately. `_translate_terms()` reads source/target language from manifest `step_state.Information.data.metadata`. Mode configurable in Global Options → Utility. Tests in `dev/test_protagonist_romanization.py` (22 romanization tests) and `dev/test_term_translation.py` (52 tests).
+**Task 75 Romanization + Term Translation**: `functions/romanization.py` — Modified Hepburn kana→rōmaji conversion with `capitalize_name()` (first-letter-only capitalization) and `contains_kanji()` (skips mixed kanji+kana terms to avoid garbled output). `functions/term_translation.py` — unified dispatcher supporting Romaji (romanize) and LLM modes. LLM mode reads API key/model from API.ini `[term_translation]` profile section via `api_config.get_profile_setting()`. Uses strict JSON-schema structured output (`response_format=json_schema`) with `store=False` and `max_tokens` cap to minimise output-token waste. Accepts `prompt_type` kwarg (`"glossary"` or `"code"`) to route to the appropriate configurable prompt template from CherryAI.ini `[prompts]`. Terms are split into batches of configurable `term_batch_size` (default 10). API failures raise `RuntimeError` and the Analysis step shows an error messagebox instead of silently continuing. GUI button renamed to "Translate Terms". `_translate_terms()` runs in a background thread with a modal progress dialog (determinate progress bar, per-term status label, Cancel button) for all modes. Auto-populates glossary Translation field and code database Translation column. Code pattern translations are synced to the manifest `code_patterns` field for cross-tab persistence. After translation, the findings table Details column updates immediately. `_translate_terms()` reads source/target language from manifest `step_state.Information.data.metadata`. Mode configurable in Global Options → Utility. Prompts configurable in Global Options → Prompts. Tests in `dev/test_protagonist_romanization.py` (22 romanization tests), `dev/test_term_translation.py` (52 tests), `dev/test_utility_settings.py` (53 tests), and `dev/test_utility_integration.py` (7 live API tests).
 
 **Purpose**: Infer the narrative point of view from non-dialogue text to provide the LLM with accurate context for pronoun and perspective handling.
 
@@ -896,7 +897,7 @@ Each step is a tab in the main notebook. Steps can be navigated freely but follo
 | **Options Panel** | LabelFrame | Contains Encoding, Format, and Auto-Pipeline settings |
 | Encoding Dropdown | Combobox | Select file encoding (auto, utf-8, shift_jis, etc.). Default: auto |
 | Format Dropdown | Combobox | Override format detection (auto, txt, csv, json, rpgmaker, image, etc.). Default: auto |
-| Auto-Pipeline Dropdown | Combobox | Pipeline automation level (see Automatic Pipeline section) |
+| Auto-Pipeline Dropdown | Combobox | Pipeline automation level (see Automatic Pipeline section). **Currently hidden** pending rework; widget created but not packed |
 | **Loaded Files Panel** | LabelFrame | Shows loaded files in a tree structure |
 | File Tree | Treeview | Collapsible folder hierarchy with files. Folders always appear above files within the same directory. Loaded files are collapsed (not expanded) by default. Supports multi-select for bulk operations |
 | **Preview Panel** | LabelFrame | Shows content of selected file |
@@ -974,7 +975,7 @@ The Input button opens a **unified file and folder selection window** that combi
 |-------|------|----------|-------------|
 | Project Name | Entry | Yes | User must provide the project name. No auto-suggestion — field starts empty |
 | Source Files | Label | Display | Shows the list of files/folders being loaded (read-only) |
-| Auto-Pipeline | Combobox | No | Select automation level for this load |
+| Auto-Pipeline | Combobox | No | Select automation level for this load. **Currently hidden** pending rework |
 
 **Behavior**:
 - Dialog blocks file loading until project name is provided
@@ -1039,7 +1040,7 @@ When `auto_inference` is enabled (Global Option), the pipeline offers several in
 | `infer_speakers_to_glossary` | Analysis speakers | characters[] | Add detected speakers as character glossary entries with empty Translation |
 | `infer_codes_to_database` | Analysis code_patterns | CodeGlossary[] | Add detected code patterns to Code Database with default "Preserve" action; prefers `individual_codes` (per-code detail) over grouped `code_patterns` when available |
 | `infer_pov` | Analysis non-dialogue | POVResult | Detect Point of View (1st/2nd/3rd person) for prompt context |
-| `infer_gender` | Input step text + Analysis speaker counts | characters[].gender | Use `infer_gender_comprehensive()` heuristics to infer character gender from full text context |
+| `infer_gender` | Input step text + Analysis speaker counts | characters[].gender | Two modes: "Script only" uses `infer_gender_comprehensive()` heuristics; "Script + LLM" runs script first then `infer_gender_llm()` for unknowns via dialogue excerpts. Configurable confidence spinboxes (min/max, ignore_unknown, do_all). Settings read from CherryAI.ini [utility] and API.ini [gender_inference]. |
 
 **Manifest Keys**: Each inference option has a corresponding boolean in `Options.AutoInference.*`.
 

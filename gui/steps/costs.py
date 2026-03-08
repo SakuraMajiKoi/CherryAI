@@ -1458,6 +1458,21 @@ class CostsStep(BaseStep):
             reset_preprocessed_only,
         )
 
+    def on_new_project(self) -> None:
+        """Reset cached state for a fresh project."""
+        super().on_new_project()
+        self._estimation_result = None
+        self._is_estimating = False
+        self._lines_original.clear()
+        self._lines_preprocessed.clear()
+        self._estimation_state = {
+            "original_complete": False,
+            "preprocessed_complete": False,
+            "original_result": None,
+            "preprocessed_result": None,
+        }
+        logger.debug("Costs step reset for new project")
+
     def on_enter(self) -> None:
         """Called when step becomes active."""
         # TASK 43.12: Sync chunk size from manifest (shared with Translation)

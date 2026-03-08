@@ -64,30 +64,17 @@ CONFIDENCE_THRESHOLD: float = 70.0  # Required confidence % (51-90) to stop vali
 # System prompt template for name translation and gender inference from excerpts
 # {excerpt} will be replaced with the actual text excerpt
 # {name} will be replaced with the speaker name to analyze
-PROMPT_TEMPLATE: str = """You are a translator and gender inference assistant.
-
-Analyze the following dialogue excerpt and provide information about the speaker "{name}":
-
-1. If the name is written in non-Latin characters, provide its romanized reading. Otherwise repeat the name.
-2. Gender inference (Male, Female, Neutral, or Unknown if not clear from context)
-3. Optional note (e.g., a role like teacher, parent, student, etc.)
-
-Base your gender inference on:
-- How other characters refer to this speaker
-- The speech patterns and word choices used by this speaker
-- Any contextual clues in the surrounding dialogue
-
-Excerpt:
-{excerpt}
-
-Return a JSON object with this structure:
-{{
-  "name": "original name from excerpt",
-  "romaji": "romanized name",
-  "gender": "Male|Female|Neutral|Unknown",
-  "note": "optional context or role"
-}}
-"""
+PROMPT_TEMPLATE: str = (
+    "Infer the gender of the speaker \"{name}\" from the dialogue excerpt "
+    "below. Base your answer on how others address this speaker, their "
+    "speech patterns, and contextual clues.\n\n"
+    "Excerpt:\n{excerpt}\n\n"
+    "Return a JSON object with exactly these fields:\n"
+    "- name: the original name\n"
+    "- romaji: romanized reading (repeat if already Latin)\n"
+    "- gender: exactly one of Female, Male, Non-Binary, Unsure\n"
+    "- note: one-word role (e.g. teacher, parent) or empty string"
+)
 
 # Default enabled state (set to False to require explicit opt-in via config)
 DEFAULT_ENABLED: bool = False
@@ -109,7 +96,7 @@ RESPONSE_SCHEMA = {
                 "romaji": {"type": "string", "description": "Romanized name (Hepburn)"},
                 "gender": {
                     "type": "string",
-                    "enum": ["Male", "Female", "Neutral", "Unknown"],
+                    "enum": ["Female", "Male", "Non-Binary", "Unsure"],
                     "description": "Inferred gender",
                 },
                 "note": {"type": "string", "description": "Optional context or notes"},
@@ -121,6 +108,48 @@ RESPONSE_SCHEMA = {
 }
 
 # ---------------- End Configuration ---------------- #
+
+# Canonical gender values accepted by the schema.
+_VALID_GENDERS = frozenset({"Female", "Male", "Non-Binary", "Unsure"})
+
+
+def _get_gender_prompt(name: str, excerpt: str) -> str:
+    """Build the gender-inference prompt from the configurable template.
+
+    Reads the template from CherryAI.ini ``[prompts] gender_inference``,
+    falling back to the compiled-in default from global_options.py.
+    """
+    from CherryAI.gui.dialogs.global_options import DEFAULT_GENDER_INFERENCE_PROMPT
+
+    template = PROMPT_TEMPLATE  # module-level default
+    try:
+        from CherryAI.functions import ini_manager
+        val = ini_manager.get_user_default("prompts", "gender_inference")
+        if val:
+            template = val
+    except Exception:
+        pass
+
+    # If ini_manager had no value, use compiled default
+    if template == PROMPT_TEMPLATE:
+        template = DEFAULT_GENDER_INFERENCE_PROMPT
+
+    return template.format(name=name, excerpt=excerpt)
+
+
+def _normalize_gender(raw: str) -> str:
+    """Map API gender strings to canonical values.
+
+    ``'Unsure'`` and ``'Unknown'`` both map to ``'Unknown'`` for
+    downstream compatibility.  ``'Neutral'`` maps to ``'Non-Binary'``.
+    """
+    if raw in ("Unsure", "Unknown"):
+        return "Unknown"
+    if raw == "Neutral":
+        return "Non-Binary"
+    if raw in _VALID_GENDERS:
+        return raw
+    return "Unknown"
 
 
 def _get_api_key() -> Optional[str]:
@@ -259,8 +288,8 @@ def _call_api_for_excerpt(speaker: str, excerpt: str) -> Dict[str, str]:
     if not key or not API_URL:
         raise ValueError("API_KEY and API_URL must be configured")
 
-    # Build prompt with excerpt and speaker name
-    user_prompt = PROMPT_TEMPLATE.format(excerpt=excerpt, name=speaker)
+    # Build prompt from configurable template
+    user_prompt = _get_gender_prompt(speaker, excerpt)
 
     # Construct OpenAI-compatible request
     url = API_URL.rstrip("/") + "/chat/completions"
@@ -272,7 +301,9 @@ def _call_api_for_excerpt(speaker: str, excerpt: str) -> Dict[str, str]:
         "model": MODEL_NAME,
         "messages": [{"role": "user", "content": user_prompt}],
         "response_format": RESPONSE_SCHEMA,
-        "temperature": 0.0,  # deterministic for name translation
+        "temperature": 0.0,
+        "max_tokens": 150,
+        "store": False,
     }
 
     logging.debug("API2Glossary: calling API for speaker '%s'", speaker)
@@ -287,10 +318,10 @@ def _call_api_for_excerpt(speaker: str, excerpt: str) -> Dict[str, str]:
     except (KeyError, IndexError, json.JSONDecodeError) as exc:
         raise ValueError(f"Unexpected API response structure: {exc}") from exc
 
-    # Return the single result
+    # Return the single result with normalized gender
     result = {
         "romaji": parsed.get("romaji", ""),
-        "gender": parsed.get("gender", "Unknown"),
+        "gender": _normalize_gender(parsed.get("gender", "Unsure")),
         "note": parsed.get("note", ""),
     }
     return result
@@ -345,7 +376,7 @@ def _validate_gender_with_checks(
         most_common_gender, most_common_count = gender_counts.most_common(1)[0]
         conf_pct = (most_common_count / total_non_unknown) * 100.0
 
-        # Check for conflict: Male vs Female (ignore Neutral)
+        # Check for conflict: Male vs Female (ignore Non-Binary)
         has_male = gender_counts.get("Male", 0) > 0
         has_female = gender_counts.get("Female", 0) > 0
         has_conflict = has_male and has_female
@@ -631,12 +662,12 @@ def test_api_connection() -> Tuple[bool, Dict[str, Any]]:
                 "note": note
             })
         
-        # Neutral is acceptable but log as warning
-        if gender == "Neutral":
-            logging.warning("API2Glossary: test resulted in 'Neutral' gender (acceptable but not ideal)")
+        # Non-Binary is acceptable but log as warning
+        if gender == "Non-Binary":
+            logging.warning("API2Glossary: test resulted in 'Non-Binary' gender (acceptable but not ideal)")
             return (True, {
-                "status": "neutral_result",
-                "message": f"'太郎' inferred as 'Neutral' (acceptable but 'Male' expected)",
+                "status": "nonbinary_result",
+                "message": f"'太郎' inferred as 'Non-Binary' (acceptable but 'Male' expected)",
                 "result": result,
                 "romaji": romaji,
                 "gender": gender,
@@ -648,7 +679,7 @@ def test_api_connection() -> Tuple[bool, Dict[str, Any]]:
         return (False, {
             "status": "invalid_gender",
             "message": f"API returned unexpected gender value: '{gender}'",
-            "error": f"Gender must be Male/Female/Neutral/Unknown, got '{gender}'",
+            "error": f"Gender must be Female/Male/Non-Binary/Unknown, got '{gender}'",
             "result": result
         })
         
@@ -670,6 +701,173 @@ def test_api_connection() -> Tuple[bool, Dict[str, Any]]:
             "message": "API connection test failed",
             "error": error_msg
         })
+
+
+# ============================================================================
+# Configurable LLM Gender Inference (called from Information step)
+# ============================================================================
+
+def infer_gender_llm(
+    speaker: str,
+    all_lines: List[str],
+    *,
+    provider: str = "",
+    key_name: str = "",
+    model: str = "",
+    minimum: int = 3,
+    maximum: int = 5,
+    ignore_unknown: bool = True,
+    do_all: bool = False,
+) -> Tuple[str, float]:
+    """Infer a speaker's gender using the LLM with configurable confidence.
+
+    Uses the API key/model from the ``[gender_inference]`` profile in
+    API.ini (or explicit overrides).
+
+    Args:
+        speaker: Speaker name to infer gender for.
+        all_lines: All lines from the loaded project.
+        provider: API key provider (falls back to [gender_inference] profile).
+        key_name: API key name (falls back to [gender_inference] profile).
+        model: Model identifier (falls back to [gender_inference] profile).
+        minimum: Minimum agreements needed (or min attempts when !do_all).
+        maximum: Maximum checks to run.
+        ignore_unknown: Whether Unknown results don't count toward max.
+        do_all: Always run *maximum* checks regardless of early consensus.
+
+    Returns:
+        Tuple of (gender, confidence_pct).
+        ``gender`` is one of 'Male', 'Female', 'Non-Binary', 'Unknown'.
+        ``confidence_pct`` is 0-100.
+    """
+    from CherryAI.functions import api_config
+
+    prov = provider or api_config.get_profile_setting(
+        "gender_inference", "provider",
+    ) or "openai"
+    kname = key_name or api_config.get_profile_setting(
+        "gender_inference", "key_name",
+    ) or "default"
+    mdl = model or api_config.get_profile_setting(
+        "gender_inference", "model",
+    ) or "gpt-4.1-nano"
+
+    api_key = api_config.get_api_key_plain(prov, kname)
+    if not api_key:
+        raise RuntimeError(
+            f"No API key for provider '{prov}', name '{kname}'. "
+            "Configure in Global Options → Utility."
+        )
+
+    base_url = api_config.get_profile_setting(
+        "gender_inference", "base_url",
+    ) or None
+
+    # Build excerpts
+    num_needed = max(minimum, maximum)
+    speaker_indices = [
+        i for i, line in enumerate(all_lines)
+        if line.strip().startswith(f"{speaker}:")
+        or line.strip().startswith(f"{speaker}：")
+    ]
+    if len(speaker_indices) < EXCERPT_SPEAKER_OCCURRENCES:
+        return ("Unknown", 0.0)
+
+    excerpts = _construct_excerpts(
+        speaker, speaker_indices, all_lines, num_needed,
+    )
+    if not excerpts:
+        return ("Unknown", 0.0)
+
+    # Perform checks with configurable confidence
+    from collections import Counter
+    results: List[str] = []
+    checks_done = 0
+    unknown_count = 0
+
+    for excerpt in excerpts:
+        if not do_all and _has_consensus(results, minimum):
+            break
+        effective_max = maximum + unknown_count if ignore_unknown else maximum
+        if checks_done >= effective_max:
+            break
+
+        try:
+            res = _call_api_for_excerpt_custom(
+                speaker, excerpt, api_key, mdl, base_url,
+            )
+            gender = res.get("gender", "Unknown")
+            if gender == "Unknown":
+                unknown_count += 1
+                if not ignore_unknown:
+                    checks_done += 1
+            else:
+                results.append(gender)
+                checks_done += 1
+        except Exception as exc:
+            logging.warning(
+                "LLM gender check for '%s' failed: %s", speaker, exc,
+            )
+            checks_done += 1
+
+    if not results:
+        return ("Unknown", 0.0)
+
+    counts = Counter(results)
+    best_gender, best_count = counts.most_common(1)[0]
+    confidence = (best_count / len(results)) * 100.0
+    return (best_gender, confidence)
+
+
+def _has_consensus(results: List[str], minimum: int) -> bool:
+    """Return True when *minimum* results agree on one gender."""
+    if not results or len(results) < minimum:
+        return False
+    from collections import Counter
+    counts = Counter(results)
+    _, top = counts.most_common(1)[0]
+    return top >= minimum
+
+
+def _call_api_for_excerpt_custom(
+    speaker: str,
+    excerpt: str,
+    api_key: str,
+    model: str,
+    base_url: Optional[str] = None,
+) -> Dict[str, str]:
+    """Call LLM API for gender inference using the given credentials.
+
+    Uses strict JSON-schema structured output, ``store=False`` and a
+    ``max_tokens`` cap to minimise output-token waste.
+    """
+    import importlib
+
+    openai_mod = importlib.import_module("openai")
+    client_cls = getattr(openai_mod, "OpenAI")
+    kwargs: Dict[str, Any] = {"api_key": api_key}
+    if base_url:
+        kwargs["base_url"] = base_url
+    client = client_cls(**kwargs)
+
+    user_prompt = _get_gender_prompt(speaker, excerpt)
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": user_prompt}],
+        response_format=RESPONSE_SCHEMA,
+        temperature=0.0,
+        max_tokens=150,
+        store=False,
+    )
+
+    content = response.choices[0].message.content
+    parsed = json.loads(content)
+    return {
+        "romaji": parsed.get("romaji", ""),
+        "gender": _normalize_gender(parsed.get("gender", "Unsure")),
+        "note": parsed.get("note", ""),
+    }
 
 
 if __name__ == "__main__":

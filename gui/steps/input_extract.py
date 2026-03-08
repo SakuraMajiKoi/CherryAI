@@ -1933,6 +1933,24 @@ class InputExtractionStep(BaseStep):
 
     # ----------------------------- BaseStep Methods ----------------------------- #
 
+    def on_new_project(self) -> None:
+        """Reset all cached state for a fresh project.
+
+        Called by ``App._on_new_session()`` to flush stale data from a
+        previous project so no files, lines, or tree items leak across.
+        """
+        super().on_new_project()
+        self._loaded_files.clear()
+        self._current_file_index = -1
+        self._folder_root = None
+        self._tree_item_to_index.clear()
+        if hasattr(self, "_pending_project_name"):
+            self._pending_project_name = ""
+        self._update_file_list()
+        self._update_preview()
+        self._update_summary()
+        logger.debug("Input step reset for new project")
+
     def on_enter(self) -> None:
         """Called when entering this step tab."""
         step_data = self.get_step_data()

@@ -1248,6 +1248,14 @@ class WordwrapOverwriteStep(BaseStep):
             except Exception:
                 pass
 
+    def on_new_project(self) -> None:
+        """Reset cached state for a fresh project."""
+        super().on_new_project()
+        self._lines.clear()
+        self._selected_line_idx = -1
+        self._manifest_bindings.clear()
+        logger.debug("Wordwrap step reset for new project")
+
     def on_enter(self) -> None:
         """Called when entering this tab."""
         # TASK 53.4: Register parser-provided format defaults (before

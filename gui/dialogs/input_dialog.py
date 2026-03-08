@@ -167,7 +167,7 @@ class UnifiedInputDialog(tk.Toplevel):
         go_btn = ttk.Button(path_frame, text="Go", command=self._navigate_to_path, width=5)
         go_btn.pack(side="left")
 
-        up_btn = ttk.Button(path_frame, text="⬆️ Up", command=self._go_up, width=6)
+        up_btn = ttk.Button(path_frame, text="\u2191 Up", command=self._go_up, width=6)
         up_btn.pack(side="left", padx=2)
 
         # File/folder tree
@@ -311,8 +311,8 @@ class UnifiedInputDialog(tk.Toplevel):
         )
         encoding_cb.pack(side="left")
 
-        # Auto-Pipeline
-        ttk.Label(options_frame, text="Auto-Pipeline:").pack(side="left", padx=(20, 5))
+        # Auto-Pipeline – hidden pending rework; widgets created but not packed
+        # ttk.Label(options_frame, text="Auto-Pipeline:").pack(side="left", padx=(20, 5))
         self._pipeline_var = tk.StringVar(value=self._auto_pipeline)
         pipeline_cb = ttk.Combobox(
             options_frame,
@@ -327,7 +327,7 @@ class UnifiedInputDialog(tk.Toplevel):
             width=18,
             state="readonly",
         )
-        pipeline_cb.pack(side="left")
+        # pipeline_cb.pack(side="left")  # hidden pending rework
 
     def _build_button_panel(self, parent: ttk.Frame) -> None:
         """Build the button panel."""

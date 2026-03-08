@@ -2723,11 +2723,11 @@ class InformationStep(BaseStep):
     def _infer_character_genders(self) -> None:
         """Infer gender for characters using analysis context.
 
-        Gathers speaker dialogue lines from the loaded project files
-        and Analysis results so the inference engine has actual text
-        signals (explicit markers, honorifics by others, self-pronouns)
-        rather than just bare names.
+        Reads mode from utility settings:
+        - **Script only** — built-in script analysis (pronouns, honorifics).
+        - **Script + LLM** — runs script first, then LLM for unknowns.
 
+        Confidence spinbox settings control the inference thresholds.
         Only updates characters whose gender is empty or 'Unknown'.
         Shows a progress dialog for visibility during long operations.
         """
@@ -2738,7 +2738,7 @@ class InformationStep(BaseStep):
             )
             return
 
-        # Try to import gender inference function
+        # Import gender inference function
         try:
             from CherryAI.functions.glossaries.name_glossary_functions import (
                 infer_gender_comprehensive,
@@ -2750,8 +2750,40 @@ class InformationStep(BaseStep):
             )
             return
 
+        # Read utility settings
+        from CherryAI.functions import ini_manager
+        gi_mode = ini_manager.get_user_default(
+            "utility", "gender_inference_mode",
+        ) or "Script only"
+        script_min = int(
+            ini_manager.get_user_default(
+                "utility", "gender_script_minimum",
+            ) or "30"
+        )
+        script_max = int(
+            ini_manager.get_user_default(
+                "utility", "gender_script_maximum",
+            ) or "50"
+        )
+        script_ign = ini_manager.get_user_default(
+            "utility", "gender_script_ignore_unknown",
+        )
+        script_ignore_unknown = script_ign not in ("false", "False", "0", "")
+        script_doall_str = ini_manager.get_user_default(
+            "utility", "gender_script_do_all",
+        )
+        script_do_all = script_doall_str not in ("false", "False", "0", "")
+
+        # Confidence threshold from script spinboxes
+        if script_do_all:
+            # Absolute: need script_min of script_max to agree
+            confidence_threshold = (
+                (script_min / script_max) * 100 if script_max else 50
+            )
+        else:
+            confidence_threshold = 50
+
         # --- Gather context data ---
-        # 1. Get loaded lines from manifest for full_text + lines
         all_lines: List[str] = []
         try:
             mgr = self.manifest_manager
@@ -2762,7 +2794,6 @@ class InformationStep(BaseStep):
 
         full_text = "\n".join(all_lines) if all_lines else ""
 
-        # 2. Get speaker counts from Analysis for the others-honorific tier
         speaker_counts: Dict[str, int] = {}
         try:
             analysis_data = self._get_analysis_step_data()
@@ -2781,7 +2812,6 @@ class InformationStep(BaseStep):
         # --- Build list of characters to check ---
         chars_to_check = []
         for char in self._metadata.characters:
-            # Skip if notes already contain a gender keyword
             notes_lower = char.notes.lower() if char.notes else ""
             has_gender = any(
                 g in notes_lower for g in ("male", "female", "non-binary")
@@ -2832,13 +2862,12 @@ class InformationStep(BaseStep):
 
         progress_dialog.update_idletasks()
 
-        # --- Run inference for each character with progress ---
+        # --- Run inference ---
         updated_count = 0
+        llm_needed: List[tuple] = []
+
         for i, (char, name_to_check) in enumerate(chars_to_check):
-            # Update progress
-            progress_label.configure(
-                text=f"Checking '{name_to_check}'",
-            )
+            progress_label.configure(text=f"Script: '{name_to_check}'")
             progress_bar["value"] = i
             count_label.configure(text=f"{i} / {total}")
             progress_dialog.update_idletasks()
@@ -2851,10 +2880,9 @@ class InformationStep(BaseStep):
                     full_text=full_text,
                     lines=all_lines if all_lines else None,
                     speaker_counts=speaker_counts if speaker_counts else None,
-                    confidence_threshold=0.5,
+                    confidence_threshold=confidence_threshold / 100,
                 )
-                if inferred and inferred != "Unknown" and confidence >= 50:
-                    # Append gender to notes
+                if inferred and inferred != "Unknown" and confidence >= confidence_threshold:
                     parts = [
                         p.strip()
                         for p in char.notes.split(",") if p.strip()
@@ -2863,8 +2891,85 @@ class InformationStep(BaseStep):
                         parts.insert(0, inferred)
                     char.notes = ", ".join(parts)
                     updated_count += 1
+                elif gi_mode == "Script + LLM":
+                    llm_needed.append((char, name_to_check))
             except Exception as e:
-                logger.debug("Gender inference failed for %s: %s", name_to_check, e)
+                logger.debug(
+                    "Gender inference failed for %s: %s", name_to_check, e,
+                )
+                if gi_mode == "Script + LLM":
+                    llm_needed.append((char, name_to_check))
+
+        # --- LLM pass for remaining unknowns ---
+        if llm_needed and gi_mode == "Script + LLM" and all_lines:
+            llm_min = int(
+                ini_manager.get_user_default(
+                    "utility", "gender_llm_minimum",
+                ) or "3"
+            )
+            llm_max = int(
+                ini_manager.get_user_default(
+                    "utility", "gender_llm_maximum",
+                ) or "5"
+            )
+            llm_ign = ini_manager.get_user_default(
+                "utility", "gender_llm_ignore_unknown",
+            )
+            llm_ignore = llm_ign not in ("false", "False", "0", "")
+            llm_doall_str = ini_manager.get_user_default(
+                "utility", "gender_llm_do_all",
+            )
+            llm_do_all = llm_doall_str not in ("false", "False", "0", "")
+
+            try:
+                from CherryAI.functions.API2Glossary import infer_gender_llm
+            except ImportError:
+                logger.warning("LLM gender inference not available")
+                llm_needed = []
+
+            for j, (char, name_to_check) in enumerate(llm_needed):
+                idx = total - len(llm_needed) + j
+                progress_label.configure(text=f"LLM: '{name_to_check}'")
+                progress_bar["value"] = idx
+                count_label.configure(
+                    text=f"{idx} / {total} (LLM pass)",
+                )
+                progress_dialog.update_idletasks()
+
+                try:
+                    gender, conf = infer_gender_llm(
+                        name_to_check,
+                        all_lines,
+                        minimum=llm_min,
+                        maximum=llm_max,
+                        ignore_unknown=llm_ignore,
+                        do_all=llm_do_all,
+                    )
+                    if gender and gender != "Unknown" and conf >= 50:
+                        parts = [
+                            p.strip()
+                            for p in char.notes.split(",") if p.strip()
+                        ]
+                        if gender not in parts:
+                            parts.insert(0, gender)
+                        char.notes = ", ".join(parts)
+                        updated_count += 1
+                except RuntimeError as exc:
+                    logger.error("LLM gender inference error: %s", exc)
+                    try:
+                        progress_dialog.grab_release()
+                        progress_dialog.destroy()
+                    except tk.TclError:
+                        pass
+                    messagebox.showerror(
+                        "Gender Inference Failed",
+                        str(exc),
+                    )
+                    return
+                except Exception as e:
+                    logger.debug(
+                        "LLM gender for %s failed: %s", name_to_check, e,
+                    )
 
         # Close progress dialog
         try:
@@ -2876,7 +2981,6 @@ class InformationStep(BaseStep):
         # Refresh display
         self._refresh_character_list()
 
-        # Save to manifest if any were updated
         if updated_count > 0:
             self._save_characters_to_manifest()
 
@@ -4668,6 +4772,14 @@ class InformationStep(BaseStep):
     # ========================================================================
     # BaseStep Interface
     # ========================================================================
+
+    def on_new_project(self) -> None:
+        """Reset cached state for a fresh project."""
+        super().on_new_project()
+        self._is_inferring = False
+        self._json_mode = False
+        self._manifest_bindings.clear()
+        logger.debug("Information step reset for new project")
 
     def on_enter(self) -> None:
         """Called when step is entered.

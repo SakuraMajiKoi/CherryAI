@@ -1724,6 +1724,15 @@ class OutputInjectStep(BaseStep):
     # BaseStep Implementation
     # =========================================================================
 
+    def on_new_project(self) -> None:
+        """Reset cached state for a fresh project."""
+        super().on_new_project()
+        self._files.clear()
+        self._cancel_requested = False
+        self._selected_file_idx = -1
+        self._manifest_bindings.clear()
+        logger.debug("Output step reset for new project")
+
     def on_enter(self) -> None:
         """Called when entering this tab."""
         # TASK 28.2: Load output settings from manifest

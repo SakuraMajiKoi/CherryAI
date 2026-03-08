@@ -1855,6 +1855,16 @@ class PostprocessingStep(BaseStep):
             f"Marked {len(selected)} line(s) for retry.",
         )
 
+    def on_new_project(self) -> None:
+        """Reset cached state for a fresh project."""
+        super().on_new_project()
+        self._lines.clear()
+        self._selected_line_idx = -1
+        self._manifest_bindings.clear()
+        self._validation_result = None
+        self._validation_run = False
+        logger.debug("Postprocessing step reset for new project")
+
     def on_enter(self) -> None:
         """Called when step becomes active."""
         # TASK 27.1: Load postprocessing options from manifest

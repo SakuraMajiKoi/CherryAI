@@ -948,35 +948,52 @@ class AnalysisStep(BaseStep):
         def _worker() -> None:
             nonlocal updated_chars, updated_codes, done_count
 
-            # Translate characters
-            for idx, name in char_items:
-                if cancel_event.is_set():
-                    break
-                result = translate_term(
-                    name, source_lang=src_code, target_lang=tgt_code,
-                )
-                if result != name:
-                    characters[idx]["translation"] = _sanitize_translation(
-                        result,
+            try:
+                # Translate characters
+                for idx, name in char_items:
+                    if cancel_event.is_set():
+                        break
+                    result = translate_term(
+                        name, source_lang=src_code, target_lang=tgt_code,
+                        prompt_type="glossary",
                     )
-                    updated_chars += 1
-                    translated_speakers.append(name)
-                done_count += 1
-                dlg.after(0, _update, done_count, name)
+                    if result != name:
+                        characters[idx]["translation"] = _sanitize_translation(
+                            result,
+                        )
+                        updated_chars += 1
+                        translated_speakers.append(name)
+                    done_count += 1
+                    dlg.after(0, _update, done_count, name)
 
-            # Translate code patterns
-            for idx, pattern in code_items:
-                if cancel_event.is_set():
-                    break
-                result = translate_term(
-                    pattern, source_lang=src_code, target_lang=tgt_code,
+                # Translate code patterns
+                for idx, pattern in code_items:
+                    if cancel_event.is_set():
+                        break
+                    result = translate_term(
+                        pattern, source_lang=src_code, target_lang=tgt_code,
+                        prompt_type="code",
+                    )
+                    if result != pattern:
+                        code_rows[idx][1] = _sanitize_translation(result)
+                        updated_codes += 1
+                        translated_patterns[pattern] = code_rows[idx][1]
+                    done_count += 1
+                    dlg.after(0, _update, done_count, pattern)
+            except RuntimeError as exc:
+                logger.error("Term translation aborted: %s", exc)
+                dlg.after(
+                    0,
+                    lambda: (
+                        dlg.destroy(),
+                        messagebox.showerror(
+                            "Term Translation Failed",
+                            str(exc),
+                            parent=self.winfo_toplevel(),
+                        ),
+                    ),
                 )
-                if result != pattern:
-                    code_rows[idx][1] = _sanitize_translation(result)
-                    updated_codes += 1
-                    translated_patterns[pattern] = code_rows[idx][1]
-                done_count += 1
-                dlg.after(0, _update, done_count, pattern)
+                return
 
             dlg.after(0, _finish)
 
@@ -2247,6 +2264,16 @@ class AnalysisStep(BaseStep):
             else:
                 logger.warning("Unexpected finding type: %s", type(item))
         return result
+
+    def on_new_project(self) -> None:
+        """Reset cached state for a fresh project."""
+        super().on_new_project()
+        self._analysis_results.clear()
+        self._is_analyzing = False
+        self._instance_rows.clear()
+        self._expanded_parents.clear()
+        self._findings_rows.clear()
+        logger.debug("Analysis step reset for new project")
 
     def on_enter(self) -> None:
         """Called when the step tab is selected.

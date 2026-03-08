@@ -1461,6 +1461,14 @@ class QAStep(BaseStep):
         
         logger.debug("Loaded QA options from manifest")
 
+    def on_new_project(self) -> None:
+        """Reset cached state for a fresh project."""
+        super().on_new_project()
+        self._lines.clear()
+        self._selected_line_idx = -1
+        self._manifest_bindings.clear()
+        logger.debug("QA step reset for new project")
+
     def on_enter(self) -> None:
         """Called when step becomes active."""
         if self._full_ui_built:
