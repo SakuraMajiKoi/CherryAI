@@ -68,12 +68,22 @@ class ConditionalPrompt:
     def get_dynamic_instruction(self, matched_patterns: Set[str]) -> str:
         """Generate a dynamic instruction with only relevant examples.
         
+        For delimiter_protection and linebreaks, builds a description
+        listing only the delimiter/linebreak types actually detected.
+        
         Args:
             matched_patterns: Set of pattern strings that matched
         
         Returns:
             Instruction with relevant examples only
         """
+        # Special handling for delimiter_protection: list matched types
+        if self.name == "delimiter_protection":
+            return self._build_delimiter_instruction(matched_patterns)
+        # Special handling for linebreaks: list matched linebreak kinds
+        if self.name == "linebreaks":
+            return self._build_linebreak_instruction(matched_patterns)
+
         if not self.pattern_examples:
             return self.instruction
         
@@ -89,6 +99,42 @@ class ConditionalPrompt:
         # Build instruction with examples
         examples_str = ", ".join(sorted(set(examples)))
         return f"{self.instruction} (e.g., {examples_str})"
+
+    def _build_delimiter_instruction(self, matched_patterns: Set[str]) -> str:
+        """Build variable instruction text listing matched delimiter types."""
+        _DELIMITER_NAMES: Dict[str, str] = {
+            r"\[[^\]]+\]": "[square]",
+            r"\{[^}]+\}": "{curly}",
+            r"<[^>]+>": "<angle>",
+            r"__[A-Za-z][A-Za-z0-9_]*__": "__double_underscore__",
+        }
+        found = [
+            _DELIMITER_NAMES[p] for p in matched_patterns
+            if p in _DELIMITER_NAMES
+        ]
+        if not found:
+            return self.instruction
+        types_str = " / ".join(sorted(found))
+        return f"Preserve content within {types_str} delimiters unchanged."
+
+    def _build_linebreak_instruction(self, matched_patterns: Set[str]) -> str:
+        """Build variable instruction text listing matched linebreak kinds."""
+        _LINEBREAK_NAMES: Dict[str, str] = {
+            r"<[bB][rR]\s*/?\s*>": "<br> tags",
+            r"(?<!\\)\\n(?!\[)": "\\n escape sequences",
+            r"\r\n|\r|\n": "literal newlines",
+        }
+        found = [
+            _LINEBREAK_NAMES[p] for p in matched_patterns
+            if p in _LINEBREAK_NAMES
+        ]
+        if not found:
+            return self.instruction
+        kinds_str = ", ".join(sorted(found))
+        return (
+            f"Preserve line break markers ({kinds_str}) exactly. "
+            f"Keep count and position. Don't add or remove."
+        )
     
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary."""
@@ -121,91 +167,66 @@ class ConditionalPrompt:
 
 
 # ============================================================================
-# Built-in Conditional Prompts
+# Built-in Conditional Prompts (Pattern-Triggered)
 # ============================================================================
 
-# Code Protection Tokens
-CONDITION_PROT_TOKEN = ConditionalPrompt(
-    name="prot_token",
-    description="Protected code tokens (__PROTECTED__, __COLOR__, __FONT__)",
-    patterns=[
-        r"__PROTECTED__",
-        r"__PROTECTED_\d+__",
-        r"__CODE_PROTECTED_\d+__",
-        r"__COLOR__",
-        r"__COLOR_\d+__",
-        r"__FONT__",
-        r"__FONT_\d+__",
-    ],
-    instruction="Protected tokens must be preserved exactly - same position, count, spelling.",
-    priority=100,
-    category="code",
-    pattern_examples={
-        r"__PROTECTED__": "__PROTECTED__",
-        r"__PROTECTED_\d+__": "__PROTECTED_1__",
-        r"__CODE_PROTECTED_\d+__": "__CODE_PROTECTED_5__",
-        r"__COLOR__": "__COLOR__",
-        r"__COLOR_\d+__": "__COLOR_2__",
-        r"__FONT__": "__FONT__",
-        r"__FONT_\d+__": "__FONT_1__",
-    },
-)
-
-# Deduplication Markers
-CONDITION_DEDUP_TOKEN = ConditionalPrompt(
-    name="dedup_token",
-    description="Deduplication markers (__DEDUP__)",
-    patterns=[r"__DEDUP__", r"_DEDUP__"],
-    instruction="__DEDUP__ lines are duplicate placeholders. Output unchanged - filled automatically.",
-    priority=95,
-    category="code",
-    pattern_examples={
-        r"__DEDUP__": "__DEDUP__",
-        r"_DEDUP__": "_DEDUP__",
-    },
-)
-
-# Temporary Replacement Values
+# Temporary Replacement Values (covers Temporary Replacement + Custom Placeholder tokens)
 CONDITION_TEMPREPL = ConditionalPrompt(
     name="temp_replacement",
-    description="Temporary replacement values (names like Steve)",
-    patterns=[r"__TEMPREPL_\d+_\d+__"],
-    instruction="__TEMPREPL_X_Y__ tokens are temp placeholders. Preserve exactly.",
+    description="Temporary replacement and Custom Placeholder tokens",
+    patterns=[
+        r"__TEMPREPL_\d+_\d+__",
+        r"__CUST__",
+    ],
+    instruction=(
+        "Placeholder tokens (__TEMPREPL_X_Y__, __CUST__, etc.) "
+        "are temporary markers. Preserve them exactly — same spelling, position, and count."
+    ),
     priority=90,
     category="code",
     pattern_examples={
         r"__TEMPREPL_\d+_\d+__": "__TEMPREPL_1_0__",
+        r"__CUST__": "__CUST__",
     },
 )
 
-# Bracket-based Anchors
-CONDITION_BRACKETS = ConditionalPrompt(
-    name="brackets",
-    description="Square, curly, or angle brackets",
-    patterns=[r"\[.*?\]", r"\{.*?\}", r"<[^>]+>"],
-    instruction="Preserve bracketed content - keep code/variables unchanged.",
+# Delimiter Protection (reworked from 'brackets')
+CONDITION_DELIMITER_PROTECTION = ConditionalPrompt(
+    name="delimiter_protection",
+    description="Content within delimiters: [square], {curly}, <angle>, __double_underscore__",
+    patterns=[
+        r"\[[^\]]+\]",
+        r"\{[^}]+\}",
+        r"<[^>]+>",
+        r"__[A-Za-z][A-Za-z0-9_]*__",
+    ],
+    instruction="Preserve content within delimiters unchanged.",
     priority=80,
     category="anchors",
     pattern_examples={
-        r"\[.*?\]": "[name]",
-        r"\{.*?\}": "{var}",
+        r"\[[^\]]+\]": "[name]",
+        r"\{[^}]+\}": "{variable}",
         r"<[^>]+>": "<tag>",
+        r"__[A-Za-z][A-Za-z0-9_]*__": "__TOKEN__",
     },
 )
 
-# Japanese/Asian Brackets
-CONDITION_JP_BRACKETS = ConditionalPrompt(
-    name="jp_brackets",
-    description="Japanese-style brackets (「」『』【】《》)",
-    patterns=[r"「.*?」", r"『.*?』", r"【.*?】", r"《.*?》"],
-    instruction='Convert JP brackets appropriately.',
-    priority=75,
-    category="format",
+# Linebreaks (reworked from 'br_tags' — encompasses all linebreak types)
+CONDITION_LINEBREAKS = ConditionalPrompt(
+    name="linebreaks",
+    description="Line break markers: <br> tags, literal newlines, \\n escape sequences",
+    patterns=[
+        r"<[bB][rR]\s*/?\s*>",
+        r"(?<!\\)\\n(?!\[)",
+        r"\r\n|\r|\n",
+    ],
+    instruction="Preserve line break markers exactly. Keep count and position. Don't add or remove.",
+    priority=85,
+    category="code",
     pattern_examples={
-        r"「.*?」": '「text」→"text"',
-        r"『.*?』": '『text』→"text"',
-        r"【.*?】": "【text】→[text]",
-        r"《.*?》": "《text》→<text>",
+        r"<[bB][rR]\s*/?\s*>": "<br>",
+        r"(?<!\\)\\n(?!\[)": "\\n",
+        r"\r\n|\r|\n": "(literal newline)",
     },
 )
 
@@ -220,22 +241,6 @@ CONDITION_COLOR_CODES = ConditionalPrompt(
     pattern_examples={
         r"\\c\[\d+\]": "\\c[4]",
         r"\\c\[#[0-9A-Fa-f]+\]": "\\c[#FF0000]",
-    },
-)
-
-# Variable References
-CONDITION_VARIABLES = ConditionalPrompt(
-    name="variables",
-    description="Variable references (\\v[N], \\n[N])",
-    patterns=[r"\\v\[\d+\]", r"\\n\[\d+\]", r"\\N\[\d+\]", r"\\V\[\d+\]"],
-    instruction="Preserve variable refs exactly - they display game data.",
-    priority=70,
-    category="code",
-    pattern_examples={
-        r"\\v\[\d+\]": "\\v[15]",
-        r"\\n\[\d+\]": "\\n[1]",
-        r"\\N\[\d+\]": "\\N[2]",
-        r"\\V\[\d+\]": "\\V[10]",
     },
 )
 
@@ -256,11 +261,11 @@ CONDITION_MEDIA = ConditionalPrompt(
     },
 )
 
-# Text Formatting
+# Text Formatting (\\n removed — handled by linebreaks condition)
 CONDITION_FORMATTING = ConditionalPrompt(
     name="text_formatting",
-    description="Text formatting codes (\\fb, \\fr, \\i[], \\n, etc.)",
-    patterns=[r"\\fb", r"\\fr", r"\\i\[\d+\]", r"\\b", r"\\n(?!\[\d+\])"],
+    description="Text formatting codes (\\fb, \\fr, \\i[], \\b)",
+    patterns=[r"\\fb", r"\\fr", r"\\i\[\d+\]", r"\\b"],
     instruction="Preserve formatting codes exactly.",
     priority=65,
     category="code",
@@ -269,7 +274,6 @@ CONDITION_FORMATTING = ConditionalPrompt(
         r"\\fr": "\\fr",
         r"\\i\[\d+\]": "\\i[2]",
         r"\\b": "\\b",
-        r"\\n(?!\[\d+\])": "\\n",
     },
 )
 
@@ -300,63 +304,18 @@ CONDITION_ELLIPSIS = ConditionalPrompt(
     },
 )
 
-# Speaker Tags
-CONDITION_SPEAKER = ConditionalPrompt(
-    name="speaker_tags",
-    description="Speaker name prefixes (Name: or Name：)",
-    patterns=[r"^[^\s:：]+[:：]\s*", r"「[^」]+」"],
-    instruction="Translate speaker names from glossary. Keep Name: format.",
-    priority=30,
-    category="content",
-    pattern_examples={
-        r"^[^\s:：]+[:：]\s*": "Name:",
-        r"「[^」]+」": "「dialogue」",
-    },
-)
-
-# Speaker Dialogue Format Preservation
+# Speaker Dialogue Format (reworked — uses Analysis-style speaker detection)
 CONDITION_SPEAKER_FORMAT = ConditionalPrompt(
     name="speaker_dialogue_format",
-    description="Speaker: \"Dialogue\" format with balanced quotes",
+    description="Speaker: Dialogue format detected via Analysis-style speaker inference",
     patterns=[
-        # Name followed by colon (or fullwidth), then quote
-        r"^[^\s:：]+[:：]\s*[\"'「『""'（(]",
-        # Fullwidth colon variant
-        r"^[^\s:：]+：\s*「",
+        r"(?m)^[^\s:：]{1,30}[:：]\s*.+",
     ],
-    instruction="Preserve Speaker: \"Dialogue\" format. Keep colon between name and quote. Maintain balanced quotes.",
+    instruction='Preserve Speaker: "Dialogue" format. Keep colon between name and dialogue. Maintain balanced quotes.',
     priority=32,
     category="format",
     pattern_examples={
-        r"^[^\s:：]+[:：]\s*[\"'「『""'（(]": 'Name: "text"',
-        r"^[^\s:：]+：\s*「": "名前：「text」",
-    },
-)
-
-# Line Break Tags (HTML-style)
-CONDITION_BR_TAGS = ConditionalPrompt(
-    name="br_tags",
-    description="HTML line break tags (<br>, <br/>, <br />)",
-    patterns=[r"<br\s*/?\s*>", r"<BR\s*/?\s*>"],
-    instruction="Preserve line break tags exactly. Keep count and position. Don't add/remove.",
-    priority=85,
-    category="code",
-    pattern_examples={
-        r"<br\s*/?\s*>": "<br>",
-        r"<BR\s*/?\s*>": "<BR/>",
-    },
-)
-
-# Newline escape sequences
-CONDITION_NEWLINE = ConditionalPrompt(
-    name="newline_escape",
-    description="Newline escape sequences (\\n literal)",
-    patterns=[r"(?<!\\)\\n(?!\[)"],
-    instruction="Preserve \\n newline escapes exactly in position.",
-    priority=84,
-    category="code",
-    pattern_examples={
-        r"(?<!\\)\\n(?!\[)": "\\n",
+        r"(?m)^[^\s:：]{1,30}[:：]\s*.+": 'Name: "dialogue"',
     },
 )
 
@@ -394,14 +353,27 @@ def build_merged_request_instruction(merge_boundaries: List[int]) -> str:
     if not merge_boundaries or len(merge_boundaries) < 2:
         return ""
 
+    # Load configurable base texts from INI.
+    try:
+        from functions.ini_manager import get_merged_request_text
+        all_text = get_merged_request_text(
+            "all_unrelated",
+            "All lines are unrelated to each other.",
+        )
+        block_text = get_merged_request_text(
+            "block_unrelated",
+            "This request has lines unrelated to each other.",
+        )
+    except Exception:
+        all_text = "All lines are unrelated to each other."
+        block_text = "This request has lines unrelated to each other."
+
     # All single-line blocks → every line is unrelated
     if all(b == 1 for b in merge_boundaries):
-        return "All lines are unrelated to each other."
+        return all_text
 
     # Mixed: describe block boundaries with relative line numbers
-    parts: List[str] = [
-        "This request has lines unrelated to each other.",
-    ]
+    parts: List[str] = [block_text]
     offset = 0
     for idx, size in enumerate(merge_boundaries):
         block_start = offset + 1
@@ -426,20 +398,14 @@ def build_merged_request_instruction(merge_boundaries: List[int]) -> str:
 # ============================================================================
 
 BUILTIN_CONDITIONS: List[ConditionalPrompt] = [
-    CONDITION_PROT_TOKEN,
-    CONDITION_DEDUP_TOKEN,
     CONDITION_TEMPREPL,
-    CONDITION_BRACKETS,
-    CONDITION_JP_BRACKETS,
-    CONDITION_BR_TAGS,
-    CONDITION_NEWLINE,
+    CONDITION_DELIMITER_PROTECTION,
+    CONDITION_LINEBREAKS,
     CONDITION_COLOR_CODES,
-    CONDITION_VARIABLES,
     CONDITION_MEDIA,
     CONDITION_FORMATTING,
     CONDITION_RUBY,
     CONDITION_ELLIPSIS,
-    CONDITION_SPEAKER,
     CONDITION_SPEAKER_FORMAT,
 ]
 
@@ -466,6 +432,7 @@ class ConditionalPromptManager:
         self.conditions: Dict[str, ConditionalPrompt] = {}
         
         self._load_builtin_conditions()
+        self._apply_ini_overrides()
         self._load_user_conditions()
     
     def _load_builtin_conditions(self) -> None:
@@ -475,6 +442,21 @@ class ConditionalPromptManager:
             # Deep copy to avoid modifying global defaults
             self.conditions[condition.name] = copy.deepcopy(condition)
         self.logger.debug(f"Loaded {len(BUILTIN_CONDITIONS)} built-in conditions")
+
+    def _apply_ini_overrides(self) -> None:
+        """Apply enabled/text overrides from CherryAI.ini [pattern_prompts]."""
+        try:
+            from functions.ini_manager import (
+                get_pattern_prompt_enabled,
+                get_pattern_prompt_text,
+            )
+        except Exception:
+            return
+        for name, condition in self.conditions.items():
+            condition.enabled = get_pattern_prompt_enabled(name)
+            text = get_pattern_prompt_text(name)
+            if text:
+                condition.instruction = text
     
     def _load_user_conditions(self) -> None:
         """Load user-defined conditions from JSON file."""
@@ -562,27 +544,33 @@ class ConditionalPromptManager:
             self.logger.error(f"Failed to save conditions: {e}")
     
     def evaluate_batch(self, lines: List[str]) -> List[Tuple[ConditionalPrompt, Set[str]]]:
-        """Evaluate which conditions match a batch of text.
-        
+        """Evaluate which conditions match a batch of input lines.
+
+        Each line is evaluated individually so that join separators do not
+        produce false-positive pattern matches (e.g. literal newline pattern).
+
         Args:
             lines: List of text lines to evaluate
-        
+
         Returns:
             List of (condition, matched_patterns) tuples, sorted by priority (highest first)
         """
-        batch_text = "\n".join(lines)
-        matches: List[Tuple[ConditionalPrompt, Set[str]]] = []
-        
-        for condition in self.conditions.values():
-            if not condition.enabled:
-                continue
-            matched, patterns = condition.matches(batch_text)
-            if matched:
-                matches.append((condition, patterns))
-        
-        # Sort by priority (highest first)
-        matches.sort(key=lambda x: x[0].priority, reverse=True)
-        return matches
+        accumulated: Dict[str, Tuple[ConditionalPrompt, Set[str]]] = {}
+
+        for line in lines:
+            for condition in self.conditions.values():
+                if not condition.enabled:
+                    continue
+                matched, patterns = condition.matches(line)
+                if matched:
+                    if condition.name in accumulated:
+                        accumulated[condition.name][1].update(patterns)
+                    else:
+                        accumulated[condition.name] = (condition, set(patterns))
+
+        result = list(accumulated.values())
+        result.sort(key=lambda x: x[0].priority, reverse=True)
+        return result
     
     def build_conditional_instructions(self, lines: List[str]) -> str:
         """Build the conditional instructions block for a batch.

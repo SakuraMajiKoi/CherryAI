@@ -418,7 +418,7 @@ The system prompt is assembled in the following fixed order. Empty sections are 
 | 5 | **Summary** | `metadata.summary` | Gated by `summary_enabled` (default: **false**) |
 | 6 | **Genre** | `metadata.genre` (fallback: top-level `Genre`) | Gated by `genre_enabled` (default: **false**) |
 | 7 | **POV** | `manifest POV` dict (`pov`, `confidence`) | Skip when confidence ≠ "high" **or** when slot 4b has narration |
-| 8 | **Conditional Prompts** | `user/CherryAI.ini [prompts]` or `user/conditional_prompts.json` | Selective — injected only when [Input Lines] contain the trigger pattern |
+| 8 | **Conditional Prompts** | `user/CherryAI.ini [prompts]` + `[pattern_prompts]` or `user/conditional_prompts.json` | Selective — injected only when [Input Lines] contain the trigger pattern. Context-type + 9 pattern-triggered prompts (configurable in Global Options) |
 | 8b | **Merged-Request Instruction** | `_merge_boundaries` from formation | Efficient mode only — describes block relatedness for Step 5 merged requests |
 | 9 | **Glossary** | Manifest `Glossary` + `user/globalglossary.tsv` + `metadata.characters` | Gated by `glossary_enabled` (default: **true**); selective — rows injected only when Original found in [Input Lines] |
 | 10 | **Rolling Context** | Preceding translated lines from manifest | Conditional — dialogue/unknown requests only; disabled for Menu/Choice |

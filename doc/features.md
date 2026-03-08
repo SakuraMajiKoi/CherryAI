@@ -341,31 +341,27 @@ CONDITIONAL PROMPT INSTRUCTIONS ✓ (Enhanced - Session 14+)
 - **Dynamic Instructions** (NEW - TASK 5):
   - Instructions generated based on patterns actually present in batch
   - Only shows relevant examples (reduces token usage)
-  - Separate handling for related patterns (e.g., <br> vs \n)
-- Built-in conditions (15 total):
-  - **__PROTECTED__/__COLOR__/__FONT__**: Protected placeholders with indexed variants
-  - **__DEDUP__**: AI instructed to output unchanged
-  - **__TEMPREPL_X_Y__**: AI instructed to preserve format
-  - **Brackets**: Preserves [name], {variable}, <tag> structures (shows only used types)
-  - **Japanese brackets**: Converts 「」『』【】《》 appropriately
-  - **<br> Tags**: Protects HTML line break tags in game text
-  - **\n Newlines**: Preserves escaped newline sequences
+  - Separate handling for related patterns (e.g., delimiter types, linebreak kinds)
+- Built-in conditions (9 total, all configurable in Global Options → Prompts):
+  - **Temporary Replacement**: Preserves __TEMPREPL_X_Y__ and __CUST__ placeholder tokens
+  - **Delimiter Protection**: Preserves [square], {curly}, <angle>, __dunder__ delimiters (dynamic — lists only matched types)
+  - **Linebreaks**: Preserves <br> tags, \\n escape sequences, literal newlines (dynamic — lists only detected kinds)
   - **Color codes**: Preserves \\c[N] formatting
-  - **Variables**: Preserves \\v[N], \\n[N] references
-  - **Media commands**: Preserves \\se[], \\pic[], \\wait[]
-  - **Text formatting**: Preserves \\fb, \\fr, \\i[], etc.
+  - **Media commands**: Preserves \\se[], \\pic[], \\wait[], \\fadein[]
+  - **Text formatting**: Preserves \\fb, \\fr, \\i[], \\b codes
   - **Ruby text**: Preserves \\rb[text,reading] furigana
-  - **Ellipsis**: Maintains ... dramatic pauses
-  - **Speaker tags**: Handles Name: format structure
-  - **Speaker dialogue format**: Preserves Speaker: "Dialogue" format
-- Custom patterns: Define your own via config/conditional_prompts.json
+  - **Ellipsis**: Maintains …/... dramatic pauses
+  - **Speaker dialogue format**: Preserves Speaker: "Dialogue" format (Analysis-style detection)
+- All pattern-triggered prompts configurable: enabled/disabled + instruction text editable in Global Options → Prompts → Conditional Prompts (Pattern Triggered)
+- Settings stored in CherryAI.ini [pattern_prompts] section
+- Custom patterns: Define your own via user/conditional_prompts.json
 - Priority-based ordering (higher priority = earlier in prompt)
 - Instructions only injected when relevant patterns detected in batch
 - **Pattern-Specific Examples**:
   - Each pattern has its own human-readable example
   - Examples only shown when that specific pattern matches
-  - e.g., "[name]" shown only when square brackets detected
-  - e.g., "__PROTECTED_1__" shown only when indexed PROTECTED detected
+  - e.g., "[square]" shown only when square brackets detected
+  - e.g., "<br> tags" shown only when <br> detected in input
 - Reduces placeholder corruption from ~5% to <0.1%
 
 API RESPONSE VALIDATION ✓ (Enhanced - Session 14+)
@@ -1724,7 +1720,13 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
       - Each row: 3-line Text widget + scrollbar + Reset to Default button
       - Persisted to CherryAI.ini on Apply/OK via set_conditional_prompt()
       - Used by get_context_prompt() in prompt_builder.py for live translation and mock translation
-    - Prompts stored in [prompts] section of CherryAI.ini (auto-seeded from defaults.ini)
+    - **Conditional Prompts (Pattern Triggered):** 9-prompt LabelFrame configuring pattern-triggered prompts:
+      - Each prompt: Enabled checkbox + 2-line instruction Text widget + Reset to Default button
+      - temp_replacement, delimiter_protection, linebreaks, color_codes, media_commands, text_formatting, ruby_text, ellipsis, speaker_dialogue_format
+      - Stored in CherryAI.ini [pattern_prompts] section (enabled + text per prompt)
+      - Merged Request Instructions subsection: all_unrelated + block_unrelated texts
+      - Loaded from INI by ConditionalPromptManager via _apply_ini_overrides()
+    - Prompts stored in [prompts] and [pattern_prompts] sections of CherryAI.ini (auto-seeded from defaults)
     - User customizations saved via Save as Default
     - Factory defaults restorable via Restore Initial Defaults
   - **Dialog Features:**

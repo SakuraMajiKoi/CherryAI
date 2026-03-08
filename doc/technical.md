@@ -379,6 +379,11 @@ TABLE OF CONTENTS
          - _CONDITIONAL_PROMPT_DEFAULTS: hardcoded fallbacks per context type
          - get_conditional_prompt(context_type, fallback="") → str: reads [prompts] section; falls back to hardcoded defaults
          - set_conditional_prompt(context_type, value) → bool: writes to [prompts] section via set_default()
+       - **Pattern Prompt Helpers (new):**
+         - PATTERN_PROMPT_NAMES: list of 9 pattern-triggered prompt names
+         - get/set_pattern_prompt_enabled(name): reads/writes [pattern_prompts] section enabled flag
+         - get/set_pattern_prompt_text(name): reads/writes [pattern_prompts] section instruction text
+         - get/set_merged_request_text(kind): reads/writes merged-request instruction texts
    
    6.11 gui/theme/ (3 files)
        - __init__.py - Theme exports
@@ -2566,45 +2571,47 @@ Helper Functions:
 
 Conditional Prompt System (functions/conditional_prompts.py) ✓ Enhanced Session 14+:
 - Pattern-triggered instructions appended to system prompt
-- Detects tokens like __PROTECTED__, __DEDUP__, __TEMPREPL_X_Y__ in batch text
+- Detects tokens like __TEMPREPL_X_Y__, __CUST__, delimiters, linebreaks in batch text
 - Injects handling instructions only when relevant patterns present
-- Configuration via config/conditional_prompts.json for customization
-- 15 built-in conditions with priority ordering
+- Configuration via user/conditional_prompts.json for custom patterns
+- All 9 built-in conditions configurable in Global Options → Prompts → Conditional Prompts (Pattern Triggered)
+- Settings stored in CherryAI.ini [pattern_prompts] section (enabled + text per prompt)
 - **Dynamic instructions with pattern-specific examples (TASK 5)**
-- **Separate handling for <br> vs \\n, __PROTECTED__ vs __COLOR__ vs __FONT__**
-- **Bracket differentiation: [] vs {} vs <>**
+- **Delimiter differentiation: [square] / {curly} / <angle> / __dunder__**
+- **Linebreak differentiation: <br> tags, \\n escapes, literal newlines**
 
 Classes:
 - ConditionalPrompt: Dataclass with name, patterns, instruction, priority, category, pattern_examples
-- ConditionalPromptManager: Evaluates batches, builds dynamic instructions
+- ConditionalPromptManager: Evaluates batches, builds dynamic instructions, applies INI overrides
 
 Key Methods:
 - `ConditionalPrompt.matches(text)` - Returns (matched: bool, matched_patterns: Set[str])
 - `ConditionalPrompt.get_dynamic_instruction(matched_patterns)` - Generate instruction with relevant examples only
+- `ConditionalPrompt._build_delimiter_instruction(matched_patterns)` - Dynamic delimiter type listing
+- `ConditionalPrompt._build_linebreak_instruction(matched_patterns)` - Dynamic linebreak kind listing
+- `ConditionalPromptManager._apply_ini_overrides()` - Apply enabled/text from CherryAI.ini
 - `ConditionalPromptManager.evaluate_batch(lines)` - Evaluate which conditions match
 - `ConditionalPromptManager.build_conditional_instructions(lines)` - Build dynamic instruction block
 - `build_merged_request_instruction(merge_boundaries)` - Generate block-relatedness text for Step 5 merged requests (TASK 78)
 
-Built-in Conditional Prompts (with dynamic examples):
-| Pattern | Purpose | Priority | Example When Matched |
-|---------|---------|----------|---------------------|
-| `__PROTECTED__`, `__PROTECTED_\d+__` | Code protection tokens | 100 | __PROTECTED__, __PROTECTED_1__ |
-| `__COLOR__`, `__COLOR_\d+__` | Color placeholders | 100 | __COLOR__, __COLOR_2__ |
-| `__FONT__`, `__FONT_\d+__` | Font placeholders | 100 | __FONT__, __FONT_1__ |
-| `__DEDUP__` | Deduplication markers | 95 | __DEDUP__ |
-| `__TEMPREPL_\d+_\d+__` | Temporary replacements | 90 | __TEMPREPL_1_0__ |
-| `<br\s*/?\s*>` | HTML line breaks | 85 | <br>, <BR/> |
-| `\\n(?!\[)` | Newline escapes | 84 | \\n |
-| `\[.*?\]`, `\{.*?\}`, `<[^>]+>` | Brackets (dynamic) | 80 | [name], {var}, <tag> |
-| `「.*?」`, `『.*?』`, `【.*?】`, `《.*?》` | Japanese brackets | 75 | 「」→"", 【】→[] |
-| `\\c\[\d+\]` | Color codes | 70 | \\c[4] |
-| `\\v\[\d+\]`, `\\n\[\d+\]` | Variables | 70 | \\v[15], \\n[1] |
-| `\\se\[.*?\]`, `\\pic\[.*?\]` | Media commands | 70 | \\se[sound] |
-| `\\fb`, `\\fr`, `\\i\[\d+\]` | Text formatting | 65 | \\fb, \\i[2] |
-| `\\rb\[.*?,.*?\]` | Ruby text | 60 | \\rb[漢字,かんじ] |
-| `…+`, `\.\.\.+` | Ellipsis | 40 | …, ... |
-| `^[^\s:：]+[:：]\s*` | Speaker tags | 30 | Name: |
-| `^[^\s:：]+[:：]\s*[\"'「『]` | Speaker dialogue format | 32 | Name: "text" |
+Built-in Conditional Prompts (9 total, all configurable):
+| Name | Patterns | Priority | Category | Dynamic |
+|------|----------|----------|----------|---------|
+| temp_replacement | `__TEMPREPL_\d+_\d+__`, `__CUST__` | 90 | code | examples |
+| delimiter_protection | `\[...\]`, `\{...\}`, `<...>`, `__...__` | 80 | anchors | lists matched types |
+| linebreaks | `<br>`, `\\n`, `\r\n\|\r\|\n` | 85 | code | lists detected kinds |
+| color_codes | `\\c\[\d+\]`, `\\c\[#hex\]` | 70 | code | examples |
+| media_commands | `\\se\[...\]`, `\\pic\[...\]`, `\\wait\[...\]`, `\\fadein\[...\]` | 70 | code | examples |
+| text_formatting | `\\fb`, `\\fr`, `\\i\[\d+\]`, `\\b` | 65 | code | examples |
+| ruby_text | `\\rb\[.*?,.*?\]` | 60 | code | examples |
+| ellipsis | `…+`, `\.\.\.+` | 40 | format | examples |
+| speaker_dialogue_format | `(?m)^Name[:：] text` | 32 | format | examples |
+
+INI Helpers (ini_manager.py):
+- `PATTERN_PROMPT_NAMES`: List of all 9 pattern prompt names
+- `get/set_pattern_prompt_enabled(name)`: Read/write enabled state
+- `get/set_pattern_prompt_text(name)`: Read/write instruction text
+- `get/set_merged_request_text(kind)`: Read/write merged-request instruction texts (all_unrelated, block_unrelated)
 
 Dependencies:
 - Local: glossary (for term data), analysis (for token counting)

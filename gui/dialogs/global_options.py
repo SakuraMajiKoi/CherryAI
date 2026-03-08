@@ -1190,6 +1190,22 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.edit_input_policy_var = tk.StringVar(value=self.options.prompts.edit_input_policy)
         self.tlc_input_policy_var = tk.StringVar(value=self.options.prompts.tlc_input_policy)
 
+        # Pattern-triggered conditional prompt vars (from INI)
+        self._pattern_prompt_enabled_vars: Dict[str, tk.BooleanVar] = {}
+        self._pattern_prompt_text_widgets: Dict[str, tk.Text] = {}
+        self._merged_request_text_widgets: Dict[str, tk.Text] = {}
+        try:
+            from CherryAI.functions.ini_manager import (
+                PATTERN_PROMPT_NAMES,
+                get_pattern_prompt_enabled,
+            )
+            for _name in PATTERN_PROMPT_NAMES:
+                self._pattern_prompt_enabled_vars[_name] = tk.BooleanVar(
+                    value=get_pattern_prompt_enabled(_name),
+                )
+        except Exception:
+            pass
+
     def _build_ui(self) -> None:
         """Build the options UI with navigation and content panels."""
         print("DEBUG: _build_ui started")
@@ -2359,6 +2375,161 @@ class GlobalOptionsDialog(tk.Toplevel):
             btn_row = ttk.Frame(row_frame)
             btn_row.pack(anchor="w", pady=(4, 0))
             ttk.Button(btn_row, text="Reset to Default", command=_make_reset(txt_widget, _default)).pack(side=tk.LEFT)
+
+        # ── Conditional (Pattern-Triggered) Prompts ───────────────────────
+        self._build_pattern_prompts_section(panel)
+
+    def _build_pattern_prompts_section(self, panel: ttk.Frame) -> None:
+        """Build the Pattern-Triggered Conditional Prompts subsection.
+
+        Each prompt gets an enabled checkbox and an editable instruction
+        text widget.  A separate area holds merged-request instruction
+        texts (``all_unrelated`` / ``block_unrelated``).
+        """
+        from CherryAI.functions.ini_manager import (
+            PATTERN_PROMPT_NAMES,
+            get_pattern_prompt_text,
+            get_merged_request_text,
+        )
+        from CherryAI.functions.conditional_prompts import BUILTIN_CONDITIONS
+
+        # Build lookup: name → default instruction text from code constants.
+        _defaults: Dict[str, str] = {c.name: c.instruction for c in BUILTIN_CONDITIONS}
+
+        # Human-readable labels
+        _LABELS: Dict[str, str] = {
+            "temp_replacement": "Temporary Replacement",
+            "delimiter_protection": "Delimiter Protection",
+            "linebreaks": "Linebreaks",
+            "color_codes": "Color Codes",
+            "media_commands": "Media Commands",
+            "text_formatting": "Text Formatting",
+            "ruby_text": "Ruby Text / Furigana",
+            "ellipsis": "Ellipsis",
+            "speaker_dialogue_format": "Speaker: Dialogue Format",
+        }
+
+        _DESCS: Dict[str, str] = {
+            "temp_replacement": "Detects TEMPREPL and Custom Placeholder tokens",
+            "delimiter_protection": "Protects content within [square], {curly}, <angle>, __dunder__ delimiters",
+            "linebreaks": "Preserves <br> tags, \\n escapes, and literal newlines",
+            "color_codes": "Preserves color codes like \\c[N]",
+            "media_commands": "Preserves sound/media commands like \\se[], \\pic[]",
+            "text_formatting": "Preserves formatting codes like \\fb, \\fr, \\b",
+            "ruby_text": "Preserves furigana structure \\rb[text,reading]",
+            "ellipsis": "Preserves ellipsis patterns (\u2026, ...)",
+            "speaker_dialogue_format": "Detects Speaker: Dialogue format",
+        }
+
+        pat_frame = ttk.LabelFrame(
+            panel, text="Conditional Prompts (Pattern Triggered)", padding=10,
+        )
+        pat_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+
+        ttk.Label(
+            pat_frame,
+            text=(
+                "These prompts are injected when matching patterns are detected in the\n"
+                "input lines. Disable a prompt to suppress it; edit the text to customise."
+            ),
+            foreground="gray",
+        ).pack(anchor="w", pady=(0, 8))
+
+        def _make_reset(widget: tk.Text, default: str) -> Any:
+            def _reset() -> None:
+                widget.delete("1.0", tk.END)
+                widget.insert("1.0", default)
+            return _reset
+
+        for _name in PATTERN_PROMPT_NAMES:
+            label = _LABELS.get(_name, _name)
+            desc = _DESCS.get(_name, "")
+            default_text = _defaults.get(_name, "")
+            ini_text = get_pattern_prompt_text(_name, default_text)
+
+            row = ttk.LabelFrame(pat_frame, text=label, padding=6)
+            row.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
+
+            # Enabled checkbox + description on same line
+            top_row = ttk.Frame(row)
+            top_row.pack(fill=tk.X)
+            enabled_var = self._pattern_prompt_enabled_vars.get(_name)
+            if enabled_var is None:
+                enabled_var = tk.BooleanVar(value=True)
+                self._pattern_prompt_enabled_vars[_name] = enabled_var
+            ttk.Checkbutton(top_row, text="Enabled", variable=enabled_var).pack(
+                side=tk.LEFT,
+            )
+            if desc:
+                ttk.Label(top_row, text=desc, foreground="gray").pack(
+                    side=tk.LEFT, padx=(10, 0),
+                )
+
+            # Instruction text editor
+            txt_container = ttk.Frame(row)
+            txt_container.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
+            tw = tk.Text(txt_container, height=2, width=60, wrap=tk.WORD)
+            tw.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            tw.insert("1.0", ini_text)
+            self._pattern_prompt_text_widgets[_name] = tw
+
+            sb = ttk.Scrollbar(txt_container, orient=tk.VERTICAL, command=tw.yview)
+            sb.pack(side=tk.RIGHT, fill=tk.Y)
+            tw.config(yscrollcommand=sb.set)
+
+            btn = ttk.Frame(row)
+            btn.pack(anchor="w", pady=(4, 0))
+            ttk.Button(
+                btn, text="Reset to Default",
+                command=_make_reset(tw, default_text),
+            ).pack(side=tk.LEFT)
+
+        # ── Merged Request Instructions ──────────────────────────────────
+        merge_frame = ttk.LabelFrame(
+            pat_frame, text="Merged Request Instructions", padding=6,
+        )
+        merge_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+
+        ttk.Label(
+            merge_frame,
+            text="Instructions injected when Efficient mode merges requests across file boundaries.",
+            foreground="gray",
+        ).pack(anchor="w", pady=(0, 6))
+
+        _merge_entries = [
+            (
+                "All Unrelated",
+                "all_unrelated",
+                "All lines are unrelated to each other.",
+            ),
+            (
+                "Block Unrelated",
+                "block_unrelated",
+                "This request has lines unrelated to each other.",
+            ),
+        ]
+        for _label, _kind, _default_text in _merge_entries:
+            mrow = ttk.LabelFrame(merge_frame, text=_label, padding=4)
+            mrow.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
+
+            ini_val = get_merged_request_text(_kind, _default_text)
+            mc = ttk.Frame(mrow)
+            mc.pack(fill=tk.BOTH, expand=True)
+            mw = tk.Text(mc, height=2, width=60, wrap=tk.WORD)
+            mw.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            mw.insert("1.0", ini_val)
+            self._merged_request_text_widgets[_kind] = mw
+
+            msb = ttk.Scrollbar(mc, orient=tk.VERTICAL, command=mw.yview)
+            msb.pack(side=tk.RIGHT, fill=tk.Y)
+            mw.config(yscrollcommand=msb.set)
+
+            mbtn = ttk.Frame(mrow)
+            mbtn.pack(anchor="w", pady=(4, 0))
+            ttk.Button(
+                mbtn, text="Reset to Default",
+                command=_make_reset(mw, _default_text),
+            ).pack(side=tk.LEFT)
 
     def _reset_edit_prompt(self) -> None:
         """Reset edit prompt to default value."""
@@ -4353,6 +4524,28 @@ class GlobalOptionsDialog(tk.Toplevel):
             set_conditional_prompt("menu", self.options.prompts.menu)
             set_conditional_prompt("choice", self.options.prompts.choice)
             set_conditional_prompt("unknown", self.options.prompts.unknown)
+
+            # Pattern-triggered conditional prompts → [pattern_prompts]
+            from CherryAI.functions.ini_manager import (
+                PATTERN_PROMPT_NAMES,
+                set_pattern_prompt_enabled,
+                set_pattern_prompt_text,
+                set_merged_request_text,
+            )
+            for _name in PATTERN_PROMPT_NAMES:
+                if _name in self._pattern_prompt_enabled_vars:
+                    set_pattern_prompt_enabled(
+                        _name, self._pattern_prompt_enabled_vars[_name].get(),
+                    )
+                if _name in self._pattern_prompt_text_widgets:
+                    set_pattern_prompt_text(
+                        _name,
+                        self._pattern_prompt_text_widgets[_name].get(
+                            "1.0", tk.END,
+                        ).strip(),
+                    )
+            for _kind, _widget in self._merged_request_text_widgets.items():
+                set_merged_request_text(_kind, _widget.get("1.0", tk.END).strip())
 
         except Exception as exc:
             logger.warning("Failed to persist settings to INI: %s", exc)

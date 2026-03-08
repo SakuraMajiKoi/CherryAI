@@ -2844,7 +2844,7 @@ Thank you.
 | test_cli_overrides.py | 38 | CLI API overrides (TASK 3) |
 | test_cli_progress.py | 17 | CLI progress indicators (TASK 15.12) |
 | test_common_errors.py | 31 | Common error handling |
-| test_conditional_prompts.py | 45 | Conditional prompts with dynamic examples (TASK 5) |
+| test_conditional_prompts.py | 84 | Conditional prompts — 9 pattern-triggered prompts, INI overrides, merged requests |
 | test_config.py | 23 | Config management |
 | test_dedup.py | 34 | Deduplication + tag storage + top-N limit |
 | test_dependencies.py | 17 | Dependency checking (TASK 15.1) |
@@ -2944,7 +2944,7 @@ Thank you.
 | test_prompt_overhead_fix.py | 29 | Per-Request Prompt Overhead (Task 42): FormationResult dataclass, _estimate_via_formation return type, _compute_per_request_prompt_overhead, selective filtering per chunk, _update_ui avg/request format, sum vs flat multiplication, edge cases |
 | test_request_building_unification.py | 75 | Request Building Unification: is_placeholder_only (all placeholder types), PROT_PATTERN fix, build_line_infos placeholder handling, validate_line_pre (no detection_text), _count_formation_input_tokens, formation pipeline for both orig/prep, preview language skip, _apply_language_skip prioritized text with placeholder stripping, _get_skip_indices (no original_lines override), placeholder stripping regression guard |
 | smoke_test/*.py | 5+ | Smoke tests |
-| **Total Script Tests** | **3862** | (+29 Task 42 per-request prompt overhead tests) |
+| **Total Script Tests** | **3901** | (+39 conditional prompt rework, +29 Task 42 per-request prompt overhead tests) |
 | One_Click_Test.py | 7 stages | API integration |
 
 ### TASK 11: Integration Test - 200 Lines (Completed)
@@ -3030,14 +3030,14 @@ The formatting (dividers, headers) is LOG-ONLY and not part of the actual API re
 | K | Content Warning System | ✅ check_content_warning() |
 
 **Tests Passing:**
-- 566 pytest tests (all conditional prompt tests updated)
-- 34 conditional_prompts.py tests specifically
+- 605 pytest tests (all conditional prompt tests updated)
+- 84 conditional_prompts.py tests specifically
 - All instructions work with shorter text
 
 **Files Modified:**
 - functions/api_client.py: Log header, token tracking, content warning
 - functions/prompt_builder.py: Section ordering, empty section skip, examples
-- functions/conditional_prompts.py: All 14 instructions shortened
+- functions/conditional_prompts.py: 9 pattern-triggered prompts (reworked from 15)
 - functions/mainhelper.py: Call write_log_header()
 - Base instructions: embedded in _DEFAULT_PROMPT_TEMPLATE (Session 25: config/base_instructions.txt removed)
 - Output examples: embedded in _DEFAULT_OUTPUT_EXAMPLES (Session 25: config/output_examples.txt removed)
@@ -3992,9 +3992,9 @@ and symbol normalization.
 
 ---
 
-### dev/test_conditional_prompts.py (45 tests)
+### dev/test_conditional_prompts.py (84 tests)
 
-Conditional prompt system tests for pattern-triggered LLM instruction injection with dynamic examples.
+Conditional prompt system tests for the reworked 9-prompt set: pattern detection, dynamic instruction generation, merged-request instructions, user customization, and integration.
 
 #### TestConditionalPrompt (8 tests)
 
@@ -4004,42 +4004,93 @@ Conditional prompt system tests for pattern-triggered LLM instruction injection 
 | `test_matches_simple_pattern` | Match single pattern in text |
 | `test_matches_multiple_patterns` | Match multiple patterns in text |
 | `test_no_match` | No patterns matched returns false |
+| `test_invalid_regex_skipped` | Invalid regex patterns silently skipped |
 | `test_serialization_roundtrip` | to_dict and from_dict preserve data including pattern_examples |
 | `test_get_dynamic_instruction_no_examples` | Dynamic instruction returns base when no examples |
 | `test_get_dynamic_instruction_with_examples` | Dynamic instruction includes relevant examples |
-| `test_get_dynamic_instruction_multiple_examples` | Multiple matched patterns show multiple examples |
 
-#### TestBuiltinConditions (9 tests)
+#### TestBuiltinConditions (5 tests)
 
 | Test | Purpose |
 |------|---------|
-| `test_builtin_conditions_exist` | All 15 builtin conditions present |
-| `test_prot_token_matches` | __PROTECTED__, __PROTECTED_1__, __COLOR__, __FONT__ detection |
-| `test_prot_token_no_match` | No match without valid placeholders |
-| `test_dedup_token_matches` | __DEDUP__ pattern detection |
-| `test_brackets_matches` | [], {}, <tag> bracket detection |
-| `test_color_codes_matches` | \\c[N] and \\c[#RRGGBB] detection |
-| `test_variables_matches` | \\v[N], \\n[N] variable detection |
-| `test_ellipsis_matches` | ... and … detection |
-| `test_builtin_all_have_required_fields` | All builtins have required fields |
+| `test_exactly_nine_builtins` | Exactly 9 built-in conditions after rework |
+| `test_all_expected_names_present` | All 9 expected condition names present |
+| `test_removed_conditions_absent` | 6 removed conditions no longer present |
+| `test_all_have_required_fields` | All builtins have required fields |
+| `test_unique_names` | Condition names are unique |
+
+#### TestPatternMatching (30 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_temprepl_matches_temprepl_token` | __TEMPREPL_0_0__ detection |
+| `test_temprepl_matches_cust_token` | __CUST__ Custom Placeholder detection |
+| `test_temprepl_no_match_plain` | No match on plain text |
+| `test_delim_matches_square` | [square] delimiter detection |
+| `test_delim_matches_curly` | {curly} delimiter detection |
+| `test_delim_matches_angle` | <angle> delimiter detection |
+| `test_delim_matches_double_underscore` | __dunder__ delimiter detection |
+| `test_delim_no_match_plain` | No match on plain text |
+| `test_linebreaks_matches_br` | <br> tag detection |
+| `test_linebreaks_matches_br_uppercase` | <BR /> uppercase detection |
+| `test_linebreaks_matches_escaped_n` | \\n escape detection |
+| `test_linebreaks_matches_literal_newline` | Literal newline detection |
+| `test_linebreaks_no_match_plain` | No match on plain text |
+| `test_color_matches_numeric` | \\c[4] detection |
+| `test_color_matches_hex` | \\c[#FF0000] detection |
+| `test_color_no_match_plain` | No match on plain text |
+| `test_media_matches_se` | \\se[sound] detection |
+| `test_media_matches_SE` | \\SE[beep] uppercase detection |
+| `test_media_matches_pic` | \\pic[image] detection |
+| `test_media_matches_wait` | \\wait[60] detection |
+| `test_media_matches_fadein` | \\fadein[30] detection |
+| `test_media_no_match_plain` | No match on plain text |
+| `test_formatting_matches_fb` | \\fb detection |
+| `test_formatting_matches_fr` | \\fr detection |
+| `test_formatting_matches_italic` | \\i[2] detection |
+| `test_formatting_matches_bold` | \\b detection |
+| `test_formatting_no_match_plain` | No match on plain text |
+| `test_formatting_does_not_match_newline` | \\n NOT in formatting patterns |
+| `test_ruby_matches` | \\rb[漢字,かんじ] detection |
+| `test_ruby_no_match_plain` | No match on plain text |
+| `test_ellipsis_matches_dots` | ... detection |
+| `test_ellipsis_matches_unicode` | …… detection |
+| `test_ellipsis_no_match_plain` | No match on plain text |
+| `test_speaker_matches_colon_dialogue` | Name: dialogue detection |
+| `test_speaker_matches_fullwidth_colon` | 太郎：dialogue detection |
+| `test_speaker_no_match_plain` | No match on plain text |
+| `test_speaker_no_match_long_name` | Names >30 chars don't match |
+
+#### TestDynamicInstructions (7 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_delimiter_only_square` | Lists only [square] when only that matches |
+| `test_delimiter_square_and_curly` | Lists both types when both match |
+| `test_delimiter_double_underscore` | Lists __double_underscore__ when matched |
+| `test_linebreak_only_br` | Lists only <br> tags when only those match |
+| `test_linebreak_only_escaped_n` | Lists only \\n when only that matches |
+| `test_linebreak_multiple_kinds` | Lists all detected linebreak kinds |
+| `test_color_dynamic_with_examples` | Color codes shows matched examples |
 
 #### TestConditionalPromptManager (12 tests)
 
 | Test | Purpose |
 |------|---------|
-| `test_init_loads_builtins` | Manager loads all builtins on init |
+| `test_init_loads_builtins` | Manager loads all 9 builtins on init |
 | `test_evaluate_batch_empty` | Empty batch returns empty list |
-| `test_evaluate_batch_with_prot` | Batch with PROTECTED triggers condition |
-| `test_evaluate_batch_multiple_conditions` | Multiple conditions in batch |
+| `test_evaluate_batch_detects_color` | Batch with color codes triggers condition |
+| `test_evaluate_batch_detects_delimiter` | Batch with delimiters triggers condition |
 | `test_evaluate_batch_sorted_by_priority` | Results sorted by priority (high first) |
-| `test_build_conditional_instructions_empty` | No conditions = empty string |
-| `test_build_conditional_instructions_with_patterns` | Conditions build instruction block with dynamic examples |
+| `test_build_instructions_empty` | No conditions = empty string |
+| `test_build_instructions_with_patterns` | Conditions build instruction block |
 | `test_set_condition_enabled` | Enable/disable conditions |
 | `test_get_condition` | Retrieve condition by name |
 | `test_add_custom_condition` | Add user-defined conditions |
 | `test_remove_custom_condition` | Remove custom conditions |
 | `test_cannot_remove_builtin` | Builtin conditions cannot be removed |
-| `test_list_conditions` | List all conditions with status |
+| `test_list_conditions` | List conditions with filters |
+| `test_disabled_condition_not_evaluated` | Disabled conditions skipped |
 
 #### TestUserCustomization (4 tests)
 
@@ -4050,26 +4101,24 @@ Conditional prompt system tests for pattern-triggered LLM instruction injection 
 | `test_save_user_conditions` | Save conditions to JSON file |
 | `test_create_default_config` | Generate default config template |
 
-#### TestConditionalPromptIntegration (3 tests)
+#### TestMergedRequestInstruction (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_empty_returns_empty` | Empty boundaries → empty string |
+| `test_single_block_returns_empty` | Single block → empty string |
+| `test_all_single_lines` | All single-line blocks → unrelated text |
+| `test_mixed_blocks` | Mixed sizes describe boundaries |
+| `test_three_mixed_blocks` | Three blocks describe all boundaries |
+
+#### TestIntegration (4 tests)
 
 | Test | Purpose |
 |------|---------|
 | `test_full_workflow` | Complete evaluation workflow |
 | `test_disabled_conditions_not_included` | Disabled conditions skipped |
 | `test_category_ordering` | Category-based priority ordering |
-
-#### TestDynamicInstructions (9 tests) - NEW (TASK 5)
-
-| Test | Purpose |
-|------|---------|
-| `test_prot_only_shows_matched_types` | __PROTECTED__ shows only matched placeholder types |
-| `test_brackets_only_shows_used_types` | Brackets shows only detected bracket types |
-| `test_brackets_shows_multiple_types` | Multiple bracket types show all examples |
-| `test_br_vs_newline_distinction` | <br> and \\n have separate conditions |
-| `test_newline_escape_detection` | \\n newline escapes detected separately |
-| `test_color_font_prot_differentiated` | __COLOR__, __FONT__, __PROTECTED__ show correct examples |
-| `test_indexed_placeholders_shown` | __PROTECTED_1__, __PROTECTED_2__ show indexed examples |
-| `test_jp_brackets_conversion_examples` | Japanese brackets show conversion examples |
+| `test_all_nine_conditions_can_trigger` | All 9 conditions trigger with correct input |
 
 ---
 
@@ -5017,7 +5066,7 @@ Tests for `<br>` tag protection and recovery in CherryAI.
 **Test Classes:**
 
 #### TestBrTagConditionalPrompt (8 tests)
-Tests CONDITION_BR_TAGS pattern matching.
+Tests CONDITION_LINEBREAKS pattern matching.
 
 | Test | Purpose |
 |------|---------|
@@ -5855,7 +5904,7 @@ detection and two-tier validation (retry + flag).
 | | `test_condition_matches_japanese_format` | Pattern matches 話者：「テキスト」 |
 | | `test_condition_no_match_plain_text` | Plain text not matched |
 | | `test_condition_has_instruction` | Instruction text set |
-| | `test_condition_priority` | Priority = 82 |
+| | `test_condition_priority` | Priority = 32 |
 | TestSpeakerFormatEdgeCases | `test_colon_inside_quotes` | Colon inside quotes handled |
 | | `test_multiple_colons_uses_first` | First colon is separator |
 | | `test_trailing_whitespace` | Trailing space handled |

@@ -172,6 +172,28 @@ dialogue = # Content Type: Dialogue\\nThese lines are character dialogue. Pay at
 menu = # Content Type: Menu\\nThese lines are menu items from a game UI. Translate each item concisely and clearly. Preserve formatting, order, and any shortcut indicators. Keep translations brief and action-oriented.
 choice = # Content Type: Choices\\nThese lines are player choices or options. Translate each choice concisely and distinctly so the player can differentiate between options. Preserve numbering or bullet formatting.
 unknown = # Content Type: Mixed\\nThese lines may contain dialogue, menu items, or choices. Translate each line appropriately based on its apparent purpose. Maintain formatting and keep menu/choice items concise.
+
+[pattern_prompts]
+temp_replacement_enabled = true
+temp_replacement_text = Placeholder tokens (__TEMPREPL_X_Y__, __CUST__, etc.) are temporary markers. Preserve them exactly — same spelling, position, and count.
+delimiter_protection_enabled = true
+delimiter_protection_text = Preserve content within delimiters unchanged.
+linebreaks_enabled = true
+linebreaks_text = Preserve line break markers exactly. Keep count and position. Don't add or remove.
+color_codes_enabled = true
+color_codes_text = Preserve color codes exactly in original positions.
+media_commands_enabled = true
+media_commands_text = Preserve media commands exactly. Don't translate content.
+text_formatting_enabled = true
+text_formatting_text = Preserve formatting codes exactly.
+ruby_text_enabled = true
+ruby_text_text = Preserve \\rb[] furigana structure. May translate base text.
+ellipsis_enabled = true
+ellipsis_text = Preserve ellipsis patterns in their positions.
+speaker_dialogue_format_enabled = true
+speaker_dialogue_format_text = Preserve Speaker: "Dialogue" format. Keep colon between name and dialogue. Maintain balanced quotes.
+merged_all_unrelated_text = All lines are unrelated to each other.
+merged_block_unrelated_text = This request has lines unrelated to each other.
 """
 
 
@@ -464,6 +486,7 @@ _DEFAULTS_POPULATE_MAP: Dict[str, str] = {
     "limit": "limit",
     "fileio": "fileio",
     "prompts": "prompts",
+    "pattern_prompts": "pattern_prompts",
 }
 
 
@@ -2269,3 +2292,75 @@ def set_conditional_prompt(context_type: str, value: str) -> bool:
         ``True`` if the value was saved successfully.
     """
     return set_default("prompts", context_type, value)
+
+
+# ---------------------------------------------------------------------------
+# Pattern-Triggered Conditional Prompt helpers
+# ---------------------------------------------------------------------------
+
+#: Names of all pattern-triggered conditional prompts stored in [pattern_prompts].
+PATTERN_PROMPT_NAMES: List[str] = [
+    "temp_replacement",
+    "delimiter_protection",
+    "linebreaks",
+    "color_codes",
+    "media_commands",
+    "text_formatting",
+    "ruby_text",
+    "ellipsis",
+    "speaker_dialogue_format",
+]
+
+
+def get_pattern_prompt_enabled(name: str) -> bool:
+    """Return whether a pattern-triggered prompt is enabled.
+
+    Args:
+        name: One of :data:`PATTERN_PROMPT_NAMES`.
+
+    Returns:
+        ``True`` (default) when the key is missing or set to ``"true"``.
+    """
+    val = get_str("pattern_prompts", f"{name}_enabled", "true")
+    return val.lower() in ("true", "1", "yes", "")
+
+
+def set_pattern_prompt_enabled(name: str, enabled: bool) -> bool:
+    """Persist the enabled state for a pattern-triggered prompt."""
+    return set_default("pattern_prompts", f"{name}_enabled", str(enabled).lower())
+
+
+def get_pattern_prompt_text(name: str, fallback: str = "") -> str:
+    """Return the user-customised instruction text for a pattern prompt.
+
+    Args:
+        name: One of :data:`PATTERN_PROMPT_NAMES`.
+        fallback: Value returned when no override is stored.
+
+    Returns:
+        Instruction text (may be empty if not stored and no fallback given).
+    """
+    return get_str("pattern_prompts", f"{name}_text", fallback)
+
+
+def set_pattern_prompt_text(name: str, value: str) -> bool:
+    """Persist instruction text for a pattern-triggered prompt."""
+    return set_default("pattern_prompts", f"{name}_text", value)
+
+
+def get_merged_request_text(kind: str, fallback: str = "") -> str:
+    """Return configurable merged-request instruction text.
+
+    Args:
+        kind: ``"all_unrelated"`` or ``"block_unrelated"``.
+        fallback: Default text when not stored.
+
+    Returns:
+        Instruction text.
+    """
+    return get_str("pattern_prompts", f"merged_{kind}_text", fallback)
+
+
+def set_merged_request_text(kind: str, value: str) -> bool:
+    """Persist merged-request instruction text."""
+    return set_default("pattern_prompts", f"merged_{kind}_text", value)

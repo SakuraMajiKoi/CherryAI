@@ -499,6 +499,7 @@ FUTURE IDEAS (No Phase Commitment)
 - **Advanced Deduplication Rules**: Pattern-based deduplication using Increase/Decrease equivalence, RPG stat names (Strength/Willpower/Dexterity) as equivalent, database of auto-translations for common patterns
 - **Pattern Replacement Mode**: Replace patterns permanently before translation (not restored after)
 - **Pattern Removal Mode**: Remove patterns permanently before translation (not restored after)
+- **Variable Replacement via Preprocessing**: Replace variable codes (\\v[N], \\n[N]) during preprocessing and restore with postprocessing. Needs improved parser to handle replacements and restore positions correctly. Currently handled only via conditional prompt instruction.
 - **Functions Not Visible in GUI**: Restore additional processing functions that exist in code but lack GUI exposure
 - **Context-Aware Deduplication**: Use semantic similarity rather than exact match for deduplication
 - **Deduplication Variants Database**: Create database of pattern variants that should be treated as duplicates
