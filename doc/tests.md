@@ -3715,6 +3715,93 @@ which prompt sections are included or excluded by `build_full_system_prompt()`.
 
 ---
 
+### dev/test_section_toggles.py (35 tests)
+
+End-to-end section toggle tests validating toggle persistence across tab changes,
+preview request gating, estimation integration, and Save button removal.
+
+#### TestPromptToggleGating (15 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_genre_enabled_includes_section` | Genre section present when `genre_enabled=True` |
+| `test_genre_disabled_excludes_section` | Genre section absent when `genre_enabled=False` |
+| `test_summary_enabled_includes_section` | Summary section present when enabled |
+| `test_summary_disabled_excludes_section` | Summary section absent when disabled |
+| `test_style_enabled_includes_section` | Style section present when enabled |
+| `test_style_disabled_excludes_section` | Style section absent when disabled |
+| `test_tone_enabled_includes_section` | Tone section present when enabled |
+| `test_tone_disabled_excludes_section` | Tone section absent when disabled |
+| `test_si_enabled_includes_section` | System Instructions present when enabled |
+| `test_si_disabled_excludes_section` | System Instructions absent when disabled |
+| `test_glossary_enabled_includes_section` | Glossary section present when enabled |
+| `test_glossary_disabled_excludes_section` | Glossary section absent when disabled |
+| `test_all_disabled_minimal_prompt` | Only Language section when all toggles off |
+| `test_all_enabled_full_prompt` | All sections present when all toggles on |
+| `test_missing_flags_use_defaults` | Missing keys use backward-compatible defaults |
+
+#### TestProjectMetadataBoundary (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_to_dict_excludes_enabled_flags` | `ProjectMetadata.to_dict()` does NOT include `*_enabled` flags |
+
+#### TestOnLeaveTogglePreservation (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_on_leave_preserves_toggle_states` | `on_leave()` merges BooleanVar values into metadata dict |
+| `test_on_leave_toggles_survive_to_dict` | Toggle flags survive `ProjectMetadata.to_dict()` replacement |
+
+#### TestPromptTokenCount (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_tokens_decrease_when_sections_disabled` | Word count drops when sections disabled |
+| `test_tokens_stable_across_repeated_calls` | Identical inputs produce same word count |
+
+#### TestManifestMetadataField (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_set_and_get_metadata_field` | Round-trip via `set_info_metadata_field`/`get_info_metadata_field` |
+| `test_get_missing_field_returns_default` | Missing key returns provided default |
+| `test_overwrite_existing_field` | Second set overwrites first |
+| `test_get_info_metadata_returns_reference` | `get_info_metadata()` returns dict reference |
+| `test_set_field_creates_metadata_if_missing` | `set_info_metadata_field()` creates metadata dict if absent |
+
+#### TestSaveButtonRemoved (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_no_save_button_in_header` | Save button source code removed from `_build_header()` |
+
+#### TestPreviewSectionGating (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_preview_si_disabled_excluded` | Disabled sys_instructions excluded from preview |
+| `test_preview_style_disabled_excluded` | Disabled style excluded from preview |
+| `test_preview_tone_disabled_excluded` | Disabled tone excluded from preview |
+| `test_preview_summary_disabled_excluded` | Disabled summary excluded from preview |
+| `test_preview_genre_disabled_excluded` | Disabled genre excluded from preview |
+| `test_preview_glossary_disabled_excluded` | Disabled glossary/characters excluded from preview |
+
+#### TestTabChangeSaveLoad (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_toggle_flag_roundtrip_via_manifest` | Flags survive set → get roundtrip |
+| `test_enabled_flags_in_step_data` | Flags present in `get_step_data()` metadata |
+| `test_load_toggles_reads_from_manifest` | `_load_section_toggles()` reads stored flags |
+
+```bash
+# Run section toggle tests
+python -m pytest CherryAI/dev/test_section_toggles.py -v --timeout=10
+```
+
+---
+
 | `test_provider_has_required_keys` | name, base_url, models present |
 | `test_openai_has_empty_base_url` | OpenAI uses SDK default |
 | `test_gemini_has_openai_compat_url` | Gemini uses compat endpoint |
@@ -4713,6 +4800,28 @@ Integration tests for GUI Step 2 (Analysis) using analysis_adapter.
 **New Files Created:**
 - `gui/helpers/analysis_adapter.py` - Adapter layer (528 lines)
 - `dev/test_gui_analysis_integration.py` - 45 tests (43 original + 2 for TASK 18.1)
+
+---
+
+### dev/test_speaker_detection.py (97 tests) - Speaker Detection Rules
+
+Unit tests for enhanced speaker detection validation rules in `name_glossary_functions.py`.
+
+| Test Class | Count | Description |
+|------------|-------|-------------|
+| TestBasicSpeakerDetection | 8 | Basic NAME: pattern extraction |
+| TestBalancedBrackets | 15 | Bracket balance validation (ASCII + CJK) |
+| TestNoNewlineBeforeColon | 4 | Multiline rejection rules |
+| TestLengthLimit | 9 | Script-aware length limits (30 Latin / 20 CJK) |
+| TestHasBalancedBrackets | 11 | `_has_balanced_brackets()` helper |
+| TestIsCjkChar | 6 | `_is_cjk_char()` helper |
+| TestSpeakerLengthOk | 6 | `_speaker_length_ok()` helper |
+| TestFalsePositivePrevention | 8 | Real-world false positive patterns (skill descs, templates, NPC descriptions) |
+| TestUtilitySettingsSpeakerThreshold | 6 | UtilitySettings speaker_threshold field (default, to_dict, from_dict, roundtrip) |
+| TestSpeakerThresholdCollapse | 10 | Threshold-based speaker split logic (above/below/edge cases) |
+| TestTermTranslationThresholdFilter | 6 | Below-threshold speakers excluded from term translation |
+| TestGlossaryImportThresholdFilter | 4 | Below-threshold speakers excluded from glossary import |
+| TestCUDataIntegration | 5 | Integration tests against CU.CherryAI.json real-world data |
 
 ---
 

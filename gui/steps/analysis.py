@@ -369,6 +369,22 @@ class AnalysisStep(BaseStep):
         results["characters"] = unified_chars
         results["speaker_count"] = len(detected_speakers)
 
+        # Build collapsed speakers list for manifest analysis entry
+        go = getattr(self.session, "global_options", None)
+        threshold = 10
+        if go is not None:
+            threshold = getattr(
+                getattr(go, "utility", None), "speaker_threshold", 10
+            )
+        collapsed_names = [
+            c["original_name"].replace(",", "\uFF0C")
+            for c in unified_chars
+            if c.get("count", 0) > 0
+            and c.get("count", 0) < threshold
+            and c.get("original_name")
+        ]
+        results["collapsed_speakers"] = ", ".join(collapsed_names)
+
         # Unified code_patterns: merge adapter individual_codes into manifest
         # code_patterns list, preserving user edits (translation, action, etc.)
         individual_codes = analysis.get("individual_codes", {})
@@ -509,16 +525,34 @@ class AnalysisStep(BaseStep):
             row_id += 1
 
         # ALL Speakers from unified characters[], ordered by count descending
+        # Speakers below threshold are collapsed into a single expandable row
         characters = results.get("characters", [])
+        self._instance_rows.clear()
+        self._expanded_parents.clear()
+        go = getattr(self.session, "global_options", None)
+        threshold = 10
+        if go is not None:
+            threshold = getattr(
+                getattr(go, "utility", None), "speaker_threshold", 10
+            )
+
         if isinstance(characters, list) and characters:
             chars_sorted = sorted(
                 characters, key=lambda x: x.get("count", 0), reverse=True
             )
+            above: list = []
+            below: list = []
             for char in chars_sorted:
                 name = char.get("original_name", "")
                 count = char.get("count", 0)
                 if not name or count == 0:
                     continue
+                if count >= threshold:
+                    above.append((name, count))
+                else:
+                    below.append((name, count))
+
+            for name, count in above:
                 details = self._get_character_details(name)
                 findings.append(TableRow(
                     id=row_id,
@@ -530,12 +564,48 @@ class AnalysisStep(BaseStep):
                     },
                 ))
                 row_id += 1
+
+            if below:
+                parent_id = row_id
+                findings.append(TableRow(
+                    id=parent_id,
+                    values={
+                        "category": "Speakers",
+                        "item": f"[+] {len(below)} Speakers",
+                        "count": threshold,
+                        "details": f"below {threshold} occurrences",
+                    },
+                    meta={"expandable": True},
+                ))
+                children = []
+                for i, (name, count) in enumerate(below):
+                    details = self._get_character_details(name)
+                    children.append(TableRow(
+                        id=10000 + parent_id * 100 + i,
+                        values={
+                            "category": "",
+                            "item": f"    {name}",
+                            "count": count,
+                            "details": details,
+                        },
+                        tags=["instance"],
+                    ))
+                self._instance_rows[parent_id] = children
+                row_id += 1
         elif isinstance(characters, dict):
             # Legacy fallback: speakers dict (name→count)
             speakers_sorted = sorted(
                 characters.items(), key=lambda x: x[1], reverse=True
             )
+            above_legacy: list = []
+            below_legacy: list = []
             for speaker, count in speakers_sorted:
+                if count >= threshold:
+                    above_legacy.append((speaker, count))
+                else:
+                    below_legacy.append((speaker, count))
+
+            for speaker, count in above_legacy:
                 details = self._get_character_details(speaker)
                 findings.append(TableRow(
                     id=row_id,
@@ -548,11 +618,37 @@ class AnalysisStep(BaseStep):
                 ))
                 row_id += 1
 
+            if below_legacy:
+                parent_id = row_id
+                findings.append(TableRow(
+                    id=parent_id,
+                    values={
+                        "category": "Speakers",
+                        "item": f"[+] {len(below_legacy)} Speakers",
+                        "count": threshold,
+                        "details": f"below {threshold} occurrences",
+                    },
+                    meta={"expandable": True},
+                ))
+                children = []
+                for i, (speaker, count) in enumerate(below_legacy):
+                    details = self._get_character_details(speaker)
+                    children.append(TableRow(
+                        id=10000 + parent_id * 100 + i,
+                        values={
+                            "category": "",
+                            "item": f"    {speaker}",
+                            "count": count,
+                            "details": details,
+                        },
+                        tags=["instance"],
+                    ))
+                self._instance_rows[parent_id] = children
+                row_id += 1
+
         # Code patterns from unified code_patterns list, ordered by count
         # Patterns with instances sort before those without at equal count
         code_patterns = results.get("code_patterns", [])
-        self._instance_rows.clear()
-        self._expanded_parents.clear()
         if isinstance(code_patterns, list) and code_patterns:
             codes_sorted = sorted(
                 code_patterns,
@@ -871,12 +967,21 @@ class AnalysisStep(BaseStep):
         mode = get_current_mode()
 
         # --- Collect items needing translation ---
+        # Skip below-threshold speakers for term translation
+        go = getattr(self.session, "global_options", None)
+        threshold = 10
+        if go is not None:
+            threshold = getattr(
+                getattr(go, "utility", None), "speaker_threshold", 10
+            )
         characters = load_character_notes(mgr)
         char_items: list[tuple[int, str]] = []
         for i, ch in enumerate(characters):
             name = ch.get("original_name", "")
+            count = ch.get("count", 0)
             if name and not ch.get("translation", "").strip():
-                char_items.append((i, name))
+                if count >= threshold or count == 0:
+                    char_items.append((i, name))
 
         code_rows: list = []
         code_items: list[tuple[int, str]] = []

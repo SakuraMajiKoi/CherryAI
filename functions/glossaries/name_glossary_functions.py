@@ -42,22 +42,106 @@ from .name_glossary_constants import (
 # are imported lazily inside the functions that need them.
 
 
+# ---------------- Speaker detection helpers ---------------- #
+
+# CJK Unicode ranges for length-limit heuristic
+_CJK_RANGES = (
+    (0x3000, 0x9FFF),    # CJK Unified, Hiragana, Katakana, symbols
+    (0xF900, 0xFAFF),    # CJK Compatibility Ideographs
+    (0xFF00, 0xFFEF),    # Fullwidth Forms
+    (0x20000, 0x2FA1F),  # CJK Extension B-F
+)
+
+_BRACKET_PAIRS = {"(": ")", "[": "]", "{": "}", "<": ">",
+                  "（": "）", "［": "］", "｛": "｝", "＜": "＞",
+                  "〈": "〉", "【": "】", "〔": "〕", "「": "」", "『": "』"}
+
+# Max distance (in characters) from line start to the colon separator.
+SPEAKER_MAX_LEN_LATIN = 30
+SPEAKER_MAX_LEN_CJK = 20
+
+
+def _is_cjk_char(ch: str) -> bool:
+    """Return True if *ch* falls inside a CJK Unicode range."""
+    cp = ord(ch)
+    for lo, hi in _CJK_RANGES:
+        if lo <= cp <= hi:
+            return True
+    return False
+
+
+def _has_balanced_brackets(text: str) -> bool:
+    """Return True when all opening brackets in *text* are properly closed.
+
+    Handles nested and multiple bracket types. Pairs checked:
+    ``( ) [ ] { } < >`` and their fullwidth/CJK equivalents.
+    """
+    stack: List[str] = []
+    closing_map = {v: k for k, v in _BRACKET_PAIRS.items()}
+    openers = set(_BRACKET_PAIRS.keys())
+    closers = set(_BRACKET_PAIRS.values())
+
+    for ch in text:
+        if ch in openers:
+            stack.append(ch)
+        elif ch in closers:
+            expected_opener = closing_map[ch]
+            if not stack or stack[-1] != expected_opener:
+                return False
+            stack.pop()
+    return len(stack) == 0
+
+
+def _speaker_length_ok(name: str) -> bool:
+    """Return True if the speaker candidate respects length limits.
+
+    Latin-dominant names: max 30 characters.
+    CJK-dominant names: max 20 characters.
+    """
+    cjk_count = sum(1 for ch in name if _is_cjk_char(ch))
+    is_cjk_dominant = cjk_count > len(name) / 2
+    limit = SPEAKER_MAX_LEN_CJK if is_cjk_dominant else SPEAKER_MAX_LEN_LATIN
+    return len(name) <= limit
+
+
 # ---------------- Speaker detection ---------------- #
 
 
 def detect_speaker(line: str) -> Optional[str]:
-    """Return speaker name if a leading 'NAME:' or 'NAME：' pattern is detected.
-    
+    """Return speaker name if a leading ``NAME:`` or ``NAME：`` pattern is detected.
+
+    Validation rules applied after regex match:
+    1. **Balanced brackets** — all ``( ) [ ] { } < >`` (and fullwidth/CJK
+       equivalents) in the name must be properly paired.
+    2. **No newline before colon** — the colon must appear on the first
+       physical line; if ``\\n`` precedes it the match is rejected.
+    3. **Length limit** — the name portion must be ≤ 30 chars for Latin-
+       dominant text and ≤ 20 chars for CJK-dominant text.
+
     Args:
-        line: The line to check for speaker pattern
-        
+        line: The line to check for speaker pattern.
+
     Returns:
-        The speaker name if detected, None otherwise
+        The speaker name if detected, None otherwise.
     """
-    m = re.match(r"^\s*(?P<name>[^\s:：][^:：]{0,100}?)\s*[:：]", line)
-    if m:
-        return m.group("name").strip()
-    return None
+    # Rule 2: colon must be on the first physical line
+    first_line = line.split("\n", 1)[0]
+
+    m = re.match(r"^\s*(?P<name>[^\s:：][^:：]{0,100}?)\s*[:：]", first_line)
+    if not m:
+        return None
+
+    name = m.group("name").strip()
+
+    # Rule 1: balanced brackets
+    if not _has_balanced_brackets(name):
+        return None
+
+    # Rule 3: length limit
+    if not _speaker_length_ok(name):
+        return None
+
+    return name
 
 
 # ---------------- Script type detection ---------------- #
@@ -661,6 +745,7 @@ def update_speakers_in_glossary(
     update_mode: str = "Add",  # Use literal string to avoid circular import at module load time
     full_text: str = "",  # Full text content for explicit gender detection
     lines: Optional[List[str]] = None,  # All lines for honorific-from-others detection
+    speaker_threshold: int = 0,
 ) -> Path:
     """Update unified glossary with speaker entries from analysis.
     
@@ -680,6 +765,8 @@ def update_speakers_in_glossary(
                    (e.g., "名前：リリィ、性別：女性" status cards)
         lines: All lines from the file for honorific-from-others detection
                (e.g., when others call someone リリィちゃん)
+        speaker_threshold: Minimum occurrence count to include in glossary
+                          (0 = no filtering, uses MIN_SPEAKER_OCCURRENCES only).
         
     Returns:
         Path to updated unified glossary
@@ -700,6 +787,13 @@ def update_speakers_in_glossary(
     for name, count in speakers_count.items():
         if not _is_valid_speaker_entry(name, count):
             logging.debug("Filtered invalid speaker entry: %s (count=%d)", name, count)
+            continue
+
+        if speaker_threshold > 0 and count < speaker_threshold:
+            logging.debug(
+                "Speaker below threshold: %s (count=%d, threshold=%d)",
+                name, count, speaker_threshold,
+            )
             continue
         
         # For ADD mode: skip if already exists (preserve user edits)

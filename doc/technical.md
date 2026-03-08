@@ -191,9 +191,9 @@ TABLE OF CONTENTS
        - input_extract.py - Step 0: Input/Extraction 🔗formats/
        - analysis.py - Step 1: Analysis ❌NO shared imports
        - costs.py - Step 4: Costs (renamed from estimate.py in Phase 40; _estimate_via_formation() returns FormationResult with per-request line lists; _compute_per_request_prompt_overhead() builds each request's prompt individually via build_full_system_prompt(chunk_lines=...) for selective glossary/conditional filtering; syncs chunk_size from GlobalOptions; respects request_slicing mode)
-       - information.py - Step 2: Information 🔗manifest_fields
+       - information.py - Step 2: Information 🔗manifest_fields (Bug Fix: on_leave() and _save_metadata() now merge *_enabled toggle BooleanVar values into metadata dict after ProjectMetadata.to_dict() — fixes toggle state erasure on tab change; Save button removed from header — auto-save on tab change is sufficient)
        - preprocess.py - Step 3: Preprocessing 🔗manifest_fields
-       - translate.py - Step 5: Translation 🔗api_client, mock_translator, prompt_adapter, manifest_fields (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching; Preview Requests: PreviewRequest dataclass with _format_input_lines() for numbered line display, FILTER_PARTS constant (12 entries: meta, language, system_instructions, style, tone, summary, genre, pov, conditional_prompts, glossary, rolling_context, input_lines), RequestPreviewDialog class with Pure/Formatted/Plain views and Jump/Search/Filter toolbar, _plain_text() preserves curly braces for game text, _build_preview_requests() mirrors real translation request building; _build_system_prompt_from_manifest() reads from `step_state.Information.data.metadata`; Request Options: Key, Model, Model Settings/Translation Options Change… buttons, Character Whitelist/Blacklist (manifest-bound), Ban Tokens; _apply_char_filters() post-processes translations; _sync_from_global_options() syncs all hidden vars from GlobalOptions including TranslationSettings; _get_request_slicing_mode() reads slicing from GlobalOptions.translation)
+       - translate.py - Step 5: Translation 🔗api_client, mock_translator, prompt_adapter, manifest_fields (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching; Preview Requests: PreviewRequest dataclass with _format_input_lines() for numbered line display, FILTER_PARTS constant (12 entries: meta, language, system_instructions, style, tone, summary, genre, pov, conditional_prompts, glossary, rolling_context, input_lines), RequestPreviewDialog class with Pure/Formatted/Plain views and Jump/Search/Filter toolbar, _plain_text() preserves curly braces for game text, _build_preview_requests() mirrors real translation request building and gates each labeled section by *_enabled metadata flags; _build_system_prompt_from_manifest() reads from `step_state.Information.data.metadata`; Request Options: Key, Model, Model Settings/Translation Options Change… buttons, Character Whitelist/Blacklist (manifest-bound), Ban Tokens; _apply_char_filters() post-processes translations; _sync_from_global_options() syncs all hidden vars from GlobalOptions including TranslationSettings; _get_request_slicing_mode() reads slicing from GlobalOptions.translation)
        - postprocess.py - Step 6: Postprocess 🔗postprocess, manifest_fields; _FAILURE_POLICY_MAP for legacy enum mapping
        - wordwrap_overwrite.py - Step 7: Wordwrap 🔗wordwrap, manifest_fields; column "Latest" (renamed from "Original")
        - qa.py - Step 8: QA 🔗validation, manifest_fields; persists qa_overwrite field; column "Overwrite" (renamed from "Translated")
@@ -233,7 +233,7 @@ TABLE OF CONTENTS
          - _persist_to_ini(): Writes ALL settings sections to CherryAI.ini on every Apply/OK
          - _save_options() calls _persist_to_ini() for guaranteed persistence
          - Sections organized in CATEGORY_ORDER: Connection (incl. Utility), Processing, Application (incl. Add-ons)
-         - UtilitySettings: 17 fields for Term Translation and Gender Inference configuration
+         - UtilitySettings: 18 fields for Term Translation, Gender Inference, and Misc (speaker_threshold) configuration
            - Term Translation: mode (Romaji/LLM), api_key_provider, api_key_name, model, batch_size
            - Gender Inference: mode (Script only/Script + LLM), api_key_provider, api_key_name, model
            - Script Confidence: minimum, maximum, ignore_unknown, do_all (defaults 30/50/True/True)
@@ -3626,7 +3626,16 @@ name_glossary_constants.py:
 - DEFAULT_GENDER_CONFIDENCE_THRESHOLD: Confidence % for auto-assignment (75%)
 
 name_glossary_functions.py:
-- detect_speaker(line) → Optional[str]: Extract "NAME:" pattern
+- detect_speaker(line) → Optional[str]: Extract "NAME:" pattern with validation:
+  - Balanced brackets check (all bracket types including CJK must be paired)
+  - No-newline rule (colon must appear on first line; multiline text rejected)
+  - Length limit (≤30 chars Latin-dominant, ≤20 chars CJK-dominant speakers)
+- _has_balanced_brackets(text) → bool: Stack-based bracket balance validation
+- _speaker_length_ok(name) → bool: Script-aware length limit check
+- _is_cjk_char(ch) → bool: Detect CJK/kana/fullwidth characters
+- SPEAKER_MAX_LEN_LATIN = 30, SPEAKER_MAX_LEN_CJK = 20: Length constants
+- _CJK_RANGES: Unicode ranges for CJK detection
+- _BRACKET_PAIRS: Mapping of open→close brackets (ASCII + CJK)
 - extract_names_from_honorifics(lines) → Dict[str, int]: Find speakers with honorifics
 - detect_explicit_gender(name, text) → (gender, confidence, source): Find explicit declarations
 - detect_honorific_gender_from_others(name, lines, speaker_counts) → (gender, confidence): Weighted others' honorifics
@@ -3778,10 +3787,18 @@ Automatic Glossary Detection:
 Speaker Detection:
 - Scans file for "NAME:" dialogue patterns
 - Extracts speaker names and frequency
-- Calls name_glossary_functions.detect_speaker()
+- Calls name_glossary_functions.detect_speaker() with enhanced validation:
+  - Balanced brackets: rejects names with unmatched brackets (e.g. skill descriptions with 〈 but no 〉)
+  - No-newline: only checks first line of multiline input; rejects if colon is on a later line
+  - Length limit: ≤30 chars for Latin-dominant names, ≤20 for CJK-dominant (rejects long NPC descriptions)
 - Tracks pronouns and honorifics used by each speaker
 - Infers gender from linguistic patterns (pronouns, suffixes)
 - Results: speakers.unique_speakers, speakers.speaker_data
+- Speaker Threshold (from UtilitySettings.speaker_threshold, default 10):
+  - Speakers below threshold are collapsed into "[+] N Speakers" row in findings table
+  - Double-click toggles expansion to show individual below-threshold speakers
+  - Below-threshold speaker names stored as comma-separated string in results["collapsed_speakers"]
+  - Commas in speaker names replaced with fullwidth comma (，) to avoid delimiter conflicts
 
 Code Detection:
 - Scans file for code patterns (tags, escapes, brackets)
@@ -4862,9 +4879,11 @@ from CherryAI.functions.glossaries.name_glossary_functions import (
     update_speakers_in_glossary
 )
 
-# Detect speaker from dialogue line
+# Detect speaker from dialogue line (with balanced brackets, length, and newline validation)
 speaker = detect_speaker("アリス: Hello!")  # "アリス"
 speaker = detect_speaker("No speaker here")  # None
+speaker = detect_speaker("〈戦闘中回数制限: text")  # None (unbalanced bracket)
+speaker = detect_speaker("A" * 31 + ": text")  # None (too long for Latin)
 
 # Extract names with honorific patterns
 names = extract_names_from_honorifics(lines)  # Dict[str, count]
@@ -5308,6 +5327,42 @@ Updated across 6 files: `ProjectMetadata` dataclass + to_dict/from_dict in infor
 `ProjectInfo` dataclass + pascal_map "Prompt" mapping in manifest_manager.py (migration reads
 both keys), `metadata.get()` calls in prompt_adapter.py and translate.py,
 `"system_instructions"` key in test_prompt_builder_shared.py.
+
+## Bug Fix — Section Toggle Persistence & Preview Gating
+
+### gui/steps/information.py Changes
+
+**`on_leave()` toggle merging:** `ProjectMetadata.to_dict()` does NOT include `*_enabled`
+keys (by design — they are not part of the dataclass). Previously, `on_leave()` replaced
+the entire metadata dict with `to_dict()` output via `set_step_data()`, erasing the toggle
+flags that `_toggle_section_enabled()` had written via `set_info_metadata_field()`. Fixed by
+reading current BooleanVar values for all seven toggles (`genre_enabled`, `summary_enabled`,
+`style_enabled`, `tone_enabled`, `system_instructions_enabled`, `glossary_enabled`,
+`code_database_enabled`) and merging them into the metadata dict after `to_dict()`.
+
+**`_save_metadata()` cleanup:** Removed `messagebox.showinfo("Saved", ...)` popup. Now
+merges toggle states identically to `on_leave()` for consistency. Retained as internal
+helper for programmatic use.
+
+**Save button removed:** Removed `ttk.Button(header, text="Save", command=self._save_metadata)`
+from `_build_header()`. Auto-save on tab change via `on_leave()` → `set_step_data()` is
+sufficient.
+
+### gui/steps/translate.py Changes
+
+**`_build_preview_requests()` toggle gating:** Added enabled flag reads from metadata dict.
+Each labeled section (sys_instructions, style, tone, summary, genre) is now wrapped in an
+`if *_enabled:` guard. Per-chunk glossary and character sections are gated by
+`glossary_enabled`. Matches the gating logic in `build_full_system_prompt()`.
+
+Variables added: `si_enabled`, `style_enabled`, `tone_enabled`, `summary_enabled`,
+`genre_enabled`, `glossary_enabled` — all read from `metadata.get("*_enabled", default)`.
+
+### Tests: dev/test_section_toggles.py (35 tests)
+
+8 test classes covering prompt toggle gating (15), ProjectMetadata boundary (1),
+on_leave toggle preservation (2), prompt token count (2), manifest metadata field (5),
+Save button removal (1), preview section gating (6), tab change save/load (3).
 
 ## Phase 78 — Estimation, Validation & Formation Fixes
 

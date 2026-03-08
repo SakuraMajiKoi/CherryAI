@@ -361,6 +361,10 @@ The following systems span multiple pipeline steps. They are documented here as 
 - Uses Speaker Inference from `functions/validation.py`
 - Matches the `:` separator and its fullwidth equivalent `：` to catch all occurrences with minimal false positives
 - Speaker names are validated against the character glossary when available
+- **Enhanced validation rules** reduce false positives:
+  - Balanced brackets: all bracket/paren types (ASCII + CJK) must be paired; rejects skill descriptions like `〈戦闘中回数制限:`
+  - No-newline: colon must appear on the first line; multiline text before a colon is rejected
+  - Length limit: speaker names must be ≤30 chars (Latin-dominant) or ≤20 chars (CJK-dominant); rejects long NPC descriptions
 
 #### Cross-Step Behaviour
 
@@ -2073,6 +2077,7 @@ Characters:
 
 **Stored In**:
 - Manifest: `step_state.Information.data.metadata{}` (source_language, target_language, genre, style, tone, summary, custom_notes, characters, code_patterns, system_instructions)
+- Toggle flags: `step_state.Information.data.metadata{}` (`genre_enabled`, `summary_enabled`, `style_enabled`, `tone_enabled`, `system_instructions_enabled`, `glossary_enabled`, `code_database_enabled`) — written by `_toggle_section_enabled()` via `set_info_metadata_field()`, preserved by `on_leave()` merging BooleanVar values into the metadata dict after `ProjectMetadata.to_dict()`
 - Step data: `Information.{fields...}`
 
 ---
@@ -2101,6 +2106,9 @@ Characters:
 3. ~~**Import from Analysis (Glossary)**: Button not functional - needs implementation~~ — FIXED: uses `_get_analysis_step_data()` (ManifestManager first, session fallback)
 4. **"Other" Language**: Does not prompt for custom input
 5. ~~**Custom Style/Tone Graying**: Visual feedback not implemented~~ — FIXED: Replaced by full preset system (Phase 60); text fields auto-populate from preset via `_ensure_style_tone_text()`
+6. ~~**Section Toggle Persistence**: `on_leave()` called `ProjectMetadata.to_dict()` which does not include `*_enabled` flags, then replaced the entire metadata dict via `set_step_data()`, erasing toggle states written by `_toggle_section_enabled()`~~ — FIXED: `on_leave()` and `_save_metadata()` now merge current toggle BooleanVar values into the metadata dict before saving
+7. ~~**Preview Request Ignores Toggles**: `_build_preview_requests()` built labeled sections for all fields regardless of `*_enabled` flags, making disabled sections appear in Preview Request~~ — FIXED: `_build_preview_requests()` now reads enabled flags from metadata and gates sys_instructions, style, tone, summary, genre, glossary, and character sections
+8. ~~**Redundant Save Button**: Header contained a Save button that duplicated the auto-save on tab change behavior and showed a misleading confirmation messagebox~~ — FIXED: Save button removed from header; `_save_metadata()` retained as internal helper without messagebox
 
 ---
 
@@ -5184,6 +5192,7 @@ symbol-only dialogue, skip generic placeholders.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 3.6 | 2026-03-06 | Bug Fix — Section Toggle Persistence & Preview Gating: Fixed `on_leave()` in information.py erasing `*_enabled` flags (root cause: `ProjectMetadata.to_dict()` excludes them, then `set_step_data()` replaced entire metadata dict). Fixed `_build_preview_requests()` in translate.py ignoring enabled flags (now gates sys_instructions, style, tone, summary, genre, glossary, character sections). Removed redundant Save button from Information step header (auto-save on tab change is sufficient). 35 new tests (test_section_toggles.py). |
 | 3.5 | 2026-03-05 | Task 42 — Per-Request Prompt Overhead: `_estimate_via_formation()` returns `FormationResult` dataclass (num_requests + request_line_lists). New `_compute_per_request_prompt_overhead()` builds each request's prompt individually via `build_full_system_prompt(chunk_lines=...)` for selective glossary/conditional filtering, sums token counts. Display format changed from `~Z total (Y Requests, ~X per)` to `~Z total (Y Requests, ~X avg/request)`. 29 new tests (test_prompt_overhead_fix.py). |
 | 3.4 | 2026-03-04 | Task 41 — Max Input Tokens: Added `max_input_tokens` field to RequestSettings (0 = no limit, input lines only), Global Options spinbox (0–128000, increment 500), INI persistence (`[api].max_input_tokens`), wired into translate.py `_build_chunks()` and costs.py `_estimate_via_formation()` via `RequestFormationConfig.max_tokens`. 34 new tests (test_max_input_tokens.py). |
 | 3.3 | 2026-03-03 | Phase 78 — 10 tasks: manifest sample removal, speaker replacement fix, estimation skip logic, prompt overhead display, blacklist/whitelist validation rewrite (parse_filter_entries, check_filter_violations, 3-strategy _apply_char_filters, NEEDS_REVIEW status, 3 new TranslationSettings fields + UI checkboxes), romanization + Code DB Translation column, rolling context file-boundary fix, slicing efficient mode fix, global options scrolling fix, model settings lines/request decoupling. New test files: test_estimation_skip.py (41), test_costs_step_phase40.py (57), test_rolling_context_phase78.py (10), test_slicing_phase78.py (11), test_char_filter_phase78.py (32). |

@@ -3718,23 +3718,36 @@ class TranslationStep(BaseStep):
         if src and tgt:
             language_block = f"# Language\nTranslate from {src} to {tgt}."
 
-        sys_instructions = (metadata.get("system_instructions", "") or "").strip()
+        # --- Section toggle flags from Information metadata (§5.2) ---
+        si_enabled = metadata.get("system_instructions_enabled", True)
+        style_enabled = metadata.get("style_enabled", False)
+        tone_enabled = metadata.get("tone_enabled", False)
+        summary_enabled = metadata.get("summary_enabled", False)
+        genre_enabled = metadata.get("genre_enabled", False)
+        glossary_enabled = metadata.get("glossary_enabled", True)
 
-        style_val = (metadata.get("style", "") or "").strip()
-        if style_val:
-            style_block = f"# Translation Style Guidelines\n{style_val}"
+        if si_enabled:
+            sys_instructions = (metadata.get("system_instructions", "") or "").strip()
 
-        tone_val = (metadata.get("tone", "") or "").strip()
-        if tone_val:
-            tone_block = f"# Translation Tone\n{tone_val}"
+        if style_enabled:
+            style_val = (metadata.get("style", "") or "").strip()
+            if style_val:
+                style_block = f"# Translation Style Guidelines\n{style_val}"
 
-        summary_val = (metadata.get("summary", "") or "").strip()
-        if summary_val:
-            summary_block = f"# Game Context\n{summary_val}"
+        if tone_enabled:
+            tone_val = (metadata.get("tone", "") or "").strip()
+            if tone_val:
+                tone_block = f"# Translation Tone\n{tone_val}"
 
-        genre_val = (metadata.get("genre", "") or "").strip()
-        if genre_val:
-            genre_block = f"# Genre\n{genre_val}"
+        if summary_enabled:
+            summary_val = (metadata.get("summary", "") or "").strip()
+            if summary_val:
+                summary_block = f"# Game Context\n{summary_val}"
+
+        if genre_enabled:
+            genre_val = (metadata.get("genre", "") or "").strip()
+            if genre_val:
+                genre_block = f"# Genre\n{genre_val}"
 
         if isinstance(pov_data, dict) and pov_data.get("confidence") == "high":
             pov_label = {
@@ -3777,32 +3790,36 @@ class TranslationStep(BaseStep):
 
             chunk_text_joined = "\n".join(filtered_lines)
 
-            # Per-chunk selective glossary
+            # Per-chunk selective glossary (gated by glossary_enabled)
             chunk_glossary_block = ""
-            active = [
-                e for e in glossary_entries
-                if e.get("active", True) and e.get("source", "")
-                and e["source"] in chunk_text_joined
-            ]
-            if active:
-                g_lines = ["# Glossary", "Use these terms strictly:"]
-                for entry in active:
-                    s = entry.get("source", "")
-                    t = entry.get("target", "")
-                    n = entry.get("notes", "")
-                    if s:
-                        lt = f"- {s} → {t}" if t else f"- {s}"
-                        if n:
-                            lt += f" ({n})"
-                        g_lines.append(lt)
-                chunk_glossary_block = "\n".join(g_lines)
+            if glossary_enabled:
+                active = [
+                    e for e in glossary_entries
+                    if e.get("active", True) and e.get("source", "")
+                    and e["source"] in chunk_text_joined
+                ]
+                if active:
+                    g_lines = ["# Glossary", "Use these terms strictly:"]
+                    for entry in active:
+                        s = entry.get("source", "")
+                        t = entry.get("target", "")
+                        n = entry.get("notes", "")
+                        if s:
+                            lt = f"- {s} → {t}" if t else f"- {s}"
+                            if n:
+                                lt += f" ({n})"
+                            g_lines.append(lt)
+                    chunk_glossary_block = "\n".join(g_lines)
 
-            # Per-chunk selective characters
-            relevant_chars = [
-                ch for ch in characters
-                if ch.get("original_name", "")
-                and ch["original_name"] in chunk_text_joined
-            ]
+            # Per-chunk selective characters (gated by glossary_enabled)
+            if glossary_enabled:
+                relevant_chars = [
+                    ch for ch in characters
+                    if ch.get("original_name", "")
+                    and ch["original_name"] in chunk_text_joined
+                ]
+            else:
+                relevant_chars = []
             if relevant_chars:
                 char_lines = ["# Characters"]
                 for ch in relevant_chars:

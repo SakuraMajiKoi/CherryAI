@@ -58,6 +58,65 @@ MODULE COUNTS (Verified January 2026)
 
 PENDING TASKS - Costs TAB
 
+### BUG FIX: Section Toggle Persistence
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Section Enabled/Disabled toggle states must survive tab changes and be respected by Preview Request and Estimation.
+
+**Root Cause:** `on_leave()` called `ProjectMetadata.to_dict()` which does NOT include
+`*_enabled` flags, then replaced the entire metadata dict via `set_step_data()`. This
+erased toggle states written by `_toggle_section_enabled()` via `set_info_metadata_field()`.
+
+**Solution:** Modified `on_leave()` and `_save_metadata()` to read current BooleanVar values
+for all seven toggle flags and merge them into the metadata dict after `to_dict()` but before
+`set_step_data()`. This preserves flags across tab changes.
+
+**Files Modified:**
+- `gui/steps/information.py` - Fixed on_leave() and _save_metadata() to merge toggle states
+
+**Tests:** `dev/test_section_toggles.py` — 35 tests (all passing)
+
+---
+
+### BUG FIX: Preview Request Ignores Section Toggles
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 1 hour
+
+Goal: Preview Request must respect Enabled/Disabled toggles — disabled sections must not
+appear in the request preview.
+
+**Root Cause:** `_build_preview_requests()` in translate.py built labeled sections for all
+fields regardless of `*_enabled` flags. `build_full_system_prompt()` already gated sections
+correctly, but the preview builder did not.
+
+**Solution:** Added enabled flag reads from metadata in `_build_preview_requests()`. Each
+labeled section (sys_instructions, style, tone, summary, genre, glossary, characters) is
+now gated by its corresponding `*_enabled` flag, matching `build_full_system_prompt()`.
+
+**Files Modified:**
+- `gui/steps/translate.py` - Gated preview sections by enabled flags in _build_preview_requests()
+
+**Tests:** `dev/test_section_toggles.py::TestPreviewSectionGating` — 6 tests (all passing)
+
+---
+
+### BUG FIX: Redundant Save Button Removal
+**Priority:** LOW | **Status:** ✅ COMPLETE | **Effort:** 10 minutes
+
+Goal: Remove redundant Save button from Information step header.
+
+**Root Cause:** The Save button duplicated auto-save behavior (manifest saves on every tab
+change via on_leave → set_step_data) and showed a misleading "Saved" messagebox.
+
+**Solution:** Removed Save button from header UI. Retained `_save_metadata()` as internal
+helper without messagebox for programmatic use.
+
+**Files Modified:**
+- `gui/steps/information.py` - Removed Save button, removed messagebox from _save_metadata()
+
+**Tests:** `dev/test_section_toggles.py::TestSaveButtonRemoved` — 1 test (all passing)
+
+---
+
 ### BUG FIX: New Project Manifest Flush
 **Priority:** CRITICAL | **Status:** ✅ COMPLETE | **Effort:** 2 hours
 
@@ -859,6 +918,8 @@ menu dynamically shows options based on the Category of selected row(s).
 - Speaker actions write to character glossary (manifest `characters` key) via `_upsert_character_entry()`
 - Gender support expanded: Male, Female, Non-Binary, Transwoman, Transman
 - Import from Analysis dialogs offer choice of how many to import (non-destructive)
+- Enhanced speaker detection: balanced bracket validation, no-newline rule, script-aware length limits (≤30 Latin / ≤20 CJK)
+- Speaker Threshold (Global Options → Utility → Misc, default 10): below-threshold speakers collapsed into "[+] N Speakers" row; excluded from Glossary import and Term Translation
 
 **Files Modified:**
 - `gui/steps/analysis.py` - Right-click binding, dynamic menu, pattern actions, Nameable dialog

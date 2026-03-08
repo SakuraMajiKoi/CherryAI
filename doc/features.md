@@ -709,7 +709,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Korean: Hangul detection, excluded from JP/CN threshold
   - Language detection (Japanese, Chinese, etc.)
   - Code/pattern detection: individual normalized patterns with count, type, and concrete instances (raw variants that normalize to the same pattern)
-  - Speaker detection: ALL speakers listed with frequency counts (no truncation)
+  - Speaker detection: ALL speakers listed with frequency counts (no truncation); enhanced validation rejects false positives via balanced bracket checks, no-newline rule, and script-aware length limits (≤30 Latin / ≤20 CJK)
   - **Findings Table Enhancements:**
     - Individual code patterns shown with normalized form, occurrence count, type, and examples in Details
     - Patterns with instances (aggregated) display **[+]/[-] collapsible** sub-rows showing each concrete variant and its per-instance count; double-click to toggle expansion
@@ -849,6 +849,9 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Disabled sections are excluded from prompt assembly in `build_full_system_prompt()`
     - Collapsible sections collapse and disable their collapse button when toggled off
     - Toggles are respected by Preview Request, Estimate, and Start Translation
+    - `on_leave()` merges toggle states into metadata dict (survives `ProjectMetadata.to_dict()` which excludes `*_enabled` keys)
+    - Preview Request: `_build_preview_requests()` gates each labeled section by its enabled flag
+    - No manual Save button — toggles and metadata auto-save on tab change via `on_leave()`
 - **Theme System (Phase 14):**
   - **Pastel Blue Theme (default):**
     - Light/pastel blue base color (#B8D4E8)
@@ -2863,6 +2866,13 @@ Benefits:
 - **Consistency**: AI suggestions help maintain character consistency
 - **Learning**: Each file teaches the glossary more about your characters
 - **Flexibility**: You can always edit suggestions or turn off AI enhancement
+
+SPEAKER THRESHOLD (Global Options → Utility → Misc)
+- **Speaker Threshold** (default 10): Minimum occurrence count for speakers to appear in findings
+- Speakers below threshold are collapsed into a single "[+] N Speakers" row in the Analysis findings table
+- Below-threshold speakers are excluded from Glossary import and Term Translation
+- Manual right-click "Add to Glossary" still works for any individual speaker
+- Stored in CherryAI.ini `[utility]` section as `speaker_threshold`
 
 =============================================================================
 

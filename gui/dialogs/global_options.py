@@ -710,6 +710,7 @@ class UtilitySettings:
         gender_llm_maximum: Max LLM checks (maximumLLM).
         gender_llm_ignore_unknown: Unknown results don't count toward max.
         gender_llm_do_all: Always run max checks vs. early stop.
+        speaker_threshold: Minimum speaker occurrences for visibility (default 10).
     """
 
     term_translation_mode: str = "Romaji"
@@ -729,6 +730,7 @@ class UtilitySettings:
     gender_llm_maximum: int = 5
     gender_llm_ignore_unknown: bool = True
     gender_llm_do_all: bool = False
+    speaker_threshold: int = 10
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -750,6 +752,7 @@ class UtilitySettings:
             "gender_llm_maximum": self.gender_llm_maximum,
             "gender_llm_ignore_unknown": self.gender_llm_ignore_unknown,
             "gender_llm_do_all": self.gender_llm_do_all,
+            "speaker_threshold": self.speaker_threshold,
         }
 
     @classmethod
@@ -779,6 +782,7 @@ class UtilitySettings:
             gender_llm_maximum=int(data.get("gender_llm_maximum", 5)),
             gender_llm_ignore_unknown=bool(data.get("gender_llm_ignore_unknown", True)),
             gender_llm_do_all=bool(data.get("gender_llm_do_all", False)),
+            speaker_threshold=int(data.get("speaker_threshold", 10)),
         )
 
 
@@ -2885,6 +2889,36 @@ class GlobalOptionsDialog(tk.Toplevel):
             wraplength=450, justify="left",
         ).pack(anchor="w", pady=(6, 0))
 
+        # =====================================================================
+        # Misc
+        # =====================================================================
+        misc_frame = ttk.LabelFrame(inner, text="Misc", padding=12)
+        misc_frame.pack(fill=tk.X, pady=(0, 12))
+
+        # Speaker Threshold
+        row = ttk.Frame(misc_frame)
+        row.pack(fill=tk.X, pady=3)
+        ttk.Label(row, text="Speaker Threshold:", width=18).pack(side=tk.LEFT)
+        self._speaker_threshold_var = tk.IntVar(
+            value=self.options.utility.speaker_threshold,
+        )
+        ttk.Spinbox(
+            row, textvariable=self._speaker_threshold_var,
+            from_=1, to=9999, width=6,
+        ).pack(side=tk.LEFT)
+        ttk.Label(
+            row, text="minimum occurrences", foreground="gray",
+        ).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Label(
+            misc_frame,
+            text=(
+                "Speakers below this count are collapsed in Analysis findings "
+                "and excluded from Glossary import and Term Translation."
+            ),
+            font=("Segoe UI", 8), foreground="gray",
+            wraplength=450, justify="left",
+        ).pack(anchor="w", pady=(6, 0))
+
     def _build_buttons(self, parent: ttk.Frame) -> None:
         """Build the action buttons at the bottom."""
         button_frame = ttk.Frame(parent)
@@ -4037,6 +4071,7 @@ class GlobalOptionsDialog(tk.Toplevel):
             gender_llm_maximum=self._gender_llm_max_var.get(),
             gender_llm_ignore_unknown=self._gender_llm_ign_var.get(),
             gender_llm_do_all=self._gender_llm_doall_var.get(),
+            speaker_threshold=self._speaker_threshold_var.get(),
         )
 
         # Persist utility API settings to API.ini profiles
@@ -4217,6 +4252,9 @@ class GlobalOptionsDialog(tk.Toplevel):
                 "gender_llm_do_all": str(
                     self.options.utility.gender_llm_do_all,
                 ).lower(),
+                "speaker_threshold": str(
+                    self.options.utility.speaker_threshold,
+                ),
             }
             ini_manager.save_as_user_defaults("utility", utility_vals)
 

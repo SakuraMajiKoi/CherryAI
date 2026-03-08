@@ -603,13 +603,6 @@ class InformationStep(BaseStep):
         )
         self._json_btn.pack(side="right", padx=(5, 0))
 
-        # Save button
-        ttk.Button(
-            header,
-            text="Save",
-            command=self._save_metadata,
-        ).pack(side="right")
-
     def _build_content(self) -> None:
         """Build the main content area with 2-column layout.
 
@@ -4272,13 +4265,21 @@ class InformationStep(BaseStep):
             characters_data = analysis_results.get("characters", [])
 
             # Build sorted list: [(name, count)]
+            # Filter out below-threshold speakers
+            go = getattr(self.session, "global_options", None)
+            threshold = 10
+            if go is not None:
+                threshold = getattr(
+                    getattr(go, "utility", None), "speaker_threshold", 10
+                )
             items_list: list = []
             if isinstance(characters_data, list):
                 for entry in characters_data:
-                    if isinstance(entry, dict) and entry.get("count", 0) > 0:
+                    count = entry.get("count", 0) if isinstance(entry, dict) else 0
+                    if isinstance(entry, dict) and count >= threshold:
                         items_list.append((
                             entry.get("original_name", ""),
-                            entry.get("count", 0),
+                            count,
                         ))
 
             if not items_list:
@@ -4798,10 +4799,23 @@ class InformationStep(BaseStep):
             self._refresh_kb()
 
     def _save_metadata(self) -> None:
-        """Save metadata to session state."""
+        """Save metadata to session state (internal helper).
+
+        Includes section toggle states so they survive the full
+        metadata dict replacement.  No user-facing messagebox — the
+        manifest auto-saves on tab change.
+        """
         self._collect_metadata()
         data = self.get_step_data()
-        data["metadata"] = self._metadata.to_dict()
+        meta_dict = self._metadata.to_dict()
+        meta_dict["genre_enabled"] = self._genre_enabled_var.get()
+        meta_dict["summary_enabled"] = self._summary_enabled_var.get()
+        meta_dict["style_enabled"] = self._style_enabled_var.get()
+        meta_dict["tone_enabled"] = self._tone_enabled_var.get()
+        meta_dict["system_instructions_enabled"] = self._si_enabled_var.get()
+        meta_dict["glossary_enabled"] = self._glossary_enabled_var.get()
+        meta_dict["code_database_enabled"] = self._code_db_enabled_var.get()
+        data["metadata"] = meta_dict
         data["inference_options"] = {
             "enabled": self._infer_enabled_var.get(),
             "infer_summary": self._infer_summary_var.get(),
@@ -4810,7 +4824,6 @@ class InformationStep(BaseStep):
             "sample_lines": self._sample_lines_var.get(),
         }
         self.set_step_data(data)
-        messagebox.showinfo("Saved", "Project information saved successfully.")
 
     def _load_metadata(self) -> None:
         """Load metadata from session state."""
@@ -5430,10 +5443,25 @@ class InformationStep(BaseStep):
             logger.debug("Could not auto-import code patterns: %s", e)
 
     def on_leave(self) -> None:
-        """Called when leaving step."""
+        """Called when leaving step.
+
+        Collects form data and persists it together with section toggle
+        states so that the ``*_enabled`` flags survive the full metadata
+        dict replacement performed by ``set_step_data()``.
+        """
         self._collect_metadata()
         data = self.get_step_data()
-        data["metadata"] = self._metadata.to_dict()
+        meta_dict = self._metadata.to_dict()
+        # Preserve section toggle states — these live in the manifest
+        # metadata dict but are not part of ProjectMetadata.
+        meta_dict["genre_enabled"] = self._genre_enabled_var.get()
+        meta_dict["summary_enabled"] = self._summary_enabled_var.get()
+        meta_dict["style_enabled"] = self._style_enabled_var.get()
+        meta_dict["tone_enabled"] = self._tone_enabled_var.get()
+        meta_dict["system_instructions_enabled"] = self._si_enabled_var.get()
+        meta_dict["glossary_enabled"] = self._glossary_enabled_var.get()
+        meta_dict["code_database_enabled"] = self._code_db_enabled_var.get()
+        data["metadata"] = meta_dict
         self.set_step_data(data)
 
     # ========================================================================
