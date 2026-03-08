@@ -835,6 +835,20 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Saves last manifest path on app close for next launch
     - Recent manifests list maintained (up to 10)
   - **Global vs Project Glossary**: Toggle in Information step to use global glossary.json or project-specific glossary stored in manifest
+  - **Section Enable/Disable Toggles:**
+    - Each Information step section has an Enabled/Disabled toggle button:
+      - **Genre** (default: Disabled) — button in Project Details row
+      - **Summary** (default: Disabled) — button right of Restore Default
+      - **Translation Style** (default: Disabled) — button right of Delete
+      - **Translation Tone** (default: Disabled) — button right of Delete
+      - **System Instructions** (default: Enabled) — button right of Delete
+      - **Glossary** (default: Enabled) — button in collapsible header
+      - **Code Database** (default: Enabled) — button in collapsible header
+      - **Knowledge Base** (default: Enabled) — existing button, enhanced
+    - Toggle state persists to manifest via `*_enabled` metadata keys
+    - Disabled sections are excluded from prompt assembly in `build_full_system_prompt()`
+    - Collapsible sections collapse and disable their collapse button when toggled off
+    - Toggles are respected by Preview Request, Estimate, and Start Translation
 - **Theme System (Phase 14):**
   - **Pastel Blue Theme (default):**
     - Light/pastel blue base color (#B8D4E8)

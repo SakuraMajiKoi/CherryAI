@@ -3635,6 +3635,86 @@ Shared prompt builder tests validating §5.2 slot assembly, POV integration, glo
 
 ---
 
+### dev/test_prompt_toggles.py (28 tests)
+
+Section toggle tests validating that `*_enabled` metadata flags correctly gate
+which prompt sections are included or excluded by `build_full_system_prompt()`.
+
+#### TestGenreToggle (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_genre_included_when_enabled` | Genre section present when `genre_enabled=True` |
+| `test_genre_excluded_when_disabled` | Genre section absent when `genre_enabled=False` |
+
+#### TestSummaryToggle (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_summary_included_when_enabled` | Summary section present when `summary_enabled=True` |
+| `test_summary_excluded_when_disabled` | Summary section absent when `summary_enabled=False` |
+
+#### TestStyleToggle (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_style_included_when_enabled` | Style section present when `style_enabled=True` |
+| `test_style_excluded_when_disabled` | Style section absent when `style_enabled=False` |
+
+#### TestToneToggle (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_tone_included_when_enabled` | Tone section present when `tone_enabled=True` |
+| `test_tone_excluded_when_disabled` | Tone section absent when `tone_enabled=False` |
+
+#### TestSystemInstructionsToggle (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_si_included_when_enabled` | System Instructions present when `system_instructions_enabled=True` |
+| `test_si_excluded_when_disabled` | System Instructions absent when `system_instructions_enabled=False` |
+
+#### TestGlossaryToggle (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_glossary_included_when_enabled` | Glossary + Characters present when `glossary_enabled=True` |
+| `test_glossary_excluded_when_disabled` | Glossary + Characters absent when `glossary_enabled=False` |
+
+#### TestDefaultToggleValues (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_missing_genre_defaults_to_disabled` | Missing key defaults to disabled (backward compat) |
+| `test_missing_summary_defaults_to_disabled` | Missing key defaults to disabled |
+| `test_missing_style_defaults_to_disabled` | Missing key defaults to disabled |
+| `test_missing_tone_defaults_to_disabled` | Missing key defaults to disabled |
+| `test_missing_si_defaults_to_enabled` | Missing key defaults to enabled |
+| `test_missing_glossary_defaults_to_enabled` | Missing key defaults to enabled |
+
+#### TestCombinedToggles (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_all_disabled_produces_minimal_prompt` | Only Language section with all toggles off |
+| `test_all_enabled_includes_everything` | All sections present with all toggles on |
+| `test_token_count_changes_with_toggles` | Word count decreases when sections disabled |
+| `test_idempotent_across_calls` | Same inputs produce identical outputs |
+
+#### TestEdgeCases (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_empty_metadata` | Empty dict returns empty prompt |
+| `test_none_metadata` | None metadata returns empty prompt |
+| `test_style_falls_back_to_custom_style` | Falls back to `custom_style` when `style` empty |
+| `test_tone_falls_back_to_custom_tone` | Falls back to `custom_tone` when `tone` empty |
+| `test_enabled_but_empty_field_produces_no_section` | Toggle on + empty text = no section |
+| `test_chunk_filtering_with_glossary_toggle` | Per-chunk filtering respects glossary toggle |
+
+---
+
 | `test_provider_has_required_keys` | name, base_url, models present |
 | `test_openai_has_empty_base_url` | OpenAI uses SDK default |
 | `test_gemini_has_openai_compat_url` | Gemini uses compat endpoint |

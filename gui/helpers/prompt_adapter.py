@@ -1010,6 +1010,17 @@ def build_full_system_prompt(
             parts.append(text)
             breakdown[section_name] = len(text.split())
 
+    # --- Section toggle flags (from Information step metadata) ---
+    # Each flag controls whether that section is included in the prompt.
+    # Missing keys default to their original behaviour for backward compat.
+    genre_enabled = metadata.get("genre_enabled", False)
+    summary_enabled = metadata.get("summary_enabled", False)
+    style_enabled = metadata.get("style_enabled", False)
+    tone_enabled = metadata.get("tone_enabled", False)
+    si_enabled = metadata.get("system_instructions_enabled", True)
+    glossary_enabled = metadata.get("glossary_enabled", True)
+    code_database_enabled = metadata.get("code_database_enabled", True)
+
     # --- 1. Language Direction ---
     source_lang = (metadata.get("source_language", "") or "").strip()
     target_lang = (metadata.get("target_language", "") or "").strip()
@@ -1020,19 +1031,30 @@ def build_full_system_prompt(
         )
 
     # --- 2. System Instructions ---
-    sys_instructions = (metadata.get("system_instructions", "") or "").strip()
-    if sys_instructions:
-        _add("system_instructions", sys_instructions)
+    if si_enabled:
+        sys_instructions = (
+            metadata.get("system_instructions", "") or ""
+        ).strip()
+        if sys_instructions:
+            _add("system_instructions", sys_instructions)
 
     # --- 3. Style ---
-    style = (metadata.get("style", "") or "").strip()
-    if style:
-        _add("style", f"# Translation Style Guidelines\n{style}")
+    if style_enabled:
+        style = (
+            metadata.get("style", "") or metadata.get("custom_style", "")
+            or ""
+        ).strip()
+        if style:
+            _add("style", f"# Translation Style Guidelines\n{style}")
 
     # --- 4. Tone ---
-    tone = (metadata.get("tone", "") or "").strip()
-    if tone:
-        _add("tone", f"# Translation Tone\n{tone}")
+    if tone_enabled:
+        tone = (
+            metadata.get("tone", "") or metadata.get("custom_tone", "")
+            or ""
+        ).strip()
+        if tone:
+            _add("tone", f"# Translation Tone\n{tone}")
 
     # --- 4b. Protagonist + Narration (Task 75) ---
     protagonist_section = ""
@@ -1049,14 +1071,16 @@ def build_full_system_prompt(
         _add("protagonist", f"# Protagonist\n{protagonist_section}")
 
     # --- 5. Summary ---
-    summary = (metadata.get("summary", "") or "").strip()
-    if summary:
-        _add("summary", f"# Game Context\n{summary}")
+    if summary_enabled:
+        summary = (metadata.get("summary", "") or "").strip()
+        if summary:
+            _add("summary", f"# Game Context\n{summary}")
 
     # --- 6. Genre ---
-    genre = (metadata.get("genre", "") or "").strip()
-    if genre:
-        _add("genre", f"# Genre\n{genre}")
+    if genre_enabled:
+        genre = (metadata.get("genre", "") or "").strip()
+        if genre:
+            _add("genre", f"# Genre\n{genre}")
 
     # --- 7. POV (skipped when protagonist section has narration) ---
     if not protagonist_section and pov_data and isinstance(pov_data, dict):
@@ -1093,10 +1117,13 @@ def build_full_system_prompt(
     # --- 9. Glossary + Characters (selective per-chunk) ---
     # When chunk_lines is provided, only include entries whose source
     # term / original_name appears in the chunk text.
+    # Glossary entries are included only when glossary_enabled is True.
+    # Characters are always included when glossary_enabled is True
+    # (they are part of the glossary section).
     chunk_text_joined = "\n".join(chunk_lines) if chunk_lines else ""
 
     glossary_block = ""
-    if glossary_entries:
+    if glossary_enabled and glossary_entries:
         active = [e for e in glossary_entries if e.get("active", True)]
         if chunk_lines is not None:
             active = [
@@ -1116,7 +1143,7 @@ def build_full_system_prompt(
                     g_lines.append(line_text)
             glossary_block = "\n".join(g_lines)
 
-    if characters:
+    if glossary_enabled and characters:
         relevant_chars = characters
         if chunk_lines is not None:
             relevant_chars = [

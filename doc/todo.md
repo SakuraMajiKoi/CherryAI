@@ -663,6 +663,13 @@ Instead, use the bridge methods to sync processing results into ManifestManager.
 | Code Database | `CodeGlossary` | special | [] | prompt |
 | Prompt | `step_state.Information.data.metadata.custom_notes` | text | "[DEFAULT_SYSTEM_INSTRUCTIONS]" | prompt |
 | SI Preset | `step_state.Information.data.metadata.si_preset` | text | "Default" | - |
+| Genre Enabled | `step_state.Information.data.metadata.genre_enabled` | boolean | false | prompt toggle |
+| Summary Enabled | `step_state.Information.data.metadata.summary_enabled` | boolean | false | prompt toggle |
+| Style Enabled | `step_state.Information.data.metadata.style_enabled` | boolean | false | prompt toggle |
+| Tone Enabled | `step_state.Information.data.metadata.tone_enabled` | boolean | false | prompt toggle |
+| SI Enabled | `step_state.Information.data.metadata.system_instructions_enabled` | boolean | true | prompt toggle |
+| Glossary Enabled | `step_state.Information.data.metadata.glossary_enabled` | boolean | true | prompt toggle |
+| Code DB Enabled | `step_state.Information.data.metadata.code_database_enabled` | boolean | true | prompt toggle |
 | Deduplication | `Deduplication` | boolean | true | dedup mode |
 | Dedup Threshold | `DeduplicationThreshold` | int | 1 | dedup mode |
 | Ellipsis Compression | `EllipsisCompression` | boolean | true | ellipsis mode |

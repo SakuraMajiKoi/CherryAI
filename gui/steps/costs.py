@@ -648,13 +648,19 @@ class CostsStep(BaseStep):
             Estimated token count for system prompt.
         """
         try:
-            # Read Information step metadata (step index 2)
-            info_data = self.session.get_step(2).data
-            metadata = info_data.get("metadata", {})
+            # Read Information step metadata — prefer manifest over session
+            mgr = self.manifest_manager
+            metadata: dict = {}
+            if mgr is not None and mgr.is_loaded:
+                metadata = mgr.get_step_data_value(2, "metadata", {})
+                if not isinstance(metadata, dict):
+                    metadata = {}
+            if not metadata:
+                info_data = self.session.get_step(2).data
+                metadata = info_data.get("metadata", {})
 
             # Glossary from manifest
             glossary_entries: list[dict] = []
-            mgr = self.manifest_manager
             if mgr is not None and mgr.is_loaded:
                 try:
                     from CherryAI.functions.manifest_fields import (
@@ -759,11 +765,18 @@ class CostsStep(BaseStep):
             return 0, 0
 
         try:
-            info_data = self.session.get_step(2).data
-            metadata = info_data.get("metadata", {})
+            # Read Information step metadata — prefer manifest over session
+            mgr = self.manifest_manager
+            metadata: dict = {}
+            if mgr is not None and mgr.is_loaded:
+                metadata = mgr.get_step_data_value(2, "metadata", {})
+                if not isinstance(metadata, dict):
+                    metadata = {}
+            if not metadata:
+                info_data = self.session.get_step(2).data
+                metadata = info_data.get("metadata", {})
 
             glossary_entries: list[dict] = []
-            mgr = self.manifest_manager
             if mgr is not None and mgr.is_loaded:
                 try:
                     from CherryAI.functions.manifest_fields import (

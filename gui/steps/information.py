@@ -897,6 +897,14 @@ class InformationStep(BaseStep):
         )
         self._genre_btn.pack(side="left", padx=(5, 0))
 
+        # Enable/Disable toggle for Genre
+        self._genre_enabled_var = tk.BooleanVar(value=False)
+        self._genre_toggle_btn = ttk.Button(
+            row3, text="Disabled", width=8,
+            command=self._toggle_genre_enabled,
+        )
+        self._genre_toggle_btn.pack(side="left", padx=(5, 0))
+
     def _build_language_section(self) -> None:
         """Build language selection section.
         
@@ -998,9 +1006,15 @@ class InformationStep(BaseStep):
             )
         )
 
-        # Restore default button
+        # Restore default button + Enable/Disable toggle
         btn_row = ttk.Frame(frame)
         btn_row.pack(fill="x", padx=10, pady=(0, 5))
+        self._summary_enabled_var = tk.BooleanVar(value=False)
+        self._summary_toggle_btn = ttk.Button(
+            btn_row, text="Disabled", width=8,
+            command=self._toggle_summary_enabled,
+        )
+        self._summary_toggle_btn.pack(side="right", padx=(5, 0))
         ttk.Button(
             btn_row, text="🔄 Restore Default", width=16,
             command=self._restore_summary_default,
@@ -1061,6 +1075,14 @@ class InformationStep(BaseStep):
             style_header, text="🗑 Delete", width=10,
             command=self._delete_style_preset,
         ).pack(side="left", padx=2)
+
+        # Enable/Disable toggle for Style
+        self._style_enabled_var = tk.BooleanVar(value=False)
+        self._style_toggle_btn = ttk.Button(
+            style_header, text="Disabled", width=8,
+            command=self._toggle_style_enabled,
+        )
+        self._style_toggle_btn.pack(side="left", padx=(5, 0))
 
         # Prompt text field (writable) — this is what goes into the prompt
         self._style_var = tk.StringVar()
@@ -1123,6 +1145,14 @@ class InformationStep(BaseStep):
             command=self._delete_tone_preset,
         ).pack(side="left", padx=2)
 
+        # Enable/Disable toggle for Tone
+        self._tone_enabled_var = tk.BooleanVar(value=False)
+        self._tone_toggle_btn = ttk.Button(
+            tone_header, text="Disabled", width=8,
+            command=self._toggle_tone_enabled,
+        )
+        self._tone_toggle_btn.pack(side="left", padx=(5, 0))
+
         # Prompt text field (writable)
         self._tone_var = tk.StringVar()
         self._tone_text = scrolledtext.ScrolledText(
@@ -1149,8 +1179,19 @@ class InformationStep(BaseStep):
         Placed in right column (row 0) with collapse/expand support.
         Table expands vertically to fill available space.
         """
+        self._glossary_enabled_var = tk.BooleanVar(value=True)
+
+        def _add_glossary_enabled_btn(header: ttk.Frame) -> None:
+            """Pack the Enabled/Disabled toggle into the header bar."""
+            self._glossary_toggle_btn = ttk.Button(
+                header, text="Enabled", width=8,
+                command=self._toggle_glossary_enabled,
+            )
+            self._glossary_toggle_btn.pack(side="left", padx=(8, 0))
+
         content = self._build_collapsible_labelframe(
             self._right_column, "Glossary", "glossary", row=0,
+            extra_header_widgets=_add_glossary_enabled_btn,
         )
         content.rowconfigure(1, weight=1)
 
@@ -1360,8 +1401,19 @@ class InformationStep(BaseStep):
         Placed in right column (row 1) with collapse/expand support.
         Table expands vertically to fill available space.
         """
+        self._code_db_enabled_var = tk.BooleanVar(value=True)
+
+        def _add_code_db_enabled_btn(header: ttk.Frame) -> None:
+            """Pack the Enabled/Disabled toggle into the header bar."""
+            self._code_db_toggle_btn = ttk.Button(
+                header, text="Enabled", width=8,
+                command=self._toggle_code_db_enabled,
+            )
+            self._code_db_toggle_btn.pack(side="left", padx=(8, 0))
+
         content = self._build_collapsible_labelframe(
             self._right_column, "Code Database", "code_database", row=1,
+            extra_header_widgets=_add_code_db_enabled_btn,
         )
         content.rowconfigure(1, weight=1)  # table row expands
 
@@ -1692,16 +1744,170 @@ class InformationStep(BaseStep):
 
         Controls whether global databases are used in API request building.
         Persists the setting via ManifestManager.set_use_global_glossary().
+        When disabled, collapses the section and disables the collapse button.
         """
         enabled = not self._kb_enabled_var.get()
         self._kb_enabled_var.set(enabled)
         self._kb_enabled_btn.config(text="Enabled" if enabled else "Disabled")
+
+        # When disabled, collapse and disable collapse button
+        collapse_btn = self._collapsible_buttons.get("knowledge_base")
+        if enabled:
+            if collapse_btn:
+                collapse_btn.configure(state="normal")
+        else:
+            if self._collapsible_state.get("knowledge_base", True):
+                self._toggle_collapsible("knowledge_base")
+            if collapse_btn:
+                collapse_btn.configure(state="disabled")
 
         # Persist to manifest
         mgr = self.manifest_manager
         if mgr is not None and mgr.is_loaded:
             mgr.set_use_global_glossary(enabled)
         logger.debug("Knowledge Base enabled: %s", enabled)
+
+    # ------------------------------------------------------------------
+    # Section toggle helpers
+    # ------------------------------------------------------------------
+
+    def _toggle_section_enabled(
+        self,
+        var: tk.BooleanVar,
+        btn: ttk.Button,
+        meta_key: str,
+        widgets: Optional[list] = None,
+    ) -> None:
+        """Generic toggle handler for section enable/disable.
+
+        Updates the BooleanVar, button text, persists to manifest, and
+        optionally greys out associated widgets.
+
+        Args:
+            var: The BooleanVar tracking the toggle state.
+            btn: The toggle button widget.
+            meta_key: Manifest metadata key (e.g. ``genre_enabled``).
+            widgets: Optional list of widgets to enable/disable visually.
+        """
+        enabled = not var.get()
+        var.set(enabled)
+        btn.config(text="Enabled" if enabled else "Disabled")
+
+        # Grey out / restore associated widgets
+        if widgets:
+            state = "normal" if enabled else "disabled"
+            for w in widgets:
+                try:
+                    w.configure(state=state)
+                except tk.TclError:
+                    pass
+
+        # Persist to manifest
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            mgr.set_info_metadata_field(meta_key, enabled)
+        logger.debug("Section %s enabled: %s", meta_key, enabled)
+
+    def _toggle_genre_enabled(self) -> None:
+        """Toggle Genre section enabled/disabled."""
+        self._toggle_section_enabled(
+            self._genre_enabled_var,
+            self._genre_toggle_btn,
+            "genre_enabled",
+            widgets=[self._genre_entry, self._genre_btn],
+        )
+
+    def _toggle_summary_enabled(self) -> None:
+        """Toggle Summary section enabled/disabled."""
+        self._toggle_section_enabled(
+            self._summary_enabled_var,
+            self._summary_toggle_btn,
+            "summary_enabled",
+            widgets=[self._summary_text],
+        )
+
+    def _toggle_style_enabled(self) -> None:
+        """Toggle Style section enabled/disabled."""
+        self._toggle_section_enabled(
+            self._style_enabled_var,
+            self._style_toggle_btn,
+            "style_enabled",
+            widgets=[self._style_text, self._style_preset_combo],
+        )
+
+    def _toggle_tone_enabled(self) -> None:
+        """Toggle Tone section enabled/disabled."""
+        self._toggle_section_enabled(
+            self._tone_enabled_var,
+            self._tone_toggle_btn,
+            "tone_enabled",
+            widgets=[self._tone_text, self._tone_preset_combo],
+        )
+
+    def _toggle_si_enabled(self) -> None:
+        """Toggle System Instructions section enabled/disabled."""
+        self._toggle_section_enabled(
+            self._si_enabled_var,
+            self._si_toggle_btn,
+            "system_instructions_enabled",
+            widgets=[self._notes_text, self._si_preset_combo],
+        )
+
+    def _toggle_glossary_enabled(self) -> None:
+        """Toggle Glossary section enabled/disabled.
+
+        When disabled, collapses the section and disables the collapse button.
+        """
+        enabled = not self._glossary_enabled_var.get()
+        self._glossary_enabled_var.set(enabled)
+        self._glossary_toggle_btn.config(
+            text="Enabled" if enabled else "Disabled",
+        )
+
+        # When disabled, collapse and disable collapse button
+        collapse_btn = self._collapsible_buttons.get("glossary")
+        if enabled:
+            if collapse_btn:
+                collapse_btn.configure(state="normal")
+        else:
+            if self._collapsible_state.get("glossary", True):
+                self._toggle_collapsible("glossary")
+            if collapse_btn:
+                collapse_btn.configure(state="disabled")
+
+        # Persist to manifest
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            mgr.set_info_metadata_field("glossary_enabled", enabled)
+        logger.debug("Glossary enabled: %s", enabled)
+
+    def _toggle_code_db_enabled(self) -> None:
+        """Toggle Code Database section enabled/disabled.
+
+        When disabled, collapses the section and disables the collapse button.
+        """
+        enabled = not self._code_db_enabled_var.get()
+        self._code_db_enabled_var.set(enabled)
+        self._code_db_toggle_btn.config(
+            text="Enabled" if enabled else "Disabled",
+        )
+
+        # When disabled, collapse and disable collapse button
+        collapse_btn = self._collapsible_buttons.get("code_database")
+        if enabled:
+            if collapse_btn:
+                collapse_btn.configure(state="normal")
+        else:
+            if self._collapsible_state.get("code_database", True):
+                self._toggle_collapsible("code_database")
+            if collapse_btn:
+                collapse_btn.configure(state="disabled")
+
+        # Persist to manifest
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            mgr.set_info_metadata_field("code_database_enabled", enabled)
+        logger.debug("Code Database enabled: %s", enabled)
 
     def _refresh_kb(self) -> None:
         """Reload the Knowledge Base treeview based on current mode and search."""
@@ -2315,6 +2521,14 @@ class InformationStep(BaseStep):
             si_header, text="🗑 Delete", width=10,
             command=self._delete_si_preset,
         ).pack(side="left", padx=2)
+
+        # Enable/Disable toggle for System Instructions
+        self._si_enabled_var = tk.BooleanVar(value=True)
+        self._si_toggle_btn = ttk.Button(
+            si_header, text="Enabled", width=8,
+            command=self._toggle_si_enabled,
+        )
+        self._si_toggle_btn.pack(side="left", padx=(5, 0))
 
         # Prompt text field (writable)
         self._notes_text = scrolledtext.ScrolledText(
@@ -4779,6 +4993,20 @@ class InformationStep(BaseStep):
         self._is_inferring = False
         self._json_mode = False
         self._manifest_bindings.clear()
+
+        # Reset section toggles to defaults
+        for var, btn, default in [
+            (self._genre_enabled_var, self._genre_toggle_btn, False),
+            (self._summary_enabled_var, self._summary_toggle_btn, False),
+            (self._style_enabled_var, self._style_toggle_btn, False),
+            (self._tone_enabled_var, self._tone_toggle_btn, False),
+            (self._si_enabled_var, self._si_toggle_btn, True),
+            (self._glossary_enabled_var, self._glossary_toggle_btn, True),
+            (self._code_db_enabled_var, self._code_db_toggle_btn, True),
+        ]:
+            var.set(default)
+            btn.config(text="Enabled" if default else "Disabled")
+
         logger.debug("Information step reset for new project")
 
     def on_enter(self) -> None:
@@ -4815,6 +5043,8 @@ class InformationStep(BaseStep):
         self._ensure_style_tone_text()
         # Ensure summary and system instructions show defaults if empty
         self._ensure_default_texts()
+        # Restore section toggle states from manifest
+        self._load_section_toggles()
     
     def _load_from_manifest_bindings(self) -> None:
         """Load all manifest-bound fields from manifest.
@@ -4827,6 +5057,99 @@ class InformationStep(BaseStep):
         
         load_all_bindings(self._manifest_bindings)
         logger.debug("Loaded %d manifest bindings", len(self._manifest_bindings))
+
+    def _load_section_toggles(self) -> None:
+        """Restore section Enabled/Disabled toggle states from manifest.
+
+        Reads ``*_enabled`` boolean flags from Information metadata and
+        applies them to the corresponding BooleanVars, button labels, and
+        widget states.  Also handles collapsible section collapse/expand.
+        """
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            return
+
+        # Map: (meta_key, default, BooleanVar, Button, widgets_to_grey)
+        simple_toggles: list[tuple] = [
+            (
+                "genre_enabled", False,
+                self._genre_enabled_var, self._genre_toggle_btn,
+                [self._genre_entry, self._genre_btn],
+            ),
+            (
+                "summary_enabled", False,
+                self._summary_enabled_var, self._summary_toggle_btn,
+                [self._summary_text],
+            ),
+            (
+                "style_enabled", False,
+                self._style_enabled_var, self._style_toggle_btn,
+                [self._style_text, self._style_preset_combo],
+            ),
+            (
+                "tone_enabled", False,
+                self._tone_enabled_var, self._tone_toggle_btn,
+                [self._tone_text, self._tone_preset_combo],
+            ),
+            (
+                "system_instructions_enabled", True,
+                self._si_enabled_var, self._si_toggle_btn,
+                [self._notes_text, self._si_preset_combo],
+            ),
+        ]
+
+        for meta_key, default, var, btn, widgets in simple_toggles:
+            val = mgr.get_info_metadata_field(meta_key, default)
+            enabled = bool(val) if not isinstance(val, bool) else val
+            var.set(enabled)
+            btn.config(text="Enabled" if enabled else "Disabled")
+            state = "normal" if enabled else "disabled"
+            for w in widgets:
+                try:
+                    w.configure(state=state)
+                except tk.TclError:
+                    pass
+
+        # Collapsible sections: Glossary, Code Database
+        for meta_key, default, var, btn, widget_name in [
+            (
+                "glossary_enabled", True,
+                self._glossary_enabled_var, self._glossary_toggle_btn,
+                "glossary",
+            ),
+            (
+                "code_database_enabled", True,
+                self._code_db_enabled_var, self._code_db_toggle_btn,
+                "code_database",
+            ),
+        ]:
+            val = mgr.get_info_metadata_field(meta_key, default)
+            enabled = bool(val) if not isinstance(val, bool) else val
+            var.set(enabled)
+            btn.config(text="Enabled" if enabled else "Disabled")
+
+            collapse_btn = self._collapsible_buttons.get(widget_name)
+            if enabled:
+                if collapse_btn:
+                    collapse_btn.configure(state="normal")
+            else:
+                if self._collapsible_state.get(widget_name, True):
+                    self._toggle_collapsible(widget_name)
+                if collapse_btn:
+                    collapse_btn.configure(state="disabled")
+
+        # Knowledge Base: also handle collapse on disable
+        if hasattr(self, "_kb_enabled_var"):
+            kb_val = self._kb_enabled_var.get()
+            collapse_btn = self._collapsible_buttons.get("knowledge_base")
+            if not kb_val:
+                if self._collapsible_state.get("knowledge_base", True):
+                    self._toggle_collapsible("knowledge_base")
+                if collapse_btn:
+                    collapse_btn.configure(state="disabled")
+            else:
+                if collapse_btn:
+                    collapse_btn.configure(state="normal")
 
     def _ensure_style_tone_text(self) -> None:
         """Populate style, tone, and SI text fields with the selected preset.

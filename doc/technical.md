@@ -307,6 +307,7 @@ TABLE OF CONTENTS
            via `_upsert_character_entry()`, not to project glossary entries
        - chunker_adapter.py - Bridge between GUI and functions/chunker.py
        - prompt_adapter.py - Bridge between GUI and functions/prompt_builder.py (TASK 73: build_full_system_prompt shared builder — single source of truth for §5.2 prompt assembly)
+         - Section toggle flags: `build_full_system_prompt()` reads `*_enabled` boolean keys from metadata to gate prompt sections (genre_enabled, summary_enabled, style_enabled, tone_enabled, system_instructions_enabled, glossary_enabled, code_database_enabled)
        - manifest_binding.py - Widget-to-Manifest binding system (TASK 22.3)
        - tooltip.py - Tooltip display utilities for widgets
        - confirmations.py - Confirmation dialog with "Don't ask again" opt-out (Phase 60)

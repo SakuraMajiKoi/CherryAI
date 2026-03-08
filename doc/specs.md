@@ -407,16 +407,16 @@ The system prompt is assembled in the following fixed order. Empty sections are 
 | Slot | Component | Source | Condition |
 |------|-----------|--------|-----------|
 | 1 | **Language Direction** | `step_state.Information.data.metadata.source_language` + `target_language` (fallback: top-level `SourceLanguage`/`TargetLanguage`) | Always present |
-| 2 | **System Instructions** | `metadata.custom_notes` / preset from `user/CherryAI.ini` | Always present |
-| 3 | **Style** | `metadata.style` (fallback: `CustomStyle`) | Skip when empty |
-| 4 | **Tone** | `metadata.tone` (fallback: `CustomTone`) | Skip when empty |
+| 2 | **System Instructions** | `metadata.custom_notes` / preset from `user/CherryAI.ini` | Gated by `system_instructions_enabled` (default: **true**) |
+| 3 | **Style** | `metadata.style` (fallback: `CustomStyle`) | Gated by `style_enabled` (default: **false**) |
+| 4 | **Tone** | `metadata.tone` (fallback: `CustomTone`) | Gated by `tone_enabled` (default: **false**) |
 | 4b | **Protagonist + Narration** | Characters + Code patterns + `manifest POV` | Skip when no protagonist tagged (Task 75) |
-| 5 | **Summary** | `metadata.summary` | Skip when empty |
-| 6 | **Genre** | `metadata.genre` (fallback: top-level `Genre`) | Skip when empty |
+| 5 | **Summary** | `metadata.summary` | Gated by `summary_enabled` (default: **false**) |
+| 6 | **Genre** | `metadata.genre` (fallback: top-level `Genre`) | Gated by `genre_enabled` (default: **false**) |
 | 7 | **POV** | `manifest POV` dict (`pov`, `confidence`) | Skip when confidence ≠ "high" **or** when slot 4b has narration |
 | 8 | **Conditional Prompts** | `user/CherryAI.ini [prompts]` or `user/conditional_prompts.json` | Selective — injected only when [Input Lines] contain the trigger pattern |
 | 8b | **Merged-Request Instruction** | `_merge_boundaries` from formation | Efficient mode only — describes block relatedness for Step 5 merged requests |
-| 9 | **Glossary** | Manifest `Glossary` + `user/globalglossary.tsv` + `metadata.characters` | Selective — rows injected only when Original (or Translation) found in [Input Lines]; Characters always included |
+| 9 | **Glossary** | Manifest `Glossary` + `user/globalglossary.tsv` + `metadata.characters` | Gated by `glossary_enabled` (default: **true**); selective — rows injected only when Original found in [Input Lines] |
 | 10 | **Rolling Context** | Preceding translated lines from manifest | Conditional — dialogue/unknown requests only; disabled for Menu/Choice |
 | 11 | **Input Lines** | Manifest `lines[].prepro` (fallback: `orig`) | Always present |
 
@@ -429,6 +429,7 @@ The system prompt is assembled in the following fixed order. Empty sections are 
 - Rolling Context (slot 10) appears just before Input Lines to maximise contextual proximity
 - Meta Settings (URL, key, model, temperature, etc.) are passed separately and never counted
 - **Single source of truth**: `build_full_system_prompt()` in `gui/helpers/prompt_adapter.py` assembles the prompt for Costs (Step 4) and Translation (Step 5)
+- **Section toggles**: Each togglable slot reads a `*_enabled` boolean from `step_state.Information.data.metadata`. When the key is missing, backward-compatible defaults apply (System Instructions/Glossary: enabled; Genre/Summary/Style/Tone: disabled)
 
 #### Request Size
 
