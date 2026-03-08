@@ -52,11 +52,21 @@ full = [
     "openai>=1.0.0",
     "openpyxl>=3.0.0",
     "beautifulsoup4>=4.12.0",
+    "transformers>=4.30.0",
+    "sentencepiece>=0.1.99",
+    "torch>=2.0.0",
 ]
 
 # API client support
 api = [
     "openai>=1.0.0",
+]
+
+# Machine translation (opus-mt) support
+mtl = [
+    "transformers>=4.30.0",
+    "sentencepiece>=0.1.99",
+    "torch>=2.0.0",
 ]
 
 # Excel file support

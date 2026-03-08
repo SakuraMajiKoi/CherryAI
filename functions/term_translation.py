@@ -4,7 +4,6 @@ Routes term translation requests through the mode selected in
 Global Options → Utility → Term Translation Mode:
 
 - **Romaji** — Modified Hepburn romanization (built-in, kana only).
-- **MTL** — Machine translation via EasyNMT / opus-mt.
 - **LLM** — Uses the active LLM API provider.
 
 Public API
@@ -12,7 +11,6 @@ Public API
 - :func:`translate_term`      — translate a single term
 - :func:`translate_terms`     — translate a list of terms
 - :func:`get_current_mode`    — read the configured mode
-- :func:`ensure_mtl_ready`    — lazy-install EasyNMT + opus-mt
 """
 
 from __future__ import annotations
@@ -23,7 +21,7 @@ from typing import List, Optional
 logger = logging.getLogger(__name__)
 
 # Valid modes
-MODES = ("Romaji", "MTL", "LLM")
+MODES = ("Romaji", "LLM")
 
 
 # ============================================================================
@@ -31,18 +29,18 @@ MODES = ("Romaji", "MTL", "LLM")
 # ============================================================================
 
 def get_current_mode() -> str:
-    """Return the Term Translation mode from Global Options (default: Simple).
+    """Return the Term Translation mode from Global Options.
 
     Returns:
-        One of ``'Romaji'``, ``'MTL'``, or ``'LLM'``.
+        One of ``'Romaji'`` or ``'LLM'``.
     """
     try:
         from CherryAI.functions import ini_manager
         mode = ini_manager.get_user_default("utility", "term_translation_mode")
         if mode and mode in MODES:
             return mode
-        # Migrate legacy "Simple" to "Romaji"
-        if mode == "Simple":
+        # Migrate legacy values to "Romaji"
+        if mode in ("Simple", "MTL"):
             return "Romaji"
     except Exception:
         pass
@@ -78,8 +76,6 @@ def translate_term(
 
     active = mode or get_current_mode()
 
-    if active == "MTL":
-        return _translate_mtl(term, source_lang, target_lang)
     if active == "LLM":
         return _translate_llm(term, source_lang, target_lang, context)
     # Default: Romaji (romanization)
@@ -96,8 +92,7 @@ def translate_terms(
 ) -> List[str]:
     """Translate a list of terms using the active mode.
 
-    For MTL mode, terms are batched into a single EasyNMT call for
-    efficiency.  For LLM mode, all terms are sent in one prompt.
+    For LLM mode, all terms are sent in one prompt.
 
     Args:
         terms: List of source-language terms.
@@ -114,8 +109,6 @@ def translate_terms(
 
     active = mode or get_current_mode()
 
-    if active == "MTL":
-        return _translate_mtl_batch(terms, source_lang, target_lang)
     if active == "LLM":
         return _translate_llm_batch(terms, source_lang, target_lang, context)
     return [_translate_simple(t) for t in terms]
@@ -135,87 +128,6 @@ def _translate_simple(term: str) -> str:
     if result != term:
         return capitalize_name(result)
     return term
-
-
-# ============================================================================
-# MTL mode (EasyNMT / opus-mt)
-# ============================================================================
-
-_easynmt_model = None  # Lazy singleton
-
-
-def ensure_mtl_ready() -> None:
-    """Install EasyNMT (if needed) and load the opus-mt model.
-
-    EasyNMT and its dependencies are installed into the user's
-    normal Python environment on first use.  Models are downloaded
-    into the default HuggingFace cache.
-
-    The addon is registered in ``user/addons/addon.ini``.
-
-    Raises:
-        ImportError: If ``pip install easynmt`` fails.
-    """
-    global _easynmt_model
-    if _easynmt_model is not None:
-        return
-
-    try:
-        from easynmt import EasyNMT  # noqa: F401
-    except ImportError:
-        logger.info("EasyNMT not found — installing via pip…")
-        import subprocess
-        import sys
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-U", "easynmt"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            raise ImportError(
-                f"Failed to install EasyNMT:\n{result.stderr}"
-            )
-        logger.info("EasyNMT installed successfully")
-
-    from easynmt import EasyNMT
-    _easynmt_model = EasyNMT("opus-mt")
-
-    # Register in addon manager
-    try:
-        from CherryAI.functions.addon_manager import register_addon
-        register_addon("easynmt", version="2.0.2", model="opus-mt")
-    except Exception:
-        pass
-
-
-def _translate_mtl(term: str, source_lang: str, target_lang: str) -> str:
-    """Translate a single term with EasyNMT."""
-    ensure_mtl_ready()
-    try:
-        result = _easynmt_model.translate(
-            term, source_lang=source_lang, target_lang=target_lang,
-        )
-        return result if result else term
-    except Exception as exc:
-        logger.warning("MTL translation failed for '%s': %s", term, exc)
-        return term
-
-
-def _translate_mtl_batch(
-    terms: List[str], source_lang: str, target_lang: str,
-) -> List[str]:
-    """Translate a batch of terms with EasyNMT."""
-    ensure_mtl_ready()
-    try:
-        results = _easynmt_model.translate(
-            terms, source_lang=source_lang, target_lang=target_lang,
-        )
-        if isinstance(results, list) and len(results) == len(terms):
-            return results
-        return [str(r) for r in results] if results else terms
-    except Exception as exc:
-        logger.warning("MTL batch translation failed: %s", exc)
-        return terms
 
 
 # ============================================================================

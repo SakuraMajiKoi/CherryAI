@@ -43,7 +43,7 @@ Run API Test: `python CherryAI.py test`
 
 MODULE COUNTS (Verified January 2026)
 
-- functions/: 40 modules (+ glossaries/ subfolder with 5 files, + romanization.py, + term_translation.py, + addon_manager.py)
+- functions/: 39 modules (+ glossaries/ subfolder with 5 files, + romanization.py, + term_translation.py)
 - modi/: 12 processing modes
 - formats/: 5 format handlers
 - gui/steps/: 10 workflow tabs

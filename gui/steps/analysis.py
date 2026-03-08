@@ -837,94 +837,214 @@ class AnalysisStep(BaseStep):
         """Translate terms in characters and code database.
 
         Uses the Term Translation mode configured in Global Options
-        (Romaji / MTL / LLM).  Fills the ``translation`` field for
+        (Romaji / LLM).  Fills the ``translation`` field for
         characters and the Translation column for code database entries
         when the original/pattern is non-empty and translation is
         currently blank.  Tab and newline characters are sanitized.
 
-        After translation, refreshes the findings table Details column
-        and syncs code pattern translations to the manifest so the
-        Information tab sees them on next enter.
+        Reads source/target language from the manifest metadata.
+
+        Runs translation in a background thread with a progress dialog
+        so the GUI remains responsive for all modes (Romaji, LLM).
         """
-        from CherryAI.functions.term_translation import translate_term
+        from CherryAI.functions.term_translation import (
+            get_current_mode,
+            translate_term,
+        )
 
         mgr = self.manifest_manager
         if mgr is None or not mgr.is_loaded:
             messagebox.showwarning("No Project", "Load a project first.")
             return
 
-        updated_chars = 0
-        updated_codes = 0
-        translated_speakers: list[str] = []
+        # Read source/target language from manifest metadata
+        metadata = mgr.get_step_data_value(2, "metadata", {})
+        source_lang = metadata.get("source_language", "Japanese")
+        target_lang = metadata.get("target_language", "English")
 
-        # --- Translate character terms ---
+        from CherryAI.functions.languages import get_language_by_name
+        src_lang = get_language_by_name(source_lang)
+        tgt_lang = get_language_by_name(target_lang)
+        src_code = src_lang.code if src_lang else "ja"
+        tgt_code = tgt_lang.code if tgt_lang else "en"
+
+        mode = get_current_mode()
+
+        # --- Collect items needing translation ---
         characters = load_character_notes(mgr)
-        for ch in characters:
+        char_items: list[tuple[int, str]] = []
+        for i, ch in enumerate(characters):
             name = ch.get("original_name", "")
             if name and not ch.get("translation", "").strip():
-                result = translate_term(name)
-                if result != name:
-                    ch["translation"] = _sanitize_translation(result)
-                    updated_chars += 1
-                    translated_speakers.append(name)
+                char_items.append((i, name))
 
-        if updated_chars:
-            save_character_notes(mgr, characters)
-
-        # --- Translate code database terms ---
-        translated_patterns: dict[str, str] = {}
+        code_rows: list = []
+        code_items: list[tuple[int, str]] = []
         try:
             from CherryAI.functions.glossaries.code_glossary_db import (
                 read_all_rows_extended,
-                write_all_rows,
             )
-            rows = read_all_rows_extended()
-            changed = False
-            for row in rows:
+            code_rows = read_all_rows_extended()
+            for j, row in enumerate(code_rows):
                 pattern = row[0] if row else ""
                 translation = row[1] if len(row) > 1 else ""
                 if pattern and not translation.strip():
-                    result = translate_term(pattern)
-                    if result != pattern:
-                        row[1] = _sanitize_translation(result)
-                        updated_codes += 1
-                        changed = True
-                        translated_patterns[pattern] = row[1]
-            if changed:
-                write_all_rows(rows)
-
-                # Sync translations to manifest code_patterns
-                tsv_map = {r[0]: r[1] for r in rows if len(r) > 1}
-                manifest_pats = load_code_glossary(mgr)
-                for pat in manifest_pats:
-                    t = tsv_map.get(pat.get("pattern", ""), "")
-                    if t:
-                        pat["translation"] = t
-                save_code_glossary(mgr, manifest_pats)
+                    code_items.append((j, pattern))
         except Exception as exc:
-            logger.warning("Code DB term translation failed: %s", exc)
+            logger.warning("Code DB read failed: %s", exc)
 
-        # --- Refresh findings table Details column ---
-        if translated_speakers:
-            self._refresh_details_for_speakers(translated_speakers)
-        if translated_patterns:
-            self._refresh_details_for_code_patterns(translated_patterns)
-
-        parts = []
-        if updated_chars:
-            parts.append(f"{updated_chars} character(s)")
-        if updated_codes:
-            parts.append(f"{updated_codes} code pattern(s)")
-        if parts:
+        total = len(char_items) + len(code_items)
+        if total == 0:
             messagebox.showinfo(
                 "Term Translation Complete",
-                f"Translated {' and '.join(parts)}.",
+                "No entries needed translation "
+                "(all already filled or no kana detected).",
             )
-        else:
-            messagebox.showinfo(
-                "Term Translation Complete",
-                "No entries needed translation (all already filled or no kana detected).",
-            )
+            return
+
+        # --- Build progress dialog ---
+        dlg = tk.Toplevel(self.winfo_toplevel())
+        dlg.title("Translating Terms")
+        dlg.resizable(False, False)
+        dlg.grab_set()
+        dlg.protocol("WM_DELETE_CLOSE", lambda: None)
+
+        frame = ttk.Frame(dlg, padding=20)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        mode_label = f"Mode: {mode}"
+        ttk.Label(frame, text=mode_label).pack(anchor="w")
+
+        progress = ttk.Progressbar(
+            frame, orient="horizontal", length=380, mode="determinate",
+        )
+        progress.pack(fill=tk.X, pady=(5, 5))
+        progress["maximum"] = total
+
+        status_var = tk.StringVar(value=f"0 / {total}")
+        ttk.Label(frame, textvariable=status_var).pack(anchor="w")
+
+        cancel_event = threading.Event()
+
+        def _on_cancel() -> None:
+            cancel_event.set()
+            cancel_btn.configure(state="disabled")
+            status_var.set("Cancelling…")
+
+        cancel_btn = ttk.Button(frame, text="Cancel", command=_on_cancel)
+        cancel_btn.pack(pady=(10, 0))
+
+        # --- Worker thread ---
+        updated_chars = 0
+        updated_codes = 0
+        translated_speakers: list[str] = []
+        translated_patterns: dict[str, str] = {}
+        done_count = 0
+
+        def _update(count: int, label: str) -> None:
+            progress["value"] = count
+            status_var.set(f"{count} / {total}  —  {label}")
+
+        def _worker() -> None:
+            nonlocal updated_chars, updated_codes, done_count
+
+            # Translate characters
+            for idx, name in char_items:
+                if cancel_event.is_set():
+                    break
+                result = translate_term(
+                    name, source_lang=src_code, target_lang=tgt_code,
+                )
+                if result != name:
+                    characters[idx]["translation"] = _sanitize_translation(
+                        result,
+                    )
+                    updated_chars += 1
+                    translated_speakers.append(name)
+                done_count += 1
+                dlg.after(0, _update, done_count, name)
+
+            # Translate code patterns
+            for idx, pattern in code_items:
+                if cancel_event.is_set():
+                    break
+                result = translate_term(
+                    pattern, source_lang=src_code, target_lang=tgt_code,
+                )
+                if result != pattern:
+                    code_rows[idx][1] = _sanitize_translation(result)
+                    updated_codes += 1
+                    translated_patterns[pattern] = code_rows[idx][1]
+                done_count += 1
+                dlg.after(0, _update, done_count, pattern)
+
+            dlg.after(0, _finish)
+
+        def _finish() -> None:
+            # Save results (must run on main thread for manifest access)
+            if updated_chars:
+                save_character_notes(mgr, characters)
+
+            if updated_codes:
+                try:
+                    from CherryAI.functions.glossaries.code_glossary_db import (
+                        write_all_rows,
+                    )
+                    write_all_rows(code_rows)
+
+                    tsv_map = {
+                        r[0]: r[1] for r in code_rows if len(r) > 1
+                    }
+                    manifest_pats = load_code_glossary(mgr)
+                    for pat in manifest_pats:
+                        t = tsv_map.get(pat.get("pattern", ""), "")
+                        if t:
+                            pat["translation"] = t
+                    save_code_glossary(mgr, manifest_pats)
+                except Exception as exc:
+                    logger.warning(
+                        "Code DB term translation save failed: %s", exc,
+                    )
+
+            # Refresh findings table
+            if translated_speakers:
+                self._refresh_details_for_speakers(translated_speakers)
+            if translated_patterns:
+                self._refresh_details_for_code_patterns(translated_patterns)
+
+            dlg.destroy()
+
+            # Show summary
+            if cancel_event.is_set():
+                parts = []
+                if updated_chars:
+                    parts.append(f"{updated_chars} character(s)")
+                if updated_codes:
+                    parts.append(f"{updated_codes} code pattern(s)")
+                msg = "Translation cancelled."
+                if parts:
+                    msg += f" Translated {' and '.join(parts)} before stop."
+                messagebox.showinfo("Term Translation Cancelled", msg)
+            else:
+                parts = []
+                if updated_chars:
+                    parts.append(f"{updated_chars} character(s)")
+                if updated_codes:
+                    parts.append(f"{updated_codes} code pattern(s)")
+                if parts:
+                    messagebox.showinfo(
+                        "Term Translation Complete",
+                        f"Translated {' and '.join(parts)}.",
+                    )
+                else:
+                    messagebox.showinfo(
+                        "Term Translation Complete",
+                        "No entries needed translation "
+                        "(all already filled or no kana detected).",
+                    )
+
+        threading.Thread(target=_worker, daemon=True).start()
+
     # =========================================================================
     # TASK 59.3: Category-Aware Findings Table Context Menu
     # =========================================================================

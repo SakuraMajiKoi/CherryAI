@@ -10183,24 +10183,21 @@ python -m pytest CherryAI/dev/test_pov_inference.py -v --timeout=10
 python -m pytest CherryAI/dev/test_protagonist_romanization.py -v --timeout=10
 ```
 
-### Term Translation, Addon Management & Global Options Extensions (67 tests)
+### Term Translation & Global Options Extensions (52 tests)
 
 **File:** `dev/test_term_translation.py`
-**Baseline:** 6278+ passed
 
 | Test Class | Count | Coverage |
 |-----------|-------|----------|
 | TestCapitalizeName | 9 | Simple name, multi-word (first-letter-only), hyphenated segments, empty string, single char, all-caps preserved, already capitalized, whitespace, mixed delimiters |
 | TestContainsKanji | 6 | Pure kanji, mixed kanji+kana, pure hiragana, pure katakana, Latin text, empty string |
 | TestRomanizeIfJapaneseKanjiSkip | 5 | Pure kana romanized, mixed kanji+kana unchanged, single kanji unchanged, Latin unchanged, translate_term kanji passthrough |
-| TestTermTranslationSimple | 7 | Kana translation, non-kana passthrough, empty term, katakana name, mode override, mixed text, whitespace |
-| TestUtilitySettings | 5 | Default mode (Romaji), roundtrip, invalid mode fallback, from_dict defaults, to_dict |
+| TestTermTranslationSimple | 7 | Kana translation, non-kana passthrough, empty term, katakana name, mode override, mixed text, MTL not in MODES |
+| TestUtilitySettings | 6 | Default mode (Romaji), roundtrip, from_dict defaults, to_dict, LLM mode, MTL migration to Romaji |
 | TestGlobalOptionsUtility | 4 | GlobalOptions has utility field, default utility settings, roundtrip serialization, utility in to_dict |
-| TestOptionSectionEnums | 6 | UTILITY enum exists, ADDONS enum exists, utility in SECTION_NAMES, addons in SECTION_NAMES, utility in SECTION_DESCRIPTIONS, addons in SECTION_DESCRIPTIONS |
+| TestOptionSectionEnums | 3 | UTILITY enum exists, utility in SECTION_NAMES, utility in CATEGORY_ORDER |
 | TestCodePatternTranslation | 6 | Default empty translation, to_dict includes translation, from_dict reads translation, roundtrip, legacy from_dict without translation, translation in display |
 | TestManifestCodeGlossaryTranslation | 4 | save_code_glossary includes translation, load_code_glossary returns translation, missing translation defaults empty, roundtrip preserves translation |
-| TestAddonManager | 7 | get_addons_dir creates directory, register and list addon, is_installed check, delete addon, delete nonexistent raises, get_addon_path, dir_size_human |
-| TestMTLModeLifecycle | 6 | ensure_mtl_ready loads model, _translate_mtl single term, _translate_mtl_batch, error returns original, addon register/delete lifecycle, translate_term MTL dispatch |
 | TestSectionDescriptions | 2 | SECTION_DESCRIPTIONS completeness, all OptionSection values have descriptions |
 
 ```bash

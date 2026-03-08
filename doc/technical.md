@@ -122,10 +122,9 @@ TABLE OF CONTENTS
    3.44 process_order.py ✅🔗 - Pre/post processing order management (Phase 26)
    3.45 usage_tracker.py ✅ - API usage analytics and tracking (Phase 17.5)
    3.46 estimation.py ✅ - Token estimation utilities (legacy CLI support)
-   3.47 term_translation.py ✅🔗 - Unified term translation dispatcher (Romaji/MTL/LLM modes)
-   3.48 addon_manager.py ✅🔗 - Addon directory and INI registry management (user/addons/)
+   3.47 term_translation.py ✅🔗 - Unified term translation dispatcher (Romaji/LLM modes)
    
-   3.49 glossaries/ (subfolder - 6 files)
+   3.48 glossaries/ (subfolder - 6 files)
         - __init__.py - Package exports
         - code_glossary_constants.py - Code pattern definitions
         - code_glossary_functions.py - Code detection/classification (updated: uses TSV via code_glossary_db)
@@ -898,8 +897,7 @@ CherryAI/
 │   ├── prompt_builder.py   Dynamic prompt construction with game summary
 │   ├── project_config.py   Project-level configuration (game summary, API profiles)
 │   ├── romanization.py     Japanese kana → rōmaji (Modified Hepburn, Task 75)
-│   ├── term_translation.py Unified term translation dispatcher (Romaji/MTL/LLM)
-│   ├── addon_manager.py    Addon directory and INI registry (user/addons/)
+│   ├── term_translation.py Unified term translation dispatcher (Romaji/LLM)
 │   ├── wordwrap.py         Text analysis and wordwrap
 │   ├── postanalysis.py     Post-processing analysis
 │   ├── glossaries/         Glossary detection modules
@@ -3892,42 +3890,25 @@ TERM_TRANSLATION.PY (Unified Term Translation Dispatcher)
 Purpose: Route term translation through the mode configured in Global Options → Utility.
 
 Constants:
-- MODES: ("Romaji", "MTL", "LLM") — valid mode identifiers
+- MODES: ("Romaji", "LLM") — valid mode identifiers
 
 Mode Detection:
-- get_current_mode() → str: Reads term_translation_mode from INI [utility] section; falls back to "Romaji"
+- get_current_mode() → str: Reads term_translation_mode from INI [utility] section; falls back to "Romaji". Migrates legacy "MTL" values to "Romaji".
 
 Public API:
 - translate_term(term, source_lang, target_lang, *, mode, context) → str: Translate a single term
-- translate_terms(terms, source_lang, target_lang, *, mode, context) → List[str]: Batch-translate (MTL/LLM batch for efficiency)
-- ensure_mtl_ready() → None: Lazy-install EasyNMT via pip; load opus-mt model; register in addon.ini
+- translate_terms(terms, source_lang, target_lang, *, mode, context) → List[str]: Batch-translate (LLM mode batches for efficiency)
 
 Internal:
 - _translate_simple(term): romanize_if_japanese + capitalize_name
-- _translate_mtl(term, src, tgt): EasyNMT single term translation
-- _translate_mtl_batch(terms, src, tgt): EasyNMT batch translation
 - _translate_llm(term, src, tgt, ctx): Single-term LLM call (delegates to batch)
 - _translate_llm_batch(terms, src, tgt, ctx): OpenAI-compatible API call; structured JSON prompt → {"translations": [...]}
 - _get_api_key(): Retrieves active API key from api_config or ini_manager
 
-ADDON_MANAGER.PY (Optional Component Management)
-
-Purpose: Manage optional CherryAI components installed in user/addons/.
-
-Paths:
-- get_addons_dir() → Path: Canonical user/addons/ directory (created if missing)
-- get_addon_ini() → Path: user/addons/addon.ini registry file
-
-Public API:
-- list_addons() → List[Dict[str, str]]: Returns name and human-readable size for each registered addon
-- is_installed(name) → bool: True if addon has an INI section
-- register_addon(name, **metadata) → None: Add/update INI section with arbitrary key-value metadata
-- delete_addon(name) → None: Remove addon directory (shutil.rmtree) and INI section
-- get_addon_path(name) → Path: user/addons/<name>/ (created if missing)
-
-Internal:
-- _read_ini() / _write_ini(cfg): configparser-based INI read/write
-- _dir_size_human(path) → str: Recursive directory size in B/KB/MB/GB
+Dependencies:
+- functions/romanization.py — Romaji mode
+- functions/ini_manager.py — configuration reading
+- openai — for LLM mode
 
 CONSISTENCY.PY (Consistency System - Phase 55)
 

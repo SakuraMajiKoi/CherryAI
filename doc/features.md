@@ -2116,31 +2116,17 @@ JAPANESE ROMANIZATION — MODIFIED HEPBURN (Implemented — Task 75)
 
 TERM TRANSLATION — MULTI-MODE DISPATCHER (Implemented)
 - Unified term translation system replacing the standalone "Romanize" button with "Translate Terms"
-- **Module:** `functions/term_translation.py` — dispatches to Romaji, MTL, or LLM mode
-- **Three modes** (configurable in Global Options → Utility → Term Translation Mode):
+- **Module:** `functions/term_translation.py` — dispatches to Romaji or LLM mode
+- **Two modes** (configurable in Global Options → Utility → Term Translation Mode):
   - `Romaji` (default) — Uses the built-in Modified Hepburn romanization engine, then capitalizes the first letter. Skips terms containing kanji. Zero dependencies.
-  - `MTL` — Machine Translation via EasyNMT/opus-mt. Supports 150+ languages, ~300 MB per language pair (auto-downloaded). Lazy-installs via `pip install easynmt` on first use.
   - `LLM` — Uses the active LLM API provider (OpenAI-compatible). Sends a structured JSON prompt requesting batch translations; parses `{"translations": [...]}` response.
 - **Public API:**
   - `translate_term(term, source_lang, target_lang, *, mode, context)` — translate one term
-  - `translate_terms(terms, source_lang, target_lang, *, mode, context)` — batch-translate (MTL and LLM modes batch for efficiency)
+  - `translate_terms(terms, source_lang, target_lang, *, mode, context)` — batch-translate (LLM mode batches for efficiency)
   - `get_current_mode()` — read configured mode from INI
-  - `ensure_mtl_ready()` — lazy-install EasyNMT and register in addon.ini
-- **GUI Integration:** Analysis step "Translate Terms" button calls `translate_term()` dispatcher for characters, speakers, and Code DB entries. After translation, the findings table Details column updates immediately. Code pattern translations are synced to the manifest for cross-tab persistence.
-- **Addon Registration:** MTL mode auto-registers in `user/addons/addon.ini` via `addon_manager`
-- Test suite: `dev/test_term_translation.py` (67 tests)
-
-ADDON MANAGEMENT (Implemented)
-- Manages optional components in `user/addons/` directory
-- **Module:** `functions/addon_manager.py`
-- **Registry:** `user/addons/addon.ini` tracks installed addons with metadata
-- **Public API:**
-  - `list_addons()` — returns list of dicts with `name` and `size`
-  - `is_installed(name)` — check if an addon is registered
-  - `register_addon(name, **metadata)` — record a new addon
-  - `delete_addon(name)` — remove addon directory and INI entry
-  - `get_addon_path(name)` — path to addon subdirectory
-- **GUI Integration:** Global Options → Application → Add-ons section shows installed addons in a treeview with Delete and Refresh buttons
+- **Progress Dialog:** Clicking "Translate Terms" opens a modal progress dialog showing mode, a determinate progress bar, and per-term status (e.g. "5 / 42 — 店員"). Translation runs in a background thread so the GUI stays responsive. A Cancel button lets the user stop early; already-translated terms are saved.
+- **GUI Integration:** Analysis step "Translate Terms" button reads source/target language from manifest metadata, calls `translate_term()` with correct language pair. After translation, the findings table Details column updates immediately. Code pattern translations are synced to the manifest for cross-tab persistence.
+- Test suite: `dev/test_term_translation.py` (52 tests)
 
 CONSISTENCY SYSTEM (Implemented)
 - Ensures consistent translation of recurring terms across all requests
@@ -3286,7 +3272,7 @@ in Global Options → Translation → Character Validation.
 **Term Translation + Code DB (Task 6)**: The Analysis step exposes a
 "Translate Terms" button that fills the `translation` column for characters,
 speakers, and glossary entries using the configured term translation mode
-(Romaji/MTL/LLM, set in Global Options → Utility).  The
+(Romaji/LLM, set in Global Options → Utility).  The
 Code Database TSV has a `Translation` column (between Pattern and the
 former Type column, now renamed `Category`).  Code pattern translations
 are synced to the manifest `code_patterns` for cross-tab persistence.
