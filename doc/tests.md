@@ -2893,6 +2893,7 @@ Thank you.
 | test_options.py | 29 | Options dialog & API config |
 | test_partial_translation.py | 18 | Partial translation mode (TASK 9) |
 | test_postprocess.py | 79 | Post-process recovery suite |
+| test_prompt_caching.py | 58 | Prompt caching (ordering, model detection, token tracking) |
 | test_project_config.py | 19 | Project configuration |
 | test_quote_stripping.py | 33 | Quote stripping modes |
 | test_rate_limiter.py | 70 | Rate limiting system |

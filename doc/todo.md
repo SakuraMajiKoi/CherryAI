@@ -166,6 +166,36 @@ The `_pipeline_var` remains functional so existing code referencing it won't bre
 
 ---
 
+### FEATURE: Prompt Caching (OpenAI)
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Implement OpenAI prompt caching support for gpt-4o+ models to reduce input token
+costs by up to 50% and latency by up to 80%.
+
+**Description:** OpenAI automatically caches identical prompt prefixes (≥1024 tokens)
+across API requests. The system prompt assembly order (§5.2) already places static
+sections (slots 1-7) before dynamic sections (slots 8-10), which is optimal for
+prefix-based caching. Implementation adds model detection, extended 24h retention
+support for gpt-4.1/gpt-5 models, cached token tracking in logs/stats, and
+configurable APIConfig fields.
+
+**Solution:**
+- Confirmed prompt ordering is already cache-optimal (static before dynamic)
+- Added `prompt_cache_enabled` and `prompt_cache_retention` to APIConfig dataclass
+- Added model prefix lists for caching support detection
+- Added `supports_prompt_caching()`, `supports_extended_cache_retention()`, `get_prompt_cache_params()`
+- Injected cache parameters into `_translate_chunk()` API call
+- Tracked cached tokens from `usage.prompt_tokens_details.cached_tokens`
+- Added cache hit rate, savings, and cached token counts to all log outputs
+
+**Files Modified:**
+- `functions/api_client.py` — APIConfig fields, model lists, helper methods, param injection, token tracking, log updates
+- `dev/test_prompt_caching.py` — New test file (58 tests)
+
+**Tests:** `dev/test_prompt_caching.py` — 58 tests (all passing)
+
+---
+
 ### TASK 25.1: Analysis Results Storage
 **Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
 

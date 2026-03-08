@@ -2244,6 +2244,15 @@ Key Features:
   - `_init_client()` — auto-detects local providers; uses placeholder key `"lm-studio"` when no API key is configured
   - `_translate_chunk()` — uses `json_schema` response format for local providers (LM Studio rejects `json_object` with HTTP 400); cloud providers continue using `json_object`. Uses the caller's `system_prompt` as the primary prompt and appends `# Output Format` with JSON structure instructions. Falls back to a minimal default prompt only when `system_prompt` is not provided.
   - JSON schema enforces `{"translations": ["...", "..."]}` structure with `strict: True` and `additionalProperties: False`
+- **Prompt Caching (OpenAI)**: Automatic prompt prefix caching for gpt-4o+ models
+  - `PROMPT_CACHE_MODEL_PREFIXES` — tuple of model prefixes supporting prompt caching
+  - `EXTENDED_CACHE_MODEL_PREFIXES` — tuple of model prefixes supporting 24h extended retention
+  - `supports_prompt_caching()` — checks model/provider compatibility
+  - `supports_extended_cache_retention()` — checks for 24h retention support
+  - `get_prompt_cache_params()` — returns dict with `prompt_cache_retention` when applicable
+  - `_total_cached_tokens` — running counter of cached prompt tokens from `usage.prompt_tokens_details.cached_tokens`
+  - APIConfig fields: `prompt_cache_enabled` (bool, default True), `prompt_cache_retention` (str, "" / "in_memory" / "24h")
+  - Logging: per-chunk cached token count, cache hit rate %, savings estimate in footer, CSV summary column
 
 API Logging (TASK 11 + TASK 12 enhancements):
 - `enable_api_log` parameter in __init__ to enable logging

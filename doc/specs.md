@@ -435,6 +435,23 @@ The system prompt is assembled in the following fixed order. Empty sections are 
 - **Single source of truth**: `build_full_system_prompt()` in `gui/helpers/prompt_adapter.py` assembles the prompt for Costs (Step 4) and Translation (Step 5)
 - **Section toggles**: Each togglable slot reads a `*_enabled` boolean from `step_state.Information.data.metadata`. When the key is missing, backward-compatible defaults apply (System Instructions/Glossary: enabled; Genre/Summary/Style/Tone: disabled)
 
+#### Prompt Caching (OpenAI)
+
+OpenAI automatically caches identical prompt prefixes (≥1024 tokens) across API requests. The injection order above is designed to maximise cache efficiency:
+
+- **Static prefix** (slots 1-7): Language, System Instructions, Style, Tone, Protagonist, Summary, Genre, POV — identical for every chunk within a project. This prefix is the cacheable portion.
+- **Dynamic suffix** (slots 8-10): Conditional Prompts, Glossary, Rolling Context — vary per chunk and are not cached.
+
+**Extended retention**: Models prefixed with `gpt-4.1` or `gpt-5` support 24-hour cache retention via the `prompt_cache_retention` API parameter (value `"24h"`). Other supported models (gpt-4o, o1, o3, chatgpt-4o) use default in-memory retention (5-10 minutes).
+
+**Implementation**: `APIClient.get_prompt_cache_params()` in `functions/api_client.py` returns the appropriate parameters. Cached tokens are tracked via `usage.prompt_tokens_details.cached_tokens` in the API response.
+
+**Configuration** (APIConfig fields):
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `prompt_cache_enabled` | bool | true | Enable prompt caching support |
+| `prompt_cache_retention` | str | "" | Retention mode: "", "in_memory", or "24h" |
+
 #### Request Size
 
 - Requests have a configurable **Minimum** and **Maximum** request size

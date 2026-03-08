@@ -83,6 +83,9 @@ class APIConfig:
     no_api_key: bool = False  # Skip API key validation for local LLMs
     # Batch API settings (TASK 17.1)
     batch_mode: bool = False  # Use async Batch API (50% cheaper)
+    # Prompt caching settings (OpenAI)
+    prompt_cache_enabled: bool = True  # Enable OpenAI prompt caching (auto for gpt-4o+)
+    prompt_cache_retention: str = ""  # "" = default (in_memory), "in_memory", or "24h"
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> APIConfig:
@@ -134,6 +137,12 @@ class APIConfig:
         if "batch_mode" in filtered_data:
             val = filtered_data["batch_mode"]
             filtered_data["batch_mode"] = val if isinstance(val, bool) else str(val).lower() in ("true", "1", "yes")
+        # Prompt caching fields
+        if "prompt_cache_enabled" in filtered_data:
+            val = filtered_data["prompt_cache_enabled"]
+            filtered_data["prompt_cache_enabled"] = val if isinstance(val, bool) else str(val).lower() in ("true", "1", "yes")
+        if "prompt_cache_retention" in filtered_data:
+            filtered_data["prompt_cache_retention"] = str(filtered_data["prompt_cache_retention"])
             
         return cls(**filtered_data)
 
@@ -189,6 +198,7 @@ class APIClient:
         # Statistics tracking
         self._total_prompt_tokens = 0
         self._total_completion_tokens = 0
+        self._total_cached_tokens = 0
         self._skipped_lines: Dict[str, int] = {"dedup": 0, "symbols": 0, "no_source": 0}
         self._initial_chunk_count = 0
         self._final_chunk_count = 0
@@ -334,6 +344,24 @@ class APIClient:
     # Providers that are local and don't require API keys
     LOCAL_PROVIDERS = ("local", "lmstudio", "ollama")
 
+    # Models supporting OpenAI prompt caching (automatic, gpt-4o and newer).
+    # Prefix-matched against the configured model name (case-insensitive).
+    PROMPT_CACHE_MODEL_PREFIXES = (
+        "gpt-4o",
+        "gpt-4.1",
+        "gpt-5",
+        "o1",
+        "o3",
+        "chatgpt-4o",
+    )
+
+    # Models supporting extended 24h prompt cache retention.
+    # Prefix-matched against the configured model name (case-insensitive).
+    EXTENDED_CACHE_MODEL_PREFIXES = (
+        "gpt-4.1",
+        "gpt-5",
+    )
+
     def is_local_provider(self) -> bool:
         """Check if the current provider is a local LLM server.
 
@@ -383,7 +411,72 @@ class APIClient:
                 "sonnet-4-5", "opus-4-5", "opus-4-1", "haiku-4-5",
             ])
         return False
-    
+
+    def supports_prompt_caching(self) -> bool:
+        """Check if the current model supports OpenAI prompt caching.
+
+        Prompt caching is automatic for gpt-4o and newer models when the
+        provider is OpenAI (not local).
+
+        Returns:
+            True if the model supports prompt caching.
+        """
+        if self.is_local_provider():
+            return False
+        if self.config.provider.lower() not in ("openai", "gemini"):
+            return False
+        model_lower = self.config.model.lower()
+        return any(
+            model_lower.startswith(prefix)
+            for prefix in self.PROMPT_CACHE_MODEL_PREFIXES
+        )
+
+    def supports_extended_cache_retention(self) -> bool:
+        """Check if the current model supports 24h extended cache retention.
+
+        Extended retention keeps cached prefixes for up to 24 hours instead
+        of the default 5-10 minute in-memory window.
+
+        Returns:
+            True if the model supports extended cache retention.
+        """
+        if not self.supports_prompt_caching():
+            return False
+        model_lower = self.config.model.lower()
+        return any(
+            model_lower.startswith(prefix)
+            for prefix in self.EXTENDED_CACHE_MODEL_PREFIXES
+        )
+
+    def get_prompt_cache_params(self) -> Dict[str, Any]:
+        """Build prompt caching parameters for the API request.
+
+        Returns a dict of keyword arguments to merge into the
+        ``chat.completions.create()`` call.  Empty dict when prompt
+        caching is disabled or not supported by the model.
+
+        Returns:
+            Dict with ``prompt_cache_retention`` key when applicable.
+        """
+        if not self.config.prompt_cache_enabled:
+            return {}
+        if not self.supports_prompt_caching():
+            return {}
+
+        params: Dict[str, Any] = {}
+        retention = (self.config.prompt_cache_retention or "").strip().lower()
+
+        if retention == "24h" and self.supports_extended_cache_retention():
+            params["prompt_cache_retention"] = "24h"
+        elif retention == "in_memory":
+            params["prompt_cache_retention"] = "in_memory"
+        # When retention is "" (default), omit the parameter and let
+        # OpenAI use its default (in_memory).  This avoids sending an
+        # unsupported parameter to providers that use an OpenAI-compat
+        # endpoint but don't recognise prompt_cache_retention.
+
+        return params
+
     def get_thinking_params(self) -> Dict[str, Any]:
         """Get thinking mode parameters for the current model.
         
@@ -1037,11 +1130,21 @@ class APIClient:
         completion_tokens = usage.get("completion_tokens", 0)
         self._total_prompt_tokens += prompt_tokens
         self._total_completion_tokens += completion_tokens
+
+        # Track cached tokens from prompt caching
+        prompt_details = usage.get("prompt_tokens_details", {})
+        if isinstance(prompt_details, dict):
+            cached_tokens = prompt_details.get("cached_tokens", 0) or 0
+        else:
+            cached_tokens = 0
+        self._total_cached_tokens += cached_tokens
         
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(f"\n{'='*80}\n")
             f.write(f"CHUNK #{self._chunk_counter} - {entry['timestamp']}")
             f.write(f" | Tokens: {prompt_tokens} in / {completion_tokens} out")
+            if cached_tokens:
+                f.write(f" | Cached: {cached_tokens}")
             f.write(f" | Running Total: {self._total_prompt_tokens + self._total_completion_tokens}\n")
             f.write(f"{'='*80}\n\n")
             
@@ -1082,6 +1185,8 @@ class APIClient:
             if usage:
                 f.write(f"[USAGE]\n")
                 f.write(f"  Prompt Tokens: {prompt_tokens}\n")
+                if cached_tokens:
+                    f.write(f"  Cached Tokens: {cached_tokens}\n")
                 f.write(f"  Completion Tokens: {completion_tokens}\n")
                 f.write(f"  Total Tokens: {usage.get('total_tokens', 0)}\n")
             
@@ -1100,8 +1205,10 @@ class APIClient:
                     f"  Status: PASS",
                     f"  Input Tokens: {prompt_tokens}",
                     f"  Output Tokens: {completion_tokens}",
-                    "",
                 ]
+                if cached_tokens:
+                    entry_lines.append(f"  Cached Tokens: {cached_tokens}")
+                entry_lines.append("")
                 append_step_log_entry(self._step_log_path, "\n".join(entry_lines))
         except Exception:
             pass
@@ -1147,6 +1254,8 @@ class APIClient:
         input_cost = (self._total_prompt_tokens / 1_000_000) * cost_per_m_input
         output_cost = (self._total_completion_tokens / 1_000_000) * cost_per_m_output
         total_cost = input_cost + output_cost
+        # Prompt caching saves up to 50% on cached input tokens
+        cached_savings = (self._total_cached_tokens / 1_000_000) * cost_per_m_input * 0.5
         
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(f"\n{'='*80}\n")
@@ -1155,12 +1264,21 @@ class APIClient:
             f.write(f"[FINAL STATISTICS]\n")
             f.write(f"  Chunks Processed: {self._chunk_counter}/{self._initial_chunk_count}\n")
             f.write(f"  Total Prompt Tokens: {self._total_prompt_tokens:,}\n")
+            if self._total_cached_tokens:
+                f.write(f"  Cached Prompt Tokens: {self._total_cached_tokens:,}\n")
+                cache_pct = (
+                    self._total_cached_tokens / self._total_prompt_tokens * 100
+                    if self._total_prompt_tokens else 0
+                )
+                f.write(f"  Cache Hit Rate: {cache_pct:.1f}%\n")
             f.write(f"  Total Completion Tokens: {self._total_completion_tokens:,}\n")
             f.write(f"  Total Tokens: {self._total_prompt_tokens + self._total_completion_tokens:,}\n")
             if "gemini" in model:
                 f.write(f"  Estimated Cost: FREE (Gemini free tier)\n")
             else:
                 f.write(f"  Estimated Cost: ${total_cost:.4f}\n")
+                if cached_savings > 0:
+                    f.write(f"  Cache Savings: ~${cached_savings:.4f}\n")
             f.write("\n")
         
         # Update summary file
@@ -1170,7 +1288,7 @@ class APIClient:
         try:
             if self._step_log_path:
                 from .mainhelper import write_step_log_footer
-                footer = {
+                footer: Dict[str, str] = {
                     "Translation Summary": "",
                     "Completed": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "Chunks Processed": f"{self._chunk_counter}/{self._initial_chunk_count}",
@@ -1181,6 +1299,16 @@ class APIClient:
                     ),
                     "Estimated Cost": f"${total_cost:.4f} USD",
                 }
+                if self._total_cached_tokens:
+                    cache_pct = (
+                        self._total_cached_tokens / self._total_prompt_tokens * 100
+                        if self._total_prompt_tokens else 0
+                    )
+                    footer["Cached Tokens"] = (
+                        f"{self._total_cached_tokens:,} ({cache_pct:.1f}%)"
+                    )
+                    if cached_savings > 0:
+                        footer["Cache Savings"] = f"~${cached_savings:.4f} USD"
                 write_step_log_footer(self._step_log_path, footer)
         except Exception:
             pass
@@ -1209,6 +1337,7 @@ class APIClient:
             "chunks": self._chunk_counter,
             "prompt_tokens": self._total_prompt_tokens,
             "completion_tokens": self._total_completion_tokens,
+            "cached_tokens": self._total_cached_tokens,
             "total_tokens": self._total_prompt_tokens + self._total_completion_tokens,
             "cost": f"{total_cost:.4f}",
         }
@@ -1663,6 +1792,12 @@ class APIClient:
             api_params["logit_bias"] = logit_bias
             self.logger.debug(f"Logit bias enabled with {len(logit_bias)} token biases")
 
+        # Add prompt caching parameters for supported OpenAI models
+        cache_params = self.get_prompt_cache_params()
+        if cache_params:
+            api_params.update(cache_params)
+            self.logger.debug(f"Prompt caching: {cache_params}")
+
         try:
             if self.client is None:
                 raise TranslationError("API client not initialized")
@@ -1688,15 +1823,25 @@ class APIClient:
                 "thinking_enabled": bool(thinking_params),
                 "logit_bias_enabled": bool(logit_bias),
                 "logit_bias_count": len(logit_bias) if logit_bias else 0,
+                "prompt_cache_params": cache_params if cache_params else None,
             }
+            # Extract prompt_tokens_details for cached token tracking
+            usage_dict: Dict[str, Any] = {}
+            if response.usage:
+                usage_dict = {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "total_tokens": response.usage.total_tokens,
+                }
+                ptd = getattr(response.usage, "prompt_tokens_details", None)
+                if ptd is not None:
+                    usage_dict["prompt_tokens_details"] = {
+                        "cached_tokens": getattr(ptd, "cached_tokens", 0) or 0,
+                    }
             response_data = {
                 "content": content,
                 "finish_reason": response.choices[0].finish_reason if response.choices else None,
-                "usage": {
-                    "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
-                    "completion_tokens": response.usage.completion_tokens if response.usage else 0,
-                    "total_tokens": response.usage.total_tokens if response.usage else 0,
-                } if response.usage else None,
+                "usage": usage_dict if usage_dict else None,
             }
             self._log_api_call(request_data, response_data)
 

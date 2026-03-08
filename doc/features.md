@@ -71,6 +71,7 @@ TABLE OF CONTENTS
 
 4. ADVANCED FEATURES
    - Request Caching System
+   - Prompt Caching (OpenAI)
    - Progress Indicators
    - Rate Limit Management
    - Adaptive Chunk Sizing
@@ -1813,6 +1814,35 @@ REQUEST CACHING SYSTEM (Implemented)
   - Per-project or global cache (configurable)
   - TTL expiration (default: 30 days)
   - LRU eviction when size limit reached
+
+PROMPT CACHING — OpenAI (Implemented)
+- Leverages OpenAI's automatic prompt caching for gpt-4o and newer models
+- **How It Works:**
+  - OpenAI caches identical prompt prefixes (≥1024 tokens) across API requests
+  - Static prompt sections (language, instructions, style, tone, summary, genre, POV) are assembled first as a stable prefix
+  - Dynamic sections (conditional prompts, glossary, rolling context) follow the static prefix
+  - Repeated requests with the same static prefix reuse cached tokens automatically
+- **Benefits:**
+  - Up to 50% reduction in input token cost for cached tokens
+  - Up to 80% reduction in latency for cache hits
+  - No code changes required for basic caching (automatic)
+- **Extended Retention (24h):**
+  - Supported models: gpt-4.1, gpt-4.1-mini, gpt-4.1-nano, gpt-5.x
+  - Extends cache lifetime from 5-10 minutes to 24 hours
+  - Configured via `prompt_cache_retention` in APIConfig
+- **Supported Models:**
+  - gpt-4o, gpt-4o-mini, chatgpt-4o
+  - gpt-4.1, gpt-4.1-mini, gpt-4.1-nano
+  - gpt-5, gpt-5.x
+  - o1, o1-mini, o1-preview, o3, o3-mini
+- **Statistics Tracking:**
+  - Cached token count per chunk in API log
+  - Cache hit rate (%) in log footer
+  - Estimated cache savings ($) in log footer and step log
+  - Cached tokens column in CSV summary
+- **Configuration:**
+  - `prompt_cache_enabled`: Enable/disable (default: true)
+  - `prompt_cache_retention`: "" (default), "in_memory", or "24h"
 
 PROGRESS INDICATORS (Implemented)
 - **CLI Progress:**
