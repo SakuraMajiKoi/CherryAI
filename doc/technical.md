@@ -5484,3 +5484,106 @@ all requests.
 
 **`_render_current_request()` token counting:** Uses `count_tokens()` for
 separate prompt-token and input-token counts instead of `len // 4`.
+
+## Phase 78.2 — API Error Classification & Concurrent Execution
+
+### functions/common_errors.py Changes
+
+**5 New `ErrorCode` values:** `TRANSLATION_NON_STRUCTURED_OUTPUT`,
+`TRANSLATION_LINE_COUNT_MISMATCH`, `TRANSLATION_EMPTY_RESPONSE`,
+`TRANSLATION_REFUSED`, `TRANSLATION_ABORT`.
+
+**`APIErrorCategory` enum (20 categories):** AUTH_INVALID, AUTH_PERMISSION,
+MODEL_NOT_FOUND, RATE_LIMIT, QUOTA_EXCEEDED, CONTEXT_LENGTH, CONTENT_FILTER,
+BAD_REQUEST, INVALID_JSON_SCHEMA, TIMEOUT, SERVER_ERROR, SERVER_OVERLOADED,
+CONNECTION_ERROR, BILLING, API_DEPRECATED, REGION_UNAVAILABLE,
+NON_STRUCTURED_OUTPUT, LINE_COUNT_MISMATCH, EMPTY_RESPONSE, UNKNOWN.
+
+**`ClassifiedAPIError` dataclass:** Fields: category, user_message, steps
+(remediation), raw_message, is_retryable, is_fatal.
+
+**`_API_ERROR_INFO` dict:** Maps each category to a user-facing message and
+list of remediation steps.
+
+**`classify_api_error(error: Exception) -> ClassifiedAPIError`:** Inspects
+`type(error).__name__` and message text against known patterns. Returns a
+fully-populated `ClassifiedAPIError`.
+
+**`TranslationAbortError(Exception)`:** Wraps a `ClassifiedAPIError`.
+Properties: `user_message`, `category`, `classified`. Method
+`format_for_display()` returns user-facing text with steps; shows raw error
+for UNKNOWN category.
+
+### functions/api_client.py Changes
+
+**`_translate_chunk_with_retry()`:** Rewritten to classify errors before
+deciding whether to retry. Fatal errors (auth, model-not-found, quota,
+content-filter, billing) raise `TranslationAbortError` immediately — no
+retries. Retryable errors (rate-limit, timeout, server-error) use
+exponential backoff. Exhausted retries produce a classified abort.
+
+**`_translate_chunk()`:** API call exceptions are now classified via
+`classify_api_error()` before re-raising. Fatal → `TranslationAbortError`;
+retryable → `TranslationError`. JSON parse failures and non-list translations
+raise `TranslationAbortError` directly.
+
+### functions/prompt_builder.py Changes
+
+**`_CONTEXT_TYPE_PRIORITY` dict:** Maps context types to sort priority
+(dialogue=0, choice=1, mixed/unknown=2, menu=3).
+
+**`RequestString` dataclass:** Fields: requests, context_type,
+has_rolling_context. Properties: priority, line_count.
+
+**`sort_requests_by_type(requests) -> List[RequestString]`:** Groups requests
+into rolling-context chains (sequential runs where `receives_context=True`).
+Sorts chains by type priority → RC chains first → longer chains first.
+
+**`_build_string()` helper:** Determines dominant context type by line count
+across the chain.
+
+### gui/steps/translate.py Changes
+
+**Imports added:** `threading`, `concurrent.futures` (ThreadPoolExecutor,
+as_completed, Future), `TranslationAbortError`.
+
+**`_group_chunks_into_strings()` (static):** Reconstructs
+`TranslationRequest` objects from chunk `_formation_ctx` metadata, calls
+`sort_requests_by_type()`, maps results back to chunk groups. Returns
+`List[List[List[TranslatableLine]]]` — sorted string groups.
+
+**`_process_single_chunk()`:** Extracted chunk processing logic: builds
+rolling context, translates, applies char filters, updates progress with
+thread-safe locking. Returns `"ok"`, `"abort"`, or `"cancel"`.
+
+**`_handle_chunk_retry()`:** Extracted retry logic using the standard retry
+handler. Thread-safe progress updates via `threading.Lock`.
+
+**`_execute_string_sequential()`:** Processes all chunks of one request
+string in order. Designed for `ThreadPoolExecutor` threads. Each string
+has its own rolling context buffer — no cross-thread buffer conflicts.
+Raises `TranslationAbortError` for fatal errors.
+
+**`_do_translation()` rewrite (concurrent engine):**
+1. Calls `_group_chunks_into_strings()` to get sorted string groups.
+2. **Validation gate:** First chunk of first string sent alone. If fatal
+   error → abort immediately with user-facing dialog.
+3. Remaining strings execute via `ThreadPoolExecutor(max_workers=
+   max_concurrent)`. Sequential fallback when `max_concurrent ≤ 1`.
+4. Thread-safe progress via `threading.Lock`. Abort in any thread sets
+   `_cancel_requested` and breaks the `as_completed()` loop.
+
+**`_translate_chunk()` context_type fix:** Now extracts `context_type` from
+`_formation_ctx` and passes it to `_build_system_prompt_from_manifest()`,
+enabling §5.2 item 7b (context-type conditional prompt) injection.
+
+### Tests
+
+| Test File | Count | Focus |
+|-----------|-------|-------|
+| `dev/test_api_error_classification.py` | 56 | APIErrorCategory, classify_api_error, TranslationAbortError |
+| `dev/test_first_request_gate.py` | 14 | Fatal abort (no retry), retryable errors, validation gate |
+| `dev/test_request_sorting.py` | 22 | sort_requests_by_type, RC chains, type priority |
+| `dev/test_concurrent_execution.py` | 23 | _process_single_chunk, _execute_string_sequential, ThreadPoolExecutor parallel, thread safety |
+| `dev/test_context_type_prompts.py` | 18 | get_context_prompt, build_full_system_prompt context_type, _translate_chunk flow |
+| **Total** | **133** | |

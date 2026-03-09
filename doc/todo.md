@@ -1165,5 +1165,48 @@ configurable in Global Options → Prompts. Hide Edit/TLC prompt sections.
 **Tests:**
 - `dev/test_utility_settings.py` — Expanded to 53 tests (+26 new: PromptsSettings fields, prompt_type routing, _get_prompt_template, _normalize_gender, schema validation)
 
+---
+
+### Phase 78.2: API Error Classification, Concurrent Execution & Validation
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** Session
+
+Goal: Classify all API errors with user-facing messages and remediation steps,
+add first-request validation gate, implement concurrent string execution, sort
+requests by content type, and fix context-type conditional prompt injection.
+
+**Completed Sub-tasks:**
+1. ✅ API Error Classification System (`functions/common_errors.py`)
+   - 20-category APIErrorCategory enum, ClassifiedAPIError dataclass
+   - classify_api_error() maps exceptions to categories
+   - TranslationAbortError with format_for_display()
+2. ✅ First-Request Validation Gate (`gui/steps/translate.py`)
+   - First chunk sent alone; fatal errors abort immediately
+3. ✅ Instant-Stop on Non-Structured Output (`functions/api_client.py`)
+   - _translate_chunk_with_retry() classifies errors; fatal = no retry
+   - _translate_chunk() reclassifies before re-raising
+4. ✅ Request String Sorting by Type (`functions/prompt_builder.py`)
+   - sort_requests_by_type(): Dialogue > Choice > Mixed/Unknown > Menu
+   - RequestString dataclass with priority, RC chain detection
+5. ✅ Concurrent Request Execution (`gui/steps/translate.py`)
+   - ThreadPoolExecutor parallel strings, sequential within string
+   - _group_chunks_into_strings(), _process_single_chunk(), _execute_string_sequential()
+   - Thread-safe progress via threading.Lock
+6. ✅ Context-Type Conditional Prompt Fix (`gui/steps/translate.py`)
+   - _translate_chunk() now passes context_type to _build_system_prompt_from_manifest()
+   - Enables §5.2 item 7b injection (was silently missing)
+
+**Files Modified:**
+- `functions/common_errors.py` — APIErrorCategory, ClassifiedAPIError, classify_api_error, TranslationAbortError
+- `functions/api_client.py` — _translate_chunk_with_retry rewrite, _translate_chunk error classification
+- `functions/prompt_builder.py` — _CONTEXT_TYPE_PRIORITY, RequestString, sort_requests_by_type, _build_string
+- `gui/steps/translate.py` — Concurrent engine, validation gate, _process_single_chunk, context_type fix
+
+**Tests (133 total):**
+- `dev/test_api_error_classification.py` — 56 tests
+- `dev/test_first_request_gate.py` — 14 tests
+- `dev/test_request_sorting.py` — 22 tests
+- `dev/test_concurrent_execution.py` — 23 tests
+- `dev/test_context_type_prompts.py` — 18 tests
+
 END OF ROADMAP
 =============================================================================

@@ -1590,6 +1590,35 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - get_context_prompt() reads INI first (get_conditional_prompt()), falls back to hardcoded constants; user-configurable via Global Options → Prompts
     - _construct_system_prompt() accepts optional context_type parameter (Phase 50 slot 2 of 9)
     - Mock translation: context_type extracted from system_prompt header and forwarded to MockTranslator
+- **API Error Classification System (Phase 78.2):**
+    - 20-category error taxonomy: APIErrorCategory enum covering auth, rate-limit, quota, model, content-filter, billing, timeout, server, connection, and translation-specific errors
+    - ClassifiedAPIError dataclass: user_message, remediation steps, is_retryable, is_fatal flags
+    - classify_api_error() inspects exception type name and message text patterns to categorise any API error
+    - TranslationAbortError exception: wraps ClassifiedAPIError with format_for_display() for user-facing dialogs
+    - _API_ERROR_INFO lookup: maps each category to a human-readable message and list of actionable remediation steps
+- **First-Request Validation Gate (Phase 78.2):**
+    - First chunk of first string sent alone before batch execution begins
+    - Fatal errors (auth, model-not-found, quota, content-filter) abort immediately — no retries, no wasted tokens
+    - Retryable errors (rate-limit, timeout, server) use standard exponential backoff
+    - User sees instant feedback: "First request validated — API configuration OK" or detailed error dialog
+- **Request String Sorting by Type (Phase 78.2):**
+    - sort_requests_by_type() groups requests into rolling-context chains, sorts by type priority
+    - Priority order: Dialogue (0) > Choice (1) > Mixed/Unknown (2) > Menu (3)
+    - RC chains before standalone requests; longer strings before shorter at same priority
+    - RequestString dataclass: requests, context_type, has_rolling_context, priority, line_count
+- **Concurrent Request Execution (Phase 78.2):**
+    - _group_chunks_into_strings() maps formation chunks to sorted request strings
+    - _process_single_chunk() handles one chunk with thread-safe progress locking
+    - _execute_string_sequential() processes all chunks of one string in order (designed for ThreadPoolExecutor threads)
+    - _do_translation() uses ThreadPoolExecutor(max_workers=max_concurrent) for parallel string execution
+    - Sequential within a string (rolling context preserved), parallel across independent strings
+    - Thread-safe progress updates via threading.Lock on translated_lines / failed_lines
+    - Abort in any thread sets _cancel_requested and cancels remaining futures
+    - Falls back to sequential execution when max_concurrent ≤ 1
+- **Context-Type Conditional Prompt Fix (Phase 78.2):**
+    - _translate_chunk() now extracts context_type from _formation_ctx and passes it to _build_system_prompt_from_manifest()
+    - Enables §5.2 item 7b injection: context-type prompt (Dialogue/Menu/Choice/Mixed) appears in system prompt
+    - Previously context_type parameter was accepted but never supplied — prompts were always empty
 - **Speaker Duplicate Removal (Phase 51):**
     - Detection: detect_consecutive_speakers() identifies lines with same speaker as previous
     - Regex: _SPEAKER_PREFIX_RE handles half-width `:` and fullwidth `：` colons

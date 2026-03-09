@@ -2875,22 +2875,30 @@ Deselecting a filter hides that section from the Formatted/Plain views and omits
 - From Global Options: API Provider config (URL, Key, Model), Caching mode, Rolling Context, Thinking Mode
 
 **Processing** (via `functions/api_client.py` or Mock Translation):
-1. Build translation prompt from Information metadata via `_build_system_prompt_from_manifest()` (follows §5.2 10-slot injection order)
+1. Build translation prompt from Information metadata via `_build_system_prompt_from_manifest()` (follows §5.2 10-slot injection order; context_type passed for §5.2 slot 7b)
 2. Determine input: use `get_input_for_translation()` per line (edited_prepro → prepro → orig)
 3. Set `source_lang`/`target_lang` on API client config from Information metadata
 4. Chunk lines by configured Lines/Chunk size
-5. For each chunk:
-   a. Check line cache for existing translations (if caching enabled)
-   b. Apply rate limiting (from Global Options RPM setting)
-   c. Build chunk-specific prompt (include rolling context if enabled)
-   d. Send to LLM API with JSON response format (or Mock Translation)
-   e. Parse response, map translated lines back to source indices
-   f. Handle failures per retry strategy (Batch or Contextual)
-   g. Update progress display and API Usage widget
-   h. Save translations to manifest after each chunk (crash resilience)
-   i. Populate line cache with new translations
-6. Track token usage and costs
-7. On completion: update manifest step data with totals
+5. Group chunks into request strings via `_group_chunks_into_strings()`, sort by content type priority (dialogue > choice > mixed/unknown > menu) via `sort_requests_by_type()`
+6. **First-request validation gate**: send the first chunk of the first string alone. If a fatal API error occurs (classify via `classify_api_error()` → `TranslationAbortError`), abort immediately before spending tokens on the full batch
+7. Execute string groups concurrently via `ThreadPoolExecutor(max_workers=max_concurrent)`:
+   - Strings execute in **parallel** across threads
+   - Chunks within each string execute **sequentially** (preserving rolling context)
+   - Falls back to sequential execution when `max_concurrent ≤ 1`
+   - For each chunk:
+     a. Check line cache for existing translations (if caching enabled)
+     b. Apply rate limiting (from Global Options RPM setting)
+     c. Build chunk-specific prompt (include rolling context if enabled)
+     d. Send to LLM API with JSON response format (or Mock Translation)
+     e. Parse response, map translated lines back to source indices
+     f. Classify any API errors via `classify_api_error()` — fatal errors raise `TranslationAbortError` (no retry); retryable errors use exponential backoff
+     g. Handle failures per retry strategy (Batch or Contextual)
+     h. Update progress display and API Usage widget (thread-safe via `threading.Lock`)
+     i. Save translations to manifest after each chunk (crash resilience)
+     j. Populate line cache with new translations
+   - If any thread raises `TranslationAbortError`, set `_cancel_requested` and drain remaining futures
+8. Track token usage and costs
+9. On completion: update manifest step data with totals
 
 **Outputs**:
 - `tl: List[str]` - Translated lines

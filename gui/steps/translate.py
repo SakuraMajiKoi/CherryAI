@@ -14,6 +14,7 @@ import logging
 import math
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
@@ -61,6 +62,11 @@ from CherryAI.gui.helpers.prompt_adapter import (
     create_retry_config,
     handle_failed_lines,
 )
+from CherryAI.functions.common_errors import TranslationAbortError
+
+# Lazy import targets for concurrent execution; resolved on first use.
+_sort_requests_by_type = None
+_RequestString = None
 
 if TYPE_CHECKING:
     from CherryAI.gui.state.store import SessionState
@@ -2227,6 +2233,7 @@ class TranslationStep(BaseStep):
         self._cancel_requested = False
         self._pause_requested = False
         self._translation_state = TranslationState.RUNNING
+        self._abort_error: TranslationAbortError | None = None
 
         # Show progress window
         self._progress_window = TranslationProgressWindow(
@@ -2490,191 +2497,174 @@ class TranslationStep(BaseStep):
 
             rolling_ctx_buffer: list[str] = []
 
-            # Process each chunk
-            for chunk_idx, chunk in enumerate(chunks):
-                if self._cancel_requested:
-                    self._log_progress("Translation cancelled by user")
-                    break
+            # ================================================================
+            # First-Request Validation Gate
+            # ================================================================
+            # Send the very first chunk alone before committing to the full
+            # translation run. If the API returns a fatal error (auth,
+            # model not found, non-structured output, etc.) translation
+            # stops immediately with a user-facing message.  This avoids
+            # wasting time / tokens on a clearly broken configuration.
+            # ================================================================
+            first_request_validated = False
 
-                # Wait while paused
-                while self._pause_requested:
-                    time.sleep(0.1)
-                    if self._cancel_requested:
-                        break
+            # ================================================================
+            # Concurrent Execution Engine
+            # ================================================================
+            # Group chunks into request strings (rolling-context chains).
+            # Strings execute in parallel; chunks within a string execute
+            # sequentially to maintain rolling context ordering.
+            # ================================================================
+            request_strings = self._group_chunks_into_strings(chunks)
 
-                if self._cancel_requested:
-                    break
-
-                self._progress.current_chunk = chunk_idx + 1
-                self._log_progress(f"Processing chunk {chunk_idx + 1}/{len(chunks)}")
-
-                # Mark lines as translating
+            # Flatten all chunks for index-based lookup and assign chunk_ids
+            all_chunks_flat = []
+            for string_group in request_strings:
+                all_chunks_flat.extend(string_group)
+            chunk_id_map: dict[int, int] = {}
+            for flat_idx, chunk in enumerate(all_chunks_flat):
                 for line in chunk:
-                    line.status = LineStatus.TRANSLATING
-                    line.chunk_id = chunk_idx
+                    chunk_id_map[line.idx] = flat_idx
 
-                self.after(0, self._update_lines_table)
+            max_concurrent = 1  # Default: sequential
+            if self._api_client and hasattr(self._api_client, "config"):
+                max_concurrent = max(1, self._api_client.config.max_concurrent)
 
-                # Build rolling context text for this chunk
-                formation_ctx = getattr(chunk[0], "_formation_ctx", None)
-                receives_context = (
-                    formation_ctx.get("receives_context", False)
-                    if formation_ctx else (chunk_idx > 0)
+            self._log_progress(
+                f"Execution plan: {len(request_strings)} strings, "
+                f"max {max_concurrent} concurrent"
+            )
+
+            # Thread-safe progress lock
+            progress_lock = threading.Lock()
+
+            # ----------------------------------------------------------------
+            # Validation gate: execute the first chunk of the first string
+            # alone before starting concurrent execution.
+            # ----------------------------------------------------------------
+            if request_strings and request_strings[0]:
+                gate_chunk = request_strings[0][0]
+                gate_result = self._process_single_chunk(
+                    chunk=gate_chunk,
+                    chunk_idx=0,
+                    total_chunks=len(chunks),
+                    rolling_ctx_buffer=rolling_ctx_buffer,
+                    rolling_ctx_max=rolling_ctx_max,
+                    rolling_ctx_between=rolling_ctx_between,
+                    rolling_ctx_after=rolling_ctx_after,
+                    use_translated_ctx=use_translated_ctx,
+                    all_chunks=chunks,
+                    progress_lock=progress_lock,
                 )
-
-                # Reset buffer at file boundaries (first chunk of a
-                # file section never receives prior context).
-                if not receives_context:
-                    rolling_ctx_buffer.clear()
-
-                rolling_context_text = ""
-                if receives_context and rolling_ctx_buffer and rolling_ctx_max > 0:
-                    tail = rolling_ctx_buffer[-rolling_ctx_max:]
-                    rolling_context_text = "\n".join(tail)
-
-                # Build "between" context: skipped lines interspersed
-                # within this chunk's index range.
-                between_context_text = ""
-                if rolling_ctx_between > 0 and self._manifest_manager is not None:
-                    between_lines = self._collect_between_context(
-                        chunk, rolling_ctx_between, use_translated_ctx,
-                    )
-                    if between_lines:
-                        between_context_text = "\n".join(between_lines)
-
-                # Build "after" context: already-translated lines
-                # that follow this chunk in the manifest.
-                after_context_text = ""
-                if rolling_ctx_after > 0 and self._manifest_manager is not None:
-                    after_lines = self._collect_after_context(
-                        chunk, chunks, chunk_idx, rolling_ctx_after,
-                        use_translated_ctx,
-                    )
-                    if after_lines:
-                        after_context_text = "\n".join(after_lines)
-
-                # Combine all rolling context parts
-                full_context_text = rolling_context_text
-                if between_context_text:
-                    from CherryAI.functions.prompt_builder import format_rolling_context
-                    full_context_text += format_rolling_context(
-                        between_context_text.split("\n"),
-                        is_translated=use_translated_ctx,
-                        context_type="between",
-                    )
-                if after_context_text:
-                    from CherryAI.functions.prompt_builder import format_rolling_context
-                    full_context_text += format_rolling_context(
-                        after_context_text.split("\n"),
-                        is_translated=use_translated_ctx,
-                        context_type="after",
-                    )
-
-                # Translate chunk
-                try:
-                    translations = self._translate_chunk(
-                        chunk, rolling_context_text=full_context_text,
-                    )
-
-                    # Apply character whitelist/blacklist filters
-                    translations = self._apply_char_filters(
-                        translations, line_objects=chunk,
-                    )
-
-                    # Apply translations
-                    for line, translation in zip(chunk, translations):
-                        line.translated = translation
-                        if line.status not in (
-                            LineStatus.NEEDS_REVIEW, LineStatus.PENDING,
-                        ):
-                            line.status = LineStatus.COMPLETED
-                        self._progress.translated_lines += 1
-                        # Persist to manifest
-                        if self._manifest_manager is not None:
-                            self._manifest_manager.update_translation(
-                                line.idx, translation,
-                            )
-
-                    # Update rolling context buffer with this chunk's
-                    # translations (only if the chunk provides context).
-                    provides_context = (
-                        formation_ctx.get("provides_context", True)
-                        if formation_ctx else True
-                    )
-                    if provides_context:
-                        if use_translated_ctx:
-                            rolling_ctx_buffer.extend(translations)
-                        else:
-                            rolling_ctx_buffer.extend(
-                                line.edited_prepro or line.preprocessed
-                                for line in chunk
-                            )
-
-                except Exception as e:
-                    self._log_progress(f"Chunk {chunk_idx + 1} failed: {e}")
-
-                    # Handle failed lines using prompt_adapter retry handler
-                    failed_indices = [line.idx for line in chunk]
-                    original_lines = [line.preprocessed for line in chunk]
-                    translations = [""] * len(chunk)
-
-                    # Create retry config from options
-                    retry_config, _ = create_retry_config(
-                        strategy=self._translation_options.retry_strategy,
-                        max_retries=self._translation_options.max_retries,
-                        context_lines=2,
-                    )
-
-                    # Build translate function for retry handler
-                    def translate_fn(lines: List[str], prompt: str | None) -> List[str]:
-                        if self._api_client is None:
-                            return [f"[Retry] {line}" for line in lines]
-                        return self._api_client.translate_batch(lines, system_prompt=prompt or "")
-
-                    # Attempt retry via adapter
-                    retry_result, method = handle_failed_lines(
-                        failed_indices=list(range(len(chunk))),
-                        original_lines=original_lines,
-                        translations=translations,
-                        translate_fn=translate_fn,
-                        config=retry_config,
-                        system_prompt=self._get_prompt_parts().get("summary", ""),
-                    )
-
-                    # Apply retry results
-                    for i, line in enumerate(chunk):
-                        if i < len(retry_result.line_results):
-                            result = retry_result.line_results[i]
-                            if result.success:
-                                line.translated = result.translation
-                                line.status = LineStatus.COMPLETED
-                                self._progress.translated_lines += 1
-                                # Persist to manifest
-                                if self._manifest_manager is not None:
-                                    self._manifest_manager.update_translation(
-                                        line.idx, result.translation,
-                                    )
-                            else:
-                                line.status = LineStatus.FAILED
-                                line.error_message = result.error_message or str(e)
-                                self._progress.failed_lines += 1
-                        else:
-                            line.status = LineStatus.FAILED
-                            line.error_message = str(e)
-                            self._progress.failed_lines += 1
-
+                if gate_result == "abort":
+                    # _abort_error was set by _process_single_chunk
+                    if not hasattr(self, "_abort_error") or self._abort_error is None:
+                        # Shouldn't happen, but guard
+                        pass
+                    else:
+                        self._log_progress(
+                            "First-request validation FAILED — aborting."
+                        )
+                elif gate_result == "cancel":
+                    pass  # Will be handled below
+                else:
+                    first_request_validated = True
                     self._log_progress(
-                        f"Retry complete: {retry_result.successful_count} recovered, "
-                        f"{retry_result.failed_count} failed ({method})"
+                        "First request validated — API configuration OK"
                     )
 
-                # Update progress
-                self._update_progress_display()
-                self.after(0, self._update_lines_table)
+            # ----------------------------------------------------------------
+            # If validation failed or was cancelled, skip remaining work.
+            # ----------------------------------------------------------------
+            if (
+                not first_request_validated
+                and not self._cancel_requested
+                and request_strings
+            ):
+                # Abort — don't process remaining strings
+                pass
+            elif not self._cancel_requested and first_request_validated:
+                # ============================================================
+                # Execute remaining work concurrently
+                # ============================================================
+                # Build work items: each is (string_index, chunk_list)
+                # For the first string, skip the first chunk (already done).
+                work_items: list[tuple[int, list[list[TranslatableLine]]]] = []
+                for s_idx, string_group in enumerate(request_strings):
+                    if s_idx == 0:
+                        remaining = string_group[1:]  # Skip validated chunk
+                        if remaining:
+                            work_items.append((s_idx, remaining))
+                    else:
+                        work_items.append((s_idx, string_group))
+
+                if max_concurrent <= 1 or len(work_items) <= 1:
+                    # Sequential execution
+                    for s_idx, string_chunks in work_items:
+                        if self._cancel_requested:
+                            break
+                        if hasattr(self, "_abort_error") and self._abort_error is not None:
+                            break
+                        local_buffer = (
+                            list(rolling_ctx_buffer) if s_idx == 0 else []
+                        )
+                        self._execute_string_sequential(
+                            string_chunks=string_chunks,
+                            rolling_ctx_buffer=local_buffer,
+                            rolling_ctx_max=rolling_ctx_max,
+                            rolling_ctx_between=rolling_ctx_between,
+                            rolling_ctx_after=rolling_ctx_after,
+                            use_translated_ctx=use_translated_ctx,
+                            all_chunks=chunks,
+                            progress_lock=progress_lock,
+                        )
+                else:
+                    # Concurrent execution via ThreadPoolExecutor
+                    with ThreadPoolExecutor(
+                        max_workers=min(max_concurrent, len(work_items)),
+                    ) as executor:
+                        futures: dict[Future, int] = {}
+                        for s_idx, string_chunks in work_items:
+                            local_buffer = (
+                                list(rolling_ctx_buffer) if s_idx == 0 else []
+                            )
+                            future = executor.submit(
+                                self._execute_string_sequential,
+                                string_chunks=string_chunks,
+                                rolling_ctx_buffer=local_buffer,
+                                rolling_ctx_max=rolling_ctx_max,
+                                rolling_ctx_between=rolling_ctx_between,
+                                rolling_ctx_after=rolling_ctx_after,
+                                use_translated_ctx=use_translated_ctx,
+                                all_chunks=chunks,
+                                progress_lock=progress_lock,
+                            )
+                            futures[future] = s_idx
+
+                        # Wait for all strings to complete
+                        for future in as_completed(futures):
+                            try:
+                                future.result()
+                            except TranslationAbortError as abort_err:
+                                self._abort_error = abort_err
+                                self._log_progress(
+                                    f"ABORT: {abort_err.user_message}"
+                                )
+                                # Cancel remaining futures
+                                self._cancel_requested = True
+                                break
+                            except Exception as exc:
+                                logger.exception(
+                                    "String %d failed: %s",
+                                    futures[future], exc,
+                                )
 
             # Translation complete
             if self._cancel_requested:
                 self._translation_state = TranslationState.CANCELLED
+            elif hasattr(self, "_abort_error") and self._abort_error is not None:
+                self._translation_state = TranslationState.FAILED
+                self._log_progress("Translation aborted due to API error.")
             elif self._progress.failed_lines > 0:
                 self._translation_state = TranslationState.COMPLETED
                 self._log_progress(f"Translation completed with {self._progress.failed_lines} failures")
@@ -2682,6 +2672,13 @@ class TranslationStep(BaseStep):
                 self._translation_state = TranslationState.COMPLETED
                 self._log_progress("Translation completed successfully!")
 
+            self.after(0, self._on_translation_complete)
+
+        except TranslationAbortError as abort_err:
+            # Fatal API error caught at top level (e.g. during first-request)
+            self._abort_error = abort_err
+            self._log_progress(f"ABORT: {abort_err.user_message}")
+            self._translation_state = TranslationState.FAILED
             self.after(0, self._on_translation_complete)
 
         except Exception as e:
@@ -3021,6 +3018,387 @@ class TranslationStep(BaseStep):
             chunks.append(chunk)
         return chunks
 
+    # ------------------------------------------------------------------
+    # Concurrent Execution Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _group_chunks_into_strings(
+        chunks: List[List["TranslatableLine"]],
+    ) -> List[List[List["TranslatableLine"]]]:
+        """Group chunks into request strings using formation metadata.
+
+        A "string" is a consecutive run of chunks linked by rolling
+        context (``receives_context=True``).  When a chunk does not
+        receive context, it starts a new string.
+
+        Each string contains an ordered list of chunks that **must**
+        execute sequentially, but independent strings can run in
+        parallel.
+
+        After grouping, strings are sorted by type priority using
+        :func:`sort_requests_by_type` from ``prompt_builder``.
+
+        Args:
+            chunks: Chunks from :meth:`_build_chunks`.
+
+        Returns:
+            Sorted list of string groups (each a list of chunks).
+        """
+        if not chunks:
+            return []
+
+        # Try using the full formation-based sorting
+        try:
+            from CherryAI.functions.prompt_builder import (
+                TranslationRequest, sort_requests_by_type,
+            )
+
+            # Reconstruct TranslationRequest objects from chunk metadata
+            chunk_to_req: Dict[int, TranslationRequest] = {}
+            requests: List[TranslationRequest] = []
+            for i, chunk in enumerate(chunks):
+                ctx = getattr(chunk[0], "_formation_ctx", None) if chunk else None
+                req = TranslationRequest(
+                    lines=[
+                        (line.edited_prepro or line.preprocessed)
+                        for line in chunk
+                    ],
+                    line_indices=[line.idx for line in chunk],
+                    context_type=(ctx.get("context_type", "unknown") if ctx else "unknown"),
+                    receives_context=(ctx.get("receives_context", False) if ctx else False),
+                    provides_context=(ctx.get("provides_context", True) if ctx else True),
+                    _merge_boundaries=(ctx.get("merge_boundaries", []) if ctx else []),
+                )
+                # Infer file section from receives_context transitions
+                req._file_section = getattr(chunk[0], "_file_section", 0) if chunk else 0
+                chunk_to_req[i] = req
+                requests.append(req)
+
+            # Sort into RequestString objects
+            sorted_strings = sort_requests_by_type(requests)
+
+            # Map back to chunk indices
+            req_to_chunk: Dict[int, int] = {}
+            for chunk_idx, req in chunk_to_req.items():
+                req_id = id(req)
+                req_to_chunk[req_id] = chunk_idx
+
+            result: List[List[List["TranslatableLine"]]] = []
+            for rs in sorted_strings:
+                string_chunks: List[List["TranslatableLine"]] = []
+                for req in rs.requests:
+                    chunk_idx = req_to_chunk.get(id(req))
+                    if chunk_idx is not None:
+                        string_chunks.append(chunks[chunk_idx])
+                if string_chunks:
+                    result.append(string_chunks)
+
+            return result if result else [chunks]
+
+        except ImportError:
+            pass
+
+        # Fallback: each chunk is its own string
+        return [[chunk] for chunk in chunks]
+
+    # ------------------------------------------------------------------
+    # Single-Chunk Processing (used by both gate and sequential worker)
+    # ------------------------------------------------------------------
+
+    def _process_single_chunk(
+        self,
+        chunk: List[TranslatableLine],
+        chunk_idx: int,
+        total_chunks: int,
+        rolling_ctx_buffer: list[str],
+        rolling_ctx_max: int,
+        rolling_ctx_between: int,
+        rolling_ctx_after: int,
+        use_translated_ctx: bool,
+        all_chunks: List[List[TranslatableLine]],
+        progress_lock: threading.Lock,
+    ) -> str:
+        """Process a single chunk: build context, translate, apply filters.
+
+        Returns:
+            ``"ok"`` on success, ``"abort"`` if a fatal error occurred,
+            ``"cancel"`` if the user cancelled.
+        """
+        if self._cancel_requested:
+            return "cancel"
+
+        # Wait while paused
+        while self._pause_requested:
+            time.sleep(0.1)
+            if self._cancel_requested:
+                return "cancel"
+
+        self._log_progress(
+            f"Processing chunk {chunk_idx + 1}/{total_chunks}"
+        )
+
+        # Mark lines as translating
+        for line in chunk:
+            line.status = LineStatus.TRANSLATING
+            line.chunk_id = chunk_idx
+        self.after(0, self._update_lines_table)
+
+        # Build rolling context text for this chunk
+        formation_ctx = (
+            getattr(chunk[0], "_formation_ctx", None) if chunk else None
+        )
+        receives_context = (
+            formation_ctx.get("receives_context", False)
+            if formation_ctx else (chunk_idx > 0)
+        )
+
+        # Reset buffer at file boundaries
+        if not receives_context:
+            rolling_ctx_buffer.clear()
+
+        rolling_context_text = ""
+        if receives_context and rolling_ctx_buffer and rolling_ctx_max > 0:
+            tail = rolling_ctx_buffer[-rolling_ctx_max:]
+            rolling_context_text = "\n".join(tail)
+
+        # Build "between" context
+        between_context_text = ""
+        if rolling_ctx_between > 0 and self._manifest_manager is not None:
+            between_lines = self._collect_between_context(
+                chunk, rolling_ctx_between, use_translated_ctx,
+            )
+            if between_lines:
+                between_context_text = "\n".join(between_lines)
+
+        # Build "after" context
+        after_context_text = ""
+        if rolling_ctx_after > 0 and self._manifest_manager is not None:
+            after_lines = self._collect_after_context(
+                chunk, all_chunks, chunk_idx, rolling_ctx_after,
+                use_translated_ctx,
+            )
+            if after_lines:
+                after_context_text = "\n".join(after_lines)
+
+        # Combine all rolling context parts
+        full_context_text = rolling_context_text
+        if between_context_text:
+            from CherryAI.functions.prompt_builder import format_rolling_context
+            full_context_text += format_rolling_context(
+                between_context_text.split("\n"),
+                is_translated=use_translated_ctx,
+                context_type="between",
+            )
+        if after_context_text:
+            from CherryAI.functions.prompt_builder import format_rolling_context
+            full_context_text += format_rolling_context(
+                after_context_text.split("\n"),
+                is_translated=use_translated_ctx,
+                context_type="after",
+            )
+
+        # Translate chunk
+        try:
+            translations = self._translate_chunk(
+                chunk, rolling_context_text=full_context_text,
+            )
+
+            # Apply character whitelist/blacklist filters
+            translations = self._apply_char_filters(
+                translations, line_objects=chunk,
+            )
+
+            # Apply translations
+            for line, translation in zip(chunk, translations):
+                line.translated = translation
+                if line.status not in (
+                    LineStatus.NEEDS_REVIEW, LineStatus.PENDING,
+                ):
+                    line.status = LineStatus.COMPLETED
+                with progress_lock:
+                    self._progress.translated_lines += 1
+                # Persist to manifest
+                if self._manifest_manager is not None:
+                    self._manifest_manager.update_translation(
+                        line.idx, translation,
+                    )
+
+            # Update rolling context buffer
+            provides_context = (
+                formation_ctx.get("provides_context", True)
+                if formation_ctx else True
+            )
+            if provides_context:
+                if use_translated_ctx:
+                    rolling_ctx_buffer.extend(translations)
+                else:
+                    rolling_ctx_buffer.extend(
+                        line.edited_prepro or line.preprocessed
+                        for line in chunk
+                    )
+
+        except TranslationAbortError as abort_err:
+            # Fatal API error — mark lines failed, store abort.
+            for line in chunk:
+                line.status = LineStatus.FAILED
+                line.error_message = abort_err.user_message
+                with progress_lock:
+                    self._progress.failed_lines += 1
+            self.after(0, self._update_lines_table)
+            self._abort_error = abort_err
+            return "abort"
+
+        except Exception as e:
+            self._log_progress(
+                f"Chunk {chunk_idx + 1} failed: {e}"
+            )
+            self._handle_chunk_retry(chunk, e, progress_lock)
+
+        # Update progress
+        self._update_progress_display()
+        self.after(0, self._update_lines_table)
+        return "ok"
+
+    # ------------------------------------------------------------------
+    # Chunk Retry Handler
+    # ------------------------------------------------------------------
+
+    def _handle_chunk_retry(
+        self,
+        chunk: List[TranslatableLine],
+        error: Exception,
+        progress_lock: threading.Lock,
+    ) -> None:
+        """Retry a failed chunk using the standard retry handler."""
+        original_lines = [line.preprocessed for line in chunk]
+        translations = [""] * len(chunk)
+
+        retry_config, _ = create_retry_config(
+            strategy=self._translation_options.retry_strategy,
+            max_retries=self._translation_options.max_retries,
+            context_lines=2,
+        )
+
+        def translate_fn(
+            lines: List[str], prompt: str | None,
+        ) -> List[str]:
+            if self._api_client is None:
+                return [f"[Retry] {line}" for line in lines]
+            return self._api_client.translate_batch(
+                lines, system_prompt=prompt or "",
+            )
+
+        retry_result, method = handle_failed_lines(
+            failed_indices=list(range(len(chunk))),
+            original_lines=original_lines,
+            translations=translations,
+            translate_fn=translate_fn,
+            config=retry_config,
+            system_prompt=self._get_prompt_parts().get("summary", ""),
+        )
+
+        for i, line in enumerate(chunk):
+            if i < len(retry_result.line_results):
+                result = retry_result.line_results[i]
+                if result.success:
+                    line.translated = result.translation
+                    line.status = LineStatus.COMPLETED
+                    with progress_lock:
+                        self._progress.translated_lines += 1
+                    if self._manifest_manager is not None:
+                        self._manifest_manager.update_translation(
+                            line.idx, result.translation,
+                        )
+                else:
+                    line.status = LineStatus.FAILED
+                    line.error_message = (
+                        result.error_message or str(error)
+                    )
+                    with progress_lock:
+                        self._progress.failed_lines += 1
+            else:
+                line.status = LineStatus.FAILED
+                line.error_message = str(error)
+                with progress_lock:
+                    self._progress.failed_lines += 1
+
+        self._log_progress(
+            f"Retry complete: {retry_result.successful_count} recovered, "
+            f"{retry_result.failed_count} failed ({method})"
+        )
+
+    # ------------------------------------------------------------------
+    # Sequential String Worker (runs inside a thread)
+    # ------------------------------------------------------------------
+
+    def _execute_string_sequential(
+        self,
+        string_chunks: List[List[TranslatableLine]],
+        rolling_ctx_buffer: list[str],
+        rolling_ctx_max: int,
+        rolling_ctx_between: int,
+        rolling_ctx_after: int,
+        use_translated_ctx: bool,
+        all_chunks: List[List[TranslatableLine]],
+        progress_lock: threading.Lock,
+    ) -> None:
+        """Execute all chunks of a single string sequentially.
+
+        Designed to run inside a ``ThreadPoolExecutor`` thread. Each
+        string has its own ``rolling_ctx_buffer`` so there are no
+        cross-thread buffer conflicts.
+
+        Args:
+            string_chunks: Ordered chunks for one request string.
+            rolling_ctx_buffer: Per-string rolling context (caller
+                provides the initial buffer; this method extends it).
+            rolling_ctx_max: Max rolling context window size.
+            rolling_ctx_between: Between context line count.
+            rolling_ctx_after: After context line count.
+            use_translated_ctx: Whether to use translated text for ctx.
+            all_chunks: All chunks (for after-context lookup).
+            progress_lock: Lock for thread-safe progress updates.
+
+        Raises:
+            TranslationAbortError: Re-raised from ``_process_single_chunk``
+                when a fatal API error is encountered.
+        """
+        total = len(all_chunks)
+        for chunk in string_chunks:
+            if self._cancel_requested:
+                break
+            if hasattr(self, "_abort_error") and self._abort_error is not None:
+                break
+
+            # Determine global chunk index for logging
+            chunk_idx = 0
+            if chunk and chunk[0]:
+                for ci, c in enumerate(all_chunks):
+                    if c is chunk or (c and c[0].idx == chunk[0].idx):
+                        chunk_idx = ci
+                        break
+
+            result = self._process_single_chunk(
+                chunk=chunk,
+                chunk_idx=chunk_idx,
+                total_chunks=total,
+                rolling_ctx_buffer=rolling_ctx_buffer,
+                rolling_ctx_max=rolling_ctx_max,
+                rolling_ctx_between=rolling_ctx_between,
+                rolling_ctx_after=rolling_ctx_after,
+                use_translated_ctx=use_translated_ctx,
+                all_chunks=all_chunks,
+                progress_lock=progress_lock,
+            )
+
+            if result == "abort":
+                if self._abort_error is not None:
+                    raise self._abort_error
+                break
+            if result == "cancel":
+                break
+
     def _translate_chunk(
         self,
         chunk: List[TranslatableLine],
@@ -3069,11 +3447,12 @@ class TranslationStep(BaseStep):
             ln for ln in lines_to_translate if "__DEDUP__" not in ln
         ]
 
-        # Build system prompt with per-chunk selective filtering
-        # Include merged-request instruction when merge_boundaries exist
+        # Extract context_type from formation metadata for conditional prompt
+        context_type = ""
         merge_instruction = ""
         formation_ctx = getattr(chunk[0], "_formation_ctx", None) if chunk else None
         if formation_ctx:
+            context_type = formation_ctx.get("context_type", "")
             boundaries = formation_ctx.get("merge_boundaries", [])
             if boundaries and len(boundaries) > 1:
                 try:
@@ -3090,6 +3469,7 @@ class TranslationStep(BaseStep):
             rolling_context_text=rolling_context_text,
             chunk_lines=filtered_for_api,
             merge_instruction=merge_instruction,
+            context_type=context_type,
         )
 
         # Log outgoing request when enabled in Global Options
@@ -3324,6 +3704,12 @@ class TranslationStep(BaseStep):
         if self._progress_window:
             self._progress_window.set_state(self._translation_state)
 
+        # Show abort error dialog if translation was aborted
+        abort_err = getattr(self, "_abort_error", None)
+        if abort_err is not None:
+            self._show_abort_error_dialog(abort_err)
+            self._abort_error = None
+
         # Store results in session
         step_data = self.session.get_step(self.step_id).data
         step_data["translated_lines"] = [l.translated for l in self._lines]
@@ -3339,6 +3725,19 @@ class TranslationStep(BaseStep):
         self._status_label.configure(
             text=f"Completed: {completed}, Failed: {failed}"
         )
+
+    def _show_abort_error_dialog(self, abort_err: TranslationAbortError) -> None:
+        """Show a user-facing error dialog for a translation abort.
+
+        Displays the classified error message, remediation steps, and
+        for unknown errors includes the raw API message so the user can
+        copy it for bug reports.
+
+        Args:
+            abort_err: The classified abort error.
+        """
+        display_text = abort_err.format_for_display()
+        messagebox.showerror("Translation Aborted", display_text)
 
     def on_new_project(self) -> None:
         """Reset cached state for a fresh project."""

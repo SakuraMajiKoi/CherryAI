@@ -769,6 +769,125 @@ def build_requests(
     return all_requests
 
 
+# Priority order: lower number = higher priority (processed first).
+_CONTEXT_TYPE_PRIORITY: Dict[str, int] = {
+    "dialogue": 0,
+    "choice": 1,
+    "mixed": 2,
+    "unknown": 2,
+    "menu": 3,
+}
+
+
+@dataclass
+class RequestString:
+    """A chain of requests linked by rolling context.
+
+    Requests that share a rolling-context dependency (``provides_context``
+    → ``receives_context`` chain within the same file section) form a
+    *string*.  Strings must be executed sequentially, but independent
+    strings can run in parallel.
+
+    Attributes:
+        requests: Ordered requests in the chain.
+        context_type: Dominant context type for sorting.
+        has_rolling_context: Whether the string uses rolling context.
+    """
+
+    requests: List[TranslationRequest] = field(default_factory=list)
+    context_type: str = "unknown"
+    has_rolling_context: bool = False
+
+    @property
+    def priority(self) -> int:
+        """Sorting priority (lower = higher priority)."""
+        return _CONTEXT_TYPE_PRIORITY.get(self.context_type, 2)
+
+    @property
+    def line_count(self) -> int:
+        """Total translatable lines across all requests in the string."""
+        return sum(r.line_count for r in self.requests)
+
+
+def sort_requests_by_type(
+    requests: List[TranslationRequest],
+) -> List[RequestString]:
+    """Group and sort requests by context type and rolling-context chains.
+
+    Produces a list of :class:`RequestString` objects sorted by:
+
+    1. **Context type priority**: Dialogue > Choice > Mixed/Unknown > Menu.
+    2. **Rolling context**: Strings with rolling context before standalone.
+    3. **Size (descending)**: Longer strings first within each priority.
+
+    Requests within a rolling-context chain maintain their original
+    document order (they must execute sequentially).
+
+    Args:
+        requests: Formation-pipeline output from :func:`build_requests`.
+
+    Returns:
+        Sorted list of :class:`RequestString` objects.
+    """
+    if not requests:
+        return []
+
+    # --- Phase 1: Build strings (rolling-context chains) ---
+    strings: List[RequestString] = []
+    current_chain: List[TranslationRequest] = []
+    current_section: int | None = None
+
+    for req in requests:
+        section = getattr(req, "_file_section", 0)
+
+        # Start a new chain when:
+        #  - This is the first request
+        #  - This request does not receive context (start of a new chain)
+        #  - We crossed a file section boundary
+        if (
+            not current_chain
+            or not req.receives_context
+            or section != current_section
+        ):
+            # Flush the previous chain
+            if current_chain:
+                strings.append(_build_string(current_chain))
+            current_chain = [req]
+            current_section = section
+        else:
+            current_chain.append(req)
+
+    if current_chain:
+        strings.append(_build_string(current_chain))
+
+    # --- Phase 2: Sort strings ---
+    strings.sort(key=lambda s: (
+        s.priority,               # Type priority (dialogue first)
+        0 if s.has_rolling_context else 1,  # RC chains before standalone
+        -s.line_count,            # Longer strings first
+    ))
+
+    return strings
+
+
+def _build_string(chain: List[TranslationRequest]) -> RequestString:
+    """Build a :class:`RequestString` from a chain of requests."""
+    # Dominant context type = most common among the chain
+    type_counts: Dict[str, int] = {}
+    for req in chain:
+        ct = req.context_type or "unknown"
+        type_counts[ct] = type_counts.get(ct, 0) + req.line_count
+
+    dominant = max(type_counts, key=type_counts.get)  # type: ignore[arg-type]
+    has_rc = len(chain) > 1 and any(r.receives_context for r in chain)
+
+    return RequestString(
+        requests=list(chain),
+        context_type=dominant,
+        has_rolling_context=has_rc,
+    )
+
+
 # ---- LineEntry → LineInfo conversion (Phase 50) ----------------------------
 
 

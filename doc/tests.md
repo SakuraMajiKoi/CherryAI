@@ -3161,7 +3161,7 @@ TRANSLATION COMPLETE - 2025-01-30 08:01:23
 
 ### Run All Script Tests
 ```bash
-pytest dev/test_manifest_v2.py dev/test_modi_v2.py dev/test_functions_v2.py dev/test_replication.py dev/test_config.py dev/test_dedup.py dev/test_options.py dev/test_validation.py dev/test_conditional_prompts.py -v
+pytest dev/test_manifest_v2.py dev/test_modi_v2.py dev/test_functions_v2.py dev/test_replication.py dev/test_config.py dev/test_dedup.py dev/test_options.py dev/test_validation.py dev/test_conditional_prompts.py dev/test_api_error_classification.py dev/test_first_request_gate.py dev/test_request_sorting.py dev/test_concurrent_execution.py dev/test_context_type_prompts.py -v
 ```
 
 ### Run API Test (Full)
@@ -11371,6 +11371,108 @@ overwrite-off skips existing translations, symbol-only dialogue, generic placeho
 ```bash
 # Run Task 41 tests
 python -m pytest CherryAI/dev/test_max_input_tokens.py -v --timeout=10
+```
+
+---
+
+### dev/test_api_error_classification.py (56 tests) - TASK 78.1
+
+API error classification system tests. Validates the `APIErrorCategory` enum,
+`ClassifiedAPIError` dataclass, `classify_api_error()` function, and
+`TranslationAbortError` exception class.
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestAPIErrorInfoCompleteness | 2 | All categories have entries, no stale keys |
+| TestBuildClassified | 2 | Default fields, custom is_fatal/is_retryable |
+| TestClassifyByExceptionType | 10 | Auth, permission, not-found, rate-limit (429/quota), bad-request variants, timeout, server error, connection |
+| TestClassifyByMessage | 14 | HTTP status codes (400-504), keyword matching (rate limit, timeout, overloaded, invalid JSON, content filter, billing, etc.) |
+| TestTranslationAbortError | 5 | Properties, display (fatal/unknown), user_message passthrough |
+| TestClassifiedAPIErrorDefaults | 2 | Default retryable/fatal, custom override |
+| TestEdgeCases | 5 | Empty message, None attributes, generic Exception, nested messages, very long messages |
+
+```bash
+python -m pytest dev/test_api_error_classification.py -v --timeout=10
+```
+
+---
+
+### dev/test_first_request_gate.py (14 tests) - TASK 78.2
+
+First-request validation gate and instant-stop behaviour tests. Validates
+that `_translate_chunk_with_retry()` in `api_client.py` classifies errors
+and raises `TranslationAbortError` for fatal errors without retrying.
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestRetryFatalErrors | 5 | Auth (text + SDK type), model-not-found, non-structured output, quota exceeded |
+| TestRetryRetryableErrors | 4 | Rate-limit (real SDK), timeout recovery, TranslationError timeout retries, server error (real SDK) |
+| TestTranslateChunkError | 3 | Invalid JSON, non-list translation, API error propagation |
+| TestAbortErrorDisplay | 2 | Fatal display shows steps, unknown shows raw message |
+
+```bash
+python -m pytest dev/test_first_request_gate.py -v --timeout=10
+```
+
+---
+
+### dev/test_request_sorting.py (22 tests) - TASK 78.4
+
+Request string sorting by type priority tests. Validates `sort_requests_by_type()`
+and `RequestString` dataclass from `prompt_builder.py`.
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestBasicSorting | 4 | Empty, single, type ordering (dialogue > choice > menu), full priority chain |
+| TestRollingContextChains | 5 | Chain detection, section boundaries, receives_false breaks chain, RC chains before standalone, chain order preserved |
+| TestSizeSort | 2 | Longer strings first, type priority overrides size |
+| TestRequestStringDataclass | 3 | Priority property, line_count, has_rolling_context |
+| TestContextTypePriority | 3 | Dialogue highest, menu lowest, choice between |
+| TestEdgeCases | 5 | Mixed types in section, document order in chain, dominant type detection, priority consistency, chain dominant multi-type |
+
+```bash
+python -m pytest dev/test_request_sorting.py -v --timeout=10
+```
+
+---
+
+### dev/test_concurrent_execution.py (23 tests) - TASK 78.5
+
+Concurrent request execution engine tests. Validates `_process_single_chunk()`,
+`_execute_string_sequential()`, `_group_chunks_into_strings()`, and
+ThreadPoolExecutor-based parallel string execution.
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestGroupChunksIntoStrings | 5 | Empty, single, two independent, RC chain stays together, mixed chains + standalone |
+| TestProcessSingleChunk | 6 | Successful translation, cancel before processing, abort on fatal, rolling context extends, rolling context clears, thread-safe progress |
+| TestExecuteStringSequential | 4 | Sequential order, cancel stops, abort raises TranslationAbortError, rolling context flows |
+| TestConcurrentExecution | 3 | Independent strings run in parallel, abort in one stops others, sequential fallback with max_concurrent=1 |
+| TestEdgeCases | 5 | Empty string group, single-line chunk, already-set abort skips, provides_context=False, source text context |
+
+```bash
+python -m pytest dev/test_concurrent_execution.py -v --timeout=10
+```
+
+---
+
+### dev/test_context_type_prompts.py (18 tests) - TASK 78.6
+
+Context-type conditional prompt injection tests. Validates that `context_type`
+flows from `_formation_ctx` through `_translate_chunk` →
+`_build_system_prompt_from_manifest` → `build_full_system_prompt` →
+`get_context_prompt`, ensuring §5.2 item 7b is correctly injected.
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestGetContextPrompt | 6 | Dialogue, menu, choice, unknown, unrecognised, empty |
+| TestBuildFullSystemPromptContextType | 5 | Dialogue injected, menu injected, choice injected, no type = no injection, unknown type |
+| TestMergeInstruction | 2 | Merge instruction injected, empty not injected |
+| TestBuildMergedRequestInstruction | 3 | Basic merge, single boundary, empty boundaries |
+| TestTranslateChunkContextTypeFlow | 2 | context_type reaches prompt, merge_boundaries generate instruction |
+
+```bash
+python -m pytest dev/test_context_type_prompts.py -v --timeout=10
 ```
 
 

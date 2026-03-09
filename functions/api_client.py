@@ -33,6 +33,10 @@ else:
     APITimeoutError = getattr(openai, "APITimeoutError", Exception)
 
 from .chunker import Chunker, ChunkerConfig, ChunkMode, create_chunker
+from .common_errors import (
+    TranslationAbortError,
+    classify_api_error,
+)
 from .config import load_config, get_preset_config, list_preset_names
 from .logit_bias import (
     LogitBiasManager,
@@ -1793,33 +1797,55 @@ class APIClient:
         return line
 
     def _translate_chunk_with_retry(self, chunk: List[str], system_prompt: Optional[str]) -> List[str]:
-        """Translate a single chunk with retry logic."""
+        """Translate a single chunk with retry logic.
+
+        Fatal errors (auth, model not found, etc.) raise
+        :class:`TranslationAbortError` immediately without retrying.
+        Retryable errors (rate limit, timeout, server error) use
+        exponential backoff up to *max_retries* attempts.
+        """
         import random
         attempt = 0
-        last_error = None
-        max_retries = max(self.config.retries, 5)  # At least 5 retries for empty responses
-        
-        # Estimate tokens for rate limiting
-        estimated_tokens = sum(len(line) // 4 + 1 for line in chunk)  # Rough estimate
+        last_error: Exception | None = None
+        max_retries = max(self.config.retries, 5)
+
+        estimated_tokens = sum(len(line) // 4 + 1 for line in chunk)
 
         while attempt < max_retries:
             try:
                 self._wait_for_rate_limit(estimated_tokens=estimated_tokens)
                 return self._translate_chunk(chunk, system_prompt)
+            except TranslationAbortError:
+                # Already classified and fatal — propagate immediately
+                raise
             except (RateLimitError, APITimeoutError, APIError, TranslationError) as e:
+                classified = classify_api_error(e)
+                if classified.is_fatal:
+                    raise TranslationAbortError(classified) from e
                 attempt += 1
                 last_error = e
-                # Longer backoff for rate-limit-like issues (empty response often means overload)
-                base_wait = 3 ** attempt  # 3, 9, 27, 81, 243 seconds
-                jitter = random.uniform(0, base_wait * 0.2)  # Add up to 20% jitter
-                wait_time = min(base_wait + jitter, 120)  # Cap at 2 minutes
-                self.logger.warning(f"Translation failed (attempt {attempt}/{max_retries}): {e}. Retrying in {wait_time:.1f}s...")
+                base_wait = 3 ** attempt
+                jitter = random.uniform(0, base_wait * 0.2)
+                wait_time = min(base_wait + jitter, 120)
+                self.logger.warning(
+                    "Translation failed (attempt %d/%d): %s. Retrying in %.1fs...",
+                    attempt, max_retries, e, wait_time,
+                )
                 time.sleep(wait_time)
             except Exception as e:
-                self.logger.error(f"Unexpected error during translation: {e}")
+                classified = classify_api_error(e)
+                if classified.is_fatal:
+                    raise TranslationAbortError(classified) from e
+                self.logger.error("Unexpected error during translation: %s", e)
                 raise TranslationError(f"Unexpected error: {e}") from e
 
-        raise TranslationError(f"Failed to translate chunk after {max_retries} attempts. Last error: {last_error}")
+        # All retries exhausted — classify the last error for the user
+        if last_error is not None:
+            classified = classify_api_error(last_error)
+            raise TranslationAbortError(classified)
+        raise TranslationError(
+            f"Failed to translate chunk after {max_retries} attempts.",
+        )
 
     def _translate_chunk(self, chunk: List[str], system_prompt: Optional[str]) -> List[str]:
         """Perform the actual API call for a chunk."""
@@ -1936,8 +1962,13 @@ class APIClient:
             response = client_any.chat.completions.create(**api_params)
         except TranslationError:
             raise
+        except TranslationAbortError:
+            raise
         except Exception as e:
-            # Catch-all for library errors to wrap them
+            # Classify the library-level error and raise the appropriate type
+            classified = classify_api_error(e)
+            if classified.is_fatal:
+                raise TranslationAbortError(classified) from e
             raise TranslationError(f"OpenAI API call failed: {str(e)}") from e
 
         content = response.choices[0].message.content
@@ -1980,10 +2011,19 @@ class APIClient:
             data = json.loads(content)
             translations = data.get("translations")
         except json.JSONDecodeError:
-            raise TranslationError("API returned invalid JSON")
+            # Non-structured output is fatal — model cannot produce JSON
+            classified = classify_api_error(
+                TranslationError("API returned invalid JSON"),
+            )
+            raise TranslationAbortError(classified)
         
         if not isinstance(translations, list):
-            raise TranslationError("API returned JSON but 'translations' is not a list")
+            classified = classify_api_error(
+                TranslationError(
+                    "API returned JSON but 'translations' is not a list",
+                ),
+            )
+            raise TranslationAbortError(classified)
 
         # Validation
         if len(translations) != len(chunk):
