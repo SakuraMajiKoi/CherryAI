@@ -2278,6 +2278,105 @@ def detect_pov(
 
 
 # ============================================================================
+# File Type Classification (Typing)
+# ============================================================================
+
+
+def classify_file_type(lines: List[str]) -> str:
+    """Classify a file's content type based on speaker detection ratio.
+
+    Uses ``detect_speaker`` to count how many lines have a speaker prefix,
+    then classifies:
+
+    - ``"dialogue"`` — more than 10% of lines have speakers detected.
+    - ``"menu?"``    — 10% or fewer but at least 2 lines have speakers.
+    - ``"menu"``     — no speakers detected at all.
+
+    Args:
+        lines: The raw text lines from a single file.
+
+    Returns:
+        One of ``"dialogue"``, ``"menu?"``, or ``"menu"``.
+    """
+    if not lines:
+        return "menu"
+
+    speaker_count = 0
+    for line in lines:
+        stripped = line.strip()
+        if stripped and detect_speaker(stripped) is not None:
+            speaker_count += 1
+
+    total = len(lines)
+    if total == 0:
+        return "menu"
+
+    ratio = speaker_count / total
+    if ratio > 0.10:
+        return "dialogue"
+    elif speaker_count >= 2:
+        return "menu?"
+    else:
+        return "menu"
+
+
+def resolve_chunk_type(
+    line_indices: List[int],
+    lines: List[Dict[str, Any]],
+    filedir: List[Any],
+) -> str:
+    """Resolve the context type for a chunk of line indices.
+
+    Priority:
+    1. Per-line ``tag`` values — majority wins.
+    2. ``filedir`` entry ``type`` for the files containing the lines.
+    3. ``"unknown"`` fallback.
+
+    Args:
+        line_indices: Global 0-based line indices in this chunk.
+        lines: Full manifest ``lines`` list (dicts with ``idx``, ``tag``, …).
+        filedir: List of ``FileDirEntry`` objects from the manifest.
+
+    Returns:
+        One of ``"dialogue"``, ``"menu"``, ``"choice"``, ``"menu?"``,
+        ``"mixed"``, or ``"unknown"``.
+    """
+    if not line_indices:
+        return "unknown"
+
+    # Build idx→tag map for requested indices
+    idx_set = set(line_indices)
+    tag_counts: Dict[str, int] = {}
+    for line_data in lines:
+        idx = line_data.get("idx", -1)
+        if idx in idx_set:
+            tag = line_data.get("tag", "")
+            if tag:
+                tag_counts[tag] = tag_counts.get(tag, 0) + 1
+
+    # 1. Tags take priority
+    if tag_counts:
+        winner = max(tag_counts, key=tag_counts.get)  # type: ignore[arg-type]
+        return winner
+
+    # 2. Filedir type
+    type_set: set = set()
+    for idx in line_indices:
+        for entry in filedir:
+            if entry.contains_idx(idx) and entry.type:
+                type_set.add(entry.type)
+                break
+
+    if len(type_set) == 1:
+        return type_set.pop()
+    if len(type_set) > 1:
+        return "mixed"
+
+    # 3. Fallback
+    return "unknown"
+
+
+# ============================================================================
 # Protagonist Detection (Task 75)
 # ============================================================================
 

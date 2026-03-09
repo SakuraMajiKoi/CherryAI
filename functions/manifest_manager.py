@@ -238,6 +238,7 @@ class FileDirEntry:
         format: File format (txt, csv, tsv, json, xlsx, rpgm, etc.).
         rel_path: Path relative to source_root (preserves folder structure).
         encoding: File encoding (utf-8, shift_jis, etc.).
+        type: Content type classification (dialogue, menu?, menu, or empty).
     """
     
     first_idx: int
@@ -245,15 +246,17 @@ class FileDirEntry:
     format: str
     rel_path: str
     encoding: str = "utf-8"
+    type: str = ""
     
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary (sparse format)."""
-        result: Dict[str, Any] = {
-            "first_idx": self.first_idx,
-            "last_idx": self.last_idx,
-            "format": self.format,
-            "rel_path": self.rel_path,
-        }
+        result: Dict[str, Any] = {}
+        if self.type:
+            result["type"] = self.type
+        result["first_idx"] = self.first_idx
+        result["last_idx"] = self.last_idx
+        result["format"] = self.format
+        result["rel_path"] = self.rel_path
         if self.encoding != "utf-8":
             result["encoding"] = self.encoding
         return result
@@ -267,6 +270,7 @@ class FileDirEntry:
             format=d.get("format", "txt"),
             rel_path=d.get("rel_path", ""),
             encoding=d.get("encoding", "utf-8"),
+            type=d.get("type", ""),
         )
     
     @property
@@ -2026,6 +2030,7 @@ class ManifestManager:
                 format=file_info.get("format", "txt"),
                 rel_path=str(rel_path),
                 encoding=file_info.get("encoding", "utf-8"),
+                type=file_info.get("type", ""),
             )
             entries.append(entry)
             current_idx += line_count

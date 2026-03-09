@@ -86,6 +86,7 @@ class APIConfig:
     # Prompt caching settings (OpenAI)
     prompt_cache_enabled: bool = True  # Enable OpenAI prompt caching (auto for gpt-4o+)
     prompt_cache_retention: str = ""  # "" = default (in_memory), "in_memory", or "24h"
+    prompt_cache_key: str = ""  # Semi-unique key to improve cache hit routing
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> APIConfig:
@@ -143,8 +144,92 @@ class APIConfig:
             filtered_data["prompt_cache_enabled"] = val if isinstance(val, bool) else str(val).lower() in ("true", "1", "yes")
         if "prompt_cache_retention" in filtered_data:
             filtered_data["prompt_cache_retention"] = str(filtered_data["prompt_cache_retention"])
+        if "prompt_cache_key" in filtered_data:
+            filtered_data["prompt_cache_key"] = str(filtered_data["prompt_cache_key"])
             
         return cls(**filtered_data)
+
+
+def generate_prompt_cache_key(
+    project_name: str,
+    created_at: str,
+) -> str:
+    """Generate a prompt_cache_key from manifest metadata.
+
+    Format: ``"{first 5 alpha chars of project_name}-{seconds of created_at}"``
+    Example: ``"MyCoo-56"`` for project "My Cool Game" created at
+    ``"2025-01-15T12:34:56Z"``.
+
+    Returns an empty string if either input is empty or malformed.
+    """
+    if not project_name or not created_at:
+        return ""
+    # Extract first 5 alphabetic characters from project name
+    alpha_chars = [c for c in project_name if c.isalpha()]
+    prefix = "".join(alpha_chars[:5])
+    if not prefix:
+        return ""
+    # Extract seconds from ISO timestamp (…T…:SS or …:SSZ)
+    try:
+        # Handle "2025-01-15T12:34:56Z" or "2025-01-15T12:34:56.123Z"
+        time_part = created_at.split("T")[-1] if "T" in created_at else ""
+        seconds_str = time_part.split(":")[2] if time_part.count(":") >= 2 else ""
+        # Strip trailing Z or fractional seconds
+        seconds_str = seconds_str.rstrip("Z").split(".")[0]
+        seconds = int(seconds_str)
+    except (IndexError, ValueError):
+        return ""
+    return f"{prefix}-{seconds}"
+
+
+# Sections that form the static (cacheable) prefix per §5.2
+_STATIC_PROMPT_SECTIONS = frozenset({
+    "language", "system_instructions", "style", "tone",
+    "protagonist", "summary", "genre", "pov", "context_type",
+})
+
+
+def check_static_prompt_cache_status(
+    token_breakdown: Dict[str, int],
+    *,
+    words_per_token: float = 0.75,
+) -> tuple[str, str]:
+    """Evaluate whether the static prompt prefix is large enough for caching.
+
+    OpenAI caches prompt prefixes ≥ 1024 tokens in 128-token increments.
+    This checks the *static* portion (slots 1-7b) of the prompt.
+
+    Args:
+        token_breakdown: Section-name → word-count mapping from
+            ``build_full_system_prompt``.
+        words_per_token: Estimated words-per-token ratio.  Default 0.75
+            (≈ 1.33 tokens per word) is conservative for English.
+
+    Returns:
+        Tuple of ``(status, message)`` where *status* is one of:
+        - ``"ok"`` — ≥ 1280 estimated tokens (2× 128-token boundary above 1024)
+        - ``"suggest"`` — 1024–1279 tokens (borderline; may not cache reliably)
+        - ``"warn"`` — < 1024 tokens (below caching threshold)
+    """
+    static_words = sum(
+        count for section, count in token_breakdown.items()
+        if section in _STATIC_PROMPT_SECTIONS
+    )
+    estimated_tokens = int(static_words / words_per_token) if words_per_token else 0
+
+    if estimated_tokens >= 1280:
+        return ("ok", f"Static prompt ~{estimated_tokens} tokens — caching active.")
+    if estimated_tokens >= 1024:
+        return (
+            "suggest",
+            f"Static prompt ~{estimated_tokens} tokens — borderline. "
+            f"Adding more system instructions may improve cache reliability.",
+        )
+    return (
+        "warn",
+        f"Static prompt ~{estimated_tokens} tokens — below 1024 minimum. "
+        f"Prompt caching will NOT activate.",
+    )
 
 
 
@@ -199,6 +284,7 @@ class APIClient:
         self._total_prompt_tokens = 0
         self._total_completion_tokens = 0
         self._total_cached_tokens = 0
+        self._total_reasoning_tokens = 0
         self._skipped_lines: Dict[str, int] = {"dedup": 0, "symbols": 0, "no_source": 0}
         self._initial_chunk_count = 0
         self._final_chunk_count = 0
@@ -416,14 +502,15 @@ class APIClient:
         """Check if the current model supports OpenAI prompt caching.
 
         Prompt caching is automatic for gpt-4o and newer models when the
-        provider is OpenAI (not local).
+        provider is OpenAI (not local).  Gemini uses a different caching
+        mechanism and is not supported here.
 
         Returns:
             True if the model supports prompt caching.
         """
         if self.is_local_provider():
             return False
-        if self.config.provider.lower() not in ("openai", "gemini"):
+        if self.config.provider.lower() != "openai":
             return False
         model_lower = self.config.model.lower()
         return any(
@@ -474,6 +561,11 @@ class APIClient:
         # OpenAI use its default (in_memory).  This avoids sending an
         # unsupported parameter to providers that use an OpenAI-compat
         # endpoint but don't recognise prompt_cache_retention.
+
+        # Include prompt_cache_key when set for improved cache routing
+        cache_key = (self.config.prompt_cache_key or "").strip()
+        if cache_key:
+            params["prompt_cache_key"] = cache_key
 
         return params
 
@@ -1138,6 +1230,20 @@ class APIClient:
         else:
             cached_tokens = 0
         self._total_cached_tokens += cached_tokens
+
+        # Track completion token breakdown (reasoning, predictions)
+        comp_details = usage.get("completion_tokens_details", {})
+        if isinstance(comp_details, dict):
+            reasoning_tokens = comp_details.get("reasoning_tokens", 0) or 0
+            accepted_pred = comp_details.get(
+                "accepted_prediction_tokens", 0,
+            ) or 0
+            rejected_pred = comp_details.get(
+                "rejected_prediction_tokens", 0,
+            ) or 0
+        else:
+            reasoning_tokens = accepted_pred = rejected_pred = 0
+        self._total_reasoning_tokens += reasoning_tokens
         
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(f"\n{'='*80}\n")
@@ -1145,6 +1251,8 @@ class APIClient:
             f.write(f" | Tokens: {prompt_tokens} in / {completion_tokens} out")
             if cached_tokens:
                 f.write(f" | Cached: {cached_tokens}")
+            if reasoning_tokens:
+                f.write(f" | Reasoning: {reasoning_tokens}")
             f.write(f" | Running Total: {self._total_prompt_tokens + self._total_completion_tokens}\n")
             f.write(f"{'='*80}\n\n")
             
@@ -1188,6 +1296,16 @@ class APIClient:
                 if cached_tokens:
                     f.write(f"  Cached Tokens: {cached_tokens}\n")
                 f.write(f"  Completion Tokens: {completion_tokens}\n")
+                if reasoning_tokens:
+                    f.write(f"  Reasoning Tokens: {reasoning_tokens}\n")
+                if accepted_pred:
+                    f.write(
+                        f"  Accepted Prediction Tokens: {accepted_pred}\n",
+                    )
+                if rejected_pred:
+                    f.write(
+                        f"  Rejected Prediction Tokens: {rejected_pred}\n",
+                    )
                 f.write(f"  Total Tokens: {usage.get('total_tokens', 0)}\n")
             
             finish_reason = response_data.get("finish_reason", "")
@@ -1208,6 +1326,10 @@ class APIClient:
                 ]
                 if cached_tokens:
                     entry_lines.append(f"  Cached Tokens: {cached_tokens}")
+                if reasoning_tokens:
+                    entry_lines.append(
+                        f"  Reasoning Tokens: {reasoning_tokens}",
+                    )
                 entry_lines.append("")
                 append_step_log_entry(self._step_log_path, "\n".join(entry_lines))
         except Exception:
@@ -1272,6 +1394,10 @@ class APIClient:
                 )
                 f.write(f"  Cache Hit Rate: {cache_pct:.1f}%\n")
             f.write(f"  Total Completion Tokens: {self._total_completion_tokens:,}\n")
+            if self._total_reasoning_tokens:
+                f.write(
+                    f"  Reasoning Tokens: {self._total_reasoning_tokens:,}\n",
+                )
             f.write(f"  Total Tokens: {self._total_prompt_tokens + self._total_completion_tokens:,}\n")
             if "gemini" in model:
                 f.write(f"  Estimated Cost: FREE (Gemini free tier)\n")
@@ -1309,6 +1435,10 @@ class APIClient:
                     )
                     if cached_savings > 0:
                         footer["Cache Savings"] = f"~${cached_savings:.4f} USD"
+                if self._total_reasoning_tokens:
+                    footer["Reasoning Tokens"] = (
+                        f"{self._total_reasoning_tokens:,}"
+                    )
                 write_step_log_footer(self._step_log_path, footer)
         except Exception:
             pass

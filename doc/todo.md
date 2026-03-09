@@ -181,18 +181,27 @@ configurable APIConfig fields.
 
 **Solution:**
 - Confirmed prompt ordering is already cache-optimal (static before dynamic)
-- Added `prompt_cache_enabled` and `prompt_cache_retention` to APIConfig dataclass
-- Added model prefix lists for caching support detection
-- Added `supports_prompt_caching()`, `supports_extended_cache_retention()`, `get_prompt_cache_params()`
+- Added `prompt_cache_enabled`, `prompt_cache_retention`, and `prompt_cache_key` to APIConfig
+- `supports_prompt_caching()` restricted to `provider == "openai"` (Gemini excluded)
+- Added `supports_extended_cache_retention()`, `get_prompt_cache_params()` (returns key + retention)
 - Injected cache parameters into `_translate_chunk()` API call
 - Tracked cached tokens from `usage.prompt_tokens_details.cached_tokens`
+- Tracked reasoning tokens from `usage.completion_tokens_details` (reasoning, accepted/rejected prediction)
 - Added cache hit rate, savings, and cached token counts to all log outputs
+- `generate_prompt_cache_key(project_name, created_at)` — format `"{alpha5}-{seconds}"`
+- `check_static_prompt_cache_status(token_breakdown)` — ok/suggest/warn classification
+- Update button now calls `refresh_models()` + `reload_model_pricing()` to save to API.ini
+- Available Models: added Cached Input filter, inverted Thinking filter, Save button, Cached $/1M column
+- Costs step: `estimate_cost()` supports `cached_tokens` param, Prompt/Cached Input Cost rows, Cached $/1M in comparison table
 
 **Files Modified:**
-- `functions/api_client.py` — APIConfig fields, model lists, helper methods, param injection, token tracking, log updates
-- `dev/test_prompt_caching.py` — New test file (58 tests)
+- `functions/api_client.py` — APIConfig fields, model lists, helper methods, param injection, token tracking, log updates, generate_prompt_cache_key, check_static_prompt_cache_status
+- `functions/config.py` — `estimate_cost()` cached_tokens support
+- `gui/dialogs/global_options.py` — Filters, Save button, Update button fix, Cached $/1M column
+- `gui/steps/costs.py` — EstimationResult extended, Cached $/1M column, Prompt/Cached Input Cost rows
+- `dev/test_prompt_caching.py` — Comprehensive test file (103 tests)
 
-**Tests:** `dev/test_prompt_caching.py` — 58 tests (all passing)
+**Tests:** `dev/test_prompt_caching.py` — 103 tests (all passing)
 
 ---
 

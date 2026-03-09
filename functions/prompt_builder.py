@@ -1582,14 +1582,15 @@ class PromptBuilder:
         if self.game_summary and not self._is_game_summary_empty():
             prompt_parts.append(self.game_summary)
 
-        # 6. Conditional block (context-type + POV + pattern-triggered, merged)
+        # 6. Conditional block (POV + pattern-triggered; context-type is now
+        #    injected as a separate static slot 5b before this block)
         conditionals: List[str] = []
 
-        # 6a. Context-type instructions (Phase 50)
+        # 6a. Context-type instructions (static, cacheable — slot 5b)
         if context_type:
             ctx_prompt = get_context_prompt(context_type)
             if ctx_prompt:
-                conditionals.append(ctx_prompt.strip())
+                prompt_parts.append(ctx_prompt.strip())
 
         # 6b. Narrative Perspective (Phase 54 — skip when protagonist has narration)
         if (

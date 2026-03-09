@@ -311,6 +311,18 @@ class UnifiedInputDialog(tk.Toplevel):
         )
         encoding_cb.pack(side="left")
 
+        # Typing Enabled toggle button
+        from CherryAI.functions.ini_manager import get_default, set_default
+        typing_on = get_default("session", "typing_enabled", True, bool)
+        self._typing_enabled = tk.BooleanVar(value=typing_on)
+        self._typing_btn = ttk.Button(
+            options_frame,
+            text="Typing Enabled" if typing_on else "Typing Disabled",
+            command=self._toggle_typing,
+            width=16,
+        )
+        self._typing_btn.pack(side="left", padx=(20, 0))
+
         # Auto-Pipeline – hidden pending rework; widgets created but not packed
         # ttk.Label(options_frame, text="Auto-Pipeline:").pack(side="left", padx=(20, 5))
         self._pipeline_var = tk.StringVar(value=self._auto_pipeline)
@@ -354,6 +366,17 @@ class UnifiedInputDialog(tk.Toplevel):
             command=self._quick_file_select,
         )
         file_btn.pack(side="left")
+
+    def _toggle_typing(self) -> None:
+        """Toggle Typing Enabled/Disabled and persist to INI."""
+        from CherryAI.functions.ini_manager import set_default
+
+        new_val = not self._typing_enabled.get()
+        self._typing_enabled.set(new_val)
+        self._typing_btn.configure(
+            text="Typing Enabled" if new_val else "Typing Disabled",
+        )
+        set_default("session", "typing_enabled", str(new_val))
 
     # ----------------------------- Browser Operations ----------------------------- #
 

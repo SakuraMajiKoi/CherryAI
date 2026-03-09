@@ -3287,6 +3287,10 @@ class GlobalOptionsDialog(tk.Toplevel):
         from functions import model_registry
         from functions.options import _CLOUD_PROVIDER_META
 
+        registry_id = _CLOUD_PROVIDER_META.get(provider, {}).get(
+            "registry_id", provider,
+        )
+
         # Normalise model IDs — strip "models/" prefix used by Gemini API
         normalised_ids: list[str] = []
         for mid in model_ids:
@@ -3327,10 +3331,14 @@ class GlobalOptionsDialog(tk.Toplevel):
         _saved_thinking = _api_config.get_api_setting(
             "filter_thinking", "0",
         )
+        _saved_cached = _api_config.get_api_setting(
+            "filter_cached", "0",
+        )
 
         struct_var = tk.BooleanVar(value=_saved_struct == "1")
         batch_var = tk.BooleanVar(value=_saved_batch == "1")
         thinking_var = tk.BooleanVar(value=_saved_thinking == "1")
+        cached_var = tk.BooleanVar(value=_saved_cached == "1")
 
         def _apply_filter() -> None:
             """Rebuild the Treeview based on current filter checkboxes."""
@@ -3344,6 +3352,9 @@ class GlobalOptionsDialog(tk.Toplevel):
             _api_config.set_api_setting(
                 "filter_thinking", "1" if thinking_var.get() else "0",
             )
+            _api_config.set_api_setting(
+                "filter_cached", "1" if cached_var.get() else "0",
+            )
             tree.delete(*tree.get_children())
             for mid in current_ids:
                 info = model_registry.get_model_info(mid)
@@ -3352,7 +3363,11 @@ class GlobalOptionsDialog(tk.Toplevel):
                     continue
                 if batch_var.get() and row[2] != "✓":
                     continue
-                if thinking_var.get() and row[3] != "✓":
+                # "No / Optional Thinking" — hide models that *require*
+                # thinking (row[3] == "✓") when the checkbox is ON.
+                if thinking_var.get() and row[3] == "✓":
+                    continue
+                if cached_var.get() and row[4] == "—":
                     continue
                 tree.insert("", tk.END, values=row)
 
@@ -3365,23 +3380,29 @@ class GlobalOptionsDialog(tk.Toplevel):
             variable=batch_var, command=_apply_filter,
         ).pack(side=tk.LEFT, padx=(0, 10))
         ttk.Checkbutton(
-            filter_bar, text="Thinking only",
+            filter_bar, text="No / Optional Thinking",
             variable=thinking_var, command=_apply_filter,
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Checkbutton(
+            filter_bar, text="Cached Input",
+            variable=cached_var, command=_apply_filter,
         ).pack(side=tk.LEFT, padx=(0, 10))
 
         # Treeview columns
         cols = (
             "model", "structured", "batch", "thinking",
-            "input_price", "output_price", "context",
+            "cached_input", "input_price", "output_price", "context",
         )
         col_widths = {
             "model": 250, "structured": 90, "batch": 60,
-            "thinking": 70, "input_price": 100, "output_price": 100,
+            "thinking": 70, "cached_input": 90,
+            "input_price": 100, "output_price": 100,
             "context": 100,
         }
         col_headings = {
             "model": "Model", "structured": "Structured",
             "batch": "Batch", "thinking": "Thinking",
+            "cached_input": "Cached $/1M",
             "input_price": "Input $/1M", "output_price": "Output $/1M",
             "context": "Context",
         }
@@ -3412,11 +3433,16 @@ class GlobalOptionsDialog(tk.Toplevel):
                     "✓" if info.structured_output else "—",
                     "✓" if info.batch_mode else "—",
                     "✓" if info.thinking else "—",
+                    (
+                        f"${info.cached_input_price:.2f}"
+                        if info.cached_input_price is not None
+                        else "—"
+                    ),
                     f"${info.input_price:.2f}" if info.input_price else "—",
                     f"${info.output_price:.2f}" if info.output_price else "—",
                     f"{info.context_window:,}" if info.context_window else "—",
                 )
-            return (mid, "?", "?", "?", "?", "?", "?")
+            return (mid, "?", "?", "?", "?", "?", "?", "?")
 
         # Populate table (respects current filter state)
         _apply_filter()
@@ -3507,6 +3533,22 @@ class GlobalOptionsDialog(tk.Toplevel):
                     timeout=15.0,
                 )
 
+                # When successful, also refresh the model registry to persist
+                # model metadata (pricing, capabilities) into API.ini.
+                saved_count = 0
+                if success and live_ids:
+                    try:
+                        refreshed = model_registry.refresh_models(
+                            api_keys={registry_id: effective_key},
+                            providers=[registry_id],
+                        )
+                        saved_count = len(refreshed.get(registry_id, []))
+                        # Reload config.py pricing cache
+                        from functions.config import reload_model_pricing
+                        reload_model_pricing()
+                    except Exception:
+                        pass
+
                 def _refresh_ui() -> None:
                     try:
                         if success and live_ids:
@@ -3525,8 +3567,13 @@ class GlobalOptionsDialog(tk.Toplevel):
                                 ),
                             )
                             _apply_filter()
+                            extra = (
+                                f" ({saved_count} saved to registry)"
+                                if saved_count else ""
+                            )
                             test_result_label.config(
-                                text=f"✓ {msg}", foreground="green",
+                                text=f"✓ {msg}{extra}",
+                                foreground="green",
                             )
                         else:
                             test_result_label.config(
@@ -3578,6 +3625,34 @@ class GlobalOptionsDialog(tk.Toplevel):
         ttk.Button(
             btn_bar, text="Update",
             command=_update_models,
+        ).pack(side=tk.RIGHT, padx=(5, 0))
+
+        def _save_filtered() -> None:
+            """Save the currently visible (filtered) model list."""
+            visible_ids = [
+                tree.item(child, "values")[0]
+                for child in tree.get_children()
+            ]
+            if not visible_ids:
+                test_result_label.config(
+                    text="No models to save.", foreground="orange",
+                )
+                return
+            _api_config.set_api_setting(
+                "saved_models",
+                ",".join(visible_ids),
+            )
+            test_result_label.config(
+                text=(
+                    f"✓ {len(visible_ids)} model(s) saved to "
+                    f"preferences."
+                ),
+                foreground="green",
+            )
+
+        ttk.Button(
+            btn_bar, text="Save",
+            command=_save_filtered,
         ).pack(side=tk.RIGHT, padx=(5, 0))
         ttk.Button(
             btn_bar, text="Close", command=win.destroy,

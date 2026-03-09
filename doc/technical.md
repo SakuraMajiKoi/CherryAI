@@ -220,10 +220,13 @@ TABLE OF CONTENTS
            on success opens _show_available_models_window() dialog with filterable model table and per-model translation testing
          - "Details" button inline with Provider dropdown (opens Available Models from registry cache)
          - _show_available_models() loads cached models; _show_available_models_window() displays filterable table
-         - "Update" button in Available Models window triggers live API call to refresh models
+         - "Update" button in Available Models window triggers live API call to refresh models; saves metadata to API.ini via model_registry.refresh_models()
          - "Set as Default" button saves default model per key via api_config.set_default_model()
+         - "Save" button persists filtered model list to API.ini saved_models setting
          - Gemini model IDs normalized (strips "models/" prefix) for display consistency
-         - Filter states (Structured/Batch/Thinking) saved to API.ini; Structured defaults to checked
+         - Filter states (Structured/Batch/No-Optional-Thinking/Cached-Input) saved to API.ini; Structured defaults to checked
+         - "No / Optional Thinking" filter excludes thinking=True models (inverted logic)
+         - "Cached Input" filter keeps only models with cached_input_price; Treeview includes Cached $/1M column
          - Temperature moved from API section to Request section (renamed "Model Settings")
          - TRANSLATION section: Workflow Defaults + Output Quality settings
          - API key entry with inline Save button between key entry and Show checkbox
@@ -729,6 +732,35 @@ TABLE OF CONTENTS
            - Modified: gui/dialogs/global_options.py
            - Test file: dev/test_glossary_selective.py (28 tests)
 
+   6.21 Typing Feature
+         - File-Level Classification:
+           - classify_file_type(lines) → str: uses detect_speaker() with 10% threshold
+           - >10% speakers → "dialogue"; ≤10% ≥2 → "menu?"; 0 speakers → "menu"
+           - Called during _sync_lines_to_manifest() when typing_enabled INI setting is True
+           - Result stored in FileDirEntry.type field (sparse serialization)
+           - Modified: functions/analysis.py, gui/steps/input_extract.py
+         - Per-Line Tagging:
+           - Users set Dialogue/Menu/Choice tags on preview lines via right-click context menu
+           - Tags stored in LineEntry.tags field; displayed in Preview tags column
+           - Search bar above Preview tree for live filtering
+         - Type Resolution at Translation Time:
+           - resolve_chunk_type(line_indices, lines, filedir) → str
+           - Priority: per-line tags > filedir type > "unknown"
+           - Mixed filedir types → "mixed"
+           - Modified: functions/analysis.py
+         - Prompt Integration:
+           - build_full_system_prompt() accepts context_type parameter
+           - Context-type prompt injected at slot 7b (static, cacheable)
+           - Cache boundary comment between slots 7b and 8
+           - Pattern-triggered prompts remain dynamic at slot 8
+           - Modified: gui/helpers/prompt_adapter.py, functions/prompt_builder.py
+         - GUI Controls:
+           - Typing Enabled toggle button in UnifiedInputDialog (gui/dialogs/input_dialog.py)
+           - Sort combobox (Filetree / Count / Type) above Loaded Files tree
+           - Type column in file tree; Select Type cascade in file context menu
+           - INI setting: [session] typing_enabled (bool, default True)
+         - Test file: dev/test_typing_feature.py (24 tests)
+
 7. CLI ARCHITECTURE
    7.1 Command Line Interface Structure (CLI.py)
    7.2 CLI-Functions Integration
@@ -1136,6 +1168,7 @@ class FileDirEntry:
     format: str           # File format (txt, csv, json, xlsx, rpgm, etc.)
     rel_path: str         # Path relative to source_root
     encoding: str = "utf-8"  # File encoding
+    type: str = ""        # Content type (dialogue, menu, menu?, ""); set by classify_file_type()
     
     @property
     def line_count(self) -> int:
@@ -2247,11 +2280,15 @@ Key Features:
 - **Prompt Caching (OpenAI)**: Automatic prompt prefix caching for gpt-4o+ models
   - `PROMPT_CACHE_MODEL_PREFIXES` — tuple of model prefixes supporting prompt caching
   - `EXTENDED_CACHE_MODEL_PREFIXES` — tuple of model prefixes supporting 24h extended retention
-  - `supports_prompt_caching()` — checks model/provider compatibility
+  - `supports_prompt_caching()` — checks model/provider compatibility (OpenAI only, Gemini excluded)
   - `supports_extended_cache_retention()` — checks for 24h retention support
-  - `get_prompt_cache_params()` — returns dict with `prompt_cache_retention` when applicable
+  - `get_prompt_cache_params()` — returns dict with `prompt_cache_retention` and optional `prompt_cache_key` when applicable
   - `_total_cached_tokens` — running counter of cached prompt tokens from `usage.prompt_tokens_details.cached_tokens`
-  - APIConfig fields: `prompt_cache_enabled` (bool, default True), `prompt_cache_retention` (str, "" / "in_memory" / "24h")
+  - `_total_reasoning_tokens` — running counter of reasoning tokens from `usage.completion_tokens_details.reasoning_tokens`
+  - Completion token breakdown: `reasoning_tokens`, `accepted_prediction_tokens`, `rejected_prediction_tokens` extracted from `completion_tokens_details` and logged per-chunk + footer
+  - APIConfig fields: `prompt_cache_enabled` (bool, default True), `prompt_cache_retention` (str, "" / "in_memory" / "24h"), `prompt_cache_key` (str, routing hint for cache slot affinity)
+  - `generate_prompt_cache_key(project_name, created_at)` — builds key as `"{first 5 alpha chars}-{seconds}"` from manifest metadata
+  - `check_static_prompt_cache_status(token_breakdown)` — evaluates static prefix size: "ok" (≥1280 tokens), "suggest" (1024-1279), "warn" (<1024); uses `_STATIC_PROMPT_SECTIONS` frozenset for section classification
   - Logging: per-chunk cached token count, cache hit rate %, savings estimate in footer, CSV summary column
 
 API Logging (TASK 11 + TASK 12 enhancements):
@@ -4057,8 +4094,10 @@ Functions:
   - Returns list of all available model IDs for pricing
 - get_model_display_name(model: str) → str
   - Returns human-readable display name for model
-- estimate_cost(input_tokens, output_tokens, model=None) → Dict
+- estimate_cost(input_tokens, output_tokens, model=None, cached_tokens=0) → Dict
   - Estimates translation cost with input_usd, output_usd, total_usd
+  - When cached_tokens > 0 and model has cached_input pricing, also returns prompt_usd and cached_input_usd
+  - Formula: (input - cached) × input_price + cached × cached_input_price + output × output_price
   - Uses DEFAULT_PRICING_MODEL if model not specified
 - get_all_model_pricing() → Dict
   - Returns complete MODEL_PRICING dictionary

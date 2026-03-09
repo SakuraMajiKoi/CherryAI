@@ -2089,6 +2089,7 @@ class TranslationStep(BaseStep):
         rolling_context_text: str = "",
         chunk_lines: Optional[List[str]] = None,
         merge_instruction: str = "",
+        context_type: str = "",
     ) -> str:
         """Build the system prompt from manifest Information step metadata.
 
@@ -2103,6 +2104,7 @@ class TranslationStep(BaseStep):
                 prompts (only terms present in these lines are included).
             merge_instruction: Optional instruction describing block
                 relatedness for merged requests (Step 5).
+            context_type: Resolved content type for this chunk/request.
 
         Returns:
             Assembled system prompt string.
@@ -2150,6 +2152,7 @@ class TranslationStep(BaseStep):
                 pov_data=pov_data,
                 chunk_lines=chunk_lines,
                 merge_instruction=merge_instruction,
+                context_type=context_type,
             )
 
             if prompt_text:
@@ -3846,6 +3849,14 @@ class TranslationStep(BaseStep):
                 chunk_conditional_block = cond_text.strip()
 
             # Build per-chunk full system prompt with selective filtering
+            # Resolve context type from tags → filedir → fallback
+            from CherryAI.functions.analysis import resolve_chunk_type
+            chunk_line_indices = [line.idx for line in chunk]
+            m_lines = mgr.get_lines() if mgr is not None and mgr.is_loaded else []
+            m_filedir = mgr.get_filedir() if mgr is not None and mgr.is_loaded else []
+            resolved_type = resolve_chunk_type(
+                chunk_line_indices, m_lines, m_filedir,
+            )
             chunk_full_prompt, _ = build_full_system_prompt(
                 metadata=metadata,
                 glossary_entries=glossary_entries,
@@ -3853,6 +3864,7 @@ class TranslationStep(BaseStep):
                 sample_lines=sample_lines,
                 pov_data=pov_data,
                 chunk_lines=filtered_lines,
+                context_type=resolved_type,
             )
 
             # Rolling context preview — show actual orig lines for

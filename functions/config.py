@@ -186,6 +186,7 @@ def estimate_cost(
     input_tokens: int,
     output_tokens: int,
     model: Optional[str] = None,
+    cached_tokens: int = 0,
 ) -> Dict[str, float]:
     """Estimate translation cost for given token counts.
 
@@ -193,17 +194,35 @@ def estimate_cost(
         input_tokens: Number of input tokens.
         output_tokens: Number of output tokens.
         model: Model ID for pricing. Uses DEFAULT_PRICING_MODEL if None.
+        cached_tokens: Number of prompt tokens served from cache.
+            When non-zero and the model has ``cached_input`` pricing,
+            the cost formula splits input into prompt (non-cached) and
+            cached portions.
 
     Returns:
-        Dict with 'input_usd', 'output_usd', 'total_usd'.
+        Dict with 'input_usd', 'output_usd', 'total_usd', and when
+        cached_tokens > 0 also 'prompt_usd' and 'cached_input_usd'.
     """
     import math
 
     pricing = get_model_pricing(model or DEFAULT_PRICING_MODEL)
     input_price = pricing.get("input") or 0.0
     output_price = pricing.get("output") or 0.0
+    cached_input_price = pricing.get("cached_input")
 
-    in_cost = (input_tokens / 1_000_000) * input_price
+    # Clamp cached_tokens to input_tokens
+    effective_cached = min(cached_tokens, input_tokens) if cached_tokens > 0 else 0
+
+    if effective_cached > 0 and cached_input_price is not None:
+        prompt_tokens = input_tokens - effective_cached
+        prompt_cost = (prompt_tokens / 1_000_000) * input_price
+        cached_cost = (effective_cached / 1_000_000) * cached_input_price
+        in_cost = prompt_cost + cached_cost
+    else:
+        prompt_cost = 0.0
+        cached_cost = 0.0
+        in_cost = (input_tokens / 1_000_000) * input_price
+
     out_cost = (output_tokens / 1_000_000) * output_price
 
     def _ceil_to_cents(x: float) -> float:
@@ -214,11 +233,17 @@ def estimate_cost(
     output_usd = _ceil_to_cents(out_cost)
     total_usd = _ceil_to_cents(in_cost + out_cost)
 
-    return {
+    result: Dict[str, float] = {
         "input_usd": round(input_usd, 2),
         "output_usd": round(output_usd, 2),
         "total_usd": round(total_usd, 2),
     }
+
+    if effective_cached > 0 and cached_input_price is not None:
+        result["prompt_usd"] = round(_ceil_to_cents(prompt_cost), 2)
+        result["cached_input_usd"] = round(_ceil_to_cents(cached_cost), 2)
+
+    return result
 
 
 def get_all_model_pricing() -> Dict[str, Dict[str, Any]]:

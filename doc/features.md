@@ -929,7 +929,8 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - Lines/Request spinbox range expanded to 1–99999 to match Model Settings
   - Token counts panel: original vs preprocessed with savings
   - Cost estimate panel with input/output/total breakdown
-  - **Model comparison table** with Price Original, Price Preprocessed, Savings columns
+  - **Prompt Cost** and **Cached Input Cost** sub-rows shown when model supports prompt caching (≥1024 token static prefix). Estimates first-request uncached cost plus remaining-requests cached cost.
+  - **Model comparison table** with Cached $/1M column between Input and Output, plus Price Original, Price Preprocessed, Savings columns
   - **Dual estimation workflow** (Task 40.4):
     - Tracks original_complete and preprocessed_complete states separately
     - Auto-estimation on enter when files loaded
@@ -1655,9 +1656,11 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - **API Section:**
     - Provider dropdown (OpenAI, Gemini, Anthropic, Mistral, Local, Ollama, LM Studio)
     - "Details" button inline with provider dropdown; opens Available Models window from registry cache
-    - Available Models window: filterable model table (Structured/Batch/Thinking filters), "Update" button for live API fetch, "Set as Default" button for per-key default model
+    - Available Models window: filterable model table (Structured/Batch/No-Optional-Thinking/Cached-Input filters), "Update" button for live API fetch, "Set as Default" button for per-key default model, "Save" button to persist filtered model list
     - Gemini model IDs normalized (strips "models/" prefix) for consistent display
-    - Filter checkbox states saved to API.ini (filter_structured, filter_batch, filter_thinking); Structured Output defaults to checked
+    - Filter checkbox states saved to API.ini (filter_structured, filter_batch, filter_thinking, filter_cached); Structured Output defaults to checked
+    - "No / Optional Thinking" filter excludes models that require extended thinking (inverted logic)
+    - "Cached Input" filter keeps only models with cached input pricing
     - API key entry with inline Save button and show/hide toggle
     - Base URL entry (auto-filled from provider)
     - Default model per key: `get_default_model()` / `set_default_model()` in api_config.py (stored as `default_model_{provider}_{name}` in [api] section)
@@ -1843,6 +1846,12 @@ PROMPT CACHING — OpenAI (Implemented)
 - **Configuration:**
   - `prompt_cache_enabled`: Enable/disable (default: true)
   - `prompt_cache_retention`: "" (default), "in_memory", or "24h"
+  - `prompt_cache_key`: Routing hint for cache slot affinity (auto-generated from manifest)
+- **Static Prompt Size Check:**
+  - Evaluates static prefix (slots 1-7b) estimated token count
+  - ≥1280 tokens: "ok" — caching active (80%+)
+  - 1024-1279 tokens: "suggest" — borderline, may benefit from more instructions for more hits
+  - <1024 tokens: "warn" — below minimum, caching will NEVER activate
 
 PROGRESS INDICATORS (Implemented)
 - **CLI Progress:**
@@ -2063,6 +2072,30 @@ CONTEXT MARKERS (Planned)
 - Context Markers are never translated or sent to the LLM
 - When no markers are present, lines are treated as "Unknown" (mixed content)
 - Quality improvement: Appropriate prompt selection per content type
+
+TYPING (Implemented)
+- Classifies source files and individual lines by content type (dialogue, menu, choice)
+- Enables per-request prompt selection based on content type
+- **File-level classification** (`functions/analysis.py: classify_file_type()`):
+  - Uses `detect_speaker()` with 10% threshold
+  - >10% speakers → "dialogue"; ≤10% ≥2 → "menu?"; 0 → "menu"
+  - Runs during `_sync_lines_to_manifest()` when typing is enabled
+  - Result stored in `FileDirEntry.type` field
+- **Line-level tagging** (Preview context menu):
+  - Users can tag individual lines as Dialogue, Menu, or Choice via right-click
+  - Tags stored in `LineEntry.tags` field; displayed in Preview tags column
+- **Type resolution** (`functions/analysis.py: resolve_chunk_type()`):
+  - Priority chain: per-line tags > filedir type > "unknown"
+  - Resolves per API request chunk at translation time
+- **Prompt injection** (slot 7b in `build_full_system_prompt()`):
+  - Context-type prompt injected as static cacheable content before the cache boundary
+  - Pattern-triggered prompts remain dynamic in slot 8
+- **GUI controls:**
+  - Typing Enabled toggle in UnifiedInputDialog options panel
+  - Sort combobox (Filetree / Count / Type) above Loaded Files tree
+  - Type column in file tree; Select Type cascade in file context menu
+  - Search bar and Tags column in Preview tree
+- **INI setting:** `[session] typing_enabled` (bool, default True)
 
 PARSER SCRIPTS (Implemented)
 - Game-engine-specific scripts that extend the format system with engine-aware logic

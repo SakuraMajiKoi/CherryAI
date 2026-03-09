@@ -418,14 +418,17 @@ The system prompt is assembled in the following fixed order. Empty sections are 
 | 5 | **Summary** | `metadata.summary` | Gated by `summary_enabled` (default: **false**) |
 | 6 | **Genre** | `metadata.genre` (fallback: top-level `Genre`) | Gated by `genre_enabled` (default: **false**) |
 | 7 | **POV** | `manifest POV` dict (`pov`, `confidence`) | Skip when confidence ≠ "high" **or** when slot 4b has narration |
-| 8 | **Conditional Prompts** | `user/CherryAI.ini [prompts]` + `[pattern_prompts]` or `user/conditional_prompts.json` | Selective — injected only when [Input Lines] contain the trigger pattern. Context-type + 9 pattern-triggered prompts (configurable in Global Options) |
+| 7b | **Context-Type Prompt** | `resolve_chunk_type()` → `get_context_prompt()` | Resolved from per-line tags → filedir type → "unknown" fallback. Static, cacheable. |
+| | **— cache boundary —** | | Everything above is cacheable; everything below varies per chunk |
+| 8 | **Pattern-Triggered Prompts** | `user/CherryAI.ini [pattern_prompts]` or `user/conditional_prompts.json` | Selective — injected only when [Input Lines] contain the trigger pattern. 9 built-in pattern-triggered prompts (configurable in Global Options) |
 | 8b | **Merged-Request Instruction** | `_merge_boundaries` from formation | Efficient mode only — describes block relatedness for Step 5 merged requests |
 | 9 | **Glossary** | Manifest `Glossary` + `user/globalglossary.tsv` + `metadata.characters` | Gated by `glossary_enabled` (default: **true**); selective — rows injected only when Original found in [Input Lines] |
 | 10 | **Rolling Context** | Preceding translated lines from manifest | Conditional — dialogue/unknown requests only; disabled for Menu/Choice |
 | 11 | **Input Lines** | Manifest `lines[].prepro` (fallback: `orig`) | Always present |
 
 **Notes on ordering:**
-- Slots 1-7 are non-selective (included when non-empty regardless of line content)
+- Slots 1-7b are non-selective (included when non-empty regardless of line content)
+- Slot 7b resolves the content type via priority chain: per-line tags > filedir type > "unknown"
 - POV (slot 7) maps "1st"→"first person", "2nd"→"second person", "3rd"→"third person"
 - Slot 4b format: `Protagonist: {Original} - {Translation} ({Details})\nNarration: {1st/2nd/3rd/Mixed} View`
 - When slot 4b is present, slot 7 (POV) is skipped to avoid duplication
@@ -439,18 +442,23 @@ The system prompt is assembled in the following fixed order. Empty sections are 
 
 OpenAI automatically caches identical prompt prefixes (≥1024 tokens) across API requests. The injection order above is designed to maximise cache efficiency:
 
-- **Static prefix** (slots 1-7): Language, System Instructions, Style, Tone, Protagonist, Summary, Genre, POV — identical for every chunk within a project. This prefix is the cacheable portion.
-- **Dynamic suffix** (slots 8-10): Conditional Prompts, Glossary, Rolling Context — vary per chunk and are not cached.
+- **Static prefix** (slots 1-7b): Language, System Instructions, Style, Tone, Protagonist, Summary, Genre, POV, Context-Type Prompt — semi-identical for every chunk within a project. This prefix is the cacheable portion.
+- **Dynamic suffix** (slots 8-10): Pattern-Triggered Prompts, Glossary, Rolling Context — vary per chunk and are not cached.
 
 **Extended retention**: Models prefixed with `gpt-4.1` or `gpt-5` support 24-hour cache retention via the `prompt_cache_retention` API parameter (value `"24h"`). Other supported models (gpt-4o, o1, o3, chatgpt-4o) use default in-memory retention (5-10 minutes).
 
-**Implementation**: `APIClient.get_prompt_cache_params()` in `functions/api_client.py` returns the appropriate parameters. Cached tokens are tracked via `usage.prompt_tokens_details.cached_tokens` in the API response.
+**Implementation**: `APIClient.get_prompt_cache_params()` in `functions/api_client.py` returns the appropriate parameters. `supports_prompt_caching()` checks model and provider (OpenAI only; Gemini excluded). Cached tokens are tracked via `usage.prompt_tokens_details.cached_tokens` in the API response. Completion token breakdown (reasoning, predictions) tracked via `completion_tokens_details`.
+
+**Cache key generation**: `generate_prompt_cache_key(project_name, created_at)` builds a semi-unique routing hint from manifest metadata. Format: `"{first 5 alpha chars}-{seconds}"`.
+
+**Static prompt size check**: `check_static_prompt_cache_status(token_breakdown)` evaluates whether the static prefix is large enough for caching: "ok" (≥1280 tokens), "suggest" (1024-1279), "warn" (<1024).
 
 **Configuration** (APIConfig fields):
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `prompt_cache_enabled` | bool | true | Enable prompt caching support |
 | `prompt_cache_retention` | str | "" | Retention mode: "", "in_memory", or "24h" |
+| `prompt_cache_key` | str | "" | Routing hint for cache slot affinity |
 
 #### Request Size
 
@@ -1115,10 +1123,10 @@ When `auto_inference` is enabled (Global Option), the pipeline offers several in
 - `encoding: str` - Default encoding override if user-supplied
 - *(TASK 71)* `all_lines` no longer stored — access via `mgr.get_all_orig_lines()` or `lines[].orig`
 - `loaded_files: List[LoadedFile]` - File metadata objects
-- `file_dir: List[FileDirEntry]` - Index ranges per file (for output injection)
+- `file_dir: List[FileDirEntry]` - Index ranges per file (for output injection). Each entry includes a `type` field (``dialogue``, ``menu?``, ``menu``, or ``""``).
 
 **Stored In**:
-- Manifest: `source_root` (folder name), `file_dir[]`, `lines[].orig`
+- Manifest: `source_root` (folder name), `file_dir[]`, `lines[].orig`, `lines[].tag` (optional per-line type tag)
 - Manifest step data: `Input.file_count`, `Input.total_lines`, `Input.formats`
 
 #### Step Completion
@@ -1133,11 +1141,13 @@ When `auto_inference` is enabled (Global Option), the pipeline offers several in
 
 | Action | Effect |
 |--------|--------|
-| Click Select File(s) | Opens unified file/folder picker dialog |
+| Click Select File(s) | Opens unified file/folder picker dialog with Typing Enabled toggle |
 | Select item in File Tree | Shows preview of that file's content |
-| Right-click File Tree | Context menu: Remove Selected, Select All |
+| Right-click File Tree | Context menu: Remove Selected, Select All, Select Type (Dialogue/Menu/Mixed) |
 | Multi-select + Delete | Removes all selected files |
-| Collapse/Expand folder | Toggles folder visibility in tree |
+| Sort spinbox (Filetree/Count/Type) | Controls file tree display order |
+| Right-click Preview line | Context menu: Set Tag (Dialogue/Menu/Choice/Clear) for selected lines |
+| Preview search box | Filters preview lines by text content |
 
 #### Format Handler Integration
 
@@ -1541,10 +1551,10 @@ The Analysis step is functional and provides valuable information. Phase 59 adds
 | Token Grid | Frame | Shows Original, Preprocessed, and Saved columns for Lines, Input Tokens, Output Tokens |
 | Prompt Overhead Label | Label | Shows total and average prompt overhead per request (per-request selective filtering) |
 | **Cost Estimate Panel** | LabelFrame | Display cost projection |
-| Cost Labels | Labels | Input cost, Output cost, Total cost for selected model |
+| Cost Labels | Labels | Input cost (with Prompt Cost and Cached Input Cost sub-rows when model supports caching), Output cost, Total cost for selected model |
 | **Time Estimate Panel** | LabelFrame | Display time projection |
 | Time Labels | Labels | Estimated duration accounting for rate limits and concurrent requests |
-| **Model Comparison Table** | SharedTable | Compare all available models |
+| **Model Comparison Table** | SharedTable | Compare all available models (includes Cached $/1M column) |
 | **Bottom Panel** | Frame | Actions and status (future enhancements) |
 
 #### Options Panel Details

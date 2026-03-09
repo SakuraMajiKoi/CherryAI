@@ -947,6 +947,7 @@ def build_full_system_prompt(
     chunk_lines: Optional[List[str]] = None,
     code_patterns: Optional[List[Dict[str, Any]]] = None,
     merge_instruction: str = "",
+    context_type: str = "",
 ) -> Tuple[str, Dict[str, int]]:
     """Build the full system prompt following spec §5.2 injection order.
 
@@ -963,7 +964,9 @@ def build_full_system_prompt(
         5. Summary
         6. Genre
         7. POV (narrative perspective) — skipped when 4b has narration
-        8. Conditional Prompts (selective per-chunk)
+        7b. Context-type prompt (static, cacheable)
+        --- cache boundary ---
+        8. Pattern-triggered conditional prompts (dynamic per-chunk)
         8b. Merged-request instruction (Efficient mode Step 5)
         9. Glossary + Characters (selective per-chunk)
         10. Rolling Context (conditional)
@@ -994,6 +997,9 @@ def build_full_system_prompt(
         merge_instruction: Instruction text describing block relatedness
             for merged requests (Step 5 Efficient mode).  Injected as
             §5.2 item 8b.
+        context_type: Resolved content type for this chunk/request
+            (``"dialogue"``, ``"menu"``, ``"choice"``, or ``""``).
+            Injected as §5.2 item 7b (static, cacheable).
 
     Returns:
         Tuple of (assembled_prompt, token_breakdown) where
@@ -1098,7 +1104,16 @@ def build_full_system_prompt(
                 f"throughout.",
             )
 
-    # --- 8. Conditional Prompts (selective per-chunk) ---
+    # --- 7b. Context-type prompt (static, cacheable) ---
+    if context_type:
+        from CherryAI.functions.prompt_builder import get_context_prompt
+        ctx_prompt = get_context_prompt(context_type)
+        if ctx_prompt:
+            _add("context_type", ctx_prompt.strip())
+
+    # --- cache boundary (everything above is static/cacheable) ---
+
+    # --- 8. Pattern-triggered conditional prompts (dynamic per-chunk) ---
     cond_lines = chunk_lines if chunk_lines is not None else (sample_lines or [])
     if cond_lines:
         cond_text, _ = build_conditional_instructions(

@@ -20,6 +20,8 @@ from tkinter import ttk
 from CherryAI.gui.dialogs.loading_progress import LoadingProgressDialog
 from CherryAI.gui.dialogs.input_dialog import UnifiedInputDialog
 
+from CherryAI.functions.analysis import classify_file_type
+from CherryAI.functions.ini_manager import get_default
 from CherryAI.gui.steps.base import BaseStep
 from CherryAI.gui.theme.colors import THEME
 
@@ -231,6 +233,21 @@ class InputExtractionStep(BaseStep):
         left_frame = ttk.LabelFrame(content, text="Loaded Files")
         content.add(left_frame, weight=1)
 
+        # Sort control row
+        sort_frame = ttk.Frame(left_frame)
+        sort_frame.pack(fill="x", padx=5, pady=(5, 0))
+        ttk.Label(sort_frame, text="Sort:").pack(side="left")
+        self._sort_var = tk.StringVar(value="Filetree")
+        sort_cb = ttk.Combobox(
+            sort_frame,
+            textvariable=self._sort_var,
+            values=["Filetree", "Count", "Type"],
+            width=8,
+            state="readonly",
+        )
+        sort_cb.pack(side="left", padx=(5, 0))
+        sort_cb.bind("<<ComboboxSelected>>", lambda e: self._update_file_list())
+
         # File listbox with scrollbar
         list_frame = ttk.Frame(left_frame)
         list_frame.pack(fill="both", expand=True, padx=5, pady=5)
@@ -238,13 +255,15 @@ class InputExtractionStep(BaseStep):
         # TASK 39.4: Treeview with collapsible folder hierarchy replaces flat Listbox
         self._file_tree = ttk.Treeview(
             list_frame,
-            columns=("lines",),
+            columns=("type", "lines"),
             show="tree headings",
             selectmode="extended",
         )
         self._file_tree.heading("#0", text="Name", anchor="w")
+        self._file_tree.heading("type", text="Type", anchor="w")
         self._file_tree.heading("lines", text="Lines", anchor="e")
-        self._file_tree.column("#0", width=200, stretch=True)
+        self._file_tree.column("#0", width=180, stretch=True)
+        self._file_tree.column("type", width=70, stretch=False)
         self._file_tree.column("lines", width=60, stretch=False)
         self._file_tree.pack(side="left", fill="both", expand=True)
         self._file_tree.bind("<<TreeviewSelect>>", self._on_file_select)
@@ -269,12 +288,21 @@ class InputExtractionStep(BaseStep):
             label="Select All", command=self._on_select_all_files,
         )
         self._file_context_menu.add_separator()
-        self._file_context_menu.add_command(
-            label="Expand All", command=self._on_expand_all_tree,
+        # "Select Type" submenu for typing
+        type_menu = tk.Menu(self._file_context_menu, tearoff=0)
+        type_menu.add_command(
+            label="Dialogue",
+            command=lambda: self._set_selected_file_type("dialogue"),
         )
-        self._file_context_menu.add_command(
-            label="Collapse All", command=self._on_collapse_all_tree,
+        type_menu.add_command(
+            label="Menu",
+            command=lambda: self._set_selected_file_type("menu"),
         )
+        type_menu.add_command(
+            label="Mixed",
+            command=lambda: self._set_selected_file_type("mixed"),
+        )
+        self._file_context_menu.add_cascade(label="Select Type", menu=type_menu)
         self._file_tree.bind("<Button-3>", self._on_file_listbox_right_click)
 
         file_scroll = ttk.Scrollbar(
@@ -289,11 +317,24 @@ class InputExtractionStep(BaseStep):
         right_frame = ttk.LabelFrame(content, text="Preview")
         content.add(right_frame, weight=3)
 
+        # Search bar for preview filtering
+        search_frame = ttk.Frame(right_frame)
+        search_frame.pack(fill="x", padx=5, pady=(5, 0))
+        ttk.Label(search_frame, text="Search:").pack(side="left")
+        self._preview_search_var = tk.StringVar()
+        self._preview_search_var.trace_add(
+            "write", lambda *_a: self._update_preview(),
+        )
+        search_entry = ttk.Entry(
+            search_frame, textvariable=self._preview_search_var, width=30,
+        )
+        search_entry.pack(side="left", fill="x", expand=True, padx=(5, 0))
+
         # Preview Treeview
         preview_frame = ttk.Frame(right_frame)
         preview_frame.pack(fill="both", expand=True, padx=5, pady=5)
 
-        columns = ("line", "content")
+        columns = ("line", "content", "tags")
         self._preview_tree = ttk.Treeview(
             preview_frame,
             columns=columns,
@@ -302,9 +343,33 @@ class InputExtractionStep(BaseStep):
         )
         self._preview_tree.heading("line", text="#", anchor="w")
         self._preview_tree.heading("content", text="Content", anchor="w")
+        self._preview_tree.heading("tags", text="Tags", anchor="w")
         self._preview_tree.column("line", width=60, stretch=False)
-        self._preview_tree.column("content", width=600, stretch=True)
+        self._preview_tree.column("content", width=500, stretch=True)
+        self._preview_tree.column("tags", width=80, stretch=False)
         self._preview_tree.pack(side="left", fill="both", expand=True)
+
+        # Preview right-click context menu for tag editing
+        self._preview_context_menu = tk.Menu(self._preview_tree, tearoff=0)
+        tag_menu = tk.Menu(self._preview_context_menu, tearoff=0)
+        tag_menu.add_command(
+            label="Dialogue",
+            command=lambda: self._set_selected_line_tag("dialogue"),
+        )
+        tag_menu.add_command(
+            label="Menu",
+            command=lambda: self._set_selected_line_tag("menu"),
+        )
+        tag_menu.add_command(
+            label="Choice",
+            command=lambda: self._set_selected_line_tag("choice"),
+        )
+        tag_menu.add_command(
+            label="Clear",
+            command=lambda: self._set_selected_line_tag(""),
+        )
+        self._preview_context_menu.add_cascade(label="Set Tag", menu=tag_menu)
+        self._preview_tree.bind("<Button-3>", self._on_preview_right_click)
 
         preview_scroll = ttk.Scrollbar(
             preview_frame,
@@ -967,6 +1032,14 @@ class InputExtractionStep(BaseStep):
         if mgr is None or not mgr.is_loaded:
             return
         
+        # Determine whether typing is enabled
+        typing_enabled = get_default(
+            "session", "typing_enabled", True, bool,
+        )
+        # Block typing when only one file loaded
+        if len(self._loaded_files) <= 1:
+            typing_enabled = False
+        
         # Collect all lines (compact: idx + orig only)
         lines: List[Dict[str, Any]] = []
         file_infos: List[Dict[str, Any]] = []
@@ -981,12 +1054,18 @@ class InputExtractionStep(BaseStep):
                 })
                 idx += 1
             
+            # Classify file type when typing is enabled
+            file_type = ""
+            if typing_enabled:
+                file_type = classify_file_type(loaded_file.lines)
+            
             # Build file info for filedir
             file_infos.append({
                 "path": str(loaded_file.path),
                 "format": loaded_file.format_id,
                 "line_count": loaded_file.line_count,
                 "encoding": loaded_file.encoding,
+                "type": file_type,
             })
         
         # Update manifest with lines
@@ -1174,10 +1253,14 @@ class InputExtractionStep(BaseStep):
         )
 
     def _on_file_listbox_right_click(self, event: tk.Event) -> None:
-        """Handle right-click on file tree to show context menu."""
+        """Handle right-click on file tree to show context menu.
+
+        Preserves multiselect: only changes selection when the clicked
+        row is not already part of the current selection.
+        """
         try:
             item = self._file_tree.identify_row(event.y)
-            if item:
+            if item and item not in self._file_tree.selection():
                 self._file_tree.selection_set(item)
             self._file_context_menu.tk_popup(event.x_root, event.y_root)
         finally:
@@ -1209,6 +1292,43 @@ class InputExtractionStep(BaseStep):
         all_file_items = list(self._tree_item_to_index.keys())
         if all_file_items:
             self._file_tree.selection_set(all_file_items)
+
+    def _set_selected_file_type(self, new_type: str) -> None:
+        """Set the type of all selected file(s) in the filedir.
+
+        Updates both the manifest filedir entry and the tree display.
+
+        Args:
+            new_type: One of ``"dialogue"``, ``"menu"``, or ``"mixed"``.
+        """
+        selection = self._file_tree.selection()
+        if not selection:
+            return
+
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            return
+
+        filedir = mgr.get_filedir()
+
+        for item_id in selection:
+            # Resolve file indices (folders → all children)
+            file_idx = self._tree_item_to_index.get(item_id)
+            if file_idx is not None:
+                indices = [file_idx]
+            else:
+                indices = [
+                    self._tree_item_to_index[c]
+                    for c in self._file_tree.get_children(item_id)
+                    if c in self._tree_item_to_index
+                ]
+
+            for idx in indices:
+                if 0 <= idx < len(filedir):
+                    filedir[idx].type = new_type
+
+        mgr.set_filedir(filedir)
+        self._update_file_list()
 
     def _on_expand_all_tree(self) -> None:
         """Expand all folders in the tree (PHASE 58.7)."""
@@ -1754,6 +1874,9 @@ class InputExtractionStep(BaseStep):
         by a two-phase approach:
         1. First, collect all unique folder paths and create folder nodes
         2. Then, insert files under their respective parent nodes
+        
+        Typing: Adds type column from filedir entries. Sort spinbox
+        controls display order (Filetree / Count / Type).
         """
         # Clear existing tree
         for item in self._file_tree.get_children():
@@ -1764,47 +1887,66 @@ class InputExtractionStep(BaseStep):
         step_data = self.get_step_data()
         source_status = step_data.get("source_files_status", {})
 
+        # Build index→type map from manifest filedir
+        type_map: Dict[int, str] = {}
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            for idx, entry in enumerate(mgr.get_filedir()):
+                type_map[idx] = entry.type
+
+        sort_mode = getattr(self, "_sort_var", None)
+        sort_key = sort_mode.get() if sort_mode else "Filetree"
+
         # Build folder → tree item ID mapping for hierarchy
         folder_items: Dict[str, str] = {}
 
         # PHASE 58.7: Two-phase approach to ensure folders appear before files
         # Phase 1: Collect all unique folder paths from all files
         all_folders: set = set()
-        file_display_data: List[Tuple[str, int, 'LoadedFile']] = []  # (display_name, index, file)
-        
+        file_display_data: List[Tuple[str, int, 'LoadedFile']] = []
+
         for i, file in enumerate(self._loaded_files):
             display_name = self._get_display_name(file.path)
             parts = display_name.replace("\\", "/").split("/")
-            
+
             # Collect all parent folder paths
             for depth in range(1, len(parts)):
                 folder_path = "/".join(parts[:depth])
                 all_folders.add(folder_path)
-            
+
             file_display_data.append((display_name, i, file))
-        
+
+        # Apply sort
+        if sort_key == "Count":
+            file_display_data.sort(key=lambda x: x[2].line_count, reverse=True)
+        elif sort_key == "Type":
+            file_display_data.sort(key=lambda x: type_map.get(x[1], ""))
+        else:
+            # Filetree: alphabetical by display name (default)
+            file_display_data.sort(key=lambda x: x[0].lower())
+
         # Phase 2: Create all folder nodes first (sorted alphabetically)
-        # This ensures folders appear before files at each level
-        sorted_folders = sorted(all_folders, key=str.lower)
-        for folder_path in sorted_folders:
-            parts = folder_path.split("/")
-            parent = ""
-            for depth, folder_name in enumerate(parts):
-                folder_key = "/".join(parts[:depth + 1])
-                if folder_key not in folder_items:
-                    # Create folder node - collapsed by default (open=False)
-                    folder_id = self._file_tree.insert(
-                        parent, "end", text=f"📂 {folder_name}", open=False,
-                    )
-                    folder_items[folder_key] = folder_id
-                parent = folder_items[folder_key]
-        
-        # Phase 3: Insert all files under their parent folders (sorted alphabetically)
-        sorted_files = sorted(file_display_data, key=lambda x: x[0].lower())
-        
-        for display_name, i, file in sorted_files:
+        # Only for Filetree sort – flat list for Count/Type sorts
+        use_folders = sort_key == "Filetree"
+
+        if use_folders:
+            sorted_folders = sorted(all_folders, key=str.lower)
+            for folder_path in sorted_folders:
+                parts = folder_path.split("/")
+                parent = ""
+                for depth, folder_name in enumerate(parts):
+                    folder_key = "/".join(parts[:depth + 1])
+                    if folder_key not in folder_items:
+                        folder_id = self._file_tree.insert(
+                            parent, "end", text=f"📂 {folder_name}", open=False,
+                        )
+                        folder_items[folder_key] = folder_id
+                    parent = folder_items[folder_key]
+
+        # Phase 3: Insert all files
+        for display_name, i, file in file_display_data:
             parts = display_name.replace("\\", "/").split("/")
-            
+
             # Determine status tag for coloring
             file_path_str = str(file.path)
             status = source_status.get(
@@ -1817,23 +1959,23 @@ class InputExtractionStep(BaseStep):
                 tags = ("recoverable",)
             elif status == "missing":
                 tags = ("missing",)
-            
-            # Determine parent based on folder path
-            if len(parts) > 1:
-                # File is inside subfolder(s): find parent folder node
+
+            file_type = type_map.get(i, "")
+
+            if use_folders and len(parts) > 1:
                 parent_folder_path = "/".join(parts[:-1])
                 parent = folder_items.get(parent_folder_path, "")
                 item_id = self._file_tree.insert(
                     parent, "end", text=f"📄 {parts[-1]}",
-                    values=(file.line_count,), tags=tags,
+                    values=(file_type, file.line_count), tags=tags,
                 )
             else:
-                # File at root level
+                label = parts[-1] if use_folders else display_name
                 item_id = self._file_tree.insert(
-                    "", "end", text=f"📄 {display_name}",
-                    values=(file.line_count,), tags=tags,
+                    "", "end", text=f"📄 {label}",
+                    values=(file_type, file.line_count), tags=tags,
                 )
-            
+
             self._tree_item_to_index[item_id] = i
 
         # Configure tag colors
@@ -1861,7 +2003,11 @@ class InputExtractionStep(BaseStep):
         return file_path.name
 
     def _update_preview(self) -> None:
-        """Update the preview table for current file."""
+        """Update the preview table for current file.
+
+        Supports search filtering via ``_preview_search_var`` and shows
+        per-line tags from the manifest.
+        """
         # Clear existing
         for item in self._preview_tree.get_children():
             self._preview_tree.delete(item)
@@ -1871,23 +2017,102 @@ class InputExtractionStep(BaseStep):
 
         file = self._loaded_files[self._current_file_index]
 
+        # Determine the global start index for this file from filedir
+        global_offset = 0
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            filedir = mgr.get_filedir()
+            if self._current_file_index < len(filedir):
+                global_offset = filedir[self._current_file_index].first_idx
+
+        # Build line-level tag map from manifest
+        tag_map: Dict[int, str] = {}
+        if mgr is not None and mgr.is_loaded:
+            all_lines = mgr.get_lines()
+            for line_data in all_lines:
+                idx = line_data.get("idx", -1)
+                line_tag = line_data.get("tag", "")
+                if line_tag:
+                    tag_map[idx] = line_tag
+
+        # Optional search filter
+        search_text = ""
+        if hasattr(self, "_preview_search_var"):
+            search_text = self._preview_search_var.get().strip().lower()
+
         # Show first 1000 lines (for performance)
         max_preview = 1000
-        for i, line in enumerate(file.lines[:max_preview]):
-            # TASK 39.5: Replace newlines with visible markers for multi-line content
-            display_line = line.replace("\r\n", "↵").replace("\n", "↵").replace("\r", "↵")
-            self._preview_tree.insert(
-                "",
-                "end",
-                values=(i + 1, display_line),
+        shown = 0
+        for i, line in enumerate(file.lines):
+            if shown >= max_preview:
+                break
+
+            # TASK 39.5: Replace newlines with visible markers
+            display_line = (
+                line.replace("\r\n", "↵").replace("\n", "↵").replace("\r", "↵")
             )
 
-        if len(file.lines) > max_preview:
+            if search_text and search_text not in display_line.lower():
+                continue
+
+            global_idx = global_offset + i
+            line_tag = tag_map.get(global_idx, "")
             self._preview_tree.insert(
                 "",
                 "end",
-                values=("...", f"(+{len(file.lines) - max_preview} more lines)"),
+                iid=str(global_idx),
+                values=(i + 1, display_line, line_tag),
             )
+            shown += 1
+
+        remaining = len(file.lines) - shown
+        if remaining > 0:
+            self._preview_tree.insert(
+                "",
+                "end",
+                values=("...", f"(+{remaining} more lines)", ""),
+            )
+
+    def _on_preview_right_click(self, event: tk.Event) -> None:
+        """Handle right-click on preview tree for tag editing.
+
+        Preserves multiselect when clicking on an already-selected row.
+        """
+        try:
+            item = self._preview_tree.identify_row(event.y)
+            if item and item not in self._preview_tree.selection():
+                self._preview_tree.selection_set(item)
+            self._preview_context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self._preview_context_menu.grab_release()
+
+    def _set_selected_line_tag(self, tag: str) -> None:
+        """Set the tag for all selected lines in the manifest.
+
+        Args:
+            tag: One of ``"dialogue"``, ``"menu"``, ``"choice"``, or ``""``
+                 (clear).
+        """
+        selection = self._preview_tree.selection()
+        if not selection:
+            return
+
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            return
+
+        all_lines = mgr.get_lines()
+        idx_set = {int(iid) for iid in selection if iid.isdigit()}
+
+        for line_data in all_lines:
+            if line_data.get("idx") in idx_set:
+                if tag:
+                    line_data["tag"] = tag
+                else:
+                    line_data.pop("tag", None)
+
+        mgr.set_lines(all_lines)
+        self._update_preview()
 
     def _update_summary(self) -> None:
         """Update the summary bar."""

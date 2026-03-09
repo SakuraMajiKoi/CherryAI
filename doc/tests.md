@@ -1136,6 +1136,56 @@ Tests for FileDirEntry dataclass, filedir operations, Original/ copy, and Patch/
 
 ---
 
+### dev/test_typing_feature.py (24 tests) - Typing Feature
+
+Tests for the Typing feature: file type classification, type resolution, prompt injection.
+
+#### TestFileDirEntryType (7 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_default_type_is_empty` | FileDirEntry type defaults to "" |
+| `test_to_dict_omits_empty_type` | Sparse format omits empty type |
+| `test_to_dict_includes_nonempty_type` | Non-empty type serialized |
+| `test_to_dict_type_before_first_idx` | type field appears before first_idx |
+| `test_from_dict_reads_type` | from_dict restores type value |
+| `test_from_dict_missing_type_defaults_empty` | Missing type defaults to "" |
+| `test_roundtrip` | to_dict + from_dict roundtrip |
+
+#### TestClassifyFileType (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_empty_lines_returns_menu` | No lines → "menu" |
+| `test_no_speakers_returns_menu` | No speakers → "menu" |
+| `test_above_10pct_returns_dialogue` | >10% speakers → "dialogue" |
+| `test_exactly_10pct_returns_menu_question` | ≤10% ≥2 speakers → "menu?" |
+| `test_one_speaker_returns_menu` | 1 speaker → "menu" |
+| `test_all_speakers_returns_dialogue` | 100% speakers → "dialogue" |
+
+#### TestResolveChunkType (7 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_empty_indices_returns_unknown` | No indices → "unknown" |
+| `test_tags_take_priority_over_filedir` | Tags override filedir type |
+| `test_majority_tag_wins` | Most common tag wins |
+| `test_filedir_used_when_no_tags` | Falls back to filedir type |
+| `test_mixed_filedir_types` | Multiple file types → "mixed" |
+| `test_no_tags_no_filedir_returns_unknown` | No type info → "unknown" |
+| `test_lines_with_empty_tag_are_ignored` | Empty tags don't count |
+
+#### TestBuildFullSystemPromptContextType (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_context_type_appears_after_pov` | Context-type in breakdown after POV |
+| `test_empty_context_type_omits_section` | Empty type → no section |
+| `test_unknown_context_type_omits_section` | Invalid type → no section |
+| `test_dialogue_context_type_adds_content` | "dialogue" → non-empty section |
+
+---
+
 ### dev/test_manifest_v32.py (35 tests) - TASK 38
 
 TASK 38: Manifest v3.2 optimization with source_root and compact line format.
@@ -2893,7 +2943,7 @@ Thank you.
 | test_options.py | 29 | Options dialog & API config |
 | test_partial_translation.py | 18 | Partial translation mode (TASK 9) |
 | test_postprocess.py | 79 | Post-process recovery suite |
-| test_prompt_caching.py | 58 | Prompt caching (ordering, model detection, token tracking) |
+| test_prompt_caching.py | 103 | Prompt caching (ordering, model detection, token tracking, filter logic, cached input column, reasoning/prediction logging, cache key generation, static prompt size check, cost estimation with cached input) |
 | test_project_config.py | 19 | Project configuration |
 | test_quote_stripping.py | 33 | Quote stripping modes |
 | test_rate_limiter.py | 70 | Rate limiting system |
