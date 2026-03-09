@@ -285,7 +285,7 @@ def detect_code_terms(
 ) -> List[ConsistencyTerm]:
     """Detect consistency terms from the Code Database.
 
-    Scans code patterns for entries with action='translate'.
+    Scans code patterns for entries with action='provides_context'.
 
     Args:
         code_patterns: List of code pattern dicts (from manifest).
@@ -298,7 +298,7 @@ def detect_code_terms(
         if not isinstance(pat, dict):
             continue
         action = str(pat.get("action", "preserve")).lower()
-        if action != "translate":
+        if action != "provides_context":
             continue
         original = str(pat.get("pattern", "")).strip()
         if not original:

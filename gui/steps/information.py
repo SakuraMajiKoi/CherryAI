@@ -159,7 +159,8 @@ class CodePattern:
         pattern: The code pattern regex or string.
         translation: Translated term for this pattern.
         category: Category like 'RPG Maker Variable', 'Ruby Code', etc.
-        action: How to handle: 'preserve', 'translate', 'remove'.
+        action: How to handle: 'preserve', 'provides_context', 'custom_placeholder',
+            'protect', 'strip_with_anchor', 'part_of_span'.
         example: Example occurrence from the source text.
         notes: User notes about this pattern.
         count: Total occurrence count from analysis.
@@ -216,11 +217,19 @@ class CodePattern:
         else:
             count = int(count_val)
             instance_counts = []
+        # Migrate legacy action values
+        raw_action = data.get("action", "preserve")
+        if raw_action == "remove":
+            raw_action = "preserve"
+        elif raw_action == "translate":
+            raw_action = "provides_context"
+        elif raw_action == "replace":
+            raw_action = "protect"
         return cls(
             pattern=data.get("pattern", ""),
             translation=data.get("translation", ""),
             category=data.get("category", ""),
-            action=data.get("action", "preserve"),
+            action=raw_action,
             example=data.get("example", ""),
             notes=data.get("notes", ""),
             count=count,
@@ -3736,7 +3745,8 @@ class InformationStep(BaseStep):
                                      ["code", "variable", "control", "tag", "markup", "other"])
         elif col_key == "action":
             self._show_code_dropdown(item, col_key, pattern, x, y, width, height,
-                                     ["preserve", "translate", "remove", "replace"])
+                                     ["preserve", "provides_context", "custom_placeholder",
+                                      "protect", "strip_with_anchor", "part_of_span"])
         else:
             # Text entry for pattern
             entry = ttk.Entry(self._code_tree)
@@ -5600,7 +5610,10 @@ class CodePatternDialog(tk.Toplevel):
     """Dialog for adding/editing code pattern information (TASK 18.5)."""
 
     # Common code pattern actions
-    ACTIONS = ["preserve", "translate", "remove"]
+    ACTIONS = [
+        "preserve", "provides_context", "custom_placeholder",
+        "protect", "strip_with_anchor", "part_of_span",
+    ]
 
     # Common code pattern categories
     CATEGORIES = [

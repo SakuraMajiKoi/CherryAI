@@ -319,6 +319,49 @@ CONDITION_SPEAKER_FORMAT = ConditionalPrompt(
     },
 )
 
+# Code Context — triggered when code_patterns have action='provides_context'
+CONDITION_CODE_CONTEXT = ConditionalPrompt(
+    name="code_context",
+    description="Code patterns providing translation context",
+    patterns=[
+        r"<[^/>][^>]*>",         # angle bracket tags (non-closing)
+        r"\[[^\]]+\]",           # square bracket codes
+        r"\{[^}]+\}",           # curly bracket codes
+        r"\\[a-zA-Z]+\[.*?\]",  # escape-code patterns
+    ],
+    instruction=(
+        "Some code patterns in this text provide context for the translation. "
+        "Use them to understand meaning but preserve them exactly as-is in output."
+    ),
+    priority=65,
+    category="code",
+    pattern_examples={
+        r"<[^/>][^>]*>": "<文字色 255 221 167>",
+        r"\[[^\]]+\]": "[character_name]",
+    },
+)
+
+# Span Content — triggered when code_patterns have action='part_of_span'
+CONDITION_SPAN_CONTENT = ConditionalPrompt(
+    name="span_content",
+    description="Paired span tags wrapping translatable content",
+    patterns=[
+        r"<[^/>][^>]*>.*?</[^>]*>",  # <tag>...</tag> or <tag>...</>
+        r"<[^/>][^>]*>.*?</>",       # <tag>...</>
+    ],
+    instruction=(
+        "Some code patterns form paired spans (opening + closing tags) around "
+        "translatable text. Translate the text between the tags but preserve "
+        "the tags themselves exactly."
+    ),
+    priority=64,
+    category="code",
+    pattern_examples={
+        r"<[^/>][^>]*>.*?</[^>]*>": "<b>bold text</b>",
+        r"<[^/>][^>]*>.*?</>": "<文字色 255 0 0>red text</>",
+    },
+)
+
 
 # ============================================================================
 # Merged Request Instruction (Step 5 — Efficient Mode)
@@ -407,6 +450,8 @@ BUILTIN_CONDITIONS: List[ConditionalPrompt] = [
     CONDITION_RUBY,
     CONDITION_ELLIPSIS,
     CONDITION_SPEAKER_FORMAT,
+    CONDITION_CODE_CONTEXT,
+    CONDITION_SPAN_CONTENT,
 ]
 
 

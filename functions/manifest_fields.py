@@ -1424,6 +1424,126 @@ def load_anchor_removal(
     return result
 
 
+# ---------------------------------------------------------------------------
+# Code Pattern → Preprocessing Sync
+# ---------------------------------------------------------------------------
+
+_SYNC_SOURCE = "code_pattern"
+
+
+def sync_code_pattern_actions(manager: "ManifestManager") -> None:
+    """Sync code_patterns actions to preprocessing manifest sections.
+
+    For each code pattern:
+    - action='protect' → add regex to ProtectCodePatterns
+    - action='custom_placeholder' → add to CustomPlaceholders
+    - action='strip_with_anchor' → add to AnchorRemoval
+
+    Auto-synced entries carry ``source: 'code_pattern'`` so manual
+    entries are never modified.  Stale auto-synced entries whose
+    source pattern no longer has the matching action are removed.
+    """
+    from CherryAI.functions.glossaries.code_glossary_functions import (
+        generate_regex_pattern,
+    )
+
+    code_patterns = manager._manifest_data.get("code_patterns", [])
+    if not isinstance(code_patterns, list):
+        code_patterns = []
+
+    # Collect desired patterns per section
+    want_protect: Dict[str, Dict[str, Any]] = {}
+    want_custom: Dict[str, Dict[str, Any]] = {}
+    want_anchor: Dict[str, Dict[str, Any]] = {}
+
+    for cp in code_patterns:
+        if not isinstance(cp, dict):
+            continue
+        pat = cp.get("pattern", "")
+        action = cp.get("action", "preserve")
+        raw_type = cp.get("raw_type", "UNKNOWN")
+        if not pat:
+            continue
+
+        regex = generate_regex_pattern(pat, raw_type)
+
+        if action == "protect":
+            want_protect[pat] = {
+                "pattern": regex,
+                "replacement": "__PROTECTED__",
+                "is_regex": True,
+                "description": f"Auto: {pat}",
+                "source": _SYNC_SOURCE,
+                "source_pattern": pat,
+            }
+        elif action == "custom_placeholder":
+            placeholder = cp.get("translation", "") or f"__{pat}__"
+            want_custom[pat] = {
+                "pattern": regex,
+                "placeholder": placeholder,
+                "is_regex": True,
+                "restore_after": True,
+                "description": f"Auto: {pat}",
+                "source": _SYNC_SOURCE,
+                "source_pattern": pat,
+            }
+        elif action == "strip_with_anchor":
+            want_anchor[pat] = {
+                "pattern": regex,
+                "action": "remove",
+                "anchor_spec": cp.get("notes", ""),
+                "is_regex": True,
+                "description": f"Auto: {pat}",
+                "source": _SYNC_SOURCE,
+                "source_pattern": pat,
+            }
+
+    # --- ProtectCodePatterns ---
+    _merge_sync_entries(
+        manager, "ProtectCodePatterns", want_protect,
+    )
+    # --- CustomPlaceholders ---
+    _merge_sync_entries(
+        manager, "CustomPlaceholders", want_custom,
+    )
+    # --- AnchorRemoval ---
+    _merge_sync_entries(
+        manager, "AnchorRemoval", want_anchor,
+    )
+
+
+def _merge_sync_entries(
+    manager: "ManifestManager",
+    section: str,
+    wanted: Dict[str, Dict[str, Any]],
+) -> None:
+    """Merge auto-synced entries into a manifest section.
+
+    Keeps manual entries untouched.  Updates existing auto entries
+    whose source_pattern is still wanted, removes stale ones, and
+    adds new ones.
+    """
+    existing: List[Dict[str, Any]] = manager._manifest_data.get(section, [])
+    if not isinstance(existing, list):
+        existing = []
+
+    # Partition into manual vs auto-synced
+    manual = [e for e in existing if e.get("source") != _SYNC_SOURCE]
+    auto_by_src = {
+        e.get("source_pattern", ""): e
+        for e in existing
+        if e.get("source") == _SYNC_SOURCE
+    }
+
+    # Build new auto list: keep wanted, drop stale
+    new_auto: List[Dict[str, Any]] = []
+    for src_pat, entry in wanted.items():
+        new_auto.append(entry)
+
+    manager._manifest_data[section] = manual + new_auto
+    manager._mark_dirty()
+
+
 def save_glossary_entries(
     manager: "ManifestManager",
     entries: List[Dict[str, Any]]

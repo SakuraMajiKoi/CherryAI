@@ -1860,7 +1860,6 @@ class PromptBuilder:
                 prompt_parts.append(char_notes_block)
 
         # 5. Code database from manifest (conditional)
-        # TASK 41.8: Handle Preserve / Translate / Remove actions.
         if components.get("code_glossary", True) and code_glossary:
             code_block = "# Code Patterns\n"
             for pattern in code_glossary:
@@ -1870,15 +1869,11 @@ class PromptBuilder:
                 example = pattern.get("example", "")
                 if not pat:
                     continue
-                # "Remove" entries are NOT sent to the prompt; they
-                # are handled entirely in post-processing.
-                if action == "remove":
-                    continue
-                if action == "translate":
+                if action == "provides_context":
                     hint = notes if notes else "contextually"
                     code_block += f"- Translate [{pat}] as {hint}\n"
                 else:
-                    # Default "preserve"
+                    # Default "preserve" and all other actions
                     code_block += f"- Do not translate [{pat}]"
                     if example:
                         code_block += f" (e.g., {example})"

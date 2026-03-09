@@ -938,8 +938,9 @@ menu dynamically shows options based on the Category of selected row(s).
 - Select All with Speaker (sets filter)
 
 **Code Pattern Options:**
-- Preserve / Remove / Translate (persisted to Code Database)
-- Replace → (Generic | Custom Input)
+- Preserve / Provides Context / Custom Placeholder / Protect (Generic Placeholder) / Strip with Anchor / Part of a Span (persisted to Code Database)
+- Action sync: Protect → ProtectCodePatterns, Custom Placeholder → CustomPlaceholders, Strip with Anchor → AnchorRemoval (auto-synced via sync_code_pattern_actions in manifest_fields.py)
+- Legacy migration: translate→provides_context, remove→preserve, replace→protect
 - Is a Name / Is Text / Is a Number / Is Invisible (type classification)
 - Nameable... (expanded dialog with Character/Company/Location modes,
   Custom Replacement, Role, Gender, Notes, OK/Cancel/Apply)

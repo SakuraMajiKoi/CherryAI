@@ -1655,6 +1655,13 @@ class PreprocessingStep(BaseStep):
         # TASK 24.1: Load from manifest bindings
         self._load_from_manifest_bindings()
         
+        # Sync code pattern actions to preprocessing sections
+        if self.manifest_manager:
+            from CherryAI.functions.manifest_fields import (
+                sync_code_pattern_actions,
+            )
+            sync_code_pattern_actions(self.manifest_manager)
+        
         # TASK 24.2: Load protect patterns from manifest
         self._load_protect_patterns_from_manifest()
         

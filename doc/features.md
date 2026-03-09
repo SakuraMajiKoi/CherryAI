@@ -733,7 +733,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - **Findings Table Context Menu (Phase 59.3-59.5):**
     - Category-aware right-click menu (categories: "Speakers", "Code Patterns")
     - **Speaker actions:** Add to Glossary, Set Role (Protagonist/Love Interest/Major/Minor), Set Gender (Male/Female/Non-Binary/Transwoman/Transman/Other/Unknown), Set Translation, Add to Code Glossary, Copy Name, Select All with Speaker (filter); all actions write to **character glossary** (manifest `characters` key) not project glossary entries
-    - **Code Pattern actions:** Preserve/Remove/Translate toggles (persisted to Code Database), Replace options (Generic/Custom), Type classification (Name/Text/Number/Invisible), Nameable... (assigns temp replacement name for Character/Company/Location), Copy Pattern, Show Lines with Pattern (filter)
+    - **Code Pattern actions:** Preserve/Provides Context/Custom Placeholder/Protect (Generic Placeholder)/Strip with Anchor/Part of a Span (persisted to Code Database); action sync auto-populates Preprocessing sections (Protect → ProtectCodePatterns, Custom Placeholder → CustomPlaceholders, Strip with Anchor → AnchorRemoval). Type classification (Name/Text/Number/Invisible), Nameable... (assigns temp replacement name for Character/Company/Location), Copy Pattern, Show Lines with Pattern (filter)
     - **Nameable Dialog:** Code patterns marked "Is a Name" get the replacement name added to character glossary and the code pattern to Custom Placeholders in Preprocessing; "Nameable..." opens a dialog with Character (John/Jane/Alex Smith), Company (Acme/Globex/Initech Corp), and Location (Millfield/Oakville/Riverside) modes with gender-aware name selection
     - Generic menu for mixed selection (Copy, Select All)
   - **Ignored Patterns (Phase 59.7):** Filter patterns from code detection results
@@ -801,7 +801,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
       - Supports CharacterInfo dataclass or plain dicts
       - Gender/Role merged into Notes column in UI for parity with Glossary Settings
     - Code Glossary: `save_code_glossary()` / `load_code_glossary()`
-      - Fields: pattern, category, action (preserve/translate/remove), example, notes
+      - Fields: pattern, category, action (preserve/provides_context/custom_placeholder/protect/strip_with_anchor/part_of_span), example, notes
       - Supports CodePattern dataclass or plain dicts
     - Protect Code Patterns: `save_protect_code_patterns()` / `load_protect_code_patterns()`
       - Fields: pattern, replacement, is_regex, description
@@ -1500,7 +1500,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Style/Tone preset system (Phase 60): replaced graying with full preset management (see Style & Tone Panel above)
     - Glossary table inline editing: 4-column Treeview (Active, Original, Translation, Notes) with double-click editing
     - Import from Analysis: choice dialog (Top N with spinbox / All) for each import; code patterns import as "Detected" category; speakers import as character entries; non-destructive merge (skips duplicates); reads data from manifest via `_get_analysis_step_data()` helper
-    - Code Database actions: Preserve ("Do not translate"), Translate ("Translate as"), Remove (filtered from prompt)
+    - Code Database actions: Preserve ("Do not translate"), Provides Context ("Translate as" hint), Custom Placeholder/Protect/Strip with Anchor/Part of a Span (default "Do not translate"); legacy migration: translate→provides_context, remove→preserve
     - Code Database mass removal: multi-select (selectmode="extended") with batch reverse-index deletion
     - Code Database auto-populate: reads from unified `code_patterns` list with per-pattern count, raw_type, instances, and instance_counts
     - **Code Database collapsible instances**: Patterns with instances display [+]/[-] prefix; double-click on pattern column toggles expansion to show indented instance sub-rows with per-instance counts; patterns with instances sort before those without; instance sub-rows use tag-based index lookup (`pat_{idx}` tags) for correct edit/remove operations
@@ -1770,7 +1770,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
       - Each row: 3-line Text widget + scrollbar + Reset to Default button
       - Persisted to CherryAI.ini on Apply/OK via set_conditional_prompt()
       - Used by get_context_prompt() in prompt_builder.py for live translation and mock translation
-    - **Conditional Prompts (Pattern Triggered):** 9-prompt LabelFrame configuring pattern-triggered prompts:
+    - **Conditional Prompts (Pattern Triggered):** 11-prompt LabelFrame configuring pattern-triggered prompts:
       - Each prompt: Enabled checkbox + 2-line instruction Text widget + Reset to Default button
       - temp_replacement, delimiter_protection, linebreaks, color_codes, media_commands, text_formatting, ruby_text, ellipsis, speaker_dialogue_format
       - Stored in CherryAI.ini [pattern_prompts] section (enabled + text per prompt)

@@ -420,7 +420,7 @@ The system prompt is assembled in the following fixed order. Empty sections are 
 | 7 | **POV** | `manifest POV` dict (`pov`, `confidence`) | Skip when confidence ≠ "high" **or** when slot 4b has narration |
 | 7b | **Context-Type Prompt** | `resolve_chunk_type()` → `get_context_prompt()` | Resolved from per-line tags → filedir type → "unknown" fallback. Static, cacheable. |
 | | **— cache boundary —** | | Everything above is cacheable; everything below varies per chunk |
-| 8 | **Pattern-Triggered Prompts** | `user/CherryAI.ini [pattern_prompts]` or `user/conditional_prompts.json` | Selective — injected only when [Input Lines] contain the trigger pattern. 9 built-in pattern-triggered prompts (configurable in Global Options) |
+| 8 | **Pattern-Triggered Prompts** | `user/CherryAI.ini [pattern_prompts]` or `user/conditional_prompts.json` | Selective — injected only when [Input Lines] contain the trigger pattern. 11 built-in pattern-triggered prompts (configurable in Global Options) |
 | 8b | **Merged-Request Instruction** | `_merge_boundaries` from formation | Efficient mode only — describes block relatedness for Step 5 merged requests |
 | 9 | **Glossary** | Manifest `Glossary` + `user/globalglossary.tsv` + `metadata.characters` | Gated by `glossary_enabled` (default: **true**); selective — rows injected only when Original found in [Input Lines] |
 | 10 | **Rolling Context** | Preceding translated lines from manifest | Conditional — dialogue/unknown requests only; disabled for Menu/Choice |

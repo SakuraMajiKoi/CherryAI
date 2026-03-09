@@ -488,7 +488,7 @@ TABLE OF CONTENTS
          - Gender inference progress dialog: Toplevel with progress bar, "Checking 'name'" label, X/Y count
          - Inline editing via double-click with Entry overlay; Delete key removes entries
          - Import from Analysis: choice dialog (Top N / All) with spinbox; code patterns → category="Detected"; speakers → character glossary entries; non-destructive merge; uses `_get_analysis_step_data()` (ManifestManager first, session fallback)
-         - Code Database actions in prompt_builder: Preserve="Do not translate", Translate="Translate as", Remove=filtered out
+         - Code Database actions in prompt_builder: Preserve="Do not translate", Provides Context="Translate as" hint, Custom Placeholder/Protect/Strip with Anchor/Part of a Span=default "Do not translate"; legacy migration: translate→provides_context, remove→preserve; action sync via sync_code_pattern_actions() auto-populates ProtectCodePatterns/CustomPlaceholders/AnchorRemoval
          - Code Database multi-select removal with reverse-index batch deletion (Phase 60)
          - Code Database auto-populate: prefers `individual_codes` over grouped `code_patterns` (Phase 60)
          - Knowledge Base widget: unified mode switch (Glossary / Code Database), search/column filter, inline Active toggle, Enabled/Disabled button, mixed-selection Activate/Deactivate failsafe
@@ -2620,7 +2620,7 @@ Conditional Prompt System (functions/conditional_prompts.py) ✓ Enhanced Sessio
 - Detects tokens like __TEMPREPL_X_Y__, __CUST__, delimiters, linebreaks in batch text
 - Injects handling instructions only when relevant patterns present
 - Configuration via user/conditional_prompts.json for custom patterns
-- All 9 built-in conditions configurable in Global Options → Prompts → Conditional Prompts (Pattern Triggered)
+- All 11 built-in conditions configurable in Global Options → Prompts → Conditional Prompts (Pattern Triggered)
 - Settings stored in CherryAI.ini [pattern_prompts] section (enabled + text per prompt)
 - **Dynamic instructions with pattern-specific examples (TASK 5)**
 - **Delimiter differentiation: [square] / {curly} / <angle> / __dunder__**

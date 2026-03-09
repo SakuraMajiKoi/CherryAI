@@ -1268,26 +1268,25 @@ class AnalysisStep(BaseStep):
             command=lambda: self._set_pattern_action("preserve"),
         )
         menu.add_command(
-            label="Remove",
-            command=lambda: self._set_pattern_action("remove"),
+            label="Provides Context",
+            command=lambda: self._set_pattern_action("provides_context"),
         )
         menu.add_command(
-            label="Translate",
-            command=lambda: self._set_pattern_action("translate"),
+            label="Custom Placeholder",
+            command=lambda: self._set_pattern_action("custom_placeholder"),
         )
-
-        menu.add_separator()
-
-        # Replace submenu
-        replace_menu = tk.Menu(menu, tearoff=0)
-        replace_menu.add_command(
-            label="Generic",
-            command=lambda: self._set_pattern_replace("generic"),
+        menu.add_command(
+            label="Protect (Generic Placeholder)",
+            command=lambda: self._set_pattern_action("protect"),
         )
-        replace_menu.add_command(
-            label="Custom...", command=self._set_pattern_replace_custom,
+        menu.add_command(
+            label="Strip with Anchor",
+            command=lambda: self._set_pattern_action("strip_with_anchor"),
         )
-        menu.add_cascade(label="Replace With", menu=replace_menu)
+        menu.add_command(
+            label="Part of a Span",
+            command=lambda: self._set_pattern_action("part_of_span"),
+        )
 
         menu.add_separator()
 
@@ -1780,7 +1779,8 @@ class AnalysisStep(BaseStep):
 
         Args:
             pattern: Normalized code pattern string.
-            action: Action to set (preserve/remove/translate/replace).
+            action: Action to set (preserve/provides_context/custom_placeholder/
+                protect/strip_with_anchor/part_of_span).
             category: Pattern category (Line Break, Variable Name, etc.).
             notes: User notes (e.g. "Type: name").
             example: Example occurrence from source text.
@@ -1834,9 +1834,10 @@ class AnalysisStep(BaseStep):
 
     # Code pattern actions
     def _set_pattern_action(self, action: str) -> None:
-        """Set action (preserve/remove/translate) for selected patterns.
+        """Set action for selected patterns.
 
-        Persists to Code Database in manifest.
+        Persists to Code Database in manifest, then syncs
+        preprocessing sections (ProtectCodePatterns, etc.).
         """
         items = self._get_selected_items()
         patterns = [name for cat, name in items if cat == "Code Patterns"]
@@ -1845,6 +1846,13 @@ class AnalysisStep(BaseStep):
 
         for pattern in patterns:
             self._upsert_code_pattern(pattern, action=action)
+
+        # Sync preprocessing sections for action-dependent entries
+        if self.manifest_manager:
+            from CherryAI.functions.manifest_fields import (
+                sync_code_pattern_actions,
+            )
+            sync_code_pattern_actions(self.manifest_manager)
 
         logger.info(
             "Set action '%s' for %d patterns: %s",

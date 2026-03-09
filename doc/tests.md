@@ -2894,7 +2894,7 @@ Thank you.
 | test_cli_overrides.py | 38 | CLI API overrides (TASK 3) |
 | test_cli_progress.py | 17 | CLI progress indicators (TASK 15.12) |
 | test_common_errors.py | 31 | Common error handling |
-| test_conditional_prompts.py | 84 | Conditional prompts — 9 pattern-triggered prompts, INI overrides, merged requests |
+| test_conditional_prompts.py | 86 | Conditional prompts — 11 pattern-triggered prompts, INI overrides, merged requests |
 | test_config.py | 23 | Config management |
 | test_dedup.py | 34 | Deduplication + tag storage + top-N limit |
 | test_dependencies.py | 17 | Dependency checking (TASK 15.1) |
@@ -2968,6 +2968,7 @@ Thank you.
 | test_gui_layout.py | 12 | 2-column layout tests (TASK 18.2) |
 | test_subtask_tracking.py | 14 | Subtask progress tracking (TASK 18.3) |
 | test_code_glossary_display.py | 27 | Code glossary widget + instance counts (TASK 18.5) |
+| test_code_pattern_actions.py | 46 | Code pattern action overhaul: normalization, actions, sync, validation, prompts |
 | test_information_step_phase41.py | 57 | Information step Phase 41 UI enhancements |
 | test_preprocess_phase42.py | 80 | Preprocessing & Postprocessing Phase 42 |
 | test_translation_phase43.py | 48 | Translation Tab Overhaul Phase 43 |
@@ -4044,9 +4045,9 @@ and symbol normalization.
 
 ---
 
-### dev/test_conditional_prompts.py (84 tests)
+### dev/test_conditional_prompts.py (86 tests)
 
-Conditional prompt system tests for the reworked 9-prompt set: pattern detection, dynamic instruction generation, merged-request instructions, user customization, and integration.
+Conditional prompt system tests for the reworked 11-prompt set: pattern detection, dynamic instruction generation, merged-request instructions, user customization, and integration.
 
 #### TestConditionalPrompt (8 tests)
 
@@ -4065,8 +4066,8 @@ Conditional prompt system tests for the reworked 9-prompt set: pattern detection
 
 | Test | Purpose |
 |------|---------|
-| `test_exactly_nine_builtins` | Exactly 9 built-in conditions after rework |
-| `test_all_expected_names_present` | All 9 expected condition names present |
+| `test_exactly_nine_builtins` | Exactly 11 built-in conditions after rework |
+| `test_all_expected_names_present` | All 11 expected condition names present (including code_context, span_content) |
 | `test_removed_conditions_absent` | 6 removed conditions no longer present |
 | `test_all_have_required_fields` | All builtins have required fields |
 | `test_unique_names` | Condition names are unique |
@@ -8153,6 +8154,122 @@ Tests for Code Glossary widget in Information tab, CodePattern dataclass, instan
 
 ---
 
+### dev/test_code_pattern_actions.py (46 tests) - Code Pattern Action Overhaul
+
+Tests for the code pattern action system overhaul: normalization fixes (CJK tags, space-separated numbers, closing tags), new action set, sync with preprocessing sections, validation, and prompt building.
+
+#### TestAngleBracketNormalization (10 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_simple_ascii_tag` | `<abc>` → `<TAG>` |
+| `test_cjk_tag_name` | `<文字色 …>` → `<文字色 <NUM>>` |
+| `test_multiple_space_separated_numbers` | `<tag 1 2 3>` → `<tag <NUM>>` |
+| `test_closing_tag` | `</>` → `</>` (literal) |
+| `test_tag_no_extra_content` | `<文字色>` → `<TAG>` |
+| `test_tag_with_hex_content` | `<TAG FF>` → `<TAG <NUM>>` |
+| `test_empty_brackets` | `<>` → `<>` |
+| `test_self_closing_html` | `<br/>` → `<TAG>` |
+| `test_non_numeric_content` | `<tag abc def>` → `<TAG>` |
+| `test_mixed_alpha_num_content` | `<tag abc 123>` stays generic |
+
+#### TestAngleBracketRegex (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_cjk_regex_matches_variants` | Regex matches space-separated numbers |
+| `test_closing_tag_regex_literal` | `</>` regex is literal match |
+| `test_ascii_tag_regex_matches` | `<TAG>` regex matches |
+
+#### TestCodePatternActions (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_valid_actions` | ACTIONS list contains all 6 new actions |
+| `test_from_dict_preserves_action` | from_dict preserves valid action |
+| `test_from_dict_migrate_translate` | "translate" → "provides_context" |
+| `test_from_dict_migrate_remove` | "remove" → "preserve" |
+
+#### TestProvidesContextPrompt (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_provides_context_in_prompt` | "Translate as" hint for provides_context |
+| `test_default_action_in_prompt` | "Do not translate" for other actions |
+
+#### TestPartOfSpanPrompt (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_part_of_span_default` | part_of_span gets "Do not translate" |
+
+#### TestSyncCodePatternActions (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_protect_syncs_to_protect_code_patterns` | protect → ProtectCodePatterns |
+| `test_custom_placeholder_syncs` | custom_placeholder → CustomPlaceholders |
+| `test_strip_with_anchor_syncs` | strip_with_anchor → AnchorRemoval |
+| `test_stale_entries_removed` | Old auto entries cleaned on re-sync |
+| `test_manual_entries_preserved` | Non-auto entries kept |
+
+#### TestCodePatternValidation (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_missing_pattern_detected` | Missing preserve pattern flagged |
+| `test_present_pattern_ok` | Present pattern passes |
+| `test_non_preserve_ignored` | Non-preserve actions skipped |
+| `test_pattern_not_in_original` | Original missing pattern skipped |
+| `test_validate_line_post_integration` | Integration with validate_line_post |
+
+#### TestAnchorEquivalents (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_strip_with_anchor_equivalent` | strip_with_anchor syncs like anchor |
+| `test_anchor_icon_in_action` | Action recognized |
+
+#### TestPromptBuilderActions (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_provides_context_hint` | provides_context generates hint |
+| `test_default_hint` | Other actions get "Do not translate" |
+| `test_preserve_do_not_translate` | preserve → "Do not translate" |
+| `test_protect_default_path` | protect → default path |
+| `test_old_remove_not_skipped` | remove action no longer skips |
+
+#### TestConsistencyActions (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_provides_context_excludes` | provides_context excluded from consistency |
+| `test_preserve_includes` | preserve included in consistency |
+
+#### TestFromDictMigration (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_replace_migrates_to_protect` | "replace" → "protect" |
+| `test_unknown_action_passthrough` | Unknown action kept as-is |
+| `test_missing_action_defaults_preserve` | Missing action defaults preserve |
+
+#### TestNormalizationEdgeCases (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_unicode_tag_with_numbers` | Unicode tag + space-separated numbers |
+| `test_plain_number_in_brackets` | `<123>` → `<NUM>` |
+| `test_nested_looking_brackets` | Nested angle brackets handled |
+| `test_very_long_tag_content` | Long content stays generic |
+
+```
+python -m pytest CherryAI/dev/test_code_pattern_actions.py -v --timeout=10
+```
+
+---
+
 ### dev/test_session_loading.py (28 tests) - TASKS 18.1-18.8
 
 Tests for session loading and state restoration fixes.
@@ -8193,7 +8310,7 @@ Tests for session loading and state restoration fixes.
 | `test_code_pattern_dataclass_creation` | CodePattern creation |
 | `test_code_pattern_to_dict` | Serialization |
 | `test_code_pattern_from_dict` | Deserialization |
-| `test_code_pattern_actions` | Valid actions list |
+| `test_code_pattern_actions` | Valid actions list (6 new actions: preserve, provides_context, custom_placeholder, protect, strip_with_anchor, part_of_span) |
 
 #### TestPreprocessingSessionLoading (4 tests) - TASK 18.4/18.8
 
@@ -10708,7 +10825,7 @@ python -m pytest CherryAI/dev/test_utility_integration.py -v -s --timeout=60
 |-----------|-------|----------|
 | TestConsistencyTerm | 7 | Defaults, resolved/unresolved, invalid type, all valid types, roundtrip, from_dict defaults |
 | TestConsistencyStore | 11 | Empty store, add/get, case-insensitive, update canonical (found/missing), remove, resolved/unresolved filters, by_type, roundtrip, invalid entries, overwrite |
-| TestDetectCodeTerms | 4 | Translate action detected, preserve/remove ignored, empty pattern skipped, case-insensitive action |
+| TestDetectCodeTerms | 4 | Provides_context action detected, preserve/other actions ignored, empty pattern skipped, case-insensitive action |
 | TestDetectGlossaryTerms | 4 | Empty translation, empty notes, complete entry skipped, empty source skipped |
 | TestDetectSpanTerms | 5 | RPG Maker color span, HTML bold, no spans, dedup, source_line_idx |
 | TestBuildConsistencyStore | 3 | Combined detection, empty inputs, no duplicate between types |

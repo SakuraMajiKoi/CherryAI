@@ -270,6 +270,72 @@ def validate_placeholder_preserved(
 
 
 # ============================================================================
+# Code Pattern Preservation Validation
+# ============================================================================
+
+
+def validate_code_patterns_preserved(
+    original: str,
+    translated: str,
+    code_patterns: List[Dict[str, Any]],
+) -> List[str]:
+    """Check that code patterns with action='preserve' survive translation.
+
+    For each code pattern whose regex matches in *original*, verify that
+    at least one match also exists in *translated*.  Patterns whose action
+    is not ``preserve`` are silently skipped.
+
+    ``__PLACEHOLDER__``-style tokens and CustomPlaceholder tokens are
+    never flagged — they are handled by the placeholder validator.
+
+    Args:
+        original: The original (preprocessed) line.
+        translated: The translated line from the API.
+        code_patterns: Code pattern dicts from the manifest.
+
+    Returns:
+        List of warning strings for missing patterns (empty if all good).
+    """
+    from CherryAI.functions.glossaries.code_glossary_functions import (
+        generate_regex_pattern,
+    )
+
+    warnings: List[str] = []
+    for cp in code_patterns:
+        if not isinstance(cp, dict):
+            continue
+        action = cp.get("action", "preserve")
+        if action != "preserve":
+            continue
+        pat = cp.get("pattern", "")
+        raw_type = cp.get("raw_type", "UNKNOWN")
+        if not pat:
+            continue
+
+        regex = generate_regex_pattern(pat, raw_type)
+        try:
+            orig_matches = re.findall(regex, original)
+        except re.error:
+            continue
+
+        if not orig_matches:
+            continue  # pattern not present in this line
+
+        try:
+            trans_matches = re.findall(regex, translated)
+        except re.error:
+            continue
+
+        if len(trans_matches) < len(orig_matches):
+            warnings.append(
+                f"Code pattern '{pat}' found {len(orig_matches)} time(s) "
+                f"in original but {len(trans_matches)} in translation"
+            )
+
+    return warnings
+
+
+# ============================================================================
 # Speaker: "Dialogue" Format Detection
 # ============================================================================
 
@@ -928,6 +994,7 @@ def validate_line_post(
     max_japanese_chars: int = 4,
     check_anchors: bool = True,
     check_speaker_format: bool = True,
+    code_patterns: Optional[List[Dict[str, Any]]] = None,
 ) -> ValidationResult:
     """Validate a translated line.
     
@@ -935,6 +1002,7 @@ def validate_line_post(
     1. Translated line doesn't have too many Japanese characters (max 4)
     2. Important anchor characters are preserved
     3. Speaker: "Dialogue" format is preserved (if present in original)
+    4. Code patterns with action='preserve' survive translation
     
     Args:
         original: The original (preprocessed) line
@@ -942,6 +1010,7 @@ def validate_line_post(
         max_japanese_chars: Maximum allowed Japanese characters in translation
         check_anchors: Whether to check for anchor preservation
         check_speaker_format: Whether to check speaker dialogue format preservation
+        code_patterns: Optional code pattern dicts for preservation check
     
     Returns:
         ValidationResult with errors and warnings
@@ -983,6 +1052,13 @@ def validate_line_post(
         )
         errors.extend(format_errors)
         warnings.extend(format_warnings)
+    
+    # 4. Check code pattern preservation
+    if code_patterns:
+        cp_warnings = validate_code_patterns_preserved(
+            original, translated, code_patterns,
+        )
+        warnings.extend(cp_warnings)
     
     is_valid = len(errors) == 0
     return ValidationResult(

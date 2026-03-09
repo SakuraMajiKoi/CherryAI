@@ -392,20 +392,38 @@ def _normalize_code_segment(seg: str) -> str:
         # Angle brackets: <tag ...>
         if s.startswith("<") and s.endswith(">"):
             inner = s[1:-1].strip()
+
+            # Closing/reset tags: </> or </tagname>
+            if inner.startswith("/"):
+                residual = inner[1:].strip()
+                if not residual:
+                    return "</>"
+                return f"</{residual}>"
+
             # Normalize FIRST = to key=VALUE
             if "=" in inner:
                 eq_pos = inner.index("=")
                 key_part = inner[:eq_pos].strip()
                 return f"<{key_part}=VALUE>"
-            m = re.match(r"^<\s*([A-Za-z0-9]+)([^>]*)>", s)
+
+            # Match tag name: ASCII + CJK + other Unicode word chars
+            m = re.match(r"^<\s*([\w]+)(.*?)>", s, re.UNICODE)
             if m:
-                tag = m.group(1).lower()
-                attrs = m.group(2) or ""
+                tag = m.group(1)
+                attrs = (m.group(2) or "").strip()
+                # Check for hex color codes in attributes
                 if re.search(r"#[0-9A-Fa-f]{3,8}", attrs):
                     return f"<{tag}_COLOR>"
+                # Check for named colors in attributes
                 for nm in COLOR_NAMES:
                     if re.search(fr"\b{re.escape(nm)}\b", attrs, flags=re.IGNORECASE):
                         return f"<{tag}_COLOR>"
+                # Collapse space-separated numbers into single <NUM>
+                if attrs:
+                    nums_collapsed = re.sub(
+                        r"\d+(?:\s+\d+)*", "<NUM>", attrs,
+                    ).strip()
+                    return f"<{tag} {nums_collapsed}>"
                 return f"<{tag}>"
             return "<TAG>"
 
@@ -508,7 +526,11 @@ def generate_regex_pattern(code: str, code_type: str) -> str:
     # Handle angle bracket codes: <...>
     if code.startswith("<") and code.endswith(">"):
         inner = code[1:-1]
-        
+
+        # Pattern: </> or </tag> closing tags
+        if inner.startswith("/"):
+            return regex_module.escape(code)
+
         # Pattern: <key=VALUE>
         if "=VALUE" in inner:
             key_part = inner.split("=")[0]
@@ -521,12 +543,32 @@ def generate_regex_pattern(code: str, code_type: str) -> str:
             tag_part = inner.split("_")[0]
             tag_escaped = regex_module.escape(tag_part)
             color_pattern = "|".join(regex_module.escape(c) for c in sorted(COLOR_NAMES, key=len, reverse=True))
-            return fr"<{tag_escaped}[_\-](?:{color_pattern})[^>]*>"
+            return fr"<{tag_escaped}[_\-\s](?:{color_pattern})[^>]*>"
         
-        # Pattern: <NUM> placeholder
+        # Pattern: <tag <NUM>> with space-separated numbers
         if "<NUM>" in inner:
-            inner_escaped = regex_module.escape(inner).replace(r"\<NUM\>", r"\d+")
-            return fr"<{inner_escaped}>"
+            # Split into tag name and remainder
+            parts = inner.split(" ", 1)
+            if len(parts) == 2:
+                tag_escaped = regex_module.escape(parts[0])
+                # <NUM> matches one or more space-separated number groups
+                remainder = parts[1]
+                # Replace <NUM> token before escaping
+                remainder_regex = re.sub(
+                    r"<NUM>",
+                    r"(?:\\d+(?:\\s+\\d+)*)",
+                    remainder,
+                )
+                return fr"<{tag_escaped}\s+{remainder_regex}>"
+            # Fallback: <NUM> anywhere in inner
+            # Build regex manually to avoid escaping <NUM>
+            result_parts = []
+            for chunk in re.split(r"(<NUM>)", inner):
+                if chunk == "<NUM>":
+                    result_parts.append(r"(?:\d+(?:\s+\d+)*)")
+                else:
+                    result_parts.append(regex_module.escape(chunk))
+            return "<" + "".join(result_parts) + ">"
         
         # Pattern: Literal angle bracket code
         inner_escaped = regex_module.escape(inner)
