@@ -651,7 +651,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   8. **Wordwrap** - Line breaking, width limits ✅ Implemented
   9. **QA** - Quality checks, auto-tagging ✅ Implemented
   10. **Output** - Export formats, save results
-- **Input Tab (Phase 1, updated Phase 39, 58):**
+- **Input Tab (Phase 1, updated Phase 39, 58, 60):**
   - **Unified Input Button (Phase 58.1):** Single "Input" button opens UnifiedInputDialog
     - Dual-pane interface: File browser (left) and Folder browser (right)
     - Multi-select support with path list display
@@ -666,6 +666,23 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Folders collapsed by default for cleaner initial view
     - Folders sorted above files in tree
     - New context menu items: Select All, Expand All, Collapse All
+  - **Clickable Column Headers (Phase 60):**
+    - Name, Type, Lines columns clickable to sort ascending/descending
+    - ▲/▼ indicators show current sort column and direction
+    - Folder hierarchy flattened when sorting by Type or Lines
+    - Replaces previous Sort Combobox
+  - **File List Filter (Phase 60):**
+    - Text entry for instant filtering by filename, type, or line count
+    - Non-matching files hidden; ✕ clear button restores full list
+    - Filter resets on New Project
+  - **Type Column Refresh Fix (Phase 60):**
+    - File types (dialogue, menu, etc.) now display immediately after loading
+    - Previously required a sort action to populate the Type column
+  - **Cross-File Preview Search (Phase 60):**
+    - Preview search now searches ALL loaded files, not just the selected one
+    - Results show global idx column for cross-file identification
+    - Selecting a result auto-switches to the containing file in the file tree
+    - ✕ clear button restores single-file preview mode
   - **Input Dialog UX Improvements (Phase 58.12):**
     - UnifiedInputDialog remembers last used directory across sessions
     - Project Name field integrated into Options panel (avoids separate dialog)

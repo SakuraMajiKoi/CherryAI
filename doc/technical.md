@@ -188,7 +188,7 @@ TABLE OF CONTENTS
    6.4 gui/steps/ (10 files - 10 workflow tabs)
        - __init__.py - Step exports
        - base.py - BaseStep abstract class (TASK 43.14: tab caching infra; on_new_project() lifecycle method for state flush)
-       - input_extract.py - Step 0: Input/Extraction 🔗formats/
+       - input_extract.py - Step 0: Input/Extraction 🔗formats/ (Phase 60: clickable column header sort with ▲/▼ indicators, file list filter entry, type column refresh fix, cross-file preview search with idx column and auto file-switching)
        - analysis.py - Step 1: Analysis ❌NO shared imports
        - costs.py - Step 4: Costs (renamed from estimate.py in Phase 40; _estimate_via_formation() returns FormationResult with per-request line lists; _compute_per_request_prompt_overhead() builds each request's prompt individually via build_full_system_prompt(chunk_lines=...) for selective glossary/conditional filtering; syncs chunk_size from GlobalOptions; respects request_slicing mode)
        - information.py - Step 2: Information 🔗manifest_fields (Bug Fix: on_leave() and _save_metadata() now merge *_enabled toggle BooleanVar values into metadata dict after ProjectMetadata.to_dict() — fixes toggle state erasure on tab change; Save button removed from header — auto-save on tab change is sufficient)

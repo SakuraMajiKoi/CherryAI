@@ -233,20 +233,27 @@ class InputExtractionStep(BaseStep):
         left_frame = ttk.LabelFrame(content, text="Loaded Files")
         content.add(left_frame, weight=1)
 
-        # Sort control row
-        sort_frame = ttk.Frame(left_frame)
-        sort_frame.pack(fill="x", padx=5, pady=(5, 0))
-        ttk.Label(sort_frame, text="Sort:").pack(side="left")
-        self._sort_var = tk.StringVar(value="Filetree")
-        sort_cb = ttk.Combobox(
-            sort_frame,
-            textvariable=self._sort_var,
-            values=["Filetree", "Count", "Type"],
-            width=8,
-            state="readonly",
+        # Filter control row (replaces Sort combobox)
+        filter_frame = ttk.Frame(left_frame)
+        filter_frame.pack(fill="x", padx=5, pady=(5, 0))
+        ttk.Label(filter_frame, text="Filter:").pack(side="left")
+        self._file_filter_var = tk.StringVar()
+        self._file_filter_var.trace_add(
+            "write", lambda *_a: self._update_file_list(),
         )
-        sort_cb.pack(side="left", padx=(5, 0))
-        sort_cb.bind("<<ComboboxSelected>>", lambda e: self._update_file_list())
+        self._file_filter_entry = ttk.Entry(
+            filter_frame, textvariable=self._file_filter_var, width=16,
+        )
+        self._file_filter_entry.pack(side="left", fill="x", expand=True, padx=(5, 0))
+        self._file_filter_clear_btn = ttk.Button(
+            filter_frame, text="✕", width=3,
+            command=lambda: self._file_filter_var.set(""),
+        )
+        self._file_filter_clear_btn.pack(side="left", padx=(2, 0))
+
+        # Sort state for clickable column headers
+        self._sort_column: str = ""  # "" = filetree default, "type", "lines", "name"
+        self._sort_ascending: bool = True
 
         # File listbox with scrollbar
         list_frame = ttk.Frame(left_frame)
@@ -259,9 +266,18 @@ class InputExtractionStep(BaseStep):
             show="tree headings",
             selectmode="extended",
         )
-        self._file_tree.heading("#0", text="Name", anchor="w")
-        self._file_tree.heading("type", text="Type", anchor="w")
-        self._file_tree.heading("lines", text="Lines", anchor="e")
+        self._file_tree.heading(
+            "#0", text="Name", anchor="w",
+            command=lambda: self._on_column_sort("name"),
+        )
+        self._file_tree.heading(
+            "type", text="Type", anchor="w",
+            command=lambda: self._on_column_sort("type"),
+        )
+        self._file_tree.heading(
+            "lines", text="Lines", anchor="e",
+            command=lambda: self._on_column_sort("lines"),
+        )
         self._file_tree.column("#0", width=180, stretch=True)
         self._file_tree.column("type", width=70, stretch=False)
         self._file_tree.column("lines", width=60, stretch=False)
@@ -329,25 +345,33 @@ class InputExtractionStep(BaseStep):
             search_frame, textvariable=self._preview_search_var, width=30,
         )
         search_entry.pack(side="left", fill="x", expand=True, padx=(5, 0))
+        self._preview_search_clear_btn = ttk.Button(
+            search_frame, text="✕", width=3,
+            command=self._on_preview_search_clear,
+        )
+        self._preview_search_clear_btn.pack(side="left", padx=(2, 0))
 
         # Preview Treeview
         preview_frame = ttk.Frame(right_frame)
         preview_frame.pack(fill="both", expand=True, padx=5, pady=5)
 
-        columns = ("line", "content", "tags")
+        columns = ("idx", "line", "content", "tags")
         self._preview_tree = ttk.Treeview(
             preview_frame,
             columns=columns,
             show="headings",
             selectmode="extended",
         )
+        self._preview_tree.heading("idx", text="Idx", anchor="w")
         self._preview_tree.heading("line", text="#", anchor="w")
         self._preview_tree.heading("content", text="Content", anchor="w")
         self._preview_tree.heading("tags", text="Tags", anchor="w")
-        self._preview_tree.column("line", width=60, stretch=False)
-        self._preview_tree.column("content", width=500, stretch=True)
+        self._preview_tree.column("idx", width=60, stretch=False)
+        self._preview_tree.column("line", width=50, stretch=False)
+        self._preview_tree.column("content", width=450, stretch=True)
         self._preview_tree.column("tags", width=80, stretch=False)
         self._preview_tree.pack(side="left", fill="both", expand=True)
+        self._preview_tree.bind("<<TreeviewSelect>>", self._on_preview_select)
 
         # Preview right-click context menu for tag editing
         self._preview_context_menu = tk.Menu(self._preview_tree, tearoff=0)
@@ -591,6 +615,9 @@ class InputExtractionStep(BaseStep):
             self._ensure_project_created()
             self._save_manifest_after_file_load()
 
+            # Refresh file list after manifest sync to show Type column
+            self._update_file_list()
+
             # PHASE 58.4: Execute automatic pipeline
             self._execute_auto_pipeline()
 
@@ -771,6 +798,9 @@ class InputExtractionStep(BaseStep):
             
             # TASK 29.2: Save manifest after file load
             self._save_manifest_after_file_load()
+
+            # Refresh file list after manifest sync to show Type column
+            self._update_file_list()
             
             # Trigger auto-analysis if enabled
             self._trigger_auto_analysis()
@@ -855,6 +885,9 @@ class InputExtractionStep(BaseStep):
             
             # TASK 29.2: Save manifest after file load
             self._save_manifest_after_file_load()
+
+            # Refresh file list after manifest sync to show Type column
+            self._update_file_list()
             
             # Trigger auto-analysis if enabled
             self._trigger_auto_analysis()
@@ -1416,6 +1449,33 @@ class InputExtractionStep(BaseStep):
                 self._current_file_index = self._tree_item_to_index[item_id]
                 self._update_preview()
 
+    def _on_column_sort(self, column: str) -> None:
+        """Handle click on a column header to toggle sort.
+
+        Clicking the same column toggles ascending/descending.
+        Clicking a different column sorts ascending by that column.
+
+        Args:
+            column: Column identifier (``"name"``, ``"type"``, or ``"lines"``).
+        """
+        if self._sort_column == column:
+            self._sort_ascending = not self._sort_ascending
+        else:
+            self._sort_column = column
+            self._sort_ascending = True
+        self._refresh_sort_headings()
+        self._update_file_list()
+
+    def _refresh_sort_headings(self) -> None:
+        """Update column heading text with sort direction indicators."""
+        labels = {"name": "Name", "type": "Type", "lines": "Lines"}
+        for col, base in labels.items():
+            indicator = ""
+            if self._sort_column == col:
+                indicator = " ▲" if self._sort_ascending else " ▼"
+            col_id = "#0" if col == "name" else col
+            self._file_tree.heading(col_id, text=f"{base}{indicator}")
+
     # ----------------------------- File Loading ----------------------------- #
 
     def _load_file(
@@ -1869,14 +1929,14 @@ class InputExtractionStep(BaseStep):
         nodes are individual files with line counts.
 
         PHASE 58.7: Folders collapsed by default, folders sorted above files.
-        
+
         Folders appear ABOVE files at the same directory level. This is achieved
         by a two-phase approach:
         1. First, collect all unique folder paths and create folder nodes
         2. Then, insert files under their respective parent nodes
-        
-        Typing: Adds type column from filedir entries. Sort spinbox
-        controls display order (Filetree / Count / Type).
+
+        Clickable column headers control sort order (ascending/descending).
+        Filter textbox filters rows by matching any column.
         """
         # Clear existing tree
         for item in self._file_tree.get_children():
@@ -1894,19 +1954,34 @@ class InputExtractionStep(BaseStep):
             for idx, entry in enumerate(mgr.get_filedir()):
                 type_map[idx] = entry.type
 
-        sort_mode = getattr(self, "_sort_var", None)
-        sort_key = sort_mode.get() if sort_mode else "Filetree"
+        # Read sort state from clickable column headers
+        sort_col = getattr(self, "_sort_column", "")
+        sort_asc = getattr(self, "_sort_ascending", True)
+
+        # Read filter text
+        filter_text = ""
+        if hasattr(self, "_file_filter_var"):
+            filter_text = self._file_filter_var.get().strip().lower()
 
         # Build folder → tree item ID mapping for hierarchy
         folder_items: Dict[str, str] = {}
 
-        # PHASE 58.7: Two-phase approach to ensure folders appear before files
         # Phase 1: Collect all unique folder paths from all files
         all_folders: set = set()
         file_display_data: List[Tuple[str, int, 'LoadedFile']] = []
 
         for i, file in enumerate(self._loaded_files):
             display_name = self._get_display_name(file.path)
+            file_type = type_map.get(i, "")
+
+            # Apply filter: match against name, type, or line count
+            if filter_text:
+                name_match = filter_text in display_name.lower()
+                type_match = filter_text in file_type.lower()
+                count_match = filter_text in str(file.line_count)
+                if not (name_match or type_match or count_match):
+                    continue
+
             parts = display_name.replace("\\", "/").split("/")
 
             # Collect all parent folder paths
@@ -1916,18 +1991,27 @@ class InputExtractionStep(BaseStep):
 
             file_display_data.append((display_name, i, file))
 
-        # Apply sort
-        if sort_key == "Count":
-            file_display_data.sort(key=lambda x: x[2].line_count, reverse=True)
-        elif sort_key == "Type":
-            file_display_data.sort(key=lambda x: type_map.get(x[1], ""))
+        # Apply sort based on column header clicks
+        if sort_col == "lines":
+            file_display_data.sort(
+                key=lambda x: x[2].line_count, reverse=not sort_asc,
+            )
+        elif sort_col == "type":
+            file_display_data.sort(
+                key=lambda x: type_map.get(x[1], "").lower(),
+                reverse=not sort_asc,
+            )
+        elif sort_col == "name":
+            file_display_data.sort(
+                key=lambda x: x[0].lower(), reverse=not sort_asc,
+            )
         else:
-            # Filetree: alphabetical by display name (default)
+            # Default filetree: alphabetical by display name
             file_display_data.sort(key=lambda x: x[0].lower())
 
         # Phase 2: Create all folder nodes first (sorted alphabetically)
-        # Only for Filetree sort – flat list for Count/Type sorts
-        use_folders = sort_key == "Filetree"
+        # Only for default filetree sort — flat list for explicit column sorts
+        use_folders = sort_col == "" and not filter_text
 
         if use_folders:
             sorted_folders = sorted(all_folders, key=str.lower)
@@ -2003,57 +2087,84 @@ class InputExtractionStep(BaseStep):
         return file_path.name
 
     def _update_preview(self) -> None:
-        """Update the preview table for current file.
+        """Update the preview table for current file or cross-file search.
 
-        Supports search filtering via ``_preview_search_var`` and shows
-        per-line tags from the manifest.
+        When a search term is entered, searches across ALL loaded files and
+        shows matching lines with their global idx. When no search term is
+        active, shows lines from the currently selected file only.
         """
         # Clear existing
         for item in self._preview_tree.get_children():
             self._preview_tree.delete(item)
 
-        if self._current_file_index < 0 or not self._loaded_files:
+        if not self._loaded_files:
             return
-
-        file = self._loaded_files[self._current_file_index]
-
-        # Determine the global start index for this file from filedir
-        global_offset = 0
-        mgr = self.manifest_manager
-        if mgr is not None and mgr.is_loaded:
-            filedir = mgr.get_filedir()
-            if self._current_file_index < len(filedir):
-                global_offset = filedir[self._current_file_index].first_idx
 
         # Build line-level tag map from manifest
         tag_map: Dict[int, str] = {}
+        mgr = self.manifest_manager
         if mgr is not None and mgr.is_loaded:
             all_lines = mgr.get_lines()
             for line_data in all_lines:
-                idx = line_data.get("idx", -1)
+                idx_val = line_data.get("idx", -1)
                 line_tag = line_data.get("tag", "")
                 if line_tag:
-                    tag_map[idx] = line_tag
+                    tag_map[idx_val] = line_tag
 
-        # Optional search filter
+        # Read search text
         search_text = ""
         if hasattr(self, "_preview_search_var"):
             search_text = self._preview_search_var.get().strip().lower()
 
-        # Show first 1000 lines (for performance)
+        # Build filedir offset map
+        offsets: List[int] = []
+        if mgr is not None and mgr.is_loaded:
+            filedir = mgr.get_filedir()
+            for entry in filedir:
+                offsets.append(entry.first_idx)
+        else:
+            offset = 0
+            for f in self._loaded_files:
+                offsets.append(offset)
+                offset += f.line_count
+
+        if search_text:
+            # Cross-file search: show matching lines from ALL files
+            self._update_preview_cross_file(search_text, tag_map, offsets)
+        else:
+            # Single-file preview
+            self._update_preview_single_file(tag_map, offsets)
+
+    def _update_preview_single_file(
+        self,
+        tag_map: Dict[int, str],
+        offsets: List[int],
+    ) -> None:
+        """Show preview lines from the currently selected file.
+
+        Args:
+            tag_map: Mapping of global idx to tag string.
+            offsets: List of global start offsets per file.
+        """
+        if self._current_file_index < 0:
+            return
+
+        file = self._loaded_files[self._current_file_index]
+        global_offset = (
+            offsets[self._current_file_index]
+            if self._current_file_index < len(offsets)
+            else 0
+        )
+
         max_preview = 1000
         shown = 0
         for i, line in enumerate(file.lines):
             if shown >= max_preview:
                 break
 
-            # TASK 39.5: Replace newlines with visible markers
             display_line = (
                 line.replace("\r\n", "↵").replace("\n", "↵").replace("\r", "↵")
             )
-
-            if search_text and search_text not in display_line.lower():
-                continue
 
             global_idx = global_offset + i
             line_tag = tag_map.get(global_idx, "")
@@ -2061,7 +2172,7 @@ class InputExtractionStep(BaseStep):
                 "",
                 "end",
                 iid=str(global_idx),
-                values=(i + 1, display_line, line_tag),
+                values=(global_idx, i + 1, display_line, line_tag),
             )
             shown += 1
 
@@ -2070,8 +2181,106 @@ class InputExtractionStep(BaseStep):
             self._preview_tree.insert(
                 "",
                 "end",
-                values=("...", f"(+{remaining} more lines)", ""),
+                values=("", "...", f"(+{remaining} more lines)", ""),
             )
+
+    def _update_preview_cross_file(
+        self,
+        search_text: str,
+        tag_map: Dict[int, str],
+        offsets: List[int],
+    ) -> None:
+        """Show search results across all loaded files.
+
+        Args:
+            search_text: Lowercased search string to match.
+            tag_map: Mapping of global idx to tag string.
+            offsets: List of global start offsets per file.
+        """
+        max_results = 1000
+        shown = 0
+
+        for file_idx, file in enumerate(self._loaded_files):
+            global_offset = offsets[file_idx] if file_idx < len(offsets) else 0
+
+            for i, line in enumerate(file.lines):
+                if shown >= max_results:
+                    break
+
+                display_line = (
+                    line.replace("\r\n", "↵").replace("\n", "↵").replace("\r", "↵")
+                )
+
+                if search_text not in display_line.lower():
+                    continue
+
+                global_idx = global_offset + i
+                line_tag = tag_map.get(global_idx, "")
+                self._preview_tree.insert(
+                    "",
+                    "end",
+                    iid=str(global_idx),
+                    values=(global_idx, i + 1, display_line, line_tag),
+                )
+                shown += 1
+
+            if shown >= max_results:
+                break
+
+    def _on_preview_select(self, event: tk.Event) -> None:
+        """Handle selection in the preview tree.
+
+        During cross-file search, selecting a result switches the file
+        tree selection to the file that contains the selected line so
+        that clearing the search shows the surrounding context.
+        """
+        selection = self._preview_tree.selection()
+        if not selection:
+            return
+
+        item_id = selection[0]
+        if not item_id.isdigit():
+            return
+
+        global_idx = int(item_id)
+
+        # Find which file this idx belongs to
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            filedir = mgr.get_filedir()
+            for file_idx, entry in enumerate(filedir):
+                if entry.first_idx <= global_idx <= entry.last_idx:
+                    if file_idx != self._current_file_index:
+                        self._current_file_index = file_idx
+                        # Update file tree selection without triggering preview refresh
+                        self._select_file_in_tree(file_idx)
+                    break
+        else:
+            # Fallback: compute from loaded file line counts
+            offset = 0
+            for file_idx, file in enumerate(self._loaded_files):
+                if offset <= global_idx < offset + file.line_count:
+                    if file_idx != self._current_file_index:
+                        self._current_file_index = file_idx
+                        self._select_file_in_tree(file_idx)
+                    break
+                offset += file.line_count
+
+    def _select_file_in_tree(self, file_index: int) -> None:
+        """Select a file in the file tree by its loaded file index.
+
+        Args:
+            file_index: Index into ``_loaded_files``.
+        """
+        for item_id, idx in self._tree_item_to_index.items():
+            if idx == file_index:
+                self._file_tree.selection_set(item_id)
+                self._file_tree.see(item_id)
+                break
+
+    def _on_preview_search_clear(self) -> None:
+        """Clear the preview search box and show current file."""
+        self._preview_search_var.set("")
 
     def _on_preview_right_click(self, event: tk.Event) -> None:
         """Handle right-click on preview tree for tag editing.
@@ -2171,6 +2380,12 @@ class InputExtractionStep(BaseStep):
         self._tree_item_to_index.clear()
         if hasattr(self, "_pending_project_name"):
             self._pending_project_name = ""
+        # Reset sort and filter state
+        self._sort_column = ""
+        self._sort_ascending = True
+        if hasattr(self, "_file_filter_var"):
+            self._file_filter_var.set("")
+        self._refresh_sort_headings()
         self._update_file_list()
         self._update_preview()
         self._update_summary()

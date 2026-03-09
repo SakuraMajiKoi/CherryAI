@@ -929,9 +929,12 @@ Each step is a tab in the main notebook. Steps can be navigated freely but follo
 | Format Dropdown | Combobox | Override format detection (auto, txt, csv, json, rpgmaker, image, etc.). Default: auto |
 | Auto-Pipeline Dropdown | Combobox | Pipeline automation level (see Automatic Pipeline section). **Currently hidden** pending rework; widget created but not packed |
 | **Loaded Files Panel** | LabelFrame | Shows loaded files in a tree structure |
-| File Tree | Treeview | Collapsible folder hierarchy with files. Folders always appear above files within the same directory. Loaded files are collapsed (not expanded) by default. Supports multi-select for bulk operations |
+| File Tree | Treeview | Collapsible folder hierarchy with files. Folders always appear above files within the same directory. Loaded files are collapsed (not expanded) by default. Supports multi-select for bulk operations. Clickable column headers (Name, Type, Lines) sort ascending/descending with ▲/▼ indicators |
+| File Filter Entry | Entry | Text filter for loaded files — matches against filename, type, or line count. Matching is instant on keystroke. Non-matching rows are hidden |
+| File Filter Clear Button | Button | "✕" button to clear the file filter text |
 | **Preview Panel** | LabelFrame | Shows content of selected file |
-| Preview Tree | Treeview | Line numbers and content. Must properly render newlines (multi-line content) |
+| Preview Tree | Treeview | Columns: Idx, Line #, Content, Tags. Shows all lines from selected file. When search text is entered, searches across ALL loaded files showing global idx. Must properly render newlines (multi-line content) |
+| Preview Search Clear Button | Button | "✕" button to clear the preview search text |
 
 **Removed Elements** (from previous design):
 - Load Manifest button → Use File → Open Project... menu instead
@@ -1088,12 +1091,34 @@ When `auto_inference` is enabled (Global Option), the pipeline offers several in
 - Multi-select enabled for bulk delete operations
 - Context menu (right-click): Remove Selected, Select All in Folder, Expand All, Collapse All
 
+**Clickable Column Headers**:
+- Columns: Name, Type, Lines — each clickable to sort
+- First click sorts ascending (▲ indicator appended to heading text)
+- Second click on same column sorts descending (▼ indicator)
+- Clicking a different column resets to ascending for that column
+- When sorted by Type or Lines, folder hierarchy is flattened to a flat file list
+- Default (no sort active) shows the original folder tree structure
+
+**File Filter**:
+- Text entry above the file tree for instant filtering
+- Matches against display name, file type, or line count (case-insensitive)
+- Non-matching files are hidden; matching files are shown in a flat list (no folder hierarchy)
+- "✕" clear button resets the filter and restores the full file tree
+- Filter is reset on New Project
+
 #### Preview Panel Details
 
 **Preview Tree**:
-- Columns: Line # (narrow), Content (wide, stretches)
-- Shows all lines from selected file
+- Columns: Idx (narrow), Line # (narrow), Content (wide, stretches), Tags (narrow)
+- Shows all lines from selected file (single-file mode) or search results across all files (cross-file mode)
 - Content column must properly display multi-line text (newlines rendered, not truncated)
+
+**Cross-File Preview Search**:
+- When search text is entered, the preview searches ALL loaded files (not just the selected one)
+- Results show the global idx for each matching line
+- Selecting a search result automatically switches to the file containing that line
+- The corresponding file is highlighted in the file tree
+- "✕" clear button resets the search and returns to single-file preview mode
 
 **Known Issues**:
 - Newlines not displayed properly (second line barely visible, subsequent lines invisible)
@@ -1145,9 +1170,11 @@ When `auto_inference` is enabled (Global Option), the pipeline offers several in
 | Select item in File Tree | Shows preview of that file's content |
 | Right-click File Tree | Context menu: Remove Selected, Select All, Select Type (Dialogue/Menu/Mixed) |
 | Multi-select + Delete | Removes all selected files |
-| Sort spinbox (Filetree/Count/Type) | Controls file tree display order |
+| Click column header (Name/Type/Lines) | Sorts file tree ascending/descending with ▲/▼ indicator |
+| Type in file filter | Filters loaded files by name, type, or line count (instant, case-insensitive) |
 | Right-click Preview line | Context menu: Set Tag (Dialogue/Menu/Choice/Clear) for selected lines |
-| Preview search box | Filters preview lines by text content |
+| Preview search box | Cross-file search: searches ALL loaded files, shows global idx, auto-switches file on selection |
+| Click preview search clear (✕) | Clears search and returns to single-file preview |
 
 #### Format Handler Integration
 

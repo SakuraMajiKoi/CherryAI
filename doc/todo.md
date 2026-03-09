@@ -1208,5 +1208,41 @@ requests by content type, and fix context-type conditional prompt injection.
 - `dev/test_concurrent_execution.py` — 23 tests
 - `dev/test_context_type_prompts.py` — 18 tests
 
+---
+
+### Phase 60: Input Step Improvements
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** Session
+
+Goal: Fix Type column display bug, replace Sort Combobox with clickable column headers,
+add file list filter, and implement cross-file preview search with automatic file switching.
+
+**Completed Sub-tasks:**
+1. ✅ Type Column Refresh Fix (`gui/steps/input_extract.py`)
+   - Added `_update_file_list()` call after `_ensure_project_created()` + `_save_manifest_after_file_load()` in all 3 loading methods
+   - Root cause: `_update_file_list()` was called before `_sync_lines_to_manifest()` set file types via `classify_file_type()`
+2. ✅ Clickable Column Headers (`gui/steps/input_extract.py`)
+   - Replaced Sort Combobox with clickable Name/Type/Lines column headings
+   - ▲/▼ indicators for ascending/descending sort direction
+   - Same column click toggles direction; different column resets to ascending
+   - New attributes: `_sort_column`, `_sort_ascending`
+   - New methods: `_on_column_sort()`, `_refresh_sort_headings()`
+3. ✅ File List Filter (`gui/steps/input_extract.py`)
+   - Filter Entry replaces Sort Combobox frame area
+   - Matches against display name, file type, or line count (case-insensitive)
+   - ✕ clear button resets filter; filter resets on New Project
+   - New widgets: `_file_filter_var`, `_file_filter_entry`, `_file_filter_clear_btn`
+4. ✅ Cross-File Preview Search (`gui/steps/input_extract.py`)
+   - Added `idx` column to preview Treeview
+   - Search text triggers cross-file search across ALL loaded files
+   - Selecting a result auto-switches to the containing file in the file tree
+   - ✕ clear button restores single-file preview mode
+   - New methods: `_update_preview_single_file()`, `_update_preview_cross_file()`, `_on_preview_select()`, `_select_file_in_tree()`, `_on_preview_search_clear()`
+
+**Files Modified:**
+- `gui/steps/input_extract.py` — All 4 improvements
+
+**Tests (60 total):**
+- `dev/test_input_step_improvements.py` — 60 tests (all passing)
+
 END OF ROADMAP
 =============================================================================

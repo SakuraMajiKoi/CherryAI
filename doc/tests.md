@@ -2912,6 +2912,7 @@ Thank you.
 | test_session_persistence.py | 40 | Session auto-save/load, step persistence, file restoration (Release Stabilization) |
 | test_folder_loading.py | 23 | Folder loading in InputExtractionStep |
 | test_input_step_phase39.py | 38 | Input step Phase 39 improvements (unified selector, treeview, format filtering, progress) |
+| test_input_step_improvements.py | 60 | Input step Phase 60 improvements (type column refresh, clickable sort headers, file filter, cross-file preview search) |
 | test_costs_step_phase40.py | 57 | Costs step Phase 40+78 improvements (rename, dual estimation, dual ticks, concurrent time, prepro lines, prompt overhead, preview tokens) |
 | test_estimate_manifest.py | 33 | Estimation/Analysis manifest integration (TASK 25.1, 25.2) |
 | test_qa_manifest.py | 17 | QA step manifest integration (TASK 26.1) |
@@ -8388,6 +8389,118 @@ progress dialog.
 | Test | Purpose |
 |------|---------|
 | `test_no_deprecated_widgets` | Deprecated widgets removed |
+
+---
+
+### dev/test_input_step_improvements.py (60 tests) - Phase 60 Input Step Improvements
+
+Tests for Phase 60 Input step UI/UX improvements: type column refresh fix,
+clickable column header sort, file list filter, cross-file preview search.
+
+#### TestModuleImports (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_input_extraction_step_importable` | InputExtractionStep class is importable |
+| `test_classify_file_type_importable` | classify_file_type function is importable |
+
+#### TestTypeColumnRefresh (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_update_file_list_method_exists` | _update_file_list method exists |
+| `test_load_selected_paths_method_exists` | _load_selected_paths method exists |
+| `test_on_load_files_method_exists` | _on_load_files method exists |
+| `test_on_load_folder_method_exists` | _on_load_folder method exists |
+
+#### TestClickableColumnHeaders (13 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_sort_column_attribute_exists` | _sort_column attribute exists |
+| `test_sort_ascending_attribute_exists` | _sort_ascending attribute exists |
+| `test_sort_column_default_empty` | _sort_column defaults to "" |
+| `test_sort_ascending_default_true` | _sort_ascending defaults to True |
+| `test_on_column_sort_method_exists` | _on_column_sort method exists |
+| `test_refresh_sort_headings_method_exists` | _refresh_sort_headings method exists |
+| `test_no_sort_combobox` | _sort_var attribute removed |
+| `test_column_sort_toggles_ascending` | First sort sets ascending, second toggles |
+| `test_column_sort_changes_column` | Sorting different column resets to ascending |
+| `test_column_sort_name` | Sorting by "name" works |
+| `test_column_sort_type` | Sorting by "type" works |
+| `test_column_sort_lines` | Sorting by "lines" works |
+| `test_refresh_sort_headings_callable` | _refresh_sort_headings is callable |
+
+#### TestFileListFilter (9 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_file_filter_var_exists` | _file_filter_var attribute exists |
+| `test_file_filter_entry_exists` | _file_filter_entry attribute exists |
+| `test_file_filter_clear_btn_exists` | _file_filter_clear_btn attribute exists |
+| `test_filter_var_is_string_var` | _file_filter_var is a StringVar |
+| `test_filter_default_empty` | Filter defaults to empty string |
+| `test_filter_match_name` | Filter matches against filename |
+| `test_filter_match_type` | Filter matches against file type |
+| `test_filter_match_line_count` | Filter matches against line count |
+| `test_filter_case_insensitive` | Filter matching is case-insensitive |
+
+#### TestCrossFilePreviewSearch (14 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_update_preview_method_exists` | _update_preview method exists |
+| `test_update_preview_single_file_method` | _update_preview_single_file method exists |
+| `test_update_preview_cross_file_method` | _update_preview_cross_file method exists |
+| `test_on_preview_select_method` | _on_preview_select method exists |
+| `test_select_file_in_tree_method` | _select_file_in_tree method exists |
+| `test_on_preview_search_clear_method` | _on_preview_search_clear method exists |
+| `test_preview_search_clear_btn_exists` | _preview_search_clear_btn attribute exists |
+| `test_preview_tree_has_idx_column` | Preview treeview has idx column |
+| `test_preview_tree_columns_complete` | Preview tree has all expected columns (idx, line, content, tags) |
+| `test_current_file_index_attribute` | _current_file_index attribute exists |
+| `test_preview_search_var_exists` | _preview_search_var attribute exists |
+| `test_loaded_files_attribute` | _loaded_files attribute exists |
+| `test_preview_tree_has_selectmode` | Preview tree supports selection |
+| `test_file_tree_has_selectmode` | File tree supports selection |
+
+#### TestLoadedFileBasics (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_loaded_files_is_list` | _loaded_files is a list |
+| `test_current_file_index_is_int` | _current_file_index is an integer |
+
+#### TestSortLogicUnit (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_sort_by_name_ascending` | Sort files by name ascending |
+| `test_sort_by_name_descending` | Sort files by name descending |
+| `test_sort_by_lines_ascending` | Sort files by line count ascending |
+| `test_sort_by_lines_descending` | Sort files by line count descending |
+
+#### TestFilterLogicUnit (8 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_filter_empty_shows_all` | Empty filter shows all files |
+| `test_filter_by_partial_name` | Partial name match filters correctly |
+| `test_filter_no_match` | Non-matching filter returns empty |
+| `test_filter_by_type_dialogue` | Filter by "dialogue" type |
+| `test_filter_by_line_count_string` | Filter by line count number |
+| `test_filter_case_insensitive_logic` | Case-insensitive matching |
+| `test_filter_multiple_matches` | Multiple files match single filter |
+| `test_filter_whitespace_stripped` | Leading/trailing whitespace stripped |
+
+#### TestCrossFileSearchLogicUnit (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_search_finds_across_files` | Search finds matches across multiple files |
+| `test_search_returns_global_idx` | Results include global idx |
+| `test_search_empty_returns_none` | Empty search returns no cross-file results |
+| `test_search_case_insensitive` | Search matching is case-insensitive |
 
 ---
 
