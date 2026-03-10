@@ -91,6 +91,8 @@ CherryAI is designed to achieve high-quality translation using LLMs through exte
 The GUI is organized as:
 - **Menu Bar**: File, Edit, Tools, Help dropdowns (File contains New Project, Open Project)
   - **New Project** (`_on_new_session`): Resets ManifestManager (creates empty manifest), resets SessionState, and calls `on_new_project()` on ALL step tabs to flush cached instance state (loaded files, analysis results, lines, estimation data, etc.). Prevents old project data from leaking into the new session.
+- **Toolbar**: Direct-access buttons below the menu bar
+  - **Full Table View** (`_on_full_table_view`): Opens FullTableViewDialog — spreadsheet-like view and editor for all manifest line entries. Requires a loaded project. Features: all LineEntry columns, column auto-hide, cell editing, file filter, RegEx search/replace, pagination, save/reset/diff.
 - **Step Tabs**: 10 workflow tabs (Steps 0-9) progressing from Input to Output
 - **Global Options**: Application-wide settings accessed via Tools → Options
 - **Progress Tracker**: Visual indicator showing completion status of each step
@@ -103,7 +105,7 @@ The GUI is organized as:
 - `formats/`: 5+ file format handlers (expanding to support images and game engines)
 - `gui/steps/`: 10 workflow tabs
 - `gui/helpers/`: 6 adapter modules
-- `gui/dialogs/`: 2 dialog modules
+- `gui/dialogs/`: 6 dialog modules (incl. table_view.py)
 
 ### State Management
 

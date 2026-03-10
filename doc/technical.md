@@ -25,7 +25,7 @@ MODULE AWARENESS (Always check these when implementing features):
 - formats/      : 8 format handlers - file I/O for CSV, TXT, JSON, etc.
 - gui/steps/    : 10 workflow tabs - display and user interaction only
 - gui/components/: Reusable UI widgets (1 module: table.py)
-- gui/dialogs/  : Modal dialogs and forms (5 modules: global_options.py, project_dialog.py, input_dialog.py, loading_progress.py, password_dialog.py)
+- gui/dialogs/  : Modal dialogs and forms (6 modules: global_options.py, project_dialog.py, input_dialog.py, loading_progress.py, password_dialog.py, table_view.py)
 - gui/widgets/  : Reusable standalone widgets (1 module: password_strength.py) [NEW 2026]
 - gui/helpers/  : 7 adapter modules bridging GUI config to processing (mode, analysis, glossary, chunker, prompt, manifest_binding, tooltip)
 - gui/state/    : Application state management (1 module: store.py)
@@ -230,7 +230,7 @@ TABLE OF CONTENTS
        - __init__.py - Component exports
        - table.py - SharedTable, ColumnDef, TableRow (Phase 43: batch insertion for large datasets; Phase 17: version tracking to cancel stale batches; TASK 71: bulk delete, 2000-row batches; TASK 72: page-based display (5000 rows/page), show_count_filter parameter, "Search:" label rename)
    
-   6.6 gui/dialogs/ (6 files - 5 dialog modules)
+   6.6 gui/dialogs/ (7 files - 6 dialog modules)
        - __init__.py - Dialog exports
        - global_options.py - GlobalOptionsDialog with section panels:
          - OptionSection enum: API, REQUEST, TRANSLATION, CACHING, LOGGING, SESSION, LIMIT, FILE_IO, PROMPTS, SECURITY, UTILITY, ADDONS (12 sections)
@@ -314,6 +314,20 @@ TABLE OF CONTENTS
          - ChangePasswordDialog: Authenticated password change with old/new/confirm fields
          - VerifyPasswordDialog: Single-entry unlock prompt (used to authenticate API key access)
          - All dialogs delegate to functions/api_config.py for hashing and encryption
+       - table_view.py - Full Table View dialog (2026):
+         - FullTableViewDialog: Spreadsheet-like view of all manifest line entries
+         - All LineEntry fields as columns (idx, orig, prepro, tl, postpro, wordwr, etc.)
+         - Column visibility: auto-hides empty columns; Column Filter dropdown to toggle
+         - Cell editing (double-click), deletion (Del key), multi-select, column clearing
+         - File filter dropdown: hierarchical folder navigation with Back/All navigation
+         - Full RegEx search and replace across selectable columns (Show/Hide Misses, Prev/Next)
+         - Row selection checkboxes with highlighting; Ctrl+click and Shift+click support
+         - Pagination: Show All / Show X with configurable page size (default 100)
+         - Save/Reset/Diff buttons: saves changes to manifest, resets from snapshot, diff mode
+         - Change tracking: unsaved changes highlighted; close prompt to save/discard
+         - Accessed via "Full Table View" button in the toolbar (not menu dropdown)
+         - _FileFilterDropdown helper: hierarchical listbox with scrolling and keyboard nav
+         - _ColumnFilterDropdown helper: checkbox list with Show Populated / Show All buttons
 
    6.7 gui/widgets/ (2 files - 1 widget module) [NEW 2026]
        - __init__.py - Widget package

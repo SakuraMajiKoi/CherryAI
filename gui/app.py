@@ -26,6 +26,7 @@ from CherryAI.gui.dialogs.project_dialog import (
     LoadManifestDialog,
     WelcomeDialog,
 )
+from CherryAI.gui.dialogs.table_view import FullTableViewDialog
 from CherryAI.gui.theme.colors import THEME, apply_theme
 from CherryAI.gui.state.store import (
     SessionState,
@@ -152,6 +153,7 @@ class App(tk.Tk):
 
         # Build UI
         self._build_menu()
+        self._build_toolbar()
         self._build_main_layout()
         self._build_status_bar()
 
@@ -271,6 +273,18 @@ class App(tk.Tk):
         help_menu.add_command(label="Documentation", command=self._on_help)
         help_menu.add_separator()
         help_menu.add_command(label="About", command=self._on_about)
+
+    def _build_toolbar(self) -> None:
+        """Build the top toolbar with direct-access buttons."""
+        toolbar = ttk.Frame(self)
+        toolbar.pack(fill="x", padx=4, pady=(2, 0))
+
+        ttk.Button(
+            toolbar,
+            text="Full Table View",
+            command=self._on_full_table_view,
+            width=16,
+        ).pack(side="left", padx=(4, 0))
 
     def _build_main_layout(self) -> None:
         """Build the main layout with tabs and progress tracker."""
@@ -787,6 +801,16 @@ class App(tk.Tk):
         # Start background thread
         thread = threading.Thread(target=run_test, daemon=True)
         thread.start()
+
+    def _on_full_table_view(self) -> None:
+        """Open the Full Table View dialog."""
+        if not self._manifest_manager.is_loaded:
+            messagebox.showwarning(
+                "No Project",
+                "Please open or create a project first.",
+            )
+            return
+        FullTableViewDialog(self, self._manifest_manager)
 
     def _on_help(self) -> None:
         """Handle Documentation menu item."""

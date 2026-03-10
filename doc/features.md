@@ -245,6 +245,19 @@ The tool has several ways to protect content:
 
 KEY FEATURES
 
+FULL TABLE VIEW
+- **Toolbar Button**: Direct access via "Full Table View" button in the top toolbar (not a menu dropdown)
+- **Spreadsheet View**: Displays all manifest line entries with every LineEntry field as a column
+- **Column Auto-Hide**: Empty columns hidden by default; Column Filter dropdown to toggle visibility
+- **Cell Editing**: Double-click to edit any cell (except idx); multiline support via Shift+Enter
+- **Deletion**: Del key clears selected cells; entire columns can be cleared
+- **File Filter**: Hierarchical dropdown with folder navigation (click folders, Back button, scrollable)
+- **RegEx Search & Replace**: Search across all or specific columns; toggle RegEx mode; Show/Hide Misses with Prev/Next navigation
+- **Row Selection**: Checkbox-based selection with Ctrl+click and Shift+click; highlighted rows
+- **Pagination**: Show All / Show X with configurable page size (default 100); "Showing X / Y Lines" status
+- **Save/Reset/Diff**: Save changes to manifest (all or selected); Reset from manifest data; Diff mode shows only changed rows
+- **Close Prompt**: Asks to save or discard unsaved changes on close
+
 INTEGRATED AI TRANSLATION
 - **1-Click Flow**: Use the "1-Click" button to run the entire pipeline (Load -> Pre -> Translate -> Post) automatically.
 - **Manual Control**: Use the "Translate" button to run translation on already pre-processed files (using the loaded manifest).

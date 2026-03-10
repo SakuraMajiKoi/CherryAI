@@ -48,13 +48,40 @@ MODULE COUNTS (Verified January 2026)
 - formats/: 5 format handlers
 - gui/steps/: 10 workflow tabs
 - gui/helpers/: 6 adapter modules (mode, analysis, glossary, chunker, prompt, manifest_binding)
-- gui/dialogs/: 3 dialog modules (global_options, project_dialog, loading_progress)
+- gui/dialogs/: 6 dialog modules (global_options, project_dialog, input_dialog, loading_progress, password_dialog, table_view)
 
 =============================================================================
 
 =============================================================================
 [Archived: Sessions 43–24 + Phase 62 → see doc/archived.md]
 
+
+PENDING TASKS - Full Table View
+
+### FEATURE: Full Table View Dialog
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 4 hours
+
+Goal: Spreadsheet-like view of all manifest line entries accessible via toolbar button.
+
+**Implementation:**
+- Added `gui/dialogs/table_view.py` — FullTableViewDialog (Toplevel)
+- Added "Full Table View" button in app.py toolbar (not a menu dropdown)
+- All LineEntry fields as columns; column auto-hide for empty columns
+- Cell editing (double-click), deletion (Del), multi-select, column clearing
+- Hierarchical file filter dropdown with folder navigation
+- Full RegEx search & replace with Show/Hide Misses and Prev/Next navigation
+- Row selection checkboxes with Ctrl+click / Shift+click
+- Pagination: Show All / Show X (default 100), configurable page size
+- Save/Reset/Diff operations against manifest with change tracking
+- Close prompt for unsaved changes
+
+**Files Modified:**
+- `gui/dialogs/table_view.py` — New: FullTableViewDialog, _FileFilterDropdown, _ColumnFilterDropdown
+- `gui/app.py` — Added toolbar with "Full Table View" button + handler
+
+**Tests:** `dev/test_table_view.py` — 88 tests (all passing)
+
+---
 
 PENDING TASKS - Costs TAB
 

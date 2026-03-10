@@ -218,6 +218,146 @@ python CherryAI.py test --skip-api
 
 ## Test File Reference
 
+### dev/test_table_view.py (88 tests)
+
+Full Table View dialog unit tests. Mocks Tkinter to test data logic independently.
+
+#### TestDataLoading (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_load_data_populates_all_lines` | Lines loaded from manifest |
+| `test_load_data_deep_copies_lines` | Deep copy prevents mutation |
+| `test_load_data_populates_filedir` | Filedir entries loaded |
+| `test_find_line_exists` | Find line by idx |
+| `test_find_line_not_exists` | None for missing idx |
+| `test_empty_manifest_has_no_lines` | Empty manifest handled |
+
+#### TestColumnVisibility (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_populated_columns_detected` | Detects columns with data |
+| `test_empty_columns_hidden_by_default` | Empty columns auto-hidden |
+| `test_apply_column_visibility` | Updates visible/hidden sets |
+| `test_idx_always_visible` | idx cannot be hidden |
+
+#### TestPagination (9 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_get_display_lines_no_filter` | All lines without filter |
+| `test_get_paginated_lines_default` | Default page size |
+| `test_get_paginated_lines_offset` | Pagination offset |
+| `test_show_all_returns_everything` | Show All mode |
+| `test_page_next` | Next page navigation |
+| `test_page_prev` | Previous page navigation |
+| `test_page_prev_at_zero` | Prev at offset 0 |
+| `test_toggle_show_all` | Show All toggle |
+| `test_last_page_partial` | Partial last page |
+
+#### TestFileFilter (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_no_filter_shows_all` | No filter shows all lines |
+| `test_filter_by_file` | Filter by specific file |
+| `test_filter_by_folder` | Filter by folder |
+| `test_filter_by_subfolder` | Filter by subfolder |
+| `test_refresh_file_filter_options_builds_tree` | Folder tree built |
+| `test_apply_file_filter_none_clears` | None clears filter |
+
+#### TestSearchReplace (9 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_search_plain_text` | Plain text search |
+| `test_search_regex` | RegEx search |
+| `test_search_specific_column` | Column-specific search |
+| `test_search_invalid_regex_no_crash` | Invalid regex handling |
+| `test_hide_misses_filter` | Hide misses mode |
+| `test_pinned_rows_survive_hide_misses` | Pinned rows visible |
+| `test_replace_all_single_column` | Replace all in column |
+| `test_replace_regex_groups` | Regex capture groups |
+| `test_replace_non_editable_column_blocked` | idx not replaceable |
+
+#### TestCellEditing (11 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_record_change` | Record field change |
+| `test_record_multiple_changes_same_line` | Multiple field changes |
+| `test_record_delete` | Record field deletion |
+| `test_has_changes_false_initially` | No changes at start |
+| `test_has_changes_after_edit` | Changes detected after edit |
+| `test_has_changes_after_delete` | Changes detected after delete |
+| `test_non_editable_fields_constant` | Constant verification |
+| `test_edit_updates_working_copy` | Working copy updated |
+| `test_delete_clears_field` | Field cleared to empty |
+| `test_clear_column_affects_all_lines` | Column clear all lines |
+| `test_clear_column_respects_file_filter` | Column clear with filter |
+
+#### TestRowSelection (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_select_row` | Select individual row |
+| `test_deselect_row` | Deselect row |
+| `test_multiselect` | Multi-row selection |
+| `test_range_select` | Shift-click range select |
+
+#### TestSaveResetDiff (8 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_save_all_changes` | Save all to manifest |
+| `test_save_selected_only` | Save selected rows only |
+| `test_reset_all` | Reset all to original |
+| `test_reset_selected_only` | Reset selected rows only |
+| `test_diff_mode_shows_only_changed` | Diff shows changes |
+| `test_diff_mode_empty_when_no_changes` | Diff empty without changes |
+| `test_save_no_changes_noop` | No-op save on clean state |
+| `test_changes_cleared_after_full_save` | Tracking cleared after save |
+
+#### TestDisplayLinesComposition (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_file_filter_plus_search` | Combined file + search filter |
+| `test_file_filter_plus_diff` | Combined file + diff filter |
+| `test_all_filters_combined` | All filters + pagination |
+
+#### TestSorting (3 tests), TestConstants (6 tests), TestFileDirEntryIntegration (4 tests)
+
+| Test Category | Count | Purpose |
+|---------------|-------|---------|
+| Sorting | 3 | Column sorting by idx, text, reverse |
+| Constants | 6 | Module constants validation |
+| FileDirEntry | 4 | Integration with FileDirEntry dataclass |
+
+#### TestFileFilterDropdownLogic (3 tests), TestColumnFilterLogic (3 tests)
+
+| Test Category | Count | Purpose |
+|---------------|-------|---------|
+| FileFilterDropdown | 3 | Folder tree, navigation, back |
+| ColumnFilterLogic | 3 | Populated filter, show all, idx |
+
+#### TestEdgeCases (9 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_empty_manifest_no_crash` | Handle empty manifest |
+| `test_large_line_count_pagination` | 10k line pagination |
+| `test_line_with_none_values` | None value handling |
+| `test_find_line_with_zero_idx` | idx=0 is valid |
+| `test_recording_change_creates_entry` | New change tracking entry |
+| `test_search_matches_empty_on_clear` | Clear search |
+| `test_diff_after_delete` | Diff includes deletions |
+| `test_lines_with_special_characters` | Regex special chars safe |
+| `test_multiline_content` | Multiline text handling |
+
+---
+
 ### dev/test_manifest_v2.py (51 tests)
 
 Core Manifest v2.0 unit tests validating LineEntry and Manifest classes.
