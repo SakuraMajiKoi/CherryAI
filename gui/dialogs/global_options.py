@@ -1067,6 +1067,7 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.api_key_var = tk.StringVar(value=self.options.api.api_key)
         self.base_url_var = tk.StringVar(value=self.options.api.base_url)
         self.model_var = tk.StringVar(value=self.options.api.model)
+        self.model_var.trace_add("write", self._on_model_change)
         self.temperature_var = tk.DoubleVar(value=self.options.api.temperature)
 
         # Request settings
@@ -1515,6 +1516,29 @@ class GlobalOptionsDialog(tk.Toplevel):
         desc = ttk.Label(panel, text=SECTION_DESCRIPTIONS[OptionSection.REQUEST], foreground="gray")
         desc.pack(anchor="w", pady=(0, 15))
 
+        # Model Selection (V8: per-model settings)
+        model_frame = ttk.LabelFrame(panel, text="Model Selection", padding=10)
+        model_frame.pack(fill=tk.X, pady=(0, 10))
+
+        model_row = ttk.Frame(model_frame)
+        model_row.pack(fill=tk.X, pady=5)
+
+        ttk.Label(model_row, text="Model:", width=18).pack(side=tk.LEFT)
+        self._settings_model_combo = ttk.Combobox(
+            model_row, textvariable=self.model_var, width=35,
+        )
+        self._settings_model_combo.pack(side=tk.LEFT, padx=5)
+
+        self._model_info_label = ttk.Label(
+            model_frame,
+            text="Settings below are stored per model.",
+            foreground="gray",
+        )
+        self._model_info_label.pack(anchor=tk.W, pady=(0, 5))
+
+        # Keep combo values in sync with provider's models
+        self._sync_settings_model_combo()
+
         # Settings frame
         settings_frame = ttk.LabelFrame(panel, text="Request Parameters", padding=10)
         settings_frame.pack(fill=tk.X, pady=(0, 10))
@@ -1569,14 +1593,15 @@ class GlobalOptionsDialog(tk.Toplevel):
         # Temperature (moved from API Provider section)
         temp_row = ttk.Frame(settings_frame)
         temp_row.pack(fill=tk.X, pady=5)
+        self._temp_row = temp_row  # V8: stored for show/hide
 
         ttk.Label(temp_row, text="Temperature:", width=18).pack(side=tk.LEFT)
-        temp_scale = ttk.Scale(
+        self._temp_scale = ttk.Scale(
             temp_row, from_=0.0, to=2.0,
             variable=self.temperature_var,
             orient=tk.HORIZONTAL, length=200,
         )
-        temp_scale.pack(side=tk.LEFT, padx=5)
+        self._temp_scale.pack(side=tk.LEFT, padx=5)
 
         self._temp_label = ttk.Label(
             temp_row, text=f"{self.temperature_var.get():.1f}",
@@ -1584,15 +1609,17 @@ class GlobalOptionsDialog(tk.Toplevel):
         self._temp_label.pack(side=tk.LEFT, padx=5)
         self.temperature_var.trace_add("write", self._update_temp_label)
 
-        ttk.Label(
+        self._temp_hint_label = ttk.Label(
             settings_frame,
             text="Lower = more deterministic, Higher = more creative (0.0-2.0)",
             foreground="gray",
-        ).pack(anchor=tk.W, pady=(0, 5))
+        )
+        self._temp_hint_label.pack(anchor=tk.W, pady=(0, 5))
 
         # Thinking Mode (Task 43.8)
         think_frame = ttk.LabelFrame(panel, text="Thinking Mode", padding=10)
         think_frame.pack(fill=tk.X, pady=(0, 10))
+        self._think_frame = think_frame  # V8: stored for show/hide
 
         think_check = ttk.Checkbutton(
             think_frame, text="Enable Thinking Mode",
@@ -1616,7 +1643,19 @@ class GlobalOptionsDialog(tk.Toplevel):
             text="Applies extended thinking for Claude and reasoning effort for OpenAI models.",
             foreground="gray",
         )
-        think_help.pack(anchor=tk.W, pady=(0, 5))
+        think_help.pack(anchor=tk.W, pady=(0, 2))
+
+        think_warn = ttk.Label(
+            think_frame,
+            text=(
+                "⚠ Thinking/reasoning significantly increases cost and latency. "
+                "It is not known to improve translation quality and may even "
+                "negatively affect it."
+            ),
+            foreground="#cc6600",
+            wraplength=450,
+        )
+        think_warn.pack(anchor=tk.W, pady=(0, 5))
 
     def _build_translation_section(self) -> None:
         """Build the Translation Options section.
@@ -3109,12 +3148,106 @@ class GlobalOptionsDialog(tk.Toplevel):
     # -------------------------------------------------------------------------
 
     def _on_provider_change(self, event: Optional[tk.Event]) -> None:
-        """Handle provider selection change."""
+        """Handle provider selection change with provider validation."""
         provider = self.provider_var.get()
         if provider in API_PROVIDERS:
             info = API_PROVIDERS[provider]
             self.base_url_var.set(info.get("base_url", ""))
             self._update_model_list()
+
+        # Provider Handshake validation (V8)
+        self._apply_provider_constraints()
+
+    def _on_model_change(self, *_args: Any) -> None:
+        """Handle model selection change — re-apply provider constraints.
+
+        Also loads per-model settings (temperature, thinking) when
+        they differ from the global defaults.
+        """
+        self._load_model_settings()
+        self._apply_provider_constraints()
+
+    def _apply_provider_constraints(self) -> None:
+        """Apply provider/model capability constraints to UI widgets.
+
+        Validates the selected provider, then shows or hides temperature
+        and thinking widgets based on the provider's reported capabilities
+        for the currently selected model.  Also warns when the model
+        does not support structured JSON output.
+        """
+        # Guard: widgets not yet created during __init__
+        if not hasattr(self, "_temp_row"):
+            return
+
+        try:
+            from CherryAI.providers import (
+                ProviderRegistry, validate_provider,
+            )
+        except Exception:
+            return  # providers package not available — skip
+
+        provider_key = self.provider_var.get()
+        provider = ProviderRegistry.get(provider_key)
+        if provider is None:
+            return
+
+        # --- Validate provider (only after initial build) ---
+        if getattr(self, "_constraints_initialized", False):
+            errors = validate_provider(provider)
+            if errors:
+                messagebox.showwarning(
+                    "Provider Validation",
+                    f"Provider '{provider.display_name}' has issues:\n\n"
+                    + "\n".join(f"• {e}" for e in errors),
+                    parent=self,
+                )
+
+        model_id = self.model_var.get()
+
+        # --- Temperature constraints ---
+        temp_cfg = provider.get_temperature_config(model_id)
+        if temp_cfg.supported:
+            self._temp_row.pack(fill=tk.X, pady=5)
+            self._temp_hint_label.pack(anchor=tk.W, pady=(0, 5))
+            self._temp_scale.configure(
+                from_=temp_cfg.min_value, to=temp_cfg.max_value,
+            )
+            hint = (
+                f"Range {temp_cfg.min_value:.1f}–{temp_cfg.max_value:.1f}"
+                f"  (default {temp_cfg.default:.1f})"
+            )
+            self._temp_hint_label.configure(text=hint)
+            # Clamp current value to valid range
+            cur = self.temperature_var.get()
+            if cur < temp_cfg.min_value:
+                self.temperature_var.set(temp_cfg.min_value)
+            elif cur > temp_cfg.max_value:
+                self.temperature_var.set(temp_cfg.max_value)
+        else:
+            self._temp_row.pack_forget()
+            self._temp_hint_label.pack_forget()
+
+        # --- Thinking constraints ---
+        think_cfg = provider.get_thinking_config(model_id)
+        if think_cfg.available:
+            self._think_frame.pack(fill=tk.X, pady=(0, 10))
+        else:
+            self._think_frame.pack_forget()
+            self.thinking_enabled_var.set(False)
+
+        # --- Structured output warning (only on user action) ---
+        if getattr(self, "_constraints_initialized", False):
+            if model_id and not provider.supports_structured_output(model_id):
+                messagebox.showwarning(
+                    "Structured Output",
+                    f"Model '{model_id}' does not support "
+                    "structured JSON output.\n"
+                    "Translation quality may be reduced.",
+                    parent=self,
+                )
+
+        # Mark that future calls come from user interaction
+        self._constraints_initialized = True
 
     def _update_model_list(self) -> None:
         """Update the model combobox from the model registry for the current provider."""
@@ -3126,6 +3259,91 @@ class GlobalOptionsDialog(tk.Toplevel):
         self._model_combo["values"] = models
         if self.model_var.get() not in models and models:
             self.model_var.set(models[0])
+        # Keep visible combo in sync
+        self._sync_settings_model_combo()
+
+    def _sync_settings_model_combo(self) -> None:
+        """Sync the visible Model Selection combo with the hidden one."""
+        if not hasattr(self, "_settings_model_combo"):
+            return
+        self._settings_model_combo["values"] = self._model_combo["values"]
+
+    def _load_model_settings(self) -> None:
+        """Load per-model settings from INI (temperature, thinking).
+
+        Falls back to provider defaults when no saved per-model entry exists.
+        """
+        try:
+            from CherryAI.functions import ini_manager
+        except Exception:
+            return
+
+        model_id = self.model_var.get()
+        if not model_id:
+            return
+
+        saved = ini_manager.get_all_user_defaults("model_settings")
+        prefix = f"{model_id}."
+
+        # Temperature
+        temp_key = f"{prefix}temperature"
+        if temp_key in saved:
+            try:
+                self.temperature_var.set(float(saved[temp_key]))
+            except (ValueError, tk.TclError):
+                pass
+        else:
+            # Use provider default if available
+            self._apply_provider_temp_default(model_id)
+
+        # Thinking enabled
+        think_key = f"{prefix}thinking_enabled"
+        if think_key in saved:
+            self.thinking_enabled_var.set(
+                saved[think_key].lower() in ("true", "1", "yes"),
+            )
+        else:
+            self.thinking_enabled_var.set(False)
+
+        # Thinking budget
+        budget_key = f"{prefix}thinking_budget"
+        if budget_key in saved:
+            try:
+                self.thinking_budget_var.set(int(saved[budget_key]))
+            except (ValueError, tk.TclError):
+                pass
+
+    def _apply_provider_temp_default(self, model_id: str) -> None:
+        """Set temperature to the provider's default for this model."""
+        try:
+            from CherryAI.providers import ProviderRegistry
+            provider = ProviderRegistry.get(self.provider_var.get())
+            if provider:
+                cfg = provider.get_temperature_config(model_id)
+                if cfg.supported:
+                    self.temperature_var.set(cfg.default)
+        except Exception:
+            pass
+
+    def _save_model_settings(self) -> None:
+        """Persist per-model settings (temperature, thinking) to INI."""
+        try:
+            from CherryAI.functions import ini_manager
+        except Exception:
+            return
+
+        model_id = self.model_var.get()
+        if not model_id:
+            return
+
+        vals = {
+            f"{model_id}.temperature": str(self.temperature_var.get()),
+            f"{model_id}.thinking_enabled": str(
+                self.thinking_enabled_var.get(),
+            ).lower(),
+            f"{model_id}.thinking_budget": str(self.thinking_budget_var.get()),
+        }
+        ini_manager.save_as_user_defaults("model_settings", vals)
 
     def _on_refresh_models(self) -> None:
         """Refresh model lists — uses built-in curated fallback data.
@@ -4419,6 +4637,9 @@ class GlobalOptionsDialog(tk.Toplevel):
 
         # Persist all settings to INI so they survive application restart.
         self._persist_to_ini()
+
+        # Persist per-model overrides (V8)
+        self._save_model_settings()
 
         logger.info("Global options saved")
 

@@ -20,6 +20,7 @@ GUI CODE RULES:
 
 MODULE AWARENESS (Always check these when implementing features):
 - functions/    : 48 modules - core shared functionality (+ glossaries/ subfolder with 5 files)
+- providers/    : 7 LLM provider modules - unified provider interface (Provider Handshake)
 - modi/         : 12 processing modes - pre/post-processing plugins
 - formats/      : 8 format handlers - file I/O for CSV, TXT, JSON, etc.
 - gui/steps/    : 10 workflow tabs - display and user interaction only
@@ -150,6 +151,30 @@ TABLE OF CONTENTS
         * Migration: migrate_profiles_ini(path) — migrates non-secret fields from api_profiles.ini, renames to .migrated
         * PasswordStrength.assess(pw) / meter_text(pw) — Tiers: Instantly/Weak/Good/Great/Safe
         * See doc/passwords.md for full security documentation
+
+3A. PROVIDERS/ MODULES (7 providers - Unified LLM Provider Interface)
+    ✅ = Verified exists | 🔗 = Integrated with api_client.py & options.py
+
+    Provider Handshake — pluggable provider abstraction replacing scattered
+    if/elif provider branches with self-contained provider classes.
+
+    3A.1 __init__.py ✅🔗 - ProviderBase ABC, ProviderRegistry, validate_provider(),
+         shared types (TokenUsage, ProviderResponse, ThinkingConfig,
+         TemperatureConfig, CachedInputConfig, BatchConfig),
+         error hierarchy (ProviderError → 7 subtypes), _load_providers()
+    3A.2 openai_provider.py ✅🔗 - OpenAIProvider (reference), OpenAICompatProvider
+         (base for compatible providers). GPT-5 family: no temperature, builtin
+         reasoning. O-series: builtin reasoning. Prompt caching, batch support.
+    3A.3 google_provider.py ✅ - GoogleProvider (inherits OpenAICompatProvider).
+         Thinking via FALLBACK_MODELS lookup.
+    3A.4 mistral_provider.py ✅ - MistralProvider (inherits OpenAICompatProvider).
+         Temperature max 1.0. Magistral models have thinking.
+    3A.5 anthropic_provider.py ✅ - AnthropicProvider (inherits OpenAICompatProvider).
+         Explicit thinking mode via extra_body, budget default 10K.
+    3A.6 local_provider.py ✅ - LocalProvider (direct ProviderBase), LMStudioProvider
+         (port 1234), OllamaProvider (port 11434). json_schema format, $0 pricing.
+    3A.7 provider_template.py - Documented skeleton for adding new providers.
+         See also doc/adding_a_provider.md.
 
 4. MODI/ MODULES (12 modes - Pre/Post Processing Plugins)
    ✅ = Verified exists | 🔗 = GUI integrated via mode_adapter | ❌ = Not integrated with GUI v2

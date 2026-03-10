@@ -77,6 +77,15 @@ def _setup_cherryai_package():
         except ImportError:
             pass
 
+    # Create CherryAI.providers namespace
+    providers_dir = CHERRYAI_ROOT / "providers"
+    if providers_dir.exists():
+        try:
+            import providers as actual_providers  # type: ignore
+            sys.modules["CherryAI.providers"] = actual_providers
+        except ImportError:
+            pass
+
 
 # Pytest hook to ensure setup runs before each test session
 @pytest.hookimpl(tryfirst=True)

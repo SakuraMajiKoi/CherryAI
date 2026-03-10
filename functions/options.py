@@ -72,7 +72,65 @@ def _build_api_providers() -> Dict[str, Dict[str, Any]]:
     """Build the full API_PROVIDERS dict, pulling cloud model lists from the registry.
 
     Falls back to built-in model lists if the registry is unavailable.
+    Integrates with ProviderRegistry when available (V7 Provider Handshake).
     """
+    # Try ProviderRegistry first — it knows all registered providers
+    try:
+        from providers import ProviderRegistry
+        pr_providers = ProviderRegistry.all()
+    except Exception:
+        pr_providers = []
+
+    providers: Dict[str, Dict[str, Any]] = {}
+
+    if pr_providers:
+        # ProviderRegistry is available — build from registered providers
+        # Map provider names to options.py keys
+        _NAME_TO_KEY = {
+            "openai": "openai",
+            "google": "gemini",
+            "mistral": "mistral",
+            "anthropic": "anthropic",
+            "local": "local",
+            "lmstudio": "lmstudio",
+            "ollama": "ollama",
+        }
+
+        try:
+            from .model_registry import get_provider_model_ids
+        except Exception:
+            get_provider_model_ids = None  # type: ignore[assignment]
+
+        for p in pr_providers:
+            key = _NAME_TO_KEY.get(p.name, p.name)
+
+            # Get model list: try model_registry for cloud providers
+            # Map options key to registry provider ID
+            _KEY_TO_REGISTRY = {
+                "openai": "openai", "gemini": "google", "mistral": "mistral",
+            }
+            rid = _KEY_TO_REGISTRY.get(key)
+            models: List[str] = []
+            if rid and get_provider_model_ids is not None:
+                try:
+                    models = get_provider_model_ids(rid)
+                except Exception:
+                    pass
+            if not models:
+                # Fallback to hardcoded lists
+                if key in _CLOUD_FALLBACK_MODELS:
+                    models = _CLOUD_FALLBACK_MODELS[key]
+                elif key in _STATIC_PROVIDERS:
+                    models = _STATIC_PROVIDERS[key].get("models", [])
+
+            providers[key] = {
+                "name": p.display_name,
+                "base_url": p.base_url,
+                "models": models,
+            }
+        return providers
+
+    # Legacy fallback: ProviderRegistry not available
     try:
         from .model_registry import (
             get_provider_model_ids,
@@ -87,8 +145,6 @@ def _build_api_providers() -> Dict[str, Dict[str, Any]]:
         }
     except Exception:
         _registry_map = {}
-
-    providers: Dict[str, Dict[str, Any]] = {}
 
     # Cloud providers — dynamic model lists
     for pkey, meta in _CLOUD_PROVIDER_META.items():
@@ -237,6 +293,14 @@ def get_provider_display_name(provider: str) -> str:
     Returns:
         Human-readable provider name, or the key if not found.
     """
+    # Try ProviderRegistry first
+    try:
+        from providers import ProviderRegistry
+        p = ProviderRegistry.get(provider)
+        if p:
+            return p.display_name
+    except Exception:
+        pass
     providers = _get_api_providers()
     if provider in providers:
         return providers[provider].get("name", provider)

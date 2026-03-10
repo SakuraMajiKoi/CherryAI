@@ -98,6 +98,7 @@ The GUI is organized as:
 ### Module Counts
 
 - `functions/`: 36 modules (core processing)
+- `providers/`: 7 LLM provider modules (Provider Handshake — unified provider interface)
 - `modi/`: 12 pre/post-processing modes
 - `formats/`: 5+ file format handlers (expanding to support images and game engines)
 - `gui/steps/`: 10 workflow tabs
@@ -3051,6 +3052,14 @@ Local providers (LM Studio, Ollama, local):
 > It requires `{"type": "json_schema", ...}` with a full schema definition.
 > The `APIClient.is_local_provider()` method detects the provider type and selects
 > the appropriate format automatically.
+>
+> **Provider Handshake:** Since the Provider Handshake migration, the response
+> format, temperature handling, and thinking mode parameters are determined by
+> each provider's `get_response_format()`, `get_temperature_config()`, and
+> `get_thinking_config()` methods.  The `api_client.py` delegates to the resolved
+> provider rather than using if/elif branches.  Temperature is omitted for
+> GPT-5 family and o-series models.  Thinking parameters are injected only
+> for Anthropic's explicit mode.
 
 ---
 

@@ -308,6 +308,14 @@ class APIClient:
         
         # Rate limiter (initialized lazily when needed)
         self._rate_limiter: Optional[RateLimiter] = None
+
+        # Resolve provider from ProviderRegistry (V6 Provider Handshake)
+        self._provider = None
+        try:
+            from providers import ProviderRegistry
+            self._provider = ProviderRegistry.get(self.config.provider)
+        except Exception:
+            pass  # Fallback to legacy branching if registry unavailable
         
         self._init_client()
         
@@ -350,9 +358,13 @@ class APIClient:
         # For local LLMs, allow dummy/empty keys
         api_key = self.config.api_key
         if not api_key:
-            if (self.config.no_api_key
+            # Use provider handshake if available
+            if self._provider and not self._provider.requires_api_key:
+                api_key = "lm-studio"
+                self.logger.info("Using no-API-key mode for local LLM")
+            elif (self.config.no_api_key
                     or self.config.provider.lower() in self.LOCAL_PROVIDERS):
-                # Use a placeholder key for local LLMs
+                # Legacy fallback
                 api_key = "lm-studio"
                 self.logger.info("Using no-API-key mode for local LLM")
             else:
@@ -1900,7 +1912,11 @@ class APIClient:
         # {"type": "json_object"}.  LM Studio requires
         # {"type": "json_schema", "json_schema": {...}} instead.
         # We detect the provider and choose the right format.
-        if self.is_local_provider():
+        if self._provider:
+            response_fmt: Dict[str, Any] = self._provider.get_response_format(
+                self.config.model
+            )
+        elif self.is_local_provider():
             response_fmt: Dict[str, Any] = {
                 "type": "json_schema",
                 "json_schema": {
@@ -1925,9 +1941,16 @@ class APIClient:
         api_params: Dict[str, Any] = {
             "model": self.config.model,
             "messages": messages,
-            "temperature": self.config.temperature,
             "response_format": response_fmt,
         }
+
+        # Temperature: use provider to check if model supports it
+        if self._provider:
+            temp_cfg = self._provider.get_temperature_config(self.config.model)
+            if temp_cfg.supported:
+                api_params["temperature"] = self.config.temperature
+        else:
+            api_params["temperature"] = self.config.temperature
         
         # Add thinking mode parameters if enabled
         thinking_params = self.get_thinking_params()
@@ -1965,8 +1988,12 @@ class APIClient:
         except TranslationAbortError:
             raise
         except Exception as e:
-            # Classify the library-level error and raise the appropriate type
-            classified = classify_api_error(e)
+            # Try provider-level classification first, fall back to legacy
+            classified = None
+            if self._provider:
+                classified = self._provider.classify_error(e)
+            if classified is None:
+                classified = classify_api_error(e)
             if classified.is_fatal:
                 raise TranslationAbortError(classified) from e
             raise TranslationError(f"OpenAI API call failed: {str(e)}") from e

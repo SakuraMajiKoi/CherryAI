@@ -1494,7 +1494,7 @@ All features documented in `features.md`, `technical.md`, and `tests.md`.
 
 ## PHASE: Provider Handshake — Unified LLM Provider Interface
 
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 16-20 hours
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 16-20 hours
 
 ### Goal
 
@@ -1898,7 +1898,7 @@ the orchestrator that delegates to the active provider.
 ### Implementation Plan
 
 #### TASK V1: Define Provider ABC and Shared Types
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
 
 - Create `providers/__init__.py` with `ProviderBase` ABC, `ProviderResponse`,
   `TokenUsage`, `ProviderError` hierarchy, `ThinkingConfig`, `CachedInputConfig`,
@@ -1923,7 +1923,7 @@ the orchestrator that delegates to the active provider.
 ---
 
 #### TASK V2: OpenAI Reference Provider
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
 
 - Create `providers/openai_provider.py` implementing `ProviderBase`.
 - `send_request()` uses `OpenAI` SDK `client.chat.completions.create()`.
@@ -1956,7 +1956,7 @@ the orchestrator that delegates to the active provider.
 ---
 
 #### TASK V3: OpenAI-Compatible Base + Google/Mistral Providers
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
 
 - Create `OpenAICompatProvider` class inheriting from `OpenAIProvider`.
   It reuses `send_request()` and `parse_response()` but overrides URL,
@@ -1989,7 +1989,7 @@ the orchestrator that delegates to the active provider.
 ---
 
 #### TASK V4: Anthropic (Claude) Provider
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
 
 - Create `providers/anthropic_provider.py` (`AnthropicProvider`):
   - Inherits `OpenAICompatProvider` (uses OpenAI-compat endpoint)
@@ -2017,7 +2017,7 @@ the orchestrator that delegates to the active provider.
 ---
 
 #### TASK V5: Local Provider (LM Studio / Ollama)
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
 
 - Create `providers/local_provider.py` (`LocalProvider`):
   - `requires_api_key = False`
@@ -2050,7 +2050,7 @@ the orchestrator that delegates to the active provider.
 ---
 
 #### TASK V6: Integrate ProviderRegistry into APIClient
-**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
 
 Refactor `APIClient` to delegate to the active provider instead of using
 inline `if`/`elif` branches:
@@ -2084,7 +2084,7 @@ The observable behaviour of `APIClient` must not change.
 ---
 
 #### TASK V7: Migrate options.py Provider Definitions
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 2 hours
 
 Replace `_STATIC_PROVIDERS`, `_CLOUD_PROVIDER_META`, and `_build_api_providers()`
 in `options.py` with lookups against `ProviderRegistry`:
@@ -2108,7 +2108,7 @@ in `options.py` with lookups against `ProviderRegistry`:
 ---
 
 #### TASK V8: Provider Validation in Global Options UI
-**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 1 hour
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 1 hour
 
 When user selects a provider in Global Options:
 - Run `validate_provider()` — error popup for missing mandatory methods.
@@ -2129,7 +2129,7 @@ When user selects a provider in Global Options:
 ---
 
 #### TASK V9: New Provider Template & Documentation
-**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 1 hour
+**Priority:** LOW | **Status:** ✅ COMPLETE | **Effort:** 1 hour
 
 Create a documented template showing how to add a new provider:
 

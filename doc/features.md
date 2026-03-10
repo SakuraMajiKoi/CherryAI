@@ -3516,6 +3516,56 @@ costs step and the translation step are fully decoupled, so changing the
 lines-per-request slider in Model Settings no longer affects translation
 chunk sizes and vice-versa.
 
+## Provider Handshake — Unified LLM Provider Interface
+
+A pluggable provider abstraction layer that moves all provider-specific
+logic out of scattered if/elif branches into self-contained provider
+classes registered in a global registry.
+
+### Architecture
+
+- **`providers/`** — new top-level package alongside `functions/`, `modi/`, `formats/`
+- **`ProviderBase`** — abstract base class with 7 mandatory + 8 optional methods
+- **`ProviderRegistry`** — global registry mapping provider slugs to instances
+- **`validate_provider()`** — verifies ABC compliance at registration time
+
+### Registered Providers (7)
+
+| Provider | Class | Key Features |
+|----------|-------|-------------|
+| OpenAI | `OpenAIProvider` | Reference implementation. GPT-5 family (no temperature, builtin reasoning), o-series reasoning, prompt caching, batch mode |
+| Google/Gemini | `GoogleProvider` | OpenAI-compatible. Thinking via FALLBACK_MODELS lookup |
+| Mistral | `MistralProvider` | OpenAI-compatible. Temperature max 1.0, Magistral thinking |
+| Anthropic | `AnthropicProvider` | OpenAI-compatible. Explicit thinking mode (extra_body.thinking), budget 10K default |
+| Local | `LocalProvider` | Direct ProviderBase. json_schema format, $0 pricing, no API key |
+| LM Studio | `LMStudioProvider` | Inherits Local. Port 1234 |
+| Ollama | `OllamaProvider` | Inherits Local. Port 11434 |
+
+### Shared Types
+
+- `TokenUsage` — 7-field token accounting (prompt, completion, cached, reasoning, etc.)
+- `ProviderResponse` — content + usage + finish_reason + raw
+- `ThinkingConfig` — available/mode/budget with `build_params()` helper
+- `TemperatureConfig` — supported/min/max/default
+- `CachedInputConfig` — factory methods for OpenAI standard and extended 24h
+- `BatchConfig` — batch/flex/priority ratios
+- Error hierarchy: `ProviderError` → Auth, ModelNotFound, RateLimited, Quota, ContentFiltered, Connection, Timeout
+
+### Integration Points
+
+- **`api_client.py`** — resolves `self._provider` from ProviderRegistry; delegates `requires_api_key`, `get_response_format()`, `get_temperature_config()`, `classify_error()` to provider
+- **`options.py`** — `_build_api_providers()` and `get_provider_display_name()` check ProviderRegistry first, then fall back to legacy dict
+- **Global Options UI** — provider constraints applied dynamically:
+  - Temperature slider hidden when `get_temperature_config().supported` is False (e.g. GPT-5 family)
+  - Thinking frame hidden when `get_thinking_config().available` is False
+  - Warning for models without structured output support
+  - Per-model settings (temperature, thinking) saved/loaded from INI
+  - Model selection combo in Request Settings section
+
+### Adding a New Provider
+
+See `providers/provider_template.py` (documented skeleton) and `doc/adding_a_provider.md` (step-by-step guide).
+
 =============================================================================
 
 END OF USER GUIDE
