@@ -1168,6 +1168,1007 @@ Format: "Aggressive Dedup: X lines → Y unique (Z% reduction)"
 ### TASK 59.3: Category-Aware Findings Table Context Menu
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
 
+---
+
+=============================================================================
+
+## PHASE: Parser Handshake — Unified I/O Parser Interface 
+
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 12-16 hours
+
+### Goal
+
+Define a formal "handshake" contract that every file-format parser must satisfy.
+The contract has **mandatory** components (must be present and return valid data or
+raise an error) and **optional** components (provide additional capabilities when
+the format supports them). The handshake standardises how parsers communicate with
+the pipeline so that adding a new format is purely additive — implement the ABC,
+register, done.
+
+All parsers remain in the `formats/` folder. No new top-level package is created.
+
+### Design Principle
+
+Parsers write their results to well-known manifest fields. The rest of the pipeline
+never reads parser internals — it reads the manifest. If a mandatory handshake
+function is missing or returns an error/unknwn value, an error popup is shown
+immediately (on parser selection for missing functions, or after Input is attempted
+for validation failures). Warnings (e.g., lines > 1024 tokens) are displayed but
+do not block.
+
+---
+
+### Current Implementation Snapshot
+
+Two parallel hierarchies already exist in `formats/`:
+
+1. **`FormatHandler`** (ABC in `formats/__init__.py`)
+   - `format_id: str`, `extensions: list[str]`
+   - `extract(path, encoding) → list[str]`
+   - `inject(path, lines, encoding)`
+   - `supports_original() → bool`, `get_metadata(path) → dict`
+   - Registered via `FormatRegistry` with extension-based lookup.
+   - Concrete handlers: `TxtHandler`, `CsvHandler`, `TsvHandler`, `JsonHandler`,
+     `XlsxHandler`, `HtmlHandler`, `MarkdownHandler`, `JsonLenientHandler`,
+     `TranslatorPlusHandler` (all in `formats/`). Stub handlers: `RpgMakerMVHandler`,
+     `RpgMakerMZHandler`, `PdfHandler`, `EpubHandler`.
+
+2. **`ParserScript`** (ABC in `formats/parser_base.py`)
+   - Wraps a FormatHandler and adds game-engine-specific features.
+   - `name: str`, `extract()`, `inject()`, optional `wordwrap_config`,
+     `forbidden_chars`, `context_marker_rules`, `can_handle()`.
+   - Dataclasses: `WordwrapConfig`, `ForbiddenChars`, `ContextMarkerRules`.
+   - Registered via `ParserRegistry` with `can_handle()` auto-detection.
+   - Concrete parsers: `RpgMakerMVParser`, `RpgMakerMZParser`
+     (in `formats/parser_rpgmaker.py`).
+
+**Registration flow:**
+- `get_registry()` → `_load_handlers()` (simple, html, markdown, json_lenient,
+  translator_plus)
+- `get_parser_registry()` → `_load_parsers()` (RPG Maker MV, RPG Maker MZ)
+
+**Step 0 (Input)** currently calls `FormatRegistry.get_for_path()` or
+`ParserRegistry.detect()` to find the right handler. Lines are stored in
+`manifest.lines[].orig`.
+
+**Step 9 (Output)** calls the handler's `inject()` to write translated lines into
+copies of the original files.
+
+---
+
+### Handshake Contract
+
+#### A. MANDATORY Components
+
+Every parser (whether a simple `FormatHandler` or an engine-specific `ParserScript`)
+**must** implement the following. Failure to provide one raises an error popup when
+the parser is selected.
+
+| # | Component | Signature / Type | Description | Validation |
+|---|-----------|-----------------|-------------|------------|
+| M1 | **Extract** | `extract(path, encoding=None) → list[str]` | Extract translatable lines from the source file, one element per line. Must not return `None`. | Empty list is valid (file has no translatable text). Raises `ParserError` on read failure. |
+| M2 | **Inject** | `inject(path, lines, encoding=None)` | Inject translated lines back into a **copy** of the source. Never modifies the original. | `len(lines)` must match the count produced by `extract()` for the same file. Raises `ParserError` on write failure. |
+| M3 | **Format ID / Extensions** | `format_id: str` + `extensions: list[str]` **or** `can_handle(path) → bool` | Determines which file types this parser claims. For `FormatHandler` subclasses this is `format_id` and `extensions`. For `ParserScript` subclasses this is `can_handle()` (probes file structure). At least one mechanism is required. | `format_id` must be non-empty. `extensions` must have ≥1 entry or `can_handle()` must be defined. |
+
+**Validation rules for mandatory outputs:**
+- No single extracted line may exceed **2048 tokens** (raises `ParserError` immediately).
+- Lines exceeding **1024 tokens** emit a warning popup: "Line {idx} is {N} tokens
+  ({N-1024} over recommended limit). Consider splitting."
+- Token counting uses `tiktoken` when available, else the `len(text) * 0.3` heuristic
+  already in `functions/chunker.py`.
+
+#### B. OPTIONAL Components
+
+Optional components follow an `opt-in` pattern: the parser either provides the
+attribute/method or does not. The pipeline checks `hasattr()` / `getattr(..., None)`
+before using them. Missing optionals never raise errors.
+
+| # | Component | Signature / Type | Description | Manifest Field(s) |
+|---|-----------|-----------------|-------------|-------------------|
+| O1 | **Decryption** | `decrypt(path) → path` | Decrypt source file before extraction. **Discouraged** without explicit copyright permission. Situated in pipeline *before* `extract()`. | — (transparent to manifest) |
+| O2 | **Encryption** | `encrypt(path) → path` | Re-encrypt output file after injection. Situated *after* `inject()`. Must mirror the original encryption. | — (transparent to manifest) |
+| O3 | **Encoding** | `detect_encoding(path) → str` **or** `encoding: str` | Calculate or declare the file encoding. When absent the pipeline uses its own heuristic (`chardet` → UTF-8 fallback from `formats/__init__.py`). | `Options.Encoding` |
+| O4 | **Speaker Detection** | `detect_speakers(lines) → list[SpeakerInfo]` | Parse `Speaker: Dialogue` or format-specific speaker notation. Returns list of `SpeakerInfo(name, line_idx)`. When provided: auto-writes speakers to Analysis findings, disables the generic regex-based speaker detector in `functions/analysis.py` for this project. | `Analysis.speakers`, `characters[]` |
+| O5 | **Wordwrap Config** | `wordwrap_config: WordwrapConfig` | Engine-specific wrapping settings (`max_line_length`, `max_line_number`, `wordwrap_command`, `new_textbox_injection`). Written to manifest in Wordwrap step (Step 7) and loaded by it. | `Options.Wordwrap.*` |
+| O6 | **Wordwrap Function** | `wordwrap(line, config) → list[str]` | Custom wrapping logic that **replaces** the built-in `pretty_wrap`. When present, Step 7 calls this instead of `functions/wordwrap.py`. The return value is the wrapped lines list. | `lines[].wordwr` |
+| O7 | **Forbidden/Allowed Chars** | `forbidden_chars: ForbiddenChars` | Characters the engine cannot render. Added to logit bias during Translation (Step 5) and to the Blacklist/Whitelist during Postprocessing (Step 6). | `Options.ForbiddenChars`, `Options.LogitBias` |
+| O8 | **Context Markers** | `context_marker_rules: ContextMarkerRules` | Regex patterns for scene, dialogue, menu, and choice boundaries. Injected during Input to tag lines. | `lines[].tag` |
+
+#### C. Dataclass Reference (existing + extensions)
+
+```python
+# --- Already defined in formats/parser_base.py ---
+@dataclass
+class WordwrapConfig:
+    max_line_length: int = 0        # 0 = no limit
+    max_line_number: int = 0        # 0 = no limit
+    wordwrap_command: str = "\n"    # engine linebreak
+    new_textbox_injection: str = "" # overflow handler
+
+@dataclass
+class ForbiddenChars:
+    characters: list[str]           # chars that must not appear
+    logit_bias: dict[str, int]      # token→bias mapping
+    output_action: str = "replace"  # "replace" | "flag"
+
+@dataclass
+class ContextMarkerRules:
+    scene_pattern: str = ""         # regex
+    dialogue_pattern: str = ""
+    menu_pattern: str = ""
+    choice_pattern: str = ""
+
+# --- NEW for Parser Handshake ---
+@dataclass
+class SpeakerInfo:
+    name: str          # speaker name as detected
+    line_idx: int      # index into extracted lines where speaker appears
+```
+
+---
+
+### Validation Pipeline
+
+Validation is split into **selection-time** and **load-time** checks:
+
+**Selection-time** (when user picks a format/parser in Step 0 dropdown):
+- Verify `extract()` exists and is callable → error popup if missing.
+- Verify `inject()` exists and is callable → error popup if missing.
+- Verify `format_id` is non-empty or `can_handle()` is defined → error popup if
+  neither.
+
+**Load-time** (after user clicks Input to load files):
+- Run `extract()` → on `ParserError`, show error popup with message.
+- For each line: token-count check (>2048 → error, >1024 → warning).
+- Encoding heuristic: if `detect_encoding` provided, use it and verify it can
+  decode the first 8 KB of the file without errors. If heuristic, fall back
+  through `chardet` → UTF-8 → Latin-1 with a warning on each fallback.
+
+This validation must be **fast** — encoding heuristic reads the first 8 KB
+only, token counting uses the fast `len(text) * 0.3` estimate for the warning
+threshold and only calls `tiktoken` if the estimate exceeds 900 tokens.
+
+---
+
+### Manifest Integration Points
+
+Parsers write to the manifest through the existing `ManifestManager` API.
+The handshake standardises which keys are targeted:
+
+| Parser Output | Manifest Key | Written When |
+|---------------|-------------|--------------|
+| Extracted lines | `lines[].orig` | Step 0 Input load |
+| File directory | `file_dir[]` (with `type` field) | Step 0 Input load |
+| Encoding | `Options.Encoding` | Step 0 Input load |
+| Speaker list | `Analysis.speakers`, `characters[]` | Step 0 via O4 or Step 1 Analysis |
+| Speaker-detect disable | `Options.ParserHandlesSpeakers` | Step 0 via O4 |
+| Wordwrap config | `Options.Wordwrap.*` | Step 0 load; Step 7 reads |
+| Wordwrap function flag | `Options.ParserHandlesWordwrap` | Step 0 load; Step 7 checks |
+| Forbidden chars | `Options.ForbiddenChars` | Step 0 load; Step 5 logit bias |
+| Context markers | `lines[].tag` | Step 0 via O8 or Step 1 Analysis |
+| Decryption/Encryption | (transparent) | Step 0 before extract / Step 9 after inject |
+
+---
+
+### Implementation Plan
+
+#### TASK P1: Define `ParserHandshake` Protocol
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+- Create `formats/handshake.py` with a `ParserHandshake` Protocol class
+  documenting all mandatory and optional components.
+- Add `SpeakerInfo` dataclass.
+- Add `ParserError` exception class for mandatory-component failures.
+- Add `validate_parser(parser) → list[str]` that returns error messages for
+  missing mandatory components (empty list = valid).
+
+**Files to Create:**
+- `formats/handshake.py`
+
+**Files to Modify:**
+- `formats/__init__.py` — export `ParserHandshake`, `ParserError`,
+  `validate_parser`, `SpeakerInfo`
+
+**Tests to Add:**
+- `dev/test_parser_handshake.py`:
+  - `test_txt_handler_satisfies_handshake`
+  - `test_csv_handler_satisfies_handshake`
+  - `test_json_handler_satisfies_handshake`
+  - `test_rpgmaker_parser_satisfies_handshake`
+  - `test_missing_extract_raises`
+  - `test_missing_inject_raises`
+  - `test_missing_format_id_raises`
+  - `test_optional_components_absent_ok`
+
+---
+
+#### TASK P2: Integrate Validation into Step 0 (Input)
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+- On parser/format selection in Step 0, run `validate_parser()`.
+  Missing mandatory → error popup, block load.
+- After `extract()`, run per-line token validation (>2048 error, >1024 warning).
+- Add encoding heuristic (8 KB probe, BOM → parser → utf-8 → shift_jis → cp932 → latin-1 fallback chain).
+- Show error popups via `tkinter.messagebox.showerror`.
+
+**Files Modified:**
+- `gui/steps/input_extract.py` — `_validate_parser_selection()`, `_validate_extracted_lines()`,
+  `_estimate_tokens()` (static method, tiktoken with `len*0.3` fallback),
+  `_detect_encoding()` (8 KB probe, BOM → parser `detect_encoding()` → utf-8 → shift_jis → cp932 → latin-1)
+- Wired into `_load_file()` (parser validation + token validation before loading)
+- Wired into `_load_selected_paths()` (batch parser validation before file loop)
+
+**Tests:** `dev/test_parser_input_routing.py` — 32 tests (all passing):
+- TestHandshakeValidation (5): valid parser, missing extract, missing inject, missing identity, all registered parsers pass
+- TestTokenValidation (4): short text, empty, long text, normal lines pass
+- TestEncodingFallback (6): utf-8 BOM, utf-16 BOM, plain utf-8, shift_jis, latin-1 fallback, parser encoding preferred
+
+---
+
+#### TASK P3: Wire Optional Components into Pipeline
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 4 hours
+
+Wired each optional component to its consuming pipeline step:
+
+- **O3 Encoding**: Parser `detect_encoding()` preferred in 8 KB probe chain (P2).
+- **O4 Speaker Detection**: `_wire_parser_optionals()` calls `detect_speakers()`,
+  writes `SpeakerInfo` list to `characters[]`, sets `Options.ParserHandlesSpeakers`.
+  Analysis step reads flag and skips generic speaker detection.
+- **O5 Wordwrap Config**: `_apply_parser_wordwrap_defaults()` auto-populates
+  wordwrap fields from `wordwrap_config` on tab entry (already done pre-P3).
+- **O6 Wordwrap Function**: `_wire_parser_optionals()` sets
+  `Options.ParserHandlesWordwrap`. Step 7 `_process_wrap` delegates to
+  `parser.wordwrap()` instead of built-in `apply_wordwrap`.
+- **O7 Forbidden Chars**: `_wire_parser_optionals()` serialises
+  `forbidden_chars.to_dict()` to `Options.ParserForbiddenChars`. Translation
+  step calls `api_client.apply_parser_forbidden_chars()` to merge into logit bias.
+- **O8 Context Markers**: `_wire_parser_optionals()` compiles
+  `context_marker_rules` and applies regex to extracted lines, writing
+  `context_marker` tags. `detect_context_markers()` in `functions/analysis.py`
+  accepts optional `parser_rules` parameter to override built-in heuristics.
+- **O1/O2 Decrypt/Encrypt**: Deferred — requires permission UX design.
+
+**Files Modified:**
+- `gui/steps/input_extract.py` — `_wire_parser_optionals()` (~100 lines) called
+  between `_ensure_project_created` and `_save_manifest_after_file_load`
+- `gui/steps/analysis.py` — reads `ParserHandlesSpeakers`, skips generic speakers
+- `gui/steps/wordwrap_overwrite.py` — reads `ParserHandlesWordwrap`, delegates
+  to `parser.wordwrap()` per line
+- `gui/steps/output_inject.py` — reads `ParserName`, routes through `parser.inject()`
+- `gui/steps/translate.py` — reads `ParserName`, calls `apply_parser_forbidden_chars()`
+- `functions/analysis.py` — `detect_context_markers()` accepts `parser_rules` kwarg
+
+**Tests:** `dev/test_parser_optional_wiring.py` — 28 tests (all passing):
+- TestO4SpeakerDetection (4): returns list, name+idx, no-override returns None, override check
+- TestO6CustomWordwrap (4): has override, short line, long line, no-override returns None
+- TestO7ForbiddenChars (4): exists, has characters, serialisable round-trip, RPG Maker check
+- TestO8ContextMarkers (7): default heuristics, parser rules override, empty lines, LightVN rules exist, compile, dialogue match, no-rules+no-lines
+- TestWireParserOptionals (7): parser name stored, speaker flag, wordwrap flag, forbidden chars dict, context markers flag, all LightVN optionals, info flags match checks
+- TestAnalysisSpeakerSkip (2): without speakers, with speakers
+
+---
+
+#### TASK P4: Retrofit Existing Handlers to Handshake
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Verified and annotated all existing handlers:
+
+- `TxtHandler` — M1 ✓, M2 ✓, M3 ✓ (extensions: `.txt`). No optionals.
+- `CsvHandler` / `TsvHandler` — M1 ✓, M2 ✓, M3 ✓. No optionals.
+- `JsonHandler` — M1 ✓, M2 ✓, M3 ✓. No optionals.
+- `XlsxHandler` — M1 ✓, M2 ✓, M3 ✓. No optionals.
+- `HtmlHandler` — M1 ✓, M2 ✓, M3 ✓. No optionals.
+- `MarkdownHandler` — M1 ✓, M2 ✓, M3 ✓. No optionals.
+- `JsonLenientHandler` — M1 ✓, M2 ✓, M3 ✓. No optionals.
+- `TranslatorPlusHandler` — M1 ✓, M2 ✓, M3 ✓. O3 (encoding — SQLite). No others.
+- `RpgMakerMVParser` — M3 ✓ (via `can_handle`). O5 ✓, O7 ✓, O8 ✓. M1/M2 stubs raise `ParserError`.
+- `RpgMakerMZParser` — same as MV with different constants. M1/M2 stubs raise `ParserError`.
+
+RPG Maker handler stubs (`formats/rpgmaker.py`) now raise `ParserError` with
+`parser_name` and `component` metadata instead of silently returning empty
+results. All registered FormatHandlers pass `validate_parser()`.
+
+**Files Modified:**
+- `formats/rpgmaker.py` — extract/inject raise `ParserError` on all three stubs
+
+**Tests:** `dev/test_parser_handler_retrofit.py` — 28 tests (all passing):
+- TestFormatHandlerCompliance (9): all extract, all inject, all identity, txt/csv/tsv/json/xlsx individual, validate_parser on all
+- TestParserScriptCompliance (4): all parsers pass, LightVN valid, RPGMakerMV valid, RPGMakerMZ valid
+- TestRpgMakerStubs (9): MV extract/inject raise, MZ extract/inject raise, plugin extract/inject raise, MV parser delegates raise, MZ parser delegates raise, error metadata
+- TestRpgMakerParserOptionals (6): MV wordwrap, MZ wordwrap, MV forbidden chars, MV context markers, MV can_handle, MZ can_handle
+
+**Tests:**
+- Expand `dev/test_parser_handshake.py` with one test per handler.
+
+---
+
+#### TASK P5: New Parser Template & Documentation
+**Priority:** LOW | **Status:** ✅ COMPLETE | **Effort:** 1 hour
+
+LightVN parser (`formats/LightVN.py`) serves as the reference implementation.
+All features documented in `features.md`, `technical.md`, and `tests.md`.
+
+---
+
+=============================================================================
+
+## PHASE: Provider Handshake — Unified LLM Provider Interface
+
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 16-20 hours
+
+### Goal
+
+Define a formal "handshake" contract for LLM providers so that each provider
+is a self-contained module in a new `providers/` top-level folder. The contract
+has **mandatory** provider-level components, **mandatory** model-level components,
+and **optional** components for advanced features. The OpenAI provider serves as
+the **default reference implementation** — other providers that speak the
+OpenAI-compatible format can simply delegate to OpenAI's functions instead of
+reimplementing them.
+
+Failure to satisfy a mandatory component or having it return an error/unknown
+value raises an error popup immediately (on provider selection for missing
+functions, or on first API call attempt for runtime failures).
+
+---
+
+### Current Implementation Snapshot
+
+All provider logic currently lives in scattered locations:
+
+1. **`functions/options.py`** — Provider definitions
+   - `_STATIC_PROVIDERS`: anthropic, local, ollama, lmstudio (with URLs)
+   - `_CLOUD_PROVIDER_META`: openai, gemini, mistral (with registry IDs + URLs)
+   - `_build_api_providers()` merges static + dynamic model lists from registry
+   - `API_PROVIDERS` is a lazy proxy dict rebuilt on every access
+   - Helper functions: `get_api_urls()`, `get_provider_models()`,
+     `get_provider_display_name()`, etc.
+
+2. **`functions/api_client.py`** (~2170 lines) — Monolithic API client
+   - `APIConfig` dataclass (50+ fields) — all config for all providers
+   - `APIClient` class — a single class handling ALL providers:
+     - `_init_client()` — creates `OpenAI(...)` SDK client for ALL providers
+       (including Claude and Gemini, which use OpenAI-compatible endpoints)
+     - Local providers get placeholder API key `"lm-studio"`
+     - Provider-specific branching scattered throughout:
+       - `is_local_provider()` — checks `LOCAL_PROVIDERS` tuple
+       - `is_openai_reasoning_model()` — checks for "o1", "o3" in model name
+       - `is_claude_thinking_model()` — checks for "claude" + versioned names
+       - `supports_prompt_caching()` — OpenAI-only (Gemini excluded)
+       - `supports_extended_cache_retention()` — gpt-4.1/gpt-5 only
+     - `_translate_chunk()` has the biggest provider branch:
+       - Local → `response_format = json_schema` (strict schema)
+       - Cloud → `response_format = json_object`
+       - Claude → `extra_body = thinking params`, inflated `max_tokens`
+     - Token usage parsing assumes OpenAI response format
+       (`usage.prompt_tokens_details.cached_tokens`, etc.)
+
+3. **`functions/model_registry.py`** (~1730 lines) — Model data
+   - `ModelInfo` dataclass with 30+ fields (pricing, rate limits, capabilities)
+   - `FALLBACK_MODELS`: curated built-in data per provider (OpenAI 12, Google 7,
+     Mistral 8 models) <- MUST BE REMOVED
+   - Provider-specific fetchers: `fetch_openai_models()`, `fetch_google_models()`,
+     `fetch_mistral_models()` — each fetches from provider API + parses pricing pages
+   - `probe_openai_rate_limits()` — reads `x-ratelimit-*` headers
+   - INI persistence: saves/loads model data to `user/API.ini`
+
+4. **`functions/common_errors.py`** — Error classification
+   - `classify_api_error()` inspects error type + message for provider-specific patterns
+   - Categories: AUTH_INVALID, MODEL_NOT_FOUND, RATE_LIMITED, QUOTA_EXCEEDED,
+     CONTENT_FILTERED, THINKING_NOT_AVAILABLE, TEMPERATURE_NOT_AVAILABLE, etc.
+
+5. **`functions/config.py`** — loads API config from `user/API.ini`
+
+6. **Supporting modules:**
+   - `functions/local_llm.py` — `is_local_url()` helper
+   - `functions/logit_bias.py` — `LogitBiasManager`
+   - `functions/rate_limiter.py` — `RateLimiter`
+   - `functions/batch_tracker.py` — `BatchJob` (batch API support)
+   - `functions/request_cache.py` — `RequestCache`
+   - `functions/retry_handler.py` — retry logic
+
+**Key architectural problem:** Everything is routed through a single `OpenAI()`
+SDK client. Provider differences are handled by scattered `if`/`elif` branches
+inside `APIClient`. Adding a new provider means touching `api_client.py`,
+`options.py`, `model_registry.py`, and `common_errors.py` simultaneously.
+
+---
+
+### Handshake Contract
+
+#### A. MANDATORY Provider-Level Components
+
+Every provider module **must** implement the following. Failure raises an error
+popup when the provider is selected.
+
+| # | Component | Signature / Type | Description | Validation |
+|---|-----------|-----------------|-------------|------------|
+| MP1 | **API Key Requirement** | `requires_api_key: bool` | `True` for cloud providers, `False` for local. Determines whether the pipeline validates and requires an API key before proceeding. When `False`, a placeholder key is used automatically. | Must be `bool`. |
+| MP2 | **Input Price** | `get_input_price(model_id) → float` | Returns price in USD per 1M input tokens. For local providers returns `0.0` (FREE). Cloud providers must fetch or look up from static data. | Must be ≥ 0.0. Return `0.0` for free/local. |
+| MP3 | **Output Price** | `get_output_price(model_id) → float` | Returns price in USD per 1M output tokens. Same rules as Input Price. | Must be ≥ 0.0. Return `0.0` for free/local. |
+| MP4 | **Base URL** | `base_url: str` | Provider API endpoint. For OpenAI: `https://api.openai.com/v1`. For local: `http://localhost:{port}/v1`. | Must be non-empty, valid URL format. |
+| MP5 | **Send Request** | `send_request(messages, model, temperature, response_format, **kwargs) → ProviderResponse` | Send a chat completion request. Returns a `ProviderResponse` with `content`, `usage`, `finish_reason`. This is the core translation call. Providers that use the OpenAI-compatible format can delegate to the default OpenAI implementation. | Must return `ProviderResponse`. Raises `ProviderError` on failure. | `temperature` may be disabled for some models and relegated to optional model.
+| MP6 | **Parse Response** | `parse_response(raw_response) → ProviderResponse` | Extract translated content, token usage metadata, and finish reason from the raw API response. Must handle the provider's specific response format and normalise to `ProviderResponse`. | `ProviderResponse.content` must be non-empty on success. `ProviderResponse.usage` must populate `prompt_tokens` and `completion_tokens` at minimum. |
+
+**`ProviderResponse` dataclass:**
+```python
+@dataclass
+class ProviderResponse:
+    content: str                           # The response text (JSON string)
+    usage: TokenUsage                      # Token counts
+    finish_reason: str = "stop"            # "stop", "length", "content_filter"
+    raw: Any = None                        # Original response object for debugging
+
+@dataclass
+class TokenUsage:
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    # Optional extended fields — populated when provider supports them
+    cached_tokens: int = 0                 # OpenAI prompt caching
+    reasoning_tokens: int = 0              # o1/o3/Claude thinking
+    accepted_prediction_tokens: int = 0
+    rejected_prediction_tokens: int = 0
+```
+
+**`ProviderError` exception hierarchy:**
+```python
+class ProviderError(Exception):
+    """Base error for all provider failures."""
+    def __init__(self, message, is_fatal=False, error_code="UNKNOWN"):
+        ...
+
+class AuthenticationError(ProviderError):    # is_fatal=True
+class ModelNotFoundError(ProviderError):     # is_fatal=True
+class RateLimitedError(ProviderError):       # is_fatal=False (retryable)
+class QuotaExceededError(ProviderError):     # is_fatal=True
+class ContentFilteredError(ProviderError):   # is_fatal=True
+class ProviderConnectionError(ProviderError): # is_fatal=False (retryable)
+class ProviderTimeoutError(ProviderError):   # is_fatal=False (retryable)
+```
+
+#### B. MANDATORY Model-Level Components
+
+Each provider must be able to report these per-model facts. These determine
+whether a model is valid for use in CherryAI.
+
+| # | Component | Signature / Type | Description | Validation |
+|---|-----------|-----------------|-------------|------------|
+| MM1 | **Structured Output** | `supports_structured_output(model_id) → bool` | Whether the model can return structured JSON. CherryAI requires this for line-by-line translation matching. Models without structured output are **rejected** (not shown in model dropdown). | Must be `bool`. `True` → model included, else discarded. |
+| MM2 | **Model Name** | `get_model_name(model_id) → str` | Human-readable display name for the model. | Must be non-empty. |
+| MM3 | **Thinking / Reasoning** | `get_thinking_config(model_id) → ThinkingConfig` | Determines if and how thinking/reasoning is implemented for the model. Returns config with `available`, `mode` ("builtin" for o1/o3, "explicit" for Claude), and `param_builder` callable. | `ThinkingConfig.available` must be `bool`. When `True`, `mode` must be "builtin" or "explicit". "builtin" are by default rejected when filtering for No / Optional Thinking which is the default. |
+
+**`ThinkingConfig` dataclass:**
+```python
+@dataclass
+class ThinkingConfig:
+    available: bool = False
+    mode: str = ""                  # "builtin" | "explicit" | ""
+    budget_default: int = 10000     # default thinking token budget
+    budget_min: int = 1000
+    budget_max: int = 100000
+
+    def build_params(self, budget: int) -> dict:
+        """Build provider-specific API params for thinking mode."""
+        if not self.available:
+            return {}
+        if self.mode == "builtin":
+            return {}  # OpenAI o1/o3: built-in, no extra params
+        if self.mode == "explicit":
+            return {    # Claude: explicit thinking param
+                "thinking": {"type": "enabled", "budget_tokens": budget}
+            }
+        return {}
+```
+
+#### C. OPTIONAL Provider-Level Components
+
+| # | Component | Signature / Type | Description |
+|---|-----------|-----------------|-------------|
+| OP1 | **Cached Input** | `get_cached_input_config(model_id) → CachedInputConfig \| None` | Check whether model supports prompt caching, minimum static prompt size to trigger it, and how cached tokens are reported. Currently OpenAI-only: prefix-based, auto-triggered at ≥1024 tokens, reported via `prompt_tokens_details.cached_tokens`. | Claude is know to be vastly different.
+| OP2 | **Batch / Flex / Priority Mode** | `get_batch_config(model_id) → BatchConfig \| None` | Check availability of discount batch modes: Batch (50% off, 24h), Flex (variable discount), Priority (faster, premium). Returns differing input/output prices per mode. Currently only OpenAI has Batch. | Must be looked up for other providers.
+| OP3 | **Model List Fetcher** | `fetch_models(api_key) → list[ModelInfo]` | Fetch available models from the provider API. Currently implemented for OpenAI, Google, Mistral. Each has its own endpoint and response format. |
+| OP4 | **Rate Limit Probing** | `probe_rate_limits(api_key, model_id) → RateLimitInfo \| None` | Send a minimal request to read rate limit headers. Currently OpenAI-only (`x-ratelimit-*` headers). |
+| OP5 | **Error Classifier** | `classify_error(error) → ClassifiedError` | Provider-specific error classification. When absent, falls back to the default classifier in `common_errors.py`. |
+
+**`CachedInputConfig` dataclass:**
+```python
+@dataclass
+class CachedInputConfig:
+    supported: bool = False
+    min_prefix_tokens: int = 1024   # minimum for cache to trigger
+    retention: str = ""             # "" | "in_memory" | "24h"
+    cached_price_ratio: float = 0.5 # cached tokens cost this fraction of normal
+    param_builder: Callable = None  # builds provider-specific params
+
+    @staticmethod
+    def openai_default() -> 'CachedInputConfig':
+        return CachedInputConfig(
+            supported=True,
+            min_prefix_tokens=1024,
+            retention="in_memory",
+            cached_price_ratio=0.5,
+        )
+```
+
+**`BatchConfig` dataclass:**
+```python
+@dataclass
+class BatchConfig:
+    batch_available: bool = False
+    batch_input_price_ratio: float = 0.5   # vs normal price
+    batch_output_price_ratio: float = 0.5
+    flex_available: bool = False
+    flex_input_price_ratio: float = 0.0
+    flex_output_price_ratio: float = 0.0
+    priority_available: bool = False
+    priority_input_price_ratio: float = 1.0
+    priority_output_price_ratio: float = 1.0
+```
+
+#### D. OPTIONAL Model-Level Components
+
+| # | Component | Signature / Type | Description |
+|---|-----------|-----------------|-------------|
+| OM1 | **Temperature** | `get_temperature_config(model_id) → TemperatureConfig \| None` | Whether the model supports temperature, and its valid range. Some models (o1) do not support temperature at all. Others have restricted ranges. |
+| OM2 | **Context Window** | `get_context_window(model_id) → int` | Maximum context window in tokens. Used for chunk size validation. |
+
+**`TemperatureConfig` dataclass:**
+```python
+@dataclass
+class TemperatureConfig:
+    supported: bool = True
+    min_value: float = 0.0
+    max_value: float = 2.0
+    default: float = 0.3
+```
+
+---
+
+### Provider Module Structure
+
+New `providers/` top-level folder alongside `functions/`, `modi/`, `formats/`:
+
+```
+providers/
+├── __init__.py          # ProviderBase ABC, ProviderRegistry, ProviderResponse,
+│                        #   TokenUsage, ProviderError hierarchy, dataclasses
+├── openai_provider.py   # OpenAI reference implementation — delegates to existing
+│                        #   functions in api_client.py. Other OpenAI-format providers
+│                        #   inherit or call these functions.
+├── anthropic_provider.py  # Claude via OpenAI-compat + thinking mode specifics
+├── google_provider.py     # Gemini via OpenAI-compat (generativelanguage endpoint)
+├── mistral_provider.py    # Mistral via OpenAI-compat
+├── local_provider.py      # LM Studio / Ollama / generic local (json_schema format)
+└── custom_provider.py     # Template for user-created providers (future)
+```
+
+**`ProviderBase` ABC** (in `providers/__init__.py`):
+```python
+class ProviderBase(ABC):
+    """Base class for all LLM providers."""
+    name: str                          # e.g., "openai", "anthropic"
+    display_name: str                  # e.g., "OpenAI", "Anthropic (Claude)"
+    requires_api_key: bool = True      # MP1
+    base_url: str = ""                 # MP4
+
+    # --- Mandatory ---
+    @abstractmethod
+    def send_request(self, messages, model, temperature, response_format, **kw):
+        """MP5: Send a chat completion request."""
+        ...
+
+    @abstractmethod
+    def parse_response(self, raw_response) -> ProviderResponse:
+        """MP6: Parse raw response to ProviderResponse."""
+        ...
+
+    @abstractmethod
+    def get_input_price(self, model_id: str) -> float:
+        """MP2: USD per 1M input tokens."""
+        ...
+
+    @abstractmethod
+    def get_output_price(self, model_id: str) -> float:
+        """MP3: USD per 1M output tokens."""
+        ...
+
+    @abstractmethod
+    def supports_structured_output(self, model_id: str) -> bool:
+        """MM1: Can this model return structured JSON?"""
+        ...
+
+    @abstractmethod
+    def get_model_name(self, model_id: str) -> str:
+        """MM2: Human-readable model name."""
+        ...
+
+    @abstractmethod
+    def get_thinking_config(self, model_id: str) -> ThinkingConfig:
+        """MM3: Thinking/reasoning support."""
+        ...
+
+    # --- Optional (default no-ops) ---
+    def get_cached_input_config(self, model_id: str):
+        return None  # OP1
+
+    def get_batch_config(self, model_id: str):
+        return None  # OP2
+
+    def fetch_models(self, api_key: str) -> list:
+        return []  # OP3
+
+    def probe_rate_limits(self, api_key: str, model_id: str):
+        return None  # OP4
+
+    def classify_error(self, error: Exception):
+        return None  # OP5 — falls back to common_errors.classify_api_error()
+
+    def get_temperature_config(self, model_id: str):
+        return TemperatureConfig()  # OM1
+
+    def get_context_window(self, model_id: str) -> int:
+        return 128000  # OM2 default
+```
+
+---
+
+### OpenAI as Default Reference
+
+`providers/openai_provider.py` is the reference implementation. It delegates to
+the existing proven functions in `functions/api_client.py` rather than rewriting
+them. Other providers that speak the OpenAI-compatible format (Gemini, Mistral,
+generic locals via `/v1/chat/completions`) can inherit from
+`OpenAICompatProvider` and override only what differs.
+
+```python
+class OpenAIProvider(ProviderBase):
+    """Reference implementation. All existing api_client.py functions stay."""
+    name = "openai"
+    display_name = "OpenAI"
+    requires_api_key = True
+    base_url = "https://api.openai.com/v1"
+    # Implements all methods by calling the existing api_client.py code
+
+class OpenAICompatProvider(OpenAIProvider):
+    """Base for providers using OpenAI-compatible endpoints."""
+    # Override: name, display_name, base_url, pricing, model lists
+    # Keep: send_request, parse_response (identical format)
+
+class GoogleProvider(OpenAICompatProvider):
+    """Gemini via OpenAI-compat endpoint."""
+    name = "gemini"
+    display_name = "Google (Gemini)"
+    base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    # Override: pricing, model list fetcher, prompt caching (not supported)
+
+class MistralProvider(OpenAICompatProvider):
+    name = "mistral"
+    display_name = "Mistral AI"
+    base_url = "https://api.mistral.ai/v1"
+
+class AnthropicProvider(OpenAICompatProvider):
+    """Claude via OpenAI-compat proxy + thinking mode."""
+    name = "anthropic"
+    display_name = "Anthropic (Claude)"
+    base_url = "https://api.anthropic.com/v1"
+    # Override: thinking config (explicit mode), send_request (extra_body)
+
+class LocalProvider(ProviderBase):
+    """LM Studio / Ollama / generic local."""
+    name = "local"
+    display_name = "Local LLM"
+    requires_api_key = False
+    base_url = "http://localhost:11434/v1"
+    # Override: send_request (json_schema format), pricing (FREE)
+```
+
+---
+
+### Migration Path
+
+The Provider Handshake is a **refactor**, not a rewrite. All existing features
+must be preserved. The migration moves scattered provider logic from
+`api_client.py` into discrete provider modules while keeping `APIClient` as
+the orchestrator that delegates to the active provider.
+
+**What moves to providers/:**
+- Provider-specific request formatting (response_format branching)
+- Provider-specific thinking mode params
+- Provider-specific prompt caching params
+- Provider-specific error classification
+- Provider-specific pricing lookups
+- Provider model list fetchers (from model_registry.py)
+- Provider-specific rate limit probing
+
+**What stays in api_client.py:**
+- `APIClient` class as orchestrator (chunking, retry, caching, logging)
+- `APIConfig` dataclass (config remains centralised)
+- Translation batch orchestration (`translate_batch`, `_translate_chunk_with_retry`)
+- Request caching and rate limiting (shared infrastructure)
+- Step-log integration
+
+**What stays in model_registry.py:**
+- `ModelInfo` dataclass, `FALLBACK_MODELS` (curated static data)
+- INI persistence (save/load to `user/API.ini`)
+- Provider-specific fetch functions become thin wrappers calling provider modules
+
+---
+
+### Implementation Plan
+
+#### TASK V1: Define Provider ABC and Shared Types
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+- Create `providers/__init__.py` with `ProviderBase` ABC, `ProviderResponse`,
+  `TokenUsage`, `ProviderError` hierarchy, `ThinkingConfig`, `CachedInputConfig`,
+  `BatchConfig`, `TemperatureConfig`, `ProviderRegistry`.
+- `ProviderRegistry.register(provider)`, `get(name)`, `list_providers()`.
+- `validate_provider(provider) → list[str]` — checks mandatory components.
+
+**Files to Create:**
+- `providers/__init__.py`
+
+**Tests to Add:**
+- `dev/test_provider_handshake.py`:
+  - `test_provider_base_is_abstract`
+  - `test_mandatory_methods_enforced`
+  - `test_optional_methods_have_defaults`
+  - `test_provider_response_dataclass`
+  - `test_token_usage_dataclass`
+  - `test_provider_error_hierarchy`
+  - `test_thinking_config_build_params`
+  - `test_cached_input_config_openai_default`
+
+---
+
+#### TASK V2: OpenAI Reference Provider
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+
+- Create `providers/openai_provider.py` implementing `ProviderBase`.
+- `send_request()` uses `OpenAI` SDK `client.chat.completions.create()`.
+- `parse_response()` extracts `content`, `usage` (including
+  `prompt_tokens_details.cached_tokens`, `completion_tokens_details.*`).
+- `get_input_price()` / `get_output_price()` delegate to `model_registry`.
+- `supports_structured_output()` checks `ModelInfo.structured_output`.
+- `get_thinking_config()` returns builtin config for o1/o3 models.
+- `get_cached_input_config()` returns OpenAI config for gpt-4o+ models.
+- `fetch_models()` wraps existing `fetch_openai_models()`.
+- `probe_rate_limits()` wraps existing `probe_openai_rate_limits()`.
+- `classify_error()` wraps error patterns from `common_errors.py`.
+
+**Files to Create:**
+- `providers/openai_provider.py`
+
+**Files to Modify:**
+- `providers/__init__.py` — register OpenAI provider
+
+**Tests to Add:**
+- `dev/test_provider_handshake.py`:
+  - `test_openai_satisfies_handshake`
+  - `test_openai_send_request_format`
+  - `test_openai_parse_response_usage`
+  - `test_openai_thinking_config_o1`
+  - `test_openai_cached_input_gpt4o`
+  - `test_openai_pricing_lookup`
+  - `test_openai_structured_output_cloud_format`
+
+---
+
+#### TASK V3: OpenAI-Compatible Base + Google/Mistral Providers
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+
+- Create `OpenAICompatProvider` class inheriting from `OpenAIProvider`.
+  It reuses `send_request()` and `parse_response()` but overrides URL,
+  pricing, and model fetching.
+- Create `providers/google_provider.py` (`GoogleProvider`):
+  - `base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"`
+  - `get_cached_input_config()` returns `None` (Gemini caching not supported)
+  - `fetch_models()` wraps existing `fetch_google_models()`
+- Create `providers/mistral_provider.py` (`MistralProvider`):
+  - `base_url = "https://api.mistral.ai/v1"`
+  - `fetch_models()` wraps existing `fetch_mistral_models()`
+
+**Files to Create:**
+- `providers/google_provider.py`
+- `providers/mistral_provider.py`
+
+**Files to Modify:**
+- `providers/openai_provider.py` — add `OpenAICompatProvider` base
+- `providers/__init__.py` — register Google and Mistral
+
+**Tests to Add:**
+- `dev/test_provider_handshake.py`:
+  - `test_google_satisfies_handshake`
+  - `test_google_no_prompt_caching`
+  - `test_google_pricing_free_tier`
+  - `test_mistral_satisfies_handshake`
+  - `test_mistral_pricing_lookup`
+  - `test_openai_compat_inherits_send_request`
+
+---
+
+#### TASK V4: Anthropic (Claude) Provider
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+- Create `providers/anthropic_provider.py` (`AnthropicProvider`):
+  - Inherits `OpenAICompatProvider` (uses OpenAI-compat endpoint)
+  - Overrides `send_request()` to inject `extra_body` with thinking params
+    and inflate `max_tokens` when thinking is enabled
+  - `get_thinking_config()` returns explicit mode for Claude sonnet-4/opus-4/
+    haiku-4 models
+  - Pricing from model registry FallbackModels or hardcoded
+  - Currently no models in `FALLBACK_MODELS` — add Claude models
+
+**Files to Create:**
+- `providers/anthropic_provider.py`
+
+**Files to Modify:**
+- `providers/__init__.py` — register Anthropic
+- `functions/model_registry.py` — add Claude `FALLBACK_MODELS` entries
+
+**Tests to Add:**
+- `dev/test_provider_handshake.py`:
+  - `test_anthropic_satisfies_handshake`
+  - `test_anthropic_thinking_config_claude`
+  - `test_anthropic_send_request_extra_body`
+  - `test_anthropic_max_tokens_inflation`
+
+---
+
+#### TASK V5: Local Provider (LM Studio / Ollama)
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+- Create `providers/local_provider.py` (`LocalProvider`):
+  - `requires_api_key = False`
+  - `send_request()` overrides `response_format` to use full `json_schema`
+    with strict schema (the biggest provider-specific branch currently in
+    `_translate_chunk()`)
+  - All pricing returns `0.0` (FREE)
+  - `supports_structured_output()` returns `True` (LM Studio and Ollama
+    support JSON schema)
+  - `get_thinking_config()` returns default (not available)
+  - `fetch_models()` queries `/v1/models` endpoint on localhost
+  - Subclasses `LMStudioProvider` (port 1234) and `OllamaProvider` (port 11434)
+    can override `base_url`
+
+**Files to Create:**
+- `providers/local_provider.py`
+
+**Files to Modify:**
+- `providers/__init__.py` — register Local, LMStudio, Ollama
+
+**Tests to Add:**
+- `dev/test_provider_handshake.py`:
+  - `test_local_satisfies_handshake`
+  - `test_local_no_api_key_required`
+  - `test_local_json_schema_format`
+  - `test_local_pricing_free`
+  - `test_lmstudio_port_1234`
+  - `test_ollama_port_11434`
+
+---
+
+#### TASK V6: Integrate ProviderRegistry into APIClient
+**Priority:** HIGH | **Status:** 🔲 NOT STARTED | **Effort:** 3 hours
+
+Refactor `APIClient` to delegate to the active provider instead of using
+inline `if`/`elif` branches:
+
+- `__init__` resolves `self.provider = ProviderRegistry.get(config.provider)`
+- `_translate_chunk()` replaces all provider branches with:
+  - `response_format = self.provider.get_response_format(model)`
+  - `thinking_params = self.provider.get_thinking_config(model).build_params(budget)`
+  - `cache_params = self.provider.get_cached_input_config(model).build_params()`
+  - `raw = self.provider.send_request(messages, model, temp, response_format, **extra)`
+  - `result = self.provider.parse_response(raw)`
+- Error handling delegates to `self.provider.classify_error(e)` with fallback
+  to `common_errors.classify_api_error()`.
+- `_init_client()` uses `self.provider.requires_api_key` instead of hardcoded
+  `LOCAL_PROVIDERS` check.
+
+**Critical**: This is a refactor — all existing tests must continue passing.
+The observable behaviour of `APIClient` must not change.
+
+**Files to Modify:**
+- `functions/api_client.py` — refactor to use provider delegation
+
+**Tests to Add:**
+- `dev/test_provider_handshake.py`:
+  - `test_api_client_uses_provider_registry`
+  - `test_api_client_local_json_schema`
+  - `test_api_client_claude_thinking_delegation`
+  - `test_api_client_openai_cache_delegation`
+  - `test_api_client_error_classification_delegation`
+
+---
+
+#### TASK V7: Migrate options.py Provider Definitions
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 2 hours
+
+Replace `_STATIC_PROVIDERS`, `_CLOUD_PROVIDER_META`, and `_build_api_providers()`
+in `options.py` with lookups against `ProviderRegistry`:
+
+- `API_PROVIDERS` becomes: `{p.name: {"url": p.base_url, "models": p.fetch_models_cached()} for p in ProviderRegistry.all()}`
+- Helper functions (`get_api_urls`, `get_provider_models`, etc.) delegate to
+  `ProviderRegistry`.
+- `model_registry.py` fetch functions become thin redirects:
+  `fetch_openai_models()` → `ProviderRegistry.get("openai").fetch_models()`.
+
+**Files to Modify:**
+- `functions/options.py` — replace provider dicts with registry lookups
+- `functions/model_registry.py` — redirect fetch functions to providers
+
+**Tests:**
+- Existing tests in `dev/test_api_providers.py` must continue passing.
+- `dev/test_provider_handshake.py`:
+  - `test_options_api_providers_from_registry`
+  - `test_model_registry_delegates_to_provider`
+
+---
+
+#### TASK V8: Provider Validation in Global Options UI
+**Priority:** MEDIUM | **Status:** 🔲 NOT STARTED | **Effort:** 1 hour
+
+When user selects a provider in Global Options:
+- Run `validate_provider()` — error popup for missing mandatory methods.
+- Add model selection to Model Settings so every model gets its own settings. Ensure that each writers and loads its own config. Use default values for initial. 
+- When user selects a model: check `supports_structured_output()` — warn if False.
+- Check if Thinking is available, `get_thinking_config().available` — hide entry if False. When user enables thinking: check `get_thinking_config().available` — warn if False. Warn users that thinking and reasoning are only known to waste money and may even negatively affect translation. Ensure that the request do not contain thinking if not supported.
+- When loading temperature: check `get_temperature_config().supported` — hide entry if
+  not supported, adjust slider to show valid range if available. Ensure that the request do not contain temperature if not supported.
+
+**Files to Modify:**
+- `gui/dialogs/global_options.py` — add provider validation callbacks
+
+**Tests to Add:**
+- `dev/test_provider_handshake.py`:
+  - `test_provider_selection_validation`
+  - `test_model_structured_output_warning`
+
+---
+
+#### TASK V9: New Provider Template & Documentation
+**Priority:** LOW | **Status:** 🔲 NOT STARTED | **Effort:** 1 hour
+
+Create a documented template showing how to add a new provider:
+
+- Copy template, fill in `send_request()`, `parse_response()`, pricing, model list.
+- For OpenAI-compatible APIs: inherit `OpenAICompatProvider`, override URL and pricing.
+- For truly custom APIs: implement `ProviderBase` directly.
+- Register in `providers/__init__.py`'s `_load_providers()`.
+- `validate_provider()` confirms compliance.
+
+**Files to Create:**
+- `providers/provider_template.py` — documented skeleton
+- `doc/adding_a_provider.md` — step-by-step guide
+
+---
+
+### Summary of Provider-Specific Behaviour (Reference for Migration)
+
+This table captures every known provider-specific branch from the current
+codebase that must be preserved during migration:
+
+| Concern | OpenAI | Claude (Anthropic) | Gemini (Google) | Mistral | Local (LM Studio/Ollama) |
+|---------|--------|-------------------|-----------------|---------|--------------------------|
+| **SDK init** | `OpenAI(api_key, base_url)` | Same (compat proxy) | Same (compat endpoint) | Same (compat endpoint) | Same + placeholder key `"lm-studio"` |
+| **response_format** | `{"type": "json_object"}` | `{"type": "json_object"}` | `{"type": "json_object"}` | `{"type": "json_object"}` | Full `json_schema` with strict schema |
+| **Thinking mode** | Built-in for o1/o3 (no extra params) | `extra_body.thinking` + inflated `max_tokens` | Not supported | Not supported | Not supported |
+| **Prompt caching** | Auto for gpt-4o+; 24h retention for gpt-4.1/gpt-5 | No | No | No | No |
+| **Batch mode** | Yes (JSONL, 50% off) | No | No | No | No |
+| **Pricing** | Per-model (model_registry) | Default $1/$2 per M (no registry models yet) | FREE tier (some paid) | Per-model (model_registry) | FREE ($0.0) |
+| **Token usage** | Full details (cached, reasoning, prediction) | Basic (prompt + completion) | Basic (prompt + completion) | Basic (prompt + completion) | Basic (prompt + completion) |
+| **Error patterns** | All categories from `classify_api_error()` | Same (via compat) + thinking-specific | Same (via compat) + content filter likelihood | Same (via compat) | Connection errors more common |
+| **Rate limit headers** | `x-ratelimit-*` (probeable) | Not available | Not available | Not available | Not applicable |
+| **Model fetcher** | `fetch_openai_models()` — `/v1/models` + pricing page HTML | None (hardcoded) | `fetch_google_models()` — `/v1beta/models` + pricing page | `fetch_mistral_models()` — `/v1/models` | `/v1/models` on localhost |
+| **Logit bias** | Supports `logit_bias` param | Not supported (ignored) | Limited support | Not supported | Varies by backend |
+| **Temperature** | 0.0-2.0 (some models no temperature: o1) | 0.0-1.0 | 0.0-2.0 | 0.0-1.0 | Varies |
+
+---
+
+=============================================================================
+
 Goal: Add category-aware right-click menu to the existing Findings Table. The
 menu dynamically shows options based on the Category of selected row(s).
 

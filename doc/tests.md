@@ -10706,6 +10706,92 @@ python -m pytest CherryAI/dev/test_glossary_selective.py -v --timeout=10
 python -m pytest CherryAI/dev/test_parser_scripts.py -v --timeout=10
 ```
 
+### Parser Handshake & LightVN Parser (63 tests)
+
+**File:** `dev/test_lightvn_parser.py`
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestHandshakeValidation | 6 | LightVN satisfies handshake, RPGMaker satisfies handshake, missing extract raises, missing inject raises, missing format_id raises, optional components absent ok |
+| TestSpeakerInfo | 1 | Creation with name and line_idx |
+| TestExtractedLine | 4 | Defaults, to_dict minimal, to_dict full, roundtrip |
+| TestParserError | 1 | Attributes (parser_name, component, message) |
+| TestLightVNExtraction | 7 | Name, extract dialogue, narration, menu, variable, empty file, no translatable |
+| TestLightVNTaggedExtraction | 5 | All types returned, dialogue has speaker, narration no speaker, menu no speaker, variable no speaker |
+| TestConditionalDialogue | 2 | Conditional extracted, conditional prefix stripped |
+| TestMultilineDialogue | 1 | Multiline joined |
+| TestSpeakerDetection | 2 | Detect speakers, detect no speakers |
+| TestWordwrap | 7 | Short no wrap, long wraps, bracket ignored, config, tag dialogue, tag menu no wrap, textbox splitting |
+| TestCodeHandling | 5 | Code segments, code recovery, angle bracket safety, angle brackets preserved, code only detection |
+| TestConditionalPrefix | 5 | Strip simple, strip nested, no prefix, has conditional, extract prefix |
+| TestInjection | 4 | Inject dialogue, menu, variable, preserves structure |
+| TestEncoding | 2 | UTF-8, UTF-8 BOM |
+| TestCanHandle | 3 | Recognizes LightVN script, rejects non-txt, rejects plain txt |
+| TestOptionalComponents | 3 | Forbidden chars, context markers, info capabilities |
+| TestFullCorpus | 4 | Extraction count (55604/50212), tagged count matches, all tags valid, speaker detection on corpus |
+| TestAllParsersHandshake | 1 | All registered parsers valid |
+
+```bash
+# Run Parser Handshake & LightVN tests
+python -m pytest CherryAI/dev/test_lightvn_parser.py -v --timeout=300
+```
+
+### Parser Input Routing & P2 Validation (32 tests)
+
+**File:** `dev/test_parser_input_routing.py`
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestListParserNames | 4 | Returns list of strings, contains LightVN, contains RPGMaker, no duplicates |
+| TestParserRegistryLookup | 3 | LightVN lookup, case-insensitive, unknown returns None |
+| TestParserAwareExtraction | 2 | LightVN extract via registry, extract_lines routes to parser |
+| TestAutoDetection | 2 | Detect LightVN script, non-LightVN not detected |
+| TestFileMatchesFormat | 3 | LightVN script matches, plain text doesn't match, extension format still works |
+| TestFullCorpusViaRouting | 1 | Corpus via registry matches direct parser call |
+| TestInputDialogFormatValues | 2 | Format values include lightvn, rpgmaker not duplicated |
+| TestHandshakeValidation | 5 | Valid parser no errors, missing extract, missing inject, missing identity, all registered parsers pass |
+| TestTokenValidation | 4 | Estimate short text, estimate empty, estimate long text, normal lines pass |
+| TestEncodingFallback | 6 | UTF-8 BOM, UTF-16 BOM, plain UTF-8, Shift-JIS, Latin-1 fallback, parser encoding preferred |
+
+```bash
+# Run Parser Input Routing & P2 Validation tests
+python -m pytest CherryAI/dev/test_parser_input_routing.py -v --timeout=60
+```
+
+### Parser Optional Wiring — P3 (28 tests)
+
+**File:** `dev/test_parser_optional_wiring.py`
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestO4SpeakerDetection | 4 | LightVN returns list, name+idx valid, no-override returns None, override check |
+| TestO6CustomWordwrap | 4 | LightVN has override, short line passthrough, long line wraps, no-override returns None |
+| TestO7ForbiddenChars | 4 | LightVN exists, has characters, to_dict/from_dict round-trip, RPG Maker check |
+| TestO8ContextMarkers | 7 | Default heuristics, parser rules override, empty lines None, LightVN rules exist, rules compile, dialogue match, no-rules + no-lines |
+| TestWireParserOptionals | 7 | ParserName stored, speaker flag, wordwrap flag, forbidden chars dict, context markers flag, all LightVN optionals, info flags match |
+| TestAnalysisSpeakerSkip | 2 | Without speakers, with speakers |
+
+```bash
+# Run Parser Optional Wiring P3 tests
+python -m pytest CherryAI/dev/test_parser_optional_wiring.py -v --timeout=60
+```
+
+### Parser Handler Retrofit — P4 (28 tests)
+
+**File:** `dev/test_parser_handler_retrofit.py`
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestFormatHandlerCompliance | 9 | All extract, all inject, all identity, txt/csv/tsv/json/xlsx individual, validate_parser on all registered |
+| TestParserScriptCompliance | 4 | All parsers pass, LightVN valid, RPGMakerMV valid, RPGMakerMZ valid |
+| TestRpgMakerStubs | 9 | MV extract/inject raise, MZ extract/inject raise, plugin extract/inject raise, MV/MZ parser delegate raises, error metadata |
+| TestRpgMakerParserOptionals | 6 | MV/MZ wordwrap config, MV forbidden chars, MV context markers, MV/MZ can_handle override |
+
+```bash
+# Run Parser Handler Retrofit P4 tests
+python -m pytest CherryAI/dev/test_parser_handler_retrofit.py -v --timeout=60
+```
+
 ### Phase 54: Point of View Inference (36 tests)
 
 **File:** `dev/test_pov_inference.py`

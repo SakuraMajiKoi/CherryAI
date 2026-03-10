@@ -2167,6 +2167,48 @@ PARSER SCRIPTS (Implemented)
 - **Forbidden Characters:** Merged into logit bias via `merge_parser_forbidden_chars()`; auto-replaced or flagged via `replace_forbidden_chars()`
 - **API Integration** (`functions/api_client.py`): `apply_parser_forbidden_chars()` method on ApiClient
 
+PARSER HANDSHAKE — UNIFIED I/O PARSER INTERFACE (Implemented)
+- Formal contract that every parser must satisfy: Mandatory (M1-M3) and Optional (O1-O8) components
+- **Handshake module** (`formats/handshake.py`): `SpeakerInfo`, `ExtractedLine`, `ParserError`, `validate_parser()`
+- **Mandatory contract:** M1=Extract, M2=Inject, M3=Identity (format_id+extensions or can_handle)
+- **Optional components:** O1=Decrypt, O2=Encrypt, O3=Encoding, O4=Speaker Detection, O5=Wordwrap Config, O6=Custom Wordwrap, O7=Forbidden Chars, O8=Context Markers
+- **Handler retrofit (P4):** All registered FormatHandlers and ParserScripts verified against M1-M3 via `validate_parser()`. RPG Maker handler stubs raise `ParserError` with metadata instead of silent no-ops.
+- **Tagged extraction** (`parser_base.py`): `extract_tagged()` returns `List[ExtractedLine]` with per-line tag, speaker, context
+- **Tag-specific wordwrap** (`parser_base.py`): `wordwrap_for_tag(tag)` returns different `WordwrapConfig` per extraction tag
+- **Speaker detection** (`parser_base.py`): `detect_speakers(lines)` returns `List[SpeakerInfo]`
+- **Validation:** `validate_parser(parser)` checks M1-M3 compliance, returns list of errors
+- **Dynamic format spinbox:** Parser names dynamically appear in format dropdown via `list_parser_names()`
+- **Parser-aware extraction:** `_extract_lines()` routes to parser.extract() when format is a parser name
+- **Auto-detection:** `_load_file()` tries `detect_parser()` for auto format, falls back to FORMAT_MAP
+- **Selection-time validation:** `_validate_parser_selection()` runs `validate_parser()` on parser/format selection; missing mandatory → error popup, blocks load
+- **Token validation:** `_validate_extracted_lines()` checks per-line token count; >2048 → error popup + abort, >1024 → warning
+- **Token estimation:** `_estimate_tokens()` uses tiktoken when available, else `len(text) * 0.3` heuristic
+- **Encoding heuristic:** `_detect_encoding()` 8 KB probe with fallback chain: BOM → parser `detect_encoding()` → utf-8 → shift_jis → cp932 → latin-1
+
+PIPELINE WIRING OF OPTIONAL COMPONENTS (Implemented — P3)
+- **`_wire_parser_optionals(format_id)`** in `gui/steps/input_extract.py`: Runs after extraction/manifest creation, writes all parser optional data to manifest fields
+- **O4 Speaker Detection:** Calls `parser.detect_speakers()`, writes `SpeakerInfo` list to manifest `characters[]`, sets `Options.ParserHandlesSpeakers = True`; analysis step reads flag and skips generic speaker detection
+- **O6 Custom Wordwrap:** Sets `Options.ParserHandlesWordwrap = True`; wordwrap step delegates to `parser.wordwrap(line)` per line instead of built-in `apply_wordwrap`
+- **O7 Forbidden Chars:** Serialises `forbidden_chars.to_dict()` to `Options.ParserForbiddenChars`; translation step calls `api_client.apply_parser_forbidden_chars()` to merge into logit bias
+- **O8 Context Markers:** Compiles `context_marker_rules`, applies regex patterns to extracted lines, writes `context_marker` tags; `detect_context_markers()` accepts optional `parser_rules` parameter to override built-in heuristics
+- **Output Injection:** Output step reads `Options.ParserName`, routes through `parser.inject()` instead of standard format-based writers
+- **Manifest Options written:** `ParserName`, `ParserHandlesSpeakers`, `ParserHandlesWordwrap`, `ParserForbiddenChars` (dict), `ParserHandlesContextMarkers`
+
+LIGHT VN PARSER (Implemented)
+- Full parser for Light VN visual novel engine scripts (`formats/LightVN.py`)
+- Extracts dialogue, menu text (`~文字`/`~ボタン文字`), and variable assignments in document order
+- **Extraction tags:** `dialogue` (with speaker info), `menu`, `variable`
+- **Speaker format:** `Speaker: text` — speaker tags detected from `~【SpeakerName】` notation
+- **Conditional dialogue:** `~もし (condition)` prefix stripped from keys, preserved during injection
+- **Code handling:** Balanced bracket matching for `[] {} <> ［］ ｛｝ ＜＞ ⟨⟩ ⟪⟫ 〈〉 《》`
+- **Code recovery:** Restores accidentally translated code during injection
+- **Angle bracket safety:** Converts non-code `<>` to fullwidth `＜＞` during injection
+- **Custom wordwrap:** Balanced line wrapping with orphan avoidance, textbox splitting (O6)
+- **Tag-specific wrapping:** Dialogue=wrap (60 chars, 3 lines), menu/variable=no wrap
+- **Encoding detection:** Priority chain: utf-8, utf-8-sig, shift_jis, cp932, euc-jp, utf-16
+- **Auto-detection:** `can_handle()` scans first 200 lines for `~【` or `~文字` patterns
+- **Corpus verified:** 55604 total lines, 50212 unique across 1056 .txt files, 843 speakers
+
 WIDTH CONVERSION (Implemented)
 - Converts character width from source language to target language encoding
 - East Asian languages (Chinese/Japanese/Korean) use fullwidth characters

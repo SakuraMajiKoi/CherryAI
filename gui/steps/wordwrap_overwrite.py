@@ -863,6 +863,23 @@ class WordwrapOverwriteStep(BaseStep):
             self._simple_wrap()
             return
 
+        # Parser Handshake O6: Check if parser provides custom wordwrap
+        parser_handles_wordwrap = False
+        parser_obj = None
+        try:
+            mgr = self.manifest_manager
+            if mgr is not None and mgr.is_loaded:
+                opts = mgr._manifest_data.get("Options", {})
+                if isinstance(opts, dict) and opts.get("ParserHandlesWordwrap"):
+                    parser_name = opts.get("ParserName", "")
+                    if parser_name:
+                        from CherryAI.formats import get_parser_registry
+                        parser_obj = get_parser_registry().get(parser_name)
+                        if parser_obj is not None:
+                            parser_handles_wordwrap = True
+        except Exception:
+            pass
+
         # Build config
         config = WordwrapConfig(
             mode=self._mode_var.get(),
@@ -880,8 +897,18 @@ class WordwrapOverwriteStep(BaseStep):
         if not lines:
             return
 
-        # Apply wordwrap
-        wrapped_lines = apply_wordwrap(lines, config)
+        # O6: Delegate to parser wordwrap when available
+        if parser_handles_wordwrap and parser_obj is not None:
+            wrapped_lines = []
+            for line in lines:
+                result = parser_obj.wordwrap(line)
+                if result is not None:
+                    wrapped_lines.append(config.in2.join(result))
+                else:
+                    wrapped_lines.append(line)
+        else:
+            # Apply standard wordwrap
+            wrapped_lines = apply_wordwrap(lines, config)
 
         # Update wrap lines
         self._lines = []

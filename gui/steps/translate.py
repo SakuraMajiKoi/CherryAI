@@ -2422,6 +2422,22 @@ class TranslationStep(BaseStep):
                                 banned_tokens=self._translation_options.banned_tokens,
                             )
 
+                        # Parser Handshake O7: Merge parser forbidden chars
+                        try:
+                            info_mgr_o7 = self.manifest_manager
+                            if info_mgr_o7 is not None and info_mgr_o7.is_loaded:
+                                opts = info_mgr_o7._manifest_data.get(
+                                    "Options", {},
+                                )
+                                if isinstance(opts, dict):
+                                    pname = opts.get("ParserName", "")
+                                    if pname:
+                                        self._api_client.apply_parser_forbidden_chars(
+                                            pname,
+                                        )
+                        except Exception:
+                            pass
+
                         self._log_progress(
                             f"API client initialized: {key_provider} "
                             f"({self._translation_options.model})"

@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from . import FormatHandler
+from .handshake import ParserError
 
 
 __all__ = [
@@ -50,13 +51,13 @@ class RpgMakerMVHandler(FormatHandler):
     supports_pairs = False
     
     def extract(self, path: Path, encoding: str = "utf-8") -> List[str]:
-        """Extract translatable text from RPG Maker MV JSON.
-        
-        Not yet implemented.
-        """
-        logging.warning("RPG Maker MV handler not yet implemented")
-        return []
-    
+        """Extract translatable text from RPG Maker MV JSON."""
+        raise ParserError(
+            "RPG Maker MV extraction not yet implemented",
+            parser_name="RPGMakerMV",
+            component="extract",
+        )
+
     def inject(
         self,
         path: Path,
@@ -64,11 +65,12 @@ class RpgMakerMVHandler(FormatHandler):
         original_lines: Optional[List[str]] = None,
         encoding: str = "utf-8"
     ) -> None:
-        """Inject translated text into RPG Maker MV JSON.
-        
-        Not yet implemented.
-        """
-        logging.warning("RPG Maker MV handler not yet implemented")
+        """Inject translated text into RPG Maker MV JSON."""
+        raise ParserError(
+            "RPG Maker MV injection not yet implemented",
+            parser_name="RPGMakerMV",
+            component="inject",
+        )
 
 
 class RpgMakerMZHandler(FormatHandler):
@@ -89,13 +91,13 @@ class RpgMakerMZHandler(FormatHandler):
     supports_pairs = False
     
     def extract(self, path: Path, encoding: str = "utf-8") -> List[str]:
-        """Extract translatable text from RPG Maker MZ JSON.
-        
-        Not yet implemented.
-        """
-        logging.warning("RPG Maker MZ handler not yet implemented")
-        return []
-    
+        """Extract translatable text from RPG Maker MZ JSON."""
+        raise ParserError(
+            "RPG Maker MZ extraction not yet implemented",
+            parser_name="RPGMakerMZ",
+            component="extract",
+        )
+
     def inject(
         self,
         path: Path,
@@ -103,11 +105,12 @@ class RpgMakerMZHandler(FormatHandler):
         original_lines: Optional[List[str]] = None,
         encoding: str = "utf-8"
     ) -> None:
-        """Inject translated text into RPG Maker MZ JSON.
-        
-        Not yet implemented.
-        """
-        logging.warning("RPG Maker MZ handler not yet implemented")
+        """Inject translated text into RPG Maker MZ JSON."""
+        raise ParserError(
+            "RPG Maker MZ injection not yet implemented",
+            parser_name="RPGMakerMZ",
+            component="inject",
+        )
 
 
 class RpgMakerPluginHandler(FormatHandler):
@@ -127,13 +130,13 @@ class RpgMakerPluginHandler(FormatHandler):
     supports_pairs = False
     
     def extract(self, path: Path, encoding: str = "utf-8") -> List[str]:
-        """Extract translatable text from RPG Maker plugin JS.
-        
-        Not yet implemented.
-        """
-        logging.warning("RPG Maker plugin handler not yet implemented")
-        return []
-    
+        """Extract translatable text from RPG Maker plugin JS."""
+        raise ParserError(
+            "RPG Maker plugin extraction not yet implemented",
+            parser_name="RPGMakerPlugin",
+            component="extract",
+        )
+
     def inject(
         self,
         path: Path,
@@ -141,11 +144,12 @@ class RpgMakerPluginHandler(FormatHandler):
         original_lines: Optional[List[str]] = None,
         encoding: str = "utf-8"
     ) -> None:
-        """Inject translated text into RPG Maker plugin JS.
-        
-        Not yet implemented.
-        """
-        logging.warning("RPG Maker plugin handler not yet implemented")
+        """Inject translated text into RPG Maker plugin JS."""
+        raise ParserError(
+            "RPG Maker plugin injection not yet implemented",
+            parser_name="RPGMakerPlugin",
+            component="inject",
+        )
 
 
 def get_handlers() -> List[FormatHandler]:

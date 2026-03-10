@@ -175,9 +175,11 @@ TABLE OF CONTENTS
    5.3 document.py ✅ - PDF, EPUB handlers (placeholder)
    5.4 html.py ✅ - HTML parsing (under development)
    5.5 rpgmaker.py ✅ - RPG Maker MV/MZ (placeholder)
-   5.6 parser_base.py ✅ - ParserScript ABC, WordwrapConfig, ForbiddenChars, ContextMarkerRules
+   5.6 parser_base.py ✅ - ParserScript ABC, WordwrapConfig, ForbiddenChars, ContextMarkerRules, ExtractedLine, SpeakerInfo
    5.7 parser_rpgmaker.py ✅ - RpgMakerMVParser, RpgMakerMZParser implementations
    5.8 json_lenient.py ✅ - Lenient JSON parsing with error recovery
+   5.9 handshake.py ✅ - ParserHandshake protocol: SpeakerInfo, ExtractedLine, ParserError, validate_parser()
+   5.10 LightVN.py ✅ - LightVNParser: Light VN visual novel script parser (dialogue, menu, variable extraction/injection)
 
 6. GUI V2 ARCHITECTURE (gui/ - 7 packages)
    
@@ -2237,6 +2239,64 @@ Planned Formats (placeholder implementations):
 2. **Documents** (formats/document.py):
    - PDF: Text extraction via PyMuPDF, generation via reportlab
    - EPUB: Chapter-based extraction via ebooklib, beautifulsoup4
+
+Parser Handshake (formats/handshake.py):
+- Formal contract definition for all parsers (mandatory M1-M3, optional O1-O8)
+- `SpeakerInfo(name, line_idx)`: Speaker detected by parser
+- `ExtractedLine(text, tag, speaker, context)`: Tagged extraction result
+- `ParserError(message, parser_name, component)`: Mandatory component failure
+- `validate_parser(parser) → list[str]`: Check parser satisfies M1-M3
+- **Handler Retrofit (P4):** All registered FormatHandlers verified via `validate_parser()`.
+  RPG Maker stubs (`formats/rpgmaker.py`) raise `ParserError` with `parser_name` and `component`
+  metadata instead of silent `logging.warning()` + empty returns.
+
+Parser Input Routing (gui/steps/input_extract.py):
+- `list_parser_names() → List[str]`: Returns display names from ParserRegistry
+- Dynamic format combobox: Parser names appended to base format values in input dialog
+- `_extract_lines()`: Routes to `parser.extract()` when format_id is a parser name
+- `_load_file()`: Auto-detect parser via `detect_parser()` for format="auto"
+- `_file_matches_format()`: Delegates to `parser.can_handle()` for parser format IDs
+- `_collect_files_for_format()`: Collects files via `can_handle()` for parser filters
+- `_validate_parser_selection(format_id)`: Runs `validate_parser()`, error popup if fails
+- `_validate_extracted_lines(lines, filename)`: Per-line token check (>2048 error, >1024 warning)
+- `_estimate_tokens(text)`: Static — tiktoken with `len(text) * 0.3` fallback
+- `_detect_encoding(path)`: 8 KB probe: BOM → parser `detect_encoding()` → utf-8 → shift_jis → cp932 → latin-1
+
+Pipeline Wiring of Optional Components (P3):
+- `_wire_parser_optionals(format_id)`: Post-extraction hook in `_load_selected_paths` between
+  `_ensure_project_created` and `_save_manifest_after_file_load`. Writes manifest Options:
+  - `ParserName` — stores active parser identifier
+  - `ParserHandlesSpeakers` (bool) — O4: calls `parser.detect_speakers()`, writes to `characters[]`
+  - `ParserHandlesWordwrap` (bool) — O6: detected via `type(parser).wordwrap is not ParserScript.wordwrap`
+  - `ParserForbiddenChars` (dict) — O7: `forbidden_chars.to_dict()` serialised to manifest
+  - `ParserHandlesContextMarkers` (bool) — O8: compiled rules applied to lines, tags written
+- `gui/steps/analysis.py` `_perform_analysis()`: Reads `ParserHandlesSpeakers` flag; when True,
+  passes `include_speakers=False` to `analyze_lines()` and loads existing `characters[]` from manifest
+- `gui/steps/wordwrap_overwrite.py` `_process_wrap()`: Reads `ParserHandlesWordwrap` + `ParserName`;
+  when set, delegates to `parser.wordwrap(line)` per line instead of `apply_wordwrap(lines, config)`
+- `gui/steps/output_inject.py` `_write_file()`: Reads `ParserName`; when set, routes through
+  `parser.inject(output_path, lines)` with fallback to standard format writers on failure
+- `gui/steps/translate.py`: After logit bias setup, reads `ParserName`, calls
+  `api_client.apply_parser_forbidden_chars(parser_name)` to merge O7 into logit bias
+- `functions/analysis.py` `detect_context_markers()`: Accepts optional `parser_rules` kwarg
+  (compiled regex dict from `ContextMarkerRules.compiled()`); when provided, uses parser patterns
+  instead of built-in heuristics (`_is_choice_item`, `_is_dialogue_line`, `_is_menu_item`)
+
+Light VN Parser (formats/LightVN.py):
+- `LightVNParser(ParserScript)`: Full Light VN visual novel script parser
+- **M1 Extract**: `extract(path)` → flat list; `extract_tagged(path)` → `List[ExtractedLine]`
+- **M2 Inject**: `inject(path, lines)` — writes to `{stem}_translated.txt`
+- **M3 Identity**: `can_handle()` probes for `~【` or `~文字` in first 200 lines
+- **O3 Encoding**: Priority chain: utf-8, utf-8-sig, shift_jis, cp932, euc-jp, utf-16
+- **O4 Speakers**: `detect_speakers()` parses `Speaker: text` format from extracted lines
+- **O5 Wordwrap**: 60 chars, 3 lines per textbox, `\w` textbox injection
+- **O6 Custom Wrap**: Balanced wrapping with orphan avoidance (`_pretty_wrap`)
+- **O7 Forbidden**: Tab and carriage return characters
+- **O8 Context**: Patterns for dialogue (`^"`), menu (`~?文字`), choice (`~選択`)
+- **Tags**: `dialogue` (with speaker), `menu`, `variable`
+- **Code recovery**: Balanced bracket matching for 10 bracket types, angle bracket safety
+- **Conditional handling**: `~もし (condition)` prefix stripped for keys, preserved on injection
+- **Verified**: 55604 total / 50212 unique from 1056 files, 843 unique speakers
 
 Configuration Storage (CherryAI.ini):
 ```ini

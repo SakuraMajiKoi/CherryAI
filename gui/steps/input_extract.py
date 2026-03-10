@@ -574,6 +574,13 @@ class InputExtractionStep(BaseStep):
         if len(files_to_load) > 3:
             progress = LoadingProgressDialog(self, len(files_to_load))
 
+        # Handshake: validate parser once before iterating files
+        if format_override != "auto":
+            if not self._validate_parser_selection(format_override):
+                if progress is not None:
+                    progress.close()
+                return
+
         for path in files_to_load:
             if progress is not None and progress.cancelled:
                 break
@@ -613,6 +620,10 @@ class InputExtractionStep(BaseStep):
 
             self._populate_project_info_from_files()
             self._ensure_project_created()
+
+            # Parser Handshake P3: Wire optional components to manifest
+            self._wire_parser_optionals(format_override)
+
             self._save_manifest_after_file_load()
 
             # Refresh file list after manifest sync to show Type column
@@ -624,6 +635,8 @@ class InputExtractionStep(BaseStep):
     def _collect_files_for_format(self, folder: Path, format_filter: str) -> List[Path]:
         """Collect files from a folder based on format filter.
 
+        For parser names, collects all files then filters via ``can_handle``.
+
         Args:
             folder: Folder to scan.
             format_filter: Format filter ("auto" or specific format).
@@ -631,6 +644,19 @@ class InputExtractionStep(BaseStep):
         Returns:
             List of matching file paths.
         """
+        # Check if format_filter is a parser name
+        try:
+            from CherryAI.formats import get_parser_registry
+            parser = get_parser_registry().get(format_filter)
+            if parser is not None:
+                # Collect all files, then filter via can_handle
+                all_files = self._collect_files_from_folder(
+                    folder, {".txt", ".csv", ".tsv", ".json", ".xlsx", ".js"},
+                )
+                return [f for f in all_files if parser.can_handle(f)]
+        except Exception:
+            pass
+
         if format_filter != "auto" and format_filter in FORMAT_EXTENSIONS:
             suffixes = FORMAT_EXTENSIONS[format_filter]
         else:
@@ -923,21 +949,110 @@ class InputExtractionStep(BaseStep):
     def _file_matches_format(self, path: Path, format_id: str) -> bool:
         """Check if a file matches the specified format filter.
 
+        For parser names (e.g. ``lightvn``), delegates to the parser's
+        ``can_handle`` method instead of checking extensions.
+
         Args:
             path: File path to check.
             format_id: Required format identifier.
 
         Returns:
-            True if file extension matches the format, False otherwise.
+            True if file matches the format, False otherwise.
         """
+        # Check parser registry first
+        try:
+            from CherryAI.formats import get_parser_registry
+            parser = get_parser_registry().get(format_id)
+            if parser is not None:
+                return parser.can_handle(path)
+        except Exception:
+            pass
+
         allowed = FORMAT_EXTENSIONS.get(format_id)
         if allowed is None:
             return True  # Unknown format, allow all
         return path.suffix.lower() in allowed
 
     @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """Estimate token count for a line of text.
+
+        Uses tiktoken when available, otherwise ``len(text) * 0.3`` heuristic
+        matching the chunker approach.
+        """
+        try:
+            import tiktoken
+            enc = tiktoken.encoding_for_model("gpt-4o")
+            return len(enc.encode(text))
+        except Exception:
+            return max(1, int(len(text) * 0.3))
+
+    def _validate_extracted_lines(
+        self, lines: List[str], filename: str,
+    ) -> bool:
+        """Run per-line token validation after extraction.
+
+        - Lines >2048 tokens raise an error popup and abort.
+        - Lines >1024 tokens emit a warning (non-blocking).
+
+        Returns:
+            True if no fatal errors, False if load should be aborted.
+        """
+        warnings: List[str] = []
+        for idx, line in enumerate(lines):
+            tok = self._estimate_tokens(line)
+            if tok > 2048:
+                messagebox.showerror(
+                    "Token Limit Exceeded",
+                    f"File: {filename}\n"
+                    f"Line {idx + 1} is {tok} tokens (max 2048).\n"
+                    f"Consider splitting this line.",
+                )
+                return False
+            if tok > 1024:
+                warnings.append(
+                    f"Line {idx + 1}: {tok} tokens "
+                    f"({tok - 1024} over recommended 1024)"
+                )
+        if warnings:
+            msg = "\n".join(warnings[:10])
+            if len(warnings) > 10:
+                msg += f"\n...and {len(warnings) - 10} more"
+            messagebox.showwarning(
+                "Token Warning",
+                f"File: {filename}\nSome lines exceed 1024 tokens "
+                f"(recommended limit):\n\n{msg}",
+            )
+        return True
+
+    def _validate_parser_selection(self, format_id: str) -> bool:
+        """Run handshake validation when a parser is selected.
+
+        Returns True if parser is valid, False if load should be blocked.
+        """
+        try:
+            from CherryAI.formats import get_parser_registry, validate_parser
+            parser = get_parser_registry().get(format_id)
+            if parser is None:
+                return True  # Not a parser, skip validation
+            errors = validate_parser(parser)
+            if errors:
+                messagebox.showerror(
+                    "Parser Validation Failed",
+                    f"Parser '{parser.name}' failed handshake validation:\n\n"
+                    + "\n".join(errors),
+                )
+                return False
+        except Exception:
+            pass
+        return True
+
+    @staticmethod
     def _detect_encoding(path: Path) -> str:
-        """Detect file encoding by reading BOM or falling back to utf-8.
+        """Detect file encoding using an 8 KB probe with fallback chain.
+
+        Priority: BOM → parser detect_encoding → utf-8 → shift_jis →
+        cp932 → latin-1 fallback.
 
         Args:
             path: File path.
@@ -947,25 +1062,34 @@ class InputExtractionStep(BaseStep):
         """
         try:
             with open(path, "rb") as f:
-                raw = f.read(4)
+                raw = f.read(8192)
             # Check BOM markers
             if raw[:3] == b"\xef\xbb\xbf":
                 return "utf-8-sig"
             if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
                 return "utf-16"
-            # Try utf-8 first (most common)
+
+            # Try parser-specific encoding if available
             try:
-                path.read_text(encoding="utf-8")
-                return "utf-8"
-            except UnicodeDecodeError:
+                from CherryAI.formats import detect_parser as _detect_parser
+                parser = _detect_parser(path)
+                if parser is not None:
+                    detect_fn = getattr(parser, "detect_encoding", None)
+                    if detect_fn is not None:
+                        enc = detect_fn(path)
+                        if enc:
+                            return enc
+            except Exception:
                 pass
-            # Try shift_jis for Japanese content
-            try:
-                path.read_text(encoding="shift_jis")
-                return "shift_jis"
-            except UnicodeDecodeError:
-                pass
-            return "utf-8"  # Fallback
+
+            # Fallback chain: utf-8 → shift_jis → cp932 → latin-1
+            for enc in ("utf-8", "shift_jis", "cp932"):
+                try:
+                    raw.decode(enc)
+                    return enc
+                except (UnicodeDecodeError, LookupError):
+                    continue
+            return "latin-1"  # Always succeeds
         except Exception:
             return "utf-8"
 
@@ -982,6 +1106,132 @@ class InputExtractionStep(BaseStep):
                     logger.debug("Manifest saved after file load")
             except Exception as e:
                 logger.warning("Failed to save manifest after file load: %s", e)
+
+    def _wire_parser_optionals(self, format_id: str) -> None:
+        """Wire parser optional components (O1-O8) to manifest after load.
+
+        Reads optional attributes from the detected parser and writes them
+        to manifest Options fields so downstream pipeline steps can use them.
+
+        Parser Handshake P3: Called after file extraction and manifest
+        creation in ``_load_selected_paths``.
+
+        Args:
+            format_id: Format identifier (may be a parser name).
+        """
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            return
+
+        try:
+            from CherryAI.formats import get_parser_registry
+            from CherryAI.formats.parser_base import ParserScript
+            parser = get_parser_registry().get(format_id)
+        except Exception:
+            parser = None
+
+        if parser is None:
+            return
+
+        from CherryAI.functions.manifest_fields import (
+            save_nested_bool_field,
+            save_nested_text_field,
+        )
+
+        # Store parser name for downstream steps (output, translation, etc.)
+        save_nested_text_field(mgr, "Options", "ParserName", parser.name)
+
+        # ------------------------------------------------------------------
+        # O4: Speaker Detection
+        # ------------------------------------------------------------------
+        if type(parser).detect_speakers is not ParserScript.detect_speakers:
+            all_lines: List[str] = []
+            for lf in self._loaded_files:
+                all_lines.extend(lf.lines)
+            speakers = parser.detect_speakers(all_lines)
+            if speakers:
+                save_nested_bool_field(
+                    mgr, "Options", "ParserHandlesSpeakers", True,
+                )
+                # Merge parser-detected speakers into characters[]
+                try:
+                    from CherryAI.functions.manifest_fields import (
+                        load_character_notes,
+                        save_character_notes,
+                    )
+                    existing = load_character_notes(mgr)
+                    existing_names = {c["original_name"] for c in existing}
+                    for si in speakers:
+                        if si.name not in existing_names:
+                            existing.append({
+                                "original_name": si.name,
+                                "translation": "",
+                                "notes": "",
+                                "count": 1,
+                            })
+                        else:
+                            for c in existing:
+                                if c["original_name"] == si.name:
+                                    c["count"] = c.get("count", 0) + 1
+                    save_character_notes(mgr, existing)
+                except Exception as e:
+                    logger.debug("Could not merge parser speakers: %s", e)
+                logger.info(
+                    "O4: Parser '%s' detected %d speakers",
+                    parser.name, len(speakers),
+                )
+
+        # ------------------------------------------------------------------
+        # O6: Custom Wordwrap flag
+        # ------------------------------------------------------------------
+        if type(parser).wordwrap is not ParserScript.wordwrap:
+            save_nested_bool_field(
+                mgr, "Options", "ParserHandlesWordwrap", True,
+            )
+            logger.debug("O6: Parser '%s' provides custom wordwrap", parser.name)
+
+        # ------------------------------------------------------------------
+        # O7: Forbidden Characters
+        # ------------------------------------------------------------------
+        if parser.forbidden_chars is not None:
+            fc = parser.forbidden_chars
+            # Store serialised dict for downstream steps
+            if "Options" not in mgr._manifest_data:
+                mgr._manifest_data["Options"] = {}
+            mgr._manifest_data["Options"]["ParserForbiddenChars"] = fc.to_dict()
+            mgr._mark_dirty()
+            logger.debug(
+                "O7: Parser '%s' has %d forbidden chars",
+                parser.name, len(fc.characters),
+            )
+
+        # ------------------------------------------------------------------
+        # O8: Context Markers
+        # ------------------------------------------------------------------
+        if parser.context_marker_rules is not None:
+            rules = parser.context_marker_rules
+            compiled = rules.compiled()
+            lines_data = mgr.get_lines()  # list of dicts with 'idx', 'orig'
+            tagged_count = 0
+            for entry in lines_data:
+                text = entry.get("orig", "")
+                tag = None
+                for pattern_name, pattern in compiled.items():
+                    if pattern and pattern.search(text):
+                        tag = pattern_name.replace("_pattern", "")
+                        break
+                if tag:
+                    entry["context_marker"] = tag
+                    tagged_count += 1
+            if tagged_count > 0:
+                mgr.set_lines(lines_data)
+                save_nested_bool_field(
+                    mgr, "Options", "ParserHandlesContextMarkers", True,
+                )
+                logger.info(
+                    "O8: Parser '%s' tagged %d lines with context markers",
+                    parser.name, tagged_count,
+                )
 
     def _ensure_project_created(self) -> None:
         """Ensure a project is created for loaded files (TASK 19 Phase 5).
@@ -1499,14 +1749,31 @@ class InputExtractionStep(BaseStep):
             if encoding == "auto":
                 encoding = self._detect_encoding(path)
 
-            # Detect format
+            # Detect format — try parser registry first for auto or parser names
             if format_override != "auto":
                 format_id = format_override
             else:
-                format_id = FORMAT_MAP.get(path.suffix.lower(), "txt")
+                # Auto-detect: try parser registry, then fall back to extension map
+                try:
+                    from CherryAI.formats import detect_parser as _detect_parser
+                    parser = _detect_parser(path)
+                    if parser is not None:
+                        format_id = parser.name.lower()
+                    else:
+                        format_id = FORMAT_MAP.get(path.suffix.lower(), "txt")
+                except Exception:
+                    format_id = FORMAT_MAP.get(path.suffix.lower(), "txt")
+
+            # Handshake: validate parser selection (M1-M3 check)
+            if not self._validate_parser_selection(format_id):
+                return False
 
             # Extract lines using format handler
             lines = self._extract_lines(path, format_id, encoding)
+
+            # Handshake: per-line token validation
+            if not self._validate_extracted_lines(lines, path.name):
+                return False
 
             # Check for existing manifest (don't auto-create individual manifests)
             # The unified manifest is created by _ensure_project_created() after all files load
@@ -1553,12 +1820,21 @@ class InputExtractionStep(BaseStep):
 
         Args:
             path: File path.
-            format_id: Format identifier.
+            format_id: Format identifier (handler id or parser name).
             encoding: Text encoding.
 
         Returns:
             List of extracted lines.
         """
+        # Try parser registry first (handles parser names like "lightvn")
+        try:
+            from CherryAI.formats import get_parser_registry
+            parser = get_parser_registry().get(format_id)
+            if parser is not None:
+                return parser.extract(path)
+        except Exception:
+            pass
+
         try:
             # Try to use formats module
             from CherryAI.formats import get_handler

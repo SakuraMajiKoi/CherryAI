@@ -319,10 +319,23 @@ class AnalysisStep(BaseStep):
 
         results["total_lines"] = len(all_lines)
 
+        # Parser Handshake O4: Check if parser already handled speaker detection
+        parser_handles_speakers = False
+        try:
+            mgr = self.manifest_manager
+            if mgr is not None and mgr.is_loaded:
+                opts = mgr._manifest_data.get("Options", {})
+                if isinstance(opts, dict):
+                    parser_handles_speakers = bool(
+                        opts.get("ParserHandlesSpeakers", False)
+                    )
+        except Exception:
+            pass
+
         # Use analysis adapter for comprehensive analysis (TASK 16.6)
         analysis = analyze_lines(
             all_lines,
-            include_speakers=True,
+            include_speakers=not parser_handles_speakers,
             include_code_patterns=True,
             include_language=True,
             include_tokens=False,
@@ -343,6 +356,16 @@ class AnalysisStep(BaseStep):
 
         # Unified speakers: merge adapter speakers into manifest characters[]
         detected_speakers = analysis.get("speakers", {})
+
+        # Parser Handshake O4: When parser handled speakers, load from chars
+        if parser_handles_speakers and not detected_speakers:
+            existing_chars = self._load_characters()
+            detected_speakers = {
+                c["original_name"]: c.get("count", 1)
+                for c in existing_chars
+                if c.get("original_name")
+            }
+
         existing_chars = self._load_characters()
         char_lookup = {c["original_name"]: c for c in existing_chars}
 

@@ -82,7 +82,7 @@ CherryAI is designed to achieve high-quality translation using LLMs through exte
 | GUI | `gui/` | Display, user interaction, widget binding (10 workflow steps/tabs) |
 | Processing | `functions/` | Core logic, translation, validation |
 | Modes | `modi/` | Pre/post-processing transformations |
-| Formats | `formats/` | File I/O for TXT, CSV, JSON, XLSX, RPG Maker, Images |
+| Formats | `formats/` | File I/O for TXT, CSV, JSON, XLSX, RPG Maker, Light VN, Images |
 
 **Critical Rule:** GUI code contains NO processing logic. All text manipulation occurs in `functions/` or `modi/`. Both GUI and CLI share identical processing paths.
 
@@ -671,14 +671,49 @@ Code Spacing Rules (processed in both Pre and Post steps) apply these extended p
 
 **Purpose**: Parser Scripts are game-engine-specific or format-specific scripts that handle extraction, injection, and optionally provide wordwrap settings and context markers. They extend the base format handlers in `formats/` with engine-aware logic.
 
-**Status**: Implemented (Phase 53) — `formats/parser_base.py` defines the `ParserScript` ABC with `WordwrapConfig`, `ForbiddenChars`, and `ContextMarkerRules` dataclasses. RPG Maker MV/MZ parsers live in `formats/parser_rpgmaker.py`. A `ParserRegistry` in `formats/__init__.py` handles discovery and auto-detection. Wordwrap step auto-populates settings from detected parsers; forbidden characters integrate with logit bias and postprocessing.
+**Status**: Implemented (Phase 53 + Parser Handshake) — `formats/parser_base.py` defines the `ParserScript` ABC with `WordwrapConfig`, `ForbiddenChars`, and `ContextMarkerRules` dataclasses plus optional handshake methods (`extract_tagged`, `detect_speakers`, `wordwrap_for_tag`, `wordwrap`, `detect_encoding`). `formats/handshake.py` defines the handshake protocol types (`ExtractedLine`, `SpeakerInfo`, `ParserError`) and `validate_parser()`. RPG Maker MV/MZ parsers live in `formats/parser_rpgmaker.py`. The Light VN parser lives in `formats/LightVN.py` and is the reference handshake-compliant implementation. A `ParserRegistry` in `formats/__init__.py` handles discovery and auto-detection. Wordwrap step auto-populates settings from detected parsers; forbidden characters integrate with logit bias and postprocessing.
 
-#### Interface
+#### Handshake Protocol
+
+The Parser Handshake (`formats/handshake.py`) formalizes what every parser must and may provide:
+
+**Mandatory Components** (M1–M3):
+| Component | Requirement |
+|-----------|-------------|
+| M1: Extract | `extract(file_path) → List[str]` — flat list of translatable strings |
+| M2: Inject | `inject(file_path, output_path, translations) → bool` — write translations back |
+| M3: Identity | Either `format_id + extensions` (FormatHandler) or `can_handle(file_path)` (ParserScript) |
+
+**Optional Components** (O1–O8):
+| Component | Method / Attribute | Description |
+|-----------|--------------------|-------------|
+| O1 | `decrypt(file_path)` | Decrypt before extraction |
+| O2 | `encrypt(file_path)` | Re-encrypt after injection |
+| O3 | `detect_encoding(file_path)` | Parser-specific encoding detection |
+| O4 | `detect_speakers(lines)` | Return `List[SpeakerInfo]` from extracted text |
+| O5 | `wordwrap_config` / `wordwrap_for_tag(tag)` | Wrapping config (global or per-tag) |
+| O6 | `wordwrap(line, config)` | Custom wrapping function |
+| O7 | `forbidden_chars` | Characters that must not appear in output |
+| O8 | `context_marker_rules` | Engine-specific context marker definitions |
+
+**Tagged Extraction** (extends M1): `extract_tagged(file_path) → List[ExtractedLine]` returns lines with tag, speaker, and context metadata. When provided, `extract()` delegates to it for backward compatibility.
+
+**Validation**: `validate_parser(parser) → List[str]` checks M1–M3 compliance and returns a list of error strings (empty = valid).
+
+#### Data Types
+
+| Type | Fields | Description |
+|------|--------|-------------|
+| `ExtractedLine` | `text`, `tag`, `speaker`, `context` | Tagged extraction result with serialization (`to_dict`/`from_dict`) |
+| `SpeakerInfo` | `name`, `line_idx` | Speaker detection result linking name to line index |
+| `ParserError` | `message`, `parser_name`, `component` | Structured error with source identification |
+
+#### Interface (Legacy)
 
 **Mandatory Fields**:
 | Field | Type | Description |
 |-------|------|-------------|
-| Name | string | Parser identifier (e.g., "RPGMakerMV", "WolfRPG", "RenPy") |
+| Name | string | Parser identifier (e.g., "RPGMakerMV", "LightVN", "RenPy") |
 | Extract | function | Extract translatable lines from source files |
 | Inject | function | Inject translated lines back into file copies |
 
@@ -698,6 +733,21 @@ Code Spacing Rules (processed in both Pre and Post steps) apply these extended p
 | ContextMarkers.Dialogue | pattern | RegEx or rule to detect dialogue sections |
 | ContextMarkers.Menu | pattern | RegEx or rule to detect menu sections |
 | ContextMarkers.Choices | pattern | RegEx or rule to detect choice sections |
+
+#### Light VN Parser (`formats/LightVN.py`)
+
+Reference handshake-compliant parser for Light VN visual novel scripts. Adapted from the standalone `parlight.py` extraction tool.
+
+**Capabilities**: M1 ✓, M2 ✓, M3 ✓ (via `can_handle`), O3 ✓, O4 ✓, O5 ✓ (per-tag), O6 ✓, O7 ✓, O8 ✓
+
+**Tags**:
+| Tag | Content | Wordwrap |
+|-----|---------|----------|
+| `dialogue` | Quoted dialogue, continuations, conditional dialogue | 60 chars / 3 lines |
+| `menu` | `~文字` and `~ボタン文字` menu strings | No wrap |
+| `variable` | `臨時全域変数` and `保存変数` assignments | No wrap |
+
+**Detection**: Scans first 200 lines for `~【` (speaker tags) or `~文字` (menu commands).
 
 #### Wordwrap Integration
 

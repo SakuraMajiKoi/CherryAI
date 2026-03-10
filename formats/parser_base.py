@@ -34,7 +34,13 @@ __all__ = [
     "WordwrapConfig",
     "ForbiddenChars",
     "ContextMarkerRules",
+    "ExtractedLine",
+    "SpeakerInfo",
+    "ParserError",
 ]
+
+# Re-export handshake types for convenience
+from .handshake import ExtractedLine, ParserError, SpeakerInfo
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +245,80 @@ class ParserScript(ABC):
         return False
 
     # ------------------------------------------------------------------
+    # Optional — tagged extraction (Parser Handshake O4/O8 extensions)
+    # ------------------------------------------------------------------
+
+    def extract_tagged(self, file_path: Path) -> Optional[List["ExtractedLine"]]:
+        """Extract translatable lines with per-line tags and speaker info.
+
+        Override to provide richer extraction metadata.  When present the
+        pipeline uses this instead of plain :meth:`extract`.
+
+        Returns:
+            List of :class:`ExtractedLine`, or ``None`` to fall back to
+            :meth:`extract`.
+        """
+        return None
+
+    def detect_speakers(
+        self, lines: List[str],
+    ) -> Optional[List["SpeakerInfo"]]:
+        """Detect speakers from extracted lines (O4).
+
+        Override when the parser can reliably identify speakers.  When
+        provided the generic regex-based speaker detector is skipped.
+
+        Returns:
+            List of :class:`SpeakerInfo`, or ``None``.
+        """
+        return None
+
+    def wordwrap_for_tag(
+        self, tag: str,
+    ) -> Optional[WordwrapConfig]:
+        """Return a tag-specific wordwrap config.
+
+        Override when different extraction types (e.g. dialogue vs menu)
+        require different wrapping settings.
+
+        Args:
+            tag: The extraction tag (e.g. ``"dialogue"``, ``"menu"``).
+
+        Returns:
+            Tag-specific :class:`WordwrapConfig`, or ``None`` to use the
+            default :attr:`wordwrap_config`.
+        """
+        return None
+
+    def wordwrap(
+        self, line: str, config: Optional[WordwrapConfig] = None,
+    ) -> Optional[List[str]]:
+        """Custom wordwrap function (O6).
+
+        Override to replace the built-in ``pretty_wrap`` with
+        engine-specific wrapping logic.
+
+        Args:
+            line: Text to wrap.
+            config: Wrapping settings (uses :attr:`wordwrap_config` when
+                ``None``).
+
+        Returns:
+            Wrapped lines, or ``None`` to fall back to the built-in.
+        """
+        return None
+
+    def detect_encoding(self, file_path: Path) -> Optional[str]:
+        """Detect file encoding (O3).
+
+        Override to provide engine-specific encoding detection.
+
+        Returns:
+            Encoding string, or ``None`` to use the global heuristic.
+        """
+        return None
+
+    # ------------------------------------------------------------------
     # Convenience
     # ------------------------------------------------------------------
 
@@ -249,4 +329,16 @@ class ParserScript(ABC):
             "has_wordwrap": self.wordwrap_config is not None,
             "has_forbidden_chars": self.forbidden_chars is not None,
             "has_context_markers": self.context_marker_rules is not None,
+            "has_tagged_extraction": (
+                type(self).extract_tagged is not ParserScript.extract_tagged
+            ),
+            "has_speaker_detection": (
+                type(self).detect_speakers is not ParserScript.detect_speakers
+            ),
+            "has_custom_wordwrap": (
+                type(self).wordwrap is not ParserScript.wordwrap
+            ),
+            "has_encoding_detection": (
+                type(self).detect_encoding is not ParserScript.detect_encoding
+            ),
         }

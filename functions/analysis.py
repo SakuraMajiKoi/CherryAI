@@ -924,6 +924,7 @@ def _is_dialogue_line(line: str) -> bool:
 def detect_context_markers(
     lines: List[str],
     min_run: int = 3,
+    parser_rules: Optional[Dict[str, Optional["re.Pattern"]]] = None,
 ) -> List[Optional[str]]:
     """Detect context marker annotations for a list of raw lines.
 
@@ -932,12 +933,21 @@ def detect_context_markers(
     lines earns a marker annotation; shorter runs are left as ``None``
     (treated as "unknown").
 
+    When *parser_rules* is provided (compiled patterns from a
+    ``ContextMarkerRules``), those patterns are used **instead** of the
+    built-in heuristics.  This allows parser scripts to define
+    engine-specific context marker patterns (Parser Handshake O8).
+
     This function does **not** produce file_end markers — those come from
     the file-loading layer or from Parser Scripts.
 
     Args:
         lines: Raw text lines (orig or prepro).
         min_run: Minimum consecutive lines to trigger a marker annotation.
+        parser_rules: Optional compiled regex dict from
+            ``ContextMarkerRules.compiled()``.  Keys are pattern names
+            (e.g. ``"dialogue_pattern"``), values are compiled regex or
+            ``None``.
 
     Returns:
         List of marker strings or ``None`` per line, same length as *lines*.
@@ -947,6 +957,18 @@ def detect_context_markers(
     markers: List[Optional[str]] = [None] * n
 
     if n == 0:
+        return markers
+
+    # Parser Handshake O8: Use parser-provided regex patterns
+    if parser_rules:
+        for i, line in enumerate(lines):
+            text = line.strip()
+            if not text:
+                continue
+            for pattern_name, pattern in parser_rules.items():
+                if pattern and pattern.search(text):
+                    markers[i] = pattern_name.replace("_pattern", "")
+                    break
         return markers
 
     # Classify each line independently

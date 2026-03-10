@@ -1228,6 +1228,24 @@ class OutputInjectStep(BaseStep):
         step_data = self.get_step_data()
         lines = step_data.get("lines", [])
 
+        # Parser Handshake O2: Route through parser.inject() when available
+        try:
+            mgr = self.manifest_manager
+            if mgr is not None and mgr.is_loaded:
+                opts = mgr._manifest_data.get("Options", {})
+                if isinstance(opts, dict):
+                    parser_name = opts.get("ParserName", "")
+                    if parser_name:
+                        from CherryAI.formats import get_parser_registry
+                        parser = get_parser_registry().get(parser_name)
+                        if parser is not None:
+                            parser.inject(output_path, lines)
+                            output_file.line_count = len(lines)
+                            self._stats.total_lines += len(lines)
+                            return
+        except Exception as e:
+            logger.warning("Parser inject failed, falling back: %s", e)
+
         # Write based on format
         format_val = OutputFormat(self._format_var.get().lower())
         encoding = self._encoding_var.get()

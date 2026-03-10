@@ -33,6 +33,8 @@ from abc import ABC, abstractmethod
 if TYPE_CHECKING:
     from .parser_base import ParserScript
 
+from .handshake import ExtractedLine, ParserError, SpeakerInfo, validate_parser
+
 
 __all__ = [
     "FormatHandler",
@@ -42,6 +44,11 @@ __all__ = [
     "ParserRegistry",
     "get_parser_registry",
     "detect_parser",
+    "list_parser_names",
+    "validate_parser",
+    "ExtractedLine",
+    "ParserError",
+    "SpeakerInfo",
     "SUPPORTED_FORMATS",
     "SIMPLE_FORMATS",
     "RPGMAKER_FORMATS",
@@ -409,7 +416,22 @@ def _load_parsers() -> None:
     except Exception:
         pass  # Graceful degradation
 
+    try:
+        from .LightVN import LightVNParser
+        _parser_registry.register(LightVNParser())
+    except Exception:
+        pass  # Graceful degradation
+
 
 def detect_parser(file_path: Path) -> Optional["ParserScript"]:
     """Convenience: auto-detect parser for *file_path*."""
     return get_parser_registry().detect(file_path)
+
+
+def list_parser_names() -> List[str]:
+    """Return display names of all registered parsers.
+
+    Used by the GUI format combobox to dynamically include parser options.
+    """
+    registry = get_parser_registry()
+    return [p["name"] for p in registry.list_parsers()]

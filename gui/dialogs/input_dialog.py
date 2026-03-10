@@ -287,14 +287,23 @@ class UnifiedInputDialog(tk.Toplevel):
             # Separator
             ttk.Separator(options_frame, orient="vertical").pack(side="left", fill="y", padx=15)
 
-        # Format filter
+        # Format filter — base formats + registered parsers
         ttk.Label(options_frame, text="Format:").pack(side="left", padx=(0, 5))
         self._format_var = tk.StringVar(value=self._format_filter)
+        format_values = ["auto", "txt", "csv", "tsv", "json", "xlsx", "rpgmaker", "image"]
+        try:
+            from CherryAI.formats import list_parser_names
+            for pname in list_parser_names():
+                lower = pname.lower()
+                if lower not in format_values:
+                    format_values.append(lower)
+        except Exception:
+            pass
         format_cb = ttk.Combobox(
             options_frame,
             textvariable=self._format_var,
-            values=["auto", "txt", "csv", "tsv", "json", "xlsx", "rpgmaker", "image"],
-            width=10,
+            values=format_values,
+            width=12,
             state="readonly",
         )
         format_cb.pack(side="left")
