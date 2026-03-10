@@ -120,7 +120,7 @@ class ModelInfo:
     rpd_tier1: Optional[int] = None      # requests per day (paid tier 1)
     tpm_free: Optional[int] = None       # input tokens per minute (free tier)
     tpm_tier1: Optional[int] = None      # input tokens per minute (paid tier 1)
-    max_concurrent: int = 5              # sane default concurrent reqs
+    max_concurrent: Optional[int] = None   # app-internal parallel slots (not API-imposed)
 
     # Capabilities
     structured_output: bool = False      # supports JSON schema / structured output
@@ -141,6 +141,18 @@ class ModelInfo:
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to a plain dict (JSON-safe)."""
         return asdict(self)
+
+    def _derived_concurrent(self) -> int:
+        """Derive a concurrent request limit from RPM when max_concurrent is unset.
+
+        Uses whichever RPM field is available (tier1 preferred, then free).
+        Formula: ``min(rpm / 30, 50)`` — assumes ~2s per request on average,
+        capped at 50 to be conservative.  Returns 5 if no RPM data.
+        """
+        rpm = self.rpm_tier1 or self.rpm_free
+        if rpm and rpm > 0:
+            return max(1, min(rpm // 30, 50))
+        return 5
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ModelInfo":
@@ -167,7 +179,7 @@ class ModelInfo:
             "priority_input": self.priority_input_price,
             "priority_output": self.priority_output_price,
             "batch_mode": self.batch_mode,
-            "concurrent": self.max_concurrent,
+            "concurrent": self.max_concurrent or self._derived_concurrent(),
             "token_speed": self.token_speed,
             "rpm_free": self.rpm_free,
             "rpm_tier1": self.rpm_tier1,
@@ -1075,6 +1087,78 @@ def _http_get(url: str, headers: Optional[Dict[str, str]] = None) -> str:
         return resp.read().decode(charset, errors="replace")
 
 
+def _http_post_json(
+    url: str,
+    body: Dict[str, Any],
+    headers: Optional[Dict[str, str]] = None,
+) -> Tuple[Dict[str, Any], Dict[str, str]]:
+    """HTTP POST with JSON body; return (parsed_response, response_headers).
+
+    Returns a tuple of (response body as dict, response headers as dict).
+    Raises ``urllib.error.URLError`` / ``json.JSONDecodeError`` on failure.
+    """
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method="POST",
+        headers={
+            "User-Agent": "CherryAI/1.0 (model registry fetcher)",
+            "Content-Type": "application/json",
+            **(headers or {}),
+        },
+    )
+    with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
+        raw = resp.read().decode("utf-8", errors="replace")
+        resp_headers = {k.lower(): v for k, v in resp.headers.items()}
+        return json.loads(raw), resp_headers
+
+
+def probe_openai_rate_limits(
+    api_key: str,
+    model_id: str,
+) -> Optional[Dict[str, int]]:
+    """Probe a single OpenAI model for rate limits via response headers.
+
+    Makes a minimal chat completion request (1 output token) and reads
+    ``x-ratelimit-limit-requests`` (RPM) and ``x-ratelimit-limit-tokens``
+    (TPM) from the response headers.
+
+    Args:
+        api_key: OpenAI API key.
+        model_id: Model ID to probe (e.g. ``"gpt-4.1-nano"``).
+
+    Returns:
+        Dict with ``rpm`` and ``tpm`` keys, or ``None`` on failure.
+    """
+    try:
+        _, headers = _http_post_json(
+            f"{OPENAI_BASE_URL}/chat/completions",
+            body={
+                "model": model_id,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_completion_tokens": 1,
+            },
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        result: Dict[str, int] = {}
+        rpm_raw = headers.get("x-ratelimit-limit-requests")
+        tpm_raw = headers.get("x-ratelimit-limit-tokens")
+        if rpm_raw:
+            result["rpm"] = int(rpm_raw)
+        if tpm_raw:
+            result["tpm"] = int(tpm_raw)
+        if result:
+            logger.info(
+                "probe_rate_limits(%s): rpm=%s tpm=%s",
+                model_id, result.get("rpm"), result.get("tpm"),
+            )
+            return result
+    except Exception as exc:
+        logger.warning("probe_rate_limits(%s): failed: %s", model_id, exc)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Provider-specific fetchers
 # ---------------------------------------------------------------------------
@@ -1121,13 +1205,21 @@ def _parse_openai_pricing(html: str) -> Dict[str, Dict[str, Optional[float]]]:
     return pricing
 
 
-def fetch_openai_models(api_key: str) -> List[ModelInfo]:
+def fetch_openai_models(
+    api_key: str,
+    probe_limits: bool = False,
+) -> List[ModelInfo]:
     """Fetch available OpenAI models via the /v1/models API.
 
     Also attempts to enrich with live pricing from the pricing page.
+    When *probe_limits* is ``True``, a minimal chat completion request is
+    sent to each structured-output model to read the actual RPM/TPM from
+    the ``x-ratelimit-*`` response headers.
 
     Args:
-        api_key: OpenAI API key.
+        api_key:      OpenAI API key.
+        probe_limits: If ``True``, probe each model for rate limits
+                      (costs ~0.01 cent per model probed).
 
     Returns:
         List of ``ModelInfo`` objects.  Falls back to ``FALLBACK_MODELS`` if
@@ -1204,7 +1296,23 @@ def fetch_openai_models(api_key: str) -> List[ModelInfo]:
         if fb.model_id not in present:
             result.append(ModelInfo(**{**fb.to_dict(), "fetched_at": now}))
 
-    logger.info("fetch_openai_models: %d models", len(result))
+    # Only keep models that support structured output
+    result = [m for m in result if m.structured_output]
+
+    # --- Probe rate limits from response headers ---
+    if probe_limits and api_key:
+        for i, m in enumerate(result):
+            limits = probe_openai_rate_limits(api_key, m.model_id)
+            if limits:
+                updates: Dict[str, Any] = {}
+                if "rpm" in limits:
+                    updates["rpm_tier1"] = limits["rpm"]
+                if "tpm" in limits:
+                    updates["tpm_tier1"] = limits["tpm"]
+                if updates:
+                    result[i] = ModelInfo(**{**m.to_dict(), **updates})
+
+    logger.info("fetch_openai_models: %d models (structured_output only)", len(result))
     return result
 
 
@@ -1331,7 +1439,10 @@ def fetch_google_models(api_key: str) -> List[ModelInfo]:
         if fb.model_id not in present:
             result.append(ModelInfo(**{**fb.to_dict(), "fetched_at": now}))
 
-    logger.info("fetch_google_models: %d models", len(result))
+    # Only keep models that support structured output
+    result = [m for m in result if m.structured_output]
+
+    logger.info("fetch_google_models: %d models (structured_output only)", len(result))
     return result
 
 
@@ -1376,7 +1487,10 @@ def fetch_mistral_models(api_key: str) -> List[ModelInfo]:
     if not result:
         return list(FALLBACK_MODELS[PROVIDER_MISTRAL])
 
-    logger.info("fetch_mistral_models: %d models", len(result))
+    # Only keep models that support structured output
+    result = [m for m in result if m.structured_output]
+
+    logger.info("fetch_mistral_models: %d models (structured_output only)", len(result))
     return result
 
 
@@ -1388,15 +1502,18 @@ def refresh_models(
     api_keys: Optional[Dict[str, str]] = None,
     path: Optional[Path] = None,
     providers: Optional[List[str]] = None,
+    probe_limits: bool = False,
 ) -> Dict[str, List[ModelInfo]]:
     """Fetch fresh model data for all (or specified) providers and save to INI.
 
     Args:
-        api_keys: Dict mapping provider → API key.  If a key is absent/empty,
-                  only the pricing-page fetch is attempted; the model list
-                  falls back to built-in data.
-        path:     Override path for API.ini.
-        providers: Subset of providers to refresh, default = all three.
+        api_keys:     Dict mapping provider → API key.  If a key is absent/empty,
+                      only the pricing-page fetch is attempted; the model list
+                      falls back to built-in data.
+        path:         Override path for API.ini.
+        providers:    Subset of providers to refresh, default = all three.
+        probe_limits: If ``True``, probe each OpenAI model for actual rate
+                      limits via response headers (costs ~0.01 cent per model).
 
     Returns:
         Dict mapping provider → list of ModelInfo.
@@ -1412,7 +1529,11 @@ def refresh_models(
         key = api_keys.get(provider, "").strip()
         try:
             if provider == PROVIDER_OPENAI:
-                models = fetch_openai_models(key) if key else list(FALLBACK_MODELS[PROVIDER_OPENAI])
+                models = (
+                    fetch_openai_models(key, probe_limits=probe_limits)
+                    if key
+                    else list(FALLBACK_MODELS[PROVIDER_OPENAI])
+                )
             elif provider == PROVIDER_GOOGLE:
                 models = fetch_google_models(key) if key else list(FALLBACK_MODELS[PROVIDER_GOOGLE])
             elif provider == PROVIDER_MISTRAL:

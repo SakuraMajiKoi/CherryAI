@@ -2938,6 +2938,7 @@ Thank you.
 | test_modehelper.py | 30 | Mode helper utilities (TASK 15.6) |
 | test_model_encodings.py | 52 | Model encodings consolidation (TASK 16.3) |
 | test_model_pricing.py | 52 | Model pricing consolidation (TASK 16.4) |
+| test_model_registry.py | 140 | Model registry: fetch/save/load, structured_output filter, rate limit probing, derived concurrent, current selection, per-model settings, costs tab save settings, request mode, token breakdown, manifest estimation persistence, estimate button rename |
 | test_model_selection.py | 23 | Model presets (TASK 8) |
 | test_modi_all.py | 44 | Modi comprehensive (TASK 15.6) |
 | test_modi_v2.py | 14 | Modi integration |
@@ -2997,7 +2998,7 @@ Thank you.
 | test_prompt_overhead_fix.py | 29 | Per-Request Prompt Overhead (Task 42): FormationResult dataclass, _estimate_via_formation return type, _compute_per_request_prompt_overhead, selective filtering per chunk, _update_ui avg/request format, sum vs flat multiplication, edge cases |
 | test_request_building_unification.py | 75 | Request Building Unification: is_placeholder_only (all placeholder types), PROT_PATTERN fix, build_line_infos placeholder handling, validate_line_pre (no detection_text), _count_formation_input_tokens, formation pipeline for both orig/prep, preview language skip, _apply_language_skip prioritized text with placeholder stripping, _get_skip_indices (no original_lines override), placeholder stripping regression guard |
 | smoke_test/*.py | 5+ | Smoke tests |
-| **Total Script Tests** | **3901** | (+39 conditional prompt rework, +29 Task 42 per-request prompt overhead tests) |
+| **Total Script Tests** | **4041** | (+140 model registry, +39 conditional prompt rework, +29 Task 42 per-request prompt overhead tests) |
 | One_Click_Test.py | 7 stages | API integration |
 
 ### TASK 11: Integration Test - 200 Lines (Completed)
@@ -11224,9 +11225,9 @@ python -m pytest dev/test_phase62_dirs.py -v --timeout=15
 
 =============================================================================
 
-## dev/test_model_registry.py — 83 tests
+## dev/test_model_registry.py — 140 tests
 
-Tests for the dynamic model registry system. Run with:
+Tests for the dynamic model registry system, API config, and Costs tab features. Run with:
 ```bash
 python -m pytest dev/test_model_registry.py -v --timeout=30
 ```
@@ -11244,6 +11245,16 @@ python -m pytest dev/test_model_registry.py -v --timeout=30
 | `TestConfigModelPricingFunctions` | 4 | get_all_model_pricing returns dict, openai/google/mistral models present |
 | `TestOptionsAPIProvidersProxy` | 10 | All providers present, get_provider_models for 3 cloud providers, reload |
 | `TestEndToEndFlow` | 3 | Fresh INI → populate → read; pricing dict from INI; shared data |
+| `TestStructuredOutputFilter` | 10 | Only structured_output=True models saved to registry |
+| `TestRateLimitProbing` | 5 | Rate limit probe function, header parsing, RPM/TPM extraction |
+| `TestDerivedConcurrent` | 6 | Concurrent slot derivation from RPM, defaults, boundary cases |
+| `TestCurrentSelection` | 4 | current_selection write/read, provider.model format |
+| `TestPerModelSettings` | 7 | Per-model settings CRUD, key validation, isolation |
+| `TestCostsTabSaveSettings` | 8 | Save/load UI settings per model, round-trip, fallback handling |
+| `TestRequestModeSettings` | 6 | Request mode round-trip, per-model mode, pricing keys, defaults |
+| `TestTokenBreakdown` | 6 | content/prompt/cached tokens in EstimationResult, UI grid rows |
+| `TestManifestEstimationPersistence` | 6 | Save/load full estimation to manifest, field coverage |
+| `TestEstimateButtonRename` | 3 | Initial "▶ Estimate" → "↻ Update Counts" after first run |
 | `TestLiveFetch` | 4 | **SKIPPED** unless `CHERRYAI_TEST_LIVE=1` — live OpenAI/Google/Mistral fetch |
 
 **Key individual tests:**

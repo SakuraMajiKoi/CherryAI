@@ -453,9 +453,89 @@ def get_default_model(provider: str, name: str = "default") -> str:
 def set_default_model(
     provider: str, name: str, model_id: str,
 ) -> None:
-    """Store *model_id* as the default model for a provider/name key."""
+    """Store *model_id* as the default model for a provider/name key.
+
+    Also writes ``current_selection = {provider}.{model_id}`` so that
+    a cross-provider "last selected" value is always available.
+    """
     key = f"default_model_{provider.lower()}_{name.lower()}"
     set_api_setting(key, model_id)
+    set_api_setting("current_selection", f"{provider.lower()}.{model_id}")
+
+
+def get_current_selection() -> str:
+    """Return the cross-provider current selection (``provider.model_id``).
+
+    Returns empty string if no selection has been set.
+    """
+    return get_api_setting("current_selection", fallback="")
+
+
+# ---------------------------------------------------------------------------
+# Per-model settings (stored in API.ini)
+# ---------------------------------------------------------------------------
+
+# Keys that can be stored per-model
+_MODEL_SETTING_KEYS = (
+    "temperature", "timeout", "chunk_size", "chunk_max_tokens",
+    "retries", "rate_limit_requests", "thinking_enabled",
+    "thinking_budget", "logit_bias_enabled", "max_concurrent",
+    "request_mode", "rolling_context_before", "rolling_context_between",
+    "rolling_context_after", "use_translated_context",
+)
+
+
+def get_model_settings(model_id: str) -> dict[str, str]:
+    """Return per-model settings from ``[model_settings]`` in API.ini.
+
+    Settings are stored as ``{model_id}.{key} = value``.
+    Returns a dict of key → value (all strings).
+    """
+    import json as _json
+    cfg = _load()
+    section = "model_settings"
+    if not cfg.has_section(section):
+        return {}
+    result: dict[str, str] = {}
+    prefix = f"{model_id}."
+    for opt, val in cfg.items(section):
+        if opt.startswith(prefix):
+            key = opt[len(prefix):]
+            result[key] = val
+    return result
+
+
+def set_model_settings(model_id: str, settings: dict[str, str]) -> None:
+    """Save per-model settings to ``[model_settings]`` in API.ini.
+
+    Only keys in ``_MODEL_SETTING_KEYS`` are accepted.   Existing keys for
+    the model are preserved if not present in *settings*.
+
+    Args:
+        model_id: The model identifier (e.g. ``"gpt-4.1"``).
+        settings: Dict of ``key → value`` (values must be strings).
+    """
+    cfg = _load()
+    section = "model_settings"
+    if not cfg.has_section(section):
+        cfg.add_section(section)
+    for key, val in settings.items():
+        if key in _MODEL_SETTING_KEYS:
+            cfg.set(section, f"{model_id}.{key}", str(val))
+    _save(cfg)
+
+
+def delete_model_settings(model_id: str) -> None:
+    """Remove all per-model settings for *model_id*."""
+    cfg = _load()
+    section = "model_settings"
+    if not cfg.has_section(section):
+        return
+    prefix = f"{model_id}."
+    to_remove = [k for k in cfg.options(section) if k.startswith(prefix)]
+    for k in to_remove:
+        cfg.remove_option(section, k)
+    _save(cfg)
 
 
 # ---------------------------------------------------------------------------

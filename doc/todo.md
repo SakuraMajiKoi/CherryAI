@@ -227,40 +227,290 @@ Goal: Store analysis results (line counts, token estimates) in manifest.
 ---
 
 ### TASK 40.8: Refresh Button Model Data Fetch
-**Priority:** LOW | **Status:** 🔲 DEFERRED | **Effort:** 3 hours
+**Priority:** LOW | **Status:** ✅ SUPERSEDED | **Effort:** 3 hours
 
-Goal: Implement Refresh button to fetch latest model data from providers.
+Superseded by model_registry.py implementation (functions/model_registry.py).
+Model data is now fetched from provider APIs and persisted to API.ini.
 
-**Current Issue:**
-- Refresh button does nothing
-- Model data is static from config.py
+---
 
-**Changes Required:**
-- Create `functions/model_data.py` module
-- Implement API calls to fetch model info:
-  - OpenAI: `/v1/models` endpoint
-  - Gemini: Models API
-  - Claude: Models API
-  - Mistral: Models API
-  - Grok: Models API
-  - DeepSeek: Models API
-- Store fetched data in `models.db` (SQLite)
-- Load from database on startup, fallback to config.py
-- Refresh button triggers async fetch
-- Update Model Comparison table with new data
+### BUG FIX: Model Registry Save Criteria (structured_output filter)
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 1 hour
 
-**Files to Create:**
-- `functions/model_data.py` - Model data fetching and storage
+Goal: Only save models with structured_output=True to the model registry INI.
+Previously, all API-returned models were saved, including skeleton models that
+default to structured_output=False, cluttering the registry with unusable entries.
 
-**Files to Modify:**
-- `gui/steps/costs.py` - Wire Refresh button to fetch
-- `functions/config.py` - Add database fallback
+**Root Cause:** fetch_openai_models(), fetch_google_models(), and fetch_mistral_models()
+created skeleton ModelInfo for API models not in FALLBACK_MODELS with all defaults
+(structured_output=False). These were saved alongside real models.
 
-**Tests to Add:**
-- `dev/test_model_data.py`:
-  - Test API fetch (mocked)
-  - Test database storage
-  - Test fallback to static config
+**Solution:** Added `result = [m for m in result if m.structured_output]` filter after
+building the result list in all three fetch functions. Skeleton models without
+structured output are now excluded. All FALLBACK_MODELS have structured_output=True
+so they are preserved.
+
+**Files Modified:**
+- `functions/model_registry.py` — Added structured_output filter to fetch_openai_models(),
+  fetch_google_models(), fetch_mistral_models()
+
+**Tests:** `dev/test_model_registry.py::TestStructuredOutputFilter` — 10 tests (all passing)
+  `dev/test_model_registry.py::TestFallbackData::test_all_fallback_models_have_structured_output`
+
+---
+
+### FEATURE: Rate Limit Probing via API Response Headers
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Fetch actual RPM and TPM for each model from OpenAI's rate limit response
+headers instead of relying on hardcoded values. Remove hardcoded max_concurrent=5.
+
+**Root Cause:** max_concurrent defaulted to 5 for all models. OpenAI does not
+impose a concurrent request limit — only RPM and TPM. The hardcoded 5 was
+artificially limiting throughput.
+
+**Solution:**
+- Added `_http_post_json()` helper returning (body, headers)
+- Added `probe_openai_rate_limits(api_key, model_id)` that makes a minimal
+  chat completion request (1 token) and reads `x-ratelimit-limit-requests` (RPM)
+  and `x-ratelimit-limit-tokens` (TPM) from response headers
+- `fetch_openai_models()` accepts `probe_limits=True` to probe after filtering
+- `refresh_models()` passes `probe_limits` through to fetch_openai_models
+- `global_options.py` `_update_models()` now calls with `probe_limits=True`
+- `max_concurrent` changed from `int = 5` to `Optional[int] = None`
+- Added `_derived_concurrent()` method to calculate concurrent from RPM when unset
+- `to_pricing_entry()["concurrent"]` uses explicit value or derived value
+
+**Files Modified:**
+- `functions/model_registry.py` — Added probing, changed max_concurrent type,
+  added _derived_concurrent
+- `gui/dialogs/global_options.py` — Pass probe_limits=True in _update_models
+
+**Tests:** `dev/test_model_registry.py::TestRateLimitProbing` — 5 tests (all passing)
+  `dev/test_model_registry.py::TestDerivedConcurrent` — 6 tests (all passing)
+
+---
+
+### FEATURE: Current Selection + Per-Model Settings in API.ini
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 1 hour
+
+Goal: Track the active model selection across providers and store per-model
+settings (temperature, timeout, chunk_size, etc.) in API.ini so that each
+model retains its own configuration.
+
+**Root Cause:** Previously, all model settings were global in CherryAI.ini.
+Switching models lost per-model tuning. No cross-provider selection tracking.
+
+**Solution:**
+- `set_default_model()` now also writes `current_selection = {provider}.{model_id}`
+  to API.ini via `set_api_setting()`
+- Added `get_current_selection()` to read back `current_selection`
+- Added `_MODEL_SETTING_KEYS` tuple (11 allowed keys: temperature, timeout,
+  chunk_size, chunk_max_tokens, retries, rate_limit_requests, thinking_enabled,
+  thinking_budget, logit_bias_enabled, max_concurrent, request_mode)
+- Added `get_model_settings(model_id)` — reads `[model_settings]` section,
+  returns dict of `{key: value}` for matching `{model_id}.{key}` entries
+- Added `set_model_settings(model_id, settings)` — validates keys against
+  `_MODEL_SETTING_KEYS`, writes to `[model_settings]` section
+- Added `delete_model_settings(model_id)` — removes all keys for a model
+
+**Files Modified:**
+- `functions/api_config.py` — Added current_selection writing, get_current_selection,
+  per-model settings CRUD functions
+
+**Tests:** `dev/test_model_registry.py::TestCurrentSelection` — 4 tests (all passing)
+  `dev/test_model_registry.py::TestPerModelSettings` — 7 tests (all passing)
+
+---
+
+### FEATURE: Save Settings + Translation Options in Costs Tab (Task 4)
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Replace Refresh button with Save Settings, add workflow defaults
+(Thinking, Translated Context checkboxes) and Rolling Context spinboxes
+(Before, Between, After) to the Costs tab header.  Settings are saved
+per-model to API.ini via `set_model_settings()` only when Save Settings
+is pressed.  Model change loads saved settings without auto-saving.
+
+**Solution:**
+- Removed `↻ Refresh` button from Costs header
+- Added `💾 Save Settings` button that persists UI settings per-model
+- Added second header row with:
+  - Thinking checkbox (`thinking_enabled`)
+  - Translated Context checkbox (`use_translated_context`)
+  - Rolling Context Before/Between/After spinboxes (0–20)
+- `_save_settings()` collects all UI values and calls `set_model_settings()`
+- `_load_model_settings()` reads per-model settings from API.ini, falling
+  back to Global Options defaults
+- `_on_model_changed()` calls `_load_model_settings()` before re-estimating
+- `on_enter()` loads model settings on tab activation
+- Rolling context values passed to `RequestFormationConfig` for accurate
+  request formation during estimation
+- Extended `_MODEL_SETTING_KEYS` with `rolling_context_before`,
+  `rolling_context_between`, `rolling_context_after`, `use_translated_context`
+- Fixed test fixture isolation: patched `_load.__globals__` in addition to
+  module attribute to handle conftest module duplication
+
+**Files Modified:**
+- `gui/steps/costs.py` — New header layout, Save/Load settings, rolling context
+- `functions/api_config.py` — Extended `_MODEL_SETTING_KEYS` (4 new keys)
+- `dev/test_model_registry.py` — Fixed 3 fixtures, added TestCostsTabSaveSettings
+
+**Tests:** `dev/test_model_registry.py::TestCostsTabSaveSettings` — 8 tests (all passing)
+  All 119 + 4 skipped in test_model_registry.py
+  All 56 in test_costs_step_phase40.py
+
+---
+
+### FEATURE: Request Mode Widget in Costs Tab (Task 5)
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Add a 2×2 Request Mode grid (Normal / Batch / Flex / Priority) to
+the Costs tab summary panel.  Mode selection drives pricing in the
+comparison table and persists per-model via API.ini.
+
+**Description:** OpenAI offers alternative processing tiers:
+- **Normal** — standard synchronous, full price
+- **Batch** — asynchronous (24 h turnaround), 50 % discount
+- **Flex** — synchronous but slower, batch-rate pricing
+- **Priority** — guaranteed processing, may cost more
+
+Button states:
+- **Selected** (#4a90d9 / white / sunken) — currently active mode
+- **Available** (#c8e6c9 / green text / groove) — model has pricing data
+- **Unavailable** (#ffcdd2 / gray text / flat) — no mode pricing in registry
+
+**Solution:**
+- Added `_REQUEST_MODES` class tuple mapping mode → (key, label, input_key,
+  output_key) for all four tiers
+- `_build_request_mode_grid()` creates 2×2 tk.Button grid in summary panel
+- `_select_request_mode(mode)` validates availability, sets `_mode_var`,
+  calls `_refresh_mode_buttons()` and re-estimates
+- `_refresh_mode_buttons()` colors buttons per state; guards for
+  uninitialized widgets
+- `_get_mode_price_keys()` returns `(input_key, output_key)` for the
+  active mode, defaulting to `("input", "output")`
+- `_update_comparison_table()` now uses mode-specific pricing keys
+- `_save_settings()` includes `request_mode` in per-model settings
+- `_load_model_settings()` restores `request_mode` from API.ini
+- Added "(No Model)" sentinel to Primary Model dropdown
+
+**Files Modified:**
+- `gui/steps/costs.py` — Request Mode grid, mode-aware pricing, save/load
+- `dev/test_model_registry.py` — Added TestRequestModeSettings (6 tests)
+
+**Tests:** `dev/test_model_registry.py::TestRequestModeSettings` — 6 tests (all passing)
+  All 125 + 4 skipped in test_model_registry.py
+  All 56 in test_costs_step_phase40.py
+
+---
+
+### FEATURE: Revised Token/Cost Breakdown in Costs Tab (Task 6)
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 1 hour
+
+Goal: Separate the Token Counts display into distinct rows for
+content tokens (line text only), prompt tokens (overhead), cached
+tokens (prompt portion from request 2+), and total input (billed).
+Previously, Input Tokens showed the combined content+prompt total.
+
+**Solution:**
+- Added `content_tokens`, `prompt_tokens`, `cached_tokens` fields to
+  `EstimationResult` dataclass (default 0 for backward compatibility)
+- Token Counts UI grid now shows 6 rows:
+  1. **Lines** — translatable line count
+  2. **Input Tokens** — content tokens only (line JSON payloads)
+  3. **Prompt Tokens** — total prompt overhead across all requests
+  4. **Cached Tokens** — prompt tokens cached after first request
+  5. **Total Input** (bold) — content + prompt (what gets billed)
+  6. **Output Tokens (est)** — estimated output
+- `_do_estimation()` populates new fields: `content_tokens` = line-only,
+  `prompt_tokens` = per-request overhead sum, `cached_tokens` = prompt ×
+  (num_requests − 1) when prompt ≥ 1024 tokens and model has cached_input pricing
+- `_update_ui()` displays all breakdown rows with Original/Preprocessed/Saved
+  columns for each
+- Updated existing `TestPromptOverheadFormat` tests to verify new grid
+  structure instead of old single-label format
+
+**Files Modified:**
+- `gui/steps/costs.py` — EstimationResult fields, UI grid layout, estimation logic
+- `dev/test_costs_step_phase40.py` — Updated TestPromptOverheadFormat tests
+- `dev/test_model_registry.py` — Added TestTokenBreakdown (6 tests)
+
+**Tests:** `dev/test_model_registry.py::TestTokenBreakdown` — 6 tests (all passing)
+  `dev/test_costs_step_phase40.py::TestPromptOverheadFormat` — 5 tests (all passing)
+  All 131 + 4 skipped in test_model_registry.py
+  All 57 in test_costs_step_phase40.py
+
+---
+
+### FEATURE: Manifest Estimation Persistence (Task 7)
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 30 min
+
+Goal: Persist full estimation results to the manifest so re-opening the
+Costs tab restores previous values without re-estimating.  Previously
+only InputLines, InputTokens, OutputTokens were saved (TASK 25.1).
+
+**Solution:**
+- Replaced `_save_analysis_results_to_manifest()` /
+  `_load_analysis_results_from_manifest()` with expanded
+  `_save_estimation_to_manifest()` / `_load_estimation_from_manifest()`
+- Saved fields: InputLines, InputTokens, OutputTokens, ContentTokens,
+  PromptTokens, CachedTokens, NumRequests, InputCost, OutputCost, TotalCost
+- `on_enter()` restores all token breakdown rows (Input, Prompt,
+  Cached, Total, Output), request count, and total cost from manifest
+- `_load_estimation_from_manifest()` returns `None` when no saved data
+- Added `save_float_field` / `load_float_field` imports for cost fields
+
+**Files Modified:**
+- `gui/steps/costs.py` — Expanded save/load, on_enter restoration
+- `dev/test_model_registry.py` — Added TestManifestEstimationPersistence (6 tests)
+
+**Tests:** `dev/test_model_registry.py::TestManifestEstimationPersistence` — 6 tests (all passing)
+  All 137 + 4 skipped in test_model_registry.py
+  All 57 in test_costs_step_phase40.py
+
+---
+
+### FEATURE: Estimate/Update Counts Button Rename (Task 8)
+**Priority:** LOW | **Status:** ✅ COMPLETE | **Effort:** 15 min
+
+Goal: After the first estimation, rename the Estimate button to
+"↻ Update Counts" so users know clicking again refreshes (not creates)
+the estimation.  Also sets "↻ Update Counts" when restoring saved
+estimation from manifest on tab enter.
+
+**Solution:**
+- `_estimation_complete()` now checks `self._estimation_result`:
+  if present → "↻ Update Counts", else → "▶ Estimate"
+- `on_enter()` sets "↻ Update Counts" when manifest data is restored
+- Initial text remains "▶ Estimate" in `_build_header()`
+- "Estimating..." shown during computation (unchanged)
+
+**Files Modified:**
+- `gui/steps/costs.py` — Button text logic in _estimation_complete, on_enter
+- `dev/test_model_registry.py` — Added TestEstimateButtonRename (3 tests)
+
+**Tests:** `dev/test_model_registry.py::TestEstimateButtonRename` — 3 tests (all passing)
+  All 140 + 4 skipped in test_model_registry.py
+  All 57 in test_costs_step_phase40.py
+
+---
+
+### DOCS: Costs Tab Overhaul Documentation (Task 9)
+**Priority:** LOW | **Status:** ✅ COMPLETE | **Effort:** 15 min
+
+Goal: Update all documentation to reflect changes made in Tasks 1-8.
+
+**Changes:**
+- `doc/features.md` — Costs Tab section updated: dynamic registry, per-model
+  settings, Translation Options row, Request Mode widget, revised token
+  breakdown (6 rows), manifest persistence (10 fields), Estimate/Update
+  button rename
+- `doc/technical.md` — costs.py entry updated with all new features
+- `doc/tests.md` — test_model_registry.py section updated from 83 to 140
+  tests with 21 class entries; added to summary table; total updated
+  from 3901 to 4041
+- `doc/todo.md` — Tasks 1-9 all documented with COMPLETE status
 
 =============================================================================
 

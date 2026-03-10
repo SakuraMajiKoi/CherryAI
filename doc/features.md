@@ -931,23 +931,33 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Skip writing `prepro` when `processed == orig` — PIPELINE_FIELDS fallback chain handles reads
     - O(1) `idx_map` lookup replaces N×`set_line_field` calls; single `_mark_dirty()` at end
     - Filter label renamed from "Filter:" to "Search:"
-- **Costs Tab (Phase 6, updated Phase 40):**
+- **Costs Tab (Phase 6, updated Phase 40+):**
   - **Renamed from Estimation to Costs** (class CostsStep, step_name "Costs")
   - Token counting with tiktoken (cl100k_base) or heuristic fallback
-  - Model selection dropdown with 11 supported models:
-    - GPT-4.1, GPT-4o, GPT-4o Mini, GPT-4 Turbo
-    - Claude 3.5 Sonnet, Claude 3 Opus, Claude 3 Haiku
-    - Gemini 1.5 Pro, Gemini 1.5 Flash, Gemini 2.0 Flash, Gemini 2.0 Flash Lite
+  - Model selection dropdown with dynamic registry models and "(No Model)" option
+  - **Per-model settings** (Task 4): Save Settings button persists chunk_size,
+    chunk_max_tokens, thinking_enabled, use_translated_context, rolling_context
+    Before/Between/After, and request_mode per model to API.ini.  Model change
+    loads saved settings without auto-saving.
+  - **Translation Options row** (Task 4): Thinking checkbox, Translated Context
+    checkbox, Rolling Context Before/Between/After spinboxes (0–20)
+  - **Request Mode widget** (Task 5): 2×2 grid (Normal / Batch / Flex / Priority)
+    with Available (green), Unavailable (red), Selected (blue) states.  Mode
+    drives comparison table pricing and persists per-model.
   - **Tokens/Request spinbox** (500-32000): alternative maximum alongside Lines/Request
     - Hybrid chunking mode: whichever limit is reached first triggers chunk boundary
-  - **Prompt overhead calculation**: per-request prompt overhead with selective glossary/conditional filtering via `_compute_per_request_prompt_overhead()`. Each request's prompt is built individually using `build_full_system_prompt(chunk_lines=...)`, token counts are summed for total, average = total // num_requests. Display: `~Z total (Y Requests, ~X avg/request)`
+  - **Revised token breakdown** (Task 6): Token Counts panel shows:
+    - Input Tokens — content/line tokens only
+    - Prompt Tokens — overhead across all requests
+    - Cached Tokens — prompt portion cached after first request
+    - Total Input (bold) — content + prompt (what gets billed)
+    - Output Tokens (est)
   - **Formation-based request counting**: Uses the same 4-step formation pipeline (prompt_builder.py) as Translation step for accurate request counting via `_estimate_via_formation()`
   - **GlobalOptions sync**: Chunk size, max input tokens, and request slicing mode read from Global Options at estimation time
   - Lines/Request spinbox range expanded to 1–99999 to match Model Settings
-  - Token counts panel: original vs preprocessed with savings
   - Cost estimate panel with input/output/total breakdown
   - **Prompt Cost** and **Cached Input Cost** sub-rows shown when model supports prompt caching (≥1024 token static prefix). Estimates first-request uncached cost plus remaining-requests cached cost.
-  - **Model comparison table** with Cached $/1M column between Input and Output, plus Price Original, Price Preprocessed, Savings columns
+  - **Model comparison table** with Cached $/1M column, mode-specific pricing (Normal/Batch/Flex/Priority rates)
   - **Dual estimation workflow** (Task 40.4):
     - Tracks original_complete and preprocessed_complete states separately
     - Auto-estimation on enter when files loaded
@@ -962,9 +972,12 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Checks Step 4 session data, then manifest prepro[] as fallback
   - Auto-refresh when switching from preprocessing step
   - Output token estimation using language-specific multiplier (1.2x for JP→EN)
-  - **Manifest Integration (Phase 25):**
-    - Analysis results saved: InputLines, InputTokens, OutputTokens
-    - Results loaded on step enter for session restoration
+  - **Manifest estimation persistence** (Task 7):
+    - Saves 10 fields: InputLines, InputTokens, OutputTokens, ContentTokens,
+      PromptTokens, CachedTokens, NumRequests, InputCost, OutputCost, TotalCost
+    - on_enter restores all breakdown rows, request count, and cost
+  - **Estimate/Update Counts** button (Task 8): Shows "▶ Estimate" initially,
+    changes to "↻ Update Counts" after first estimation or manifest restore
   - **Backward compatibility**: EstimationStep alias, estimate.py re-exports
 - **Translation Tab (Phase 7):**
   - TranslationStep class (step_id=5) with ~900 lines

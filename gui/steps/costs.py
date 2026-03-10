@@ -23,11 +23,19 @@ from CherryAI.gui.components.table import ColumnDef, SharedTable, TableRow
 from CherryAI.gui.steps.base import BaseStep
 from CherryAI.gui.theme.colors import THEME
 
+# Per-model settings persistence (Task 4)
+from CherryAI.functions.api_config import (
+    get_model_settings,
+    set_model_settings,
+)
+
 # TASK 25.1: Import manifest field helpers for saving/loading analysis results
 from CherryAI.functions.manifest_fields import (
     get_all_lines_resolved,
     save_int_field,
     load_int_field,
+    save_float_field,
+    load_float_field,
 )
 
 # Import pricing from centralized config (TASK 16.4)
@@ -97,6 +105,9 @@ class EstimationResult:
     token_method: str
     prompt_cost: float = 0.0  # Non-cached prompt portion cost
     cached_input_cost: float = 0.0  # Cached portion cost
+    content_tokens: int = 0  # Line-content tokens only (no prompt)
+    prompt_tokens: int = 0  # Total prompt overhead across all requests
+    cached_tokens: int = 0  # Prompt tokens that benefit from caching
 
 
 @dataclass
@@ -250,6 +261,9 @@ class CostsStep(BaseStep):
             "original_result": None,
             "preprocessed_result": None,
         }
+        # Task 5: Request mode button refs (populated in _build_request_mode_grid)
+        self._mode_var: Optional[tk.StringVar] = None
+        self._mode_buttons: dict[str, tk.Button] = {}
         super().__init__(parent, session, manifest_manager=manifest_manager)
 
     def _build_ui(self) -> None:
@@ -262,16 +276,21 @@ class CostsStep(BaseStep):
         header = ttk.Frame(self)
         header.pack(fill="x", padx=10, pady=5)
 
+        # ── Row 1: Model, Lines/Request, Tokens/Request, buttons ──
+        row1 = ttk.Frame(header)
+        row1.pack(fill="x")
+
         # Model selection
-        model_frame = ttk.Frame(header)
+        model_frame = ttk.Frame(row1)
         model_frame.pack(side="left")
 
         ttk.Label(model_frame, text="Primary Model:").pack(side="left", padx=(0, 5))
         self._model_var = tk.StringVar(value=DEFAULT_PRICING_MODEL)
+        model_names = get_model_names()
         self._model_combo = ttk.Combobox(
             model_frame,
             textvariable=self._model_var,
-            values=get_model_names(),
+            values=["(No Model)"] + model_names,
             state="readonly",
             width=20,
         )
@@ -279,7 +298,7 @@ class CostsStep(BaseStep):
         self._model_combo.bind("<<ComboboxSelected>>", self._on_model_changed)
 
         # Chunk size (Lines/Request)
-        chunk_frame = ttk.Frame(header)
+        chunk_frame = ttk.Frame(row1)
         chunk_frame.pack(side="left", padx=(20, 0))
 
         ttk.Label(chunk_frame, text="Lines/Request:").pack(side="left", padx=(0, 5))
@@ -297,7 +316,7 @@ class CostsStep(BaseStep):
         self._chunk_var.trace_add("write", self._on_chunk_changed)
 
         # Tokens/Request limit (Task 40.2)
-        tokens_frame = ttk.Frame(header)
+        tokens_frame = ttk.Frame(row1)
         tokens_frame.pack(side="left", padx=(15, 0))
 
         ttk.Label(tokens_frame, text="Tokens/Request:").pack(
@@ -316,18 +335,59 @@ class CostsStep(BaseStep):
 
         # Estimate button
         self._estimate_btn = ttk.Button(
-            header,
+            row1,
             text="▶ Estimate",
             command=self._run_estimation,
         )
         self._estimate_btn.pack(side="right", padx=(5, 0))
 
-        # Refresh button
-        ttk.Button(
-            header,
-            text="↻ Refresh",
-            command=self._refresh_lines,
-        ).pack(side="right")
+        # Save Settings button (replaces Refresh — Task 4)
+        self._save_btn = ttk.Button(
+            row1,
+            text="💾 Save Settings",
+            command=self._save_settings,
+        )
+        self._save_btn.pack(side="right")
+
+        # ── Row 2: Workflow defaults + Rolling Context ──
+        row2 = ttk.Frame(header)
+        row2.pack(fill="x", pady=(4, 0))
+
+        # Thinking checkbox
+        self._thinking_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            row2, text="Thinking", variable=self._thinking_var,
+        ).pack(side="left")
+
+        # Use Translated Context checkbox
+        self._use_translated_ctx_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            row2, text="Translated Context",
+            variable=self._use_translated_ctx_var,
+        ).pack(side="left", padx=(12, 0))
+
+        # Rolling Context spinboxes
+        ttk.Label(row2, text="Rolling Context —").pack(
+            side="left", padx=(20, 5),
+        )
+
+        ttk.Label(row2, text="Before:").pack(side="left")
+        self._rc_before_var = tk.IntVar(value=3)
+        ttk.Spinbox(
+            row2, from_=0, to=20, textvariable=self._rc_before_var, width=3,
+        ).pack(side="left", padx=(2, 8))
+
+        ttk.Label(row2, text="Between:").pack(side="left")
+        self._rc_between_var = tk.IntVar(value=0)
+        ttk.Spinbox(
+            row2, from_=0, to=20, textvariable=self._rc_between_var, width=3,
+        ).pack(side="left", padx=(2, 8))
+
+        ttk.Label(row2, text="After:").pack(side="left")
+        self._rc_after_var = tk.IntVar(value=0)
+        ttk.Spinbox(
+            row2, from_=0, to=20, textvariable=self._rc_after_var, width=3,
+        ).pack(side="left", padx=(2, 0))
 
     def _build_content(self) -> None:
         """Build the main content area."""
@@ -347,6 +407,11 @@ class CostsStep(BaseStep):
 
     def _build_summary_panels(self, parent: ttk.Frame) -> None:
         """Build the summary panels on the left side."""
+        # Request Mode panel (2x2 grid above Token Counts — Task 5)
+        mode_frame = ttk.LabelFrame(parent, text="Request Mode")
+        mode_frame.pack(fill="x", padx=5, pady=5)
+        self._build_request_mode_grid(mode_frame)
+
         # Token counts panel
         token_frame = ttk.LabelFrame(parent, text="Token Counts")
         token_frame.pack(fill="x", padx=5, pady=5)
@@ -390,7 +455,7 @@ class CostsStep(BaseStep):
         )
         self._lines_saved_label.grid(row=1, column=3)
 
-        # Input tokens row
+        # Input tokens row (content only — excludes prompt overhead)
         ttk.Label(self._token_grid, text="Input Tokens:").grid(row=2, column=0, sticky="w")
         self._input_orig_label = ttk.Label(self._token_grid, text="-")
         self._input_orig_label.grid(row=2, column=1)
@@ -403,27 +468,80 @@ class CostsStep(BaseStep):
         )
         self._input_saved_label.grid(row=2, column=3)
 
+        # Prompt tokens row (overhead per request × num requests)
+        ttk.Label(
+            self._token_grid, text="Prompt Tokens:",
+            foreground=THEME.text_secondary,
+        ).grid(row=3, column=0, sticky="w")
+        self._prompt_orig_label = ttk.Label(
+            self._token_grid, text="-", foreground=THEME.text_secondary,
+        )
+        self._prompt_orig_label.grid(row=3, column=1)
+        self._prompt_prep_label = ttk.Label(
+            self._token_grid, text="-", foreground=THEME.text_secondary,
+        )
+        self._prompt_prep_label.grid(row=3, column=2)
+        self._prompt_saved_label = ttk.Label(
+            self._token_grid, text="-",
+            foreground=THEME.accent_success,
+        )
+        self._prompt_saved_label.grid(row=3, column=3)
+
+        # Cached tokens row (prompt portion cached after first request)
+        ttk.Label(
+            self._token_grid, text="Cached Tokens:",
+            foreground=THEME.text_secondary,
+        ).grid(row=4, column=0, sticky="w")
+        self._cached_orig_label = ttk.Label(
+            self._token_grid, text="-", foreground=THEME.text_secondary,
+        )
+        self._cached_orig_label.grid(row=4, column=1)
+        self._cached_prep_label = ttk.Label(
+            self._token_grid, text="-", foreground=THEME.text_secondary,
+        )
+        self._cached_prep_label.grid(row=4, column=2)
+        self._cached_saved_label = ttk.Label(
+            self._token_grid, text="-",
+            foreground=THEME.accent_success,
+        )
+        self._cached_saved_label.grid(row=4, column=3)
+
+        # Total input row (content + prompt — what gets billed)
+        ttk.Label(
+            self._token_grid, text="Total Input:",
+            font=("TkDefaultFont", 10, "bold"),
+        ).grid(row=5, column=0, sticky="w")
+        self._total_input_orig_label = ttk.Label(
+            self._token_grid, text="-",
+            font=("TkDefaultFont", 10, "bold"),
+        )
+        self._total_input_orig_label.grid(row=5, column=1)
+        self._total_input_prep_label = ttk.Label(
+            self._token_grid, text="-",
+            font=("TkDefaultFont", 10, "bold"),
+        )
+        self._total_input_prep_label.grid(row=5, column=2)
+        self._total_input_saved_label = ttk.Label(
+            self._token_grid, text="-",
+            font=("TkDefaultFont", 10, "bold"),
+            foreground=THEME.accent_success,
+        )
+        self._total_input_saved_label.grid(row=5, column=3)
+
         # Output tokens row (estimated)
         ttk.Label(self._token_grid, text="Output Tokens (est):").grid(
-            row=3, column=0, sticky="w"
+            row=6, column=0, sticky="w"
         )
         self._output_orig_label = ttk.Label(self._token_grid, text="-")
-        self._output_orig_label.grid(row=3, column=1)
+        self._output_orig_label.grid(row=6, column=1)
         self._output_prep_label = ttk.Label(self._token_grid, text="-")
-        self._output_prep_label.grid(row=3, column=2)
+        self._output_prep_label.grid(row=6, column=2)
         self._output_saved_label = ttk.Label(
             self._token_grid,
             text="-",
             foreground=THEME.accent_success,
         )
-        self._output_saved_label.grid(row=3, column=3)
-
-        # Prompt tokens row (overhead per request)
-        ttk.Label(self._token_grid, text="Prompt Overhead:").grid(
-            row=4, column=0, sticky="w"
-        )
-        self._prompt_tokens_label = ttk.Label(self._token_grid, text="-")
-        self._prompt_tokens_label.grid(row=4, column=1, columnspan=3)
+        self._output_saved_label.grid(row=6, column=3)
 
         # Cost estimate panel
         cost_frame = ttk.LabelFrame(parent, text="Cost Estimate")
@@ -556,6 +674,94 @@ class CostsStep(BaseStep):
         )
         self._rate_limit_label.pack(pady=(0, 5))
 
+    # ── Request Mode constants and methods (Task 5) ──
+
+    # Mode definitions: (key, display_label, price_input_key, price_output_key)
+    _REQUEST_MODES = (
+        ("normal", "Normal", "input", "output"),
+        ("batch", "Batch", "batch_input", "batch_output"),
+        ("flex", "Flex", "flex_input", "flex_output"),
+        ("priority", "Priority", "priority_input", "priority_output"),
+    )
+
+    def _build_request_mode_grid(self, parent: ttk.Frame) -> None:
+        """Build a 2×2 grid of request mode buttons.
+
+        Each button can be Available (pale green), Unavailable (pale red),
+        or Selected (accent).  The selected mode drives which price columns
+        are used in estimation and the comparison table.
+        """
+        grid = ttk.Frame(parent)
+        grid.pack(padx=5, pady=5)
+
+        self._mode_var = tk.StringVar(value="normal")
+        self._mode_buttons: dict[str, tk.Button] = {}
+
+        for idx, (key, label, _, _) in enumerate(self._REQUEST_MODES):
+            r, c = divmod(idx, 2)
+            btn = tk.Button(
+                grid,
+                text=label,
+                width=10,
+                relief="groove",
+                command=lambda k=key: self._select_request_mode(k),
+            )
+            btn.grid(row=r, column=c, padx=3, pady=2)
+            self._mode_buttons[key] = btn
+
+        # Initial colouring
+        self._refresh_mode_buttons()
+
+    def _select_request_mode(self, mode: str) -> None:
+        """Select a request mode and refresh the button visuals."""
+        pricing = get_model_pricing(self._model_var.get())
+        # Check availability
+        for key, _, input_key, _ in self._REQUEST_MODES:
+            if key == mode:
+                if key != "normal" and pricing.get(input_key) is None:
+                    return  # unavailable — ignore click
+                break
+        self._mode_var.set(mode)
+        self._refresh_mode_buttons()
+        # Re-estimate if data exists
+        if self._estimation_result:
+            self._run_estimation()
+
+    def _refresh_mode_buttons(self) -> None:
+        """Colour mode buttons based on model availability and selection."""
+        if self._mode_var is None or not self._mode_buttons:
+            return
+        selected = self._mode_var.get()
+        model_id = self._model_var.get()
+        pricing = get_model_pricing(model_id) if model_id else {}
+
+        for key, _, input_key, _ in self._REQUEST_MODES:
+            btn = self._mode_buttons.get(key)
+            if btn is None:
+                continue
+            is_selected = key == selected
+            if key == "normal":
+                available = True
+            else:
+                available = pricing.get(input_key) is not None
+
+            if is_selected:
+                btn.configure(bg="#4a90d9", fg="white", relief="sunken")
+            elif available:
+                btn.configure(bg="#c8e6c9", fg="black", relief="groove")
+            else:
+                btn.configure(bg="#ffcdd2", fg="#888888", relief="flat")
+
+    def _get_mode_price_keys(self) -> Tuple[str, str]:
+        """Return (input_price_key, output_price_key) for the active mode."""
+        if self._mode_var is None:
+            return "input", "output"
+        selected = self._mode_var.get()
+        for key, _, input_key, output_key in self._REQUEST_MODES:
+            if key == selected:
+                return input_key, output_key
+        return "input", "output"
+
     def _build_comparison_table(self, parent: ttk.LabelFrame) -> None:
         """Build the model comparison table."""
         # Define columns
@@ -583,23 +789,26 @@ class CostsStep(BaseStep):
     def _update_comparison_table(self) -> None:
         """Update the model comparison table with current estimation."""
         rows: List[TableRow] = []
+        in_key, out_key = self._get_mode_price_keys()
 
         for idx, (model_id, pricing) in enumerate(get_all_model_pricing().items()):
+            # Use mode-specific prices, falling back to standard
+            mode_input = pricing.get(in_key) or pricing.get("input", 0.0)
+            mode_output = pricing.get(out_key) or pricing.get("output", 0.0)
+
             # Calculate costs if we have estimation data
             if self._estimation_result:
                 orig = self._estimation_result.original
                 prep = self._estimation_result.preprocessed
 
-                # Calculate for this model
-                orig_cost = estimate_cost(
-                    orig.input_tokens, orig.output_tokens, model_id
-                )
-                prep_cost = estimate_cost(
-                    prep.input_tokens, prep.output_tokens, model_id
-                )
+                # Use mode-adjusted pricing for cost calculation
+                orig_in_cost = (orig.input_tokens / 1_000_000) * mode_input
+                orig_out_cost = (orig.output_tokens / 1_000_000) * mode_output
+                prep_in_cost = (prep.input_tokens / 1_000_000) * mode_input
+                prep_out_cost = (prep.output_tokens / 1_000_000) * mode_output
 
-                orig_total = orig_cost["total_usd"]
-                prep_total = prep_cost["total_usd"]
+                orig_total = round(orig_in_cost + orig_out_cost, 2)
+                prep_total = round(prep_in_cost + prep_out_cost, 2)
                 savings = orig_total - prep_total
                 savings_str = f"-${savings:.2f}" if savings > 0 else "-"
             else:
@@ -611,13 +820,13 @@ class CostsStep(BaseStep):
                 id=idx,
                 values={
                     "model": pricing["name"],
-                    "input_price": f"${pricing['input']:.2f}",
+                    "input_price": f"${mode_input:.2f}",
                     "cached_price": (
                         f"${pricing['cached_input']:.2f}"
                         if pricing.get("cached_input") is not None
                         else "—"
                     ),
-                    "output_price": f"${pricing['output']:.2f}",
+                    "output_price": f"${mode_output:.2f}",
                     "orig_cost": f"${orig_total:.2f}" if orig_total else "-",
                     "prep_cost": f"${prep_total:.2f}" if prep_total else "-",
                     "savings": savings_str,
@@ -1148,6 +1357,9 @@ class CostsStep(BaseStep):
             prep_cached_cost = 0.0
             orig_prompt_cost = 0.0
             orig_cached_cost = 0.0
+            # Cached token counts (prompt tokens from request 2+)
+            orig_cached_tokens = 0
+            prep_cached_tokens = 0
             pricing_info = get_model_pricing(model_id)
             cached_rate = pricing_info.get("cached_input")
             if cached_rate is not None and prep_prompt_avg >= 1024:
@@ -1156,6 +1368,7 @@ class CostsStep(BaseStep):
                 if prep_requests > 1:
                     uncached_prompt = prep_prompt_avg  # 1 request
                     cached_prompt = prep_prompt_avg * (prep_requests - 1)
+                    prep_cached_tokens = cached_prompt
                     prep_prompt_cost = (uncached_prompt / 1_000_000) * input_rate
                     prep_cached_cost = (cached_prompt / 1_000_000) * cached_rate
                 # Original: same logic with orig prompt
@@ -1164,10 +1377,12 @@ class CostsStep(BaseStep):
                     if orig_p_avg >= 1024:
                         uncached_orig = orig_p_avg
                         cached_orig = orig_p_avg * (orig_requests - 1)
+                        orig_cached_tokens = cached_orig
                         orig_prompt_cost = (uncached_orig / 1_000_000) * input_rate
                         orig_cached_cost = (cached_orig / 1_000_000) * cached_rate
 
-            # Build results (store total tokens including overhead)
+            # Build results — content_tokens stores line-only tokens,
+            # input_tokens stores total (content + prompt) for billing.
             original = EstimationResult(
                 input_tokens=orig_total_input,
                 output_tokens=orig_output_tokens,
@@ -1177,6 +1392,9 @@ class CostsStep(BaseStep):
                 token_method=orig_method,
                 prompt_cost=round(orig_prompt_cost, 4),
                 cached_input_cost=round(orig_cached_cost, 4),
+                content_tokens=orig_input_tokens,
+                prompt_tokens=orig_prompt_total,
+                cached_tokens=orig_cached_tokens,
             )
 
             preprocessed = EstimationResult(
@@ -1188,6 +1406,9 @@ class CostsStep(BaseStep):
                 token_method=prep_method,
                 prompt_cost=round(prep_prompt_cost, 4),
                 cached_input_cost=round(prep_cached_cost, 4),
+                content_tokens=prep_input_tokens,
+                prompt_tokens=prep_prompt_total,
+                cached_tokens=prep_cached_tokens,
             )
 
             tokens_saved = orig_total_input - prep_total_input
@@ -1328,6 +1549,8 @@ class CostsStep(BaseStep):
             max_lines=chunk_size,
             min_lines=min_lines,
             max_tokens=max_input_tokens,
+            rolling_context_between=self._rc_between_var.get(),
+            rolling_context_after=self._rc_after_var.get(),
         )
         requests = build_requests(line_infos, config)
         if not requests:
@@ -1368,32 +1591,64 @@ class CostsStep(BaseStep):
             prompt_tokens_total: Total prompt overhead across all requests.
             prompt_tokens_avg: Average prompt overhead per request.
         """
-        # Update token labels
-        self._input_orig_label.configure(text=f"{original.input_tokens:,}")
-        self._input_prep_label.configure(text=f"{preprocessed.input_tokens:,}")
-        saved = original.input_tokens - preprocessed.input_tokens
+        # Update token labels — content tokens only (Task 6)
+        self._input_orig_label.configure(
+            text=f"{original.content_tokens:,}",
+        )
+        self._input_prep_label.configure(
+            text=f"{preprocessed.content_tokens:,}",
+        )
+        content_saved = original.content_tokens - preprocessed.content_tokens
         self._input_saved_label.configure(
-            text=f"-{saved:,}" if saved > 0 else "0"
+            text=f"-{content_saved:,}" if content_saved > 0 else "0",
         )
 
+        # Prompt tokens (overhead across all requests)
+        self._prompt_orig_label.configure(
+            text=f"{original.prompt_tokens:,}",
+        )
+        self._prompt_prep_label.configure(
+            text=f"{preprocessed.prompt_tokens:,}",
+        )
+        prompt_saved = original.prompt_tokens - preprocessed.prompt_tokens
+        self._prompt_saved_label.configure(
+            text=f"-{prompt_saved:,}" if prompt_saved > 0 else "0",
+        )
+
+        # Cached tokens (prompt portion cached after first request)
+        self._cached_orig_label.configure(
+            text=f"{original.cached_tokens:,}" if original.cached_tokens else "-",
+        )
+        self._cached_prep_label.configure(
+            text=f"{preprocessed.cached_tokens:,}" if preprocessed.cached_tokens else "-",
+        )
+        cached_saved = original.cached_tokens - preprocessed.cached_tokens
+        self._cached_saved_label.configure(
+            text=f"-{cached_saved:,}" if cached_saved > 0 else (
+                "0" if original.cached_tokens or preprocessed.cached_tokens
+                else "-"
+            ),
+        )
+
+        # Total input (content + prompt — what gets billed)
+        self._total_input_orig_label.configure(
+            text=f"{original.input_tokens:,}",
+        )
+        self._total_input_prep_label.configure(
+            text=f"{preprocessed.input_tokens:,}",
+        )
+        total_saved = original.input_tokens - preprocessed.input_tokens
+        self._total_input_saved_label.configure(
+            text=f"-{total_saved:,}" if total_saved > 0 else "0",
+        )
+
+        # Output tokens
         self._output_orig_label.configure(text=f"{original.output_tokens:,}")
         self._output_prep_label.configure(text=f"{preprocessed.output_tokens:,}")
-        saved = original.output_tokens - preprocessed.output_tokens
+        out_saved = original.output_tokens - preprocessed.output_tokens
         self._output_saved_label.configure(
-            text=f"-{saved:,}" if saved > 0 else "0"
+            text=f"-{out_saved:,}" if out_saved > 0 else "0",
         )
-
-        # Update prompt overhead label
-        if prompt_tokens_total > 0:
-            self._prompt_tokens_label.configure(
-                text=(
-                    f"~{prompt_tokens_total:,} total "
-                    f"({prep_requests} Requests, "
-                    f"~{prompt_tokens_avg:,} avg/request)"
-                )
-            )
-        else:
-            self._prompt_tokens_label.configure(text="(no prompt data available)")
 
         # Update cost labels
         pricing = get_model_pricing(model_id)
@@ -1465,57 +1720,83 @@ class CostsStep(BaseStep):
             "rate_limit_rpm": rate_limit_rpm,
         }
 
-        # TASK 25.1: Save analysis results to manifest
-        self._save_analysis_results_to_manifest(
-            input_lines=len(self._lines_preprocessed),
-            input_tokens=preprocessed.input_tokens,
-            output_tokens=preprocessed.output_tokens,
-        )
+        # TASK 25.1 + Task 7: Save full estimation results to manifest
+        self._save_estimation_to_manifest(preprocessed, prep_requests)
 
-    def _save_analysis_results_to_manifest(
+    def _save_estimation_to_manifest(
         self,
-        input_lines: int,
-        input_tokens: int,
-        output_tokens: int,
+        result: EstimationResult,
+        num_requests: int,
     ) -> None:
-        """Save analysis results to manifest (TASK 25.1).
-        
+        """Save full estimation results to manifest (Task 7).
+
+        Persists token breakdown, costs, and request count so the
+        Costs tab can restore previous results without re-estimating.
+
         Args:
-            input_lines: Number of lines to translate.
-            input_tokens: Estimated input tokens.
-            output_tokens: Estimated output tokens.
+            result: Preprocessed estimation result.
+            num_requests: Number of API requests.
         """
-        if self.manifest_manager is None:
+        mgr = self.manifest_manager
+        if mgr is None:
             logger.debug("No manifest manager, skipping save")
             return
-        
-        save_int_field(self.manifest_manager, "InputLines", input_lines)
-        save_int_field(self.manifest_manager, "InputTokens", input_tokens)
-        save_int_field(self.manifest_manager, "OutputTokens", output_tokens)
+
+        n_lines = len(self._lines_preprocessed)
+        save_int_field(mgr, "InputLines", n_lines)
+        save_int_field(mgr, "InputTokens", result.input_tokens)
+        save_int_field(mgr, "OutputTokens", result.output_tokens)
+        save_int_field(mgr, "ContentTokens", result.content_tokens)
+        save_int_field(mgr, "PromptTokens", result.prompt_tokens)
+        save_int_field(mgr, "CachedTokens", result.cached_tokens)
+        save_int_field(mgr, "NumRequests", num_requests)
+        save_float_field(mgr, "InputCost", result.input_cost)
+        save_float_field(mgr, "OutputCost", result.output_cost)
+        save_float_field(mgr, "TotalCost", result.total_cost)
         logger.debug(
-            "Saved analysis results to manifest: lines=%d, input=%d, output=%d",
-            input_lines, input_tokens, output_tokens
+            "Saved estimation to manifest: lines=%d, total_input=%d, "
+            "content=%d, prompt=%d, cached=%d, requests=%d, cost=%.4f",
+            n_lines, result.input_tokens, result.content_tokens,
+            result.prompt_tokens, result.cached_tokens,
+            num_requests, result.total_cost,
         )
 
-    def _load_analysis_results_from_manifest(self) -> Dict[str, int]:
-        """Load analysis results from manifest (TASK 25.1).
-        
+    def _load_estimation_from_manifest(self) -> Optional[Dict[str, Any]]:
+        """Load saved estimation results from manifest (Task 7).
+
         Returns:
-            Dict with input_lines, input_tokens, output_tokens.
+            Dict with all saved fields, or ``None`` if no data saved.
         """
-        if self.manifest_manager is None:
-            return {"input_lines": 0, "input_tokens": 0, "output_tokens": 0}
-        
+        mgr = self.manifest_manager
+        if mgr is None:
+            return None
+
+        input_lines = load_int_field(mgr, "InputLines", 0)
+        if input_lines == 0:
+            return None
+
         return {
-            "input_lines": load_int_field(self.manifest_manager, "InputLines", 0),
-            "input_tokens": load_int_field(self.manifest_manager, "InputTokens", 0),
-            "output_tokens": load_int_field(self.manifest_manager, "OutputTokens", 0),
+            "input_lines": input_lines,
+            "input_tokens": load_int_field(mgr, "InputTokens", 0),
+            "output_tokens": load_int_field(mgr, "OutputTokens", 0),
+            "content_tokens": load_int_field(mgr, "ContentTokens", 0),
+            "prompt_tokens": load_int_field(mgr, "PromptTokens", 0),
+            "cached_tokens": load_int_field(mgr, "CachedTokens", 0),
+            "num_requests": load_int_field(mgr, "NumRequests", 0),
+            "input_cost": load_float_field(mgr, "InputCost", 0.0),
+            "output_cost": load_float_field(mgr, "OutputCost", 0.0),
+            "total_cost": load_float_field(mgr, "TotalCost", 0.0),
         }
 
     def _estimation_complete(self) -> None:
         """Called when estimation completes."""
         self._is_estimating = False
-        self._estimate_btn.configure(state="normal", text="▶ Estimate")
+        # Show "Update Counts" after first estimation (Task 8)
+        label = (
+            "↻ Update Counts" if self._estimation_result
+            else "▶ Estimate"
+        )
+        self._estimate_btn.configure(state="normal", text=label)
 
     def _update_dual_ticks(self) -> None:
         """Update progress tracker dual ticks for Costs step (Task 40.5).
@@ -1535,10 +1816,99 @@ class CostsStep(BaseStep):
             logger.debug("Could not update dual ticks: %s", e)
 
     def _on_model_changed(self, event: Optional[tk.Event] = None) -> None:
-        """Handle model selection change."""
+        """Handle model selection change.
+
+        Loads per-model settings from API.ini (Task 4) then refreshes
+        mode buttons and re-estimates if a previous estimation exists.
+        """
+        self._load_model_settings()
+        self._refresh_mode_buttons()
         if self._estimation_result:
-            # Re-run estimation with new model
             self._run_estimation()
+
+    def _save_settings(self) -> None:
+        """Save current UI settings for the active model to API.ini.
+
+        Collects chunk_size, chunk_max_tokens, thinking, rolling context,
+        and use_translated_context from the UI and persists them via
+        :func:`set_model_settings`.
+        """
+        model_id = self._model_var.get()
+        if not model_id:
+            return
+
+        settings: dict[str, str] = {
+            "chunk_size": str(self._chunk_var.get()),
+            "chunk_max_tokens": str(self._tokens_var.get()),
+            "thinking_enabled": str(self._thinking_var.get()),
+            "use_translated_context": str(self._use_translated_ctx_var.get()),
+            "rolling_context_before": str(self._rc_before_var.get()),
+            "rolling_context_between": str(self._rc_between_var.get()),
+            "rolling_context_after": str(self._rc_after_var.get()),
+            "request_mode": self._mode_var.get(),
+        }
+        set_model_settings(model_id, settings)
+        logger.info("Saved settings for model %s", model_id)
+
+        # Brief visual confirmation on button
+        self._save_btn.configure(text="✓ Saved")
+        self.after(1500, lambda: self._save_btn.configure(text="💾 Save Settings"))
+
+    def _load_model_settings(self) -> None:
+        """Load per-model settings from API.ini and apply to UI widgets.
+
+        Falls back to Global Options defaults when no saved settings exist.
+        """
+        model_id = self._model_var.get()
+        if not model_id:
+            return
+
+        saved = get_model_settings(model_id)
+
+        # Determine defaults from Global Options (if available)
+        go = getattr(self.session, "global_options", None)
+        go_req = getattr(go, "request", None) if go else None
+
+        def _int(key: str, fallback: int) -> int:
+            if key in saved:
+                try:
+                    return int(saved[key])
+                except (ValueError, TypeError):
+                    pass
+            if go_req is not None:
+                return int(getattr(go_req, key, fallback))
+            return fallback
+
+        def _bool(key: str, fallback: bool) -> bool:
+            if key in saved:
+                return saved[key].lower() in ("true", "1", "yes")
+            if go_req is not None:
+                return bool(getattr(go_req, key, fallback))
+            return fallback
+
+        self._chunk_var.set(_int("chunk_size", 30))
+        self._tokens_var.set(_int("chunk_max_tokens", 4000))
+        self._thinking_var.set(_bool("thinking_enabled", False))
+        self._use_translated_ctx_var.set(
+            _bool("use_translated_context", True),
+        )
+        self._rc_before_var.set(
+            _int("rolling_context_before", 3),
+        )
+        self._rc_between_var.set(
+            _int("rolling_context_between", 0),
+        )
+        self._rc_after_var.set(
+            _int("rolling_context_after", 0),
+        )
+
+        # Restore request mode (Task 5)
+        if "request_mode" in saved:
+            mode = saved["request_mode"]
+            valid_modes = {k for k, _, _, _ in self._REQUEST_MODES}
+            if mode in valid_modes:
+                self._mode_var.set(mode)
+                self._refresh_mode_buttons()
 
     def reset_estimation(self, reset_preprocessed_only: bool = False) -> None:
         """Reset estimation state (Task 40.4).
@@ -1587,14 +1957,42 @@ class CostsStep(BaseStep):
                 except (ValueError, TypeError):
                     pass
 
-        # TASK 25.1: Load saved analysis results from manifest
-        saved_results = self._load_analysis_results_from_manifest()
-        if saved_results["input_lines"] > 0 and not self._estimation_result:
-            # Display saved values in UI
-            self._lines_prep_label.configure(text=str(saved_results["input_lines"]))
-            self._input_prep_label.configure(text=f"{saved_results['input_tokens']:,}")
-            self._output_prep_label.configure(text=f"{saved_results['output_tokens']:,}")
-            logger.debug("Loaded saved analysis results from manifest")
+        # Task 4: Load per-model settings from API.ini
+        self._load_model_settings()
+
+        # Task 7: Restore full estimation from manifest if available
+        saved = self._load_estimation_from_manifest()
+        if saved is not None and not self._estimation_result:
+            self._lines_prep_label.configure(
+                text=str(saved["input_lines"]),
+            )
+            self._input_prep_label.configure(
+                text=f"{saved['content_tokens']:,}",
+            )
+            self._prompt_prep_label.configure(
+                text=f"{saved['prompt_tokens']:,}",
+            )
+            if saved["cached_tokens"]:
+                self._cached_prep_label.configure(
+                    text=f"{saved['cached_tokens']:,}",
+                )
+            self._total_input_prep_label.configure(
+                text=f"{saved['input_tokens']:,}",
+            )
+            self._output_prep_label.configure(
+                text=f"{saved['output_tokens']:,}",
+            )
+            if saved["num_requests"]:
+                self._requests_prep_label.configure(
+                    text=str(saved["num_requests"]),
+                )
+            if saved["total_cost"] > 0:
+                self._cost_total_prep_label.configure(
+                    text=f"${saved['total_cost']:.2f}",
+                )
+            logger.debug("Restored estimation from manifest")
+            # Task 8: Show Update label when data exists
+            self._estimate_btn.configure(text="↻ Update Counts")
 
         # Refresh lines from previous steps
         self._refresh_lines()

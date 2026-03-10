@@ -3541,6 +3541,7 @@ class GlobalOptionsDialog(tk.Toplevel):
                         refreshed = model_registry.refresh_models(
                             api_keys={registry_id: effective_key},
                             providers=[registry_id],
+                            probe_limits=True,
                         )
                         saved_count = len(refreshed.get(registry_id, []))
                         # Reload config.py pricing cache
