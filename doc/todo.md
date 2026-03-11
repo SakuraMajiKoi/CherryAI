@@ -61,25 +61,36 @@ PENDING TASKS - Full Table View
 ### FEATURE: Full Table View Dialog
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 4 hours
 
-Goal: Spreadsheet-like view of all manifest line entries accessible via toolbar button.
+Goal: Spreadsheet-like view of all manifest line entries accessible via menu bar.
 
 **Implementation:**
 - Added `gui/dialogs/table_view.py` — FullTableViewDialog (Toplevel)
-- Added "Full Table View" button in app.py toolbar (not a menu dropdown)
-- All LineEntry fields as columns; column auto-hide for empty columns
-- Cell editing (double-click), deletion (Del), multi-select, column clearing
+- Menu bar restructured: File (dropdown), Full Table View (direct), Options (direct), Help (dropdown)
+- Edit menu removed; Tools menu replaced by direct Options entry
+- Toolbar removed from app.py (all access via menu bar)
+- 11 columns with display names: Line # (idx), Tags (context_marker), Original (orig), Preprocessed (prepro), Translated (tl), Postprocessed (postpro), Wrapped (wordwr), Overwrite, Quality Assurance (qa_overwrite), Log, Tags (Internal) (tags)
+- Removed deprecated columns: edited_prepro, edit1-3, tlc1-3
+- Column filter: slim tk.Menu dropdown with Show All / Show Visible / Show Latest presets + individual toggles
+- All columns hideable including Line #; Tags hidden by default (DEFAULT_HIDDEN)
+- Column selection bar: "Select / Selected" labels per column for search/replace scoping
+- Sort indicators: ▲/▼ in column headers; tracks sort column and direction
+- Two-row toolbar layout: search row (top), replace row (bottom)
+- Results Only mode (inverted Show Misses) with ◀ / ▶ navigation
+- Non-editable: Line # and Original (orig allows read-only copy via double-click)
+- Tags and Line # now searchable (removed from METADATA_FIELDS)
+- Search/replace scoped to visible or selected columns
+- File filter dropdown with larger font (size 11)
 - Hierarchical file filter dropdown with folder navigation
-- Full RegEx search & replace with Show/Hide Misses and Prev/Next navigation
-- Row selection checkboxes with Ctrl+click / Shift+click
+- Cell editing (double-click), deletion (Del), multi-select, column clearing
 - Pagination: Show All / Show X (default 100), configurable page size
 - Save/Reset/Diff operations against manifest with change tracking
 - Close prompt for unsaved changes
 
 **Files Modified:**
-- `gui/dialogs/table_view.py` — New: FullTableViewDialog, _FileFilterDropdown, _ColumnFilterDropdown
-- `gui/app.py` — Added toolbar with "Full Table View" button + handler
+- `gui/dialogs/table_view.py` — FullTableViewDialog, _FileFilterDropdown (removed _ColumnFilterDropdown)
+- `gui/app.py` — Menu bar restructured (removed Edit, Tools, toolbar)
 
-**Tests:** `dev/test_table_view.py` — 88 tests (all passing)
+**Tests:** `dev/test_table_view.py` — 124 tests (all passing)
 
 ---
 

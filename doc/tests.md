@@ -218,7 +218,7 @@ python CherryAI.py test --skip-api
 
 ## Test File Reference
 
-### dev/test_table_view.py (88 tests)
+### dev/test_table_view.py (124 tests)
 
 Full Table View dialog unit tests. Mocks Tkinter to test data logic independently.
 
@@ -240,7 +240,7 @@ Full Table View dialog unit tests. Mocks Tkinter to test data logic independentl
 | `test_populated_columns_detected` | Detects columns with data |
 | `test_empty_columns_hidden_by_default` | Empty columns auto-hidden |
 | `test_apply_column_visibility` | Updates visible/hidden sets |
-| `test_idx_always_visible` | idx cannot be hidden |
+| `test_idx_is_hideable` | idx can now be hidden (all columns hideable) |
 
 #### TestPagination (9 tests)
 
@@ -279,7 +279,7 @@ Full Table View dialog unit tests. Mocks Tkinter to test data logic independentl
 | `test_pinned_rows_survive_hide_misses` | Pinned rows visible |
 | `test_replace_all_single_column` | Replace all in column |
 | `test_replace_regex_groups` | Regex capture groups |
-| `test_replace_non_editable_column_blocked` | idx not replaceable |
+| `test_replace_non_editable_column_blocked` | idx and orig not replaceable |
 
 #### TestCellEditing (11 tests)
 
@@ -291,7 +291,7 @@ Full Table View dialog unit tests. Mocks Tkinter to test data logic independentl
 | `test_has_changes_false_initially` | No changes at start |
 | `test_has_changes_after_edit` | Changes detected after edit |
 | `test_has_changes_after_delete` | Changes detected after delete |
-| `test_non_editable_fields_constant` | Constant verification |
+| `test_non_editable_fields_constant` | idx and orig in NON_EDITABLE_FIELDS |
 | `test_edit_updates_working_copy` | Working copy updated |
 | `test_delete_clears_field` | Field cleared to empty |
 | `test_clear_column_affects_all_lines` | Column clear all lines |
@@ -327,20 +327,32 @@ Full Table View dialog unit tests. Mocks Tkinter to test data logic independentl
 | `test_file_filter_plus_diff` | Combined file + diff filter |
 | `test_all_filters_combined` | All filters + pagination |
 
-#### TestSorting (3 tests), TestConstants (6 tests), TestFileDirEntryIntegration (4 tests)
+#### TestSorting (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_sort_by_idx` | Column sorting by idx |
+| `test_sort_by_text` | Column sorting by text field |
+| `test_sort_reverse` | Reverse sorting works |
+
+#### TestConstants (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_line_fields_starts_with_idx` | LINE_FIELDS starts with idx |
+| `test_line_fields_contains_core_fields` | Essential fields present |
+| `test_non_editable_contains_idx` | idx is non-editable |
+| `test_metadata_fields_defined` | METADATA_FIELDS correct (idx/context_marker now searchable) |
+| `test_default_page_size` | Default page size is 100 |
+| `test_color_constants_are_hex` | Color constants validation |
+
+#### TestFileDirEntryIntegration (4 tests), TestFileFilterDropdownLogic (3 tests), TestColumnFilterLogic (3 tests)
 
 | Test Category | Count | Purpose |
 |---------------|-------|---------|
-| Sorting | 3 | Column sorting by idx, text, reverse |
-| Constants | 6 | Module constants validation |
 | FileDirEntry | 4 | Integration with FileDirEntry dataclass |
-
-#### TestFileFilterDropdownLogic (3 tests), TestColumnFilterLogic (3 tests)
-
-| Test Category | Count | Purpose |
-|---------------|-------|---------|
 | FileFilterDropdown | 3 | Folder tree, navigation, back |
-| ColumnFilterLogic | 3 | Populated filter, show all, idx |
+| ColumnFilterLogic | 3 | Populated filter, show all, idx hideable |
 
 #### TestEdgeCases (9 tests)
 
@@ -355,6 +367,76 @@ Full Table View dialog unit tests. Mocks Tkinter to test data logic independentl
 | `test_diff_after_delete` | Diff includes deletions |
 | `test_lines_with_special_characters` | Regex special chars safe |
 | `test_multiline_content` | Multiline text handling |
+
+#### TestColumnDisplayNames (7 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_every_line_field_has_display_name` | All LINE_FIELDS have display names |
+| `test_reverse_lookup_round_trips` | DISPLAY_NAME_TO_FIELD reverses correctly |
+| `test_display_names_are_unique` | No display name collisions |
+| `test_idx_renamed_to_line_number` | idx → Line # |
+| `test_orig_renamed_to_original` | orig → Original |
+| `test_context_marker_renamed_to_tags` | context_marker → Tags |
+| `test_qa_overwrite_renamed` | qa_overwrite → Quality Assurance |
+
+#### TestDefaultHidden (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_context_marker_hidden_by_default` | context_marker in DEFAULT_HIDDEN |
+| `test_idx_not_hidden_by_default` | idx not hidden |
+| `test_orig_not_hidden_by_default` | orig not hidden |
+
+#### TestColumnSelection (7 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_selected_columns_initially_empty` | Empty at start |
+| `test_toggle_adds_column` | Toggle adds to selection |
+| `test_toggle_removes_column` | Toggle removes from selection |
+| `test_toggle_multiple_columns` | Multiple columns selectable |
+| `test_search_respects_selected_columns` | Search scoped to selection |
+| `test_search_uses_visible_when_no_selection` | Falls back to visible columns |
+| `test_replace_skips_non_editable_in_selection` | Replace respects NON_EDITABLE_FIELDS |
+
+#### TestColumnPresets (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_preset_all_shows_all_fields` | Show All preset |
+| `test_preset_visible_hides_unpopulated` | Show Visible preset |
+| `test_preset_latest_finds_rightmost_column` | Show Latest preset |
+| `test_compute_latest_always_includes_idx` | Latest always includes idx |
+| `test_unknown_preset_is_no_op` | Invalid preset ignored |
+
+#### TestSortIndicator (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_initial_sort_state_is_none` | No initial sort |
+| `test_sort_sets_column` | Sort sets column tracking |
+| `test_sort_same_column_toggles_reverse` | Reverse toggle on same column |
+| `test_sort_different_column_resets_reverse` | New column resets direction |
+| `test_sort_idx_column_numeric` | idx sorts numerically |
+| `test_sort_idx_reverse` | Reverse idx sort |
+
+#### TestResultsOnly (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_results_only_hides_non_matches` | Only matches shown |
+| `test_results_only_shows_pinned_rows` | Pinned rows remain visible |
+| `test_results_only_off_shows_all` | All lines when disabled |
+
+#### TestNonEditableFields (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_idx_is_non_editable` | idx in NON_EDITABLE_FIELDS |
+| `test_orig_is_non_editable` | orig in NON_EDITABLE_FIELDS |
+| `test_tl_is_editable` | tl NOT in NON_EDITABLE_FIELDS |
+| `test_non_editable_fields_size` | Exactly 2 non-editable fields |
 
 ---
 

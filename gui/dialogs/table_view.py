@@ -33,17 +33,37 @@ logger = logging.getLogger(__name__)
 
 # All possible line entry fields in display order
 LINE_FIELDS: List[str] = [
-    "idx", "orig", "prepro", "edited_prepro", "tl",
-    "tlc1", "edit1", "tlc2", "edit2", "tlc3", "edit3",
+    "idx", "context_marker", "orig", "prepro", "tl",
     "postpro", "wordwr", "overwrite", "qa_overwrite",
-    "log", "tags", "context_marker",
+    "log", "tags",
 ]
 
-# Fields that are NOT editable
-NON_EDITABLE_FIELDS: Set[str] = {"idx"}
+# Fields that are NOT editable (but orig can be selected to copy)
+NON_EDITABLE_FIELDS: Set[str] = {"idx", "orig"}
+
+# Display names for columns
+COLUMN_DISPLAY_NAMES: Dict[str, str] = {
+    "idx": "Line #",
+    "context_marker": "Tags",
+    "orig": "Original",
+    "prepro": "Preprocessed",
+    "tl": "Translated",
+    "postpro": "Postprocessed",
+    "wordwr": "Wrapped",
+    "overwrite": "Overwrite",
+    "qa_overwrite": "Quality Assurance",
+    "log": "Log",
+    "tags": "Tags (Internal)",
+}
+
+# Columns hidden by default even when populated
+DEFAULT_HIDDEN: Set[str] = {"context_marker"}
+
+# Reverse lookup: display name → field name
+DISPLAY_NAME_TO_FIELD: Dict[str, str] = {v: k for k, v in COLUMN_DISPLAY_NAMES.items()}
 
 # Fields that are metadata (not text content) — excluded from search by default
-METADATA_FIELDS: Set[str] = {"idx", "log", "tags", "context_marker", "prepro_ops"}
+METADATA_FIELDS: Set[str] = {"log", "tags", "prepro_ops"}
 
 # Default page size
 DEFAULT_PAGE_SIZE = 100
@@ -98,6 +118,7 @@ class FullTableViewDialog(tk.Toplevel):
         self._hidden_columns: Set[str] = set()
         self._populated_columns: Set[str] = set()
         self._selected_rows: Set[int] = set()  # Set of idx values
+        self._selected_columns: Set[str] = set()  # Columns marked as "Selected"
         self._changes: Dict[int, Dict[str, Any]] = {}  # idx -> {field: new_value}
         self._deleted_fields: Dict[int, Set[str]] = {}  # idx -> set of cleared fields
 
@@ -121,6 +142,10 @@ class FullTableViewDialog(tk.Toplevel):
 
         # Diff mode
         self._diff_mode = False
+
+        # Sort state
+        self._sort_column: Optional[str] = None
+        self._sort_reverse: bool = False
 
         # Window setup
         self.title("Full Table View")
@@ -181,10 +206,10 @@ class FullTableViewDialog(tk.Toplevel):
                 if key not in LINE_FIELDS:
                     LINE_FIELDS.append(key)
 
-        # Set visible columns: idx always + populated columns
+        # Set visible columns: idx always + populated columns (minus default hidden)
         self._visible_columns = [
             f for f in LINE_FIELDS
-            if f in self._populated_columns or f == "idx"
+            if (f in self._populated_columns or f == "idx") and f not in DEFAULT_HIDDEN
         ]
         self._hidden_columns = set(LINE_FIELDS) - set(self._visible_columns)
 
@@ -197,98 +222,103 @@ class FullTableViewDialog(tk.Toplevel):
     # ================================================================== #
 
     def _build_toolbar(self) -> None:
-        """Build the top toolbar with file filter, search, and action buttons."""
-        toolbar = ttk.Frame(self)
-        toolbar.pack(fill="x", padx=6, pady=(6, 2))
+        """Build the top toolbar with file filter, search/replace, and action buttons.
 
-        # --- Left section: File filter ---
-        file_frame = ttk.Frame(toolbar)
-        file_frame.pack(side="left", padx=(0, 12))
+        Layout:
+        - Top row: File filter | Search entry + RegEx + Results Only + ◀ ▶ | Columns Diff Reset Save
+        - Bottom row (below search): Replace entry + Replace All | Column selector
+        """
+        # --- Top row ---
+        top_row = ttk.Frame(self)
+        top_row.pack(fill="x", padx=6, pady=(6, 1))
 
-        ttk.Label(file_frame, text="File:").pack(side="left", padx=(0, 4))
+        # Left: File filter (no "File:" label)
         self._file_filter_var = tk.StringVar(value="All")
         self._file_filter_btn = ttk.Button(
-            file_frame, textvariable=self._file_filter_var,
-            command=self._show_file_filter_dropdown, width=28,
+            top_row, textvariable=self._file_filter_var,
+            command=self._show_file_filter_dropdown, width=24,
         )
-        self._file_filter_btn.pack(side="left")
+        self._file_filter_btn.pack(side="left", padx=(0, 8))
 
-        # --- Center section: Search ---
-        search_frame = ttk.Frame(toolbar)
-        search_frame.pack(side="left", fill="x", expand=True, padx=(0, 12))
-
-        ttk.Label(search_frame, text="Search:").pack(side="left", padx=(0, 4))
+        # Center: Search
+        ttk.Label(top_row, text="Search:").pack(side="left", padx=(0, 4))
         self._search_var = tk.StringVar()
         self._search_var.trace_add("write", self._on_search_changed)
-        self._search_entry = ttk.Entry(search_frame, textvariable=self._search_var, width=30)
+        self._search_entry = ttk.Entry(top_row, textvariable=self._search_var, width=28)
         self._search_entry.pack(side="left", padx=(0, 4))
 
         self._regex_var = tk.BooleanVar(value=False)
-        self._regex_btn = ttk.Checkbutton(
-            search_frame, text="RegEx", variable=self._regex_var,
+        ttk.Checkbutton(
+            top_row, text="RegEx", variable=self._regex_var,
             command=self._on_search_changed,
-        )
-        self._regex_btn.pack(side="left", padx=(0, 4))
+        ).pack(side="left", padx=(0, 4))
 
-        self._miss_var = tk.BooleanVar(value=True)
-        self._miss_btn = ttk.Checkbutton(
-            search_frame, text="Show Misses", variable=self._miss_var,
-            command=self._on_toggle_misses,
-        )
-        self._miss_btn.pack(side="left", padx=(0, 4))
+        # "Results Only" (inverted from old "Show Misses")
+        # When checked: hide non-matching rows. Default: unchecked (show all).
+        self._results_only_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            top_row, text="Results Only", variable=self._results_only_var,
+            command=self._on_toggle_results_only,
+        ).pack(side="left", padx=(0, 4))
 
+        # Prev/Next — arrow only, small
         self._prev_btn = ttk.Button(
-            search_frame, text="◀ Prev", command=self._on_prev_match, width=7,
+            top_row, text="◀", command=self._on_prev_match, width=2,
         )
+        self._prev_btn.pack(side="left", padx=(0, 1))
         self._next_btn = ttk.Button(
-            search_frame, text="Next ▶", command=self._on_next_match, width=7,
+            top_row, text="▶", command=self._on_next_match, width=2,
         )
-        # Prev/Next only visible when Show Misses is active
-        self._prev_btn.pack(side="left", padx=(0, 2))
-        self._next_btn.pack(side="left", padx=(0, 4))
+        self._next_btn.pack(side="left", padx=(0, 8))
 
-        ttk.Label(search_frame, text="Replace:").pack(side="left", padx=(4, 4))
+        # Right: Action buttons (text-sized)
+        btn_frame = ttk.Frame(top_row)
+        btn_frame.pack(side="right", padx=(8, 0))
+
+        ttk.Button(
+            btn_frame, text="Columns", command=self._show_column_filter,
+        ).pack(side="left", padx=(0, 12))
+
+        ttk.Separator(btn_frame, orient="vertical").pack(
+            side="left", fill="y", padx=(0, 12), pady=2,
+        )
+
+        ttk.Button(
+            btn_frame, text="Diff", command=self._on_diff,
+        ).pack(side="left", padx=(0, 4))
+        ttk.Button(
+            btn_frame, text="Reset", command=self._on_reset,
+        ).pack(side="left", padx=(0, 4))
+        ttk.Button(
+            btn_frame, text="Save", command=self._on_save,
+        ).pack(side="left")
+
+        # --- Bottom row: Replace + Column selector ---
+        bottom_row = ttk.Frame(self)
+        bottom_row.pack(fill="x", padx=6, pady=(1, 2))
+
+        # Spacer to align with search entry (file filter button width)
+        ttk.Frame(bottom_row, width=190).pack(side="left")
+
+        ttk.Label(bottom_row, text="Replace:").pack(side="left", padx=(0, 4))
         self._replace_var = tk.StringVar()
-        self._replace_entry = ttk.Entry(search_frame, textvariable=self._replace_var, width=20)
+        self._replace_entry = ttk.Entry(
+            bottom_row, textvariable=self._replace_var, width=28,
+        )
         self._replace_entry.pack(side="left", padx=(0, 4))
 
         ttk.Button(
-            search_frame, text="Replace All", command=self._on_replace_all, width=10,
-        ).pack(side="left", padx=(0, 4))
+            bottom_row, text="Replace All", command=self._on_replace_all,
+        ).pack(side="left", padx=(0, 8))
 
-        # Search column selector
-        ttk.Label(search_frame, text="in:").pack(side="left", padx=(4, 4))
+        # Column selector (no "in:" label)
         self._search_col_var = tk.StringVar(value="All Columns")
         self._search_col_combo = ttk.Combobox(
-            search_frame, textvariable=self._search_col_var,
-            state="readonly", width=14,
+            bottom_row, textvariable=self._search_col_var,
+            state="readonly", width=16,
         )
         self._search_col_combo.pack(side="left")
         self._search_col_combo.bind("<<ComboboxSelected>>", self._on_search_changed)
-
-        # --- Right section: Action buttons ---
-        btn_frame = ttk.Frame(toolbar)
-        btn_frame.pack(side="right", padx=(12, 0))
-
-        # Column filter dropdown
-        ttk.Button(
-            btn_frame, text="Columns", command=self._show_column_filter, width=8,
-        ).pack(side="left", padx=(0, 16))
-
-        # Spacer between column filter and action buttons
-        ttk.Separator(btn_frame, orient="vertical").pack(
-            side="left", fill="y", padx=(0, 16), pady=2,
-        )
-
-        ttk.Button(
-            btn_frame, text="Diff", command=self._on_diff, width=6,
-        ).pack(side="left", padx=(0, 4))
-        ttk.Button(
-            btn_frame, text="Reset", command=self._on_reset, width=6,
-        ).pack(side="left", padx=(0, 4))
-        ttk.Button(
-            btn_frame, text="Save", command=self._on_save, width=6,
-        ).pack(side="left", padx=(0, 0))
 
     # ================================================================== #
     #                         TABLE                                       #
@@ -299,21 +329,35 @@ class FullTableViewDialog(tk.Toplevel):
         table_frame = ttk.Frame(self)
         table_frame.pack(fill="both", expand=True, padx=6, pady=2)
 
-        # Checkbox row above column headers
-        self._checkbox_frame = ttk.Frame(table_frame)
-        self._checkbox_frame.pack(fill="x")
+        # Selection bar above column headers (scrolls with tree horizontally)
+        self._sel_canvas = tk.Canvas(
+            table_frame, height=26, highlightthickness=0, bg=COLOR_BG,
+        )
+        self._sel_canvas.pack(fill="x")
+        self._sel_inner = ttk.Frame(self._sel_canvas)
+        self._sel_canvas.create_window((0, 0), window=self._sel_inner, anchor="nw")
+        self._sel_labels: Dict[str, tk.Label] = {}
 
         # Treeview for the table
         self._tree = ttk.Treeview(table_frame, show="headings", selectmode="extended")
 
-        # Scrollbars
+        # Scrollbars with synchronized horizontal scroll
         self._vsb = ttk.Scrollbar(table_frame, orient="vertical", command=self._tree.yview)
-        self._hsb = ttk.Scrollbar(table_frame, orient="horizontal", command=self._tree.xview)
-        self._tree.configure(yscrollcommand=self._vsb.set, xscrollcommand=self._hsb.set)
+        self._hsb = ttk.Scrollbar(
+            table_frame, orient="horizontal", command=self._xscroll_synced,
+        )
+        self._tree.configure(
+            yscrollcommand=self._vsb.set,
+            xscrollcommand=self._on_tree_xscroll,
+        )
 
         self._vsb.pack(side="right", fill="y")
         self._hsb.pack(side="bottom", fill="x")
         self._tree.pack(fill="both", expand=True)
+
+        # Re-sync selection bar on tree resize / column drag
+        self._tree.bind("<Configure>", self._sync_selection_bar, add="+")
+        self._tree.bind("<ButtonRelease-1>", self._sync_selection_bar, add="+")
 
         # Treeview bindings
         self._tree.bind("<Double-1>", self._on_cell_double_click)
@@ -415,7 +459,11 @@ class FullTableViewDialog(tk.Toplevel):
         self._tree["columns"] = self._visible_columns
         for col in self._visible_columns:
             width = IDX_COL_WIDTH if col == "idx" else DEFAULT_COL_WIDTH
-            self._tree.heading(col, text=col, command=lambda c=col: self._on_sort(c))
+            display_name = COLUMN_DISPLAY_NAMES.get(col, col)
+            if col == self._sort_column:
+                indicator = " ▼" if self._sort_reverse else " ▲"
+                display_name += indicator
+            self._tree.heading(col, text=display_name, command=lambda c=col: self._on_sort(c))
             self._tree.column(col, width=width, minwidth=MIN_COL_WIDTH, stretch=True)
 
         # Clear existing
@@ -460,25 +508,59 @@ class FullTableViewDialog(tk.Toplevel):
             self._show_all_btn.configure(text="Show All")
 
         # Rebuild checkbox row
-        self._rebuild_checkboxes()
+        self._rebuild_selection_bar()
 
-    def _rebuild_checkboxes(self) -> None:
-        """Rebuild the Select checkboxes above each column."""
-        for child in self._checkbox_frame.winfo_children():
+    def _rebuild_selection_bar(self) -> None:
+        """Rebuild the Select / Selected bar above each column."""
+        for child in self._sel_inner.winfo_children():
             child.destroy()
+        self._sel_labels.clear()
 
+        self._tree.update_idletasks()
+        x_offset = 0
         for col in self._visible_columns:
-            if col == "idx":
-                lbl = ttk.Label(self._checkbox_frame, text="Select", width=6)
-                lbl.pack(side="left", padx=2)
-            else:
-                var = tk.BooleanVar(value=False)
-                cb = ttk.Checkbutton(
-                    self._checkbox_frame, text="",
-                    variable=var,
-                    command=lambda c=col, v=var: self._on_column_select_toggle(c, v),
-                )
-                cb.pack(side="left", padx=2)
+            selected = col in self._selected_columns
+            text = "Selected" if selected else "Select"
+            bg = COLOR_SELECTED if selected else COLOR_PANEL
+            w = self._tree.column(col, "width")
+            lbl = tk.Label(
+                self._sel_inner, text=text, relief="raised", borderwidth=1,
+                font=("TkDefaultFont", 9), bg=bg, fg=COLOR_TEXT,
+                cursor="hand2",
+            )
+            lbl.place(x=x_offset, y=0, width=w, height=24)
+            lbl.bind("<Button-1>", lambda e, c=col: self._toggle_column_selection(c))
+            self._sel_labels[col] = lbl
+            x_offset += w
+
+        total_w = max(x_offset, 1)
+        self._sel_inner.configure(width=total_w, height=24)
+        self._sel_canvas.configure(scrollregion=(0, 0, total_w, 26))
+
+    def _sync_selection_bar(self, _event: Any = None) -> None:
+        """Re-sync selection bar label widths with treeview columns."""
+        self._tree.update_idletasks()
+        x_offset = 0
+        for col in self._visible_columns:
+            lbl = self._sel_labels.get(col)
+            if lbl is None:
+                continue
+            w = self._tree.column(col, "width")
+            lbl.place_configure(x=x_offset, width=w)
+            x_offset += w
+        total_w = max(x_offset, 1)
+        self._sel_inner.configure(width=total_w)
+        self._sel_canvas.configure(scrollregion=(0, 0, total_w, 26))
+
+    def _xscroll_synced(self, *args: Any) -> None:
+        """Scroll both the tree and selection bar horizontally."""
+        self._tree.xview(*args)
+        self._sel_canvas.xview(*args)
+
+    def _on_tree_xscroll(self, first: str, last: str) -> None:
+        """Handle tree horizontal scroll — sync scrollbar and selection bar."""
+        self._hsb.set(first, last)
+        self._sel_canvas.xview_moveto(float(first))
 
     # ================================================================== #
     #                       FILE FILTER                                   #
@@ -543,26 +625,101 @@ class FullTableViewDialog(tk.Toplevel):
 
     def _refresh_column_filter(self) -> None:
         """Update the search column combo box."""
-        cols = ["All Columns"] + [c for c in self._visible_columns if c != "idx"]
+        cols = ["All Columns"] + [
+            COLUMN_DISPLAY_NAMES.get(c, c) for c in self._visible_columns if c != "idx"
+        ]
         self._search_col_combo["values"] = cols
 
     def _show_column_filter(self) -> None:
-        """Show a column visibility dropdown."""
-        dropdown = _ColumnFilterDropdown(
-            self,
-            all_columns=LINE_FIELDS,
-            visible=set(self._visible_columns),
-            populated=self._populated_columns,
-            on_apply=self._apply_column_visibility,
+        """Show column visibility as a dropdown menu.
+
+        Options: Show All, Show Visible (populated), Show Latest, separator,
+        then individual named columns with checkmarks.
+        """
+        menu = tk.Menu(self, tearoff=0)
+
+        menu.add_command(
+            label="Show All",
+            command=lambda: self._apply_column_preset("all"),
         )
-        x = self.winfo_rootx() + self.winfo_width() - 300
-        y = self.winfo_rooty() + 40
-        dropdown.geometry(f"+{x}+{y}")
+        menu.add_command(
+            label="Show Visible",
+            command=lambda: self._apply_column_preset("visible"),
+        )
+        menu.add_command(
+            label="Show Latest",
+            command=lambda: self._apply_column_preset("latest"),
+        )
+        menu.add_separator()
+
+        # Individual columns with checkmarks
+        self._col_menu_vars: Dict[str, tk.BooleanVar] = {}
+        for col in LINE_FIELDS:
+            display = COLUMN_DISPLAY_NAMES.get(col, col)
+            var = tk.BooleanVar(value=col in self._visible_columns)
+            self._col_menu_vars[col] = var
+            menu.add_checkbutton(
+                label=display,
+                variable=var,
+                command=lambda: self._apply_column_menu_selection(),
+            )
+
+        # Show the menu at the button position
+        try:
+            x = self.winfo_pointerx()
+            y = self.winfo_pointery()
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    def _apply_column_preset(self, preset: str) -> None:
+        """Apply a column visibility preset.
+
+        Args:
+            preset: One of 'all', 'visible', 'latest'.
+        """
+        if preset == "all":
+            visible = set(LINE_FIELDS)
+        elif preset == "visible":
+            visible = {f for f in LINE_FIELDS if f in self._populated_columns or f == "idx"}
+        elif preset == "latest":
+            visible = self._compute_latest_columns()
+        else:
+            return
+        self._apply_column_visibility(visible)
+
+    def _compute_latest_columns(self) -> Set[str]:
+        """Compute 'Show Latest' — idx + Tags + furthest non-empty right column per line.
+
+        For each line, finds the rightmost populated field in the pipeline
+        (orig → prepro → tl → postpro → wordwr → overwrite → qa_overwrite)
+        and includes that column. Always includes idx.
+        """
+        pipeline_cols = [
+            f for f in LINE_FIELDS
+            if f not in {"idx", "context_marker", "log", "tags"}
+        ]
+        visible: Set[str] = {"idx"}
+        for line in self._all_lines:
+            for col in reversed(pipeline_cols):
+                val = line.get(col)
+                if val is not None and val != "":
+                    visible.add(col)
+                    break
+        return visible
+
+    def _apply_column_menu_selection(self) -> None:
+        """Apply column visibility from individual checkbutton menu selections."""
+        visible = {
+            col for col, var in self._col_menu_vars.items() if var.get()
+        }
+        self._apply_column_visibility(visible)
 
     def _apply_column_visibility(self, visible: Set[str]) -> None:
-        """Apply column visibility changes."""
-        # idx is always visible
-        visible.add("idx")
+        """Apply column visibility changes.
+
+        All columns including Line # and Tags are hideable.
+        """
         self._visible_columns = [f for f in LINE_FIELDS if f in visible]
         self._hidden_columns = set(LINE_FIELDS) - visible
         self._refresh_column_filter()
@@ -595,11 +752,17 @@ class FullTableViewDialog(tk.Toplevel):
             return
 
         # Determine search columns
+        # If columns are selected, search only those; otherwise visible columns
         col_sel = self._search_col_var.get()
         if col_sel == "All Columns":
-            search_cols = [c for c in self._visible_columns if c not in METADATA_FIELDS]
+            if self._selected_columns:
+                search_cols = [c for c in self._selected_columns if c not in METADATA_FIELDS]
+            else:
+                search_cols = [c for c in self._visible_columns if c not in METADATA_FIELDS]
         else:
-            search_cols = [col_sel]
+            # Resolve display name to field name
+            field = DISPLAY_NAME_TO_FIELD.get(col_sel, col_sel)
+            search_cols = [field]
 
         # Find matches
         self._search_matches.clear()
@@ -617,13 +780,13 @@ class FullTableViewDialog(tk.Toplevel):
         self._current_match_index = 0 if self._search_matches else -1
         self._refresh_table()
 
-    def _on_toggle_misses(self) -> None:
-        """Toggle Show Misses / Hide Misses."""
-        self._show_misses = self._miss_var.get()
-        # Show prev/next buttons when misses are shown
-        if self._show_misses:
-            self._prev_btn.configure(state="normal")
-            self._next_btn.configure(state="normal")
+    def _on_toggle_results_only(self) -> None:
+        """Toggle Results Only mode.
+
+        When Results Only is checked, non-matching rows are hidden.
+        Internally: _show_misses is the inverse of results_only.
+        """
+        self._show_misses = not self._results_only_var.get()
         self._page_offset = 0
         self._refresh_table()
 
@@ -666,12 +829,24 @@ class FullTableViewDialog(tk.Toplevel):
         replace_text = self._replace_var.get()
         col_sel = self._search_col_var.get()
         if col_sel == "All Columns":
-            target_cols = [c for c in self._visible_columns if c not in NON_EDITABLE_FIELDS and c not in METADATA_FIELDS]
+            if self._selected_columns:
+                target_cols = [
+                    c for c in self._selected_columns
+                    if c not in NON_EDITABLE_FIELDS and c not in METADATA_FIELDS
+                ]
+            else:
+                target_cols = [
+                    c for c in self._visible_columns
+                    if c not in NON_EDITABLE_FIELDS and c not in METADATA_FIELDS
+                ]
         else:
-            if col_sel in NON_EDITABLE_FIELDS:
-                messagebox.showwarning("Replace", f"Column '{col_sel}' is not editable.")
+            # Resolve display name to field name
+            field = DISPLAY_NAME_TO_FIELD.get(col_sel, col_sel)
+            if field in NON_EDITABLE_FIELDS:
+                display = COLUMN_DISPLAY_NAMES.get(field, field)
+                messagebox.showwarning("Replace", f"Column '{display}' is not editable.")
                 return
-            target_cols = [col_sel]
+            target_cols = [field]
 
         count = 0
         for line in self._all_lines:
@@ -715,9 +890,6 @@ class FullTableViewDialog(tk.Toplevel):
             return
         col_name = self._visible_columns[col_idx_num]
 
-        if col_name in NON_EDITABLE_FIELDS:
-            return
-
         idx = int(item)
         # Find the line
         line = self._find_line(idx)
@@ -725,6 +897,12 @@ class FullTableViewDialog(tk.Toplevel):
             return
 
         current_val = line.get(col_name, "") or ""
+
+        if col_name in NON_EDITABLE_FIELDS:
+            # For orig: allow read-only selection to copy content
+            if col_name == "orig":
+                self._show_readonly_cell(item, column, str(current_val))
+            return
 
         # Create inline edit widget
         self._start_inline_edit(item, column, col_name, idx, str(current_val))
@@ -767,6 +945,35 @@ class FullTableViewDialog(tk.Toplevel):
         edit_widget.bind("<Escape>", lambda e: finish_edit(False))
         edit_widget.bind("<FocusOut>", lambda e: finish_edit(True))
 
+    def _show_readonly_cell(self, item: str, column: str, value: str) -> None:
+        """Show a read-only text widget for copying cell content (e.g., Original)."""
+        bbox = self._tree.bbox(item, column)
+        if not bbox:
+            return
+        x, y, w, h = bbox
+        widget = tk.Text(
+            self._tree, wrap="word",
+            font=("TkDefaultFont", 9),
+            bd=1, relief="solid",
+            bg="#F0F0F0",
+        )
+        widget.insert("1.0", value)
+        widget.configure(state="disabled")
+        widget.place(x=x, y=y, width=max(w, 200), height=max(h, 60))
+        widget.focus_set()
+
+        def close(_event: Any = None) -> None:
+            widget.destroy()
+
+        widget.bind("<Escape>", close)
+        widget.bind("<FocusOut>", close)
+        # Allow Ctrl+C even in disabled state
+        widget.bind("<Control-c>", lambda e: (
+            widget.configure(state="normal"),
+            widget.event_generate("<<Copy>>"),
+            widget.configure(state="disabled"),
+        ))
+
     def _on_delete_key(self, event: tk.Event) -> None:
         """Handle Delete key to clear selected cells."""
         selected = self._tree.selection()
@@ -793,25 +1000,30 @@ class FullTableViewDialog(tk.Toplevel):
 
         self._refresh_table()
 
-    def _on_column_select_toggle(self, col: str, var: tk.BooleanVar) -> None:
-        """Handle column select checkbox toggle."""
-        # This selects all currently visible rows in this column for operations
-        if var.get():
-            for item in self._tree.get_children():
-                idx = int(item)
-                self._selected_rows.add(idx)
+    def _toggle_column_selection(self, col: str) -> None:
+        """Toggle a column's selection state for search/replace scoping."""
+        if col in self._selected_columns:
+            self._selected_columns.discard(col)
         else:
-            self._selected_rows.clear()
-        self._refresh_table()
+            self._selected_columns.add(col)
+        # Update the label appearance
+        lbl = self._sel_labels.get(col)
+        if lbl is not None:
+            selected = col in self._selected_columns
+            lbl.configure(
+                text="Selected" if selected else "Select",
+                bg=COLOR_SELECTED if selected else COLOR_PANEL,
+            )
 
     def _clear_column(self, col: str) -> None:
         """Clear all values in a column."""
         if col in NON_EDITABLE_FIELDS:
             return
 
+        display = COLUMN_DISPLAY_NAMES.get(col, col)
         if not messagebox.askyesno(
             "Clear Column",
-            f"Clear all values in column '{col}'?\nThis affects ALL lines, not just visible ones.",
+            f"Clear all values in column '{display}'?\nThis affects ALL lines, not just visible ones.",
         ):
             return
 
@@ -866,9 +1078,11 @@ class FullTableViewDialog(tk.Toplevel):
 
     def _on_sort(self, col: str) -> None:
         """Sort the table by a column."""
-        # Simple toggle sort
-        reverse = getattr(self, "_sort_reverse", False)
-        self._sort_reverse = not reverse
+        if self._sort_column == col:
+            self._sort_reverse = not self._sort_reverse
+        else:
+            self._sort_column = col
+            self._sort_reverse = False
 
         def sort_key(line: Dict[str, Any]) -> Any:
             val = line.get(col, "")
@@ -876,7 +1090,7 @@ class FullTableViewDialog(tk.Toplevel):
                 return int(val) if val else 0
             return str(val or "").lower()
 
-        self._all_lines.sort(key=sort_key, reverse=reverse)
+        self._all_lines.sort(key=sort_key, reverse=self._sort_reverse)
         self._refresh_table()
 
     # ================================================================== #
@@ -1073,7 +1287,7 @@ class _FileFilterDropdown(tk.Toplevel):
         self._listbox = tk.Listbox(
             self._frame, bg=COLOR_INPUT, fg=COLOR_TEXT,
             selectbackground=COLOR_SELECTED,
-            font=("TkDefaultFont", 9),
+            font=("TkDefaultFont", 11),
             width=40, height=15,
             activestyle="none",
         )
@@ -1188,106 +1402,6 @@ class _FileFilterDropdown(tk.Toplevel):
         """Close dropdown when focus leaves."""
         # Small delay to handle focus transitions
         self.after(150, self._check_focus)
-
-    def _check_focus(self) -> None:
-        """Check if focus is still within this dropdown."""
-        try:
-            focused = self.focus_get()
-            if focused is None or not str(focused).startswith(str(self)):
-                self.destroy()
-        except tk.TclError:
-            pass
-
-
-# ====================================================================== #
-#                    COLUMN FILTER DROPDOWN                               #
-# ====================================================================== #
-
-class _ColumnFilterDropdown(tk.Toplevel):
-    """Column visibility filter dropdown."""
-
-    def __init__(
-        self,
-        parent: tk.Toplevel,
-        all_columns: List[str],
-        visible: Set[str],
-        populated: Set[str],
-        on_apply: Any,
-    ) -> None:
-        super().__init__(parent)
-        self.overrideredirect(True)
-        self.configure(bg=COLOR_BORDER)
-
-        self._all_columns = all_columns
-        self._on_apply = on_apply
-        self._vars: Dict[str, tk.BooleanVar] = {}
-
-        frame = ttk.Frame(self, padding=4)
-        frame.pack(fill="both", expand=True)
-
-        ttk.Label(frame, text="Column Visibility", font=("TkDefaultFont", 9, "bold")).pack(
-            anchor="w", pady=(0, 4),
-        )
-
-        canvas = tk.Canvas(frame, bg=COLOR_INPUT, width=220, height=300)
-        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=canvas.yview)
-        inner = ttk.Frame(canvas)
-
-        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=inner, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-
-        for col in all_columns:
-            var = tk.BooleanVar(value=col in visible)
-            self._vars[col] = var
-            suffix = ""
-            if col not in populated and col != "idx":
-                suffix = " (empty)"
-            cb = ttk.Checkbutton(inner, text=f"{col}{suffix}", variable=var)
-            cb.pack(anchor="w", padx=4, pady=1)
-            if col == "idx":
-                cb.configure(state="disabled")
-
-        btn_frame = ttk.Frame(frame)
-        btn_frame.pack(fill="x", pady=(4, 0))
-
-        ttk.Button(btn_frame, text="Show Populated", command=self._show_populated).pack(
-            side="left", padx=(0, 4),
-        )
-        ttk.Button(btn_frame, text="Show All", command=self._show_all).pack(
-            side="left", padx=(0, 4),
-        )
-        ttk.Button(btn_frame, text="Apply", command=self._apply).pack(side="right")
-
-        self.bind("<Escape>", lambda e: self.destroy())
-        self.bind("<FocusOut>", lambda e: self.after(150, self._check_focus))
-        self.focus_set()
-
-    def _show_populated(self) -> None:
-        """Set checkboxes to show only populated columns."""
-        for col, var in self._vars.items():
-            if col == "idx":
-                var.set(True)
-            else:
-                parent = self.master
-                if isinstance(parent, FullTableViewDialog):
-                    var.set(col in parent._populated_columns)
-                else:
-                    var.set(True)
-
-    def _show_all(self) -> None:
-        """Set all checkboxes to checked."""
-        for var in self._vars.values():
-            var.set(True)
-
-    def _apply(self) -> None:
-        """Apply column visibility changes."""
-        visible = {col for col, var in self._vars.items() if var.get()}
-        self._on_apply(visible)
-        self.destroy()
 
     def _check_focus(self) -> None:
         """Check if focus is still within this dropdown."""

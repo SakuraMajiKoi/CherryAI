@@ -3,7 +3,7 @@
 Provides the main application window with:
 - 10 workflow step tabs
 - Right-side progress tracker (collapsible)
-- Menu bar (File, Edit, Tools, Help)
+- Menu bar (File, Full Table View, Options, Help)
 - Status bar with progress indicator
 - Keyboard shortcuts (Ctrl+D/Z/Y)
 - Pastel blue theme
@@ -79,7 +79,7 @@ class App(tk.Tk):
     Features:
     - 10 workflow step tabs
     - Right-side progress tracker
-    - Menu bar with File, Edit, Tools, Help
+    - Menu bar with File (dropdown), Full Table View (direct), Options (direct), Help (dropdown)
     - Status bar with progress indicator
     - Keyboard shortcuts
     - Pastel blue theme
@@ -153,7 +153,6 @@ class App(tk.Tk):
 
         # Build UI
         self._build_menu()
-        self._build_toolbar()
         self._build_main_layout()
         self._build_status_bar()
 
@@ -230,12 +229,14 @@ class App(tk.Tk):
         return result_path
 
     def _build_menu(self) -> None:
-        """Build the menu bar."""
+        """Build the menu bar.
+
+        Layout: File (dropdown) | Full Table View (direct) | Options (direct) | Help (dropdown)
+        """
         menubar = tk.Menu(self)
         self.config(menu=menubar)
 
-        # File menu
-        # TASK 19 Phase 3: Simplified menu - manifest auto-saves, no manual session save
+        # File menu (dropdown)
         file_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="File", menu=file_menu)
         file_menu.add_command(label="New Project", command=self._on_new_session)
@@ -243,48 +244,18 @@ class App(tk.Tk):
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self._on_close)
 
-        # Edit menu
-        edit_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="Edit", menu=edit_menu)
-        edit_menu.add_command(
-            label="Undo",
-            command=self._on_undo,
-        )
-        edit_menu.add_command(
-            label="Redo",
-            command=self._on_redo,
-        )
-        edit_menu.add_separator()
-        edit_menu.add_command(
-            label="Mark Step Done",
-            command=self._on_mark_done,
-        )
+        # Full Table View (direct — no dropdown)
+        menubar.add_command(label="Full Table View", command=self._on_full_table_view)
 
-        # Tools menu
-        tools_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="Tools", menu=tools_menu)
-        tools_menu.add_command(label="Options...", command=self._on_options)
-        tools_menu.add_separator()
-        tools_menu.add_command(label="Run CLI Test", command=self._on_cli_test)
+        # Options (direct — no dropdown)
+        menubar.add_command(label="Options", command=self._on_options)
 
-        # Help menu
+        # Help menu (dropdown)
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Help", menu=help_menu)
         help_menu.add_command(label="Documentation", command=self._on_help)
         help_menu.add_separator()
         help_menu.add_command(label="About", command=self._on_about)
-
-    def _build_toolbar(self) -> None:
-        """Build the top toolbar with direct-access buttons."""
-        toolbar = ttk.Frame(self)
-        toolbar.pack(fill="x", padx=4, pady=(2, 0))
-
-        ttk.Button(
-            toolbar,
-            text="Full Table View",
-            command=self._on_full_table_view,
-            width=16,
-        ).pack(side="left", padx=(4, 0))
 
     def _build_main_layout(self) -> None:
         """Build the main layout with tabs and progress tracker."""

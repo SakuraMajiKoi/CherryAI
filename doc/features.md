@@ -246,14 +246,24 @@ The tool has several ways to protect content:
 KEY FEATURES
 
 FULL TABLE VIEW
-- **Toolbar Button**: Direct access via "Full Table View" button in the top toolbar (not a menu dropdown)
-- **Spreadsheet View**: Displays all manifest line entries with every LineEntry field as a column
-- **Column Auto-Hide**: Empty columns hidden by default; Column Filter dropdown to toggle visibility
-- **Cell Editing**: Double-click to edit any cell (except idx); multiline support via Shift+Enter
+- **Menu Bar Access**: Direct access via "Full Table View" entry in the menu bar (not a dropdown)
+- **Menu Bar Layout**: File (dropdown), Full Table View (direct), Options (direct), Help (dropdown)
+- **Spreadsheet View**: Displays all manifest line entries with named columns (Line #, Tags, Original, Preprocessed, Translated, Postprocessed, Wrapped, Overwrite, Quality Assurance, Log, Tags (Internal))
+- **Column Display Names**: All columns use human-readable display names (e.g., idx→Line #, orig→Original, tl→Translated)
+- **Column Auto-Hide**: Empty columns hidden by default; Tags (context_marker) hidden by default
+- **Column Filter Dropdown**: Slim tk.Menu dropdown with presets — Show All, Show Visible, Show Latest (furthest non-empty right column per line) plus individual column toggles
+- **All Columns Hideable**: Every column including Line # can be hidden via the column filter
+- **Column Selection Bar**: Each column has a "Select / Selected" bar above the header for search/replace scoping; same visual style as column headers
+- **Sort Indicators**: Column headers display ▲/▼ arrows showing current sort direction; click toggles ascending/descending
+- **Cell Editing**: Double-click to edit any cell (except Line # and Original); multiline support via Shift+Enter
+- **Read-Only Original**: Double-click Original opens a read-only text widget for copying content
+- **Non-Editable Fields**: Line # and Original cannot be edited or replaced
 - **Deletion**: Del key clears selected cells; entire columns can be cleared
-- **File Filter**: Hierarchical dropdown with folder navigation (click folders, Back button, scrollable)
-- **RegEx Search & Replace**: Search across all or specific columns; toggle RegEx mode; Show/Hide Misses with Prev/Next navigation
-- **Row Selection**: Checkbox-based selection with Ctrl+click and Shift+click; highlighted rows
+- **File Filter**: Hierarchical dropdown with folder navigation (click folders, Back button, scrollable); larger font for readability
+- **RegEx Search & Replace**: Two-row toolbar layout — search row on top, replace row below; search across visible or selected columns; toggle RegEx mode; Results Only mode with Prev (◀) / Next (▶) navigation
+- **Results Only**: Inverted "Show Misses" — when checked, only matching rows are displayed
+- **Searchable Tags & Line #**: Tags (context_marker) and Line # (idx) are searchable (not limited to metadata)
+- **Row Selection**: Click-based selection with Ctrl+click and Shift+click; highlighted rows
 - **Pagination**: Show All / Show X with configurable page size (default 100); "Showing X / Y Lines" status
 - **Save/Reset/Diff**: Save changes to manifest (all or selected); Reset from manifest data; Diff mode shows only changed rows
 - **Close Prompt**: Asks to save or discard unsaved changes on close

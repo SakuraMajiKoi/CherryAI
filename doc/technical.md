@@ -316,18 +316,24 @@ TABLE OF CONTENTS
          - All dialogs delegate to functions/api_config.py for hashing and encryption
        - table_view.py - Full Table View dialog (2026):
          - FullTableViewDialog: Spreadsheet-like view of all manifest line entries
-         - All LineEntry fields as columns (idx, orig, prepro, tl, postpro, wordwr, etc.)
-         - Column visibility: auto-hides empty columns; Column Filter dropdown to toggle
+         - Constants: LINE_FIELDS (11 fields), COLUMN_DISPLAY_NAMES (human-readable names), DISPLAY_NAME_TO_FIELD (reverse lookup), DEFAULT_HIDDEN (context_marker), NON_EDITABLE_FIELDS (idx, orig), METADATA_FIELDS (log, tags, prepro_ops)
+         - Column display names: idx→Line #, context_marker→Tags, orig→Original, prepro→Preprocessed, tl→Translated, postpro→Postprocessed, wordwr→Wrapped, qa_overwrite→Quality Assurance
+         - Column visibility: auto-hides empty columns; slim tk.Menu dropdown with Show All/Show Visible/Show Latest presets; all columns including Line # are hideable; Tags hidden by default
+         - Column selection bar: "Select / Selected" labels above each column, synced widths via Canvas, for search/replace scoping
+         - Sort indicators: ▲/▼ arrows in column headers; _sort_column and _sort_reverse state tracking
          - Cell editing (double-click), deletion (Del key), multi-select, column clearing
-         - File filter dropdown: hierarchical folder navigation with Back/All navigation
-         - Full RegEx search and replace across selectable columns (Show/Hide Misses, Prev/Next)
-         - Row selection checkboxes with highlighting; Ctrl+click and Shift+click support
+         - Read-only Original: double-click shows copyable text widget (_show_readonly_cell)
+         - File filter dropdown: hierarchical folder navigation with Back/All navigation; font size 11
+         - Two-row toolbar: search row (top) with file filter, search entry, column selector, Results Only toggle, Prev/Next arrows; replace row (bottom) with replace entry, Replace All, action buttons
+         - Results Only mode: inverted Show Misses (_on_toggle_results_only)
+         - Search/replace scopes to visible columns or _selected_columns when populated
+         - Tags (context_marker) and Line # (idx) are searchable (removed from METADATA_FIELDS)
+         - Row selection with highlighting; Ctrl+click and Shift+click support
          - Pagination: Show All / Show X with configurable page size (default 100)
          - Save/Reset/Diff buttons: saves changes to manifest, resets from snapshot, diff mode
          - Change tracking: unsaved changes highlighted; close prompt to save/discard
-         - Accessed via "Full Table View" button in the toolbar (not menu dropdown)
+         - Accessed via "Full Table View" menu bar entry (direct command, no dropdown)
          - _FileFilterDropdown helper: hierarchical listbox with scrolling and keyboard nav
-         - _ColumnFilterDropdown helper: checkbox list with Show Populated / Show All buttons
 
    6.7 gui/widgets/ (2 files - 1 widget module) [NEW 2026]
        - __init__.py - Widget package
