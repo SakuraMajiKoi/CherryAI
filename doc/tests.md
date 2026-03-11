@@ -9494,6 +9494,30 @@ requiring a Tkinter display (no GUI instantiation needed).
 | TestUpButtonText | 2 | Up button uses plain Unicode arrow ↑ (U+2191), not emoji ⬆️; text is compact with single space |
 | TestAutoPipelineHidden | 3 | Pipeline widgets not packed (hidden); _pipeline_var created; pipeline_cb combobox created |
 
+---
+
+### dev/test_io_examples.py (51 tests)
+
+Comprehensive tests for I/O example generation, language resolution, prompt builder
+integration, metadata persistence, manifest default seeding, and cache configuration.
+No GUI or API required.
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestGenerateIoExamples | 13 | Returns (str, int) tuple; zero/negative target yields empty; 1500/2500 token budgets within ±100; 2500 > 1500; output contains Input/Output JSON blocks; sequential LineN keys; Input/Output line number pairing; globally unique line numbers across blocks; code pattern boosting; no patterns fallback; small budget yields at least one block |
+| TestLanguageResolution | 11 | JP→EN default (jp, en); EN→JP reversed (en, jp); unknown source + EN target → jp fallback; JP source + unknown target → en fallback; both unknown, no English → en+jp tiebreak; EN source + unknown target → jp; case-insensitive; keys always distinct across all combinations; EN→JP generation produces swapped roles; JP→EN uses English in output |
+| TestCalculateFillTarget | 3 | Small static returns positive fill target; large static returns 0; at-threshold returns small positive |
+| TestOptimalCacheSize | 3 | OpenAI default 1536; unknown provider fallback; optimal_cache_size in _MODEL_SETTING_KEYS |
+| TestPromptBuilderIoExamples | 7 | Disabled mode preserves all SI content; 1500 mode generates io_examples section; SI unchanged when generating (never stripped); IO placed between SI and Style; fill mode; 2500 mode; io_examples in _STATIC_PROMPT_SECTIONS |
+| TestProjectMetadataPersistence | 7 | si_preset survives to_dict/from_dict roundtrip; si_preset defaults to "Default"; io_examples survives to_dict/from_dict roundtrip; io_examples defaults to "disabled"; full roundtrip preserves both fields |
+| TestManifestDefaultSeeding | 4 | _get_info_defaults() includes system_instructions, si_preset="Default", io_examples="disabled", source/target languages |
+| TestEstimateTokens | 4 | Empty string yields 0; English text yields positive count; Japanese text yields positive count; Japanese tokens > English tokens for same character length |
+
+```bash
+# Run I/O examples tests
+python -m pytest CherryAI/dev/test_io_examples.py -v --timeout=10
+```
+
 ```bash
 # Run Input Dialog UI tests
 python -m pytest CherryAI/dev/test_input_dialog_ui.py -v --timeout=10

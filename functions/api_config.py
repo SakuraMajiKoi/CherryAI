@@ -42,7 +42,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -482,6 +482,7 @@ _MODEL_SETTING_KEYS = (
     "thinking_budget", "logit_bias_enabled", "max_concurrent",
     "request_mode", "rolling_context_before", "rolling_context_between",
     "rolling_context_after", "use_translated_context",
+    "optimal_cache_size",
 )
 
 
@@ -536,6 +537,45 @@ def delete_model_settings(model_id: str) -> None:
     for k in to_remove:
         cfg.remove_option(section, k)
     _save(cfg)
+
+
+# ---------------------------------------------------------------------------
+# Cache size helpers
+# ---------------------------------------------------------------------------
+
+# Provider defaults: (threshold, increment)
+_CACHE_DEFAULTS: Dict[str, Tuple[int, int]] = {
+    "openai": (1024, 128),
+}
+
+# Default: threshold + 4 × increment (well above minimum for reliable caching)
+_DEFAULT_OPTIMAL_CACHE_SIZE = 1024 + 4 * 128  # 1536
+
+
+def get_optimal_cache_size(model_id: str, provider: str = "openai") -> int:
+    """Return the optimal cache size for a model.
+
+    Checks per-model settings in API.ini first; falls back to provider
+    defaults (OpenAI: 1024 + 4×128 = 1536 tokens).
+
+    Args:
+        model_id: Model identifier (e.g. ``"gpt-4.1"``).
+        provider: Provider name for default lookup.
+
+    Returns:
+        Optimal cache size in tokens.
+    """
+    settings = get_model_settings(model_id)
+    stored = settings.get("optimal_cache_size", "")
+    if stored:
+        try:
+            return int(stored)
+        except ValueError:
+            pass
+    threshold, increment = _CACHE_DEFAULTS.get(
+        provider.lower(), (1024, 128),
+    )
+    return threshold + 4 * increment
 
 
 # ---------------------------------------------------------------------------

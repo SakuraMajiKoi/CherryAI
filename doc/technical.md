@@ -141,6 +141,7 @@ TABLE OF CONTENTS
    3.50 api_config.py ✅ — Encrypted API configuration manager (user/API.ini); Phase 62 extended
         * Single source of ALL API meta information: provider profiles, model, temperature, URL, timeout, rate limits, encrypted keys
         * ✅ Phase 62: api_profiles.ini consolidated; `[translation]` and `[glossary]` sections added
+        * Cache size helpers: `get_optimal_cache_size(model_id, provider)` reads per-model `optimal_cache_size` from API.ini; `_CACHE_DEFAULTS` per-provider thresholds (OpenAI: 1024+128); `_MODEL_SETTING_KEYS` includes `optimal_cache_size`
         * Key management: set_password(), verify_password(), is_password_set(), set_api_key(provider, key, password, name), get_api_key(provider, password, name), change_password(), migrate_from_ini(), disable_password(current_password), reset_password(), set_api_key_plain(provider, key, name), get_api_key_plain(provider, name)
         * Key listing: list_api_keys() returns [(provider, name), …] metadata; delete_api_key(provider, name) removes a saved key
         * INI format: `[api_keys]` section stores keys as `provider, name = encrypted_value` (Fernet AES-256) or plaintext when password disabled
@@ -151,6 +152,16 @@ TABLE OF CONTENTS
         * Migration: migrate_profiles_ini(path) — migrates non-secret fields from api_profiles.ini, renames to .migrated
         * PasswordStrength.assess(pw) / meter_text(pw) — Tiers: Instantly/Weak/Good/Great/Safe
         * See doc/passwords.md for full security documentation
+
+   3.51 io_examples.py ✅ — I/O example text generator for system prompt enrichment
+        * generate_io_examples(code_patterns, source_language, target_language, target_tokens) → (text, token_count)
+        * calculate_fill_target(static_prompt_tokens, model_id, provider) → int — fills to optimal cache boundary
+        * estimate_tokens(text) → int — tiktoken cl100k_base with heuristic fallback (len/1.7 JP, len/4 Latin)
+        * _Example dataclass with language-keyed fields (`jp`, `en`), tags, and priority
+        * _resolve_example_keys(source_language, target_language) → (source_key, target_key) — maps language names to example keys with en/jp fallback
+        * _EXAMPLE_BANK: ~35 example pairs covering PLACEHOLDER, VARIABLE, COLOR, LINEBREAK, MEDIA, ICON, FONT, SPEAKER, PRESERVE, RUBY, SPAN, COMPLEX, PLAIN
+        * _detect_project_tags() maps manifest code_patterns to example bank tags
+        * _renumber_lines() ensures sequential LineN keys across grouped output blocks; Input/Output pairs share same numbering
 
 3A. PROVIDERS/ MODULES (7 providers - Unified LLM Provider Interface)
     ✅ = Verified exists | 🔗 = Integrated with api_client.py & options.py
@@ -358,6 +369,7 @@ TABLE OF CONTENTS
        - chunker_adapter.py - Bridge between GUI and functions/chunker.py
        - prompt_adapter.py - Bridge between GUI and functions/prompt_builder.py (TASK 73: build_full_system_prompt shared builder — single source of truth for §5.2 prompt assembly)
          - Section toggle flags: `build_full_system_prompt()` reads `*_enabled` boolean keys from metadata to gate prompt sections (genre_enabled, summary_enabled, style_enabled, tone_enabled, system_instructions_enabled, glossary_enabled, code_database_enabled)
+         - I/O Examples injection: slot 2b between System Instructions and Style; reads `metadata.io_examples` mode; imports `generate_io_examples`, `calculate_fill_target` from `functions/io_examples.py`; never modifies System Instructions
        - manifest_binding.py - Widget-to-Manifest binding system (TASK 22.3)
        - tooltip.py - Tooltip display utilities for widgets
        - confirmations.py - Confirmation dialog with "Don't ask again" opt-out (Phase 60)
@@ -468,7 +480,7 @@ TABLE OF CONTENTS
          - bind_float_spinbox_to_field() - Float values with DoubleVar
        - **BindingInfo class:** Tracks save/load operations for testing
        - **load_all_bindings():** Batch load all registered bindings
-       - **Phase 23 Integration:** InformationStep uses 12 bindings:
+       - **Phase 23 Integration:** InformationStep uses 13 bindings:
          - ProjectName, Title, Genre (text entries)
          - SourceLanguage, TargetLanguage (language comboboxes)
          - Summary (multiline text)
@@ -476,6 +488,7 @@ TABLE OF CONTENTS
          - CustomStyle, CustomTone (ScrolledText fields, saved on FocusOut since Phase 60)
          - Prompt (multiline text, renamed from Additional Notes)
          - SIPreset (System Instructions preset combobox, string-based)
+         - io_examples (I/O Examples mode combobox, metadata field via `_on_io_examples_changed()`)
        - **Phase 24 Integration:** PreprocessingStep uses 7 bindings + special format helpers:
          - Standard toggles: Deduplication, DeduplicationThreshold, EllipsisCompression,
            SymbolConversion, ProtCompression, SpeakerNameReplacement, CodeSpacingRules

@@ -188,7 +188,7 @@ def generate_prompt_cache_key(
 
 # Sections that form the static (cacheable) prefix per §5.2
 _STATIC_PROMPT_SECTIONS = frozenset({
-    "language", "system_instructions", "style", "tone",
+    "language", "system_instructions", "io_examples", "style", "tone",
     "protagonist", "summary", "genre", "pov", "context_type",
 })
 

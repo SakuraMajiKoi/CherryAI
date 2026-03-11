@@ -509,9 +509,21 @@ class ManifestManager:
         TASK 21.2: Extended to include ALL fields needed by GUI and processing.
         TASK 35.1: Added filedir for input/output decoupling.
         Uses defaults from INI file via ini_manager.
+        Defaults for system_instructions and summary are seeded at creation
+        so that Steps 4/5 can operate without the Information tab being
+        visited first.
         """
         now = datetime.utcnow().isoformat() + "Z"
         defaults = self._get_manifest_defaults()
+        
+        # Seed Information step metadata with default values.
+        info_metadata = self._get_info_defaults()
+        step_states: Dict[str, Any] = {}
+        for name in STEP_NAMES:
+            ss = StepState(name=name).to_dict()
+            if name == "Information":
+                ss["data"] = {"metadata": info_metadata}
+            step_states[name] = ss
         
         return {
             # === Core Metadata ===
@@ -543,7 +555,7 @@ class ManifestManager:
             # === v3.0 Project Settings ===
             "characters": [],
             "code_patterns": [],
-            "step_state": {name: StepState(name=name).to_dict() for name in STEP_NAMES},
+            "step_state": step_states,
             "glossary": GlossaryConfig().to_dict(),
             
             # === v3.0 Preprocessing Options ===
@@ -733,6 +745,39 @@ class ManifestManager:
     
     # _create_project_info_defaults removed — project_info is no longer a
     # top-level manifest key.  Metadata lives in step_state.Information.data.metadata.
+
+    def _get_info_defaults(self) -> Dict[str, Any]:
+        """Return default Information metadata seeded at manifest creation.
+
+        Ensures that system_instructions, si_preset, summary, and other
+        defaults are present in the manifest from the start so that
+        Steps 4 (Costs) and 5 (Translation) can operate without
+        requiring the Information tab to be visited first.
+        """
+        try:
+            from . import ini_manager
+            si_text = ini_manager.get_default_text("SystemInstruction")
+            summary_text = ini_manager.get_default_text("Summary")
+        except ImportError:
+            si_text = ""
+            summary_text = ""
+        return {
+            "source_language": "Japanese",
+            "target_language": "English",
+            "system_instructions": si_text,
+            "si_preset": "Default",
+            "io_examples": "disabled",
+            "summary": summary_text,
+            "style_preset": "Natural",
+            "tone_preset": "Neutral",
+            "system_instructions_enabled": True,
+            "glossary_enabled": True,
+            "code_database_enabled": True,
+            "genre_enabled": False,
+            "summary_enabled": False,
+            "style_enabled": False,
+            "tone_enabled": False,
+        }
     
     def _parse_list_default(self, value: Any) -> list:
         """Parse a comma-separated string into a list.

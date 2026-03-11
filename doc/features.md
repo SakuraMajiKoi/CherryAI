@@ -511,6 +511,24 @@ SYSTEM INSTRUCTIONS
 - translate.py `_build_system_prompt_from_manifest()` reads `custom_notes` from `step_state.Information.data.metadata` and includes in system prompt
 - Global Options → Restore Defaults → System Instructions resets `[system_instructions]` section and re-seeds Default preset
 
+I/O EXAMPLES GENERATION (NEW)
+- Generate I/O (input/output) example blocks for the system prompt to improve translation quality
+- Dropdown in Information Step (System Instructions section): disabled | fill | 1500 | 2500
+  - **disabled**: No separate examples generated
+  - **fill**: Cache-aligned budget — calculates remaining token space to fill the optimal cache boundary (default 1536 tokens for OpenAI). Uses `get_optimal_cache_size()` from api_config.py
+  - **1500**: Fixed budget of ~1500 tokens of I/O examples
+  - **2500**: Fixed budget of ~2500 tokens of I/O examples
+- Examples generated at request build time by `functions/io_examples.py`, NOT stored in manifest
+- **Never modifies System Instructions** — examples are a separate slot (2b) and do not strip or alter SI content
+- Examples injected at prompt slot 2b (between System Instructions and Style) in the static/cacheable prefix
+- Example bank uses `_Example` dataclass with language-keyed fields (`jp`, `en`); source/target language from manifest determines which field is used for input vs output
+- Language key resolution: maps language names to keys (Japanese→jp, English→en); unknown languages fall back to `en` unless English is already source or target (then `jp`); source/target always resolve to distinct keys
+- Example bank covers ~35 translation patterns: PLACEHOLDER, VARIABLE, COLOR, LINEBREAK, MEDIA, ICON, FONT, SPEAKER, PRESERVE, RUBY, SPAN, COMPLEX, PLAIN
+- Code pattern priority boosting: project's detected `code_patterns` boost matching examples in the bank (e.g., a project with COLOR codes gets more color-related examples)
+- Line numbering: each line key ("Line1", "Line7", etc.) is globally unique across all blocks and matched between Input/Output pairs
+- Token counting via tiktoken (cl100k_base) with heuristic fallback for environments without tiktoken
+- Setting stored in manifest `metadata.io_examples`; seeded as "disabled" at manifest creation
+
 ROLLING CONTEXT (NEW - TASK 7, extended TASK 78)
 - Provides surrounding lines as context for each translation batch
 - Helps AI maintain continuity and context awareness

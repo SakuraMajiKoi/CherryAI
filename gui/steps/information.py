@@ -256,6 +256,8 @@ class ProjectMetadata:
     characters: List[CharacterInfo] = field(default_factory=list)
     code_patterns: List[CodePattern] = field(default_factory=list)  # TASK 18.5
     system_instructions: str = ""
+    si_preset: str = "Default"
+    io_examples: str = "disabled"
     created_at: str = ""
     updated_at: str = ""
 
@@ -275,6 +277,8 @@ class ProjectMetadata:
             "characters": [c.to_dict() for c in self.characters],
             "code_patterns": [p.to_dict() for p in self.code_patterns],
             "system_instructions": self.system_instructions,
+            "si_preset": self.si_preset,
+            "io_examples": self.io_examples,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -304,6 +308,8 @@ class ProjectMetadata:
             characters=characters,
             code_patterns=code_patterns,
             system_instructions=data.get("system_instructions", ""),
+            si_preset=data.get("si_preset", "Default"),
+            io_examples=data.get("io_examples", "disabled"),
             created_at=data.get("created_at", ""),
             updated_at=data.get("updated_at", ""),
         )
@@ -2551,6 +2557,37 @@ class InformationStep(BaseStep):
             )
         )
 
+        # --- I/O Examples dropdown ---
+        io_row = ttk.Frame(frame)
+        io_row.pack(fill="x", padx=10, pady=(2, 5))
+
+        ttk.Label(io_row, text="Generate I/O Examples:").pack(
+            side="left", padx=(0, 5),
+        )
+        self._io_examples_var = tk.StringVar(value="disabled")
+        self._io_examples_combo = ttk.Combobox(
+            io_row,
+            textvariable=self._io_examples_var,
+            values=["disabled", "fill", "1500", "2500"],
+            state="readonly",
+            width=12,
+        )
+        self._io_examples_combo.pack(side="left", padx=(0, 5))
+        self._io_examples_combo.bind(
+            "<<ComboboxSelected>>", self._on_io_examples_changed,
+        )
+
+        # Bind to manifest
+        self._manifest_bindings.append(
+            bind_combobox_to_info_field(
+                combobox=self._io_examples_combo,
+                var=self._io_examples_var,
+                manager_getter=lambda: self.manifest_manager,
+                meta_key="io_examples",
+                default="disabled",
+            )
+        )
+
         # Populate on first build
         self._on_si_preset_changed()
 
@@ -2841,6 +2878,18 @@ class InformationStep(BaseStep):
         self._si_preset_var.set("Default")
         self._on_si_preset_changed()
         logger.info("Deleted SI preset: %s", name)
+
+    # ---- I/O Examples helpers ----
+
+    def _on_io_examples_changed(
+        self, event: Optional[tk.Event] = None,
+    ) -> None:
+        """Handle I/O Examples dropdown change."""
+        value = self._io_examples_var.get()
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            mgr.set_info_metadata_field("io_examples", value)
+        logger.debug("I/O Examples changed to: %s", value)
 
     def _toggle_json_view(self) -> None:
         """Toggle JSON view visibility (grid-based)."""
@@ -4744,6 +4793,8 @@ class InformationStep(BaseStep):
         self._metadata.tone = self._tone_text.get("1.0", "end-1c")
         self._metadata.tone_preset = self._tone_preset_var.get()
         self._metadata.system_instructions = self._notes_text.get("1.0", "end-1c")
+        self._metadata.si_preset = self._si_preset_var.get()
+        self._metadata.io_examples = self._io_examples_var.get() if hasattr(self, "_io_examples_var") else "disabled"
         self._metadata.updated_at = datetime.now().isoformat()
         if not self._metadata.created_at:
             self._metadata.created_at = self._metadata.updated_at
@@ -4785,6 +4836,17 @@ class InformationStep(BaseStep):
 
         self._notes_text.delete("1.0", "end")
         self._notes_text.insert("1.0", self._metadata.system_instructions)
+
+        # Populate SI preset name from metadata
+        si_name = self._metadata.si_preset
+        if si_name and si_name in self._si_presets:
+            self._si_preset_var.set(si_name)
+        elif si_name == CUSTOM_PRESET_NAME:
+            self._si_preset_var.set(CUSTOM_PRESET_NAME)
+
+        # Populate IO examples dropdown
+        if hasattr(self, "_io_examples_var"):
+            self._io_examples_var.set(self._metadata.io_examples or "disabled")
 
         self._refresh_character_list()
         self._refresh_code_pattern_list()  # TASK 18.2: Also refresh code patterns
@@ -5211,18 +5273,31 @@ class InformationStep(BaseStep):
         """Populate Summary and System Instructions with defaults if empty.
 
         Called from ``on_enter`` after all loading is complete.
+        Defaults are normally seeded into the manifest at creation time.
+        This fallback handles older manifests that lack seeded defaults.
+        When a default is applied, it is also written to the manifest so
+        that subsequent enters do not repeat the fallback.
         """
-        # Summary default — always read fresh from INI so user edits propagate.
+        mgr = self.manifest_manager
+
+        # Summary default — fill only for truly empty manifests.
         summary_text = self._summary_text.get("1.0", "end-1c").strip()
         if not summary_text:
+            default_summary = ini_manager.get_default_text("Summary")
             self._summary_text.delete("1.0", "end")
-            self._summary_text.insert("1.0", ini_manager.get_default_text("Summary"))
+            self._summary_text.insert("1.0", default_summary)
+            if mgr is not None and mgr.is_loaded:
+                mgr.set_info_metadata_field("summary", default_summary)
 
-        # System Instructions default — always read fresh from INI.
+        # System Instructions default — fill only for truly empty manifests.
         notes_text = self._notes_text.get("1.0", "end-1c").strip()
         if not notes_text:
+            default_si = ini_manager.get_default_text("SystemInstruction")
             self._notes_text.delete("1.0", "end")
-            self._notes_text.insert("1.0", ini_manager.get_default_text("SystemInstruction"))
+            self._notes_text.insert("1.0", default_si)
+            if mgr is not None and mgr.is_loaded:
+                mgr.set_info_metadata_field("system_instructions", default_si)
+                mgr.set_info_metadata_field("si_preset", "Default")
     
     def _save_characters_to_manifest(self) -> None:
         """Save character notes to manifest.

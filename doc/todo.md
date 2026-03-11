@@ -55,6 +55,60 @@ MODULE COUNTS (Verified January 2026)
 =============================================================================
 [Archived: Sessions 43–24 + Phase 62 → see doc/archived.md]
 
+### BUG FIX: si_preset Lost on Tab Change
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 30 minutes
+
+Goal: si_preset value disappears from manifest when switching tabs because `ProjectMetadata.to_dict()` and `from_dict()` did not include `si_preset`.
+
+**Solution:** Added `si_preset` field to `ProjectMetadata` dataclass, `to_dict()`, `from_dict()`, `_collect_metadata()`, and `_populate_form()` in `gui/steps/information.py`.
+
+**Files Modified:** `gui/steps/information.py`
+**Tests:** `dev/test_io_examples.py::TestProjectMetadataPersistence` — 7 tests
+
+---
+
+### BUG FIX: System Instructions Reset on Re-enter
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 1 hour
+
+Goal: Default system instructions text overwrote user edits every time the Information tab was entered because `_ensure_default_texts()` ran unconditionally and empty manifests had no seeded defaults.
+
+**Solution:** Two-pronged fix:
+1. `manifest_manager.py::_create_empty_manifest()` now seeds `info_metadata` defaults (system_instructions, si_preset, io_examples, languages, toggles) via new `_get_info_defaults()` method
+2. `_ensure_default_texts()` rewritten as fallback-only — only fills truly empty fields in manifests that somehow have no defaults
+
+**Files Modified:** `functions/manifest_manager.py`, `gui/steps/information.py`
+**Tests:** `dev/test_io_examples.py::TestManifestDefaultSeeding` — 4 tests
+
+---
+
+### FEATURE: I/O Examples Generation
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 6 hours
+
+Goal: Generate I/O (input/output) example blocks in the system prompt to improve translation quality. Mode selectable per-project: disabled, fill (cache-aligned), 1500, or 2500 tokens.
+
+**Implementation:**
+- New module `functions/io_examples.py` — `_Example` dataclass with language-keyed fields (`jp`, `en`), `_resolve_example_keys()` for language resolution, example bank (~35 pairs), priority scoring, code pattern boosting, sequential LineN renumbering, tiktoken token counting with heuristic fallback
+- UI dropdown in Information Step (System Instructions section) with 4 modes
+- `build_full_system_prompt()` in `prompt_adapter.py` injects examples at slot 2b (between SI and Style)
+- Never modifies System Instructions — examples are a separate prompt slot
+- Language key resolution: maps lang names to `jp`/`en` keys; unknown languages fall back to `en` unless English is source or target (then `jp`)
+- "fill" mode uses `calculate_fill_target()` + `get_optimal_cache_size()` to fill optimal cache boundary
+- `api_config.py` extended with `optimal_cache_size` model setting key, `_CACHE_DEFAULTS`, `get_optimal_cache_size()`
+- `api_client.py` extended with `io_examples` in `_STATIC_PROMPT_SECTIONS`
+- Manifest seeding: `io_examples` default "disabled" seeded at manifest creation
+
+**Files Modified:**
+- `functions/io_examples.py` (NEW)
+- `gui/steps/information.py` — ProjectMetadata, UI dropdown, _on_io_examples_changed()
+- `gui/helpers/prompt_adapter.py` — slot 2b injection
+- `functions/api_config.py` — optimal_cache_size key, get_optimal_cache_size()
+- `functions/api_client.py` — _STATIC_PROMPT_SECTIONS
+- `functions/manifest_manager.py` — _create_empty_manifest, _get_info_defaults
+
+**Tests:** `dev/test_io_examples.py` — 43 tests across 8 classes (all passing)
+
+---
+
 
 PENDING TASKS - Full Table View
 

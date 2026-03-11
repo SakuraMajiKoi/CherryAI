@@ -1037,12 +1037,48 @@ def build_full_system_prompt(
         )
 
     # --- 2. System Instructions ---
+    io_examples_mode = (metadata.get("io_examples", "disabled") or "disabled").strip()
     if si_enabled:
         sys_instructions = (
             metadata.get("system_instructions", "") or ""
         ).strip()
         if sys_instructions:
             _add("system_instructions", sys_instructions)
+
+    # --- 2b. I/O Examples (generated, between SI and Style) ---
+    if io_examples_mode != "disabled":
+        try:
+            from CherryAI.functions.io_examples import (
+                generate_io_examples,
+                calculate_fill_target,
+            )
+        except ImportError:
+            from functions.io_examples import (
+                generate_io_examples,
+                calculate_fill_target,
+            )
+        io_code_patterns = metadata.get("code_patterns", [])
+        io_source = (metadata.get("source_language", "") or "").strip()
+        io_target = (metadata.get("target_language", "") or "").strip()
+
+        if io_examples_mode == "fill":
+            # Calculate current static tokens (excluding IO examples)
+            static_words = sum(breakdown.values())
+            # Rough words→tokens: /0.75 (conservative)
+            static_tokens = int(static_words / 0.75) if static_words else 0
+            io_target_tokens = calculate_fill_target(static_tokens)
+        else:
+            io_target_tokens = int(io_examples_mode)
+
+        if io_target_tokens > 0:
+            io_text, io_tokens = generate_io_examples(
+                code_patterns=io_code_patterns,
+                source_language=io_source or "Japanese",
+                target_language=io_target or "English",
+                target_tokens=io_target_tokens,
+            )
+            if io_text:
+                _add("io_examples", io_text)
 
     # --- 3. Style ---
     if style_enabled:
