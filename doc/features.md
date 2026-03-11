@@ -473,6 +473,7 @@ GLOSSARY & AUTOMATIC DETECTION
 - Track context for proper names (female/male, pronouns, honorifics)
 - Optional LLM-based enhancement: Get AI-suggested translations and gender for names
 - Helps AI translator maintain consistency across files
+- **Table Sorting**: Glossary and Code Database tables sort by count (highest first) by default. All column headers are clickable — ascending (A→Z), descending (Z→A), third click resets to count. Active sort column shows ▲/▼ arrow. Manifest saves entries in count-descending order.
 
 GAME SUMMARY & PROJECT CONTEXT
 - Provide story context to help the AI understand your game/story
@@ -901,6 +902,8 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
       - **Glossary** (default: Enabled) — button in collapsible header
       - **Code Database** (default: Enabled) — button in collapsible header
       - **Knowledge Base** (default: Enabled) — existing button, enhanced
+    - Disabled text fields (Summary, Style, Tone, System Instructions) are visually greyed out with `THEME.bg_disabled` / `THEME.text_disabled` colours
+    - Save, Delete, and Toggle buttons for Style, Tone, and System Instructions are right-aligned (matching Summary)
     - Toggle state persists to manifest via `*_enabled` metadata keys
     - Disabled sections are excluded from prompt assembly in `build_full_system_prompt()`
     - Collapsible sections collapse and disable their collapse button when toggled off

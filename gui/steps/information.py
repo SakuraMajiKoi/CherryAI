@@ -1075,22 +1075,21 @@ class InformationStep(BaseStep):
             )
         )
 
-        ttk.Button(
-            style_header, text="💾 Save", width=7,
-            command=self._save_style_preset,
-        ).pack(side="left", padx=2)
-        ttk.Button(
-            style_header, text="🗑 Delete", width=10,
-            command=self._delete_style_preset,
-        ).pack(side="left", padx=2)
-
-        # Enable/Disable toggle for Style
+        # Enable/Disable toggle for Style (right-aligned)
         self._style_enabled_var = tk.BooleanVar(value=False)
         self._style_toggle_btn = ttk.Button(
             style_header, text="Disabled", width=8,
             command=self._toggle_style_enabled,
         )
-        self._style_toggle_btn.pack(side="left", padx=(5, 0))
+        self._style_toggle_btn.pack(side="right", padx=(5, 0))
+        ttk.Button(
+            style_header, text="🗑 Delete", width=10,
+            command=self._delete_style_preset,
+        ).pack(side="right", padx=2)
+        ttk.Button(
+            style_header, text="💾 Save", width=7,
+            command=self._save_style_preset,
+        ).pack(side="right", padx=2)
 
         # Prompt text field (writable) — this is what goes into the prompt
         self._style_var = tk.StringVar()
@@ -1144,22 +1143,21 @@ class InformationStep(BaseStep):
             )
         )
 
-        ttk.Button(
-            tone_header, text="💾 Save", width=7,
-            command=self._save_tone_preset,
-        ).pack(side="left", padx=2)
-        ttk.Button(
-            tone_header, text="🗑 Delete", width=10,
-            command=self._delete_tone_preset,
-        ).pack(side="left", padx=2)
-
-        # Enable/Disable toggle for Tone
+        # Enable/Disable toggle for Tone (right-aligned)
         self._tone_enabled_var = tk.BooleanVar(value=False)
         self._tone_toggle_btn = ttk.Button(
             tone_header, text="Disabled", width=8,
             command=self._toggle_tone_enabled,
         )
-        self._tone_toggle_btn.pack(side="left", padx=(5, 0))
+        self._tone_toggle_btn.pack(side="right", padx=(5, 0))
+        ttk.Button(
+            tone_header, text="🗑 Delete", width=10,
+            command=self._delete_tone_preset,
+        ).pack(side="right", padx=2)
+        ttk.Button(
+            tone_header, text="💾 Save", width=7,
+            command=self._save_tone_preset,
+        ).pack(side="right", padx=2)
 
         # Prompt text field (writable)
         self._tone_var = tk.StringVar()
@@ -1254,9 +1252,23 @@ class InformationStep(BaseStep):
             height=8,
             selectmode="extended",
         )
-        self._char_tree.heading("original", text="Original")
-        self._char_tree.heading("translation", text="Translation")
-        self._char_tree.heading("notes", text="Notes")
+        self._char_tree.heading(
+            "original", text="Original",
+            command=lambda: self._on_char_heading_click("original"),
+        )
+        self._char_tree.heading(
+            "translation", text="Translation",
+            command=lambda: self._on_char_heading_click("translation"),
+        )
+        self._char_tree.heading(
+            "notes", text="Notes",
+            command=lambda: self._on_char_heading_click("notes"),
+        )
+
+        # Sort state: None = default count sort
+        self._char_sort_col: Optional[str] = None
+        self._char_sort_reverse: bool = False
+        self._char_sort_clicks: int = 0
 
         self._char_tree.column("original", width=120)
         self._char_tree.column("translation", width=120)
@@ -1468,10 +1480,27 @@ class InformationStep(BaseStep):
             height=8,
             selectmode="extended",
         )
-        self._code_tree.heading("pattern", text="Pattern")
-        self._code_tree.heading("translation", text="Translation")
-        self._code_tree.heading("category", text="Category")
-        self._code_tree.heading("action", text="Action")
+        self._code_tree.heading(
+            "pattern", text="Pattern",
+            command=lambda: self._on_code_heading_click("pattern"),
+        )
+        self._code_tree.heading(
+            "translation", text="Translation",
+            command=lambda: self._on_code_heading_click("translation"),
+        )
+        self._code_tree.heading(
+            "category", text="Category",
+            command=lambda: self._on_code_heading_click("category"),
+        )
+        self._code_tree.heading(
+            "action", text="Action",
+            command=lambda: self._on_code_heading_click("action"),
+        )
+
+        # Sort state: None = default count sort
+        self._code_sort_col: Optional[str] = None
+        self._code_sort_reverse: bool = False
+        self._code_sort_clicks: int = 0
 
         self._code_tree.column("pattern", width=130)
         self._code_tree.column("translation", width=110)
@@ -1779,6 +1808,40 @@ class InformationStep(BaseStep):
     # Section toggle helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _apply_widget_enabled_state(
+        widgets: list,
+        enabled: bool,
+    ) -> None:
+        """Apply enabled/disabled visual state to a list of widgets.
+
+        For tk.Text / ScrolledText widgets this also sets background and
+        foreground colours so the field appears visually greyed out
+        (matching the spinbox disabled appearance).
+
+        Args:
+            widgets: Widgets to update.
+            enabled: Whether the section is enabled.
+        """
+        state = "normal" if enabled else "disabled"
+        for w in widgets:
+            try:
+                w.configure(state=state)
+            except tk.TclError:
+                pass
+            # Visual greying for Text-based widgets (ScrolledText, tk.Text)
+            if isinstance(w, tk.Text):
+                if enabled:
+                    w.configure(
+                        background="white",
+                        foreground="black",
+                    )
+                else:
+                    w.configure(
+                        background=THEME.bg_disabled,
+                        foreground=THEME.text_disabled,
+                    )
+
     def _toggle_section_enabled(
         self,
         var: tk.BooleanVar,
@@ -1803,12 +1866,7 @@ class InformationStep(BaseStep):
 
         # Grey out / restore associated widgets
         if widgets:
-            state = "normal" if enabled else "disabled"
-            for w in widgets:
-                try:
-                    w.configure(state=state)
-                except tk.TclError:
-                    pass
+            self._apply_widget_enabled_state(widgets, enabled)
 
         # Persist to manifest
         mgr = self.manifest_manager
@@ -2521,22 +2579,21 @@ class InformationStep(BaseStep):
             )
         )
 
-        ttk.Button(
-            si_header, text="💾 Save", width=7,
-            command=self._save_si_preset,
-        ).pack(side="left", padx=2)
-        ttk.Button(
-            si_header, text="🗑 Delete", width=10,
-            command=self._delete_si_preset,
-        ).pack(side="left", padx=2)
-
-        # Enable/Disable toggle for System Instructions
+        # Enable/Disable toggle for System Instructions (right-aligned)
         self._si_enabled_var = tk.BooleanVar(value=True)
         self._si_toggle_btn = ttk.Button(
             si_header, text="Enabled", width=8,
             command=self._toggle_si_enabled,
         )
-        self._si_toggle_btn.pack(side="left", padx=(5, 0))
+        self._si_toggle_btn.pack(side="right", padx=(5, 0))
+        ttk.Button(
+            si_header, text="🗑 Delete", width=10,
+            command=self._delete_si_preset,
+        ).pack(side="right", padx=2)
+        ttk.Button(
+            si_header, text="💾 Save", width=7,
+            command=self._save_si_preset,
+        ).pack(side="right", padx=2)
 
         # Prompt text field (writable)
         self._notes_text = scrolledtext.ScrolledText(
@@ -2943,8 +3000,8 @@ class InformationStep(BaseStep):
             messagebox.showwarning("No Selection", "Please select a character to edit.")
             return
 
-        idx = self._char_tree.index(selection[0])
-        if idx < len(self._metadata.characters):
+        idx = self._get_char_idx(selection[0])
+        if 0 <= idx < len(self._metadata.characters):
             char = self._metadata.characters[idx]
             dialog = CharacterDialog(self, "Edit Character", char)
             if dialog.result:
@@ -2976,7 +3033,7 @@ class InformationStep(BaseStep):
             return
         # Collect indices in reverse order to avoid index shifting
         indices = sorted(
-            [self._char_tree.index(item) for item in selection],
+            {self._get_char_idx(item) for item in selection} - {-1},
             reverse=True,
         )
         for idx in indices:
@@ -3285,8 +3342,8 @@ class InformationStep(BaseStep):
 
         col_key = columns[col_idx]
         field_key = field_map[col_key]
-        idx = self._char_tree.index(item)
-        if idx >= len(self._metadata.characters):
+        idx = self._get_char_idx(item)
+        if idx < 0 or idx >= len(self._metadata.characters):
             return
 
         char = self._metadata.characters[idx]
@@ -3436,17 +3493,72 @@ class InformationStep(BaseStep):
         dialog.geometry(f"+{x}+{y}")
 
     def _refresh_character_list(self) -> None:
-        """Refresh character treeview."""
+        """Refresh character treeview.
+
+        Default sort: by count descending (highest first).
+        Column click overrides sort; three clicks on same column resets.
+        """
         for item in self._char_tree.get_children():
             self._char_tree.delete(item)
 
-        for char in self._metadata.characters:
-            # Column order: original, translation, notes
+        # Build indexed list to preserve tag mapping
+        characters = list(enumerate(self._metadata.characters))
+
+        if self._char_sort_col is None:
+            # Default: sort by count descending
+            characters.sort(key=lambda x: (-x[1].count, x[1].original_name))
+        else:
+            col = self._char_sort_col
+            key_map = {
+                "original": lambda x: x[1].original_name.lower(),
+                "translation": lambda x: x[1].translation.lower(),
+                "notes": lambda x: x[1].notes.lower(),
+            }
+            characters.sort(
+                key=key_map.get(col, lambda x: ""),
+                reverse=self._char_sort_reverse,
+            )
+
+        for idx, char in characters:
             self._char_tree.insert(
                 "",
                 "end",
+                tags=(f"char_{idx}",),
                 values=(char.original_name, char.translation, char.notes),
             )
+
+        self._update_char_heading_arrows()
+
+    def _on_char_heading_click(self, col: str) -> None:
+        """Handle column header click on character treeview.
+
+        First click: ascending.  Second click: descending.
+        Third click on same column: reset to default count sort.
+        """
+        if self._char_sort_col == col:
+            self._char_sort_clicks += 1
+            if self._char_sort_clicks >= 3:
+                self._char_sort_col = None
+                self._char_sort_reverse = False
+                self._char_sort_clicks = 0
+            else:
+                self._char_sort_reverse = not self._char_sort_reverse
+        else:
+            self._char_sort_col = col
+            self._char_sort_reverse = False
+            self._char_sort_clicks = 1
+        self._refresh_character_list()
+
+    def _update_char_heading_arrows(self) -> None:
+        """Update character treeview heading text with sort arrows."""
+        base = {"original": "Original", "translation": "Translation",
+                "notes": "Notes"}
+        for col, text in base.items():
+            if self._char_sort_col == col:
+                arrow = " \u25bc" if self._char_sort_reverse else " \u25b2"
+                self._char_tree.heading(col, text=text + arrow)
+            else:
+                self._char_tree.heading(col, text=text)
 
     def _on_char_context_menu(self, event: tk.Event) -> None:
         """Show context menu on right-click in character treeview."""
@@ -3476,10 +3588,23 @@ class InformationStep(BaseStep):
         finally:
             menu.grab_release()
 
+    def _get_char_idx(self, item: str) -> int:
+        """Extract character index from treeview item tags.
+
+        Returns -1 if no valid tag is found.
+        """
+        for tag in self._char_tree.item(item, "tags"):
+            if isinstance(tag, str) and tag.startswith("char_"):
+                try:
+                    return int(tag[5:])
+                except ValueError:
+                    pass
+        return -1
+
     def _clear_character_notes(self, item: str) -> None:
         """Clear the notes field for the selected character."""
-        idx = self._char_tree.index(item)
-        if idx >= len(self._metadata.characters):
+        idx = self._get_char_idx(item)
+        if idx < 0 or idx >= len(self._metadata.characters):
             return
         self._metadata.characters[idx].notes = ""
         self._refresh_character_list()
@@ -3865,22 +3990,36 @@ class InformationStep(BaseStep):
     def _refresh_code_pattern_list(self) -> None:
         """Refresh code pattern treeview with collapsible instances.
 
-        Patterns that have instances are prefixed with [+] or [-] in the
-        pattern column.  When expanded, instance sub-rows are shown indented
-        below the parent.  Patterns with instances sort before those without.
+        Default sort: instances first, then by count descending, then
+        alphabetical.  Column click overrides sort; three clicks on
+        same column resets to default.
         """
         for item in self._code_tree.get_children():
             self._code_tree.delete(item)
 
-        # Sort: patterns with instances first, then alphabetical
         patterns = list(enumerate(self._metadata.code_patterns))
-        patterns.sort(
-            key=lambda x: (
-                0 if x[1].instances else 1,
-                -x[1].count,
-                x[1].pattern,
+
+        if self._code_sort_col is None:
+            # Default: instances first, count descending, alpha
+            patterns.sort(
+                key=lambda x: (
+                    0 if x[1].instances else 1,
+                    -x[1].count,
+                    x[1].pattern,
+                )
             )
-        )
+        else:
+            col = self._code_sort_col
+            key_map = {
+                "pattern": lambda x: x[1].pattern.lower(),
+                "translation": lambda x: x[1].translation.lower(),
+                "category": lambda x: x[1].category.lower(),
+                "action": lambda x: x[1].action.lower(),
+            }
+            patterns.sort(
+                key=key_map.get(col, lambda x: ""),
+                reverse=self._code_sort_reverse,
+            )
 
         for idx, pattern in patterns:
             has_inst = bool(pattern.instances)
@@ -3917,6 +4056,39 @@ class InformationStep(BaseStep):
                             "",
                         ),
                     )
+
+        self._update_code_heading_arrows()
+
+    def _on_code_heading_click(self, col: str) -> None:
+        """Handle column header click on code pattern treeview.
+
+        First click: ascending.  Second click: descending.
+        Third click on same column: reset to default count sort.
+        """
+        if self._code_sort_col == col:
+            self._code_sort_clicks += 1
+            if self._code_sort_clicks >= 3:
+                self._code_sort_col = None
+                self._code_sort_reverse = False
+                self._code_sort_clicks = 0
+            else:
+                self._code_sort_reverse = not self._code_sort_reverse
+        else:
+            self._code_sort_col = col
+            self._code_sort_reverse = False
+            self._code_sort_clicks = 1
+        self._refresh_code_pattern_list()
+
+    def _update_code_heading_arrows(self) -> None:
+        """Update code pattern treeview heading text with sort arrows."""
+        base = {"pattern": "Pattern", "translation": "Translation",
+                "category": "Category", "action": "Action"}
+        for col, text in base.items():
+            if self._code_sort_col == col:
+                arrow = " \u25bc" if self._code_sort_reverse else " \u25b2"
+                self._code_tree.heading(col, text=text + arrow)
+            else:
+                self._code_tree.heading(col, text=text)
 
     def _on_import_code_patterns(self) -> None:
         """Import code patterns from Analysis step.
@@ -5188,12 +5360,7 @@ class InformationStep(BaseStep):
             enabled = bool(val) if not isinstance(val, bool) else val
             var.set(enabled)
             btn.config(text="Enabled" if enabled else "Disabled")
-            state = "normal" if enabled else "disabled"
-            for w in widgets:
-                try:
-                    w.configure(state=state)
-                except tk.TclError:
-                    pass
+            self._apply_widget_enabled_state(widgets, enabled)
 
         # Collapsible sections: Glossary, Code Database
         for meta_key, default, var, btn, widget_name in [
@@ -5307,7 +5474,11 @@ class InformationStep(BaseStep):
         if self.manifest_manager is None or not self.manifest_manager.is_loaded:
             return
         
-        characters_data = [c.to_dict() for c in self._metadata.characters]
+        # Save sorted by count descending for consistent manifest order
+        sorted_chars = sorted(
+            self._metadata.characters, key=lambda c: -c.count,
+        )
+        characters_data = [c.to_dict() for c in sorted_chars]
         save_character_notes(self.manifest_manager, characters_data)
         logger.debug("Saved %d characters to manifest", len(characters_data))
     
@@ -5335,7 +5506,11 @@ class InformationStep(BaseStep):
         if self.manifest_manager is None or not self.manifest_manager.is_loaded:
             return
         
-        patterns_data = [p.to_dict() for p in self._metadata.code_patterns]
+        # Save sorted by count descending for consistent manifest order
+        sorted_patterns = sorted(
+            self._metadata.code_patterns, key=lambda p: -p.count,
+        )
+        patterns_data = [p.to_dict() for p in sorted_patterns]
         save_code_glossary(self.manifest_manager, patterns_data)
         logger.debug("Saved %d code patterns to manifest", len(patterns_data))
     

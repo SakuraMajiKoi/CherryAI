@@ -2607,5 +2607,43 @@ add file list filter, and implement cross-file preview search with automatic fil
 **Tests (60 total):**
 - `dev/test_input_step_improvements.py` — 60 tests (all passing)
 
+=============================================================================
+TASK: INFORMATION STEP UI REFINEMENTS
+=============================================================================
+Status: ✅ COMPLETE
+
+Goal: Three visual and UX refinements to the Information Step (Step 2).
+
+1. ✅ Disabled Textbox Greying (`gui/steps/information.py`)
+   - `_apply_widget_enabled_state()` static method: sets bg/fg for ScrolledText
+   - THEME.bg_disabled / THEME.text_disabled when disabled; white/black when enabled
+   - Applied to Summary, Style, Tone, System Instructions fields
+   - Called by `_toggle_section_enabled()` and `_load_section_toggles()`
+
+2. ✅ Button Right-Alignment (`gui/steps/information.py`)
+   - Save, Delete, Toggle buttons for Style, Tone, SI now use `side="right"` pack
+   - Reversed pack order (toggle → delete → save) for correct visual left-to-right
+   - Matches existing Summary section button layout
+
+3. ✅ Table Sorting by Count + Clickable Headers (`gui/steps/information.py`)
+   - Glossary (Characters) defaults to count descending, Code Database already did
+   - All column headings clickable: ascending → descending → reset to count
+   - ▲/▼ arrows in active sort column heading
+   - Glossary uses `char_{idx}` tags via `_get_char_idx()` for index mapping
+   - Manifest saves in count-descending order for both tables
+   - New attributes: `_char_sort_col`, `_char_sort_reverse`, `_char_sort_clicks`
+   - New attributes: `_code_sort_col`, `_code_sort_reverse`, `_code_sort_clicks`
+   - New methods: `_on_char_heading_click()`, `_update_char_heading_arrows()`
+   - New methods: `_on_code_heading_click()`, `_update_code_heading_arrows()`
+   - New method: `_get_char_idx()`
+
+**Files Modified:**
+- `gui/steps/information.py` — All 3 refinements
+
+**Tests (76 total in test_section_toggles.py):**
+- TestDisabledTextboxGreyOut — 11 tests
+- TestButtonAlignment — 11 tests
+- TestTableSorting — 19 tests
+
 END OF ROADMAP
 =============================================================================

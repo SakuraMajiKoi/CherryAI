@@ -1956,6 +1956,8 @@ The Costs step has **two distinct estimation states** tracked separately:
 - If Custom Text is empty/deleted: Dropdown becomes active, preset used in prompt
 - Delete button width=10 to prevent emoji/text clipping
 
+**Button Alignment**: Save, Delete and Enabled|Disabled buttons are right-aligned (pack side="right") matching the Summary section layout.
+
 **Prompt Format**:
 - Style: `Style: [Full Display Text or Custom Value]`
 - Tone: `Tone: [Full Display Text or Custom Value]`
@@ -1973,9 +1975,12 @@ The Costs step has **two distinct estimation states** tracked separately:
 | Component | Type | Behavior |
 |-----------|------|----------|
 | Preset Dropdown | Combobox | Default / Custom / user-saved presets |
-| Save Preset | Button | "💾 Save" prompts for name, saves text + name |
-| Delete Preset | Button | "🗑 Delete" removes selected user preset |
-| Instructions Text | ScrolledText | Multi-line input, 6 rows default |
+| Save Preset | Button | "💾 Save" prompts for name, saves text + name (right-aligned) |
+| Delete Preset | Button | "🗑 Delete" removes selected user preset (right-aligned) |
+| Enabled/Disabled | Button | Toggle section on/off (right-aligned) |
+| Instructions Text | ScrolledText | Multi-line input, 4 rows; greyed out when disabled |
+
+**Button Alignment**: Save, Delete and Enabled|Disabled buttons are right-aligned (pack side="right") matching the Summary section layout.
 
 **Default Text**: `DEFAULT_SYSTEM_INSTRUCTIONS` loaded from `default/example.txt` at import time.
 
@@ -2119,7 +2124,7 @@ The Costs step has **two distinct estimation states** tracked separately:
 
 | Component | Type | Function |
 |-----------|------|----------|
-| Character Table | Treeview | Columns: Original, Translation, Notes |
+| Character Table | Treeview | Columns: Original, Translation, Notes. Default sort: count descending (highest first). Clickable column headers cycle ascending → descending → reset to count. Active sort column shows ▲/▼ arrow. |
 | Context Menu | Right-click | Clear Notes, Edit..., Remove |
 | Add Character | Button | Add new character entry |
 | Edit | Button | Edit selected character via CharacterDialog (Notes field) |
@@ -2127,13 +2132,15 @@ The Costs step has **two distinct estimation states** tracked separately:
 | Infer Gender | Button | Heuristic gender inference using loaded text data |
 | Import from Analysis | Button | Import detected speakers using `_get_analysis_step_data()` helper |
 
+**Table Sorting**: Characters display sorted by internal `count` field (highest first) by default. Clicking any column header sorts alphabetically A→Z; clicking the same header again reverses to Z→A; a third click resets to the default count-based order. Sort state tracked via `_char_sort_col`, `_char_sort_reverse`, `_char_sort_clicks`. Row-to-data mapping uses `char_{idx}` tags (via `_get_char_idx()`) so display order is independent of `_metadata.characters` list order.
+
 **Prompt Format**: Character entries included as context:
 ```
 Characters:
 - [Original] ([Translation]): [Notes]
 ```
 
-**Manifest Key**: `characters[]` (via `save_character_notes()` / `load_character_notes()`)
+**Manifest Key**: `characters[]` (via `save_character_notes()` / `load_character_notes()`). Saved in count-descending order for consistent manifest ordering.
 
 ---
 
@@ -2163,6 +2170,14 @@ Characters:
 - Parent frames use `rowconfigure(weight=1)` to allow table growth
 - Canvas `<Configure>` binding stretches inner frame to viewport height so tables fill the window when maximized
 
+**Column Sorting** (Glossary + Code Database):
+- Both tables default to **count descending** (highest first). Glossary sort key: `(-count, original_name)`. Code Database sort key: `(instances first, -count, pattern)`.
+- All column headings are clickable. Click cycle per column: **ascending (A→Z)** → **descending (Z→A)** → **reset to count**. Active sort column shows ▲ (ascending) or ▼ (descending) in heading text.
+- Sort state per tree: `_char_sort_col` / `_code_sort_col` (column name or `None`), `_char_sort_reverse` / `_code_sort_reverse`, `_char_sort_clicks` / `_code_sort_clicks`.
+- Clicking a different column resets to ascending on that column.
+- Glossary uses `char_{idx}` tags for row-to-data mapping; Code Database already uses `pat_{idx}` tags. Both are independent of list order in `_metadata`.
+- **Manifest save order**: Both `_save_characters_to_manifest()` and `_save_code_patterns_to_manifest()` sort by count descending before serialization.
+
 ---
 
 #### Data Flow
@@ -2186,6 +2201,7 @@ Characters:
 **Stored In**:
 - Manifest: `step_state.Information.data.metadata{}` (source_language, target_language, genre, style, tone, summary, custom_notes, characters, code_patterns, system_instructions, si_preset, io_examples)
 - Toggle flags: `step_state.Information.data.metadata{}` (`genre_enabled`, `summary_enabled`, `style_enabled`, `tone_enabled`, `system_instructions_enabled`, `glossary_enabled`, `code_database_enabled`) — written by `_toggle_section_enabled()` via `set_info_metadata_field()`, preserved by `on_leave()` merging BooleanVar values into the metadata dict after `ProjectMetadata.to_dict()`
+- Toggle visual state: When disabled, ScrolledText widgets (Summary, Style, Tone, System Instructions) are greyed out with `THEME.bg_disabled` background and `THEME.text_disabled` foreground via `_apply_widget_enabled_state()`. Spinboxes and combos use native `state="disabled"`. When enabled, background/foreground are restored to white/black.
 - I/O Examples setting: `metadata.io_examples` — controls example generation mode (`disabled`|`fill`|`1500`|`2500`); stored in manifest, NOT in INI
 - Step data: `Information.{fields...}`
 

@@ -3993,10 +3993,11 @@ which prompt sections are included or excluded by `build_full_system_prompt()`.
 
 ---
 
-### dev/test_section_toggles.py (35 tests)
+### dev/test_section_toggles.py (76 tests)
 
 End-to-end section toggle tests validating toggle persistence across tab changes,
-preview request gating, estimation integration, and Save button removal.
+preview request gating, estimation integration, Save button removal, disabled
+textbox visual styling, button alignment, and table sorting behaviour.
 
 #### TestPromptToggleGating (15 tests)
 
@@ -4072,6 +4073,62 @@ preview request gating, estimation integration, and Save button removal.
 | `test_toggle_flag_roundtrip_via_manifest` | Flags survive set → get roundtrip |
 | `test_enabled_flags_in_step_data` | Flags present in `get_step_data()` metadata |
 | `test_load_toggles_reads_from_manifest` | `_load_section_toggles()` reads stored flags |
+
+#### TestDisabledTextboxGreyOut (11 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_apply_widget_enabled_state_method_exists` | Static method exists on InformationStep |
+| `test_apply_widget_enabled_state_is_static` | Method is a staticmethod |
+| `test_toggle_section_calls_apply_widget_enabled_state` | `_toggle_section_enabled` delegates to helper |
+| `test_load_section_toggles_calls_apply_widget_enabled_state` | `_load_section_toggles` delegates to helper |
+| `test_apply_widget_sets_text_bg_fg_disabled` | Disabled tk.Text widgets get THEME.bg_disabled / text_disabled |
+| `test_apply_widget_restores_text_bg_fg_enabled` | Enabled tk.Text widgets get white / black |
+| `test_apply_widget_non_text_widget_no_bg_change` | Non-Text widgets skip bg/fg changes |
+| `test_summary_toggle_widgets_include_summary_text` | Summary section includes ScrolledText in toggle widget list |
+| `test_style_toggle_widgets_include_style_text` | Style section includes ScrolledText in toggle widget list |
+| `test_tone_toggle_widgets_include_tone_text` | Tone section includes ScrolledText in toggle widget list |
+| `test_si_toggle_widgets_include_notes_text` | SI section includes ScrolledText in toggle widget list |
+
+#### TestButtonAlignment (11 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_style_save_button_right_aligned` | Style Save button uses `side="right"` |
+| `test_style_delete_button_right_aligned` | Style Delete button uses `side="right"` |
+| `test_style_toggle_button_right_aligned` | Style Toggle button uses `side="right"` |
+| `test_tone_save_button_right_aligned` | Tone Save button uses `side="right"` |
+| `test_tone_delete_button_right_aligned` | Tone Delete button uses `side="right"` |
+| `test_tone_toggle_button_right_aligned` | Tone Toggle button uses `side="right"` |
+| `test_si_save_button_right_aligned` | SI Save button uses `side="right"` |
+| `test_si_delete_button_right_aligned` | SI Delete button uses `side="right"` |
+| `test_si_toggle_button_right_aligned` | SI Toggle button uses `side="right"` |
+| `test_summary_toggle_right_aligned` | Summary toggle uses `side="right"` (reference) |
+| `test_no_left_pack_for_style_buttons` | Style section has no `side="left"` for buttons |
+
+#### TestTableSorting (19 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_char_refresh_sorts_by_count_desc` | Default character sort: count descending |
+| `test_char_refresh_adds_tags` | Each character row gets `char_{idx}` tag |
+| `test_get_char_idx_extracts_tag` | `_get_char_idx` parses tag correctly |
+| `test_get_char_idx_returns_negative_for_missing_tag` | Missing tag returns -1 |
+| `test_char_heading_click_first_sets_ascending` | First click sets ascending |
+| `test_char_heading_click_second_sets_descending` | Second click switches to descending |
+| `test_char_heading_click_third_resets_to_count` | Third click resets to count sort |
+| `test_char_heading_click_different_col_resets` | New column resets to ascending |
+| `test_char_heading_arrows_show_on_sorted_col` | Active column shows ▲ |
+| `test_char_heading_arrows_descending` | Descending shows ▼ |
+| `test_char_heading_arrows_cleared_on_reset` | Reset removes all arrows |
+| `test_code_heading_click_cycle` | Code tree heading click cycles correctly |
+| `test_code_refresh_default_sorts_by_count_desc` | Default code sort: instances first, count desc |
+| `test_char_save_manifest_sorted_by_count` | Characters saved in count-desc order |
+| `test_code_save_manifest_sorted_by_count` | Code patterns saved in count-desc order |
+| `test_char_headings_have_command` | Character headings have click commands |
+| `test_code_headings_have_command` | Code headings have click commands |
+| `test_char_column_sort_ascending` | A-Z sort for character names |
+| `test_char_column_sort_descending` | Z-A sort for character names |
 
 ```bash
 # Run section toggle tests
