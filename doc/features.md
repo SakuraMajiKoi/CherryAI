@@ -247,7 +247,7 @@ KEY FEATURES
 
 FULL TABLE VIEW
 - **Menu Bar Access**: Direct access via "Full Table View" entry in the menu bar (not a dropdown)
-- **Menu Bar Layout**: File (dropdown), Full Table View (direct), Options (direct), Help (dropdown)
+- **Menu Bar Layout**: File (dropdown), Full Table View (direct), API Log (direct), Options (direct), Help (dropdown)
 - **Spreadsheet View**: Displays all manifest line entries with named columns (Line #, Tags, Original, Preprocessed, Translated, Postprocessed, Wrapped, Overwrite, Quality Assurance, Log, Tags (Internal))
 - **Column Display Names**: All columns use human-readable display names (e.g., idx→Line #, orig→Original, tl→Translated)
 - **Column Auto-Hide**: Empty columns hidden by default; Tags (context_marker) hidden by default
@@ -267,6 +267,22 @@ FULL TABLE VIEW
 - **Pagination**: Show All / Show X with configurable page size (default 100); "Showing X / Y Lines" status
 - **Save/Reset/Diff**: Save changes to manifest (all or selected); Reset from manifest data; Diff mode shows only changed rows
 - **Close Prompt**: Asks to save or discard unsaved changes on close
+
+API LOG
+- **Menu Bar Access**: Direct access via "API Log" entry in the menu bar (direct button, no dropdown)
+- **Non-Blocking Window**: Opens as a separate Toplevel window; does not lock the main application
+- **Live Updates**: Subscribes to the API log store for real-time display of new entries as API calls complete
+- **Category Filter**: Dropdown to filter by Main Translation, Term Translation, Gender Inference, or Other (probing/testing)
+- **View Mode Switch**: Radio buttons to toggle between Sent, Received, or Both views
+- **Search Bar**: Case-insensitive text search across all entry fields with yellow highlights
+- **Color-Coded Headers**: Green (✔ success), Yellow (⚠ recovered), Red (✘ failed) status indicators
+- **Sent Block**: Displays model, provider, temperature, chunk info, system prompt, and user content
+- **Received Block**: Displays token statistics (prompt/completion/total/cached/reasoning), duration, finish reason, error messages, and response content
+- **Status Bar**: Shows entry count (filtered vs. total) and aggregated token totals
+- **Per-Project Persistence**: Log stored as `.api_log.jsonl` alongside the manifest file; referenced by manifest "log" key
+- **Infinite Scroll**: Text widget with word wrap supports unlimited entries
+- **Clear Log**: Button to clear all entries from memory
+- **Chronological Order**: Entries displayed in order of occurrence; sent/received always coupled together
 
 INTEGRATED AI TRANSLATION
 - **1-Click Flow**: Use the "1-Click" button to run the entire pipeline (Load -> Pre -> Translate -> Post) automatically.

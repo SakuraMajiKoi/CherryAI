@@ -661,6 +661,9 @@ class ManifestManager:
                 "ExportProcessingLogs": defaults.get("output_export_processing_logs", False),
                 "ExportGlossaryEntries": defaults.get("output_export_glossary_entries", False),
             },
+
+            # === API Log ===
+            "log": "",
         }
     
     def _get_manifest_defaults(self) -> Dict[str, Any]:
@@ -1019,6 +1022,16 @@ class ManifestManager:
         # Initialize lines and filedir using the *full* root for rel_paths
         self._initialize_lines_from_files(source_files, full_root)
         
+        # Initialize API log for this project
+        log_filename = self._manifest_path.stem + ".api_log.jsonl"
+        self._manifest_data["log"] = log_filename
+        log_path = self._manifest_path.parent / log_filename
+        try:
+            from .api_log import reset_api_log_store
+            reset_api_log_store(log_path)
+        except Exception:
+            logger.debug("API log store init skipped")
+
         self._dirty = True
         self._current_step = 0
         self.save()
@@ -1114,6 +1127,21 @@ class ManifestManager:
             
             self._current_step = data.get("current_step", 0)
             self._dirty = False
+
+            # Load API log for this project
+            log_filename = data.get("log", "")
+            if log_filename:
+                log_path = manifest_path.parent / log_filename
+            else:
+                log_filename = manifest_path.stem + ".api_log.jsonl"
+                log_path = manifest_path.parent / log_filename
+                self._manifest_data["log"] = log_filename
+            try:
+                from .api_log import reset_api_log_store
+                store = reset_api_log_store(log_path)
+                store.load()
+            except Exception:
+                logger.debug("API log store load skipped")
             
             # Start autosave thread
             self.start_autosave()
@@ -1400,6 +1428,14 @@ class ManifestManager:
             os.replace(str(tmp_path), str(self._manifest_path))
 
             self._dirty = False
+
+            # Also persist the API log
+            try:
+                from .api_log import get_api_log_store
+                get_api_log_store().save()
+            except Exception:
+                logger.debug("API log save skipped")
+
             logger.debug("Saved manifest: %s", self._manifest_path)
             return True
 
@@ -1426,6 +1462,15 @@ class ManifestManager:
         if self._dirty and self._save_on_close:
             self.save()
         
+        # Clear API log store
+        try:
+            from .api_log import get_api_log_store
+            store = get_api_log_store()
+            store.save()
+            store.clear()
+        except Exception:
+            logger.debug("API log store close skipped")
+
         self._manifest_path = None
         self._manifest_data = self._create_empty_manifest()
         self._dirty = False

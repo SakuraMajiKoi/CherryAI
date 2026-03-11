@@ -28,7 +28,7 @@ TESTING REFERENCE
 
 For comprehensive test documentation, see `doc/tests.md`
 
-**Current Status:** 6278 tests passing (verified Q2 2026 via pytest)
+**Current Status:** 6315 tests passing (verified Q2 2026 via pytest)
 
 Two test types:
 - **Script Test**: pytest unit tests (fast, no LLM)
@@ -740,6 +740,14 @@ UPCOMING FEATURES
 See the image translation workflow: [Image Translation Workflow](image_translation_workflow.md)
 
 [Archived: Tasks 17.1–17.10 (Completed Features) → see doc/archived.md]
+
+COMPLETED: API Log Window (2026)
+   ✅ Core data module: functions/api_log.py (LogCategory, LogStatus, LogEntrySent, LogEntryReceived, LogEntry, APILogStore)
+   ✅ Hook logging into all API call sites: api_client.py, term_translation.py, API2Glossary.py, api_config.py
+   ✅ Per-project persistence: .api_log.jsonl alongside manifest, atomic saves, "log" manifest key
+   ✅ GUI: gui/dialogs/api_log_view.py (non-blocking Toplevel, search, category filter, view mode, color-coded entries, live updates)
+   ✅ Menu bar: "API Log" direct entry between Full Table View and Options
+   ✅ Tests: dev/test_api_log.py (37 tests — serialization, CRUD, filtering, subscription, persistence, singleton, enums)
 
 PENDING TASKS - QUALITY
 

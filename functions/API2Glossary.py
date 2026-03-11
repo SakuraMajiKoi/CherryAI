@@ -863,6 +863,32 @@ def _call_api_for_excerpt_custom(
 
     content = response.choices[0].message.content
     parsed = json.loads(content)
+
+    # Log to structured API log
+    try:
+        from .api_log import (
+            LogCategory, LogStatus, LogEntrySent, LogEntryReceived,
+            get_api_log_store,
+        )
+        _usage = response.usage
+        store = get_api_log_store()
+        store.log_pair(
+            LogCategory.GENDER_INFERENCE,
+            LogEntrySent(
+                model=model, user_content=user_prompt[:2000],
+                extra={"speaker": speaker},
+            ),
+            LogEntryReceived(
+                content=(content or "")[:2000],
+                prompt_tokens=_usage.prompt_tokens if _usage else 0,
+                completion_tokens=_usage.completion_tokens if _usage else 0,
+                total_tokens=getattr(_usage, "total_tokens", 0) if _usage else 0,
+            ),
+            LogStatus.SUCCESS,
+        )
+    except Exception:
+        pass
+
     return {
         "romaji": parsed.get("romaji", ""),
         "gender": _normalize_gender(parsed.get("gender", "Unsure")),

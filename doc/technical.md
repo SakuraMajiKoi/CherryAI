@@ -25,7 +25,7 @@ MODULE AWARENESS (Always check these when implementing features):
 - formats/      : 8 format handlers - file I/O for CSV, TXT, JSON, etc.
 - gui/steps/    : 10 workflow tabs - display and user interaction only
 - gui/components/: Reusable UI widgets (1 module: table.py)
-- gui/dialogs/  : Modal dialogs and forms (6 modules: global_options.py, project_dialog.py, input_dialog.py, loading_progress.py, password_dialog.py, table_view.py)
+- gui/dialogs/  : Modal dialogs and forms (7 modules: global_options.py, project_dialog.py, input_dialog.py, loading_progress.py, password_dialog.py, table_view.py, api_log_view.py)
 - gui/widgets/  : Reusable standalone widgets (1 module: password_strength.py) [NEW 2026]
 - gui/helpers/  : 7 adapter modules bridging GUI config to processing (mode, analysis, glossary, chunker, prompt, manifest_binding, tooltip)
 - gui/state/    : Application state management (1 module: store.py)
@@ -59,7 +59,7 @@ TABLE OF CONTENTS
    2.3 prepro_ops Field - Pre-processing operation tracking
    2.4 Processor Class - Core text processing engine
 
-3. FUNCTIONS/ MODULES (46 files - Core Shared Logic)
+3. FUNCTIONS/ MODULES (47 files - Core Shared Logic)
    ✅ = Verified exists | ⚠️ = Needs documentation | 🔗 = GUI integrated
    
    3.1  analysis.py ✅ - File analysis, metrics, glossary extraction
@@ -123,6 +123,7 @@ TABLE OF CONTENTS
    3.44 process_order.py ✅🔗 - Pre/post processing order management (Phase 26)
    3.45 usage_tracker.py ✅ - API usage analytics and tracking (Phase 17.5)
    3.46 estimation.py ✅ - Token estimation utilities (legacy CLI support)
+   3.47 api_log.py ✅🔗 - Structured API log store with per-project persistence (JSON lines format), category/status filtering, live subscriptions for GUI updates
    3.47 term_translation.py ✅🔗 - Unified term translation dispatcher (Romaji/LLM); json_schema structured output, prompt_type, configurable prompts
    
    3.48 glossaries/ (subfolder - 6 files)
@@ -345,6 +346,17 @@ TABLE OF CONTENTS
          - Change tracking: unsaved changes highlighted; close prompt to save/discard
          - Accessed via "Full Table View" menu bar entry (direct command, no dropdown)
          - _FileFilterDropdown helper: hierarchical listbox with scrolling and keyboard nav
+       - api_log_view.py - API Log viewer dialog (2026):
+         - APILogViewDialog: Non-blocking Toplevel window for viewing structured API log entries
+         - Toolbar: search entry, category filter combobox, view mode radio buttons (Sent/Received/Both), Clear Log button
+         - Log display: tk.Text widget with word wrap, color-coded tags (success=green, recovered=yellow, failed=red, pending=grey)
+         - Sent blocks: model, provider, temperature, chunk info, system prompt, user content
+         - Received blocks: token statistics, duration, finish reason, error messages, response content
+         - Status bar: filtered/total entry count, aggregated token totals
+         - Live updates: subscribes to APILogStore for real-time display; thread-safe via after() scheduling
+         - Category filter: All Categories, Main Translation, Term Translation, Gender Inference, Other
+         - Search: case-insensitive text search with yellow highlights across all entry fields
+         - Accessed via "API Log" menu bar entry (direct command, no dropdown)
 
    6.7 gui/widgets/ (2 files - 1 widget module) [NEW 2026]
        - __init__.py - Widget package
@@ -1008,6 +1020,9 @@ CherryAI/
 │   │                           bcrypt WF-10 + PBKDF2-SHA256 + Fernet AES-256
 │   │                           PasswordStrength class (HiveSystems 2025 tiers)
 │   │                           See doc/passwords.md
+│   ├── api_log.py          Structured API log store with per-project persistence [NEW 2026]
+│   │                           LogCategory, LogStatus, LogEntrySent, LogEntryReceived, LogEntry
+│   │                           APILogStore: entries, subscribe/unsubscribe, filtering, JSONL save/load
 │   ├── mock_translator.py  Mock translation engine with flaw injection (Phase 56)
 │   ├── validation.py       Pre/Post API validation (Session 13)
 │   ├── prompt_builder.py   Dynamic prompt construction with game summary
@@ -2512,6 +2527,20 @@ Logging Helper Methods:
 - `_format_lines_for_log(lines, prefix)`: Formats lines with numbered indices
   like `[  1]`, `[  2]` etc. for easy reference
 - `_format_translations_for_log(content)`: Parses JSON and formats output lines
+
+Structured API Log (NEW - 2026):
+- Separate from the text-based file logging above; provides machine-readable log for GUI display
+- Module: `functions/api_log.py`
+- `LogCategory(str, Enum)`: MAIN_TRANSLATION, TERM_TRANSLATION, GENDER_INFERENCE, OTHER
+- `LogStatus(str, Enum)`: SUCCESS (green), RECOVERED (yellow), FAILED (red), PENDING (awaiting response)
+- `LogEntrySent`: model, provider, temperature, system_prompt, user_content, chunk_index, total_chunks, line_count, extra
+- `LogEntryReceived`: content, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, finish_reason, error_message, duration_ms, extra
+- `LogEntry`: entry_id (int), timestamp, category, status, attempt, max_attempts, sent, received; to_dict() / from_dict()
+- `APILogStore`: singleton per project, entries list, subscribe/unsubscribe, log_sent/log_received/log_pair, get_filtered(category, status, search_text, view_mode), save/load (JSON lines format), clear
+- Persistence: `.api_log.jsonl` file alongside manifest, atomic writes (write .tmp → fsync → os.replace)
+- Manifest integration: `"log"` key in manifest with log filename; reset/load on create_new/load, save on manifest save, save+clear on close
+- Hooked into: api_client._translate_chunk (success), api_client._translate_single_line (success+failure), term_translation._translate_llm_batch (success+failure), API2Glossary._call_api_for_excerpt_custom (success), api_config.test_api_connection (success+failure), api_config.test_model_translation (success+failure)
+- GUI: `gui/dialogs/api_log_view.py` — non-blocking Toplevel, subscribes for live updates, search/filter/view mode controls
 
 Statistics Tracking (NEW - TASK 12):
 - `_total_prompt_tokens`: Running total of input tokens

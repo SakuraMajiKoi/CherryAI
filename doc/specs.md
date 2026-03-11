@@ -89,9 +89,10 @@ CherryAI is designed to achieve high-quality translation using LLMs through exte
 ### GUI Structure
 
 The GUI is organized as:
-- **Menu Bar**: File (dropdown), Full Table View (direct command), Options (direct command), Help (dropdown)
+- **Menu Bar**: File (dropdown), Full Table View (direct command), API Log (direct command), Options (direct command), Help (dropdown)
   - **New Project** (`_on_new_session`): Resets ManifestManager (creates empty manifest), resets SessionState, and calls `on_new_project()` on ALL step tabs to flush cached instance state (loaded files, analysis results, lines, estimation data, etc.). Prevents old project data from leaking into the new session.
 - **Full Table View** (`_on_full_table_view`): Opens FullTableViewDialog — spreadsheet-like view and editor for all manifest line entries. Requires a loaded project. Features: named columns (Line #, Tags, Original, Preprocessed, Translated, Postprocessed, Wrapped, Overwrite, Quality Assurance, Log, Tags (Internal)), column filter dropdown with Show All/Show Visible/Show Latest presets, all columns hideable, column selection bar for search/replace scoping, sort indicators (▲/▼) in headers, read-only Original with copy support, two-row search/replace toolbar, Results Only mode, file filter, RegEx search/replace, pagination, save/reset/diff.
+- **API Log** (`_on_api_log`): Opens APILogViewDialog — non-blocking viewer for structured API log entries. Requires a loaded project. Features: search bar, category filter (Main Translation/Term Translation/Gender Inference/Other), view mode switch (Sent/Received/Both), color-coded entries (green=success, yellow=recovered, red=failed), live updates via subscription, token statistics, per-project JSONL persistence alongside manifest.
 - **Options** (`_on_options`): Opens Global Options dialog directly from menu bar
 - **Step Tabs**: 10 workflow tabs (Steps 0-9) progressing from Input to Output
 - **Global Options**: Application-wide settings accessed via Options menu bar entry
@@ -105,7 +106,7 @@ The GUI is organized as:
 - `formats/`: 5+ file format handlers (expanding to support images and game engines)
 - `gui/steps/`: 10 workflow tabs
 - `gui/helpers/`: 6 adapter modules
-- `gui/dialogs/`: 6 dialog modules (incl. table_view.py)
+- `gui/dialogs/`: 7 dialog modules (incl. table_view.py, api_log_view.py)
 
 ### State Management
 

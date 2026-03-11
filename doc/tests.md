@@ -3222,7 +3222,8 @@ Thank you.
 | smoke_test/*.py | 5+ | Smoke tests |
 | test_provider_handshake.py | 188 | Provider Handshake: ABC, registry, validation, OpenAI/Google/Mistral/Anthropic/Local providers, APIClient integration, options.py migration, UI constraints, structured output |
 | test_provider_live_api.py | 11 | Live API tests: GPT-5-nano (no temp, reasoning) + GPT-4.1-nano (temp 0-2, no reasoning) |
-| **Total Script Tests** | **4240** | (+188 provider handshake, +11 live API) |
+| test_api_log.py | 37 | API Log: LogEntry serialization, APILogStore CRUD/filtering/subscription/persistence, singleton management, enum values, dataclass defaults |
+| **Total Script Tests** | **4277** | (+188 provider handshake, +11 live API, +37 API log) |
 | One_Click_Test.py | 7 stages | API integration |
 
 ### TASK 11: Integration Test - 200 Lines (Completed)

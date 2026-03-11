@@ -734,9 +734,42 @@ def test_api_connection(
         models = client.models.list()
         model_ids = [m.id for m in models]
         count = len(model_ids)
+        # Log to structured API log
+        try:
+            from .api_log import (
+                LogCategory, LogStatus, LogEntrySent, LogEntryReceived,
+                get_api_log_store,
+            )
+            store = get_api_log_store()
+            store.log_pair(
+                LogCategory.OTHER,
+                LogEntrySent(provider=provider, extra={"type": "connection_test"}),
+                LogEntryReceived(
+                    content=f"{count} model(s) available",
+                    extra={"model_count": count},
+                ),
+                LogStatus.SUCCESS,
+            )
+        except Exception:
+            pass
         return True, f"Connection successful — {count} model(s) available.", model_ids
     except Exception as exc:
         err_msg = str(exc)
+        # Log failure to structured API log
+        try:
+            from .api_log import (
+                LogCategory, LogStatus, LogEntrySent, LogEntryReceived,
+                get_api_log_store,
+            )
+            store = get_api_log_store()
+            store.log_pair(
+                LogCategory.OTHER,
+                LogEntrySent(provider=provider, extra={"type": "connection_test"}),
+                LogEntryReceived(error_message=err_msg[:500]),
+                LogStatus.FAILED,
+            )
+        except Exception:
+            pass
         # Extract the most useful part of the error
         if "401" in err_msg or "Unauthorized" in err_msg:
             return False, "Authentication failed — invalid API key.", []
@@ -859,8 +892,60 @@ def test_model_translation(
         )
         elapsed = _time.monotonic() - t0
         raw = response.choices[0].message.content or ""
+        # Log success to structured API log
+        try:
+            from .api_log import (
+                LogCategory, LogStatus, LogEntrySent, LogEntryReceived,
+                get_api_log_store,
+            )
+            _usage = getattr(response, "usage", None)
+            store = get_api_log_store()
+            store.log_pair(
+                LogCategory.OTHER,
+                LogEntrySent(
+                    model=model_id, provider=provider,
+                    temperature=0.2,
+                    system_prompt=system_prompt[:2000],
+                    user_content=user_msg[:2000],
+                    extra={"type": "model_translation_test"},
+                ),
+                LogEntryReceived(
+                    content=raw[:2000],
+                    prompt_tokens=getattr(_usage, "prompt_tokens", 0) if _usage else 0,
+                    completion_tokens=getattr(_usage, "completion_tokens", 0) if _usage else 0,
+                    total_tokens=getattr(_usage, "total_tokens", 0) if _usage else 0,
+                    duration_ms=round(elapsed * 1000),
+                ),
+                LogStatus.SUCCESS,
+            )
+        except Exception:
+            pass
     except Exception as exc:
         elapsed = _time.monotonic() - t0
+        # Log failure to structured API log
+        try:
+            from .api_log import (
+                LogCategory, LogStatus, LogEntrySent, LogEntryReceived,
+                get_api_log_store,
+            )
+            store = get_api_log_store()
+            store.log_pair(
+                LogCategory.OTHER,
+                LogEntrySent(
+                    model=model_id, provider=provider,
+                    temperature=0.2,
+                    system_prompt=system_prompt[:2000],
+                    user_content=user_msg[:2000],
+                    extra={"type": "model_translation_test"},
+                ),
+                LogEntryReceived(
+                    error_message=str(exc)[:500],
+                    duration_ms=round(elapsed * 1000),
+                ),
+                LogStatus.FAILED,
+            )
+        except Exception:
+            pass
         return {"success": False, "message": f"API call failed: {exc}",
                 "checks": [], "raw_response": "", "elapsed_seconds": round(elapsed, 2)}
 

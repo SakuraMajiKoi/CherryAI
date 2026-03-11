@@ -297,6 +297,10 @@ class APIClient:
         # Content warning
         self.content_warning_enabled = content_warning_enabled
 
+        # Structured API log store (API Log Window)
+        from .api_log import get_api_log_store
+        self._api_log_store = get_api_log_store()
+
         # Step log path for per-project translation.log (Phase 48)
         self._step_log_path: Optional[Path] = None
         
@@ -1788,7 +1792,34 @@ class APIClient:
                         } if response.usage else None,
                     }
                     self._log_api_call(request_data, response_data)
-                
+
+                # Structured API log for API Log Window
+                try:
+                    from .api_log import (
+                        LogCategory, LogStatus, LogEntrySent, LogEntryReceived,
+                    )
+                    sent_entry = LogEntrySent(
+                        model=self.config.model,
+                        provider=self.config.provider,
+                        temperature=self.config.temperature,
+                        user_content=user_content[:2000],
+                        line_count=1,
+                        extra={"mode": "line_by_line", "line_index": line_index},
+                    )
+                    _usage_lbl = response.usage
+                    recv_entry = LogEntryReceived(
+                        content=result[:2000],
+                        prompt_tokens=_usage_lbl.prompt_tokens if _usage_lbl else 0,
+                        completion_tokens=_usage_lbl.completion_tokens if _usage_lbl else 0,
+                        total_tokens=getattr(_usage_lbl, "total_tokens", 0) if _usage_lbl else 0,
+                    )
+                    self._api_log_store.log_pair(
+                        LogCategory.MAIN_TRANSLATION, sent_entry, recv_entry,
+                        LogStatus.SUCCESS,
+                    )
+                except Exception:
+                    pass
+
                 return result
                 
             except (RateLimitError, APITimeoutError) as e:
@@ -1804,6 +1835,26 @@ class APIClient:
                     break
                 time.sleep(1)
         
+        # Log failure to structured API log
+        try:
+            from .api_log import (
+                LogCategory, LogStatus, LogEntrySent, LogEntryReceived,
+            )
+            sent_entry = LogEntrySent(
+                model=self.config.model, provider=self.config.provider,
+                line_count=1,
+                extra={"mode": "line_by_line", "line_index": line_index},
+            )
+            recv_entry = LogEntryReceived(
+                error_message=str(last_error)[:500],
+            )
+            self._api_log_store.log_pair(
+                LogCategory.MAIN_TRANSLATION, sent_entry, recv_entry,
+                LogStatus.FAILED,
+            )
+        except Exception:
+            pass
+
         self.logger.error(f"Failed to translate line {line_index} after {max_retries} attempts: {last_error}")
         # Return original line on failure
         return line
@@ -2032,6 +2083,38 @@ class APIClient:
                 "usage": usage_dict if usage_dict else None,
             }
             self._log_api_call(request_data, response_data)
+
+        # Structured API log for API Log Window
+        try:
+            from .api_log import (
+                LogCategory, LogStatus, LogEntrySent, LogEntryReceived,
+            )
+            sent_entry = LogEntrySent(
+                model=self.config.model,
+                provider=self.config.provider,
+                temperature=self.config.temperature,
+                system_prompt=final_system_prompt[:2000],
+                user_content=user_content[:2000],
+                chunk_index=self._chunk_counter,
+                total_chunks=self._initial_chunk_count,
+                line_count=len(chunk),
+            )
+            _usage = response.usage
+            _ptd = getattr(_usage, "prompt_tokens_details", None) if _usage else None
+            recv_entry = LogEntryReceived(
+                content=content[:2000],
+                prompt_tokens=_usage.prompt_tokens if _usage else 0,
+                completion_tokens=_usage.completion_tokens if _usage else 0,
+                total_tokens=_usage.total_tokens if _usage else 0,
+                cached_tokens=(getattr(_ptd, "cached_tokens", 0) or 0) if _ptd else 0,
+                finish_reason=response.choices[0].finish_reason or "" if response.choices else "",
+            )
+            self._api_log_store.log_pair(
+                LogCategory.MAIN_TRANSLATION, sent_entry, recv_entry,
+                LogStatus.SUCCESS,
+            )
+        except Exception:
+            pass
 
         # Parse JSON output
         try:

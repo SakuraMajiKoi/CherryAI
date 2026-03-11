@@ -27,6 +27,7 @@ from CherryAI.gui.dialogs.project_dialog import (
     WelcomeDialog,
 )
 from CherryAI.gui.dialogs.table_view import FullTableViewDialog
+from CherryAI.gui.dialogs.api_log_view import APILogViewDialog
 from CherryAI.gui.theme.colors import THEME, apply_theme
 from CherryAI.gui.state.store import (
     SessionState,
@@ -246,6 +247,9 @@ class App(tk.Tk):
 
         # Full Table View (direct — no dropdown)
         menubar.add_command(label="Full Table View", command=self._on_full_table_view)
+
+        # API Log (direct — no dropdown)
+        menubar.add_command(label="API Log", command=self._on_api_log)
 
         # Options (direct — no dropdown)
         menubar.add_command(label="Options", command=self._on_options)
@@ -782,6 +786,16 @@ class App(tk.Tk):
             )
             return
         FullTableViewDialog(self, self._manifest_manager)
+
+    def _on_api_log(self) -> None:
+        """Open the API Log viewer window."""
+        if not self._manifest_manager.is_loaded:
+            messagebox.showwarning(
+                "No Project",
+                "Please open or create a project first.",
+            )
+            return
+        APILogViewDialog(self, self._manifest_manager)
 
     def _on_help(self) -> None:
         """Handle Documentation menu item."""
