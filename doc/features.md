@@ -515,12 +515,13 @@ I/O EXAMPLES GENERATION (NEW)
 - Generate I/O (input/output) example blocks for the system prompt to improve translation quality
 - Dropdown in Information Step (System Instructions section): disabled | fill | 1500 | 2500
   - **disabled**: No separate examples generated
-  - **fill**: Cache-aligned budget — calculates remaining token space to fill the optimal cache boundary (default 1536 tokens for OpenAI). Uses `get_optimal_cache_size()` from api_config.py
+  - **fill**: Cache-aligned budget — calculates remaining token space to fill the optimal cache boundary (default 1536 tokens for OpenAI). Uses `get_optimal_cache_size()` from api_config.py. Fill target = `optimal_cache_size - all_static_section_tokens` (pre-computes tokens for ALL static sections including Style, Tone, Summary, Genre, Protagonist, POV, Context-Type before generating examples)
   - **1500**: Fixed budget of ~1500 tokens of I/O examples
   - **2500**: Fixed budget of ~2500 tokens of I/O examples
 - Examples generated at request build time by `functions/io_examples.py`, NOT stored in manifest
 - **Never modifies System Instructions** — examples are a separate slot (2b) and do not strip or alter SI content
 - Examples injected at prompt slot 2b (between System Instructions and Style) in the static/cacheable prefix
+- **Preview Requests**: IO Examples section visible in Preview Request dialog via `io_examples` filter part (positioned after System Instructions, before Style/Tone)
 - Example bank uses `_Example` dataclass with language-keyed fields (`jp`, `en`); source/target language from manifest determines which field is used for input vs output
 - Language key resolution: maps language names to keys (Japanese→jp, English→en); unknown languages fall back to `en` unless English is already source or target (then `jp`); source/target always resolve to distinct keys
 - Example bank covers ~35 translation patterns: PLACEHOLDER, VARIABLE, COLOR, LINEBREAK, MEDIA, ICON, FONT, SPEAKER, PRESERVE, RUBY, SPAN, COMPLEX, PLAIN
@@ -1592,7 +1593,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Connection Test: Real `test_api_connection()` using OpenAI-compatible `models.list()` endpoint; returns `(bool, str, list)` with model IDs; threaded execution with specific error messages (auth failure, timeout, connection refused); on success, opens API Test Results dialog with filterable model table and per-model translation testing via `test_model_translation()`
     - Settings Migration: caching.mode in CachingSettings, thinking_enabled/thinking_budget in RequestSettings, rolling_context_lines in RequestSettings; `_sync_from_global_options()` applies overrides on tab enter
     - Retry Refinement: UI shows only Batch + Contextual (`RETRY_STRATEGIES`); `ALL_RETRY_STRATEGIES` kept for CLI with all 4; max retries minimum changed from 1 to 0
-    - Prompt Editor Redesign: removed Style Preset and Game Summary textarea; "Preview Requests" button opens `RequestPreviewDialog` showing actual API requests built with the same functions as translation; three view modes (Pure JSON / Formatted with section headers / Plain readable text); toolbar with Jump To (request number), Search with previous/next and match count, and Filter dropdown with checkboxes for 12 prompt parts (Meta, Language, System Instructions, Style, Tone, Summary, Genre, POV, Conditional Prompts, Glossary, Rolling Context, Input Lines); Ban Tokens LabelFrame with preset dropdown (None/Clean English/Strict)
+    - Prompt Editor Redesign: removed Style Preset and Game Summary textarea; "Preview Requests" button opens `RequestPreviewDialog` showing actual API requests built with the same functions as translation; three view modes (Pure JSON / Formatted with section headers / Plain readable text); toolbar with Jump To (request number), Search with previous/next and match count, and Filter dropdown with checkboxes for 13 prompt parts (Meta, Language, System Instructions, I/O Examples, Style, Tone, Summary, Genre, POV, Conditional Prompts, Glossary, Rolling Context, Input Lines); Ban Tokens LabelFrame with preset dropdown (None/Clean English/Strict)
     - Chunk Sync: LinesPerChunk synced between Costs step and manifest; `_on_chunk_changed()` write-back
     - Language Skip: `detect_line_script()` in `functions/analysis.py` (CJK/kana/hangul/latin detection); `_LANG_SCRIPT_MAP` and `_apply_language_skip()` filter non-source lines; placeholder tokens stripped before detection to prevent skewing ratios
     - Tab Caching: `BaseStep` infrastructure (`_compute_cache_hash`, `_is_cache_valid`, `_update_cache`, `_invalidate_cache`, `_force_refresh`); TranslationStep early-returns on cache hit

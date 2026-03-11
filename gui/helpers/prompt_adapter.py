@@ -1045,40 +1045,104 @@ def build_full_system_prompt(
         if sys_instructions:
             _add("system_instructions", sys_instructions)
 
-    # --- 2b. I/O Examples (generated, between SI and Style) ---
+    # --- 2b. I/O Examples ---
+    # For "fill" mode we need the total static prompt size (slots 1-7b
+    # excluding IO examples).  Pre-compute the remaining static section
+    # texts so we can measure before generating examples.
+    io_text_generated = ""
     if io_examples_mode != "disabled":
         try:
             from CherryAI.functions.io_examples import (
                 generate_io_examples,
                 calculate_fill_target,
+                estimate_tokens as _io_estimate_tokens,
             )
         except ImportError:
             from functions.io_examples import (
                 generate_io_examples,
                 calculate_fill_target,
+                estimate_tokens as _io_estimate_tokens,
             )
         io_code_patterns = metadata.get("code_patterns", [])
         io_source = (metadata.get("source_language", "") or "").strip()
         io_target = (metadata.get("target_language", "") or "").strip()
 
         if io_examples_mode == "fill":
-            # Calculate current static tokens (excluding IO examples)
-            static_words = sum(breakdown.values())
-            # Rough words→tokens: /0.75 (conservative)
-            static_tokens = int(static_words / 0.75) if static_words else 0
+            # Pre-compute tokens of later static sections (3-7b)
+            # so fill accounts for the full static prefix.
+            later_static_tokens = 0
+            if style_enabled:
+                _s = (metadata.get("style", "") or metadata.get(
+                    "custom_style", "") or "").strip()
+                if _s:
+                    later_static_tokens += _io_estimate_tokens(
+                        f"# Translation Style Guidelines\n{_s}")
+            if tone_enabled:
+                _t = (metadata.get("tone", "") or metadata.get(
+                    "custom_tone", "") or "").strip()
+                if _t:
+                    later_static_tokens += _io_estimate_tokens(
+                        f"# Translation Tone\n{_t}")
+            if summary_enabled:
+                _sm = (metadata.get("summary", "") or "").strip()
+                if _sm:
+                    later_static_tokens += _io_estimate_tokens(
+                        f"# Game Context\n{_sm}")
+            if genre_enabled:
+                _g = (metadata.get("genre", "") or "").strip()
+                if _g:
+                    later_static_tokens += _io_estimate_tokens(
+                        f"# Genre\n{_g}")
+            # Protagonist (4b) — light estimate
+            if _format_protagonist_prompt and (characters or code_patterns):
+                _pov_obj = None
+                if pov_data and isinstance(pov_data, dict) and _POVResult:
+                    _pov_obj = _POVResult.from_dict(pov_data)
+                _proto = _format_protagonist_prompt(
+                    characters or [], code_patterns, _pov_obj)
+                if _proto:
+                    later_static_tokens += _io_estimate_tokens(
+                        f"# Protagonist\n{_proto}")
+            # POV (7) — only when no protagonist section
+            if not (_format_protagonist_prompt and (characters or code_patterns)):
+                if pov_data and isinstance(pov_data, dict):
+                    if pov_data.get("confidence") == "high":
+                        later_static_tokens += _io_estimate_tokens(
+                            "# Narrative Perspective\n"
+                            "The narrative uses first person perspective. "
+                            "Maintain consistent first person perspective "
+                            "throughout.")
+            # Context-type prompt (7b) — estimate average size
+            if context_type:
+                try:
+                    from CherryAI.functions.prompt_builder import (
+                        get_context_prompt as _gcp,
+                    )
+                    _ctp = _gcp(context_type)
+                    if _ctp:
+                        later_static_tokens += _io_estimate_tokens(
+                            _ctp.strip())
+                except ImportError:
+                    pass
+
+            # Current static tokens = already-added parts + later parts
+            current_tokens = sum(
+                _io_estimate_tokens(p) for p in parts
+            )
+            static_tokens = current_tokens + later_static_tokens
             io_target_tokens = calculate_fill_target(static_tokens)
         else:
             io_target_tokens = int(io_examples_mode)
 
         if io_target_tokens > 0:
-            io_text, io_tokens = generate_io_examples(
+            io_text_generated, _io_tok = generate_io_examples(
                 code_patterns=io_code_patterns,
                 source_language=io_source or "Japanese",
                 target_language=io_target or "English",
                 target_tokens=io_target_tokens,
             )
-            if io_text:
-                _add("io_examples", io_text)
+            if io_text_generated:
+                _add("io_examples", io_text_generated)
 
     # --- 3. Style ---
     if style_enabled:

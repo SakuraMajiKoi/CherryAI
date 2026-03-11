@@ -2869,12 +2869,13 @@ The Translation tab contains four widget sections:
 | Formatted | Section headers (═══ META ═══, ═══ SYSTEM INSTRUCTIONS ═══, etc.) with content below each |
 | Plain | Stripped of JSON syntax, word-wrapped at 100 characters for readability |
 
-**Filter Parts** (12 toggleable checkboxes via `FILTER_PARTS` constant):
+**Filter Parts** (13 toggleable checkboxes via `FILTER_PARTS` constant):
 | Key | Label |
 |-----|-------|
 | meta | Meta |
 | language | Language |
 | system_instructions | System Instructions |
+| io_examples | I/O Examples |
 | style | Style |
 | tone | Tone |
 | summary | Summary |

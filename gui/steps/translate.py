@@ -726,6 +726,7 @@ FILTER_PARTS: List[Tuple[str, str]] = [
     ("meta", "Meta"),
     ("language", "Language"),
     ("system_instructions", "System Instructions"),
+    ("io_examples", "I/O Examples"),
     ("style", "Style"),
     ("tone", "Tone"),
     ("summary", "Summary"),
@@ -742,6 +743,7 @@ SECTION_DESCRIPTIONS: Dict[str, str] = {
     "meta": "Section headers (===) are for display only and not sent to the API",
     "language": "Source → Target language pair from Information step",
     "system_instructions": "General instructions from Information step",
+    "io_examples": "Auto-generated translation examples from I/O example bank",
     "style": "Translation style guidelines from Information step",
     "tone": "Translation tone and register from Information step",
     "summary": "Game/project context summary from Information step",
@@ -762,6 +764,7 @@ class PreviewRequest:
     meta: str
     language: str
     system_instructions: str
+    io_examples: str
     summary: str
     style: str
     tone: str
@@ -4087,6 +4090,7 @@ class TranslationStep(BaseStep):
         mgr = self.manifest_manager
         language_block = ""
         sys_instructions = ""
+        io_examples_block = ""
         summary_block = ""
         style_block = ""
         tone_block = ""
@@ -4146,6 +4150,54 @@ class TranslationStep(BaseStep):
 
         if si_enabled:
             sys_instructions = (metadata.get("system_instructions", "") or "").strip()
+
+        # --- I/O Examples (slot 2b) ---
+        io_mode = (metadata.get("io_examples", "disabled") or "disabled").strip()
+        if io_mode != "disabled":
+            try:
+                from CherryAI.functions.io_examples import (
+                    generate_io_examples as _gen_io,
+                    calculate_fill_target as _calc_fill,
+                    estimate_tokens as _est_tok,
+                )
+            except ImportError:
+                _gen_io = None  # type: ignore[assignment]
+            if _gen_io is not None:
+                io_src = (metadata.get("source_language", "") or "").strip()
+                io_tgt = (metadata.get("target_language", "") or "").strip()
+                if io_mode == "fill":
+                    # Estimate all static part tokens for fill calculation
+                    _static_parts = [language_block, sys_instructions]
+                    if style_enabled:
+                        _sv = (metadata.get("style", "") or "").strip()
+                        if _sv:
+                            _static_parts.append(
+                                f"# Translation Style Guidelines\n{_sv}")
+                    if tone_enabled:
+                        _tv = (metadata.get("tone", "") or "").strip()
+                        if _tv:
+                            _static_parts.append(f"# Translation Tone\n{_tv}")
+                    if summary_enabled:
+                        _smv = (metadata.get("summary", "") or "").strip()
+                        if _smv:
+                            _static_parts.append(f"# Game Context\n{_smv}")
+                    if genre_enabled:
+                        _gv = (metadata.get("genre", "") or "").strip()
+                        if _gv:
+                            _static_parts.append(f"# Genre\n{_gv}")
+                    _static_toks = sum(_est_tok(p) for p in _static_parts if p)
+                    _io_budget = _calc_fill(_static_toks)
+                else:
+                    _io_budget = int(io_mode)
+                if _io_budget > 0:
+                    _io_text, _ = _gen_io(
+                        code_patterns=metadata.get("code_patterns", []),
+                        source_language=io_src or "Japanese",
+                        target_language=io_tgt or "English",
+                        target_tokens=_io_budget,
+                    )
+                    if _io_text:
+                        io_examples_block = _io_text
 
         if style_enabled:
             style_val = (metadata.get("style", "") or "").strip()
@@ -4330,6 +4382,7 @@ class TranslationStep(BaseStep):
                 meta=meta_block,
                 language=language_block,
                 system_instructions=sys_instructions,
+                io_examples=io_examples_block,
                 summary=summary_block,
                 style=style_block,
                 tone=tone_block,

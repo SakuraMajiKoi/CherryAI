@@ -105,7 +105,26 @@ Goal: Generate I/O (input/output) example blocks in the system prompt to improve
 - `functions/api_client.py` — _STATIC_PROMPT_SECTIONS
 - `functions/manifest_manager.py` — _create_empty_manifest, _get_info_defaults
 
-**Tests:** `dev/test_io_examples.py` — 43 tests across 8 classes (all passing)
+**Tests:** `dev/test_io_examples.py` — 63 tests across 10 classes (all passing)
+
+---
+
+### IMPROVEMENT: Fill Mode Cache Calculation & Preview Request IO Examples
+**Priority:** HIGH | **Status:** ✅ COMPLETE
+
+Goal: Ensure fill mode calculates correctly by subtracting ALL static prompt sections from optimal cache size (not just slots 1-2). Add IO Examples to Preview Requests. Verify static prompt consistency with tests.
+
+**Implementation:**
+1. **Fill mode fix** — `build_full_system_prompt()` at slot 2b now pre-computes tokens for ALL later static sections (style, tone, summary, genre, protagonist, POV, context-type prompt) using `estimate_tokens()` before calculating fill target. Replaces the old incomplete calculation that only had access to slots 1-2 in `breakdown`.
+2. **Preview Request IO Examples** — Added `io_examples` to `FILTER_PARTS` (after system_instructions, before style), `SECTION_DESCRIPTIONS`, `PreviewRequest` dataclass, and `_build_preview_requests()` generation logic with fill mode support.
+3. **Static prompt consistency tests** — `TestStaticPromptConsistency` (8 tests): verifies static prefix identical across chunks, all sections present, IO determinism, LineN key consistency, fill uses full static tokens, fill respects cache boundary, no dynamic content without chunks, breakdown matches _STATIC_PROMPT_SECTIONS. `TestFillModeCalculation` (4 tests): empty prompt fill, at-optimal returns 0, never negative, more static → less IO fill.
+
+**Files Modified:**
+- `gui/helpers/prompt_adapter.py` — pre-compute all static section tokens at slot 2b
+- `gui/steps/translate.py` — FILTER_PARTS, SECTION_DESCRIPTIONS, PreviewRequest, _build_preview_requests
+- `dev/test_io_examples.py` — 12 new tests (TestStaticPromptConsistency, TestFillModeCalculation)
+
+**Tests:** `dev/test_io_examples.py` — 63 tests across 10 classes (all passing)
 
 ---
 

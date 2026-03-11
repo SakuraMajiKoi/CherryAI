@@ -9496,11 +9496,11 @@ requiring a Tkinter display (no GUI instantiation needed).
 
 ---
 
-### dev/test_io_examples.py (51 tests)
+### dev/test_io_examples.py (63 tests)
 
 Comprehensive tests for I/O example generation, language resolution, prompt builder
-integration, metadata persistence, manifest default seeding, and cache configuration.
-No GUI or API required.
+integration, metadata persistence, manifest default seeding, cache configuration,
+static prompt consistency, and fill mode calculation. No GUI or API required.
 
 | Test Class | Count | Coverage |
 |-----------|-------|----------|
@@ -9512,6 +9512,8 @@ No GUI or API required.
 | TestProjectMetadataPersistence | 7 | si_preset survives to_dict/from_dict roundtrip; si_preset defaults to "Default"; io_examples survives to_dict/from_dict roundtrip; io_examples defaults to "disabled"; full roundtrip preserves both fields |
 | TestManifestDefaultSeeding | 4 | _get_info_defaults() includes system_instructions, si_preset="Default", io_examples="disabled", source/target languages |
 | TestEstimateTokens | 4 | Empty string yields 0; English text yields positive count; Japanese text yields positive count; Japanese tokens > English tokens for same character length |
+| TestStaticPromptConsistency | 8 | Static prefix identical across different chunks; all enabled sections present in breakdown; IO examples deterministic (same params → same output); LineN keys consistent across calls; fill mode uses full static tokens (fewer IO tokens when other sections present); fill respects optimal cache size boundary; no dynamic content without chunks; breakdown non-dynamic keys match _STATIC_PROMPT_SECTIONS |
+| TestFillModeCalculation | 4 | Empty prompt fills most of optimal cache; at-optimal static returns 0; fill target never negative; more static content (style+tone) → less IO fill |
 
 ```bash
 # Run I/O examples tests
