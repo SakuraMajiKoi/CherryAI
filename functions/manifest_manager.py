@@ -1404,6 +1404,9 @@ class ManifestManager:
         and a custom JSON encoder as safety net for objects with
         ``to_dict()`` (e.g. ``TableRow``, ``FileDirEntry``).
 
+        Thread-safe: uses ``_autosave_lock`` to prevent the autosave
+        thread and main thread from writing simultaneously (WinError 32).
+
         Returns:
             True if saved successfully.
         """
@@ -1411,44 +1414,53 @@ class ManifestManager:
             logger.warning("Cannot save: no manifest path set")
             return False
 
-        try:
-            self._manifest_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Snapshot to prevent concurrent modification
-            data_snapshot = deepcopy(self._manifest_data)
-
-            # Atomic write: temp file → rename
-            tmp_path = self._manifest_path.with_suffix(".tmp")
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(data_snapshot, f, ensure_ascii=False, indent=2,
-                          cls=_SafeManifestEncoder)
-                f.flush()
-                os.fsync(f.fileno())
-
-            os.replace(str(tmp_path), str(self._manifest_path))
-
-            self._dirty = False
-
-            # Also persist the API log
+        with self._autosave_lock:
             try:
-                from .api_log import get_api_log_store
-                get_api_log_store().save()
-            except Exception:
-                logger.debug("API log save skipped")
+                self._manifest_path.parent.mkdir(parents=True, exist_ok=True)
 
-            logger.debug("Saved manifest: %s", self._manifest_path)
-            return True
+                # Snapshot to prevent concurrent modification
+                data_snapshot = deepcopy(self._manifest_data)
 
-        except Exception as e:
-            logger.error("Failed to save manifest: %s", e)
-            # Clean up temp file on failure
-            try:
+                # Atomic write: temp file → rename
                 tmp_path = self._manifest_path.with_suffix(".tmp")
-                if tmp_path.exists():
-                    tmp_path.unlink()
-            except OSError:
-                pass
-            return False
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(data_snapshot, f, ensure_ascii=False, indent=2,
+                              cls=_SafeManifestEncoder)
+                    f.flush()
+                    os.fsync(f.fileno())
+
+                # Retry os.replace up to 3 times for transient Windows locks
+                for attempt in range(3):
+                    try:
+                        os.replace(str(tmp_path), str(self._manifest_path))
+                        break
+                    except OSError:
+                        if attempt == 2:
+                            raise
+                        time.sleep(0.1 * (attempt + 1))
+
+                self._dirty = False
+
+                # Also persist the API log
+                try:
+                    from .api_log import get_api_log_store
+                    get_api_log_store().save()
+                except Exception:
+                    logger.debug("API log save skipped")
+
+                logger.debug("Saved manifest: %s", self._manifest_path)
+                return True
+
+            except Exception as e:
+                logger.error("Failed to save manifest: %s", e)
+                # Clean up temp file on failure
+                try:
+                    tmp_path = self._manifest_path.with_suffix(".tmp")
+                    if tmp_path.exists():
+                        tmp_path.unlink()
+                except OSError:
+                    pass
+                return False
     
     def close(self) -> None:
         """Close the current manifest.

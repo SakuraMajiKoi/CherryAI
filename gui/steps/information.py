@@ -3222,7 +3222,7 @@ class InformationStep(BaseStep):
                 if gi_mode == "Script + LLM":
                     llm_needed.append((char, name_to_check))
 
-        # --- LLM pass for remaining unknowns ---
+        # --- LLM pass for remaining unknowns (runs in background thread) ---
         if llm_needed and gi_mode == "Script + LLM" and all_lines:
             llm_min = int(
                 ini_manager.get_user_default(
@@ -3249,49 +3249,123 @@ class InformationStep(BaseStep):
                 logger.warning("LLM gender inference not available")
                 llm_needed = []
 
-            for j, (char, name_to_check) in enumerate(llm_needed):
-                idx = total - len(llm_needed) + j
-                progress_label.configure(text=f"LLM: '{name_to_check}'")
-                progress_bar["value"] = idx
-                count_label.configure(
-                    text=f"{idx} / {total} (LLM pass)",
-                )
-                progress_dialog.update_idletasks()
+            if llm_needed:
+                # Run LLM pass in background thread to avoid freezing
+                import queue as _queue
+                result_queue: _queue.Queue = _queue.Queue()
+                cancel_event = threading.Event()
 
-                try:
-                    gender, conf = infer_gender_llm(
-                        name_to_check,
-                        all_lines,
-                        minimum=llm_min,
-                        maximum=llm_max,
-                        ignore_unknown=llm_ignore,
-                        do_all=llm_do_all,
-                    )
-                    if gender and gender != "Unknown" and conf >= 50:
-                        parts = [
-                            p.strip()
-                            for p in char.notes.split(",") if p.strip()
-                        ]
-                        if gender not in parts:
-                            parts.insert(0, gender)
-                        char.notes = ", ".join(parts)
-                        updated_count += 1
-                except RuntimeError as exc:
-                    logger.error("LLM gender inference error: %s", exc)
+                def _llm_worker() -> None:
+                    """Background worker for LLM gender inference calls."""
+                    llm_updated = 0
+                    for j, (char, name) in enumerate(llm_needed):
+                        if cancel_event.is_set():
+                            break
+                        idx = total - len(llm_needed) + j
+                        result_queue.put(("progress", idx, name))
+                        try:
+                            gender, conf = infer_gender_llm(
+                                name,
+                                all_lines,
+                                minimum=llm_min,
+                                maximum=llm_max,
+                                ignore_unknown=llm_ignore,
+                                do_all=llm_do_all,
+                            )
+                            if gender and gender != "Unknown" and conf >= 50:
+                                parts = [
+                                    p.strip()
+                                    for p in char.notes.split(",")
+                                    if p.strip()
+                                ]
+                                if gender not in parts:
+                                    parts.insert(0, gender)
+                                char.notes = ", ".join(parts)
+                                llm_updated += 1
+                        except RuntimeError as exc:
+                            result_queue.put(("error", str(exc)))
+                            return
+                        except Exception as e:
+                            logger.debug(
+                                "LLM gender for %s failed: %s", name, e,
+                            )
+                    result_queue.put(("done", llm_updated))
+
+                thread = threading.Thread(
+                    target=_llm_worker, daemon=True,
+                )
+                thread.start()
+
+                def _poll_llm() -> None:
+                    """Poll the LLM worker thread for progress updates."""
+                    nonlocal updated_count
+                    try:
+                        while not result_queue.empty():
+                            msg = result_queue.get_nowait()
+                            if msg[0] == "progress":
+                                _, idx, name = msg
+                                progress_label.configure(
+                                    text=f"LLM: '{name}'",
+                                )
+                                progress_bar["value"] = idx
+                                count_label.configure(
+                                    text=f"{idx} / {total} (LLM pass)",
+                                )
+                            elif msg[0] == "error":
+                                try:
+                                    progress_dialog.grab_release()
+                                    progress_dialog.destroy()
+                                except tk.TclError:
+                                    pass
+                                messagebox.showerror(
+                                    "Gender Inference Failed", msg[1],
+                                )
+                                return
+                            elif msg[0] == "done":
+                                updated_count += msg[1]
+                                _finish_inference()
+                                return
+                    except Exception:
+                        pass
+                    if thread.is_alive():
+                        progress_dialog.after(100, _poll_llm)
+                    else:
+                        _finish_inference()
+
+                def _finish_inference() -> None:
+                    """Finalize inference: close dialog, refresh, notify."""
+                    nonlocal updated_count
                     try:
                         progress_dialog.grab_release()
                         progress_dialog.destroy()
                     except tk.TclError:
                         pass
-                    messagebox.showerror(
-                        "Gender Inference Failed",
-                        str(exc),
-                    )
-                    return
-                except Exception as e:
-                    logger.debug(
-                        "LLM gender for %s failed: %s", name_to_check, e,
-                    )
+                    self._refresh_character_list()
+                    if updated_count > 0:
+                        self._save_characters_to_manifest()
+                    if updated_count > 0:
+                        messagebox.showinfo(
+                            "Gender Inference Complete",
+                            f"Inferred gender for {updated_count}"
+                            " character(s).",
+                        )
+                    else:
+                        messagebox.showinfo(
+                            "No Updates",
+                            "Could not infer gender for any characters.\n"
+                            "Characters either already have genders set "
+                            "or names are ambiguous.",
+                        )
+
+                # Cancel button to stop LLM pass
+                cancel_btn = ttk.Button(
+                    pframe, text="Cancel",
+                    command=lambda: cancel_event.set(),
+                )
+                cancel_btn.pack(anchor="e", pady=(5, 0))
+
+                progress_dialog.after(100, _poll_llm)
+                return  # UI updates handled by _poll_llm / _finish_inference
 
         # Close progress dialog
         try:

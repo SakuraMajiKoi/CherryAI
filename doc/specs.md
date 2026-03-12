@@ -112,7 +112,8 @@ The GUI is organized as:
 
 All application state is stored in the Manifest (`.CherryAI.json`), not in GUI memory. For every translation project, a manifest file is created which loads all project data and saves all process steps. The ManifestManager handles:
 - Auto-save on step change, close, and periodic interval (60s default)
-- Atomic saves: write to `.tmp`, fsync, `os.replace()` to prevent corruption
+- Atomic saves: write to `.tmp`, fsync, `os.replace()` to prevent corruption; retry loop (3 attempts with back-off) handles transient Windows file locks
+- Thread-safe saves: `save()` acquires `_autosave_lock` to prevent races between autosave thread and main thread
 - Skip-unchanged guard: `set_line_field()` returns early when new value equals existing (TASK 72)
 - Per-step data storage with automatic serialization
 - Line-by-line translation state tracking with per-line `tags` field (TASK 72)
@@ -1128,7 +1129,7 @@ When `auto_inference` is enabled (Global Option), the pipeline offers several in
 | `infer_speakers_to_glossary` | Analysis speakers | characters[] | Add detected speakers as character glossary entries with empty Translation |
 | `infer_codes_to_database` | Analysis code_patterns | CodeGlossary[] | Add detected code patterns to Code Database with default "Preserve" action; prefers `individual_codes` (per-code detail) over grouped `code_patterns` when available |
 | `infer_pov` | Analysis non-dialogue | POVResult | Detect Point of View (1st/2nd/3rd person) for prompt context |
-| `infer_gender` | Input step text + Analysis speaker counts | characters[].gender | Two modes: "Script only" uses `infer_gender_comprehensive()` heuristics; "Script + LLM" runs script first then `infer_gender_llm()` for unknowns via dialogue excerpts. Configurable confidence spinboxes (min/max, ignore_unknown, do_all). Settings read from CherryAI.ini [utility] and API.ini [gender_inference]. |
+| `infer_gender` | Input step text + Analysis speaker counts | characters[].gender | Two modes: "Script only" uses `infer_gender_comprehensive()` heuristics; "Script + LLM" runs script first then `infer_gender_llm()` for unknowns via dialogue excerpts. LLM pass runs in a background thread with queue-based polling (`after(100)`) and a Cancel button to keep the UI responsive. Configurable confidence spinboxes (min/max, ignore_unknown, do_all). Settings read from CherryAI.ini [utility] and API.ini [gender_inference]. |
 
 **Manifest Keys**: Each inference option has a corresponding boolean in `Options.AutoInference.*`.
 
@@ -2130,7 +2131,7 @@ The Costs step has **two distinct estimation states** tracked separately:
 | Add Character | Button | Add new character entry |
 | Edit | Button | Edit selected character via CharacterDialog (Notes field) |
 | Remove | Button | Remove selected character(s) |
-| Infer Gender | Button | Heuristic gender inference using loaded text data |
+| Infer Gender | Button | Heuristic gender inference using loaded text data; LLM pass runs in background thread with Cancel support |
 | Import from Analysis | Button | Import detected speakers using `_get_analysis_step_data()` helper |
 
 **Table Sorting**: Characters display sorted by internal `count` field (highest first) by default. Clicking any column header sorts alphabetically A→Z; clicking the same header again reverses to Z→A; a third click resets to the default count-based order. Sort state tracked via `_char_sort_col`, `_char_sort_reverse`, `_char_sort_clicks`. Row-to-data mapping uses `char_{idx}` tags (via `_get_char_idx()`) so display order is independent of `_metadata.characters` list order.

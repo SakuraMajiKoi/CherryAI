@@ -277,6 +277,106 @@ The `_pipeline_var` remains functional so existing code referencing it won't bre
 
 ---
 
+### BUG FIX: Debug Print Statements in Global Options
+**Priority:** LOW | **Status:** ✅ COMPLETE | **Effort:** 15 minutes
+
+Goal: Remove all DEBUG print statements from GlobalOptionsDialog and app.py that polluted
+console output every time the Options dialog was opened.
+
+**Root Cause:** 23 debug `print("DEBUG:...")` statements were left in `global_options.py`
+and 5 in `app.py` from development/troubleshooting and were never removed.
+
+**Solution:** Removed all `print("DEBUG:...")` statements. Retained existing `logger.debug()`
+calls which respect the logging configuration.
+
+**Files Modified:** `gui/dialogs/global_options.py`, `gui/app.py`
+
+---
+
+### BUG FIX: API Log View Crash on entry.status.value
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 30 minutes
+
+Goal: Fix AttributeError crash in API Log View that caused log entries to show only a
+checkmark icon with no other content.
+
+**Root Cause:** `_render_entry()` used `entry.status.value.upper()` but `LogEntry.status`
+is typed as `str` (not `LogStatus` enum). The `.value` accessor only works on enum instances
+but after deserialization status is a plain string. Same issue in `_entry_to_searchable()`.
+
+**Solution:** Changed `entry.status.value.upper()` → `entry.status.upper()` in
+`_render_entry()` and `entry.status.value` → `entry.status` in `_entry_to_searchable()`.
+Dict lookups using `LogStatus` enum keys still work because `LogStatus(str, Enum)` compares
+equal to its string value.
+
+**Files Modified:** `gui/dialogs/api_log_view.py`
+**Tests:** `dev/test_api_log.py::TestStatusStringCompatibility` — 5 tests (all passing)
+
+---
+
+### BUG FIX: GlobalOptions Mousewheel Error After Destroy
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 30 minutes
+
+Goal: Fix "invalid command name" TclError spam when scrolling after closing Global Options.
+
+**Root Cause:** `_build_utility_section()` used `canvas.bind_all("<MouseWheel>", ...)` which
+registers a global binding. When the dialog was destroyed, the binding persisted but the canvas
+widget no longer existed, causing "invalid command name" errors on every mouse wheel event.
+
+**Solution:** Two-part fix:
+1. Changed `_build_utility_section()` to use `<Enter>`/`<Leave>` binding pattern (matching
+   the existing `_build_security_section()` approach): binds mousewheel on canvas enter,
+   unbinds on canvas leave.
+2. Added `self.unbind_all("<MouseWheel>")` to `destroy()` as safety net to clean up any
+   lingering global mousewheel bindings before widget destruction.
+
+**Files Modified:** `gui/dialogs/global_options.py`
+
+---
+
+### BUG FIX: Manifest Save File Locking (WinError 32/5)
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 30 minutes
+
+Goal: Fix concurrent manifest save crashes caused by autosave thread and main thread racing
+on `os.replace()`.
+
+**Root Cause:** `save()` did not acquire `_autosave_lock`, so the autosave background thread
+and the main thread could both write to the `.tmp` file and call `os.replace()` simultaneously.
+On Windows this caused WinError 32 ("file being used by another process") and WinError 5
+("Access denied").
+
+**Solution:** Wrapped `save()`'s critical section with `self._autosave_lock`. Added retry
+logic (3 attempts with back-off) for `os.replace()` to handle transient Windows file locks
+from antivirus scanning or other processes.
+
+**Files Modified:** `functions/manifest_manager.py`
+**Tests:** `dev/test_api_log.py::TestManifestSaveThreadSafety` — 2 tests (all passing)
+
+---
+
+### BUG FIX: Gender Inference Freezes Window
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 1 hour
+
+Goal: Fix UI freeze during LLM-based gender inference which blocked the main thread for
+the duration of all API calls.
+
+**Root Cause:** `_infer_character_genders()` ran LLM API calls (`infer_gender_llm()`)
+synchronously on the Tkinter main thread. Each API call (3-30 seconds) blocked the event
+loop, making the window completely unresponsive. The progress dialog with
+`update_idletasks()` only helped between calls, not during them.
+
+**Solution:** Refactored the LLM pass to use a background thread with queue-based
+communication:
+1. Script pass (fast, CPU-bound) remains synchronous with `update_idletasks()`
+2. LLM pass runs in a `threading.Thread` with a `queue.Queue` for messages
+3. Main thread polls the queue via `after(100, _poll_llm)` to update progress
+4. Added Cancel button to abort the LLM pass via `threading.Event`
+5. Completion callback `_finish_inference()` handles dialog close, refresh, and
+   notification on the main thread
+
+**Files Modified:** `gui/steps/information.py`
+
+---
+
 ### FEATURE: Prompt Caching (OpenAI)
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
 

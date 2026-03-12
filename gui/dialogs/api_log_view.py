@@ -324,7 +324,7 @@ class APILogViewDialog(tk.Toplevel):
         self._text.insert(
             "end",
             f"[{entry.timestamp}]  {cat_label}  —  "
-            f"{entry.status.value.upper()}",
+            f"{entry.status.upper()}",
             status_tag,
         )
         if entry.attempt > 1 or entry.max_attempts > 1:
@@ -592,7 +592,7 @@ def _entry_to_searchable(entry: LogEntry) -> str:
     """Convert an entry to a flat searchable string."""
     parts: List[str] = [
         entry.category,
-        entry.status.value,
+        entry.status,
         entry.timestamp,
     ]
     if entry.sent:

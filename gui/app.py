@@ -639,11 +639,9 @@ class App(tk.Tk):
 
     def _on_options(self) -> None:
         """Handle Options menu item - opens Global Options dialog."""
-        print("DEBUG: _on_options called")
         # Load current options from session or config
         current_options = getattr(self.session, "global_options", None)
         if current_options is None:
-            print("DEBUG: Creating new GlobalOptions")
             current_options = GlobalOptions()
 
         def on_save(options: GlobalOptions) -> None:
@@ -652,9 +650,7 @@ class App(tk.Tk):
             self._set_status("Options saved")
             logger.info("Global options updated")
 
-        print("DEBUG: Instantiating GlobalOptionsDialog")
         GlobalOptionsDialog(self, initial_options=current_options, on_save=on_save)
-        print("DEBUG: GlobalOptionsDialog instantiated")
 
     def _on_glossary(self) -> None:
         """Handle Glossary Manager menu item."""

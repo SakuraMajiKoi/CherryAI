@@ -350,6 +350,7 @@ TABLE OF CONTENTS
          - APILogViewDialog: Non-blocking Toplevel window for viewing structured API log entries
          - Toolbar: search entry, category filter combobox, view mode radio buttons (Sent/Received/Both), Clear Log button
          - Log display: tk.Text widget with word wrap, color-coded tags (success=green, recovered=yellow, failed=red, pending=grey)
+         - Entry status handling: `LogEntry.status` is plain `str` (deserialized from JSON); `_render_entry()` uses `entry.status.upper()` (not `.value.upper()`); dict lookups with `LogStatus` enum keys work via str-enum equality
          - Sent blocks: model, provider, temperature, chunk info, system prompt, user content
          - Received blocks: token statistics, duration, finish reason, error messages, response content
          - Status bar: filtered/total entry count, aggregated token totals
@@ -535,6 +536,7 @@ TABLE OF CONTENTS
          - Settings from INI `[session]` section: `autosave` (bool), `interval` (int seconds)
          - Auto-starts on create_new() and load(), stops on close()
          - Atomic saves: write to `.tmp` file, fsync, `os.replace()` to final path
+         - Thread-safe: `save()` acquires `_autosave_lock` to prevent concurrent writes from autosave thread and main thread; `os.replace()` retries 3 times with back-off for transient Windows file locks
          - `_SafeManifestEncoder`: fallback JSON encoder for non-serializable objects (str coercion)
          - Deep-copy safety: callers that mutate `get_step_data()` results use `deepcopy()`
          - SessionState autosave: disabled (no-op stubs); all autosave handled by ManifestManager
@@ -557,7 +559,7 @@ TABLE OF CONTENTS
            - `confirm_action()` for preset deletion with opt-out
          - Glossary table: 4-column Treeview (Active ✓/✗, Original, Translation, Notes)
          - Speaker multi-select removal: selectmode="extended" with reverse-index batch deletion
-         - Gender inference progress dialog: Toplevel with progress bar, "Checking 'name'" label, X/Y count
+         - Gender inference progress dialog: Toplevel with progress bar, "Checking 'name'" label, X/Y count; LLM pass runs in background thread with queue-based polling via `after(100)` to keep UI responsive; Cancel button via `threading.Event`
          - Inline editing via double-click with Entry overlay; Delete key removes entries
          - Import from Analysis: choice dialog (Top N / All) with spinbox; code patterns → category="Detected"; speakers → character glossary entries; non-destructive merge; uses `_get_analysis_step_data()` (ManifestManager first, session fallback)
          - Code Database actions in prompt_builder: Preserve="Do not translate", Provides Context="Translate as" hint, Custom Placeholder/Protect/Strip with Anchor/Part of a Span=default "Do not translate"; legacy migration: translate→provides_context, remove→preserve; action sync via sync_code_pattern_actions() auto-populates ProtectCodePatterns/CustomPlaceholders/AnchorRemoval

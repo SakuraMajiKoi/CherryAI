@@ -1539,7 +1539,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Confirmation dialog with "Don't ask again" option for removal
     - Import from glossary functionality
     - Export character list support
-    - Gender inference progress dialog: shows "Checking 'name'" label, progress bar, and count (X / Y)
+    - Gender inference progress dialog: shows "Checking 'name'" label, progress bar, and count (X / Y); LLM pass runs in background thread to keep UI responsive; Cancel button aborts inference early
   - **Style & Tone Panel (Phase 60):**
     - Style preset dropdown (combobox) with full list of built-in + user presets
     - Editable ScrolledText field (height=1) showing the preset's LLM prompt text
@@ -3016,7 +3016,7 @@ inference before being added to the glossary.
 **Two modes** (configurable in Global Options → Utility → Gender Inference):
 
 - **Script only** (default) — Built-in script analysis using pronouns, honorifics, and explicit markers. No API required.
-- **Script + LLM** — Runs script first, then uses the configured LLM API to resolve remaining unknowns via dialogue excerpt analysis.
+- **Script + LLM** — Runs script first, then uses the configured LLM API to resolve remaining unknowns via dialogue excerpt analysis. LLM pass executes in a background thread with queue-based polling (`after(100)`) to keep the UI responsive; a Cancel button allows aborting early.
 
 **Structured Output**: LLM mode uses strict JSON-schema (`response_format=json_schema`) with a gender enum of `[Female, Male, Non-Binary, Unsure]`. Output capped with `max_tokens=150` and `store=False` to minimise token waste. "Unsure" maps to "Unknown" internally.
 

@@ -969,14 +969,11 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.resizable(True, True)
         self.minsize(750, 600)
 
-        print("DEBUG: GlobalOptionsDialog bare init complete", flush=True)
-        
         self.parent = parent
         self.on_save = on_save
         self.options = initial_options or GlobalOptions()
 
         logger.debug("GlobalOptionsDialog: Starting initialization")
-        print("DEBUG: GlobalOptionsDialog: Starting initialization")
 
         # Track current section for navigation
         self._current_section: Optional[OptionSection] = None
@@ -984,18 +981,11 @@ class GlobalOptionsDialog(tk.Toplevel):
 
         # Initialize variables before building UI
         logger.debug("GlobalOptionsDialog: Initializing variables")
-        print("DEBUG: GlobalOptionsDialog: Initializing variables")
         self._init_variables()
-        
-        print("DEBUG: Variables initialized")
-        
 
         # Build UI
         logger.debug("GlobalOptionsDialog: Building UI")
-        print("DEBUG: GlobalOptionsDialog: Building UI")
         self._build_ui()
-        
-        print("DEBUG: UI built")
 
         # Handle window close button (X)
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
@@ -1012,7 +1002,6 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.after(50, self._finalize_treeview_selection)
 
         logger.debug("GlobalOptionsDialog initialized")
-        print("DEBUG: GlobalOptionsDialog initialized")
 
     def _finalize_treeview_selection(self) -> None:
         """Set the initial treeview selection after window is fully rendered."""
@@ -1209,7 +1198,6 @@ class GlobalOptionsDialog(tk.Toplevel):
 
     def _build_ui(self) -> None:
         """Build the options UI with navigation and content panels."""
-        print("DEBUG: _build_ui started")
         # Main container
         main_frame = ttk.Frame(self, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
@@ -1220,7 +1208,6 @@ class GlobalOptionsDialog(tk.Toplevel):
 
         # Left side: Navigation tree
         nav_frame = ttk.Frame(paned, width=180)
-        print("DEBUG: Building navigation")
         self._build_navigation(nav_frame)
         paned.add(nav_frame, weight=0)
 
@@ -1231,33 +1218,20 @@ class GlobalOptionsDialog(tk.Toplevel):
         # Build all section panels (hidden initially)
         self._section_panels: Dict[OptionSection, ttk.Frame] = {}
         
-        print("DEBUG: Building API section")
         self._build_api_section()
-        print("DEBUG: Building Request section")
         self._build_request_section()
-        print("DEBUG: Building Translation section")
         self._build_translation_section()
-        print("DEBUG: Building Utility section")
         self._build_utility_section()
-        print("DEBUG: Building Caching section")
         self._build_caching_section()
-        print("DEBUG: Building Logging section")
         self._build_logging_section()
-        print("DEBUG: Building Session section")
         self._build_session_section()
-        print("DEBUG: Building Limit section")
         self._build_limit_section()
-        print("DEBUG: Building File IO section")
         self._build_file_io_section()
-        print("DEBUG: Building Prompts section")
         self._build_prompts_section()
-        print("DEBUG: Building Security section")
         self._build_security_section()
 
         # Bottom: Buttons
-        print("DEBUG: Building buttons")
         self._build_buttons(main_frame)
-        print("DEBUG: _build_ui finished")
 
     def _build_navigation(self, parent: ttk.Frame) -> None:
         """Build the navigation tree on the left side."""
@@ -2830,11 +2804,18 @@ class GlobalOptionsDialog(tk.Toplevel):
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # Mouse-wheel scrolling
+        # Mouse-wheel scrolling (bind/unbind on Enter/Leave to avoid stale refs)
         def _on_mousewheel(event: tk.Event) -> None:
             canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        def _bind_wheel(event: tk.Event) -> None:
+            canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        def _unbind_wheel(event: tk.Event) -> None:
+            canvas.unbind_all("<MouseWheel>")
+
+        canvas.bind("<Enter>", _bind_wheel)
+        canvas.bind("<Leave>", _unbind_wheel)
 
         # Header
         ttk.Label(
@@ -4864,7 +4845,14 @@ class GlobalOptionsDialog(tk.Toplevel):
         
         This override ensures the grab is released even if an error occurs,
         preventing the parent window from becoming unresponsive.
+        Also cleans up any global mousewheel bindings to prevent
+        "invalid command name" errors after dialog destruction.
         """
+        try:
+            self.unbind_all("<MouseWheel>")
+        except tk.TclError:
+            pass
+
         try:
             self.grab_release()
         except tk.TclError:
