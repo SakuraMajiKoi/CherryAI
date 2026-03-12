@@ -72,6 +72,18 @@ def _safe_naming_strategy(raw: str) -> NamingStrategy:
         return NamingStrategy.SUFFIX
 
 
+def _safe_output_format(raw: str) -> OutputFormat:
+    """Parse an OutputFormat from *raw*, defaulting to TXT on bad input."""
+    try:
+        cleaned = raw.strip().lower()
+        if not cleaned:
+            return OutputFormat.TXT
+        return OutputFormat(cleaned)
+    except ValueError:
+        logger.warning("Unknown output format %r, defaulting to TXT", raw)
+        return OutputFormat.TXT
+
+
 class BackupStrategy(Enum):
     """Backup strategy for existing files."""
 
@@ -1247,7 +1259,7 @@ class OutputInjectStep(BaseStep):
             logger.warning("Parser inject failed, falling back: %s", e)
 
         # Write based on format
-        format_val = OutputFormat(self._format_var.get().lower())
+        format_val = _safe_output_format(self._format_var.get())
         encoding = self._encoding_var.get()
 
         if format_val == OutputFormat.TXT:
@@ -1473,7 +1485,7 @@ class OutputInjectStep(BaseStep):
         value = self._naming_value_var.get()
         dest_base = self._dest_var.get() or ""
         format_ext = FORMAT_EXTENSIONS.get(
-            OutputFormat(self._format_var.get().lower()),
+            _safe_output_format(self._format_var.get()),
             ".txt"
         )
         
@@ -1513,7 +1525,7 @@ class OutputInjectStep(BaseStep):
                 idx=i,
                 source_path=str(mgr.resolve_file_path(entry.rel_path)) if mgr else entry.rel_path,
                 output_path=str(output_path),
-                format=OutputFormat(self._format_var.get().lower()),
+                format=_safe_output_format(self._format_var.get()),
                 line_count=entry.line_count,
             ))
     
@@ -1528,7 +1540,7 @@ class OutputInjectStep(BaseStep):
         value = self._naming_value_var.get()
         dest_base = self._dest_var.get() or ""
         format_ext = FORMAT_EXTENSIONS.get(
-            OutputFormat(self._format_var.get().lower()),
+            _safe_output_format(self._format_var.get()),
             ".txt"
         )
 
@@ -1544,7 +1556,7 @@ class OutputInjectStep(BaseStep):
                     idx=0,
                     source_path="",
                     output_path=output_path,
-                    format=OutputFormat(self._format_var.get().lower()),
+                    format=_safe_output_format(self._format_var.get()),
                     line_count=len(lines),
                 ))
             return
@@ -1564,7 +1576,7 @@ class OutputInjectStep(BaseStep):
                 idx=i,
                 source_path=source_path,
                 output_path=output_path,
-                format=OutputFormat(self._format_var.get().lower()),
+                format=_safe_output_format(self._format_var.get()),
                 line_count=len(lines) // max(1, len(source_files)),
             ))
 
@@ -1821,7 +1833,7 @@ class OutputInjectStep(BaseStep):
             OutputOptions with current settings.
         """
         return OutputOptions(
-            format=OutputFormat(self._format_var.get().lower()),
+            format=_safe_output_format(self._format_var.get()),
             destination=self._dest_var.get(),
             naming=NamingOptions(
                 strategy=_safe_naming_strategy(self._naming_var.get()),

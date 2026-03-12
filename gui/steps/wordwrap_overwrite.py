@@ -168,9 +168,54 @@ class WrapStats:
         return (self.lines_wrapped / self.total_lines) * 100.0
 
 
+@dataclass
+class TagWrapConfig:
+    """Per-tag wordwrap configuration.
+
+    Each extraction tag (dialogue, menu, etc.) can have its own wrap
+    width, break character, and max-lines setting.  When *parser_managed*
+    is ``True``, the parser controls wrapping and the five UI settings
+    are replaced with a single informational label.
+    """
+
+    tag: str
+    width: int = 48
+    break_char: str = "\\n"
+    max_lines: int = 4
+    parser_managed: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to manifest-compatible dict."""
+        d: Dict[str, Any] = {
+            "tag": self.tag,
+            "Width": self.width,
+            "BreakChar": self.break_char,
+            "MaxLines": self.max_lines,
+        }
+        if self.parser_managed:
+            d["ParserManaged"] = True
+        return d
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "TagWrapConfig":
+        """Deserialize from manifest dict."""
+        return cls(
+            tag=d.get("tag", ""),
+            width=d.get("Width", 48),
+            break_char=d.get("BreakChar", "\\n"),
+            max_lines=d.get("MaxLines", 4),
+            parser_managed=d.get("ParserManaged", False),
+        )
+
+
 # ============================================================================
 # Constants
 # ============================================================================
+
+DEFAULT_TAG_CONFIGS: List[TagWrapConfig] = [
+    TagWrapConfig(tag="dialogue", width=48, break_char="\\n", max_lines=4),
+    TagWrapConfig(tag="menu", width=48, break_char="\\n", max_lines=0),
+]
 
 
 DEFAULT_FORMAT_CONFIGS: Dict[str, FormatConfig] = {
@@ -234,6 +279,13 @@ class WordwrapOverwriteStep(BaseStep):
         self._format_configs = dict(DEFAULT_FORMAT_CONFIGS)
         # TASK 28.1: Manifest bindings for wordwrap settings
         self._manifest_bindings: List[BindingInfo] = []
+        # Per-tag wordwrap configs and UI widgets
+        self._tag_configs: List[TagWrapConfig] = [
+            TagWrapConfig(tag=tc.tag, width=tc.width,
+                          break_char=tc.break_char, max_lines=tc.max_lines)
+            for tc in DEFAULT_TAG_CONFIGS
+        ]
+        self._tag_widgets: Dict[str, Dict[str, Any]] = {}
         super().__init__(parent, session, manifest_manager=manifest_manager)
 
     def _build_ui(self) -> None:
@@ -442,19 +494,25 @@ class WordwrapOverwriteStep(BaseStep):
         scrollable_frame.bind("<MouseWheel>", _on_mousewheel)
 
     def _build_wrap_options_panel(self, parent: ttk.Frame) -> None:
-        """Build the wordwrap options panel with manifest bindings (TASK 28.1)."""
+        """Build per-tag wordwrap options panel.
+
+        Creates a "Wordwrap Settings" LabelFrame containing:
+        - Global Mode dropdown
+        - Per-tag sections (dialogue, menu by default) with Width,
+          BreakChar, MaxLines widgets.  Parser-managed tags show an
+          informational label instead of the settings.
+        - "Add Tag" dropdown for extending the tag list.
+        """
         frame = ttk.LabelFrame(parent, text="Wordwrap Settings")
         frame.pack(fill="x", padx=5, pady=5)
 
-        # Mode selection (Task 46.1: dropdown instead of radio buttons)
+        # Global Mode selection
         mode_frame = ttk.Frame(frame)
         mode_frame.pack(fill="x", padx=5, pady=5)
 
         ttk.Label(mode_frame, text="Mode:").pack(side="left")
 
         self._mode_var = tk.StringVar(value=WrapMode.MANUAL.value)
-
-        # TASK 28.1: Trace mode changes to manifest
         self._mode_var.trace_add("write", self._save_wordwrap_mode_to_manifest)
 
         self._mode_combo = ttk.Combobox(
@@ -469,14 +527,14 @@ class WordwrapOverwriteStep(BaseStep):
             "<<ComboboxSelected>>", lambda e: self._on_mode_changed()
         )
 
-        # Width setting (Task 46.7: dropdown with Character/Pixel modes)
-        width_frame = ttk.Frame(frame)
-        width_frame.pack(fill="x", padx=5, pady=3)
+        # Width mode (global — character/pixel toggle)
+        width_mode_frame = ttk.Frame(frame)
+        width_mode_frame.pack(fill="x", padx=5, pady=3)
 
-        ttk.Label(width_frame, text="Width mode:").pack(side="left")
+        ttk.Label(width_mode_frame, text="Width mode:").pack(side="left")
         self._width_mode_var = tk.StringVar(value="character")
         self._width_mode_combo = ttk.Combobox(
-            width_frame,
+            width_mode_frame,
             textvariable=self._width_mode_var,
             values=["Character", "Pixel"],
             state="readonly",
@@ -487,132 +545,66 @@ class WordwrapOverwriteStep(BaseStep):
             "<<ComboboxSelected>>", self._on_width_mode_changed
         )
 
-        # Character width entry
-        self._char_width_frame = ttk.Frame(frame)
-        self._char_width_frame.pack(fill="x", padx=5, pady=3)
-
-        ttk.Label(self._char_width_frame, text="Width:").pack(side="left")
-        self._width_var = tk.IntVar(value=48)
-        width_spin = ttk.Spinbox(
-            self._char_width_frame,
-            from_=20,
-            to=200,
-            textvariable=self._width_var,
-            width=8,
-            command=self._on_width_changed,
-        )
-        width_spin.pack(side="left", padx=5)
-        ttk.Label(
-            self._char_width_frame, text="characters"
-        ).pack(side="left")
-
-        # Pixel width entry (initially hidden)
+        # Pixel width entry (global, initially hidden)
         self._pixel_width_frame = ttk.Frame(frame)
-
         ttk.Label(self._pixel_width_frame, text="Width:").pack(side="left")
         self._pixel_width_var = tk.IntVar(value=400)
         ttk.Spinbox(
-            self._pixel_width_frame,
-            from_=100,
-            to=2000,
-            textvariable=self._pixel_width_var,
-            width=8,
+            self._pixel_width_frame, from_=100, to=2000,
+            textvariable=self._pixel_width_var, width=8,
         ).pack(side="left", padx=5)
         ttk.Label(self._pixel_width_frame, text="px").pack(side="left")
-
         ttk.Label(
-            self._pixel_width_frame, text="  Font size:"
+            self._pixel_width_frame, text="  Font size:",
         ).pack(side="left", padx=(10, 0))
         self._font_size_var = tk.IntVar(value=14)
         ttk.Spinbox(
-            self._pixel_width_frame,
-            from_=8,
-            to=72,
-            textvariable=self._font_size_var,
-            width=5,
+            self._pixel_width_frame, from_=8, to=72,
+            textvariable=self._font_size_var, width=5,
         ).pack(side="left", padx=5)
-        
-        # TASK 28.1: Bind width spinbox to manifest
-        self._manifest_bindings.append(
-            bind_spinbox_to_field(
-                spinbox=width_spin,
-                var=self._width_var,
-                manager_getter=lambda: self.manifest_manager,
-                field_key="Width",
-                min_val=20,
-                max_val=200,
-                default=48,
-                parent_key="WordwrapSettings",
-            )
-        )
 
-        # Break character
-        break_frame = ttk.Frame(frame)
-        break_frame.pack(fill="x", padx=5, pady=3)
-
-        ttk.Label(break_frame, text="Break char:").pack(side="left")
-        self._break_var = tk.StringVar(value="\\n")
-        break_combo = ttk.Combobox(
-            break_frame,
-            textvariable=self._break_var,
-            values=["\\n", "\n", "<br>", "[r]", "\\r\\n"],
-            width=10,
-        )
-        break_combo.pack(side="left", padx=5)
-        
-        # TASK 28.1: Bind break char combobox to manifest
-        self._manifest_bindings.append(
-            bind_combobox_to_field(
-                combobox=break_combo,
-                var=self._break_var,
-                manager_getter=lambda: self.manifest_manager,
-                field_key="BreakChar",
-                options=["\\n", "\n", "<br>", "[r]", "\\r\\n"],
-                default="\\n",
-                parent_key="WordwrapSettings",
-            )
-        )
-
-        # Max lines
-        max_lines_frame = ttk.Frame(frame)
-        max_lines_frame.pack(fill="x", padx=5, pady=3)
-
-        ttk.Label(max_lines_frame, text="Max lines:").pack(side="left")
-        self._max_lines_var = tk.IntVar(value=4)
-        max_lines_spin = ttk.Spinbox(
-            max_lines_frame,
-            from_=0,
-            to=20,
-            textvariable=self._max_lines_var,
-            width=8,
-        )
-        max_lines_spin.pack(side="left", padx=5)
-        ttk.Label(max_lines_frame, text="(0 = unlimited)").pack(side="left")
-        
-        # TASK 28.1: Bind max lines spinbox to manifest
-        self._manifest_bindings.append(
-            bind_spinbox_to_field(
-                spinbox=max_lines_spin,
-                var=self._max_lines_var,
-                manager_getter=lambda: self.manifest_manager,
-                field_key="MaxLines",
-                min_val=0,
-                max_val=20,
-                default=4,
-                parent_key="WordwrapSettings",
-            )
-        )
-
-        # Options — prevent orphan and prefer punctuation breaks are always
-        # active in pretty_wrap(); no user toggle needed (Task 46.2)
+        # Orphan prevention note (always on)
         opts_frame = ttk.Frame(frame)
-        opts_frame.pack(fill="x", padx=5, pady=5)
-
+        opts_frame.pack(fill="x", padx=5, pady=(0, 3))
         ttk.Label(
             opts_frame,
             text="✓ Orphan prevention and punctuation breaks (always on)",
             foreground=THEME.text_secondary,
         ).pack(anchor="w")
+
+        # Separator
+        ttk.Separator(frame, orient="horizontal").pack(fill="x", padx=5, pady=3)
+
+        # Container for dynamic per-tag sections
+        self._tag_sections_frame = ttk.Frame(frame)
+        self._tag_sections_frame.pack(fill="x", padx=0, pady=0)
+
+        # Build initial tag sections
+        self._rebuild_tag_sections()
+
+        # "Add Tag" dropdown at the bottom
+        add_frame = ttk.Frame(frame)
+        add_frame.pack(fill="x", padx=5, pady=5)
+
+        self._add_tag_var = tk.StringVar(value="Add tag…")
+        self._add_tag_combo = ttk.Combobox(
+            add_frame,
+            textvariable=self._add_tag_var,
+            state="readonly",
+            width=25,
+        )
+        self._add_tag_combo.pack(side="left")
+        self._add_tag_combo.bind(
+            "<<ComboboxSelected>>", self._on_add_tag_selected,
+        )
+        self._refresh_add_tag_options()
+
+        # Backward-compat aliases — point at dialogue tag vars
+        self._width_var = tk.IntVar(value=48)
+        self._break_var = tk.StringVar(value="\\n")
+        self._max_lines_var = tk.IntVar(value=4)
+        # _char_width_frame kept for _on_width_mode_changed
+        self._char_width_frame = self._tag_sections_frame
 
     def _build_speaker_panel(self, parent: ttk.Frame) -> None:
         """Build the speaker handling options panel (Task 46.3: Ignore + Count)."""
@@ -693,6 +685,224 @@ class WordwrapOverwriteStep(BaseStep):
             foreground=THEME.text_secondary,
             font=("TkDefaultFont", 8),
         ).pack(padx=5, pady=(0, 5), anchor="w")
+
+    # =========================================================================
+    # Per-tag section helpers
+    # =========================================================================
+
+    def _rebuild_tag_sections(self) -> None:
+        """Destroy and recreate all per-tag setting sections."""
+        for child in self._tag_sections_frame.winfo_children():
+            child.destroy()
+        self._tag_widgets.clear()
+
+        for tc in self._tag_configs:
+            managed = self._is_tag_parser_managed(tc.tag)
+            tc.parser_managed = managed
+            self._build_tag_section(self._tag_sections_frame, tc)
+
+    def _build_tag_section(
+        self, parent: ttk.Frame, tc: TagWrapConfig,
+    ) -> None:
+        """Build a single per-tag settings section.
+
+        Args:
+            parent: Container frame for the section.
+            tc: Tag configuration to display.
+        """
+        section = ttk.LabelFrame(parent, text=f"Tag: {tc.tag}")
+        section.pack(fill="x", padx=5, pady=3)
+
+        widgets: Dict[str, Any] = {"frame": section}
+
+        if tc.parser_managed:
+            ttk.Label(
+                section,
+                text="Wordwrap mandated by Parser Format",
+                foreground=THEME.accent_info,
+                font=("TkDefaultFont", 9, "italic"),
+            ).pack(padx=5, pady=5, anchor="w")
+        else:
+            # Width
+            w_frame = ttk.Frame(section)
+            w_frame.pack(fill="x", padx=5, pady=2)
+            ttk.Label(w_frame, text="Width:").pack(side="left")
+            width_var = tk.IntVar(value=tc.width)
+            width_var.trace_add(
+                "write",
+                lambda *_a, t=tc.tag: self._on_tag_setting_changed(t),
+            )
+            ttk.Spinbox(
+                w_frame, from_=20, to=200,
+                textvariable=width_var, width=8,
+            ).pack(side="left", padx=5)
+            ttk.Label(w_frame, text="characters").pack(side="left")
+            widgets["width_var"] = width_var
+
+            # Break char
+            b_frame = ttk.Frame(section)
+            b_frame.pack(fill="x", padx=5, pady=2)
+            ttk.Label(b_frame, text="Break char:").pack(side="left")
+            break_var = tk.StringVar(value=tc.break_char)
+            break_var.trace_add(
+                "write",
+                lambda *_a, t=tc.tag: self._on_tag_setting_changed(t),
+            )
+            ttk.Combobox(
+                b_frame, textvariable=break_var,
+                values=["\\n", "\n", "<br>", "[r]", "\\r\\n"],
+                width=10,
+            ).pack(side="left", padx=5)
+            widgets["break_var"] = break_var
+
+            # Max lines
+            m_frame = ttk.Frame(section)
+            m_frame.pack(fill="x", padx=5, pady=2)
+            ttk.Label(m_frame, text="Max lines:").pack(side="left")
+            max_lines_var = tk.IntVar(value=tc.max_lines)
+            max_lines_var.trace_add(
+                "write",
+                lambda *_a, t=tc.tag: self._on_tag_setting_changed(t),
+            )
+            ttk.Spinbox(
+                m_frame, from_=0, to=20,
+                textvariable=max_lines_var, width=8,
+            ).pack(side="left", padx=5)
+            ttk.Label(m_frame, text="(0 = unlimited)").pack(side="left")
+            widgets["max_lines_var"] = max_lines_var
+
+        # Remove button (not for the first two default tags)
+        is_default = tc.tag in {t.tag for t in DEFAULT_TAG_CONFIGS}
+        if not is_default:
+            btn_frame = ttk.Frame(section)
+            btn_frame.pack(fill="x", padx=5, pady=2)
+            ttk.Button(
+                btn_frame, text="✕ Remove tag",
+                command=lambda t=tc.tag: self._remove_tag_config(t),
+            ).pack(side="right")
+
+        self._tag_widgets[tc.tag] = widgets
+
+        # Sync backward-compat aliases for first (dialogue) tag
+        if tc.tag == "dialogue" and "width_var" in widgets:
+            self._width_var = widgets["width_var"]
+            self._break_var = widgets["break_var"]
+            self._max_lines_var = widgets["max_lines_var"]
+
+    def _on_tag_setting_changed(self, tag: str) -> None:
+        """Sync UI var change back into _tag_configs and manifest."""
+        w = self._tag_widgets.get(tag)
+        if not w:
+            return
+        for tc in self._tag_configs:
+            if tc.tag == tag:
+                if "width_var" in w:
+                    try:
+                        tc.width = w["width_var"].get()
+                    except tk.TclError:
+                        pass
+                if "break_var" in w:
+                    tc.break_char = w["break_var"].get()
+                if "max_lines_var" in w:
+                    try:
+                        tc.max_lines = w["max_lines_var"].get()
+                    except tk.TclError:
+                        pass
+                break
+        self._save_tag_configs_to_manifest()
+
+    def _on_add_tag_selected(self, event: Optional[tk.Event] = None) -> None:
+        """Handle selection from the 'Add tag' dropdown."""
+        tag = self._add_tag_var.get()
+        if not tag or tag == "Add tag…":
+            return
+        self._add_tag_config(tag)
+        self._add_tag_var.set("Add tag…")
+
+    def _add_tag_config(self, tag: str) -> None:
+        """Add a new per-tag section with defaults."""
+        if any(tc.tag == tag for tc in self._tag_configs):
+            return
+        tc = TagWrapConfig(tag=tag)
+        tc.parser_managed = self._is_tag_parser_managed(tag)
+        self._tag_configs.append(tc)
+        self._rebuild_tag_sections()
+        self._refresh_add_tag_options()
+        self._save_tag_configs_to_manifest()
+
+    def _remove_tag_config(self, tag: str) -> None:
+        """Remove a per-tag section."""
+        self._tag_configs = [tc for tc in self._tag_configs if tc.tag != tag]
+        self._rebuild_tag_sections()
+        self._refresh_add_tag_options()
+        self._save_tag_configs_to_manifest()
+
+    def _refresh_add_tag_options(self) -> None:
+        """Update the 'Add tag' combobox with available (unused) tags."""
+        available = self._collect_available_tags()
+        used = {tc.tag for tc in self._tag_configs}
+        options = sorted(available - used)
+        if hasattr(self, "_add_tag_combo"):
+            self._add_tag_combo.configure(values=options or ["(no more tags)"])
+
+    def _collect_available_tags(self) -> set:
+        """Gather all unique tags from filedir and lines in the manifest."""
+        tags: set = {"dialogue", "menu"}
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            return tags
+        for entry_dict in mgr._manifest_data.get("filedir", []):
+            t = entry_dict.get("type", "")
+            if t:
+                tags.add(t)
+        for line in mgr._manifest_data.get("lines", []):
+            t = line.get("tag", "")
+            if t:
+                tags.add(t)
+        return tags
+
+    def _is_tag_parser_managed(self, tag: str) -> bool:
+        """Check whether the active parser mandates wrapping for *tag*."""
+        parser = self._get_active_parser()
+        if parser is None:
+            return False
+        try:
+            cfg = parser.wordwrap_for_tag(tag)
+            return cfg is not None
+        except Exception:
+            return False
+
+    def _get_active_parser(self) -> Any:
+        """Return the active parser object or ``None``."""
+        if not _HAS_PARSER_REGISTRY:
+            return None
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            return None
+        opts = mgr._manifest_data.get("Options", {})
+        name = opts.get("ParserName", "") if isinstance(opts, dict) else ""
+        if not name:
+            return None
+        try:
+            from CherryAI.formats import get_parser_registry
+            return get_parser_registry().get(name)
+        except Exception:
+            return None
+
+    def _save_tag_configs_to_manifest(self) -> None:
+        """Persist current per-tag configs to the manifest."""
+        mgr = self.manifest_manager
+        if mgr is None:
+            return
+        configs = [tc.to_dict() for tc in self._tag_configs]
+        mgr.set_wordwrap_tag_configs(configs)
+
+    def get_tag_config_for(self, tag: str) -> Optional[TagWrapConfig]:
+        """Return the per-tag config matching *tag*, or ``None``."""
+        for tc in self._tag_configs:
+            if tc.tag == tag:
+                return tc
+        return None
 
     def _build_summary_panel(self) -> None:
         """Build the summary statistics panel."""
@@ -857,76 +1067,153 @@ class WordwrapOverwriteStep(BaseStep):
         self._process_thread.start()
 
     def _process_wrap(self) -> None:
-        """Process wordwrap on lines."""
+        """Process wordwrap on lines with per-tag settings.
+
+        For each line the tag is resolved (line tag → filedir type →
+        ``"dialogue"`` fallback), then the matching :class:`TagWrapConfig`
+        is looked up.  Parser-managed tags delegate to the parser's O6
+        ``wordwrap()`` or ``pretty_wrap()`` hook.  User-managed tags use
+        the per-tag Width / BreakChar / MaxLines with the standard
+        ``apply_wordwrap`` pipeline.  Speaker handling and ignore patterns
+        are applied globally.
+        """
         if not _HAS_WORDWRAP:
             logger.warning("wordwrap module not available, using simple wrap")
             self._simple_wrap()
             return
 
-        # Parser Handshake O6: Check if parser provides custom wordwrap
-        parser_handles_wordwrap = False
-        parser_obj = None
-        try:
-            mgr = self.manifest_manager
-            if mgr is not None and mgr.is_loaded:
-                opts = mgr._manifest_data.get("Options", {})
-                if isinstance(opts, dict) and opts.get("ParserHandlesWordwrap"):
-                    parser_name = opts.get("ParserName", "")
-                    if parser_name:
-                        from CherryAI.formats import get_parser_registry
-                        parser_obj = get_parser_registry().get(parser_name)
-                        if parser_obj is not None:
-                            parser_handles_wordwrap = True
-        except Exception:
-            pass
+        parser_obj = self._get_active_parser()
 
-        # Build config
-        config = WordwrapConfig(
-            mode=self._mode_var.get(),
-            in1=self._width_var.get(),
-            in2=self._break_var.get(),
-            in3=self._max_lines_var.get() or None,
-            ignore_codes=self._get_ignore_codes(),
-            speaker_mode=self._speaker_var.get().upper(),
-        )
+        # Tag resolution maps
+        line_tag_map, filedir_type_map = self._build_tag_maps()
+
+        # Global settings shared across all tags
+        global_ignore = self._get_ignore_codes()
+        global_speaker = self._speaker_var.get().upper()
+        global_mode = self._mode_var.get()
 
         # Get lines from session
         step_data = self.get_step_data()
         lines = step_data.get("lines", [])
-
         if not lines:
             return
 
-        # O6: Delegate to parser wordwrap when available
-        if parser_handles_wordwrap and parser_obj is not None:
-            wrapped_lines = []
-            for line in lines:
-                result = parser_obj.wordwrap(line)
-                if result is not None:
-                    wrapped_lines.append(config.in2.join(result))
-                else:
-                    wrapped_lines.append(line)
-        else:
-            # Apply standard wordwrap
-            wrapped_lines = apply_wordwrap(lines, config)
+        # Pre-check parser capabilities once
+        has_parser_wordwrap = False
+        has_parser_pretty = False
+        if parser_obj is not None:
+            try:
+                pinfo = parser_obj.info()
+                has_parser_wordwrap = pinfo.get("has_custom_wordwrap", False)
+                has_parser_pretty = pinfo.get("has_custom_pretty_wrap", False)
+            except Exception:
+                pass
 
-        # Update wrap lines
         self._lines = []
-        for i, (orig, wrapped) in enumerate(zip(lines, wrapped_lines)):
-            line = WrapLine(
+        for i, orig in enumerate(lines):
+            # 1. Resolve tag (line tag overrules filedir file tag)
+            tag = (
+                line_tag_map.get(i)
+                or filedir_type_map.get(i)
+                or "dialogue"
+            )
+
+            # 2. Look up per-tag config
+            tc = self.get_tag_config_for(tag)
+            if tc is None:
+                tc = self.get_tag_config_for("dialogue")
+            if tc is None:
+                tc = TagWrapConfig(tag=tag)
+
+            bc = tc.break_char
+            max_l = tc.max_lines or None
+
+            # 3. Wrap the line
+            if tc.parser_managed and parser_obj is not None:
+                # Parser mandates wrapping for this tag
+                wrapped = orig
+                if has_parser_wordwrap:
+                    result = parser_obj.wordwrap(orig)
+                    if result is not None:
+                        wrapped = bc.join(result)
+                    elif has_parser_pretty:
+                        pw = parser_obj.pretty_wrap(
+                            orig, tc.width, bc, max_l,
+                        )
+                        if pw is not None:
+                            wrapped = pw
+                elif has_parser_pretty:
+                    pw = parser_obj.pretty_wrap(
+                        orig, tc.width, bc, max_l,
+                    )
+                    if pw is not None:
+                        wrapped = pw
+            elif tc.width <= 0:
+                # Zero width → no wrap
+                wrapped = orig
+            else:
+                # User-managed tag: check for parser pretty_wrap hook
+                if has_parser_pretty:
+                    pw = parser_obj.pretty_wrap(orig, tc.width, bc, max_l)
+                    if pw is not None:
+                        wrapped = pw
+                    else:
+                        config = WordwrapConfig(
+                            mode=global_mode, in1=tc.width,
+                            in2=bc, in3=max_l,
+                            ignore_codes=global_ignore,
+                            speaker_mode=global_speaker,
+                        )
+                        result_list = apply_wordwrap([orig], config)
+                        wrapped = result_list[0] if result_list else orig
+                else:
+                    config = WordwrapConfig(
+                        mode=global_mode, in1=tc.width,
+                        in2=bc, in3=max_l,
+                        ignore_codes=global_ignore,
+                        speaker_mode=global_speaker,
+                    )
+                    result_list = apply_wordwrap([orig], config)
+                    wrapped = result_list[0] if result_list else orig
+
+            # 4. Build WrapLine
+            lc = wrapped.count(bc) + 1 if bc else 1
+            exceeds = bool(tc.max_lines and lc > tc.max_lines)
+            self._lines.append(WrapLine(
                 idx=i,
                 original=orig,
                 wrapped=wrapped,
                 char_count=len(wrapped),
-                line_count=wrapped.count(config.in2) + 1 if config.in2 else 1,
-                exceeds_limit=bool(
-                    config.in3 and ((wrapped.count(config.in2) + 1) if config.in2 else 1) > config.in3
-                ),
-            )
-            self._lines.append(line)
+                line_count=lc,
+                exceeds_limit=exceeds,
+            ))
 
-        # Update stats
         self._update_stats()
+
+    def _build_tag_maps(
+        self,
+    ) -> Tuple[Dict[int, str], Dict[int, str]]:
+        """Build idx → tag maps from manifest lines and filedir.
+
+        Returns:
+            ``(line_tag_map, filedir_type_map)`` where each maps a
+            global line index to the resolved tag / file type string.
+        """
+        line_tag_map: Dict[int, str] = {}
+        filedir_type_map: Dict[int, str] = {}
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            return line_tag_map, filedir_type_map
+        for line_data in mgr.get_lines():
+            idx = line_data.get("idx", -1)
+            tag = line_data.get("tag", "")
+            if tag:
+                line_tag_map[idx] = tag
+        for entry in mgr.get_filedir():
+            if entry.type:
+                for idx in range(entry.first_idx, entry.last_idx + 1):
+                    filedir_type_map[idx] = entry.type
+        return line_tag_map, filedir_type_map
 
     def _simple_wrap(self) -> None:
         """Simple wordwrap fallback when module not available."""
@@ -1198,7 +1485,8 @@ class WordwrapOverwriteStep(BaseStep):
     def _load_wordwrap_settings_from_manifest(self) -> None:
         """Load wordwrap settings from manifest (TASK 28.1).
         
-        Loads all wordwrap options from manifest into UI widgets.
+        Loads all wordwrap options from manifest into UI widgets,
+        including per-tag configurations from ``TagConfigs``.
         """
         if self.manifest_manager is None:
             return
@@ -1219,6 +1507,19 @@ class WordwrapOverwriteStep(BaseStep):
             self.manifest_manager, "WordwrapSettings", "SpeakerHandling", SpeakerMode.COUNT.value
         )
         self._speaker_var.set(speaker_value)
+
+        # Load per-tag configs from manifest (fall back to defaults)
+        raw_configs = self.manifest_manager.get_wordwrap_tag_configs()
+        if raw_configs:
+            self._tag_configs = [TagWrapConfig.from_dict(d) for d in raw_configs]
+        else:
+            self._tag_configs = [
+                TagWrapConfig(tag=tc.tag, width=tc.width,
+                              break_char=tc.break_char, max_lines=tc.max_lines)
+                for tc in DEFAULT_TAG_CONFIGS
+            ]
+        self._rebuild_tag_sections()
+        self._refresh_add_tag_options()
         
         logger.debug("Wordwrap settings loaded from manifest")
 
@@ -1281,6 +1582,12 @@ class WordwrapOverwriteStep(BaseStep):
         self._lines.clear()
         self._selected_line_idx = -1
         self._manifest_bindings.clear()
+        self._tag_configs = [
+            TagWrapConfig(tag=tc.tag, width=tc.width,
+                          break_char=tc.break_char, max_lines=tc.max_lines)
+            for tc in DEFAULT_TAG_CONFIGS
+        ]
+        self._tag_widgets.clear()
         logger.debug("Wordwrap step reset for new project")
 
     def on_enter(self) -> None:
@@ -1347,6 +1654,7 @@ class WordwrapOverwriteStep(BaseStep):
             "max_lines": self._max_lines_var.get(),
             "speaker_mode": self._speaker_var.get(),
         }
+        step_data["tag_configs"] = [tc.to_dict() for tc in self._tag_configs]
         step_data["wrapped_lines"] = [l.wrapped for l in self._lines]
         self.set_step_data(step_data)
 

@@ -123,6 +123,116 @@ class LoadedFile:
         }
 
 
+# ======================================================================
+# Import Translation Dialog
+# ======================================================================
+
+class _ImportTranslationDialog(tk.Toplevel):
+    """Selection dialog for Import Translation.
+
+    Shows two groups of checkboxes:
+    * **Line Fields** — which per-line data to copy (prepro, tl, …)
+    * **Settings Sections** — which manifest-level settings to import
+    """
+
+    def __init__(self, parent: tk.Widget, source_data: Dict[str, Any]) -> None:
+        super().__init__(parent)
+        self.title("Import Translation — Select Data")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+
+        self.result: Optional[Dict[str, bool]] = None
+        self._vars: Dict[str, tk.BooleanVar] = {}
+        self._source = source_data
+
+        self._build_ui()
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+        # Centre on parent
+        self.update_idletasks()
+        px = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
+        py = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f"+{max(px, 0)}+{max(py, 0)}")
+
+    # ---- UI ----
+
+    def _build_ui(self) -> None:
+        pad = {"padx": 8, "pady": 2}
+
+        # --- Line Fields ---
+        lf = ttk.LabelFrame(self, text="Line Fields")
+        lf.pack(fill="x", padx=10, pady=(10, 4))
+
+        self._add_check(lf, "import_prepro", "Preprocessed", True, **pad)
+        self._add_check(lf, "import_tags", "Tags", True, **pad)
+        self._add_check(lf, "import_translated", "Translated", True, **pad)
+        self._add_check(lf, "import_postpro", "Postprocessed", True, **pad)
+        self._add_check(lf, "import_wordwrap", "Wordwrap", True, **pad)
+        self._add_check(lf, "import_qa", "QA (edits, TLC, overwrite)", True, **pad)
+        ttk.Separator(lf, orient="horizontal").pack(fill="x", padx=8, pady=4)
+        self._add_check(
+            lf, "skip_new_lines",
+            "Do not overwrite lines that already have translations",
+            False, **pad,
+        )
+
+        # --- Settings Sections ---
+        sf = ttk.LabelFrame(self, text="Settings Sections")
+        sf.pack(fill="x", padx=10, pady=(4, 4))
+
+        self._add_check(sf, "import_analysis", "Analysis", False, **pad)
+        self._add_check(sf, "import_information", "Information (metadata, glossary, code DB)", True, **pad)
+        self._add_check(sf, "import_preprocessing", "Preprocessing Settings", False, **pad)
+        self._add_check(sf, "import_costs", "Costs / Request Settings", False, **pad)
+        self._add_check(sf, "import_translation", "Translation Step State", False, **pad)
+        self._add_check(sf, "import_postprocessing", "Postprocessing", False, **pad)
+        self._add_check(sf, "import_wordwrap_settings", "Wordwrap Settings", False, **pad)
+        self._add_check(sf, "import_qa_settings", "QA / Validation Rules", False, **pad)
+        self._add_check(sf, "import_file_settings", "File / Output Settings", False, **pad)
+
+        # --- Source info ---
+        src_lines = len(self._source.get("lines", []))
+        info_text = f"Source manifest contains {src_lines} line(s)."
+        ttk.Label(self, text=info_text, foreground="gray").pack(
+            padx=10, pady=(2, 4),
+        )
+
+        # --- Buttons ---
+        btn_frame = ttk.Frame(self)
+        btn_frame.pack(fill="x", padx=10, pady=(4, 10))
+        ttk.Button(btn_frame, text="Import", command=self._on_ok).pack(
+            side="right", padx=4,
+        )
+        ttk.Button(btn_frame, text="Cancel", command=self._on_cancel).pack(
+            side="right", padx=4,
+        )
+
+    def _add_check(
+        self,
+        parent: tk.Widget,
+        key: str,
+        label: str,
+        default: bool,
+        **pack_kw: Any,
+    ) -> None:
+        var = tk.BooleanVar(value=default)
+        self._vars[key] = var
+        ttk.Checkbutton(parent, text=label, variable=var).pack(
+            anchor="w", **pack_kw,
+        )
+
+    # ---- Actions ----
+
+    def _on_ok(self) -> None:
+        self.result = {k: v.get() for k, v in self._vars.items()}
+        self.destroy()
+
+    def _on_cancel(self) -> None:
+        self.result = None
+        self.destroy()
+
+
 class InputExtractionStep(BaseStep):
     """Input workflow step.
 
@@ -362,8 +472,8 @@ class InputExtractionStep(BaseStep):
             show="headings",
             selectmode="extended",
         )
-        self._preview_tree.heading("idx", text="Idx", anchor="w")
-        self._preview_tree.heading("line", text="#", anchor="w")
+        self._preview_tree.heading("idx", text="Project", anchor="w")
+        self._preview_tree.heading("line", text="File", anchor="w")
         self._preview_tree.heading("content", text="Content", anchor="w")
         self._preview_tree.heading("tags", text="Tags", anchor="w")
         self._preview_tree.column("idx", width=60, stretch=False)
@@ -518,6 +628,8 @@ class InputExtractionStep(BaseStep):
 
         PHASE 58.1: Common loading method for unified input dialog.
         PHASE 58.12: Added project_name parameter.
+        Non-destructive: when adding to an existing manifest, only new files
+        are inserted and existing line entries are preserved.
 
         Args:
             paths: List of selected paths (files or folders).
@@ -554,7 +666,7 @@ class InputExtractionStep(BaseStep):
         if first_folder:
             self._folder_root = first_folder
 
-        # Sort files
+        # Sort files alphabetically for consistent ordering
         files_to_load.sort()
 
         # Remove duplicates
@@ -565,6 +677,42 @@ class InputExtractionStep(BaseStep):
                 seen.add(f)
                 unique_files.append(f)
         files_to_load = unique_files
+
+        # -----------------------------------------------------------
+        # Source root validation for adding to existing manifest
+        # -----------------------------------------------------------
+        mgr = self.manifest_manager
+        is_add_to_existing = (
+            mgr is not None and mgr.is_loaded and bool(mgr.get_filedir())
+        )
+
+        if is_add_to_existing:
+            existing_root = mgr.source_root
+            if existing_root:
+                # Check every new file path contains the source_root folder name
+                rejected: List[str] = []
+                for fp in files_to_load:
+                    if existing_root not in str(fp):
+                        rejected.append(fp.name)
+                if rejected:
+                    names = "\n".join(rejected[:10])
+                    if len(rejected) > 10:
+                        names += f"\n...and {len(rejected) - 10} more"
+                    messagebox.showerror(
+                        "Source Root Mismatch",
+                        f"New input must have the same source directory: "
+                        f"{existing_root}\n\nRejected files:\n{names}",
+                    )
+                    return
+
+            # Filter out files already in the manifest
+            existing_rel_paths = {e.rel_path for e in mgr.get_filedir()}
+            already_loaded_names = {
+                lf.path.name for lf in self._loaded_files
+            }
+
+        # Record the index where new LoadedFiles start
+        new_files_start = len(self._loaded_files)
 
         loaded_count = 0
         skipped_files: List[str] = []
@@ -590,6 +738,14 @@ class InputExtractionStep(BaseStep):
                 if progress is not None:
                     progress.update(path.name)
                 continue
+
+            # Skip files already in the manifest when adding
+            if is_add_to_existing:
+                if path.name in already_loaded_names:
+                    if progress is not None:
+                        progress.update(path.name)
+                    continue
+
             if self._load_file(path, encoding, format_override):
                 loaded_count += 1
             if progress is not None:
@@ -618,8 +774,13 @@ class InputExtractionStep(BaseStep):
             self.set_status("in-progress")
             logger.info("Loaded %d file(s)", loaded_count)
 
-            self._populate_project_info_from_files()
-            self._ensure_project_created()
+            if is_add_to_existing:
+                # Non-destructive addition to existing manifest
+                new_loaded = self._loaded_files[new_files_start:]
+                self._add_files_to_existing_manifest(new_loaded, format_override)
+            else:
+                self._populate_project_info_from_files()
+                self._ensure_project_created()
 
             # Parser Handshake P3: Wire optional components to manifest
             self._wire_parser_optionals(format_override)
@@ -630,7 +791,8 @@ class InputExtractionStep(BaseStep):
             self._update_file_list()
 
             # PHASE 58.4: Execute automatic pipeline
-            self._execute_auto_pipeline()
+            if not is_add_to_existing:
+                self._execute_auto_pipeline()
 
     def _collect_files_for_format(self, folder: Path, format_filter: str) -> List[Path]:
         """Collect files from a folder based on format filter.
@@ -1305,6 +1467,102 @@ class InputExtractionStep(BaseStep):
             except Exception as e:
                 logger.warning("Could not create project: %s", e)
 
+    # ------------------------------------------------------------------
+    # Non-destructive file addition
+    # ------------------------------------------------------------------
+
+    def _add_files_to_existing_manifest(
+        self,
+        new_loaded: List,
+        format_override: str = "auto",
+    ) -> None:
+        """Add *new_loaded* files to an already-populated manifest.
+
+        This is the non-destructive counterpart to ``_sync_lines_to_manifest``.
+        Existing lines and filedir entries are preserved; only new files are
+        appended and all idx values are re-sequenced contiguously.
+
+        Args:
+            new_loaded: List of ``LoadedFile`` objects that were just loaded
+                        and are **not** yet in the manifest.
+            format_override: Format string used during loading.
+        """
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            return
+
+        if not new_loaded:
+            return
+
+        # Determine whether typing is enabled
+        typing_enabled = get_default(
+            "session", "typing_enabled", True, bool,
+        )
+        if len(self._loaded_files) <= 1:
+            typing_enabled = False
+
+        # Build file_infos and new_lines_by_rel --------------------------
+        new_file_infos: List[Dict[str, Any]] = []
+        new_lines_by_rel: Dict[str, List[str]] = {}
+
+        # Derive rel_paths consistent with existing filedir
+        new_paths = [lf.path for lf in new_loaded]
+        if len(new_paths) > 1:
+            base = mgr._find_common_base(new_paths)
+        else:
+            base = new_paths[0].parent
+
+        for loaded_file in new_loaded:
+            file_type = ""
+            if typing_enabled:
+                file_type = classify_file_type(loaded_file.lines)
+
+            try:
+                rel_path = str(loaded_file.path.relative_to(base))
+            except ValueError:
+                rel_path = loaded_file.path.name
+
+            new_file_infos.append({
+                "rel_path": rel_path,
+                "format": loaded_file.format_id,
+                "line_count": loaded_file.line_count,
+                "encoding": loaded_file.encoding,
+                "type": file_type,
+            })
+
+            new_lines_by_rel[rel_path] = list(loaded_file.lines)
+
+        added = mgr.add_files(new_file_infos, new_lines_by_rel)
+        logger.info("Added %d new file(s) to manifest", added)
+
+        # Copy only the new originals to the project
+        try:
+            filedir = mgr.get_filedir()
+            source_paths: Dict[str, Path] = {}
+            new_rel_set = set(new_lines_by_rel.keys())
+            for entry in filedir:
+                if entry.rel_path in new_rel_set:
+                    # Find the matching LoadedFile
+                    for lf in new_loaded:
+                        try:
+                            rp = str(lf.path.relative_to(base))
+                        except ValueError:
+                            rp = lf.path.name
+                        if rp == entry.rel_path:
+                            source_paths[entry.rel_path] = lf.path
+                            break
+
+            if source_paths:
+                copied = mgr.copy_originals_to_project(
+                    source_paths=source_paths,
+                )
+                if copied:
+                    logger.info(
+                        "Copied %d new original(s) to project", len(copied),
+                    )
+        except Exception as e:
+            logger.warning("Failed to copy new originals: %s", e)
+
     def _sync_lines_to_manifest(self) -> None:
         """Sync loaded file lines to the manifest (TASK 19 Phase 5).
         
@@ -1449,11 +1707,16 @@ class InputExtractionStep(BaseStep):
             self.set_step_data({})
             logger.info("Cleared all loaded files")
 
-    def _on_import_translations(self) -> None:
-        """Import translations from another manifest via exact line matching.
+    # ------------------------------------------------------------------
+    # Import Translation
+    # ------------------------------------------------------------------
 
-        Task 47.8: Opens a file dialog to select a source manifest, then
-        copies translation fields for lines whose ``orig`` matches exactly.
+    def _on_import_translations(self) -> None:
+        """Import translations from another manifest with a selection dialog.
+
+        Opens a file dialog to select a source manifest, then shows
+        a selection dialog to let the user choose which line fields
+        and settings sections to import.
         """
         if not self._manifest_manager:
             messagebox.showwarning("Warning", "No project loaded.")
@@ -1463,7 +1726,10 @@ class InputExtractionStep(BaseStep):
 
         source_path = filedialog.askopenfilename(
             title="Select Source Manifest",
-            filetypes=[("CherryAI Manifest", "*.CherryAI.json"), ("All Files", "*.*")],
+            filetypes=[
+                ("CherryAI Manifest", "*.CherryAI.json"),
+                ("All Files", "*.*"),
+            ],
         )
         if not source_path:
             return
@@ -1475,10 +1741,96 @@ class InputExtractionStep(BaseStep):
             messagebox.showerror("Error", f"Failed to read manifest: {e}")
             return
 
+        # Show selection dialog
+        dialog = _ImportTranslationDialog(self, source_data)
+        self.wait_window(dialog)
+        if not dialog.result:
+            return
+
+        selections = dialog.result
+        mgr = self._manifest_manager
+
+        # ---- Import line fields ----
+        line_stats = self._import_line_fields(
+            source_data, selections, mgr,
+        )
+
+        # ---- Import settings sections ----
+        section_count = self._import_settings_sections(
+            source_data, selections, mgr,
+        )
+
+        # Log import metadata
+        mgr.update_step_data(0, "last_import", {
+            "source_manifest": str(source_path),
+            "lines_matched": line_stats["matched"],
+            "lines_total": line_stats["total"],
+            "sections_imported": section_count,
+            "timestamp": datetime.now().isoformat(),
+        })
+
+        # Build summary message
+        parts: List[str] = []
+        if line_stats["matched"] > 0:
+            parts.append(
+                f"Lines: {line_stats['matched']}/{line_stats['total']} matched"
+            )
+        if section_count > 0:
+            parts.append(f"Settings sections: {section_count}")
+        if not parts:
+            parts.append("No data imported (nothing selected).")
+
+        messagebox.showinfo("Import Complete", "\n".join(parts))
+        logger.info(
+            "Import from %s — lines: %d/%d, sections: %d",
+            source_path, line_stats["matched"],
+            line_stats["total"], section_count,
+        )
+
+        # Refresh preview
+        self._update_preview()
+
+    def _import_line_fields(
+        self,
+        source_data: Dict[str, Any],
+        selections: Dict[str, bool],
+        mgr: Any,
+    ) -> Dict[str, int]:
+        """Import selected line fields from source manifest.
+
+        Args:
+            source_data: Parsed JSON of the source manifest.
+            selections: Checkbox selections from the dialog.
+            mgr: ManifestManager of the current project.
+
+        Returns:
+            Dict with ``matched`` and ``total`` counts.
+        """
         source_lines = source_data.get("lines", [])
         if not source_lines:
-            messagebox.showinfo("Info", "Source manifest has no lines.")
-            return
+            return {"matched": 0, "total": 0}
+
+        # Determine which field groups are selected
+        field_map: Dict[str, List[str]] = {
+            "import_prepro": ["prepro"],
+            "import_tags": ["tag"],
+            "import_translated": ["tl", "preedit"],
+            "import_postpro": ["postpro"],
+            "import_wordwrap": ["wordwr"],
+        }
+
+        fields_to_copy: List[str] = []
+        for key, fields in field_map.items():
+            if selections.get(key, False):
+                fields_to_copy.extend(fields)
+
+        # QA fields (numbered: edit1, edit2, tlc1, tlc2, overwrite)
+        copy_qa = selections.get("import_qa", False)
+
+        skip_new = selections.get("skip_new_lines", False)
+
+        if not fields_to_copy and not copy_qa:
+            return {"matched": 0, "total": 0}
 
         # Build lookup: orig → source line entry
         source_lookup: Dict[str, Dict[str, Any]] = {}
@@ -1487,14 +1839,7 @@ class InputExtractionStep(BaseStep):
             if orig and orig not in source_lookup:
                 source_lookup[orig] = sl
 
-        # Fields to copy
-        copy_fields = [
-            "prepro", "tl", "preedit", "postpro", "wordwr", "overwrite",
-        ]
-        # Also copy numbered fields (edit1, edit2, tlc1, tlc2, etc.)
-        numbered_prefixes = ("edit", "tlc")
-
-        current_lines = self._manifest_manager.get_lines()
+        current_lines = mgr.get_lines()
         matched = 0
         total = len(current_lines)
 
@@ -1502,38 +1847,156 @@ class InputExtractionStep(BaseStep):
             orig = line.get("orig", "")
             if not orig:
                 continue
+
             match = source_lookup.get(orig)
             if match is None:
                 continue
+
+            # Skip if line already has data and skip_new is on
+            if skip_new and line.get("tl", ""):
+                continue
+
             matched += 1
-            for field in copy_fields:
+
+            for field in fields_to_copy:
                 if field in match and match[field]:
                     line[field] = match[field]
-            # Copy numbered fields
-            for key, val in match.items():
-                for prefix in numbered_prefixes:
-                    if key.startswith(prefix) and val:
+
+            if copy_qa:
+                for key, val in match.items():
+                    if (key.startswith("edit") or key.startswith("tlc")
+                            or key == "overwrite") and val:
                         line[key] = val
 
-        self._manifest_manager.set_lines(current_lines)
+        mgr.set_lines(current_lines)
+        return {"matched": matched, "total": total}
 
-        # Log import metadata
-        self._manifest_manager.update_step_data(0, "last_import", {
-            "source_manifest": str(source_path),
-            "lines_matched": matched,
-            "lines_total": total,
-            "timestamp": datetime.now().isoformat(),
-        })
+    def _import_settings_sections(
+        self,
+        source_data: Dict[str, Any],
+        selections: Dict[str, bool],
+        mgr: Any,
+    ) -> int:
+        """Import selected settings sections from source manifest.
 
-        messagebox.showinfo(
-            "Import Complete",
-            f"Imported {matched} of {total} lines.\n"
-            f"{total - matched} lines had no match.",
-        )
-        logger.info(
-            "Imported translations: %d/%d matched from %s",
-            matched, total, source_path,
-        )
+        Args:
+            source_data: Parsed JSON of the source manifest.
+            selections: Checkbox selections from the dialog.
+            mgr: ManifestManager of the current project.
+
+        Returns:
+            Number of sections imported.
+        """
+        count = 0
+
+        # Analysis step state
+        if selections.get("import_analysis", False):
+            src_ss = source_data.get("step_state", {}).get("Analysis")
+            if src_ss:
+                mgr._manifest_data.setdefault("step_state", {})["Analysis"] = src_ss
+                mgr._mark_dirty()
+                count += 1
+
+        # Information metadata
+        if selections.get("import_information", False):
+            src_ss = source_data.get("step_state", {}).get("Information")
+            src_meta = (
+                src_ss.get("data", {}).get("metadata", {}) if src_ss else {}
+            )
+            if src_meta:
+                mgr.set_info_metadata(src_meta)
+                count += 1
+
+            # Glossary
+            src_glossary = source_data.get("glossary")
+            if src_glossary:
+                mgr._manifest_data["glossary"] = src_glossary
+                mgr._mark_dirty()
+
+            # Code patterns (Code Database)
+            src_cp = source_data.get("code_patterns")
+            if src_cp:
+                mgr._manifest_data["code_patterns"] = src_cp
+                mgr._mark_dirty()
+
+            # Characters
+            src_chars = source_data.get("characters")
+            if src_chars:
+                mgr._manifest_data["characters"] = src_chars
+                mgr._mark_dirty()
+
+        # Preprocessing settings (top-level keys)
+        if selections.get("import_preprocessing", False):
+            _PREPRO_KEYS = [
+                "Deduplication", "DeduplicationThreshold",
+                "EllipsisCompression", "SymbolConversion",
+                "SpeakerNameReplacement", "CodeSpacingRules",
+                "ProtectCodePatterns", "CustomPlaceholders",
+                "AnchorRemoval",
+            ]
+            for key in _PREPRO_KEYS:
+                if key in source_data:
+                    mgr._manifest_data[key] = source_data[key]
+            mgr._mark_dirty()
+            count += 1
+
+        # Costs / Translation settings (RequestOptions)
+        if selections.get("import_costs", False):
+            src_ro = source_data.get("RequestOptions")
+            if src_ro:
+                mgr._manifest_data["RequestOptions"] = src_ro
+                mgr._mark_dirty()
+                count += 1
+
+        if selections.get("import_translation", False):
+            # Translation step state
+            src_ss = source_data.get("step_state", {}).get("Translation")
+            if src_ss:
+                mgr._manifest_data.setdefault("step_state", {})["Translation"] = src_ss
+                mgr._mark_dirty()
+                count += 1
+
+        # Postprocessing
+        if selections.get("import_postprocessing", False):
+            src_pp = source_data.get("PostProcessing")
+            if src_pp:
+                mgr._manifest_data["PostProcessing"] = src_pp
+                mgr._mark_dirty()
+                count += 1
+
+        # Wordwrap
+        if selections.get("import_wordwrap_settings", False):
+            src_ww = source_data.get("WordwrapSettings")
+            if src_ww:
+                mgr._manifest_data["WordwrapSettings"] = src_ww
+                mgr._mark_dirty()
+                count += 1
+
+        # QA (ValidationRules + QAOptions)
+        if selections.get("import_qa_settings", False):
+            src_vr = source_data.get("ValidationRules")
+            if src_vr:
+                mgr._manifest_data["ValidationRules"] = src_vr
+            src_qa = source_data.get("QAOptions")
+            if src_qa:
+                mgr._manifest_data["QAOptions"] = src_qa
+            # Character validation
+            for k in ("CharacterWhitelist", "CharacterBlacklist",
+                      "WordBlacklist", "AutofixMap"):
+                if k in source_data:
+                    mgr._manifest_data[k] = source_data[k]
+            mgr._mark_dirty()
+            count += 1
+
+        # Output / File settings
+        if selections.get("import_file_settings", False):
+            src_of = source_data.get("OutputFormat")
+            if src_of:
+                mgr._manifest_data["OutputFormat"] = src_of
+                mgr._mark_dirty()
+                count += 1
+
+        return count
 
     def _on_file_listbox_right_click(self, event: tk.Event) -> None:
         """Handle right-click on file tree to show context menu.
@@ -2448,7 +2911,7 @@ class InputExtractionStep(BaseStep):
                 "",
                 "end",
                 iid=str(global_idx),
-                values=(global_idx, i + 1, display_line, line_tag),
+                values=(global_idx + 1, i + 1, display_line, line_tag),
             )
             shown += 1
 
@@ -2496,7 +2959,7 @@ class InputExtractionStep(BaseStep):
                     "",
                     "end",
                     iid=str(global_idx),
-                    values=(global_idx, i + 1, display_line, line_tag),
+                    values=(global_idx + 1, i + 1, display_line, line_tag),
                 )
                 shown += 1
 

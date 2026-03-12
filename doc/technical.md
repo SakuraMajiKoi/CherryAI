@@ -227,7 +227,7 @@ TABLE OF CONTENTS
    6.4 gui/steps/ (10 files - 10 workflow tabs)
        - __init__.py - Step exports
        - base.py - BaseStep abstract class (TASK 43.14: tab caching infra; on_new_project() lifecycle method for state flush)
-       - input_extract.py - Step 0: Input/Extraction 🔗formats/ (Phase 60: clickable column header sort with ▲/▼ indicators, file list filter entry, type column refresh fix, cross-file preview search with idx column and auto file-switching)
+       - input_extract.py - Step 0: Input/Extraction 🔗formats/ (Phase 60: clickable column header sort with ▲/▼ indicators, file list filter entry, type column refresh fix, cross-file preview search with idx column and auto file-switching; non-destructive file addition with source root validation; Import Translation selection dialog with line fields and settings sections; preview columns: Project/File 1-based)
        - analysis.py - Step 1: Analysis ❌NO shared imports
        - costs.py - Step 4: Costs (renamed from estimate.py in Phase 40; _estimate_via_formation() returns FormationResult with per-request line lists; _compute_per_request_prompt_overhead() builds each request's prompt individually via build_full_system_prompt(chunk_lines=...) for selective glossary/conditional filtering; syncs chunk_size from GlobalOptions; respects request_slicing mode; Per-model settings saved/loaded via api_config; Save Settings button persists UI state per model; Translation Options row with Thinking, Translated Context, Rolling Context spinboxes; Request Mode 2×2 grid (Normal/Batch/Flex/Priority) with Available/Unavailable/Selected states driving mode-specific pricing; Token Counts panel shows Input/Prompt/Cached/Total/Output rows; EstimationResult dataclass includes content_tokens, prompt_tokens, cached_tokens; Full estimation persisted to manifest via _save_estimation_to_manifest(); Estimate button renamed to "↻ Update Counts" after first run)
        - information.py - Step 2: Information 🔗manifest_fields (Bug Fix: on_leave() and _save_metadata() now merge *_enabled toggle BooleanVar values into metadata dict after ProjectMetadata.to_dict() — fixes toggle state erasure on tab change; Save button removed from header — auto-save on tab change is sufficient)
@@ -523,7 +523,7 @@ TABLE OF CONTENTS
        - **Phase 28 Integration:** WordwrapOverwriteStep manifest bindings:
          - WordwrapSettings nested: Mode (text), Width (int), BreakChar (text),
            MaxLines (int), PreventOrphans (bool), PreferPunctuationBreaks (bool),
-           SpeakerHandling (text), Typography (text)
+           SpeakerHandling (text), Typography (text), TagConfigs (list of dicts)
        - **Phase 28 Integration:** OutputInjectStep manifest bindings:
          - OutputFormat nested: PreserveFolderStructure (bool), Format (text),
            PairMode (text), Encoding (text), FileNaming (text: suffix/prefix/subfolder),
@@ -674,7 +674,15 @@ TABLE OF CONTENTS
          - output_inject._run_export(): dirty flag pre-check with messagebox.askokcancel
          - output_inject._build_summary_panel(): _process_flag_label / _wordwrap_flag_label with ⚠/✓
          - output_inject._update_dirty_flags(): reads flags and updates indicator labels
-         - input_extract._on_import_translations(): file dialog + JSON load + orig matching + field copy
+         - input_extract._on_import_translations(): selection dialog + per-field and per-section import logic
+         - _ImportTranslationDialog: Toplevel with Line Fields and Settings Sections checkbox groups
+         - input_extract._import_line_fields(): per-field import with skip_new_lines option
+         - input_extract._import_settings_sections(): per-section import of manifest top-level and step_state keys
+         - input_extract._load_selected_paths(): non-destructive file addition with source root validation
+         - input_extract._add_files_to_existing_manifest(): builds file_infos/lines, calls mgr.add_files(), copies new originals
+         - ManifestManager.add_files(): merges new files into sorted filedir, recomputes contiguous idx, preserves existing line data
+         - output_inject._safe_output_format(): prevents ValueError on empty/invalid OutputFormat string
+         - Preview tree headings: "Idx" → "Project", "#" → "File"; display uses 1-based global idx
          - TranslationOptions.skip_already_translated: bool field for skipping translated lines
          - TranslationOptions.api_key_provider / api_key_name: API key selection from API.ini
          - translate._build_request_options(): Key dropdown (row 1), Model (row 2, filtered by provider), Temperature removed from GUI
@@ -1322,6 +1330,12 @@ class ManifestManager:
     
     def set_wordwrap_options(self, options: Dict[str, Any]) -> None:
         """Update wordwrap options in manifest."""
+    
+    def get_wordwrap_tag_configs(self) -> List[Dict]:
+        """Get per-tag wordwrap configs from WordwrapSettings.TagConfigs."""
+    
+    def set_wordwrap_tag_configs(self, configs: List[Dict]) -> None:
+        """Replace TagConfigs list in WordwrapSettings, marks dirty."""
     
     def get_output_options(self) -> Dict[str, Any]:
         """Get output format options (Format, Encoding, FileNaming, etc.)."""
@@ -2319,11 +2333,13 @@ Planned Formats (placeholder implementations):
    - EPUB: Chapter-based extraction via ebooklib, beautifulsoup4
 
 Parser Handshake (formats/handshake.py):
-- Formal contract definition for all parsers (mandatory M1-M3, optional O1-O8)
+- Formal contract definition for all parsers (mandatory M1-M3, optional O1-O9)
 - `SpeakerInfo(name, line_idx)`: Speaker detected by parser
 - `ExtractedLine(text, tag, speaker, context)`: Tagged extraction result
 - `ParserError(message, parser_name, component)`: Mandatory component failure
 - `validate_parser(parser) → list[str]`: Check parser satisfies M1-M3
+- **O9 Pretty Wrap Hook:** `pretty_wrap(text, width, break_char, max_lines) → Optional[str]` — lighter
+  core-wrap replacement; replaces built-in `pretty_wrap` while keeping speaker handling intact
 - **Handler Retrofit (P4):** All registered FormatHandlers verified via `validate_parser()`.
   RPG Maker stubs (`formats/rpgmaker.py`) raise `ParserError` with `parser_name` and `component`
   metadata instead of silent `logging.warning()` + empty returns.
@@ -2346,12 +2362,17 @@ Pipeline Wiring of Optional Components (P3):
   - `ParserName` — stores active parser identifier
   - `ParserHandlesSpeakers` (bool) — O4: calls `parser.detect_speakers()`, writes to `characters[]`
   - `ParserHandlesWordwrap` (bool) — O6: detected via `type(parser).wordwrap is not ParserScript.wordwrap`
+  - `has_custom_pretty_wrap` (bool) — O9: detected via `type(parser).pretty_wrap is not ParserScript.pretty_wrap`
   - `ParserForbiddenChars` (dict) — O7: `forbidden_chars.to_dict()` serialised to manifest
   - `ParserHandlesContextMarkers` (bool) — O8: compiled rules applied to lines, tags written
-- `gui/steps/analysis.py` `_perform_analysis()`: Reads `ParserHandlesSpeakers` flag; when True,
-  passes `include_speakers=False` to `analyze_lines()` and loads existing `characters[]` from manifest
+- `gui/steps/analysis.py` `_perform_analysis()`: Reads `ParserHandlesSpeakers` flag; always runs
+  speaker detection via `analyze_lines(include_speakers=True)`, then uses parser-detected speaker
+  names from `characters[]` as an allowlist to filter false positives from regex-based detection
 - `gui/steps/wordwrap_overwrite.py` `_process_wrap()`: Reads `ParserHandlesWordwrap` + `ParserName`;
-  when set, delegates to `parser.wordwrap(line)` per line instead of `apply_wordwrap(lines, config)`
+  when set, delegates to `parser.wordwrap(line)` per line instead of `apply_wordwrap(lines, config)`.
+  Per-tag processing via `_build_tag_maps()`: resolves line tag → filedir type → "dialogue" fallback,
+  applies per-tag `TagWrapConfig` settings. Parser-managed tags use O6→O9→passthrough chain;
+  user-managed tags use O9→built-in `pretty_wrap` with per-tag width/break_char/max_lines.
 - `gui/steps/output_inject.py` `_write_file()`: Reads `ParserName`; when set, routes through
   `parser.inject(output_path, lines)` with fallback to standard format writers on failure
 - `gui/steps/translate.py`: After logit bias setup, reads `ParserName`, calls
@@ -2362,6 +2383,8 @@ Pipeline Wiring of Optional Components (P3):
 
 Light VN Parser (formats/LightVN.py):
 - `LightVNParser(ParserScript)`: Full Light VN visual novel script parser
+- **No deduplication**: Every occurrence is returned including duplicates; CherryAI's manifest
+  stores per-line entries so dedup is handled by the Preprocessing step if enabled
 - **M1 Extract**: `extract(path)` → flat list; `extract_tagged(path)` → `List[ExtractedLine]`
 - **M2 Inject**: `inject(path, lines)` — writes to `{stem}_translated.txt`
 - **M3 Identity**: `can_handle()` probes for `~【` or `~文字` in first 200 lines
@@ -2369,6 +2392,7 @@ Light VN Parser (formats/LightVN.py):
 - **O4 Speakers**: `detect_speakers()` parses `Speaker: text` format from extracted lines
 - **O5 Wordwrap**: 60 chars, 3 lines per textbox, `\w` textbox injection
 - **O6 Custom Wrap**: Balanced wrapping with orphan avoidance (`_pretty_wrap`)
+- **O9 Pretty Wrap Hook**: `pretty_wrap()` delegates to `_pretty_wrap`, joins with break_char, truncates to max_lines
 - **O7 Forbidden**: Tab and carriage return characters
 - **O8 Context**: Patterns for dialogue (`^"`), menu (`~?文字`), choice (`~選択`)
 - **Tags**: `dialogue` (with speaker), `menu`, `variable`

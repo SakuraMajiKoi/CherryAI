@@ -55,6 +55,26 @@ MODULE COUNTS (Verified January 2026)
 =============================================================================
 [Archived: Sessions 43–24 + Phase 62 → see doc/archived.md]
 
+### BUG FIX: Input Step Non-Destructive Addition, Import Dialog, OutputFormat Crash
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 4 hours
+
+Goal: Fix Input button to non-destructively add files to existing manifests, add Import Translation selection dialog, fix OutputFormat ValueError crash, rename preview columns to Project/File with 1-based indexing.
+
+**Changes:**
+1. **OutputFormat ValueError** — Added `_safe_output_format()` in `output_inject.py` to prevent crash on empty/invalid format string (defaults to TXT).
+2. **Non-Destructive File Addition** — `ManifestManager.add_files()` merges new files into sorted filedir, rewritting all idx values contiguously while preserving existing line data (tl, prepro, tags, etc.). `_load_selected_paths()` now detects add-to-existing mode, validates source root, skips already-loaded files, and calls `_add_files_to_existing_manifest()` for new files only.
+3. **Preview Column Rename** — "Idx" → "Project" (1-based global idx), "#" → "File" (1-based per-file line number).
+4. **Import Translation Dialog** — `_ImportTranslationDialog` Toplevel with Line Fields group (Preprocessed, Tags, Translated, Postprocessed, Wordwrap, QA, skip option) and Settings Sections group (Analysis, Information, Preprocessing, Costs, Translation, Postprocessing, Wordwrap, QA/Validation, File Settings). Per-section import logic via `_import_line_fields()` and `_import_settings_sections()`.
+
+**Files Modified:**
+- `gui/steps/output_inject.py` — `_safe_output_format()`, 7 call sites updated
+- `gui/steps/input_extract.py` — `_ImportTranslationDialog` class, `_add_files_to_existing_manifest()`, `_import_line_fields()`, `_import_settings_sections()`, modified `_load_selected_paths()` and `_on_import_translations()`, preview headings
+- `functions/manifest_manager.py` — `add_files()` method
+
+**Tests:** `dev/test_input_import_fixes.py` — 23 tests (8 OutputFormat, 8 add_files, 3 import lines, 4 import sections)
+
+---
+
 ### BUG FIX: si_preset Lost on Tab Change
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 30 minutes
 
@@ -1026,6 +1046,7 @@ FUTURE IDEAS (No Phase Commitment)
 - **Translation / Edit / TLC Mode Toggle**: A three-way toggle switching the Translation step between Translation (default), Edit, and TLC modes. Edit mode prompts the LLM to fix grammar, naturalness, and formatting in existing translations. TLC mode sends original + translation for accuracy verification. Key design challenge: line-matching strategy (line numbers, full lines, or empty lines) since not every line will be edited/TLC'd and unnecessary output tokens are the most expensive component. Each mode writes to its own manifest fields (`lines[].edit{N}`, `lines[].tlc{N}`). Requires dedicated prompt design, matching script development, and cost-optimization testing before UI exposure.
 
 ### Wordwrap Step Future Enhancements
+- ~~**Per-Tag Wordwrap Settings**: Tag-based wordwrap configuration with per-tag Width/BreakChar/MaxLines. TagWrapConfig dataclass, tag resolution (line tag → filedir type → "dialogue" fallback), parser-managed tag detection, manifest persistence via TagConfigs.~~ ✅ IMPLEMENTED
 - **Parser-Driven Wrap Options**: Parsers auto-populate wordwrap settings (width, break char, max lines) based on the game engine format. Requires each format parser to expose a `get_wrap_config()` method returning engine-appropriate defaults.
 - **RPG Maker as Own Parser**: Move RPG Maker-specific wordwrap logic (pixel-accurate width, `analyze_rpgmaker_project()`, `measure_font_avg_char_px()`) into a dedicated RPG Maker format parser. RPG Maker is no longer a wordwrap mode — it becomes a parser that drives the wordwrap settings automatically.
 - **New Textboxes Structure**: When wrapping overflow exceeds Max Lines, split into a new text box entry instead of flagging. Requires parser support for text box boundaries and understanding of how the engine structures multi-box dialogue sequences.
@@ -1286,6 +1307,7 @@ Instead, use the bridge methods to sync processing results into ManifestManager.
 | Speaker Handling | `WordwrapSettings.SpeakerHandling` | enum | "Sameline" | wordwrap |
 | Ignore Patterns | `WordwrapSettings.IgnorePatterns` | list | ["Angle","Square","Curly","En"] | wordwrap |
 | Typography | `WordwrapSettings.Typography` | text | "Western" | wordwrap |
+| Tag Configs | `WordwrapSettings.TagConfigs` | list | [] | wordwrap (per-tag) |
 | Preserve Folders | `OutputFormat.PreserveFolderStructure` | boolean | true | output |
 | Format | `OutputFormat.Format` | text | "" | output |
 | Pair Mode | `OutputFormat.PairMode` | text | "translated_only" | output |
@@ -1490,6 +1512,7 @@ before using them. Missing optionals never raise errors.
 | O4 | **Speaker Detection** | `detect_speakers(lines) → list[SpeakerInfo]` | Parse `Speaker: Dialogue` or format-specific speaker notation. Returns list of `SpeakerInfo(name, line_idx)`. When provided: auto-writes speakers to Analysis findings, disables the generic regex-based speaker detector in `functions/analysis.py` for this project. | `Analysis.speakers`, `characters[]` |
 | O5 | **Wordwrap Config** | `wordwrap_config: WordwrapConfig` | Engine-specific wrapping settings (`max_line_length`, `max_line_number`, `wordwrap_command`, `new_textbox_injection`). Written to manifest in Wordwrap step (Step 7) and loaded by it. | `Options.Wordwrap.*` |
 | O6 | **Wordwrap Function** | `wordwrap(line, config) → list[str]` | Custom wrapping logic that **replaces** the built-in `pretty_wrap`. When present, Step 7 calls this instead of `functions/wordwrap.py`. The return value is the wrapped lines list. | `lines[].wordwr` |
+| O9 | **Pretty Wrap Hook** | `pretty_wrap(text, width, break_char, max_lines) → Optional[str]` | Lighter core-wrap replacement. Replaces built-in `pretty_wrap` while keeping speaker handling and pipeline logic intact. Used for user-managed tags or as fallback when O6 is absent. | `lines[].wordwr` |
 | O7 | **Forbidden/Allowed Chars** | `forbidden_chars: ForbiddenChars` | Characters the engine cannot render. Added to logit bias during Translation (Step 5) and to the Blacklist/Whitelist during Postprocessing (Step 6). | `Options.ForbiddenChars`, `Options.LogitBias` |
 | O8 | **Context Markers** | `context_marker_rules: ContextMarkerRules` | Regex patterns for scene, dialogue, menu, and choice boundaries. Injected during Input to tag lines. | `lines[].tag` |
 
@@ -1638,6 +1661,10 @@ Wired each optional component to its consuming pipeline step:
 - **O6 Wordwrap Function**: `_wire_parser_optionals()` sets
   `Options.ParserHandlesWordwrap`. Step 7 `_process_wrap` delegates to
   `parser.wordwrap()` instead of built-in `apply_wordwrap`.
+- **O9 Pretty Wrap Hook**: `parser.pretty_wrap(text, width, break_char, max_lines)`
+  replaces built-in core wrapping while keeping speaker handling and pipeline logic.
+  Lighter than O6; used for user-managed tags or as fallback when O6 is absent.
+  Detected via `type(parser).pretty_wrap is not ParserScript.pretty_wrap`.
 - **O7 Forbidden Chars**: `_wire_parser_optionals()` serialises
   `forbidden_chars.to_dict()` to `Options.ParserForbiddenChars`. Translation
   step calls `api_client.apply_parser_forbidden_chars()` to merge into logit bias.

@@ -9493,6 +9493,126 @@ fields are properly bound for session persistence.
 
 ---
 
+### dev/test_tag_wordwrap.py (52 tests)
+
+Per-tag wordwrap settings, parser pretty_wrap hook, manifest TagConfigs, and tag resolution tests.
+
+**Files Tested:** `gui/steps/wordwrap_overwrite.py`, `functions/manifest_manager.py`, `formats/parser_base.py`, `formats/LightVN.py`
+
+#### TestBuildSourcePaths (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_suffix_match` | Suffix-based path resolution (subdir/file.txt) |
+| `test_subdir_resolution` | Subdirectory paths resolve correctly |
+| `test_cross_contamination` | Same-name files in different subdirs don't collide |
+| `test_ambiguity` | Ambiguous filename-only match uses unambiguous fallback |
+
+#### TestTagConfigsManifest (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_empty_default` | New manifest has `TagConfigs: []` |
+| `test_set_get_roundtrip` | set/get_wordwrap_tag_configs roundtrip |
+| `test_dirty_flag` | Setting tag configs marks manifest dirty |
+| `test_tag_configs_key` | TagConfigs key exists in WordwrapSettings |
+| `test_parser_managed_flag` | ParserManaged field persists |
+
+#### TestPrettyWrapHook (12 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_base_returns_none` | ParserScript.pretty_wrap returns None |
+| `test_null_parser_info` | NullParser has_custom_pretty_wrap=False |
+| `test_stub_parser_info` | StubParser has_custom_pretty_wrap=True |
+| `test_lightvn_pretty_wrap` | LightVN pretty_wrap returns wrapped string |
+| `test_lightvn_width_respect` | Width parameter respected |
+| `test_lightvn_max_lines` | max_lines truncation works |
+| `test_lightvn_break_char` | Custom break_char used |
+| `test_lightvn_short_text` | Short text returned unchanged |
+| `test_lightvn_empty` | Empty text returns empty |
+| `test_lightvn_zero_width` | Width=0 returns text unchanged |
+| `test_lightvn_info` | LightVN info() has_custom_pretty_wrap=True |
+| `test_lightvn_info_has_wordwrap` | LightVN info() has_custom_wordwrap=True |
+
+#### TestTagWrapConfig (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_defaults` | Default values (width=48, max_lines=4) |
+| `test_to_dict` | Serialization to dict |
+| `test_parser_managed` | parser_managed=True in dict |
+| `test_roundtrip` | to_dict→from_dict roundtrip |
+| `test_missing_keys` | from_dict handles missing keys gracefully |
+
+#### TestDefaultTagConfigs (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_has_dialogue_and_menu` | DEFAULT_TAG_CONFIGS has dialogue + menu |
+| `test_dialogue_defaults` | Dialogue: width=48, max_lines=4 |
+| `test_menu_defaults` | Menu: width=48, max_lines=0 |
+
+#### TestTagResolution (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_line_tag_overrules_filedir` | Line tag takes priority over filedir type |
+| `test_filedir_used` | Filedir type used when no line tag |
+| `test_dialogue_fallback` | Falls back to "dialogue" when neither present |
+
+#### TestParserCapabilityDetection (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_lightvn_both` | LightVN has both O6 and O9 |
+| `test_stub_pretty_only` | StubParser has O9 only |
+| `test_null_neither` | NullParser has neither |
+
+#### TestPrettyWrapIntegration (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_stub_wraps` | StubParser pretty_wrap produces wrapped output |
+| `test_max_lines` | pretty_wrap max_lines truncation |
+| `test_lightvn_for_tag_dialogue` | LightVN wordwrap_for_tag("dialogue") returns config |
+| `test_lightvn_for_tag_menu` | LightVN wordwrap_for_tag("menu") returns no-wrap config |
+
+#### TestImportTranslationCompat (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_old_manifest` | Old manifest without TagConfigs returns [] |
+| `test_copy_preserves` | Full copy preserves TagConfigs |
+| `test_backward_compat` | Graceful degradation for old manifests |
+
+#### TestCollectAvailableTags (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_always_dialogue_menu` | Always includes dialogue + menu |
+| `test_filedir_types` | Filedir types appear in available tags |
+| `test_line_tags` | Line tags appear in available tags |
+
+#### TestEdgeCases (7 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_width_zero` | Width=0 means no wrap |
+| `test_single_word` | Single word longer than width |
+| `test_variable_tag` | Variable tag behaviour |
+| `test_parser_managed_omit` | Parser-managed tag omits from user config |
+| `test_parser_managed_include` | Parser-managed=True serializes correctly |
+| `test_no_max_lines` | max_lines=0 means unlimited |
+| `test_empty_dict` | from_dict with empty dict uses defaults |
+
+```bash
+# Run tag wordwrap tests
+python -m pytest dev/test_tag_wordwrap.py -v --timeout=60
+```
+
+---
+
 ### test_output_manifest.py (45 tests) - TASK 28.2
 
 Output step manifest integration tests. Verifies that OutputInjectStep binds all output format settings to ManifestManager for unified state persistence.
@@ -11014,7 +11134,7 @@ python -m pytest CherryAI/dev/test_glossary_selective.py -v --timeout=10
 python -m pytest CherryAI/dev/test_parser_scripts.py -v --timeout=10
 ```
 
-### Parser Handshake & LightVN Parser (63 tests)
+### Parser Handshake & LightVN Parser (63 + 31 tests)
 
 **File:** `dev/test_lightvn_parser.py`
 
@@ -11035,9 +11155,19 @@ python -m pytest CherryAI/dev/test_parser_scripts.py -v --timeout=10
 | TestInjection | 4 | Inject dialogue, menu, variable, preserves structure |
 | TestEncoding | 2 | UTF-8, UTF-8 BOM |
 | TestCanHandle | 3 | Recognizes LightVN script, rejects non-txt, rejects plain txt |
-| TestOptionalComponents | 3 | Forbidden chars, context markers, info capabilities |
+| TestOptionalComponents | 3 | Forbidden chars, context markers, info capabilities (including O9 pretty_wrap) |
 | TestFullCorpus | 4 | Extraction count (55604/50212), tagged count matches, all tags valid, speaker detection on corpus |
 | TestAllParsersHandshake | 1 | All registered parsers valid |
+| **TestDuplicateDialogue** | **4** | **Duplicate dialogue count, text content, tags, speakers — verifies extraction returns all occurrences** |
+| **TestDuplicateMenu** | **3** | **Duplicate menu count, いいえ count, all menu tagged** |
+| **TestDuplicateVariable** | **3** | **Duplicate variable count, text content, all variable tagged** |
+| **TestMixedDuplicates** | **5** | **Mixed total count, dialogue dupes, menu dupes, variable dupes, document order preserved** |
+| **TestNoDuplicates** | **2** | **Unique-only scripts still extract correctly (regression)** |
+| **TestExtractAgreement** | **2** | **extract() and extract_tagged() return same count/content** |
+| **TestInjectionWithDuplicates** | **2** | **_extract_all_keys includes duplicates, injection dict from duplicates** |
+| **TestRealFileExtraction** | **2** | **skilltext.txt has duplicates (>300 total), small file extraction** |
+| **TestSpeakerDetection (new)** | **2** | **Speakers from dialogue, single speaker** |
+| **TestSpeakerAllowlistFiltering** | **6** | **analyze_lines always detects, include_false skips, allowlist keeps valid, removes false positives, empty allowlist filters all, batch counts** |
 
 ```bash
 # Run Parser Handshake & LightVN tests
@@ -11077,7 +11207,7 @@ python -m pytest CherryAI/dev/test_parser_input_routing.py -v --timeout=60
 | TestO7ForbiddenChars | 4 | LightVN exists, has characters, to_dict/from_dict round-trip, RPG Maker check |
 | TestO8ContextMarkers | 7 | Default heuristics, parser rules override, empty lines None, LightVN rules exist, rules compile, dialogue match, no-rules + no-lines |
 | TestWireParserOptionals | 7 | ParserName stored, speaker flag, wordwrap flag, forbidden chars dict, context markers flag, all LightVN optionals, info flags match |
-| TestAnalysisSpeakerSkip | 2 | Without speakers, with speakers |
+| TestAnalysisSpeakerSkip | 2 | Without speakers, with speakers (allowlist filtering) |
 
 ```bash
 # Run Parser Optional Wiring P3 tests
@@ -12108,6 +12238,23 @@ flows from `_formation_ctx` through `_translate_chunk` →
 
 ```bash
 python -m pytest dev/test_context_type_prompts.py -v --timeout=10
+```
+
+---
+
+### dev/test_input_import_fixes.py (23 tests) — Input & Import Fixes
+
+Tests for Input step fixes and Import Translation improvements.
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestSafeOutputFormat | 8 | Empty, whitespace, valid formats, uppercase, invalid, numeric |
+| TestAddFiles | 8 | Single add, preserved lines, sorted order, contiguous idx, duplicate raises, multiple, empty, type preserved |
+| TestImportLineFields | 3 | Translated only, skip already translated, QA fields |
+| TestImportSettingsSections | 4 | Preprocessing, postprocessing, nothing selected, wordwrap settings |
+
+```bash
+python -m pytest dev/test_input_import_fixes.py -v --timeout=10
 ```
 
 

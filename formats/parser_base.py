@@ -308,6 +308,35 @@ class ParserScript(ABC):
         """
         return None
 
+    def pretty_wrap(
+        self, text: str, width: int, break_char: str = "\n",
+        max_lines: Optional[int] = None,
+    ) -> Optional[str]:
+        """Custom pretty-wrap replacement hook.
+
+        Override to provide an engine-specific wrap function that the
+        Wordwrap step calls *instead of* ``functions.wordwrap.pretty_wrap``
+        for lines belonging to this parser.  Return ``None`` to fall back
+        to the built-in ``pretty_wrap`` (default behaviour).
+
+        Unlike :meth:`wordwrap` (O6), which replaces the *entire* per-line
+        pipeline, this hook only replaces the core text-wrapping algorithm
+        while keeping speaker handling, ignore-pattern stripping, and
+        statistics tracking intact.
+
+        Args:
+            text: Visible text to wrap (speaker prefix already stripped
+                when ``SpeakerMode == IGNORE``).
+            width: Maximum visible characters per line.
+            break_char: Character sequence to insert at line breaks.
+            max_lines: Maximum number of output lines (``None`` = unlimited).
+
+        Returns:
+            Wrapped text with *break_char* separators, or ``None`` to use
+            the built-in algorithm.
+        """
+        return None
+
     def detect_encoding(self, file_path: Path) -> Optional[str]:
         """Detect file encoding (O3).
 
@@ -337,6 +366,9 @@ class ParserScript(ABC):
             ),
             "has_custom_wordwrap": (
                 type(self).wordwrap is not ParserScript.wordwrap
+            ),
+            "has_custom_pretty_wrap": (
+                type(self).pretty_wrap is not ParserScript.pretty_wrap
             ),
             "has_encoding_detection": (
                 type(self).detect_encoding is not ParserScript.detect_encoding

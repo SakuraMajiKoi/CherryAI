@@ -699,6 +699,7 @@ The Parser Handshake (`formats/handshake.py`) formalizes what every parser must 
 | O4 | `detect_speakers(lines)` | Return `List[SpeakerInfo]` from extracted text |
 | O5 | `wordwrap_config` / `wordwrap_for_tag(tag)` | Wrapping config (global or per-tag) |
 | O6 | `wordwrap(line, config)` | Custom wrapping function |
+| O9 | `pretty_wrap(text, width, break_char, max_lines)` | Custom core-wrap replacement (lighter than O6) |
 | O7 | `forbidden_chars` | Characters that must not appear in output |
 | O8 | `context_marker_rules` | Engine-specific context marker definitions |
 
@@ -744,7 +745,9 @@ The Parser Handshake (`formats/handshake.py`) formalizes what every parser must 
 
 Reference handshake-compliant parser for Light VN visual novel scripts. Adapted from the standalone `parlight.py` extraction tool.
 
-**Capabilities**: M1 ✓, M2 ✓, M3 ✓ (via `can_handle`), O3 ✓, O4 ✓, O5 ✓ (per-tag), O6 ✓, O7 ✓, O8 ✓
+**No Deduplication**: Every occurrence of a translatable line is returned, including duplicates. CherryAI's manifest stores per-line entries so deduplication must NOT happen at the parser level — it is handled downstream by the Preprocessing step (Deduplication mode) if enabled.
+
+**Capabilities**: M1 ✓, M2 ✓, M3 ✓ (via `can_handle`), O3 ✓, O4 ✓, O5 ✓ (per-tag), O6 ✓, O7 ✓, O8 ✓, O9 ✓
 
 **Tags**:
 | Tag | Content | Wordwrap |
@@ -757,11 +760,15 @@ Reference handshake-compliant parser for Light VN visual novel scripts. Adapted 
 
 #### Wordwrap Integration
 
-When a Parser Script provides wordwrap settings, these auto-populate the Wordwrap step (Step 8):
+When a Parser Script provides wordwrap settings, these auto-populate the Wordwrap step (Step 7):
 - `MaxLineLength` → Width setting
 - `MaxLineNumber` → Max Lines setting
 - `WordwrapCommand` → Break Character
 - `NewTextboxInjection` → Used when overflow exceeds Max Lines to create a new text box instead of flagging
+
+**Per-Tag Wordwrap**: Step 7 resolves each line's tag (line `tag` → filedir `type` → `"dialogue"` fallback) and applies per-tag settings from `WordwrapSettings.TagConfigs`. Tags whose wrapping is dictated by the parser (via `wordwrap_for_tag`) are marked `ParserManaged` and displayed read-only in the UI.
+
+**O9 pretty_wrap Hook**: A lighter alternative to O6. When a parser implements `pretty_wrap(text, width, break_char, max_lines) → Optional[str]`, Step 7 uses it as the core wrapping algorithm while keeping speaker handling, ignore patterns, and the rest of the pipeline intact. If the parser also provides O6, that takes priority for parser-managed tags; O9 is used for user-managed tags or as a fallback when O6 is not present.
 
 #### Forbidden Characters
 
@@ -979,7 +986,7 @@ Each step is a tab in the main notebook. Steps can be navigated freely but follo
 |--------|------|----------|
 | **Toolbar** | | |
 | Input Button | Button | Unified file/folder selector — opens a single window supporting both file and folder selection |
-| Import Translations Button | Button | Import translations from another manifest (exact line matching) |
+| Import Translations Button | Button | Import translations from another manifest via selection dialog (choose line fields and settings sections to import) |
 | **Options Panel** | LabelFrame | Contains Encoding, Format, and Auto-Pipeline settings |
 | Encoding Dropdown | Combobox | Select file encoding (auto, utf-8, shift_jis, etc.). Default: auto |
 | Format Dropdown | Combobox | Override format detection (auto, txt, csv, json, rpgmaker, image, etc.). Default: auto |
@@ -989,7 +996,7 @@ Each step is a tab in the main notebook. Steps can be navigated freely but follo
 | File Filter Entry | Entry | Text filter for loaded files — matches against filename, type, or line count. Matching is instant on keystroke. Non-matching rows are hidden |
 | File Filter Clear Button | Button | "✕" button to clear the file filter text |
 | **Preview Panel** | LabelFrame | Shows content of selected file |
-| Preview Tree | Treeview | Columns: Idx, Line #, Content, Tags. Shows all lines from selected file. When search text is entered, searches across ALL loaded files showing global idx. Must properly render newlines (multi-line content) |
+| Preview Tree | Treeview | Columns: Project (1-based global idx), File (1-based per-file #), Content, Tags. Shows all lines from selected file. When search text is entered, searches across ALL loaded files showing global idx. Must properly render newlines (multi-line content) |
 | Preview Search Clear Button | Button | "✕" button to clear the preview search text |
 
 **Removed Elements** (from previous design):
@@ -1050,6 +1057,53 @@ The Input button opens a **unified file and folder selection window** that combi
 - Source files are copied to the project's `Original/` directory for portability
 - All selected files/folders and their lines are saved to manifest
 - The Automatic Pipeline begins (based on Auto-Pipeline setting)
+
+**Non-Destructive Addition** (adding files to an existing manifest):
+- When files are loaded into an existing project (manifest already has filedir), the Input button
+  performs a **non-destructive merge**: existing lines and filedir entries are preserved, and only
+  new files are inserted.
+- **Source root validation**: new files must originate from the same source directory. If a mismatch
+  is detected, loading is blocked with an error message.
+- Files already present in the manifest (matched by filename) are silently skipped.
+- After merging, all idx values are re-sequenced contiguously and entries are sorted alphabetically
+  by ``rel_path``.
+- Only the new originals are copied to the project's ``Original/`` directory.
+- The Automatic Pipeline is **not** re-run when adding files to an existing project.
+
+---
+
+#### Import Translation Dialog
+
+**Purpose**: Dialog shown when clicking the Import Translations button. Allows the user to
+select which data to import from a source manifest.
+
+**Two groups of checkboxes**:
+
+**Line Fields** (matched by exact ``orig`` text):
+
+| Checkbox | Default | Fields Imported |
+|----------|---------|----------------|
+| Preprocessed | ✅ | ``prepro`` |
+| Tags | ✅ | ``tag`` |
+| Translated | ✅ | ``tl``, ``preedit`` |
+| Postprocessed | ✅ | ``postpro`` |
+| Wordwrap | ✅ | ``wordwr`` |
+| QA (edits, TLC, overwrite) | ✅ | ``edit*``, ``tlc*``, ``overwrite`` |
+| Do not overwrite lines that already have translations | ❌ | Skips lines with existing ``tl`` |
+
+**Settings Sections**:
+
+| Checkbox | Default | Keys Imported |
+|----------|---------|---------------|
+| Analysis | ❌ | ``step_state.Analysis`` |
+| Information (metadata, glossary, code DB) | ✅ | ``step_state.Information.data.metadata``, ``glossary``, ``code_patterns``, ``characters`` |
+| Preprocessing Settings | ❌ | ``Deduplication``, ``EllipsisCompression``, ``SymbolConversion``, etc. |
+| Costs / Request Settings | ❌ | ``RequestOptions`` |
+| Translation Step State | ❌ | ``step_state.Translation`` |
+| Postprocessing | ❌ | ``PostProcessing`` |
+| Wordwrap Settings | ❌ | ``WordwrapSettings`` |
+| QA / Validation Rules | ❌ | ``ValidationRules``, ``QAOptions``, ``CharacterWhitelist``, etc. |
+| File / Output Settings | ❌ | ``OutputFormat`` |
 
 ---
 
@@ -1165,13 +1219,13 @@ When `auto_inference` is enabled (Global Option), the pipeline offers several in
 #### Preview Panel Details
 
 **Preview Tree**:
-- Columns: Idx (narrow), Line # (narrow), Content (wide, stretches), Tags (narrow)
+- Columns: Project (narrow, 1-based global idx), File (narrow, 1-based per-file line number), Content (wide, stretches), Tags (narrow)
 - Shows all lines from selected file (single-file mode) or search results across all files (cross-file mode)
 - Content column must properly display multi-line text (newlines rendered, not truncated)
 
 **Cross-File Preview Search**:
 - When search text is entered, the preview searches ALL loaded files (not just the selected one)
-- Results show the global idx for each matching line
+- Results show the 1-based global idx (Project column) for each matching line
 - Selecting a search result automatically switches to the file containing that line
 - The corresponding file is highlighted in the file tree
 - "✕" clear button resets the search and returns to single-file preview mode
@@ -3622,6 +3676,8 @@ Key principles:
 | Reset Button | Button | Clear wordwrap results |
 | Mode Dropdown | Combobox | Wrapping mode (Manual, parser-specific modes) |
 | Width Dropdown | Combobox | Line width — Character count or Pixel-based |
+| Tag Sections | Frame per tag | Per-tag Width / BreakChar / MaxLines settings |
+| Add Tag Dropdown | Combobox | Add a new tag section from available tags |
 | Break Character Entry | Entry | Line break sequence (auto-detected, editable) |
 | Max Lines Spinbox | Spinbox | Maximum lines per box (0=unlimited) |
 | Speaker Handling Dropdown | Combobox | How to count speaker prefixes: Ignore / Count |
@@ -3639,6 +3695,27 @@ Key principles:
 - ~~Merge Method Dropdown~~ → Removed with Overwrite Strategy
 - ~~Backup Suffix Entry~~ → Removed with Overwrite Strategy
 - ~~Format Dropdown~~ → Replaced by parser-aware Mode Dropdown
+
+#### Per-Tag Wordwrap Settings
+
+Wordwrap settings are wrapped in tag sections. Each tag (e.g., `dialogue`, `menu`, `variable`) has its own Width, Break Character, and Max Lines configuration. Standard tags `dialogue` and `menu` are always present; additional tags are discovered from filedir `type` fields and line `tag` fields.
+
+**TagWrapConfig** (dataclass):
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `tag` | str | — | Tag name (e.g., "dialogue", "menu") |
+| `width` | int | 48 | Characters per line |
+| `break_char` | str | "\\n" | Line break sequence |
+| `max_lines` | int | 4 (dialogue) / 0 (menu) | Max lines per box (0=unlimited) |
+| `parser_managed` | bool | False | True when parser dictates wrapping for this tag |
+
+**Behavior**:
+- **Parser-managed tags**: When the active parser provides `wordwrap_for_tag(tag)` returning a non-None config, the tag section shows "Wordwrap mandated by Parser Format" (read-only). The parser's O6 `wordwrap()` or O9 `pretty_wrap()` handles wrapping.
+- **User-managed tags**: Width/BreakChar/MaxLines are editable. Width=0 means no wrapping for that tag.
+- **Tag resolution** (per line): Line `tag` field → filedir entry `type` field → `"dialogue"` fallback.
+- **Add Tag**: Dropdown shows tags not yet configured. Adding creates a new section with defaults.
+- **Remove Tag**: Non-standard tags (not dialogue/menu) have a "Remove tag" button.
+- **Manifest persistence**: `WordwrapSettings.TagConfigs` stores the list of `TagWrapConfig.to_dict()` entries.
 
 #### Widget Specifications
 
@@ -3769,14 +3846,18 @@ Ignore patterns are **no longer configured in Wordwrap settings**. Instead, they
 
 **Processing** (via `functions/wordwrap.py`):
 1. Load ignore patterns from Code Database (Preserve + Remove action patterns).
-2. For each line:
-   a. Detect speaker prefix per Speaker Handling mode.
-   b. Calculate visible width (excluding ignored code patterns).
-   c. Apply `pretty_wrap()` with punctuation-preferred breaks and anti-orphan (always active).
-   d. Insert break characters at calculated positions.
-   e. Respect max lines constraint (flag if exceeding).
-   f. Populate Overwrite column with injection-ready text.
-3. Calculate wrap statistics (lines changed, lines exceeding, total breaks inserted).
+2. Build tag maps: `line_tag_map` (line index → tag from `lines[].tag`) and `filedir_type_map` (file directory → type from `file_dir[].type`).
+3. For each line:
+   a. Resolve tag: line `tag` → filedir `type` → `"dialogue"` fallback.
+   b. Look up `TagWrapConfig` for resolved tag. Width=0 → skip (no wrap).
+   c. Detect speaker prefix per Speaker Handling mode.
+   d. Calculate visible width (excluding ignored code patterns).
+   e. **Parser-managed tag**: Try O6 `parser.wordwrap()` → O9 `parser.pretty_wrap()` → passthrough.
+   f. **User-managed tag**: Try O9 `parser.pretty_wrap()` → built-in `pretty_wrap()` with per-tag config.
+   g. Insert break characters at calculated positions.
+   h. Respect max lines constraint (flag if exceeding).
+   i. Populate Overwrite column with injection-ready text.
+4. Calculate wrap statistics (lines changed, lines exceeding, total breaks inserted).
 
 **Outputs**:
 - `wordwr: List[str]` — Wrapped lines
@@ -3785,7 +3866,7 @@ Ignore patterns are **no longer configured in Wordwrap settings**. Instead, they
 
 **Stored In**:
 - Manifest: `lines[].wordwr`, `lines[].overwrite`
-- Manifest step data: `WordwrapSettings.Mode`, `WordwrapSettings.Width`, `WordwrapSettings.WidthMode`, `WordwrapSettings.BreakChar`, `WordwrapSettings.MaxLines`, `WordwrapSettings.SpeakerMode`
+- Manifest step data: `WordwrapSettings.Mode`, `WordwrapSettings.Width`, `WordwrapSettings.WidthMode`, `WordwrapSettings.BreakChar`, `WordwrapSettings.MaxLines`, `WordwrapSettings.SpeakerMode`, `WordwrapSettings.TagConfigs`
 
 #### Standard Wrapping Rules (Always Active)
 

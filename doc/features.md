@@ -742,6 +742,23 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Results show global idx column for cross-file identification
     - Selecting a result auto-switches to the containing file in the file tree
     - ✕ clear button restores single-file preview mode
+  - **Non-Destructive File Addition:**
+    - Adding files to an existing manifest preserves all existing line data (tl, prepro, etc.)
+    - Source root validation blocks loading files from a different source directory
+    - New files are merged into sorted filedir with contiguous idx rewrite
+    - Only new originals are copied to project; Automatic Pipeline is not re-run
+  - **Preview Column Rename:**
+    - "Idx" column renamed to "Project" (1-based global index)
+    - "#" column renamed to "File" (1-based per-file line number)
+  - **Import Translation Selection Dialog:**
+    - Import Translations button now opens a selection dialog before importing
+    - Line Fields group: Preprocessed, Tags, Translated, Postprocessed, Wordwrap, QA
+    - Settings Sections group: Analysis, Information, Preprocessing, Costs, Translation,
+      Postprocessing, Wordwrap, QA/Validation, File/Output Settings
+    - "Do not overwrite lines that already have translations" option
+  - **OutputFormat Safe Parsing:**
+    - ``_safe_output_format()`` prevents ValueError crash when Output tab is opened
+      with empty or invalid format string (defaults to TXT)
   - **Input Dialog UX Improvements (Phase 58.12):**
     - UnifiedInputDialog remembers last used directory across sessions
     - Project Name field integrated into Options panel (avoids separate dialog)
@@ -1259,6 +1276,15 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Max lines spinbox (0=unlimited, 1-20)
     - Prevent orphans checkbox
     - Prefer punctuation breaks checkbox
+  - **Per-Tag Wordwrap Settings (TagWrapConfig):**
+    - Per-tag sections for dialogue, menu, and custom tags
+    - Each tag section has Width / Break Char / Max Lines controls
+    - Parser-managed tags shown as read-only ("Wordwrap mandated by Parser Format")
+    - "Add Tag" dropdown to add sections for additional tags from filedir/line tags
+    - "Remove tag" button on non-standard tags (dialogue/menu always present)
+    - Tag resolution: line tag → filedir type → "dialogue" fallback
+    - Default configs: dialogue (width=48, max_lines=4), menu (width=48, max_lines=0)
+    - Persisted via `WordwrapSettings.TagConfigs` in manifest
   - **Speaker Handling Panel (SpeakerMode enum):**
     - IGNORE: Remove speaker prefix before wrapping
     - SAMELINE: Keep prefix on first line only
@@ -1315,6 +1341,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
       - Mode, Width, BreakChar, MaxLines
       - PreventOrphans, PreferPunctuationBreaks
       - SpeakerHandling, Typography
+      - TagConfigs (list of per-tag config dicts)
     - All options persist to manifest and load on step enter
     - 40 tests in dev/test_wordwrap_manifest.py
 - **Output & Injection Tab (Phase 11):**
@@ -2232,7 +2259,7 @@ PARSER HANDSHAKE — UNIFIED I/O PARSER INTERFACE (Implemented)
 - Formal contract that every parser must satisfy: Mandatory (M1-M3) and Optional (O1-O8) components
 - **Handshake module** (`formats/handshake.py`): `SpeakerInfo`, `ExtractedLine`, `ParserError`, `validate_parser()`
 - **Mandatory contract:** M1=Extract, M2=Inject, M3=Identity (format_id+extensions or can_handle)
-- **Optional components:** O1=Decrypt, O2=Encrypt, O3=Encoding, O4=Speaker Detection, O5=Wordwrap Config, O6=Custom Wordwrap, O7=Forbidden Chars, O8=Context Markers
+- **Optional components:** O1=Decrypt, O2=Encrypt, O3=Encoding, O4=Speaker Detection, O5=Wordwrap Config, O6=Custom Wordwrap, O7=Forbidden Chars, O8=Context Markers, O9=Pretty Wrap Hook
 - **Handler retrofit (P4):** All registered FormatHandlers and ParserScripts verified against M1-M3 via `validate_parser()`. RPG Maker handler stubs raise `ParserError` with metadata instead of silent no-ops.
 - **Tagged extraction** (`parser_base.py`): `extract_tagged()` returns `List[ExtractedLine]` with per-line tag, speaker, context
 - **Tag-specific wordwrap** (`parser_base.py`): `wordwrap_for_tag(tag)` returns different `WordwrapConfig` per extraction tag
@@ -2248,8 +2275,9 @@ PARSER HANDSHAKE — UNIFIED I/O PARSER INTERFACE (Implemented)
 
 PIPELINE WIRING OF OPTIONAL COMPONENTS (Implemented — P3)
 - **`_wire_parser_optionals(format_id)`** in `gui/steps/input_extract.py`: Runs after extraction/manifest creation, writes all parser optional data to manifest fields
-- **O4 Speaker Detection:** Calls `parser.detect_speakers()`, writes `SpeakerInfo` list to manifest `characters[]`, sets `Options.ParserHandlesSpeakers = True`; analysis step reads flag and skips generic speaker detection
+- **O4 Speaker Detection:** Calls `parser.detect_speakers()`, writes `SpeakerInfo` list to manifest `characters[]`, sets `Options.ParserHandlesSpeakers = True`; analysis step always runs speaker detection but uses parser-detected names as an allowlist to filter false positives from regex-based detection
 - **O6 Custom Wordwrap:** Sets `Options.ParserHandlesWordwrap = True`; wordwrap step delegates to `parser.wordwrap(line)` per line instead of built-in `apply_wordwrap`
+- **O9 Pretty Wrap Hook:** `parser.pretty_wrap(text, width, break_char, max_lines)` replaces built-in `pretty_wrap` core algorithm while keeping speaker handling and pipeline logic intact; lighter alternative to O6, used for user-managed tags or as fallback
 - **O7 Forbidden Chars:** Serialises `forbidden_chars.to_dict()` to `Options.ParserForbiddenChars`; translation step calls `api_client.apply_parser_forbidden_chars()` to merge into logit bias
 - **O8 Context Markers:** Compiles `context_marker_rules`, applies regex patterns to extracted lines, writes `context_marker` tags; `detect_context_markers()` accepts optional `parser_rules` parameter to override built-in heuristics
 - **Output Injection:** Output step reads `Options.ParserName`, routes through `parser.inject()` instead of standard format-based writers
@@ -2258,6 +2286,7 @@ PIPELINE WIRING OF OPTIONAL COMPONENTS (Implemented — P3)
 LIGHT VN PARSER (Implemented)
 - Full parser for Light VN visual novel engine scripts (`formats/LightVN.py`)
 - Extracts dialogue, menu text (`~文字`/`~ボタン文字`), and variable assignments in document order
+- **No deduplication:** Every occurrence is returned including duplicates; deduplication is handled downstream by the Preprocessing step if enabled
 - **Extraction tags:** `dialogue` (with speaker info), `menu`, `variable`
 - **Speaker format:** `Speaker: text` — speaker tags detected from `~【SpeakerName】` notation
 - **Conditional dialogue:** `~もし (condition)` prefix stripped from keys, preserved during injection
@@ -2265,6 +2294,7 @@ LIGHT VN PARSER (Implemented)
 - **Code recovery:** Restores accidentally translated code during injection
 - **Angle bracket safety:** Converts non-code `<>` to fullwidth `＜＞` during injection
 - **Custom wordwrap:** Balanced line wrapping with orphan avoidance, textbox splitting (O6)
+- **Pretty wrap hook:** O9 `pretty_wrap()` — lighter core-wrap replacement used by Step 7 for user-managed tags
 - **Tag-specific wrapping:** Dialogue=wrap (60 chars, 3 lines), menu/variable=no wrap
 - **Encoding detection:** Priority chain: utf-8, utf-8-sig, shift_jis, cp932, euc-jp, utf-16
 - **Auto-detection:** `can_handle()` scans first 200 lines for `~【` or `~文字` patterns

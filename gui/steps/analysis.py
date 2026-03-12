@@ -333,9 +333,11 @@ class AnalysisStep(BaseStep):
             pass
 
         # Use analysis adapter for comprehensive analysis (TASK 16.6)
+        # Always include speakers — the parser's list acts as an allowlist
+        # to filter false positives, not as a gate to block detection.
         analysis = analyze_lines(
             all_lines,
-            include_speakers=not parser_handles_speakers,
+            include_speakers=True,
             include_code_patterns=True,
             include_language=True,
             include_tokens=False,
@@ -357,13 +359,20 @@ class AnalysisStep(BaseStep):
         # Unified speakers: merge adapter speakers into manifest characters[]
         detected_speakers = analysis.get("speakers", {})
 
-        # Parser Handshake O4: When parser handled speakers, load from chars
-        if parser_handles_speakers and not detected_speakers:
-            existing_chars = self._load_characters()
-            detected_speakers = {
-                c["original_name"]: c.get("count", 1)
-                for c in existing_chars
+        # Parser Handshake O4: When parser handled speakers, use the
+        # parser-detected names as an allowlist to filter false positives
+        # from regex-based detection while keeping accurate counts.
+        if parser_handles_speakers:
+            parser_chars = self._load_characters()
+            allowed_names = {
+                c["original_name"]
+                for c in parser_chars
                 if c.get("original_name")
+            }
+            detected_speakers = {
+                name: count
+                for name, count in detected_speakers.items()
+                if name in allowed_names
             }
 
         existing_chars = self._load_characters()

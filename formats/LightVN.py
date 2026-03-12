@@ -310,6 +310,18 @@ class LightVNParser(ParserScript):
             return [line] if line else []
         return self._pretty_wrap(line, cfg.max_line_length)
 
+    def pretty_wrap(
+        self, text: str, width: int, break_char: str = "\n",
+        max_lines: Optional[int] = None,
+    ) -> Optional[str]:
+        """Engine-specific balanced wrap with orphan avoidance."""
+        if width <= 0:
+            return text
+        lines = self._pretty_wrap(text, width)
+        if max_lines and len(lines) > max_lines:
+            lines = lines[:max_lines]
+        return break_char.join(lines) if lines else text
+
     # ======================================================================
     # O7 — Forbidden chars
     # ======================================================================
@@ -807,8 +819,13 @@ class LightVNParser(ParserScript):
     # ======================================================================
 
     def _extract_all_tagged(self, content: str) -> List[ExtractedLine]:
-        """Extract all translatable lines in document order with tags."""
-        seen: Dict[str, ExtractedLine] = {}
+        """Extract all translatable lines in document order with tags.
+
+        Every occurrence is returned, including duplicates.  CherryAI's
+        manifest stores per-line entries so deduplication must NOT happen
+        here — it is handled later by the Preprocessing step if enabled.
+        """
+        result: List[ExtractedLine] = []
         lines = content.split("\n")
         in_dialogue = False
         current_dialogue: List[str] = []
@@ -821,12 +838,11 @@ class LightVNParser(ParserScript):
                 dt = self._process_dialogue_text("\n".join(current_dialogue))
                 if dt:
                     key = self._make_dialogue_key(dt, dialogue_speaker)
-                    if key not in seen:
-                        seen[key] = ExtractedLine(
-                            text=key,
-                            tag=TAG_DIALOGUE,
-                            speaker=dialogue_speaker,
-                        )
+                    result.append(ExtractedLine(
+                        text=key,
+                        tag=TAG_DIALOGUE,
+                        speaker=dialogue_speaker,
+                    ))
                 current_dialogue = []
                 in_dialogue = False
 
@@ -861,10 +877,9 @@ class LightVNParser(ParserScript):
                 if vr:
                     _vt, _vn, text = vr
                     if not (self._exclude_code_only and self._is_code_only_text(text)):
-                        if text not in seen:
-                            seen[text] = ExtractedLine(
-                                text=text, tag=TAG_VARIABLE,
-                            )
+                        result.append(ExtractedLine(
+                            text=text, tag=TAG_VARIABLE,
+                        ))
                 i += 1
                 continue
 
@@ -874,8 +889,7 @@ class LightVNParser(ParserScript):
                 for mt in self._extract_menu_texts_from_line(stripped):
                     if self._exclude_code_only and self._is_code_only_text(mt):
                         continue
-                    if mt not in seen:
-                        seen[mt] = ExtractedLine(text=mt, tag=TAG_MENU)
+                    result.append(ExtractedLine(text=mt, tag=TAG_MENU))
                 i += 1
                 continue
 
@@ -945,7 +959,7 @@ class LightVNParser(ParserScript):
         # Flush remaining
         _flush_dialogue()
 
-        return list(seen.values())
+        return result
 
     def _extract_all_keys(self, content: str) -> List[str]:
         """Extract flat list of keys (used for injection mapping)."""

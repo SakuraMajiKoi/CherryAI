@@ -644,6 +644,7 @@ class ManifestManager:
                     defaults.get("wordwrap_ignore_patterns", "Angle,Square,Curly,En")
                 ),
                 "Typography": defaults.get("wordwrap_typography", "Western"),
+                "TagConfigs": [],
             },
             
             # === v3.0 Output Format ===
@@ -2025,6 +2026,7 @@ class ManifestManager:
         """Build rel_path → absolute-source-path map from Input step state.
 
         Falls back to matching filedir rel_paths against Input.data.files[].path.
+        Matching priority: rel_path suffix match → filename (only when unique).
         """
         result: Dict[str, Path] = {}
         ss = self._manifest_data.get("step_state", {})
@@ -2032,22 +2034,42 @@ class ManifestManager:
         files_list = input_data.get("files", [])
 
         filedir = self.get_filedir()
-        # Build a quick lookup: filename → absolute path
-        abs_by_name: Dict[str, Path] = {}
+
+        # Collect all absolute paths from Input step
+        abs_paths: List[Path] = []
         for f in files_list:
-            p = Path(f.get("path", ""))
-            abs_by_name[p.name] = p
-            # Also store by full path for exact matching
-            abs_by_name[str(p)] = p
+            raw = f.get("path", "")
+            if raw:
+                abs_paths.append(Path(raw))
+
+        # Build filename → list of absolute paths (detect ambiguity)
+        from collections import defaultdict
+        name_to_paths: Dict[str, List[Path]] = defaultdict(list)
+        for p in abs_paths:
+            name_to_paths[p.name].append(p)
 
         for entry in filedir:
             rel = entry.rel_path
-            # Try matching by filename (last component of rel_path)
+            rel_parts = Path(rel).parts  # e.g. ("cg", "coliseum_mob.txt")
+
+            # 1) Suffix match: find an abs path whose tail matches rel_path
+            matched = None
+            for p in abs_paths:
+                p_parts = p.parts
+                if (len(p_parts) >= len(rel_parts)
+                        and p_parts[-len(rel_parts):] == rel_parts):
+                    matched = p
+                    break
+
+            if matched is not None:
+                result[rel] = matched
+                continue
+
+            # 2) Filename-only match, but only when unambiguous
             fname = Path(rel).name
-            if fname in abs_by_name:
-                result[rel] = abs_by_name[fname]
-            elif rel in abs_by_name:
-                result[rel] = abs_by_name[rel]
+            candidates = name_to_paths.get(fname, [])
+            if len(candidates) == 1:
+                result[rel] = candidates[0]
 
         return result
     
@@ -2169,7 +2191,133 @@ class ManifestManager:
             return Path.cwd()
         
         return Path(*common_parts)
-    
+
+    # ======================== Non-Destructive File Addition ======================== #
+
+    def add_files(
+        self,
+        new_file_infos: List[Dict[str, Any]],
+        new_lines_by_rel: Dict[str, List[str]],
+    ) -> int:
+        """Add new files to an existing manifest without destroying existing data.
+
+        New files are merged into the sorted filedir list and all idx values
+        (both existing and new) are recomputed to maintain a contiguous,
+        sorted global index.  Existing line entries retain all their fields
+        (tl, prepro, postpro, tags, etc.) — only their ``idx`` is updated.
+
+        Args:
+            new_file_infos: List of dicts with keys:
+                - rel_path: str — relative path (same base as existing filedir)
+                - format: str — file format id
+                - line_count: int — number of lines
+                - encoding: str (optional, default utf-8)
+                - type: str (optional, default "")
+                - lines: List[str] — the orig text of each line
+            new_lines_by_rel: Mapping of rel_path → list of orig line strings
+                for the new files.
+
+        Returns:
+            Number of new files added.
+
+        Raises:
+            ValueError: If a file with the same rel_path already exists.
+        """
+        existing_filedir = self.get_filedir()
+        existing_lines = self._manifest_data.get("lines", [])
+
+        # Build lookup of existing rel_paths
+        existing_paths = {e.rel_path for e in existing_filedir}
+
+        # Validate no duplicates
+        for info in new_file_infos:
+            rel = info["rel_path"]
+            if rel in existing_paths:
+                raise ValueError(f"File already exists in manifest: {rel}")
+
+        # Build new FileDirEntry objects (temporary idx — will be recomputed)
+        new_entries: List[FileDirEntry] = []
+        for info in new_file_infos:
+            entry = FileDirEntry(
+                first_idx=0,
+                last_idx=info["line_count"] - 1,
+                format=info.get("format", "txt"),
+                rel_path=info["rel_path"],
+                encoding=info.get("encoding", "utf-8"),
+                type=info.get("type", ""),
+            )
+            new_entries.append(entry)
+
+        # Build a combined list: (rel_path, entry_or_new, is_new)
+        # Sort by rel_path to maintain consistent alphabetical ordering
+        combined: List[tuple] = []
+        for entry in existing_filedir:
+            combined.append((entry.rel_path, entry, False))
+        for entry in new_entries:
+            combined.append((entry.rel_path, entry, True))
+        combined.sort(key=lambda x: x[0].lower())
+
+        # Build mapping from old_idx → existing line dict for existing entries
+        old_lines_by_idx: Dict[int, Dict[str, Any]] = {}
+        for line in existing_lines:
+            old_lines_by_idx[line.get("idx", -1)] = line
+
+        # Recompute all indices and build final lines + filedir
+        final_lines: List[Dict[str, Any]] = []
+        final_filedir: List[FileDirEntry] = []
+        current_idx = 0
+
+        for rel_path, entry, is_new in combined:
+            first_idx = current_idx
+
+            if is_new:
+                # Insert new lines
+                new_orig_lines = new_lines_by_rel.get(rel_path, [])
+                for orig_text in new_orig_lines:
+                    final_lines.append({
+                        "idx": current_idx,
+                        "orig": orig_text,
+                    })
+                    current_idx += 1
+            else:
+                # Preserve existing lines with all their fields, just update idx
+                old_first = entry.first_idx
+                old_last = entry.last_idx
+                for old_idx in range(old_first, old_last + 1):
+                    line_data = old_lines_by_idx.get(old_idx)
+                    if line_data is not None:
+                        line_copy = dict(line_data)
+                        line_copy["idx"] = current_idx
+                        final_lines.append(line_copy)
+                    else:
+                        # Shouldn't happen, but create a placeholder
+                        final_lines.append({"idx": current_idx, "orig": ""})
+                    current_idx += 1
+
+            last_idx = current_idx - 1
+
+            final_entry = FileDirEntry(
+                first_idx=first_idx,
+                last_idx=last_idx,
+                format=entry.format,
+                rel_path=entry.rel_path,
+                encoding=entry.encoding,
+                type=entry.type,
+            )
+            final_filedir.append(final_entry)
+
+        # Commit to manifest
+        self._manifest_data["lines"] = final_lines
+        self.set_filedir(final_filedir)
+        self._mark_dirty()
+
+        added = len(new_file_infos)
+        logger.info(
+            "Added %d new file(s) to manifest, total %d files, %d lines",
+            added, len(final_filedir), len(final_lines),
+        )
+        return added
+
     # ========================== Integration with mainhelper Manifest ========================== #
     
     def import_from_mainhelper_manifest(self, manifest: "Manifest") -> None:
@@ -2602,6 +2750,28 @@ class ManifestManager:
     def set_wordwrap_options(self, options: Dict[str, Any]) -> None:
         """Set wordwrap options."""
         self._manifest_data["WordwrapSettings"] = options
+        self._mark_dirty()
+
+    def get_wordwrap_tag_configs(self) -> List[Dict[str, Any]]:
+        """Get per-tag wordwrap configuration list.
+
+        Each entry is ``{"tag": str, "Width": int, "BreakChar": str,
+        "MaxLines": int, "Mode": str, "ParserManaged": bool}``.
+
+        Returns:
+            List of tag config dicts (empty list if none defined).
+        """
+        ws = self._manifest_data.get("WordwrapSettings", {})
+        return list(ws.get("TagConfigs", []))
+
+    def set_wordwrap_tag_configs(self, configs: List[Dict[str, Any]]) -> None:
+        """Replace the full per-tag wordwrap configuration list.
+
+        Args:
+            configs: List of tag config dicts.
+        """
+        ws = self._manifest_data.setdefault("WordwrapSettings", {})
+        ws["TagConfigs"] = list(configs)
         self._mark_dirty()
     
     def get_output_options(self) -> Dict[str, Any]:
