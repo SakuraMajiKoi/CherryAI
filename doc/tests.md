@@ -11271,7 +11271,7 @@ python -m pytest CherryAI/dev/test_pov_inference.py -v --timeout=10
 python -m pytest CherryAI/dev/test_protagonist_romanization.py -v --timeout=10
 ```
 
-### Term Translation & Global Options Extensions (52 tests)
+### Term Translation & Global Options Extensions (100 tests)
 
 **File:** `dev/test_term_translation.py`
 
@@ -11287,20 +11287,29 @@ python -m pytest CherryAI/dev/test_protagonist_romanization.py -v --timeout=10
 | TestCodePatternTranslation | 6 | Default empty translation, to_dict includes translation, from_dict reads translation, roundtrip, legacy from_dict without translation, translation in display |
 | TestManifestCodeGlossaryTranslation | 4 | save_code_glossary includes translation, load_code_glossary returns translation, missing translation defaults empty, roundtrip preserves translation |
 | TestSectionDescriptions | 2 | SECTION_DESCRIPTIONS completeness, all OptionSection values have descriptions |
+| TestTranslateTermsBatch | 4 | Batch splitting exact, batch splitting remainder, large batch single call, Romaji mode no batching |
+| TestSkipEmptyTranslation | 5 | Empty LLM result in batch, caller skip-empty logic, caller skip-whitespace, caller skip-same-as-original, empty result not written |
+| TestExtractCodeSegments | 10 | No brackets, empty string, single square bracket, multiple segments, nested brackets, angle brackets, fullwidth brackets, unbalanced skipped, mixed bracket types, adjacent segments |
+| TestValidateTranslationCode | 8 | No code always valid, code preserved, code missing, partial loss, all preserved, nested preserved, nested lost, empty original valid |
+| TestErrorPathPartialSave | 5 | Partial char save, partial code save, error mid-batch keeps prior results, save_character_notes roundtrip, save_code_glossary roundtrip |
+| TestTermTranslationManifestOnly | 6 | Code pattern read from manifest, write to manifest only, partial save roundtrip, no global TSV write import, no read_all_rows_extended import, characters saved to manifest only |
+| TestManifestSaveAfterChunk | 3 | _process_single_chunk calls save(), _handle_chunk_retry calls save(), save() guarded by None check |
+| TestCodePatternsInPrompt | 7 | Translate action in prompt, preserve action excluded, translation arrow format, selective chunk filtering, notes in parentheses, translate step passes code_patterns, costs step passes code_patterns |
 
 ```bash
 # Run term translation tests
 python -m pytest CherryAI/dev/test_term_translation.py -v --timeout=10
 ```
 
-### Utility Settings Unit Tests (53 tests)
+### Utility Settings Unit Tests (57 tests)
 
 **File:** `dev/test_utility_settings.py`
 
 Tests for the expanded UtilitySettings dataclass (17 fields), term translation
 batch splitting, mode detection, API key resolution, gender inference confidence
 logic, error abort behaviour, prompt-type routing, configurable prompts,
-`_normalize_gender` mapping, and JSON-schema validation.
+`_normalize_gender` mapping, JSON-schema validation, and model dropdown
+auto-population.
 
 | Test Class | Count | Coverage |
 |-----------|-------|----------|
@@ -11316,6 +11325,7 @@ logic, error abort behaviour, prompt-type routing, configurable prompts,
 | TestNormalizeGender | 8 | Female passthrough, Male passthrough, Non-Binary passthrough, Unsure → Unknown, Unknown → Unknown, Neutral → Non-Binary, garbage → Unknown, empty → Unknown |
 | TestGenderInferenceSchema | 3 | Schema has correct gender enum (Female/Male/Non-Binary/Unsure), schema is strict, schema disallows additionalProperties |
 | TestTermTranslationSchema | 3 | Schema is strict, schema has translations array, schema disallows additionalProperties |
+| TestUtilityModelDropdown | 4 | Term model list populated from get_provider_models, gender model list populated, empty provider no crash, unknown provider fallback |
 
 ```bash
 # Run utility settings tests

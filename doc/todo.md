@@ -2588,9 +2588,12 @@ abort on API failure.
 **Term Translation:**
 - Mode dropdown: Romaji / LLM (legacy Simple/MTL migrate to Romaji)
 - API key provider + key name dropdowns populated from API.ini [api_keys]
-- Model dropdown from api_config.get_default_model()
-- Batch size spinbox (1–100, default 10)
+- Model **Combobox** auto-populated via `_update_term_model_list()` → `get_provider_models(provider)` when API key changes
+- Batch size spinbox (1–100, default 10); `_worker` calls `translate_terms()` which splits internally
 - API.ini [term_translation] profile stores provider/key_name/model
+- Code validation: `extract_code_segments()` + `validate_translation_code()` — skip terms with missing code segments
+- Skip empty/whitespace-only/identical results silently
+- Partial save on error: `_save_results()` persists all successful translations before showing error messagebox
 - RuntimeError on missing key or API failure, caught in analysis.py
 
 **Gender Inference:**
@@ -2598,6 +2601,7 @@ abort on API failure.
 - "Script only" runs heuristic pass with configurable confidence (min/max)
 - "Script + LLM" runs script first, then LLM on remaining unknowns
 - Separate API key/model controls (stored in API.ini [gender_inference])
+- Model **Combobox** auto-populated via `_update_gender_model_list()` → `get_provider_models(provider)` when API key changes
 - LLM confidence spinboxes (min/max, default 3/5)
 - ignore_unknown / do_all checkboxes for both script and LLM
 - RuntimeError on LLM failure shown via messagebox
@@ -2606,16 +2610,16 @@ abort on API failure.
 to_dict/from_dict roundtrip and legacy mode migration.
 
 **Files Modified:**
-- `gui/dialogs/global_options.py` — UtilitySettings, _build_utility_section, _on_apply, save defaults
-- `functions/term_translation.py` — Rewritten: batch splitting, API.ini profile, RuntimeError
+- `gui/dialogs/global_options.py` — UtilitySettings, _build_utility_section (Combobox model fields, _update_term_model_list, _update_gender_model_list), _on_apply, save defaults
+- `functions/term_translation.py` — Rewritten: batch splitting, API.ini profile, RuntimeError, extract_code_segments(), validate_translation_code()
 - `functions/API2Glossary.py` — infer_gender_llm(), _has_consensus(), _call_api_for_excerpt_custom()
-- `gui/steps/analysis.py` — try/except RuntimeError in _worker()
+- `gui/steps/analysis.py` — _worker() batch processing via translate_terms(), code validation, skip-empty, _save_results()/_finish_with_error() partial save on error
 - `gui/steps/information.py` — Rewritten _infer_character_genders() with two modes
 
 **Tests:**
-- `dev/test_utility_settings.py` — 27 unit tests (dataclass, batching, consensus, error abort)
+- `dev/test_utility_settings.py` — 57 unit tests (dataclass, batching, consensus, error abort, model dropdown)
 - `dev/test_utility_integration.py` — 7 live API tests with gpt-4.1-nano
-- `dev/test_term_translation.py` — Updated assertion (52 tests, all pass)
+- `dev/test_term_translation.py` — 100 tests (batch, skip-empty, code validation, partial save, manifest-only persistence, chunk save, code patterns in prompt)
 
 ---
 

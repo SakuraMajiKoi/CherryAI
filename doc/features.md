@@ -2397,16 +2397,21 @@ TERM TRANSLATION — MULTI-MODE DISPATCHER (Implemented)
 - **Structured Output**: LLM mode uses strict JSON-schema (`response_format=json_schema`) enforcing `{"translations": [...]}`. Output capped with `max_tokens` and `store=False` to minimise token waste.
 - **Two prompt types**: `prompt_type="glossary"` for character name/glossary terms (succinct translation) and `prompt_type="code"` for code pattern labels (succinct explanation). Analysis step routes each type automatically.
 - **Configurable prompts**: Global Options → Prompts shows "Translate Terms — Glossary" and "Translate Terms — Code" sections. Templates use `{source_lang}`, `{target_lang}`, and `{count}` placeholders. Stored in CherryAI.ini `[prompts]` section with compiled-in defaults as fallback.
-- **API key/model selection**: Global Options → Utility provides dropdowns to select any API key saved in API.ini and an editable model field. Settings are persisted to API.ini `[term_translation]` section.
-- **Batch size**: Configurable spinbox (1–100, default 10) controls how many terms are sent per LLM request. Large term lists are automatically split into batches.
-- **Error abort**: LLM mode raises `RuntimeError` on API failure instead of silently returning untranslated terms. The Analysis step shows a messagebox with the error message and aborts.
+- **API key/model selection**: Global Options → Utility provides dropdowns to select any API key saved in API.ini and a **model Combobox** that auto-populates from `get_provider_models()` when the API key changes. Settings are persisted to API.ini `[term_translation]` section. Gender Inference has its own model Combobox that updates independently.
+- **Batch size**: Configurable spinbox (1–100, default 10) controls how many terms are sent per LLM request. The `_worker` calls `translate_terms()` which internally splits the term list by `_get_utility_batch_size()`. Large term lists are processed in batches with per-batch progress updates.
+- **Code validation**: `extract_code_segments()` detects bracket-delimited code (balanced matching for `[]`, `{}`, `<>` and fullwidth variants). `validate_translation_code()` checks that all code segments in the original term survive in the translation. Terms with missing code segments are **skipped** (not retried) and reported in the summary.
+- **Skip empty results**: Translations that return empty, whitespace-only, or identical-to-original strings are silently skipped — the existing value is left unchanged.
+- **Partial save on error**: LLM mode raises `RuntimeError` on API failure. The Analysis step saves any terms successfully translated before the error via `_save_results()`, then shows a messagebox reporting both the error and the count of saved translations. Previously, all progress was lost on error.
+- **Error abort**: LLM mode raises `RuntimeError` on API failure instead of silently returning untranslated terms.
 - **Public API:**
   - `translate_term(term, source_lang, target_lang, *, mode, context, prompt_type)` — translate one term
   - `translate_terms(terms, source_lang, target_lang, *, mode, context, prompt_type)` — batch-translate (LLM mode respects batch_size)
   - `get_current_mode()` — read configured mode from INI
 - **Progress Dialog:** Clicking "Translate Terms" opens a modal progress dialog showing mode, a determinate progress bar, and per-term status (e.g. "5 / 42 — 店員"). Translation runs in a background thread so the GUI stays responsive. A Cancel button lets the user stop early; already-translated terms are saved.
-- **GUI Integration:** Analysis step "Translate Terms" button reads source/target language from manifest metadata, calls `translate_term()` with correct language pair and `prompt_type`. After translation, the findings table Details column updates immediately. Code pattern translations are synced to the manifest for cross-tab persistence.
-- Test suite: `dev/test_term_translation.py` (52 tests), `dev/test_utility_settings.py` (53 tests), `dev/test_utility_integration.py` (7 live API tests)
+- **GUI Integration:** Analysis step "Translate Terms" button reads source/target language from manifest metadata, calls `translate_terms()` in batches with correct language pair and `prompt_type`. After translation, the findings table Details column updates immediately. Code pattern translations are saved to the project manifest only (not the global TSV).
+- **Immediate Persistence:** Translation results are written to disk immediately after each chunk completes via `manifest_manager.save()`, not deferred to the 60-second autosave timer.
+- **Code Patterns in Prompt (§5.7):** Code patterns with action "Translate" are included in the glossary section (slot 9) of the system prompt, with per-chunk selective filtering like glossary entries and characters.
+- Test suite: `dev/test_term_translation.py` (100 tests), `dev/test_utility_settings.py` (57 tests), `dev/test_utility_integration.py` (7 live API tests)
 
 CONSISTENCY SYSTEM (Implemented)
 - Ensures consistent translation of recurring terms across all requests

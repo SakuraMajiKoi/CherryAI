@@ -2883,6 +2883,7 @@ class GlobalOptionsDialog(tk.Toplevel):
                 p, n = val.split(" / ", 1)
                 self._term_api_provider_var.set(p)
                 self._term_api_name_var.set(n)
+                self._update_term_model_list(p)
                 # Auto-fill model from default model for this key
                 default_model = _api_config.get_default_model(p, n)
                 if default_model and not self._term_model_var.get():
@@ -2897,8 +2898,13 @@ class GlobalOptionsDialog(tk.Toplevel):
         self._term_model_var = tk.StringVar(
             value=self.options.utility.term_model,
         )
-        ttk.Entry(row, textvariable=self._term_model_var, width=32).pack(
-            side=tk.LEFT,
+        self._term_model_cb = ttk.Combobox(
+            row, textvariable=self._term_model_var, width=30,
+        )
+        self._term_model_cb.pack(side=tk.LEFT)
+        # Populate models based on current provider
+        self._update_term_model_list(
+            self.options.utility.term_api_key_provider,
         )
 
         # Batch Size
@@ -2974,6 +2980,7 @@ class GlobalOptionsDialog(tk.Toplevel):
                 p, n = val.split(" / ", 1)
                 self._gender_api_provider_var.set(p)
                 self._gender_api_name_var.set(n)
+                self._update_gender_model_list(p)
                 default_model = _api_config.get_default_model(p, n)
                 if default_model and not self._gender_model_var.get():
                     self._gender_model_var.set(default_model)
@@ -2987,8 +2994,13 @@ class GlobalOptionsDialog(tk.Toplevel):
         self._gender_model_var = tk.StringVar(
             value=self.options.utility.gender_model,
         )
-        ttk.Entry(row, textvariable=self._gender_model_var, width=32).pack(
-            side=tk.LEFT,
+        self._gender_model_cb = ttk.Combobox(
+            row, textvariable=self._gender_model_var, width=30,
+        )
+        self._gender_model_cb.pack(side=tk.LEFT)
+        # Populate models based on current provider
+        self._update_gender_model_list(
+            self.options.utility.gender_api_key_provider,
         )
 
         # --- Script Confidence ---
@@ -3242,6 +3254,28 @@ class GlobalOptionsDialog(tk.Toplevel):
             self.model_var.set(models[0])
         # Keep visible combo in sync
         self._sync_settings_model_combo()
+
+    def _update_term_model_list(self, provider: str) -> None:
+        """Update the Term Translation model combobox for the given provider."""
+        from CherryAI.functions.options import get_provider_models
+        if not provider:
+            return
+        models = get_provider_models(provider)
+        if not models and provider in API_PROVIDERS:
+            models = API_PROVIDERS[provider].get("models", [])
+        if hasattr(self, "_term_model_cb"):
+            self._term_model_cb["values"] = models
+
+    def _update_gender_model_list(self, provider: str) -> None:
+        """Update the Gender Inference model combobox for the given provider."""
+        from CherryAI.functions.options import get_provider_models
+        if not provider:
+            return
+        models = get_provider_models(provider)
+        if not models and provider in API_PROVIDERS:
+            models = API_PROVIDERS[provider].get("models", [])
+        if hasattr(self, "_gender_model_cb"):
+            self._gender_model_cb["values"] = models
 
     def _sync_settings_model_combo(self) -> None:
         """Sync the visible Model Selection combo with the hidden one."""

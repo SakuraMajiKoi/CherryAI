@@ -2143,6 +2143,11 @@ class TranslationStep(BaseStep):
             if not characters:
                 characters = mgr._manifest_data.get("characters", [])
 
+            # Code patterns from manifest (§5.7 — "Translate" action
+            # patterns are sent in the glossary section)
+            from CherryAI.functions.manifest_fields import load_code_glossary
+            code_pats = load_code_glossary(mgr)
+
             # POV from manifest top-level
             pov_data = mgr._manifest_data.get("POV", {})
 
@@ -2160,6 +2165,7 @@ class TranslationStep(BaseStep):
                 rolling_context_text=rolling_context_text,
                 pov_data=pov_data,
                 chunk_lines=chunk_lines,
+                code_patterns=code_pats,
                 merge_instruction=merge_instruction,
                 context_type=context_type,
             )
@@ -3243,6 +3249,10 @@ class TranslationStep(BaseStep):
                         line.idx, translation,
                     )
 
+            # Flush to disk immediately so no chunk is lost
+            if self._manifest_manager is not None:
+                self._manifest_manager.save()
+
             # Update rolling context buffer
             provides_context = (
                 formation_ctx.get("provides_context", True)
@@ -3346,6 +3356,10 @@ class TranslationStep(BaseStep):
             f"Retry complete: {retry_result.successful_count} recovered, "
             f"{retry_result.failed_count} failed ({method})"
         )
+
+        # Flush to disk after retry so recovered translations are not lost
+        if self._manifest_manager is not None:
+            self._manifest_manager.save()
 
     # ------------------------------------------------------------------
     # Sequential String Worker (runs inside a thread)
@@ -4128,6 +4142,12 @@ class TranslationStep(BaseStep):
 
             pov_data = mgr._manifest_data.get("POV", {})
 
+        # Code patterns from manifest (§5.7)
+        code_pats: list[dict] = []
+        if mgr is not None and mgr.is_loaded:
+            from CherryAI.functions.manifest_fields import load_code_glossary
+            code_pats = load_code_glossary(mgr)
+
         # Sample lines for conditional (fallback when no per-chunk filtering)
         sample_lines = [
             (line.edited_prepro or line.preprocessed or line.original)
@@ -4331,6 +4351,7 @@ class TranslationStep(BaseStep):
                 sample_lines=sample_lines,
                 pov_data=pov_data,
                 chunk_lines=filtered_lines,
+                code_patterns=code_pats,
                 context_type=resolved_type,
             )
 

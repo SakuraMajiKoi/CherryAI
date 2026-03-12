@@ -124,7 +124,7 @@ TABLE OF CONTENTS
    3.45 usage_tracker.py ✅ - API usage analytics and tracking (Phase 17.5)
    3.46 estimation.py ✅ - Token estimation utilities (legacy CLI support)
    3.47 api_log.py ✅🔗 - Structured API log store with per-project persistence (JSON lines format), category/status filtering, live subscriptions for GUI updates
-   3.47 term_translation.py ✅🔗 - Unified term translation dispatcher (Romaji/LLM); json_schema structured output, prompt_type, configurable prompts
+   3.47 term_translation.py ✅🔗 - Unified term translation dispatcher (Romaji/LLM); json_schema structured output, prompt_type, configurable prompts; extract_code_segments() and validate_translation_code() for bracket-balanced code preservation validation
    
    3.48 glossaries/ (subfolder - 6 files)
         - __init__.py - Package exports
@@ -283,8 +283,9 @@ TABLE OF CONTENTS
            - API settings persisted to API.ini [term_translation] and [gender_inference] sections
            - Non-API settings persisted to CherryAI.ini [utility] section
          - UTILITY section: _build_utility_section() — Term Translation and Gender Inference panels
-           - Term Translation: Mode dropdown, API Key combobox (from list_api_keys()), Model entry, Batch Size spinbox
-           - Gender Inference: Mode dropdown, API Key combobox, Model entry, Script/LLM Confidence sub-panels
+           - Term Translation: Mode dropdown, API Key combobox (from list_api_keys()), Model Combobox (auto-populated via _update_term_model_list → get_provider_models()), Batch Size spinbox
+           - Gender Inference: Mode dropdown, API Key combobox, Model Combobox (auto-populated via _update_gender_model_list → get_provider_models()), Script/LLM Confidence sub-panels
+           - Model Comboboxes update their values when the API key selection changes (provider extracted from "provider / name" combo value)
            - Each Confidence sub-panel: min/max spinboxes + Ignore Unknown + Do all Requests checkboxes
          - ADDONS section: _build_addons_section() — Treeview of installed addons (name/size), Delete/Refresh buttons
          - TASK 33.2: PromptsSettings for Edit/TLC custom prompts + Utility prompts
@@ -383,6 +384,7 @@ TABLE OF CONTENTS
        - prompt_adapter.py - Bridge between GUI and functions/prompt_builder.py (TASK 73: build_full_system_prompt shared builder — single source of truth for §5.2 prompt assembly)
          - Section toggle flags: `build_full_system_prompt()` reads `*_enabled` boolean keys from metadata to gate prompt sections (genre_enabled, summary_enabled, style_enabled, tone_enabled, system_instructions_enabled, glossary_enabled, code_database_enabled)
          - I/O Examples injection: slot 2b between System Instructions and Style; reads `metadata.io_examples` mode; imports `generate_io_examples`, `calculate_fill_target`, `estimate_tokens` from `functions/io_examples.py`; never modifies System Instructions; fill mode pre-computes tokens for ALL later static sections (style, tone, summary, genre, protagonist, POV, context-type) before calculating fill target
+         - Code patterns in slot 9: code patterns with action="translate" are included alongside glossary entries and characters in the glossary section, with per-chunk selective filtering
        - manifest_binding.py - Widget-to-Manifest binding system (TASK 22.3)
        - tooltip.py - Tooltip display utilities for widgets
        - confirmations.py - Confirmation dialog with "Don't ask again" opt-out (Phase 60)

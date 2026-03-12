@@ -11,17 +11,91 @@ Public API
 - :func:`translate_term`      — translate a single term
 - :func:`translate_terms`     — translate a list of terms
 - :func:`get_current_mode`    — read the configured mode
+- :func:`extract_code_segments` — extract bracket-delimited code from text
+- :func:`validate_translation_code` — check code preservation in translation
 """
 
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+from typing import Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
 # Valid modes
 MODES = ("Romaji", "LLM")
+
+# Bracket pairs for code segment detection
+_BRACKET_PAIRS: Dict[str, str] = {
+    "[": "]", "［": "］",
+    "{": "}", "｛": "｝",
+    "<": ">", "＜": "＞",
+    "⟨": "⟩", "⟪": "⟫",
+    "〈": "〉", "《": "》",
+}
+
+
+# ============================================================================
+# Code validation helpers
+# ============================================================================
+
+def extract_code_segments(text: str) -> List[str]:
+    """Extract bracket-delimited code segments from text.
+
+    Uses balanced bracket matching so ``{{code}}`` closes on the
+    second ``}`` rather than the first.
+
+    Args:
+        text: Text to scan for code segments.
+
+    Returns:
+        List of code segments including their delimiters.
+    """
+    segments: List[str] = []
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if char in _BRACKET_PAIRS:
+            close = _BRACKET_PAIRS[char]
+            depth = 1
+            start = i
+            i += 1
+            while i < len(text) and depth > 0:
+                if text[i] == char:
+                    depth += 1
+                elif text[i] == close:
+                    depth -= 1
+                i += 1
+            if depth == 0:
+                segments.append(text[start:i])
+            continue
+        i += 1
+    return segments
+
+
+def validate_translation_code(
+    original: str, translated: str,
+) -> Tuple[bool, List[str]]:
+    """Validate that code segments in *original* are preserved in *translated*.
+
+    Args:
+        original: The source term (may contain code).
+        translated: The translated term.
+
+    Returns:
+        Tuple of ``(is_valid, missing_segments)`` where *is_valid* is
+        ``True`` when all code segments are present and *missing_segments*
+        lists those that are absent from the translation.
+    """
+    orig_codes = extract_code_segments(original)
+    if not orig_codes:
+        return True, []
+
+    missing: List[str] = []
+    for code in orig_codes:
+        if code not in translated:
+            missing.append(code)
+    return len(missing) == 0, missing
 
 
 # ============================================================================

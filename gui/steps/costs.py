@@ -920,6 +920,17 @@ class CostsStep(BaseStep):
             if not characters and mgr is not None and mgr.is_loaded:
                 characters = mgr._manifest_data.get("characters", [])
 
+            # Code patterns from manifest (§5.7)
+            code_pats: list[dict] = []
+            if mgr is not None and mgr.is_loaded:
+                try:
+                    from CherryAI.functions.manifest_fields import (
+                        load_code_glossary,
+                    )
+                    code_pats = load_code_glossary(mgr)
+                except ImportError:
+                    pass
+
             # POV from manifest top-level
             pov_data: dict = {}
             if mgr is not None and mgr.is_loaded:
@@ -935,6 +946,7 @@ class CostsStep(BaseStep):
                 characters=characters,
                 sample_lines=sample_lines,
                 pov_data=pov_data,
+                code_patterns=code_pats,
             )
 
             if not prompt_text:
@@ -1035,6 +1047,17 @@ class CostsStep(BaseStep):
             if not characters and mgr is not None and mgr.is_loaded:
                 characters = mgr._manifest_data.get("characters", [])
 
+            # Code patterns from manifest (§5.7)
+            code_pats2: list[dict] = []
+            if mgr is not None and mgr.is_loaded:
+                try:
+                    from CherryAI.functions.manifest_fields import (
+                        load_code_glossary,
+                    )
+                    code_pats2 = load_code_glossary(mgr)
+                except ImportError:
+                    pass
+
             pov_data: dict = {}
             if mgr is not None and mgr.is_loaded:
                 pov_data = mgr._manifest_data.get("POV", {})
@@ -1047,6 +1070,7 @@ class CostsStep(BaseStep):
                     characters=characters,
                     chunk_lines=chunk_lines,
                     pov_data=pov_data,
+                    code_patterns=code_pats2,
                 )
                 if not prompt_text:
                     continue

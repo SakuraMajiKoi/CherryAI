@@ -1284,6 +1284,36 @@ def build_full_system_prompt(
             else:
                 glossary_block = "\n".join(char_lines)
 
+    # Code patterns with "translate" action (§5.7)
+    if glossary_enabled and code_patterns:
+        translate_pats = [
+            p for p in code_patterns
+            if str(p.get("action", "")).lower() == "translate"
+        ]
+        if chunk_lines is not None:
+            translate_pats = [
+                p for p in translate_pats
+                if p.get("pattern", "") and p["pattern"] in chunk_text_joined
+            ]
+        if translate_pats:
+            cp_lines: List[str] = ["# Code Patterns"]
+            for pat in translate_pats:
+                pattern = pat.get("pattern", "")
+                tl = pat.get("translation", "")
+                notes = pat.get("notes", "")
+                if pattern:
+                    entry_text = f"- {pattern}"
+                    if tl:
+                        entry_text += f" → {tl}"
+                    if notes:
+                        entry_text += f" ({notes})"
+                    cp_lines.append(entry_text)
+            if len(cp_lines) > 1:
+                if glossary_block:
+                    glossary_block += "\n\n" + "\n".join(cp_lines)
+                else:
+                    glossary_block = "\n".join(cp_lines)
+
     if glossary_block:
         _add("glossary", glossary_block)
 

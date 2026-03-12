@@ -962,13 +962,18 @@ class AnalysisStep(BaseStep):
         self._findings_table._export_csv()
 
     def _translate_terms(self) -> None:
-        """Translate terms in characters and code database.
+        """Translate terms in characters and code patterns.
 
         Uses the Term Translation mode configured in Global Options
         (Romaji / LLM).  Fills the ``translation`` field for
-        characters and the Translation column for code database entries
-        when the original/pattern is non-empty and translation is
-        currently blank.  Tab and newline characters are sanitized.
+        characters and code patterns in the **project manifest** when
+        the original/pattern is non-empty and translation is currently
+        blank.  Tab and newline characters are sanitized.
+
+        All results are written exclusively to the manifest's
+        ``characters`` and ``code_patterns`` fields — the global
+        TSV databases (``globalglossary.tsv``, ``codedatabase.tsv``)
+        are **not** modified.
 
         Reads source/target language from the manifest metadata.
 
@@ -977,7 +982,7 @@ class AnalysisStep(BaseStep):
         """
         from CherryAI.functions.term_translation import (
             get_current_mode,
-            translate_term,
+            translate_terms,
         )
 
         mgr = self.manifest_manager
@@ -1015,20 +1020,14 @@ class AnalysisStep(BaseStep):
                 if count >= threshold or count == 0:
                     char_items.append((i, name))
 
-        code_rows: list = []
+        manifest_pats: list[dict] = []
         code_items: list[tuple[int, str]] = []
-        try:
-            from CherryAI.functions.glossaries.code_glossary_db import (
-                read_all_rows_extended,
-            )
-            code_rows = read_all_rows_extended()
-            for j, row in enumerate(code_rows):
-                pattern = row[0] if row else ""
-                translation = row[1] if len(row) > 1 else ""
-                if pattern and not translation.strip():
-                    code_items.append((j, pattern))
-        except Exception as exc:
-            logger.warning("Code DB read failed: %s", exc)
+        manifest_pats = load_code_glossary(mgr)
+        for j, pat in enumerate(manifest_pats):
+            pattern = pat.get("pattern", "")
+            translation = pat.get("translation", "")
+            if pattern and not translation.strip():
+                code_items.append((j, pattern))
 
         total = len(char_items) + len(code_items)
         if total == 0:
@@ -1076,6 +1075,7 @@ class AnalysisStep(BaseStep):
         updated_codes = 0
         translated_speakers: list[str] = []
         translated_patterns: dict[str, str] = {}
+        skipped_code: list[str] = []
         done_count = 0
 
         def _update(count: int, label: str) -> None:
@@ -1085,80 +1085,119 @@ class AnalysisStep(BaseStep):
         def _worker() -> None:
             nonlocal updated_chars, updated_codes, done_count
 
+            from CherryAI.functions.term_translation import (
+                _get_utility_batch_size,
+                validate_translation_code,
+            )
+            batch_size = _get_utility_batch_size()
+
             try:
-                # Translate characters
-                for idx, name in char_items:
+                # Translate characters in batches
+                for bi in range(0, len(char_items), batch_size):
                     if cancel_event.is_set():
                         break
-                    result = translate_term(
-                        name, source_lang=src_code, target_lang=tgt_code,
+                    batch = char_items[bi : bi + batch_size]
+                    names = [name for _, name in batch]
+                    results = translate_terms(
+                        names, source_lang=src_code, target_lang=tgt_code,
                         prompt_type="glossary",
                     )
-                    if result != name:
-                        characters[idx]["translation"] = _sanitize_translation(
-                            result,
-                        )
-                        updated_chars += 1
-                        translated_speakers.append(name)
-                    done_count += 1
-                    dlg.after(0, _update, done_count, name)
+                    for (idx, name), result in zip(batch, results):
+                        if cancel_event.is_set():
+                            break
+                        if result and result.strip() and result != name:
+                            valid, missing = validate_translation_code(
+                                name, result,
+                            )
+                            if not valid:
+                                logger.warning(
+                                    "Code lost in translation for '%s': "
+                                    "missing %s — skipping",
+                                    name, missing,
+                                )
+                                skipped_code.append(name)
+                            else:
+                                characters[idx]["translation"] = (
+                                    _sanitize_translation(result)
+                                )
+                                updated_chars += 1
+                                translated_speakers.append(name)
+                        done_count += 1
+                    dlg.after(0, _update, done_count, names[-1])
 
-                # Translate code patterns
-                for idx, pattern in code_items:
+                # Translate code patterns in batches
+                for bi in range(0, len(code_items), batch_size):
                     if cancel_event.is_set():
                         break
-                    result = translate_term(
-                        pattern, source_lang=src_code, target_lang=tgt_code,
+                    batch = code_items[bi : bi + batch_size]
+                    patterns = [pat for _, pat in batch]
+                    results = translate_terms(
+                        patterns, source_lang=src_code, target_lang=tgt_code,
                         prompt_type="code",
                     )
-                    if result != pattern:
-                        code_rows[idx][1] = _sanitize_translation(result)
-                        updated_codes += 1
-                        translated_patterns[pattern] = code_rows[idx][1]
-                    done_count += 1
-                    dlg.after(0, _update, done_count, pattern)
+                    for (idx, pattern), result in zip(batch, results):
+                        if cancel_event.is_set():
+                            break
+                        if result and result.strip() and result != pattern:
+                            valid, missing = validate_translation_code(
+                                pattern, result,
+                            )
+                            if not valid:
+                                logger.warning(
+                                    "Code lost in translation for '%s': "
+                                    "missing %s — skipping",
+                                    pattern, missing,
+                                )
+                                skipped_code.append(pattern)
+                            else:
+                                manifest_pats[idx]["translation"] = (
+                                    _sanitize_translation(result)
+                                )
+                                updated_codes += 1
+                                translated_patterns[pattern] = (
+                                    manifest_pats[idx]["translation"]
+                                )
+                        done_count += 1
+                    dlg.after(0, _update, done_count, patterns[-1])
             except RuntimeError as exc:
                 logger.error("Term translation aborted: %s", exc)
+                error_message = str(exc)
+                # Still save any partial results accumulated before the
+                # error — _finish handles persistence and UI refresh.
                 dlg.after(
-                    0,
-                    lambda: (
-                        dlg.destroy(),
-                        messagebox.showerror(
-                            "Term Translation Failed",
-                            str(exc),
-                            parent=self.winfo_toplevel(),
-                        ),
-                    ),
+                    0, _finish_with_error, error_message,
                 )
                 return
 
             dlg.after(0, _finish)
 
-        def _finish() -> None:
-            # Save results (must run on main thread for manifest access)
+        def _finish_with_error(error_msg: str) -> None:
+            """Save partial results and show error."""
+            _save_results()
+            parts = []
+            if updated_chars:
+                parts.append(f"{updated_chars} character(s)")
+            if updated_codes:
+                parts.append(f"{updated_codes} code pattern(s)")
+            saved_note = ""
+            if parts:
+                saved_note = (
+                    f"\n\nSaved {' and '.join(parts)} translated "
+                    "before the error."
+                )
+            messagebox.showerror(
+                "Term Translation Failed",
+                f"{error_msg}{saved_note}",
+                parent=self.winfo_toplevel(),
+            )
+
+        def _save_results() -> None:
+            """Persist translations to manifest and code database."""
             if updated_chars:
                 save_character_notes(mgr, characters)
 
             if updated_codes:
-                try:
-                    from CherryAI.functions.glossaries.code_glossary_db import (
-                        write_all_rows,
-                    )
-                    write_all_rows(code_rows)
-
-                    tsv_map = {
-                        r[0]: r[1] for r in code_rows if len(r) > 1
-                    }
-                    manifest_pats = load_code_glossary(mgr)
-                    for pat in manifest_pats:
-                        t = tsv_map.get(pat.get("pattern", ""), "")
-                        if t:
-                            pat["translation"] = t
-                    save_code_glossary(mgr, manifest_pats)
-                except Exception as exc:
-                    logger.warning(
-                        "Code DB term translation save failed: %s", exc,
-                    )
+                save_code_glossary(mgr, manifest_pats)
 
             # Refresh findings table
             if translated_speakers:
@@ -1168,7 +1207,17 @@ class AnalysisStep(BaseStep):
 
             dlg.destroy()
 
+        def _finish() -> None:
+            _save_results()
+
             # Show summary
+            skip_msg = ""
+            if skipped_code:
+                skip_msg = (
+                    f"\n{len(skipped_code)} term(s) skipped due to "
+                    "code segments lost in translation."
+                )
+
             if cancel_event.is_set():
                 parts = []
                 if updated_chars:
@@ -1178,6 +1227,7 @@ class AnalysisStep(BaseStep):
                 msg = "Translation cancelled."
                 if parts:
                     msg += f" Translated {' and '.join(parts)} before stop."
+                msg += skip_msg
                 messagebox.showinfo("Term Translation Cancelled", msg)
             else:
                 parts = []
@@ -1188,13 +1238,14 @@ class AnalysisStep(BaseStep):
                 if parts:
                     messagebox.showinfo(
                         "Term Translation Complete",
-                        f"Translated {' and '.join(parts)}.",
+                        f"Translated {' and '.join(parts)}.{skip_msg}",
                     )
                 else:
                     messagebox.showinfo(
                         "Term Translation Complete",
                         "No entries needed translation "
-                        "(all already filled or no kana detected).",
+                        "(all already filled or no kana detected)."
+                        + skip_msg,
                     )
 
         threading.Thread(target=_worker, daemon=True).start()
