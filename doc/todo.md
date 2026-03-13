@@ -869,6 +869,22 @@ COMPLETED: API Log Window (2026)
    ✅ Menu bar: "API Log" direct entry between Full Table View and Options
    ✅ Tests: dev/test_api_log.py (37 tests — serialization, CRUD, filtering, subscription, persistence, singleton, enums)
 
+COMPLETED: Pricing & Reasoning Mode Fixes (2026)
+   ✅ GPT-4.1 pricing fix: removed flex/priority from FALLBACK_MODELS (standard+batch only)
+   ✅ GPT-4.1 thinking flag: set thinking=True, thinking_mode="optional"
+   ✅ ThinkingConfig three-state: 5 modes (""/builtin/explicit/optional/mandatory) with effort_levels/effort_default/mandatory fields
+   ✅ OpenAI provider: _is_gpt41_family(), _is_gpt5_family() helpers; get_thinking_config() returns correct mode per family
+   ✅ ModelInfo: added thinking_mode field, set for all 27+ FALLBACK_MODELS entries
+   ✅ Available Models filter: shows "Optional"/"✓"/"—" instead of just "✓"/"—"
+   ✅ reasoning_effort: added to RequestSettings, APIConfig, TranslationOptions, _MODEL_SETTING_KEYS
+   ✅ Global Options UI: reasoning effort combobox (low/medium/high), budget/effort rows toggle per mode
+   ✅ Per-model INI persistence: reasoning_effort saved/loaded per model in [model_settings]
+   ✅ Translate step: _reasoning_effort_var, _sync_from_global_options(), on_leave() data
+   ✅ API client: provider-based get_thinking_params() using ThinkingConfig.build_params()
+   ✅ Chat Completions: reasoning_effort as top-level param (not nested); thinking via extra_body for Claude
+   ✅ THINKING_MODELS: added GPT-4.1, GPT-5, o4-mini; is_openai_reasoning_model() includes all families
+   ✅ Tests: dev/test_pricing_and_reasoning.py (108 tests — pricing, thinking modes, build_params, persistence, API wiring)
+
 PENDING TASKS - QUALITY
 
 TASK: Performance Optimization
@@ -2181,6 +2197,29 @@ the orchestrator that delegates to the active provider.
 - `get_cached_input_config()` returns OpenAI config for gpt-4o+ models.
 - `fetch_models()` wraps existing `fetch_openai_models()`.
 - `probe_rate_limits()` wraps existing `probe_openai_rate_limits()`.
+
+---
+
+### API Requests & Costs Rework (7 Tasks)
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 4 hours
+
+Goal: Fix 7 issues in the Costs step and Translation step related to API requests, pricing, and UI behavior.
+
+**Tasks Completed:**
+1. **Cache cost calculation** — Added `CACHE_HIT_RATE = 0.80` and `_get_static_prompt_tokens()` to compute static/dynamic prompt split. Cache savings = `cached_tokens / 1M × (input_rate - cached_rate)`.
+2. **Mode button labels** — Batch/Flex/Priority buttons show "(Available)" or "(Unavailable)" suffix based on model pricing.
+3. **Instant mode cost recalculation** — `_recalculate_costs_for_mode()` updates costs from existing token counts without re-estimation.
+4. **Model lock during estimation** — Model combo disabled while estimation runs, re-enabled on complete.
+5. **Settings decoupling** — Settings loaded from API.ini only once on first tab entry; model changes do not reload settings.
+6. **Apply Settings to Model button** — Renamed from "Save Settings", one-way write to API.ini.
+7. **Translation request mode selector** — Request Mode combobox in Translation step with unavailability detection, passed to `APIConfig.request_mode`.
+
+**Files Modified:**
+- `gui/steps/costs.py` — Tasks 1-6
+- `gui/steps/translate.py` — Task 7
+- `functions/api_client.py` — Added `request_mode` field to `APIConfig`
+
+**Tests:** `dev/test_costs_api_rework.py` — 35 tests (all passing)
 - `classify_error()` wraps error patterns from `common_errors.py`.
 
 **Files to Create:**
@@ -2783,6 +2822,51 @@ Goal: Three visual and UX refinements to the Information Step (Step 2).
 - TestDisabledTextboxGreyOut — 11 tests
 - TestButtonAlignment — 11 tests
 - TestTableSorting — 19 tests
+
+---
+
+### FEATURE: Costs Step — Instant Reprice on Model Change + Estimation Progress Dialog
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** ~2 hours
+
+**Goal:** Avoid full re-estimation when only the model (and therefore its pricing) changes.
+Also add a non-blocking progress dialog that shows step-by-step feedback during estimation.
+
+**Changes:**
+
+1. **`EstimationResult.num_requests` field** — Added `num_requests: int = 0` field to
+   the `EstimationResult` dataclass so each side (original/preprocessed) stores its
+   request count directly alongside the other token fields.  `_do_estimation()` populates
+   this when building both `original` and `preprocessed` result objects.
+
+2. **`_reprice_for_model()` method** — New method that reads the stored token breakdown
+   from `self._estimation_result` and reapplies the selected model's pricing rates and
+   rate limits without running the expensive formation + token-counting pipeline.
+   Updates all cost labels, prompt/cached breakdown rows, savings summary, model label,
+   time estimate labels, request count labels, and the comparison table.
+
+3. **`_on_model_changed()` updated** — Now calls `_reprice_for_model()` instead of
+   `_run_estimation()` when `self._estimation_result` is available.  Full re-estimation
+   is only triggered by the user clicking the "↻ Update Counts" button.
+
+4. **`EstimationProgressDialog` class** — New non-blocking `Toplevel` class added before
+   `CostsStep`.  Shows 7 step indicators (○/●/✓) and a `ttk.Progressbar`.  Cannot be
+   dismissed by the user mid-estimation (`WM_DELETE_WINDOW` is a no-op).  Closes
+   automatically when estimation completes.
+
+5. **`_report_progress(step_idx)` helper** — Posts a step update to the dialog on the
+   main thread via `self.after()`.  Safe to call from background thread.
+
+6. **Progress wired into `_do_estimation()`** — Seven `_report_progress(N)` calls injected
+   at key points: start, orig formation, prep formation, orig token count, prep token count,
+   pricing, display update.
+
+7. **`_estimation_complete()` closes dialog** — Calls `self._progress_dialog.close()` and
+   clears the reference on both normal completion and exceptions (via `finally`).
+
+**Files Modified:**
+- `gui/steps/costs.py` — All changes above
+
+**Tests:** All 92 existing cost tests pass (no regressions).
 
 END OF ROADMAP
 =============================================================================

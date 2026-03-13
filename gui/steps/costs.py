@@ -108,6 +108,7 @@ class EstimationResult:
     content_tokens: int = 0  # Line-content tokens only (no prompt)
     prompt_tokens: int = 0  # Total prompt overhead across all requests
     cached_tokens: int = 0  # Prompt tokens that benefit from caching
+    num_requests: int = 0  # Number of API requests for this side
 
 
 @dataclass
@@ -122,6 +123,11 @@ class ComparisonResult:
 
 
 # count_tokens imported directly from chunker_adapter - no wrapper needed
+
+# Cache hit rate for prompt caching.  Approximately 80 % of requests
+# after the first benefit from cached static prompt tokens (§5.2 slots
+# 1-7b).  Dynamic per-chunk sections (slots 8-10) are never cached.
+CACHE_HIT_RATE = 0.80
 
 
 def estimate_cost(
@@ -219,6 +225,112 @@ def _format_time(seconds: float) -> str:
         return f"{hours}h {mins}m"
 
 
+class EstimationProgressDialog(tk.Toplevel):
+    """Non-blocking progress dialog shown during cost estimation.
+
+    Opens as a floating Toplevel window.  The estimation thread posts
+    step updates via the owning widget's ``after()`` scheduler so the
+    dialog updates safely on the main thread without blocking it.
+
+    Usage::
+
+        dlg = EstimationProgressDialog(parent)
+        # Inside background thread:
+        parent.after(0, lambda: dlg.update_step(2))
+        # When done:
+        parent.after(0, dlg.close)
+    """
+
+    STEPS: List[str] = [
+        "Preparing lines…",
+        "Building request formation (Original)…",
+        "Building request formation (Preprocessed)…",
+        "Counting tokens (Original)…",
+        "Counting tokens (Preprocessed)…",
+        "Applying pricing & cache adjustments…",
+        "Updating display…",
+    ]
+
+    def __init__(self, parent: tk.Widget) -> None:
+        super().__init__(parent)
+        self.title("Estimating costs…")
+        self.resizable(False, False)
+        self.transient(parent.winfo_toplevel())
+
+        # Prevent the dialog from being closed mid-estimation by the user
+        self.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        # --- Layout ---
+        frame = ttk.Frame(self, padding=16)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(frame, text="Estimating costs", font=("TkDefaultFont", 11, "bold")).pack(anchor="w")
+        ttk.Separator(frame, orient="horizontal").pack(fill="x", pady=(6, 10))
+
+        self._step_label = ttk.Label(frame, text=self.STEPS[0], width=46)
+        self._step_label.pack(anchor="w", pady=(0, 6))
+
+        self._progress = ttk.Progressbar(
+            frame,
+            mode="determinate",
+            maximum=len(self.STEPS),
+            value=0,
+            length=320,
+        )
+        self._progress.pack(fill="x")
+
+        # Step list — all greyed out initially
+        self._step_items: List[ttk.Label] = []
+        step_frame = ttk.Frame(frame)
+        step_frame.pack(fill="x", pady=(10, 0))
+        for text in self.STEPS:
+            lbl = ttk.Label(step_frame, text=f"  ○  {text}", foreground="#888888")
+            lbl.pack(anchor="w")
+            self._step_items.append(lbl)
+
+        # Centre over parent
+        self.update_idletasks()
+        pw = parent.winfo_toplevel()
+        x = pw.winfo_rootx() + (pw.winfo_width() - self.winfo_width()) // 2
+        y = pw.winfo_rooty() + (pw.winfo_height() - self.winfo_height()) // 3
+        self.geometry(f"+{x}+{y}")
+
+    # ------------------------------------------------------------------
+
+    def update_step(self, step_idx: int) -> None:
+        """Advance the dialog to ``step_idx`` (0-based).
+
+        Safe to call from the main thread only (use ``after()`` from
+        background threads).
+        """
+        if not self.winfo_exists():
+            return
+        # Mark previous steps as done
+        for i, lbl in enumerate(self._step_items):
+            if i < step_idx:
+                lbl.configure(text=f"  ✓  {self.STEPS[i]}", foreground="#2e7d32")
+            elif i == step_idx:
+                lbl.configure(text=f"  ●  {self.STEPS[i]}", foreground="#1565c0")
+            else:
+                lbl.configure(text=f"  ○  {self.STEPS[i]}", foreground="#888888")
+
+        current_text = self.STEPS[step_idx] if step_idx < len(self.STEPS) else "Finalising…"
+        self._step_label.configure(text=current_text)
+        self._progress.configure(value=step_idx + 1)
+        self.update_idletasks()
+
+    def close(self) -> None:
+        """Close the dialog.
+
+        Safe to call even if the window has already been destroyed.
+        """
+        try:
+            if self.winfo_exists():
+                self.destroy()
+        except Exception:
+            pass
+
+
 class CostsStep(BaseStep):
     """Costs step for cost and time projection.
 
@@ -264,6 +376,10 @@ class CostsStep(BaseStep):
         # Task 5: Request mode button refs (populated in _build_request_mode_grid)
         self._mode_var: Optional[tk.StringVar] = None
         self._mode_buttons: dict[str, tk.Button] = {}
+        # Whether API.ini settings have been loaded once
+        self._settings_loaded_once = False
+        # Non-blocking progress dialog shown during estimation
+        self._progress_dialog: Optional[EstimationProgressDialog] = None
         super().__init__(parent, session, manifest_manager=manifest_manager)
 
     def _build_ui(self) -> None:
@@ -341,10 +457,10 @@ class CostsStep(BaseStep):
         )
         self._estimate_btn.pack(side="right", padx=(5, 0))
 
-        # Save Settings button (replaces Refresh — Task 4)
+        # Apply Settings to Model button (one-way write to API.ini)
         self._save_btn = ttk.Button(
             row1,
-            text="💾 Save Settings",
+            text="📤 Apply Settings to Model",
             command=self._save_settings,
         )
         self._save_btn.pack(side="right")
@@ -702,7 +818,7 @@ class CostsStep(BaseStep):
             btn = tk.Button(
                 grid,
                 text=label,
-                width=10,
+                width=20,
                 relief="groove",
                 command=lambda k=key: self._select_request_mode(k),
             )
@@ -723,9 +839,124 @@ class CostsStep(BaseStep):
                 break
         self._mode_var.set(mode)
         self._refresh_mode_buttons()
-        # Re-estimate if data exists
+        # Recalculate costs from existing data (no full re-estimation)
         if self._estimation_result:
-            self._run_estimation()
+            self._recalculate_costs_for_mode()
+
+    def _recalculate_costs_for_mode(self) -> None:
+        """Recalculate cost labels using existing token counts and new mode.
+
+        Called on mode change to instantly update costs without running
+        a full re-estimation.  Adjusts input/output costs for the
+        selected mode while preserving the caching split.
+        """
+        result = self._estimation_result
+        if result is None:
+            return
+
+        model_id = self._model_var.get()
+        in_key, out_key = self._get_mode_price_keys()
+        pricing = get_model_pricing(model_id)
+
+        mode_input = pricing.get(in_key) or pricing.get("input", 0.0)
+        mode_output = pricing.get(out_key) or pricing.get("output", 0.0)
+        cached_rate = pricing.get("cached_input")
+
+        for est_result, prefix in (
+            (result.original, "orig"),
+            (result.preprocessed, "prep"),
+        ):
+            non_cached_input = est_result.input_tokens - est_result.cached_tokens
+            input_cost = (non_cached_input / 1_000_000) * mode_input
+            cached_cost = 0.0
+            if cached_rate is not None and est_result.cached_tokens > 0:
+                cached_cost = (
+                    est_result.cached_tokens / 1_000_000
+                ) * cached_rate
+            output_cost = (est_result.output_tokens / 1_000_000) * mode_output
+            total_cost = round(input_cost + cached_cost + output_cost, 2)
+
+            est_result.input_cost = round(input_cost + cached_cost, 2)
+            est_result.output_cost = round(output_cost, 2)
+            est_result.total_cost = total_cost
+            est_result.prompt_cost = round(
+                (max(0, est_result.prompt_tokens - est_result.cached_tokens)
+                 / 1_000_000) * mode_input, 4,
+            )
+            est_result.cached_input_cost = round(cached_cost, 4)
+
+        # Recalculate savings
+        result.cost_saved = (
+            result.original.total_cost - result.preprocessed.total_cost
+        )
+
+        # Update cost labels
+        self._cost_input_orig_label.configure(
+            text=f"${result.original.input_cost:.2f}",
+        )
+        self._cost_input_prep_label.configure(
+            text=f"${result.preprocessed.input_cost:.2f}",
+        )
+        self._cost_output_orig_label.configure(
+            text=f"${result.original.output_cost:.2f}",
+        )
+        self._cost_output_prep_label.configure(
+            text=f"${result.preprocessed.output_cost:.2f}",
+        )
+        self._cost_total_orig_label.configure(
+            text=f"${result.original.total_cost:.2f}",
+        )
+        self._cost_total_prep_label.configure(
+            text=f"${result.preprocessed.total_cost:.2f}",
+        )
+
+        # Prompt / cached cost breakdown
+        if (
+            result.preprocessed.cached_input_cost > 0
+            or result.original.cached_input_cost > 0
+        ):
+            self._cost_prompt_orig_label.configure(
+                text=(
+                    f"${result.original.prompt_cost:.4f}"
+                    if result.original.prompt_cost else "-"
+                ),
+            )
+            self._cost_prompt_prep_label.configure(
+                text=(
+                    f"${result.preprocessed.prompt_cost:.4f}"
+                    if result.preprocessed.prompt_cost else "-"
+                ),
+            )
+            self._cost_cached_orig_label.configure(
+                text=(
+                    f"${result.original.cached_input_cost:.4f}"
+                    if result.original.cached_input_cost else "-"
+                ),
+            )
+            self._cost_cached_prep_label.configure(
+                text=(
+                    f"${result.preprocessed.cached_input_cost:.4f}"
+                    if result.preprocessed.cached_input_cost else "-"
+                ),
+            )
+        else:
+            for lbl in (
+                self._cost_prompt_orig_label, self._cost_prompt_prep_label,
+                self._cost_cached_orig_label, self._cost_cached_prep_label,
+            ):
+                lbl.configure(text="-")
+
+        # Savings summary
+        if result.cost_saved > 0:
+            self._savings_label.configure(
+                text=f"💰 Save ${result.cost_saved:.2f} "
+                     f"({result.savings_percent:.1f}% tokens)",
+            )
+        else:
+            self._savings_label.configure(text="")
+
+        # Refresh comparison table with new mode prices
+        self._update_comparison_table()
 
     def _refresh_mode_buttons(self) -> None:
         """Colour mode buttons based on model availability and selection."""
@@ -735,7 +966,7 @@ class CostsStep(BaseStep):
         model_id = self._model_var.get()
         pricing = get_model_pricing(model_id) if model_id else {}
 
-        for key, _, input_key, _ in self._REQUEST_MODES:
+        for key, label, input_key, _ in self._REQUEST_MODES:
             btn = self._mode_buttons.get(key)
             if btn is None:
                 continue
@@ -745,12 +976,26 @@ class CostsStep(BaseStep):
             else:
                 available = pricing.get(input_key) is not None
 
-            if is_selected:
-                btn.configure(bg="#4a90d9", fg="white", relief="sunken")
+            # Build label with availability suffix
+            if key == "normal":
+                display = label
             elif available:
-                btn.configure(bg="#c8e6c9", fg="black", relief="groove")
+                display = f"{label} (Available)"
             else:
-                btn.configure(bg="#ffcdd2", fg="#888888", relief="flat")
+                display = f"{label} (Unavailable)"
+
+            if is_selected:
+                btn.configure(
+                    text=display, bg="#4a90d9", fg="white", relief="sunken",
+                )
+            elif available:
+                btn.configure(
+                    text=display, bg="#c8e6c9", fg="black", relief="groove",
+                )
+            else:
+                btn.configure(
+                    text=display, bg="#ffcdd2", fg="#888888", relief="flat",
+                )
 
     def _get_mode_price_keys(self) -> Tuple[str, str]:
         """Return (input_price_key, output_price_key) for the active mode."""
@@ -761,6 +1006,169 @@ class CostsStep(BaseStep):
             if key == selected:
                 return input_key, output_key
         return "input", "output"
+
+    def _reprice_for_model(self) -> None:
+        """Instantly reprice using cached token counts when the model changes.
+
+        Reads the stored token breakdown from ``self._estimation_result``
+        and reapplies the new model's pricing without running the expensive
+        formation + token-counting pipeline again.  Also refreshes time
+        estimates using the new model's rate limits.
+
+        This is the fast path triggered by ``_on_model_changed()`` when a
+        previous estimation result is available.
+        """
+        result = self._estimation_result
+        if result is None:
+            return
+
+        model_id = self._model_var.get()
+        in_key, out_key = self._get_mode_price_keys()
+        pricing = get_model_pricing(model_id)
+
+        mode_input = pricing.get(in_key) or pricing.get("input", 0.0)
+        mode_output = pricing.get(out_key) or pricing.get("output", 0.0)
+        cached_rate = pricing.get("cached_input")
+        input_rate = pricing.get("input", mode_input)
+
+        for est_result in (result.original, result.preprocessed):
+            non_cached_input = est_result.input_tokens - est_result.cached_tokens
+            input_cost = (non_cached_input / 1_000_000) * mode_input
+            cached_cost = 0.0
+            if cached_rate is not None and est_result.cached_tokens > 0:
+                cached_cost = (est_result.cached_tokens / 1_000_000) * cached_rate
+            output_cost = (est_result.output_tokens / 1_000_000) * mode_output
+            total_cost = round(input_cost + cached_cost + output_cost, 2)
+
+            est_result.input_cost = round(input_cost + cached_cost, 2)
+            est_result.output_cost = round(output_cost, 2)
+            est_result.total_cost = total_cost
+            est_result.prompt_cost = round(
+                (max(0, est_result.prompt_tokens - est_result.cached_tokens)
+                 / 1_000_000) * mode_input, 4,
+            )
+            est_result.cached_input_cost = round(cached_cost, 4)
+
+        # Recalculate comparison savings
+        result.cost_saved = (
+            result.original.total_cost - result.preprocessed.total_cost
+        )
+        if result.original.input_tokens:
+            result.savings_percent = (
+                result.tokens_saved / result.original.input_tokens * 100
+            )
+
+        # Refresh cost labels (re-use existing helper)
+        self._cost_input_orig_label.configure(
+            text=f"${result.original.input_cost:.2f}",
+        )
+        self._cost_input_prep_label.configure(
+            text=f"${result.preprocessed.input_cost:.2f}",
+        )
+        self._cost_output_orig_label.configure(
+            text=f"${result.original.output_cost:.2f}",
+        )
+        self._cost_output_prep_label.configure(
+            text=f"${result.preprocessed.output_cost:.2f}",
+        )
+        self._cost_total_orig_label.configure(
+            text=f"${result.original.total_cost:.2f}",
+        )
+        self._cost_total_prep_label.configure(
+            text=f"${result.preprocessed.total_cost:.2f}",
+        )
+
+        # Prompt / cached cost breakdown
+        if (
+            result.preprocessed.cached_input_cost > 0
+            or result.original.cached_input_cost > 0
+        ):
+            self._cost_prompt_orig_label.configure(
+                text=(
+                    f"${result.original.prompt_cost:.4f}"
+                    if result.original.prompt_cost else "-"
+                ),
+            )
+            self._cost_prompt_prep_label.configure(
+                text=(
+                    f"${result.preprocessed.prompt_cost:.4f}"
+                    if result.preprocessed.prompt_cost else "-"
+                ),
+            )
+            self._cost_cached_orig_label.configure(
+                text=(
+                    f"${result.original.cached_input_cost:.4f}"
+                    if result.original.cached_input_cost else "-"
+                ),
+            )
+            self._cost_cached_prep_label.configure(
+                text=(
+                    f"${result.preprocessed.cached_input_cost:.4f}"
+                    if result.preprocessed.cached_input_cost else "-"
+                ),
+            )
+        else:
+            for lbl in (
+                self._cost_prompt_orig_label, self._cost_prompt_prep_label,
+                self._cost_cached_orig_label, self._cost_cached_prep_label,
+            ):
+                lbl.configure(text="-")
+
+        # Savings summary
+        if result.cost_saved > 0:
+            self._savings_label.configure(
+                text=f"💰 Save ${result.cost_saved:.2f} "
+                     f"({result.savings_percent:.1f}% tokens)",
+            )
+        else:
+            self._savings_label.configure(text="")
+
+        # Refresh model label
+        self._model_label.configure(
+            text=f"{pricing['name']} ({model_id})",
+        )
+
+        # Refresh time estimates using new model's rate limits
+        rate_limits = get_model_rate_limits(model_id)
+        concurrent = pricing.get("concurrent", 1)
+        token_spd = pricing.get("token_speed", 50)
+
+        orig_reqs = result.original.num_requests
+        prep_reqs = result.preprocessed.num_requests
+
+        if orig_reqs > 0:
+            orig_time = estimate_rate_limit_time(
+                orig_reqs,
+                rate_limit_rpm=rate_limits.rpm,
+                concurrent_requests=concurrent,
+                total_output_tokens=result.original.output_tokens,
+                token_speed=token_spd,
+            )
+            self._time_orig_label.configure(text=orig_time["formatted"])
+            self._requests_orig_label.configure(text=str(orig_reqs))
+
+        if prep_reqs > 0:
+            prep_time = estimate_rate_limit_time(
+                prep_reqs,
+                rate_limit_rpm=rate_limits.rpm,
+                concurrent_requests=concurrent,
+                total_output_tokens=result.preprocessed.output_tokens,
+                token_speed=token_spd,
+            )
+            self._time_prep_label.configure(text=prep_time["formatted"])
+            self._requests_prep_label.configure(text=str(prep_reqs))
+
+        self._rate_limit_label.configure(
+            text=f"Based on {rate_limits.rpm} requests/minute rate limit for {model_id}",
+        )
+
+        # Refresh comparison table
+        self._update_comparison_table()
+
+        logger.debug(
+            "Repriced for model %s: orig=%.2f prep=%.2f",
+            model_id, result.original.total_cost, result.preprocessed.total_cost,
+        )
 
     def _build_comparison_table(self, parent: ttk.LabelFrame) -> None:
         """Build the model comparison table."""
@@ -962,6 +1370,72 @@ class CostsStep(BaseStep):
 
         except Exception as e:
             logger.debug("Error calculating prompt tokens: %s", e)
+            return 0
+
+    def _get_static_prompt_tokens(self) -> int:
+        """Get token count for the static (cacheable) prompt portion.
+
+        Builds the system prompt with an empty chunk context so that
+        dynamic per-chunk sections (conditional prompts, glossary,
+        characters, rolling context) are excluded.  The resulting
+        token count represents §5.2 slots 1-7b which are identical
+        across all requests and eligible for prompt caching.
+
+        Returns:
+            Estimated token count for static prompt sections.
+        """
+        try:
+            mgr = self.manifest_manager
+            metadata: dict = {}
+            if mgr is not None and mgr.is_loaded:
+                metadata = mgr.get_step_data_value(2, "metadata", {})
+                if not isinstance(metadata, dict):
+                    metadata = {}
+            if not metadata:
+                info_data = self.session.get_step(2).data
+                metadata = info_data.get("metadata", {})
+
+            characters = metadata.get("characters", [])
+            if not characters and mgr is not None and mgr.is_loaded:
+                characters = mgr._manifest_data.get("characters", [])
+
+            code_pats: list[dict] = []
+            if mgr is not None and mgr.is_loaded:
+                try:
+                    from CherryAI.functions.manifest_fields import (
+                        load_code_glossary,
+                    )
+                    code_pats = load_code_glossary(mgr)
+                except ImportError:
+                    pass
+
+            pov_data: dict = {}
+            if mgr is not None and mgr.is_loaded:
+                pov_data = mgr._manifest_data.get("POV", {})
+
+            # Build with empty chunk_lines to exclude dynamic sections
+            # (conditional prompts, glossary, characters, rolling context).
+            prompt_text, _ = build_full_system_prompt(
+                metadata=metadata,
+                characters=characters,
+                chunk_lines=[],
+                pov_data=pov_data,
+                code_patterns=code_pats,
+                rolling_context_text="",
+            )
+
+            if not prompt_text:
+                return 0
+
+            try:
+                token_count, _ = count_tokens(prompt_text)
+            except Exception:
+                token_count = len(prompt_text) // 4
+
+            return token_count
+
+        except Exception as e:
+            logger.debug("Error calculating static prompt tokens: %s", e)
             return 0
 
     @staticmethod
@@ -1214,11 +1688,34 @@ class CostsStep(BaseStep):
 
         self._is_estimating = True
         self._estimate_btn.configure(state="disabled", text="Estimating...")
+        self._model_combo.configure(state="disabled")
+
+        # Open non-blocking progress dialog
+        try:
+            self._progress_dialog = EstimationProgressDialog(self)
+        except Exception:
+            self._progress_dialog = None
 
         # Run in background
         thread = threading.Thread(target=self._do_estimation)
         thread.daemon = True
         thread.start()
+
+    def _report_progress(self, step_idx: int) -> None:
+        """Post a progress step update to the dialog on the main thread.
+
+        Safe to call from background threads.  Silently ignored when no
+        dialog is open or when the dialog has already been destroyed.
+
+        Args:
+            step_idx: 0-based index into ``EstimationProgressDialog.STEPS``.
+        """
+        dlg = self._progress_dialog
+        if dlg is not None:
+            try:
+                self.after(0, lambda i=step_idx: dlg.update_step(i))
+            except Exception:
+                pass
 
     def _do_estimation(self) -> None:
         """Perform estimation in background thread.
@@ -1230,6 +1727,9 @@ class CostsStep(BaseStep):
             model_id = self._model_var.get()
             chunk_size = self._chunk_var.get()
             tokens_limit = self._tokens_var.get()
+
+            # Step 0: Preparing lines
+            self._report_progress(0)
 
             # Sync chunk_size from Global Options if available
             go = getattr(self.session, "global_options", None)
@@ -1298,11 +1798,15 @@ class CostsStep(BaseStep):
             # Use the same 4+1 step pipeline as Translation (Step 5) for
             # accurate request counts and per-request token counting that
             # matches the values shown in Request Preview.
+            # Step 1: Building request formation (Original)
+            self._report_progress(1)
             orig_formation = self._estimate_via_formation(
                 self._lines_original, chunk_size, slicing,
                 skip_indices=orig_skip,
                 max_input_tokens=tokens_limit,
             )
+            # Step 2: Building request formation (Preprocessed)
+            self._report_progress(2)
             prep_formation = self._estimate_via_formation(
                 self._lines_preprocessed, chunk_size, slicing,
                 skip_indices=prep_skip,
@@ -1310,6 +1814,8 @@ class CostsStep(BaseStep):
             )
 
             # ── Original estimation ──
+            # Step 3: Counting tokens (Original)
+            self._report_progress(3)
             if orig_formation is not None:
                 orig_requests = orig_formation.num_requests
                 orig_input_tokens = self._count_formation_input_tokens(
@@ -1339,6 +1845,8 @@ class CostsStep(BaseStep):
             orig_total_input = orig_input_tokens + orig_prompt_total
 
             # ── Preprocessed estimation ──
+            # Step 4: Counting tokens (Preprocessed)
+            self._report_progress(4)
             if prep_formation is not None:
                 prep_requests = prep_formation.num_requests
                 prep_input_tokens = self._count_formation_input_tokens(
@@ -1369,41 +1877,78 @@ class CostsStep(BaseStep):
             prep_output_tokens = int(prep_input_tokens * OUTPUT_TOKEN_MULTIPLIER)
             prep_total_input = prep_input_tokens + prep_prompt_total
 
-            # Estimate costs (including prompt overhead)
+            # Step 5: Applying pricing & cache adjustments
+            self._report_progress(5)
+            # Estimate costs (including prompt overhead) at full input rate
+            # as baseline.  Caching adjustments are applied below.
             orig_cost = estimate_cost(orig_total_input, orig_output_tokens, model_id)
             prep_cost = estimate_cost(prep_total_input, prep_output_tokens, model_id)
 
-            # Estimate prompt caching benefit for the preprocessed path.
-            # If the model has cached_input pricing and the per-request
-            # prompt overhead >= 1024 tokens, the first request is at
-            # full price and subsequent requests use cached_input pricing.
+            # ── Prompt caching with static / dynamic split ──
+            # Only the *static* prompt (§5.2 slots 1-7b) is eligible for
+            # caching.  Dynamic per-chunk sections (slots 8-10: conditional
+            # prompts, glossary, characters, rolling context) change every
+            # request and are never cached.
+            # Cache hit rate is ~80 % (CACHE_HIT_RATE).
+            static_prompt_tokens = self._get_static_prompt_tokens()
+
             prep_prompt_cost = 0.0
             prep_cached_cost = 0.0
             orig_prompt_cost = 0.0
             orig_cached_cost = 0.0
-            # Cached token counts (prompt tokens from request 2+)
             orig_cached_tokens = 0
             prep_cached_tokens = 0
+
             pricing_info = get_model_pricing(model_id)
             cached_rate = pricing_info.get("cached_input")
-            if cached_rate is not None and prep_prompt_avg >= 1024:
-                input_rate = pricing_info["input"]
-                # Preprocessed: first request uncached, rest cached
+            input_rate = pricing_info["input"]
+
+            if (
+                cached_rate is not None
+                and static_prompt_tokens >= 1024
+            ):
+                # Preprocessed path
                 if prep_requests > 1:
-                    uncached_prompt = prep_prompt_avg  # 1 request
-                    cached_prompt = prep_prompt_avg * (prep_requests - 1)
-                    prep_cached_tokens = cached_prompt
-                    prep_prompt_cost = (uncached_prompt / 1_000_000) * input_rate
-                    prep_cached_cost = (cached_prompt / 1_000_000) * cached_rate
-                # Original: same logic with orig prompt
+                    cache_eligible = static_prompt_tokens * (prep_requests - 1)
+                    prep_cached_tokens = int(cache_eligible * CACHE_HIT_RATE)
+                    non_cached_prompt = prep_prompt_total - prep_cached_tokens
+                    prep_prompt_cost = (
+                        max(0, non_cached_prompt) / 1_000_000
+                    ) * input_rate
+                    prep_cached_cost = (
+                        prep_cached_tokens / 1_000_000
+                    ) * cached_rate
+                    # Adjust totals: subtract the savings from caching
+                    cache_savings = (
+                        prep_cached_tokens / 1_000_000
+                    ) * (input_rate - cached_rate)
+                    prep_cost["total_usd"] = round(
+                        max(0.0, prep_cost["total_usd"] - cache_savings), 2,
+                    )
+                    prep_cost["input_usd"] = round(
+                        max(0.0, prep_cost["input_usd"] - cache_savings), 2,
+                    )
+
+                # Original path — same logic
                 if orig_requests > 1:
-                    orig_p_avg = self._get_prompt_tokens()
-                    if orig_p_avg >= 1024:
-                        uncached_orig = orig_p_avg
-                        cached_orig = orig_p_avg * (orig_requests - 1)
-                        orig_cached_tokens = cached_orig
-                        orig_prompt_cost = (uncached_orig / 1_000_000) * input_rate
-                        orig_cached_cost = (cached_orig / 1_000_000) * cached_rate
+                    cache_eligible = static_prompt_tokens * (orig_requests - 1)
+                    orig_cached_tokens = int(cache_eligible * CACHE_HIT_RATE)
+                    non_cached_prompt = orig_prompt_total - orig_cached_tokens
+                    orig_prompt_cost = (
+                        max(0, non_cached_prompt) / 1_000_000
+                    ) * input_rate
+                    orig_cached_cost = (
+                        orig_cached_tokens / 1_000_000
+                    ) * cached_rate
+                    cache_savings = (
+                        orig_cached_tokens / 1_000_000
+                    ) * (input_rate - cached_rate)
+                    orig_cost["total_usd"] = round(
+                        max(0.0, orig_cost["total_usd"] - cache_savings), 2,
+                    )
+                    orig_cost["input_usd"] = round(
+                        max(0.0, orig_cost["input_usd"] - cache_savings), 2,
+                    )
 
             # Build results — content_tokens stores line-only tokens,
             # input_tokens stores total (content + prompt) for billing.
@@ -1419,6 +1964,7 @@ class CostsStep(BaseStep):
                 content_tokens=orig_input_tokens,
                 prompt_tokens=orig_prompt_total,
                 cached_tokens=orig_cached_tokens,
+                num_requests=orig_requests,
             )
 
             preprocessed = EstimationResult(
@@ -1433,6 +1979,7 @@ class CostsStep(BaseStep):
                 content_tokens=prep_input_tokens,
                 prompt_tokens=prep_prompt_total,
                 cached_tokens=prep_cached_tokens,
+                num_requests=prep_requests,
             )
 
             tokens_saved = orig_total_input - prep_total_input
@@ -1485,6 +2032,9 @@ class CostsStep(BaseStep):
                 total_output_tokens=prep_output_tokens,
                 token_speed=token_spd,
             )
+
+            # Step 6: Updating display
+            self._report_progress(6)
 
             # Update UI on main thread
             self.after(0, lambda: self._update_ui(
@@ -1815,12 +2365,17 @@ class CostsStep(BaseStep):
     def _estimation_complete(self) -> None:
         """Called when estimation completes."""
         self._is_estimating = False
+        # Close progress dialog if open
+        if self._progress_dialog is not None:
+            self._progress_dialog.close()
+            self._progress_dialog = None
         # Show "Update Counts" after first estimation (Task 8)
         label = (
             "↻ Update Counts" if self._estimation_result
             else "▶ Estimate"
         )
         self._estimate_btn.configure(state="normal", text=label)
+        self._model_combo.configure(state="readonly")
 
     def _update_dual_ticks(self) -> None:
         """Update progress tracker dual ticks for Costs step (Task 40.5).
@@ -1842,20 +2397,27 @@ class CostsStep(BaseStep):
     def _on_model_changed(self, event: Optional[tk.Event] = None) -> None:
         """Handle model selection change.
 
-        Loads per-model settings from API.ini (Task 4) then refreshes
-        mode buttons and re-estimates if a previous estimation exists.
+        Refreshes mode button availability for the new model and
+        reprices existing token counts instantly without running a full
+        re-estimation.  The token breakdown (num_requests, content_tokens,
+        prompt_tokens, cached_tokens, input_tokens, output_tokens) is
+        read from the stored ``EstimationResult`` objects and only the
+        pricing arithmetic is repeated with the new model's rates.
+
+        UI settings (chunk size, tokens, rolling context, etc.) are NOT
+        reloaded from API.ini — they are independent and only written via
+        'Apply Settings to Model'.
         """
-        self._load_model_settings()
         self._refresh_mode_buttons()
         if self._estimation_result:
-            self._run_estimation()
+            self._reprice_for_model()
 
     def _save_settings(self) -> None:
-        """Save current UI settings for the active model to API.ini.
+        """Apply current UI settings to the active model in API.ini.
 
-        Collects chunk_size, chunk_max_tokens, thinking, rolling context,
-        and use_translated_context from the UI and persists them via
-        :func:`set_model_settings`.
+        One-way write: copies the current Costs step UI values into
+        the per-model settings section of API.ini.  This is the only
+        path that writes settings — model changes never read them back.
         """
         model_id = self._model_var.get()
         if not model_id:
@@ -1875,8 +2437,10 @@ class CostsStep(BaseStep):
         logger.info("Saved settings for model %s", model_id)
 
         # Brief visual confirmation on button
-        self._save_btn.configure(text="✓ Saved")
-        self.after(1500, lambda: self._save_btn.configure(text="💾 Save Settings"))
+        self._save_btn.configure(text="✓ Applied")
+        self.after(1500, lambda: self._save_btn.configure(
+            text="📤 Apply Settings to Model",
+        ))
 
     def _load_model_settings(self) -> None:
         """Load per-model settings from API.ini and apply to UI widgets.
@@ -1966,6 +2530,7 @@ class CostsStep(BaseStep):
             "original_result": None,
             "preprocessed_result": None,
         }
+        self._settings_loaded_once = False
         logger.debug("Costs step reset for new project")
 
     def on_enter(self) -> None:
@@ -1981,8 +2546,11 @@ class CostsStep(BaseStep):
                 except (ValueError, TypeError):
                     pass
 
-        # Task 4: Load per-model settings from API.ini
-        self._load_model_settings()
+        # Load per-model settings from API.ini only on first enter.
+        # Subsequent visits keep the user's current UI values.
+        if not self._settings_loaded_once:
+            self._load_model_settings()
+            self._settings_loaded_once = True
 
         # Task 7: Restore full estimation from manifest if available
         saved = self._load_estimation_from_manifest()

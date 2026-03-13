@@ -174,9 +174,14 @@ TABLE OF CONTENTS
          shared types (TokenUsage, ProviderResponse, ThinkingConfig,
          TemperatureConfig, CachedInputConfig, BatchConfig),
          error hierarchy (ProviderError → 7 subtypes), _load_providers()
+         ThinkingConfig: available/mode/mandatory/effort_levels/effort_default/budget;
+         modes: ""(unavail), "builtin"(o-series), "explicit"(Claude), "optional"(GPT-4.1),
+         "mandatory"(GPT-5); build_params() returns Chat Completions format
     3A.2 openai_provider.py ✅🔗 - OpenAIProvider (reference), OpenAICompatProvider
-         (base for compatible providers). GPT-5 family: no temperature, builtin
-         reasoning. O-series: builtin reasoning. Prompt caching, batch support.
+         (base for compatible providers). GPT-5 family: mandatory reasoning w/ effort
+         levels (low/medium/high), no temperature. GPT-4.1: optional reasoning w/
+         effort levels. O-series: builtin reasoning. Prompt caching, batch support.
+         _is_gpt41_family(), _is_gpt5_family(), _is_reasoning_model() helper functions.
     3A.3 google_provider.py ✅ - GoogleProvider (inherits OpenAICompatProvider).
          Thinking via FALLBACK_MODELS lookup.
     3A.4 mistral_provider.py ✅ - MistralProvider (inherits OpenAICompatProvider).
@@ -229,10 +234,10 @@ TABLE OF CONTENTS
        - base.py - BaseStep abstract class (TASK 43.14: tab caching infra; on_new_project() lifecycle method for state flush)
        - input_extract.py - Step 0: Input/Extraction 🔗formats/ (Phase 60: clickable column header sort with ▲/▼ indicators, file list filter entry, type column refresh fix, cross-file preview search with idx column and auto file-switching; non-destructive file addition with source root validation; Import Translation selection dialog with line fields and settings sections; preview columns: Project/File 1-based)
        - analysis.py - Step 1: Analysis ❌NO shared imports
-       - costs.py - Step 4: Costs (renamed from estimate.py in Phase 40; _estimate_via_formation() returns FormationResult with per-request line lists; _compute_per_request_prompt_overhead() builds each request's prompt individually via build_full_system_prompt(chunk_lines=...) for selective glossary/conditional filtering; syncs chunk_size from GlobalOptions; respects request_slicing mode; Per-model settings saved/loaded via api_config; Save Settings button persists UI state per model; Translation Options row with Thinking, Translated Context, Rolling Context spinboxes; Request Mode 2×2 grid (Normal/Batch/Flex/Priority) with Available/Unavailable/Selected states driving mode-specific pricing; Token Counts panel shows Input/Prompt/Cached/Total/Output rows; EstimationResult dataclass includes content_tokens, prompt_tokens, cached_tokens; Full estimation persisted to manifest via _save_estimation_to_manifest(); Estimate button renamed to "↻ Update Counts" after first run)
+       - costs.py - Step 4: Costs (renamed from estimate.py in Phase 40; _estimate_via_formation() returns FormationResult with per-request line lists; _compute_per_request_prompt_overhead() builds each request's prompt individually via build_full_system_prompt(chunk_lines=...) for selective glossary/conditional filtering; syncs chunk_size from GlobalOptions; respects request_slicing mode; Per-model settings saved/loaded via api_config; "📤 Apply Settings to Model" button is a one-way write to API.ini — model changes do NOT reload settings, loaded once on first tab entry via _settings_loaded_once flag; Translation Options row with Thinking, Translated Context, Rolling Context spinboxes; Request Mode 2×2 grid (Normal/Batch/Flex/Priority) with "(Available)"/"(Unavailable)" suffix labels and Selected (blue) states driving mode-specific pricing; _recalculate_costs_for_mode() instantly updates costs from existing token counts without re-estimation; _reprice_for_model() fast-reprices all cost and time labels when model changes using stored EstimationResult token counts — no re-estimation required; EstimationResult.num_requests stores per-side request count to enable fast reprice; EstimationProgressDialog is a non-blocking Toplevel that shows 7 step indicators (○/●/✓) and a ttk.Progressbar — opened by _run_estimation(), updated via _report_progress() from background thread using after(), closed by _estimation_complete(); Model combo disabled during estimation (_run_estimation sets state="disabled", _estimation_complete restores state="readonly"); CACHE_HIT_RATE=0.80 applied to static prompt prefix via _get_static_prompt_tokens() for cache savings calculation; Token Counts panel shows Input/Prompt/Cached/Total/Output rows; EstimationResult dataclass includes content_tokens, prompt_tokens, cached_tokens, num_requests; Full estimation persisted to manifest via _save_estimation_to_manifest(); Estimate button renamed to "↻ Update Counts" after first run)
        - information.py - Step 2: Information 🔗manifest_fields (Bug Fix: on_leave() and _save_metadata() now merge *_enabled toggle BooleanVar values into metadata dict after ProjectMetadata.to_dict() — fixes toggle state erasure on tab change; Save button removed from header — auto-save on tab change is sufficient)
        - preprocess.py - Step 3: Preprocessing 🔗manifest_fields
-       - translate.py - Step 5: Translation 🔗api_client, mock_translator, prompt_adapter, manifest_fields (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching; Preview Requests: PreviewRequest dataclass with _format_input_lines() for numbered line display and io_examples field, FILTER_PARTS constant (13 entries: meta, language, system_instructions, io_examples, style, tone, summary, genre, pov, conditional_prompts, glossary, rolling_context, input_lines), RequestPreviewDialog class with Pure/Formatted/Plain views and Jump/Search/Filter toolbar, _plain_text() preserves curly braces for game text, _build_preview_requests() mirrors real translation request building and gates each labeled section by *_enabled metadata flags, generates io_examples block with fill mode support; _build_system_prompt_from_manifest() reads from `step_state.Information.data.metadata`; Request Options: Key, Model, Model Settings/Translation Options Change… buttons, Character Whitelist/Blacklist (manifest-bound), Ban Tokens; _apply_char_filters() post-processes translations; _sync_from_global_options() syncs all hidden vars from GlobalOptions including TranslationSettings; _get_request_slicing_mode() reads slicing from GlobalOptions.translation)
+       - translate.py - Step 5: Translation 🔗api_client, mock_translator, prompt_adapter, manifest_fields (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching; Preview Requests: PreviewRequest dataclass with _format_input_lines() for numbered line display and io_examples field, FILTER_PARTS constant (13 entries: meta, language, system_instructions, io_examples, style, tone, summary, genre, pov, conditional_prompts, glossary, rolling_context, input_lines), RequestPreviewDialog class with Pure/Formatted/Plain views and Jump/Search/Filter toolbar, _plain_text() preserves curly braces for game text, _build_preview_requests() mirrors real translation request building and gates each labeled section by *_enabled metadata flags, generates io_examples block with fill mode support; _build_system_prompt_from_manifest() reads from `step_state.Information.data.metadata`; Request Options: Key, Model, Request Mode combobox (Normal/Batch/Flex/Priority with "(Unavailable)" suffixes via _refresh_request_mode_options()), Model Settings/Translation Options Change… buttons, Character Whitelist/Blacklist (manifest-bound), Ban Tokens; TranslationOptions.request_mode field passed to APIConfig.request_mode in _do_translation(); _apply_char_filters() post-processes translations; _sync_from_global_options() syncs all hidden vars from GlobalOptions including TranslationSettings; _get_request_slicing_mode() reads slicing from GlobalOptions.translation)
        - postprocess.py - Step 6: Postprocess 🔗postprocess, manifest_fields; _FAILURE_POLICY_MAP for legacy enum mapping
        - wordwrap_overwrite.py - Step 7: Wordwrap 🔗wordwrap, manifest_fields; column "Latest" (renamed from "Original")
        - qa.py - Step 8: QA 🔗validation, manifest_fields; persists qa_overwrite field; column "Overwrite" (renamed from "Translated")
@@ -264,13 +269,13 @@ TABLE OF CONTENTS
          - "Save" button persists filtered model list to API.ini saved_models setting
          - Gemini model IDs normalized (strips "models/" prefix) for display consistency
          - Filter states (Structured/Batch/No-Optional-Thinking/Cached-Input) saved to API.ini; Structured defaults to checked
-         - "No / Optional Thinking" filter excludes thinking=True models (inverted logic)
+         - "No / Optional Thinking" filter: shows "✓" for mandatory/builtin, "Optional" for optional, "—" for unavailable; filter excludes mandatory/builtin models (inverted logic)
          - "Cached Input" filter keeps only models with cached_input_price; Treeview includes Cached $/1M column
          - Temperature moved from API section to Request section (renamed "Model Settings")
          - TRANSLATION section: Workflow Defaults + Output Quality settings
          - API key entry with inline Save button between key entry and Show checkbox
          - GlobalOptions container: all settings + providers list; `safety` property is alias for `limit`
-         - RequestSettings: +thinking_enabled, +thinking_budget, +rolling_context_lines (Tasks 43.8, 43.9), +max_input_tokens (Task 41)
+         - RequestSettings: +thinking_enabled, +thinking_budget, +reasoning_effort, +rolling_context_lines (Tasks 43.8, 43.9), +max_input_tokens (Task 41)
          - CachingSettings: fields renamed — dir, age (days), size (MB), mode; defaults 0=unlimited
          - _persist_to_ini(): Writes ALL settings sections to CherryAI.ini on every Apply/OK
          - _save_options() calls _persist_to_ini() for guaranteed persistence
@@ -516,7 +521,7 @@ TABLE OF CONTENTS
          - QAOptions nested: RerunPolicy (text), MaxJapaneseChars (int), MaxLineLength (int)
          - RequestOptions nested: Model (text), Temperature (float), LinesPerChunk (int),
            RetryStrategy (text), MaxRetries (int), EnableRequestCaching (bool),
-           LineByLineMode (bool), ContextLines (int), Thinking (bool), ThinkingBudget (int)
+           LineByLineMode (bool), ContextLines (int), Thinking (bool), ThinkingBudget (int), ReasoningEffort (str: low/medium/high)
        - **Phase 27 Integration:** PostprocessingStep manifest bindings:
          - PostProcessing nested (8 booleans): PlaceholderRecovery, BracketBalanceRecovery,
            QuoteBalanceRecovery, WhitespaceNormalization, RestoreCodeCharacters,
@@ -611,7 +616,7 @@ TABLE OF CONTENTS
          - Newline Rendering: ↵ symbol in table cells, 200-char truncation
          - Mock Translation: MODEL_OPTIONS[0] = "Mock Translation", routes to MockTranslator(delay_per_chunk=0.1)
          - API Provider Management: APIProviderEntry dataclass, PROVIDER_PRESETS (5), "Saved API Keys" Treeview with Save/Load/Remove; _PresetPickerDialog
-         - Settings Migration: CachingSettings.mode, RequestSettings.thinking_enabled/budget/rolling_context_lines
+         - Settings Migration: CachingSettings.mode, RequestSettings.thinking_enabled/budget/reasoning_effort/rolling_context_lines
          - _sync_from_global_options() applies Global Options overrides on tab enter
          - Retry Refinement: RETRY_STRATEGIES (2: Batch+Contextual for UI), ALL_RETRY_STRATEGIES (4 for CLI), min retries=0
          - Prompt Editor: Preview-only button, Ban Tokens LabelFrame with _BAN_PRESETS (None/Clean English/Strict)
@@ -2450,10 +2455,18 @@ Key Features:
   - `_total_cached_tokens` — running counter of cached prompt tokens from `usage.prompt_tokens_details.cached_tokens`
   - `_total_reasoning_tokens` — running counter of reasoning tokens from `usage.completion_tokens_details.reasoning_tokens`
   - Completion token breakdown: `reasoning_tokens`, `accepted_prediction_tokens`, `rejected_prediction_tokens` extracted from `completion_tokens_details` and logged per-chunk + footer
-  - APIConfig fields: `prompt_cache_enabled` (bool, default True), `prompt_cache_retention` (str, "" / "in_memory" / "24h"), `prompt_cache_key` (str, routing hint for cache slot affinity)
+  - APIConfig fields: `prompt_cache_enabled` (bool, default True), `prompt_cache_retention` (str, "" / "in_memory" / "24h"), `prompt_cache_key` (str, routing hint for cache slot affinity), `request_mode` (str, "normal" / "batch" / "flex" / "priority" — set from translation step mode selector)
   - `generate_prompt_cache_key(project_name, created_at)` — builds key as `"{first 5 alpha chars}-{seconds}"` from manifest metadata
   - `check_static_prompt_cache_status(token_breakdown)` — evaluates static prefix size: "ok" (≥1280 tokens), "suggest" (1024-1279), "warn" (<1024); uses `_STATIC_PROMPT_SECTIONS` frozenset for section classification
   - Logging: per-chunk cached token count, cache hit rate %, savings estimate in footer, CSV summary column
+- **Thinking/Reasoning Mode**: Provider-based thinking parameter generation
+  - `THINKING_MODELS` — list of model patterns supporting thinking/reasoning (Claude, o-series, GPT-4.1, GPT-5)
+  - `get_thinking_params()` — uses provider's `ThinkingConfig.build_params()` when available; falls back to legacy hardcoded logic
+  - Provider path: mandatory models (GPT-5) always send params regardless of `thinking_enabled`; optional models (GPT-4.1) respect the toggle
+  - OpenAI models: `reasoning_effort` as top-level Chat Completions parameter (not nested `reasoning: {effort}`)
+  - Claude models: `thinking` dict via `extra_body` for OpenAI SDK compatibility
+  - `is_openai_reasoning_model()` — includes o-series, GPT-4.1, GPT-5 families
+  - APIConfig fields: `thinking_enabled`, `thinking_budget`, `reasoning_effort` (str, "low"/"medium"/"high")
 
 API Logging (TASK 11 + TASK 12 enhancements):
 - `enable_api_log` parameter in __init__ to enable logging
@@ -5485,6 +5498,13 @@ New module (Dynamic Model Registry). Single source of truth for model metadata.
 - Batch: `batch_input_price`, `batch_output_price` (async batch API, ~50% of standard)
 - Flex: `flex_input_price`, `flex_output_price` (same as batch rates, higher latency)
 - Priority: `priority_input_price`, `priority_output_price` (~1.75-2x standard, lower latency)
+- GPT-4.1 family: standard + batch only (no flex, no priority)
+- GPT-5 family: all four tiers (standard, batch, flex, priority)
+
+**Thinking/Reasoning mode (ModelInfo fields):**
+- `thinking: bool` — legacy field, True if model supports any reasoning
+- `thinking_mode: str` — three-state classification: "optional" (GPT-4.1), "mandatory" (GPT-5), "builtin" (o-series), "explicit" (Claude, Gemini thinking, Magistral), "" (unavailable)
+- `to_pricing_entry()` includes `thinking_mode` in output dict
 
 **functions/config.py:** `MODEL_PRICING` is now `_ModelPricingProxy` — lazily syncs from registry on every dict access. Backward-compatible: all existing code using `MODEL_PRICING` works unchanged.
 

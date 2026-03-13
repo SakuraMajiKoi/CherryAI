@@ -218,6 +218,10 @@ When global options enable automation, loading files triggers a cascade:
 - First tick: Original estimation complete (from raw input)
 - Second tick: Preprocessed estimation complete (after Step 4)
 - Ticks reset when relevant settings change (prompt, preprocessing)
+- **Model change does NOT trigger re-estimation** — stored token counts
+  (content_tokens, prompt_tokens, cached_tokens, input_tokens, output_tokens,
+  num_requests) are reused; only pricing/rate-limit arithmetic is repeated.
+  Full re-estimation is only triggered by the "↻ Update Counts" button.
 
 ---
 
@@ -1887,6 +1891,39 @@ The Costs step has **two distinct estimation states** tracked separately:
 | Click Refresh | Fetches latest model data from providers |
 | Click Estimate | Runs full manual estimation (both states) |
 
+#### Costs Rework (API Requests & Costs)
+
+**Cache Cost Calculation**:
+- `CACHE_HIT_RATE = 0.80` — 80% of the static prompt prefix is assumed cached after first request
+- `_get_static_prompt_tokens()` builds the prompt with `chunk_lines=[]` and `rolling_context_text=""` to isolate static sections (slots 1-7b)
+- Cache eligible = static_prompt_tokens × (n_requests − 1)
+- Cached tokens = cache_eligible × CACHE_HIT_RATE
+- Cache savings = cached_tokens / 1M × (input_rate − cached_rate) subtracted from total cost
+- Guard: no caching applied when static prefix < 1024 tokens or only 1 request
+
+**Mode Button Labels**:
+- Non-normal modes (Batch/Flex/Priority) show "(Available)" or "(Unavailable)" suffix
+- Availability determined by model pricing (batch_input/flex_input/priority_input rates)
+- Button width increased to 20 to accommodate suffix text
+
+**Instant Mode Cost Recalculation**:
+- `_recalculate_costs_for_mode()` updates all cost labels and comparison table from existing token counts without re-estimation
+- `_select_request_mode()` calls `_recalculate_costs_for_mode()` instead of `_run_estimation()`
+
+**Model Lock During Estimation**:
+- Model combo set to `state="disabled"` when estimation starts
+- Restored to `state="readonly"` in `_estimation_complete()`
+
+**Settings Decoupling**:
+- `_on_model_changed()` no longer calls `_load_model_settings()`
+- `_settings_loaded_once` flag ensures settings loaded from API.ini only on first tab entry
+- `on_new_project()` resets the flag so next project loads fresh settings
+
+**Apply Settings to Model**:
+- Button text: "📤 Apply Settings to Model" (one-way write to API.ini)
+- Confirmation text: "✓ Applied"
+- Model changes do NOT reload settings into the UI
+
 #### Future Enhancements (Low Priority)
 
 - **Request Merging**: Combine small trailing chunks into previous request when no rolling context needed
@@ -2852,6 +2889,7 @@ The Translation tab contains four widget sections:
 |--------|------|---------|----------|
 | Key | Dropdown | (first saved key) | Select API key from saved keys in API.ini |
 | Model | Dropdown | (default for key) | Select LLM model, filtered by selected key's provider |
+| Request Mode | Combobox | Normal | Normal / Batch / Flex / Priority. Unavailable modes have "(Unavailable)" suffix. Selection stored in TranslationOptions.request_mode, passed to APIConfig.request_mode. |
 | Model Settings | Label + Button | — | Opens Global Options at Model Settings section |
 | Translation Options | Label + Button | — | Opens Global Options at Translation Options section |
 | Lines/Chunk | Spinbox | 30 | Lines per API request (5-200). Must sync with Estimation step |
@@ -5250,6 +5288,29 @@ without any hardcoded cloud provider data.
 | `flex_output_price` | float | Flex processing output (USD/1M tokens) |
 | `priority_input_price` | float | Priority processing input (USD/1M tokens) |
 | `priority_output_price` | float | Priority processing output (USD/1M tokens) |
+| `thinking_mode` | str | Reasoning classification: "optional"/"mandatory"/"builtin"/"explicit"/"" |
+
+**Pricing Tier Availability per Model Family:**
+- GPT 4.1 family (`gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`): Standard + Batch only. No Flex or Priority tiers (`flex_*` and `priority_*` fields are `None`).
+- GPT 5 family (`gpt-5`, `gpt-5-mini`, `gpt-5.1`, `gpt-5.2`, `gpt-5-nano`): Standard + Batch + Flex + Priority.
+- O-series (`o3`, `o4-mini`): Standard + Batch + Flex + Priority.
+- GPT 4o family (`gpt-4o`, `gpt-4o-mini`): Standard + Batch + Flex + Priority.
+- Google/Mistral: Standard + Batch only (where `batch_mode=True`).
+
+**Thinking/Reasoning Mode per Model Family:**
+- GPT 4.1 family: `thinking_mode="optional"` — on/off toggle, `reasoning_effort` (low/medium/high)
+- GPT 5 family: `thinking_mode="mandatory"` — always on, `reasoning_effort` configurable
+- O-series (o3, o4-mini): `thinking_mode="builtin"` — always on, no extra params
+- Claude (sonnet-4, opus-4): `thinking_mode="explicit"` — toggle + budget (tokens)
+- Gemini/Magistral thinking: `thinking_mode="explicit"` — toggle + budget
+- Non-thinking models: `thinking_mode=""` — unavailable
+
+**reasoning_effort settings:**
+- Stored per model in `[model_settings]` section of `user/API.ini` as `<model>.reasoning_effort`
+- Valid values: `low`, `medium`, `high` (default: `medium`)
+- Passed as top-level `reasoning_effort` in Chat Completions API for OpenAI models
+- Part of `RequestSettings`, `APIConfig`, and `TranslationOptions` dataclasses
+- UI: Combobox shown for optional/mandatory modes in Global Options Thinking frame
 
 **Storage:** `user/API.ini`
 - `[model_registry]` — `version`, `last_refreshed`

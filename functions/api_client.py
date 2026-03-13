@@ -67,6 +67,7 @@ class APIConfig:
     target_lang: str = "English"
     thinking_enabled: bool = False  # Enable extended thinking/reasoning mode
     thinking_budget: int = 10000  # Token budget for thinking (Claude models)
+    reasoning_effort: str = "medium"  # low/medium/high for optional/mandatory models
     # Logit bias settings
     logit_bias_enabled: bool = False  # Enable token banning
     banned_tokens: str = ""  # Comma-separated tokens/chars to ban
@@ -87,6 +88,8 @@ class APIConfig:
     no_api_key: bool = False  # Skip API key validation for local LLMs
     # Batch API settings (TASK 17.1)
     batch_mode: bool = False  # Use async Batch API (50% cheaper)
+    # Request mode: normal, batch, flex, or priority
+    request_mode: str = "normal"
     # Prompt caching settings (OpenAI)
     prompt_cache_enabled: bool = True  # Enable OpenAI prompt caching (auto for gpt-4o+)
     prompt_cache_retention: str = ""  # "" = default (in_memory), "in_memory", or "24h"
@@ -445,6 +448,11 @@ class APIClient:
         "o1-preview",
         "o3",
         "o3-mini",
+        "o4-mini",
+        # GPT 4.1 family (optional reasoning)
+        "gpt-4.1",
+        # GPT 5 family (mandatory reasoning)
+        "gpt-5",
     ]
     
     # Providers that are local and don't require API keys
@@ -492,15 +500,19 @@ class APIClient:
         return False
     
     def is_openai_reasoning_model(self) -> bool:
-        """Check if the current model is an OpenAI reasoning model (o1/o3).
+        """Check if the current model is an OpenAI reasoning model.
         
-        These models have built-in reasoning and don't need special parameters.
+        Includes o-series (built-in), GPT-4.1 (optional), and GPT-5
+        (mandatory) models.
         
         Returns:
             True if model is an OpenAI reasoning model.
         """
         model_lower = self.config.model.lower()
-        return any(p in model_lower for p in ["o1", "o3"])
+        return any(
+            model_lower.startswith(p)
+            for p in ("o1", "o3", "o4", "gpt-4.1", "gpt-5")
+        )
     
     def is_claude_thinking_model(self) -> bool:
         """Check if the current model is a Claude model with thinking support.
@@ -591,35 +603,64 @@ class APIClient:
 
     def get_thinking_params(self) -> Dict[str, Any]:
         """Get thinking mode parameters for the current model.
-        
+
+        Uses the provider's ``ThinkingConfig`` when available, falling back
+        to legacy hardcoded logic.  For mandatory-mode models the params are
+        always returned regardless of ``thinking_enabled``.
+
         Returns:
-            Dictionary of extra parameters to add to API request for thinking mode.
+            Dictionary of extra parameters to add to API request.
             Empty dict if thinking is disabled or model doesn't support it.
         """
+        # --- provider-based path (preferred) ---
+        if self._provider:
+            think_cfg = self._provider.get_thinking_config(self.config.model)
+            if think_cfg.available:
+                # Mandatory models always send reasoning params
+                if not think_cfg.mandatory and not self.config.thinking_enabled:
+                    return {}
+                params = think_cfg.build_params(
+                    budget=self.config.thinking_budget,
+                    reasoning_effort=self.config.reasoning_effort,
+                )
+                if params:
+                    self.logger.debug(
+                        "Thinking params for %s (mode=%s): %s",
+                        self.config.model, think_cfg.mode, params,
+                    )
+                return params
+            # Provider says unavailable
+            return {}
+
+        # --- legacy fallback (no provider) ---
         if not self.config.thinking_enabled:
             return {}
-        
+
         if not self.supports_thinking_mode():
-            self.logger.debug(f"Model {self.config.model} does not support thinking mode")
+            self.logger.debug(
+                "Model %s does not support thinking mode",
+                self.config.model,
+            )
             return {}
-        
-        # OpenAI reasoning models have built-in reasoning, no extra params
+
+        # OpenAI reasoning models: built-in, no extra params
         if self.is_openai_reasoning_model():
             self.logger.debug("OpenAI reasoning model - using built-in reasoning")
             return {}
-        
-        # Claude models need explicit thinking parameter
+
+        # Claude models: explicit thinking parameter
         if self.is_claude_thinking_model():
-            self.logger.debug(f"Enabling Claude thinking mode (budget: {self.config.thinking_budget})")
-            # Note: This requires anthropic SDK or compatible proxy
-            # For OpenAI SDK, this may need to be passed as extra_body
+            self.logger.debug(
+                "Enabling Claude thinking mode (budget: %s)",
+                self.config.thinking_budget,
+            )
             return {
                 "thinking": {
                     "type": "enabled",
                     "budget_tokens": self.config.thinking_budget,
-                }
+                },
             }
-        
+
         return {}
 
     def configure_logit_bias(
@@ -2006,15 +2047,15 @@ class APIClient:
         # Add thinking mode parameters if enabled
         thinking_params = self.get_thinking_params()
         if thinking_params:
-            # For Claude via OpenAI SDK compatibility, use extra_body
-            api_params["extra_body"] = thinking_params
-            # Note: For Claude thinking mode, we need more max_tokens for thinking budget
-            # Ensure max_tokens accommodates thinking budget + output
-            if "thinking" in thinking_params:
+            if "reasoning_effort" in thinking_params:
+                # OpenAI Chat Completions: top-level parameter
+                api_params["reasoning_effort"] = thinking_params["reasoning_effort"]
+            elif "thinking" in thinking_params:
+                # Claude via OpenAI SDK: extra_body for thinking budget
+                api_params["extra_body"] = thinking_params
                 budget = thinking_params["thinking"].get("budget_tokens", 10000)
-                # Set max_tokens to at least budget + reasonable output buffer
                 api_params["max_tokens"] = budget + 4000
-            self.logger.debug(f"Thinking mode enabled: {thinking_params}")
+            self.logger.debug("Thinking params for %s: %s", self.config.model, thinking_params)
 
         # Add logit bias parameters if enabled
         logit_bias = self.get_logit_bias_params()

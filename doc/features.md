@@ -1013,15 +1013,20 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - **Renamed from Estimation to Costs** (class CostsStep, step_name "Costs")
   - Token counting with tiktoken (cl100k_base) or heuristic fallback
   - Model selection dropdown with dynamic registry models and "(No Model)" option
-  - **Per-model settings** (Task 4): Save Settings button persists chunk_size,
-    chunk_max_tokens, thinking_enabled, use_translated_context, rolling_context
-    Before/Between/After, and request_mode per model to API.ini.  Model change
-    loads saved settings without auto-saving.
+  - **Per-model settings** (Task 4): "📤 Apply Settings to Model" button writes
+    chunk_size, chunk_max_tokens, thinking_enabled, use_translated_context,
+    rolling_context Before/Between/After, and request_mode to API.ini.  This is
+    a one-way write — changing the model does NOT reload settings.  Settings are
+    loaded from API.ini only once on first tab entry.
   - **Translation Options row** (Task 4): Thinking checkbox, Translated Context
     checkbox, Rolling Context Before/Between/After spinboxes (0–20)
   - **Request Mode widget** (Task 5): 2×2 grid (Normal / Batch / Flex / Priority)
-    with Available (green), Unavailable (red), Selected (blue) states.  Mode
-    drives comparison table pricing and persists per-model.
+    with Available (green, "(Available)" suffix), Unavailable (red,
+    "(Unavailable)" suffix), Selected (blue) states.  Mode drives comparison
+    table pricing and persists per-model.  Switching mode instantly recalculates
+    costs from existing token counts without re-estimation.
+  - **Model lock during estimation**: Model combo is disabled while estimation
+    runs ("Estimating...") to prevent race conditions.  Re-enabled on complete.
   - **Tokens/Request spinbox** (500-32000): alternative maximum alongside Lines/Request
     - Hybrid chunking mode: whichever limit is reached first triggers chunk boundary
   - **Revised token breakdown** (Task 6): Token Counts panel shows:
@@ -1034,7 +1039,13 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - **GlobalOptions sync**: Chunk size, max input tokens, and request slicing mode read from Global Options at estimation time
   - Lines/Request spinbox range expanded to 1–99999 to match Model Settings
   - Cost estimate panel with input/output/total breakdown
-  - **Prompt Cost** and **Cached Input Cost** sub-rows shown when model supports prompt caching (≥1024 token static prefix). Estimates first-request uncached cost plus remaining-requests cached cost.
+  - **Prompt Cost** and **Cached Input Cost** sub-rows shown when model supports
+    prompt caching (≥1024 token static prefix).  Uses `_get_static_prompt_tokens()`
+    to measure the static/cacheable prompt portion (slots 1-7b: language,
+    system_instructions, io_examples, style, tone, protagonist, summary, genre,
+    pov, context_type).  Applies `CACHE_HIT_RATE = 0.80` (80%) to the static
+    prefix across (n_requests - 1) repeat requests.  Cache savings formula:
+    `cached_tokens / 1M × (input_rate - cached_rate)` subtracted from total cost.
   - **Model comparison table** with Cached $/1M column, mode-specific pricing (Normal/Batch/Flex/Priority rates)
   - **Dual estimation workflow** (Task 40.4):
     - Tracks original_complete and preprocessed_complete states separately
@@ -1056,6 +1067,25 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - on_enter restores all breakdown rows, request count, and cost
   - **Estimate/Update Counts** button (Task 8): Shows "▶ Estimate" initially,
     changes to "↻ Update Counts" after first estimation or manifest restore
+  - **Instant reprice on model change**: `EstimationResult` now stores
+    `num_requests` per side (original + preprocessed).  Changing the model
+    triggers `_reprice_for_model()` which reapplies the new model's pricing
+    and rate limits to the stored token counts without running a new estimation.
+    Time estimates are also refreshed from the new model's rate limits and
+    concurrent_requests.  Full estimation is only triggered when the user
+    clicks "↻ Update Counts".
+  - **Estimation progress dialog** (`EstimationProgressDialog`): A non-blocking
+    `Toplevel` window that appears automatically when estimation starts and
+    shows 7 steps with ○/●/✓ step indicators and a progress bar:
+    1. Preparing lines
+    2. Building request formation (Original)
+    3. Building request formation (Preprocessed)
+    4. Counting tokens (Original)
+    5. Counting tokens (Preprocessed)
+    6. Applying pricing & cache adjustments
+    7. Updating display
+    The dialog closes automatically on completion.  Cannot be closed manually
+    mid-estimation to prevent partial state.
   - **Backward compatibility**: EstimationStep alias, estimate.py re-exports
 - **Translation Tab (Phase 7):**
   - TranslationStep class (step_id=5) with ~900 lines
@@ -1072,6 +1102,11 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - API Key selection from saved keys (populated from API.ini)
     - Model selection filtered by selected key's provider
     - Model Settings "Change…" button → opens Global Options at Model Settings panel
+    - **Request Mode combobox**: Normal / Batch / Flex / Priority selector.
+      Unavailable modes shown with "(Unavailable)" suffix and auto-reset to
+      Normal.  Availability determined by `get_model_pricing()` checking for
+      batch_input/flex_input/priority_input rates.  Selection stored in
+      `TranslationOptions.request_mode` and passed to `APIConfig.request_mode`.
     - Translation Options "Change…" button → opens Global Options at Translation Options panel
     - Character Whitelist: comma-separated ranges of allowed characters (manifest-bound to `RequestOptions.CharacterWhitelist`)
     - Character Blacklist: comma-separated characters stripped from translations (manifest-bound to `RequestOptions.CharacterBlacklist`)
@@ -1637,7 +1672,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - API Provider Management: `APIProviderEntry` dataclass, `PROVIDER_PRESETS` (6 presets: OpenAI GPT-4o-mini, GPT-4o, Gemini Flash, Claude Sonnet, Local LLM, LM Studio), `_PresetPickerDialog` helper dialog
     - API Key Management: "Saved API Keys" Treeview (Name, Provider columns) with Save Key/Load Key/Remove buttons; encrypted storage via `api_config.set_api_key(provider, key, password, name)` in `[api_keys]` as `provider, name = encrypted_value`; master password prompt with first-time setup flow
     - Connection Test: Real `test_api_connection()` using OpenAI-compatible `models.list()` endpoint; returns `(bool, str, list)` with model IDs; threaded execution with specific error messages (auth failure, timeout, connection refused); on success, opens API Test Results dialog with filterable model table and per-model translation testing via `test_model_translation()`
-    - Settings Migration: caching.mode in CachingSettings, thinking_enabled/thinking_budget in RequestSettings, rolling_context_lines in RequestSettings; `_sync_from_global_options()` applies overrides on tab enter
+    - Settings Migration: caching.mode in CachingSettings, thinking_enabled/thinking_budget/reasoning_effort in RequestSettings, rolling_context_lines in RequestSettings; `_sync_from_global_options()` applies overrides on tab enter
     - Retry Refinement: UI shows only Batch + Contextual (`RETRY_STRATEGIES`); `ALL_RETRY_STRATEGIES` kept for CLI with all 4; max retries minimum changed from 1 to 0
     - Prompt Editor Redesign: removed Style Preset and Game Summary textarea; "Preview Requests" button opens `RequestPreviewDialog` showing actual API requests built with the same functions as translation; three view modes (Pure JSON / Formatted with section headers / Plain readable text); toolbar with Jump To (request number), Search with previous/next and match count, and Filter dropdown with checkboxes for 13 prompt parts (Meta, Language, System Instructions, I/O Examples, Style, Tone, Summary, Genre, POV, Conditional Prompts, Glossary, Rolling Context, Input Lines); Ban Tokens LabelFrame with preset dropdown (None/Clean English/Strict)
     - Chunk Sync: LinesPerChunk synced between Costs step and manifest; `_on_chunk_changed()` write-back
@@ -1780,7 +1815,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - See doc/passwords.md for full details
   - **Settings Dataclasses (with to_dict/from_dict):**
     - APISettings: provider, api_key, base_url, model, temperature
-    - RequestSettings: timeout, retries, rate_limit, chunk_size, max_input_tokens, thinking_enabled, thinking_budget, rolling_context_lines
+    - RequestSettings: timeout, retries, rate_limit, chunk_size, max_input_tokens, thinking_enabled, thinking_budget, reasoning_effort, rolling_context_lines
     - TranslationSettings (NEW): overwrite_translation, skip_non_source_language, retry_strategy, request_slicing
     - CachingSettings: enabled, dir, age (days; 0=unlimited), size (MB; 0=unlimited), mode (strict/line/any/model_only/disabled)
     - LoggingSettings: level, location, debug, api_log
@@ -3629,7 +3664,7 @@ classes registered in a global registry.
 
 | Provider | Class | Key Features |
 |----------|-------|-------------|
-| OpenAI | `OpenAIProvider` | Reference implementation. GPT-5 family (no temperature, builtin reasoning), o-series reasoning, prompt caching, batch mode |
+| OpenAI | `OpenAIProvider` | Reference implementation. GPT-5 family (mandatory reasoning w/ effort levels, no temperature), GPT-4.1 (optional reasoning w/ effort levels), o-series (builtin reasoning), prompt caching, batch mode |
 | Google/Gemini | `GoogleProvider` | OpenAI-compatible. Thinking via FALLBACK_MODELS lookup |
 | Mistral | `MistralProvider` | OpenAI-compatible. Temperature max 1.0, Magistral thinking |
 | Anthropic | `AnthropicProvider` | OpenAI-compatible. Explicit thinking mode (extra_body.thinking), budget 10K default |
@@ -3641,7 +3676,7 @@ classes registered in a global registry.
 
 - `TokenUsage` — 7-field token accounting (prompt, completion, cached, reasoning, etc.)
 - `ProviderResponse` — content + usage + finish_reason + raw
-- `ThinkingConfig` — available/mode/budget with `build_params()` helper
+- `ThinkingConfig` — available/mode/mandatory/effort_levels/effort_default/budget with `build_params()` helper; modes: ""(unavail), "builtin"(o-series), "explicit"(Claude), "optional"(GPT-4.1), "mandatory"(GPT-5)
 - `TemperatureConfig` — supported/min/max/default
 - `CachedInputConfig` — factory methods for OpenAI standard and extended 24h
 - `BatchConfig` — batch/flex/priority ratios
@@ -3649,13 +3684,16 @@ classes registered in a global registry.
 
 ### Integration Points
 
-- **`api_client.py`** — resolves `self._provider` from ProviderRegistry; delegates `requires_api_key`, `get_response_format()`, `get_temperature_config()`, `classify_error()` to provider
+- **`api_client.py`** — resolves `self._provider` from ProviderRegistry; delegates `requires_api_key`, `get_response_format()`, `get_temperature_config()`, `get_thinking_config()`, `classify_error()` to provider; `get_thinking_params()` uses provider ThinkingConfig.build_params() for all thinking modes; Chat Completions API: `reasoning_effort` sent as top-level param (OpenAI), `thinking` sent via `extra_body` (Claude)
 - **`options.py`** — `_build_api_providers()` and `get_provider_display_name()` check ProviderRegistry first, then fall back to legacy dict
 - **Global Options UI** — provider constraints applied dynamically:
   - Temperature slider hidden when `get_temperature_config().supported` is False (e.g. GPT-5 family)
-  - Thinking frame hidden when `get_thinking_config().available` is False
+  - Thinking frame: checkbox + budget slider for "explicit" mode (Claude), effort dropdown for "optional"/"mandatory" (GPT-4.1/5), hidden for unavailable
+  - Mandatory thinking models (GPT-5): checkbox forced on, effort dropdown shown
+  - Optional thinking models (GPT-4.1): checkbox toggleable, effort dropdown shown
+  - Reasoning effort dropdown: low/medium/high, saved per model in API.ini
   - Warning for models without structured output support
-  - Per-model settings (temperature, thinking) saved/loaded from INI
+  - Per-model settings (temperature, thinking, reasoning_effort) saved/loaded from INI
   - Model selection combo in Request Settings section
 
 ### Adding a New Provider

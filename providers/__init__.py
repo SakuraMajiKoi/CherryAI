@@ -50,20 +50,42 @@ class ProviderResponse:
 
 @dataclass
 class ThinkingConfig:
-    """Thinking/reasoning mode configuration for a model."""
+    """Thinking/reasoning mode configuration for a model.
+
+    Modes:
+        ``""``          – Thinking unavailable for this model.
+        ``"builtin"``   – Built-in reasoning (o-series); always on, no params.
+        ``"explicit"``  – Explicit thinking budget (Claude); on/off toggle.
+        ``"optional"``  – Optional thinking (GPT 4.1); on/off toggle.
+        ``"mandatory"`` – Mandatory reasoning (GPT 5); always on, effort
+                          level configurable via ``reasoning_effort``.
+    """
 
     available: bool = False
-    mode: str = ""                  # "builtin" | "explicit" | ""
+    mode: str = ""                  # "builtin"|"explicit"|"optional"|"mandatory"|""
+    mandatory: bool = False         # True when thinking cannot be disabled
+    effort_levels: tuple = ()       # e.g. ("low", "medium", "high")
+    effort_default: str = ""        # default effort when mandatory
     budget_default: int = 10000     # default thinking token budget
     budget_min: int = 1000
     budget_max: int = 100000
 
-    def build_params(self, budget: int = 0) -> Dict[str, Any]:
+    def build_params(
+        self,
+        budget: int = 0,
+        reasoning_effort: str = "",
+    ) -> Dict[str, Any]:
         """Build provider-specific API params for thinking mode.
+
+        For Chat Completions API, OpenAI models use ``reasoning_effort``
+        as a top-level parameter.  Claude uses ``thinking`` in
+        ``extra_body``.
 
         Args:
             budget: Token budget for thinking.  Uses ``budget_default``
                 when *budget* is 0.
+            reasoning_effort: Effort level (``"low"``, ``"medium"``,
+                ``"high"``).
 
         Returns:
             Dict of extra API parameters.  Empty when thinking is
@@ -73,6 +95,9 @@ class ThinkingConfig:
             return {}
         if self.mode == "builtin":
             return {}  # OpenAI o1/o3: built-in, no extra params
+        if self.mode in ("mandatory", "optional"):
+            effort = reasoning_effort or self.effort_default or "medium"
+            return {"reasoning_effort": effort}
         if self.mode == "explicit":
             effective = budget if budget > 0 else self.budget_default
             return {

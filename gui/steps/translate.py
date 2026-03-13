@@ -63,6 +63,7 @@ from CherryAI.gui.helpers.prompt_adapter import (
     handle_failed_lines,
 )
 from CherryAI.functions.common_errors import TranslationAbortError
+from CherryAI.functions.config import get_model_pricing
 
 # Lazy import targets for concurrent execution; resolved on first use.
 _sort_requests_by_type = None
@@ -157,12 +158,15 @@ class TranslationOptions:
     context_lines: int = 1  # Context lines for line-by-line mode
     thinking_enabled: bool = False  # Enable extended thinking (Claude)
     thinking_budget: int = 10000  # Token budget for thinking
+    reasoning_effort: str = "medium"  # low/medium/high for reasoning models
     # Edit before translation (Task 33.1)
     edit_before_translation: bool = False  # Show edit dialog before API call
     # Skip already translated lines (Task 47.9)
     skip_already_translated: bool = False  # Skip lines with existing tl field
     # Request slicing mode: conservative (default) or efficient
     request_slicing: str = "conservative"
+    # Request mode: normal, batch, flex, or priority
+    request_mode: str = "normal"
 
 
 @dataclass
@@ -1632,9 +1636,6 @@ class TranslationStep(BaseStep):
         )
         self._model_combo.pack(side="right")
 
-        # Now that both combos exist, populate keys (may filter models)
-        self._populate_key_dropdown()
-
         # Bind model to manifest
         self._manifest_bindings.append(
             bind_combobox_to_field(
@@ -1647,6 +1648,41 @@ class TranslationStep(BaseStep):
                 parent_key="RequestOptions",
             )
         )
+
+        # Request Mode selection (row 3) — Normal / Batch / Flex / Priority
+        mode_frame = ttk.Frame(frame)
+        mode_frame.pack(fill="x", pady=2)
+
+        ttk.Label(mode_frame, text="Request Mode:").pack(side="left")
+        self._request_mode_var = tk.StringVar(value="Normal")
+        self._request_mode_combo = ttk.Combobox(
+            mode_frame,
+            textvariable=self._request_mode_var,
+            values=["Normal", "Batch", "Flex", "Priority"],
+            state="readonly",
+            width=20,
+        )
+        self._request_mode_combo.pack(side="right")
+        self._request_mode_combo.bind(
+            "<<ComboboxSelected>>", self._on_request_mode_changed,
+        )
+
+        # Bind request mode to manifest
+        self._manifest_bindings.append(
+            bind_combobox_to_field(
+                combobox=self._request_mode_combo,
+                var=self._request_mode_var,
+                manager_getter=lambda: self.manifest_manager,
+                field_key="RequestMode",
+                options=["Normal", "Batch", "Flex", "Priority"],
+                default="Normal",
+                parent_key="RequestOptions",
+            )
+        )
+
+        # Populate keys only after all dependent request widgets exist.
+        self._populate_key_dropdown()
+        self._refresh_request_mode_options()
 
         # Model Settings — open Global Options dialog at Model Settings
         ms_frame = ttk.Frame(frame)
@@ -1711,6 +1747,9 @@ class TranslationStep(BaseStep):
         )
         self._thinking_budget_var = tk.IntVar(
             value=self._translation_options.thinking_budget,
+        )
+        self._reasoning_effort_var = tk.StringVar(
+            value=self._translation_options.reasoning_effort,
         )
 
         # --- Character Whitelist ---
@@ -2054,6 +2093,7 @@ class TranslationStep(BaseStep):
             context_lines=self._context_lines_var.get(),
             thinking_enabled=self._thinking_var.get(),
             thinking_budget=self._thinking_budget_var.get(),
+            reasoning_effort=self._reasoning_effort_var.get(),
             edit_before_translation=self._edit_before_var.get(),
             skip_already_translated=self._skip_translated_var.get(),
             request_slicing=self._get_request_slicing_mode(),
@@ -2410,6 +2450,13 @@ class TranslationStep(BaseStep):
                         self._api_client.config.cache_enabled = (
                             self._translation_options.cache_enabled
                         )
+
+                        # Apply request mode (normal/batch/flex/priority)
+                        mode_display = self._request_mode_var.get()
+                        mode_key = mode_display.lower().split()[0]
+                        self._api_client.config.request_mode = mode_key
+                        if mode_key == "batch":
+                            self._api_client.config.batch_mode = True
 
                         # Set source/target language from Information metadata
                         info_mgr = self.manifest_manager
@@ -3929,6 +3976,14 @@ class TranslationStep(BaseStep):
         )
         self._thinking_budget_var.set(thinking_budget)
 
+        # Load ReasoningEffort
+        reasoning_effort = load_nested_text_field(
+            mgr, "RequestOptions", "ReasoningEffort", "medium"
+        )
+        if reasoning_effort not in ("low", "medium", "high"):
+            reasoning_effort = "medium"
+        self._reasoning_effort_var.set(reasoning_effort)
+
         # TASK 43.7/43.8/43.9: Override from Global Options when available
         self._sync_from_global_options()
 
@@ -3953,6 +4008,7 @@ class TranslationStep(BaseStep):
         if hasattr(go, "request"):
             self._thinking_var.set(go.request.thinking_enabled)
             self._thinking_budget_var.set(go.request.thinking_budget)
+            self._reasoning_effort_var.set(go.request.reasoning_effort)
 
         # Task 43.9: Rolling context from Global Options
         if hasattr(go, "request"):
@@ -3984,6 +4040,7 @@ class TranslationStep(BaseStep):
             "context_lines": self._context_lines_var.get(),
             "thinking_enabled": self._thinking_var.get(),
             "thinking_budget": self._thinking_budget_var.get(),
+            "reasoning_effort": self._reasoning_effort_var.get(),
         }
 
     def _load_prompt_data(self) -> None:
@@ -4489,6 +4546,59 @@ class TranslationStep(BaseStep):
         provider, name = val.split(": ", 1)
         return (provider.strip(), name.strip())
 
+    def _on_request_mode_changed(self, event: Any = None) -> None:
+        """Handle request mode selection change.
+
+        Filters the displayed modes based on the current model's
+        pricing availability and applies the selection to the
+        translation options.
+        """
+        display = self._request_mode_var.get()
+        mode_key = display.lower()  # "normal", "batch", "flex", "priority"
+        self._translation_options.request_slicing = mode_key
+
+    def _refresh_request_mode_options(self) -> None:
+        """Update request mode combobox options based on model availability.
+
+        Marks unavailable modes with a suffix so the user knows which
+        modes the current model supports.
+        """
+        if not hasattr(self, "_request_mode_combo") or not hasattr(
+            self, "_request_mode_var",
+        ):
+            return
+
+        model_id = self._model_var.get()
+        if not model_id:
+            return
+
+        try:
+            pricing = get_model_pricing(model_id)
+        except Exception:
+            return
+
+        _MODES = (
+            ("Normal", "input"),
+            ("Batch", "batch_input"),
+            ("Flex", "flex_input"),
+            ("Priority", "priority_input"),
+        )
+        options: list[str] = []
+        for label, price_key in _MODES:
+            if label == "Normal" or pricing.get(price_key) is not None:
+                options.append(label)
+            else:
+                options.append(f"{label} (Unavailable)")
+        self._request_mode_combo["values"] = options
+
+        # If current selection is now unavailable, reset to Normal
+        current = self._request_mode_var.get()
+        available_labels = [
+            o for o in options if "(Unavailable)" not in o
+        ]
+        if current not in available_labels:
+            self._request_mode_var.set("Normal")
+
     def _on_key_changed(self, event: Any = None) -> None:
         """Handle key selection change — filter Models by provider.
 
@@ -4608,6 +4718,9 @@ class TranslationStep(BaseStep):
         if current not in values:
             default_model = values[1] if len(values) > 1 else values[0]
             self._model_var.set(default_model)
+
+        # Refresh request mode availability for the new model set
+        self._refresh_request_mode_options()
 
     def _on_line_by_line_toggle(self) -> None:
         """Handle line-by-line mode toggle.

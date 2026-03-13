@@ -3136,6 +3136,7 @@ Thank you.
 | test_input_step_phase39.py | 38 | Input step Phase 39 improvements (unified selector, treeview, format filtering, progress) |
 | test_input_step_improvements.py | 60 | Input step Phase 60 improvements (type column refresh, clickable sort headers, file filter, cross-file preview search) |
 | test_costs_step_phase40.py | 57 | Costs step Phase 40+78 improvements (rename, dual estimation, dual ticks, concurrent time, prepro lines, prompt overhead, preview tokens) |
+| test_costs_api_rework.py | 35 | API Requests & Costs rework (cache calculation, mode buttons, instant recalculation, model lock, settings decoupling, button rename, translation request mode, fast reprice on model change) |
 | test_estimate_manifest.py | 33 | Estimation/Analysis manifest integration (TASK 25.1, 25.2) |
 | test_qa_manifest.py | 17 | QA step manifest integration (TASK 26.1) |
 | test_translate_manifest.py | 47 | Translation step manifest integration (TASK 26.2) |
@@ -3212,6 +3213,7 @@ Thank you.
 | test_knowledge_base.py | 56 | Knowledge Base widget, Active columns, collapsible design, prompt adapter (TASK 76) |
 | test_estimation_skip.py | 41 | Estimation skip logic Phase 78 (Task 3) |
 | test_costs_step_phase40.py | 57 | Costs step Phase 40+78 improvements (rename, dual estimation, dual ticks, concurrent time, prepro lines, prompt overhead format, request preview tokens) |
+| test_costs_api_rework.py | 35 | API Requests & Costs rework (cache calculation, mode buttons, instant recalculation, model lock, settings decoupling, button rename, translation request mode) |
 | test_rolling_context_phase78.py | 10 | Rolling context file-boundary fix Phase 78 (Task 7) |
 | test_rolling_context_merge.py | 37 | Rolling context between/after, Step 5 efficient merge, merged-request conditional prompt (Task 78) |
 | test_slicing_phase78.py | 11 | Slicing efficient mode Phase 78 (Task 8) |
@@ -3222,8 +3224,9 @@ Thank you.
 | smoke_test/*.py | 5+ | Smoke tests |
 | test_provider_handshake.py | 188 | Provider Handshake: ABC, registry, validation, OpenAI/Google/Mistral/Anthropic/Local providers, APIClient integration, options.py migration, UI constraints, structured output |
 | test_provider_live_api.py | 11 | Live API tests: GPT-5-nano (no temp, reasoning) + GPT-4.1-nano (temp 0-2, no reasoning) |
+| test_pricing_and_reasoning.py | 108 | Pricing + Reasoning: GPT 4.1 no flex/priority, GPT 5 all tiers, ThinkingConfig 5 modes (builtin/explicit/optional/mandatory/""), build_params Chat Completions format, reasoning_effort persistence (RequestSettings/APIConfig/TranslationOptions/INI), provider-based get_thinking_params, THINKING_MODELS, is_openai_reasoning_model |
 | test_api_log.py | 44 | API Log: LogEntry serialization, APILogStore CRUD/filtering/subscription/persistence, singleton management, enum values, dataclass defaults, status string compatibility (5), manifest save thread safety (2) |
-| **Total Script Tests** | **4284** | (+188 provider handshake, +11 live API, +44 API log) |
+| **Total Script Tests** | **4392** | (+188 provider handshake, +11 live API, +108 pricing/reasoning, +44 API log) |
 | One_Click_Test.py | 7 stages | API integration |
 
 ### TASK 11: Integration Test - 200 Lines (Completed)
@@ -9005,6 +9008,89 @@ dual estimation, dual ticks, model comparison, concurrent time, prepro lines.
 | `test_costs_step_inherits_base` | CostsStep inherits BaseStep |
 | `test_count_tokens_returns_tuple` | Returns (int, str) tuple |
 | `test_update_dual_ticks_method_exists` | _update_dual_ticks method exists |
+
+---
+
+### dev/test_costs_api_rework.py (35 tests) - API Requests & Costs Rework
+
+Tests for all 7 Costs/Translation rework tasks: cache calculation, mode buttons,
+instant mode recalculation, model lock, settings decoupling, button rename,
+and translation request mode selector.
+
+#### TestCachedCostCalculation (8 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_cache_hit_rate_constant_exists` | CACHE_HIT_RATE constant exists in costs module |
+| `test_cache_hit_rate_value` | CACHE_HIT_RATE is 0.80 |
+| `test_cache_hit_rate_range` | CACHE_HIT_RATE between 0 and 1 |
+| `test_get_static_prompt_tokens_method` | _get_static_prompt_tokens method exists |
+| `test_build_full_system_prompt_static_sections` | Static prompt sections are cacheable |
+| `test_build_full_system_prompt_dynamic_sections` | Dynamic prompt sections identified |
+| `test_cached_tokens_less_than_total` | Cached cost < total cost in estimation |
+| `test_no_caching_below_threshold` | No caching when static prefix < 1024 tokens |
+
+#### TestModeButtonLabels (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_request_modes_defined` | REQUEST_MODES has 4 entries |
+| `test_mode_button_labels_include_availability` | Labels include (Available)/(Unavailable) |
+| `test_normal_mode_no_suffix` | Normal mode has no availability suffix |
+
+#### TestModeCostRecalculation (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_recalculate_method_exists` | _recalculate_costs_for_mode method exists |
+| `test_select_mode_no_estimation` | Mode change does not trigger re-estimation |
+| `test_mode_cost_updates_fields` | Mode change updates cost display fields |
+
+#### TestModelLockDuringEstimation (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_model_locked_during_estimation` | Model combo disabled during estimation |
+| `test_model_unlocked_after_estimation` | Model combo re-enabled after estimation |
+
+#### TestSettingsDecoupling (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_no_load_on_model_change` | _on_model_changed does not call _load_model_settings |
+| `test_settings_loaded_once_flag` | _settings_loaded_once attribute exists |
+| `test_settings_loaded_on_enter` | on_enter loads settings from API.ini |
+| `test_settings_reset_on_new_project` | on_new_project resets _settings_loaded_once flag |
+
+#### TestSaveButtonRename (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_button_text_apply` | Button text is "📤 Apply Settings to Model" |
+| `test_one_way_docstring` | _save_settings mentions one-way write |
+| `test_confirmation_text` | Confirmation shows "Applied" |
+
+#### TestTranslationRequestMode (8 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_translation_options_has_request_mode` | TranslationOptions has request_mode field |
+| `test_request_mode_combo_built` | Request mode combobox exists in translate module |
+| `test_request_mode_values` | Combobox has Normal/Batch/Flex/Priority values |
+| `test_request_mode_change_handler` | _on_request_mode_changed method exists |
+| `test_request_mode_refresh_method` | _refresh_request_mode_options method exists |
+| `test_api_config_has_request_mode` | APIConfig dataclass has request_mode field |
+| `test_api_client_mode_set_during_translation` | _do_translation sets request_mode on APIConfig |
+| `test_get_model_pricing_imported` | get_model_pricing imported in translate module |
+
+#### TestCostEstimationMath (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_estimate_cost_returns_dict` | estimate_cost returns a dictionary |
+| `test_estimation_result_fields` | EstimationResult has required fields |
+| `test_mode_price_keys_normal` | Normal mode uses standard price keys |
+| `test_model_setting_keys_include_request_mode` | _MODEL_SETTING_KEYS includes request_mode |
 
 ---
 

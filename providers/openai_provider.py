@@ -40,6 +40,9 @@ _OPENAI_REASONING_PREFIXES = ("o1", "o3", "o4")
 # the ``temperature`` parameter.
 _GPT5_PREFIXES = ("gpt-5",)
 
+# GPT-4.1 family supports optional reasoning.effort (on/off).
+_GPT41_PREFIXES = ("gpt-4.1",)
+
 # Models supporting automatic OpenAI prompt caching.
 _PROMPT_CACHE_PREFIXES = ("gpt-4o", "gpt-4.1", "gpt-5", "o1", "o3", "chatgpt-4o")
 
@@ -56,6 +59,11 @@ def _is_reasoning_model(model_id: str) -> bool:
 def _is_gpt5_family(model_id: str) -> bool:
     """Check whether *model_id* belongs to the GPT-5 family."""
     return model_id.lower().startswith("gpt-5")
+
+
+def _is_gpt41_family(model_id: str) -> bool:
+    """Check whether *model_id* belongs to the GPT-4.1 family."""
+    return model_id.lower().startswith("gpt-4.1")
 
 
 # ---------------------------------------------------------------------------
@@ -214,13 +222,32 @@ class OpenAIProvider(ProviderBase):
     # ---- MM3: thinking config ----
 
     def get_thinking_config(self, model_id: str) -> ThinkingConfig:
-        """O-series: builtin reasoning. GPT-5: builtin with configurable effort."""
+        """Return thinking/reasoning mode config for an OpenAI model.
+
+        - o-series: builtin reasoning (always on, no params).
+        - GPT-5: mandatory reasoning with configurable effort.
+        - GPT-4.1: optional reasoning (on/off, effort configurable).
+        - Others: thinking unavailable.
+        """
         ml = model_id.lower()
         if _is_reasoning_model(ml):
-            return ThinkingConfig(available=True, mode="builtin")
+            return ThinkingConfig(available=True, mode="builtin", mandatory=True)
         if _is_gpt5_family(ml):
-            # GPT-5 family has configurable reasoning.effort
-            return ThinkingConfig(available=True, mode="builtin")
+            return ThinkingConfig(
+                available=True,
+                mode="mandatory",
+                mandatory=True,
+                effort_levels=("low", "medium", "high"),
+                effort_default="medium",
+            )
+        if _is_gpt41_family(ml):
+            return ThinkingConfig(
+                available=True,
+                mode="optional",
+                mandatory=False,
+                effort_levels=("low", "medium", "high"),
+                effort_default="medium",
+            )
         return ThinkingConfig(available=False)
 
     # ---- OP1: prompt caching ----

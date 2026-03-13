@@ -479,10 +479,10 @@ def get_current_selection() -> str:
 _MODEL_SETTING_KEYS = (
     "temperature", "timeout", "chunk_size", "chunk_max_tokens",
     "retries", "rate_limit_requests", "thinking_enabled",
-    "thinking_budget", "logit_bias_enabled", "max_concurrent",
-    "request_mode", "rolling_context_before", "rolling_context_between",
-    "rolling_context_after", "use_translated_context",
-    "optimal_cache_size",
+    "thinking_budget", "reasoning_effort", "logit_bias_enabled",
+    "max_concurrent", "request_mode", "rolling_context_before",
+    "rolling_context_between", "rolling_context_after",
+    "use_translated_context", "optimal_cache_size",
 )
 
 

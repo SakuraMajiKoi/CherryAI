@@ -229,6 +229,7 @@ class RequestSettings:
     max_input_tokens: int = 0  # Task 41 — 0 = no limit (input lines only)
     thinking_enabled: bool = False  # Task 43.8
     thinking_budget: int = 10000  # Task 43.8
+    reasoning_effort: str = "medium"  # low/medium/high for optional/mandatory models
     rolling_context_lines: int = 3  # Task 43.9 — "Lines (Before)"
     rolling_context_between: int = 0  # Task 78 — "Lines (Between)"
     rolling_context_after: int = 0  # Task 78 — "Lines (After)"
@@ -247,6 +248,7 @@ class RequestSettings:
             "max_input_tokens": self.max_input_tokens,
             "thinking_enabled": self.thinking_enabled,
             "thinking_budget": self.thinking_budget,
+            "reasoning_effort": self.reasoning_effort,
             "rolling_context_lines": self.rolling_context_lines,
             "rolling_context_between": self.rolling_context_between,
             "rolling_context_after": self.rolling_context_after,
@@ -267,6 +269,7 @@ class RequestSettings:
             max_input_tokens=int(data.get("max_input_tokens", 0)),
             thinking_enabled=bool(data.get("thinking_enabled", False)),
             thinking_budget=int(data.get("thinking_budget", 10000)),
+            reasoning_effort=str(data.get("reasoning_effort", "medium")),
             rolling_context_lines=int(data.get("rolling_context_lines", 3)),
             rolling_context_between=int(data.get("rolling_context_between", 0)),
             rolling_context_after=int(data.get("rolling_context_after", 0)),
@@ -1073,6 +1076,9 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.thinking_budget_var = tk.IntVar(
             value=self.options.request.thinking_budget,
         )
+        self.reasoning_effort_var = tk.StringVar(
+            value=self.options.request.reasoning_effort,
+        )
         self.rolling_context_var = tk.IntVar(
             value=self.options.request.rolling_context_lines,
         )
@@ -1600,6 +1606,7 @@ class GlobalOptionsDialog(tk.Toplevel):
             variable=self.thinking_enabled_var,
         )
         think_check.pack(anchor=tk.W, pady=2)
+        self._thinking_cb = think_check
 
         budget_row = ttk.Frame(think_frame)
         budget_row.pack(fill=tk.X, pady=5)
@@ -1611,6 +1618,20 @@ class GlobalOptionsDialog(tk.Toplevel):
         ttk.Label(budget_row, text="tokens (1000-100000)", foreground="gray").pack(
             side=tk.LEFT, padx=5,
         )
+        self._thinking_budget_row = budget_row
+
+        effort_row = ttk.Frame(think_frame)
+        effort_row.pack(fill=tk.X, pady=5)
+        ttk.Label(effort_row, text="Reasoning Effort:", width=18).pack(side=tk.LEFT)
+        self._reasoning_effort_combo = ttk.Combobox(
+            effort_row, textvariable=self.reasoning_effort_var,
+            values=["low", "medium", "high"], state="readonly", width=10,
+        )
+        self._reasoning_effort_combo.pack(side=tk.LEFT, padx=5)
+        ttk.Label(
+            effort_row, text="(low / medium / high)", foreground="gray",
+        ).pack(side=tk.LEFT, padx=5)
+        self._reasoning_effort_row = effort_row
 
         think_help = ttk.Label(
             think_frame,
@@ -3224,6 +3245,33 @@ class GlobalOptionsDialog(tk.Toplevel):
         think_cfg = provider.get_thinking_config(model_id)
         if think_cfg.available:
             self._think_frame.pack(fill=tk.X, pady=(0, 10))
+            if think_cfg.mandatory:
+                # Mandatory thinking — force on and disable toggle
+                self.thinking_enabled_var.set(True)
+                if hasattr(self, "_thinking_cb"):
+                    self._thinking_cb.configure(state="disabled")
+            else:
+                # Optional thinking — enable toggle
+                if hasattr(self, "_thinking_cb"):
+                    self._thinking_cb.configure(state="normal")
+            # Show effort dropdown for optional/mandatory modes
+            if think_cfg.mode in ("optional", "mandatory"):
+                if hasattr(self, "_reasoning_effort_row"):
+                    self._reasoning_effort_row.pack(fill=tk.X, pady=5)
+                if hasattr(self, "_thinking_budget_row"):
+                    self._thinking_budget_row.pack_forget()
+            # Show budget for explicit (Claude) mode
+            elif think_cfg.mode == "explicit":
+                if hasattr(self, "_thinking_budget_row"):
+                    self._thinking_budget_row.pack(fill=tk.X, pady=5)
+                if hasattr(self, "_reasoning_effort_row"):
+                    self._reasoning_effort_row.pack_forget()
+            else:
+                # Builtin: no budget or effort needed
+                if hasattr(self, "_thinking_budget_row"):
+                    self._thinking_budget_row.pack_forget()
+                if hasattr(self, "_reasoning_effort_row"):
+                    self._reasoning_effort_row.pack_forget()
         else:
             self._think_frame.pack_forget()
             self.thinking_enabled_var.set(False)
@@ -3328,6 +3376,15 @@ class GlobalOptionsDialog(tk.Toplevel):
             except (ValueError, tk.TclError):
                 pass
 
+        # Reasoning effort
+        effort_key = f"{prefix}reasoning_effort"
+        if effort_key in saved:
+            val = saved[effort_key].strip().lower()
+            if val in ("low", "medium", "high"):
+                self.reasoning_effort_var.set(val)
+        else:
+            self.reasoning_effort_var.set("medium")
+
     def _apply_provider_temp_default(self, model_id: str) -> None:
         """Set temperature to the provider's default for this model."""
         try:
@@ -3357,6 +3414,7 @@ class GlobalOptionsDialog(tk.Toplevel):
                 self.thinking_enabled_var.get(),
             ).lower(),
             f"{model_id}.thinking_budget": str(self.thinking_budget_var.get()),
+            f"{model_id}.reasoning_effort": self.reasoning_effort_var.get(),
         }
         ini_manager.save_as_user_defaults("model_settings", vals)
 
@@ -3661,11 +3719,18 @@ class GlobalOptionsDialog(tk.Toplevel):
         ) -> tuple:
             """Build a display row from a model ID and optional registry info."""
             if info:
+                if info.thinking:
+                    if info.thinking_mode in ("mandatory", "builtin"):
+                        thinking_display = "✓"
+                    else:
+                        thinking_display = "Optional"
+                else:
+                    thinking_display = "—"
                 return (
                     mid,
                     "✓" if info.structured_output else "—",
                     "✓" if info.batch_mode else "—",
-                    "✓" if info.thinking else "—",
+                    thinking_display,
                     (
                         f"${info.cached_input_price:.2f}"
                         if info.cached_input_price is not None
