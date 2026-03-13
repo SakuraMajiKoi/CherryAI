@@ -55,6 +55,25 @@ MODULE COUNTS (Verified January 2026)
 =============================================================================
 [Archived: Sessions 43–24 + Phase 62 → see doc/archived.md]
 
+### BUG FIX: Glossary ↔ Term Translation Dual-Storage Desync (3 Fixes)
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Fix Term Translation results not showing in the Information step's Glossary widget, and fix editing one glossary entry causing other entries (including translations) to disappear.
+
+**Root Cause:** Characters are stored in TWO manifest locations: top-level `characters` key (written by `save_character_notes()` in Analysis step's Term Translation) and nested `step_state.Information.data.metadata.characters` (written by `on_leave()` in Information step). In `on_enter()`, `_load_characters_from_manifest()` loaded correct data from the authoritative top-level key, but `_load_metadata()` ran AFTER and completely replaced `self._metadata` with stale step_state data — wiping the translations. Additionally, `on_leave()` only saved to step_state (not top-level), so the two storage locations diverged over time. `_import_analysis_speakers()` also did not persist auto-imported speakers to the top-level key.
+
+**Changes:**
+1. **`on_enter()` load order** — Moved `_load_characters_from_manifest()` and `_load_code_patterns_from_manifest()` to AFTER `_load_metadata()`, so authoritative top-level manifest data always overrides stale step_state data.
+2. **`on_leave()` dual-storage sync** — Added `_save_characters_to_manifest()` and `_save_code_patterns_to_manifest()` calls after `set_step_data()`, keeping top-level manifest keys in sync with step_state on every tab change.
+3. **`_import_analysis_speakers()` persistence** — Added `_save_characters_to_manifest()` call after importing speakers, ensuring auto-imported entries are immediately persisted to the authoritative top-level key.
+
+**Files Modified:**
+- `gui/steps/information.py` — `on_enter()` reordered, `on_leave()` sync added, `_import_analysis_speakers()` persistence added
+
+**Tests:** `dev/test_glossary_term_link.py` — 19 tests (2 character round-trip, 3 on_enter load order AST, 2 on_leave sync AST, 1 import persistence AST, 4 dual-storage simulation, 3 CharacterInfo preservation, 2 ProjectMetadata preservation, 2 load guard)
+
+---
+
 ### BUG FIX: Batch 79 — Translation Pipeline Issues (6 Fixes)
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 4 hours
 
@@ -2730,7 +2749,7 @@ configurable in Global Options → Prompts. Hide Edit/TLC prompt sections.
 
 **Structured Output (json_schema):**
 - `term_translation.py` — `_TERM_TRANSLATION_SCHEMA` with strict `{"translations": [...]}` schema
-- `API2Glossary.py` — `RESPONSE_SCHEMA` with gender enum `[Female, Male, Non-Binary, Unsure]`
+- `API2Glossary.py` — `RESPONSE_SCHEMA` with single `details` string field (no enum constraint; accepts any gender value)
 - Both use `store=False` (prevents storing requests for model training)
 - `term_translation.py` — `max_tokens=max(100, len(terms) * 20)`
 - `API2Glossary.py` — `max_tokens=150`
@@ -2747,7 +2766,10 @@ configurable in Global Options → Prompts. Hide Edit/TLC prompt sections.
 - `analysis.py _translate_terms()` passes `prompt_type="glossary"` for characters, `"code"` for code patterns
 
 **Gender Normalization:**
-- `_normalize_gender()` maps API output: Unsure→Unknown, Neutral→Non-Binary
+- `_normalize_gender()` performs case-insensitive normalization via `_KNOWN_GENDERS` lookup dict
+- Maps known values to canonical forms: female→Female, male→Male, non-binary→Non-Binary, etc.
+- Maps Unsure/Unknown→Unknown, Neutral→Non-Binary
+- Any unrecognized value is title-cased (e.g. "other"→"Other")
 - All API result handlers use `_normalize_gender()` for consistent downstream values
 
 **UI Changes (Global Options → Prompts):**
@@ -2758,11 +2780,11 @@ configurable in Global Options → Prompts. Hide Edit/TLC prompt sections.
 **Files Modified:**
 - `gui/dialogs/global_options.py` — PromptsSettings + 3 new defaults + UI sections + hide Edit/TLC
 - `functions/term_translation.py` — json_schema, store=False, max_tokens, prompt_type, configurable prompt
-- `functions/API2Glossary.py` — json_schema gender enum, store=False, max_tokens=150, _normalize_gender, configurable prompt
+- `functions/API2Glossary.py` — json_schema single details field (no enum), store=False, max_tokens=150, case-insensitive _normalize_gender, configurable prompt
 - `gui/steps/analysis.py` — prompt_type="glossary" / "code" pass-through
 
 **Tests:**
-- `dev/test_utility_settings.py` — Expanded to 53 tests (+26 new: PromptsSettings fields, prompt_type routing, _get_prompt_template, _normalize_gender, schema validation)
+- `dev/test_utility_settings.py` — Expanded to 63 tests (+26 new: PromptsSettings fields, prompt_type routing, _get_prompt_template, _normalize_gender case-insensitive normalization, schema validation with details field)
 
 ---
 
@@ -2925,6 +2947,48 @@ Also add a non-blocking progress dialog that shows step-by-step feedback during 
 - `gui/steps/costs.py` — All changes above
 
 **Tests:** All 92 existing cost tests pass (no regressions).
+
+---
+
+### Gender Inference Simplification
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** Session
+
+Goal: Simplify the Gender Inference LLM prompt and schema to request only a
+gender value (no romanization, no note). Accept any gender output from the LLM
+and normalize case-insensitively. Only leave gender empty when "Unknown" or
+below confidence threshold.
+
+**Prompt Changes:**
+- Removed name/romaji/note fields from prompt template
+- New prompt focuses only on inferring gender from dialogue context
+- Adds "Don't guess a gender if you are unsure." instruction
+- Updated `DEFAULT_GENDER_INFERENCE_PROMPT` in `global_options.py`
+
+**Schema Changes:**
+- `RESPONSE_SCHEMA` reduced from 4 fields (`name`, `romaji`, `gender` enum, `note`) to 1 field (`details` string)
+- No enum constraint — accepts any gender value from the LLM
+- Schema name changed to `gender_inference_response`
+
+**Normalization Changes:**
+- `_VALID_GENDERS` frozenset replaced with `_KNOWN_GENDERS` case-insensitive lookup dict
+- `_normalize_gender()` rewritten: strips whitespace, lowercases, checks dict
+- Known mappings: female→Female, male→Male, non-binary→Non-Binary, nb→Non-Binary, transwoman→Transwoman, transman→Transman
+- Unsure/Unknown→Unknown, Neutral→Non-Binary
+- Unrecognized values title-cased (e.g. "other"→"Other")
+
+**Return Value Changes:**
+- `_call_api_for_excerpt()` / `_call_api_for_excerpt_custom()`: returns `{"gender": ...}` only (was `romaji`+`gender`+`note`)
+- `_validate_gender_with_checks()`: returns `(gender, checks)` tuple (was `(romaji, gender, note, checks)`)
+- `enrich_speakers_via_api()`: returns `{"gender": str, "checks": int}` per speaker
+- `_write_enriched_to_glossary()`: writes only gender (no romaji/note)
+- `test_api_connection()`: accepts any non-"Unknown" gender as valid
+
+**Files Modified:**
+- `functions/API2Glossary.py` — Prompt, schema, normalization, return values, docstring
+- `gui/dialogs/global_options.py` — `DEFAULT_GENDER_INFERENCE_PROMPT`
+- `dev/test_utility_settings.py` — Updated tests for new schema/normalization (57→63 tests)
+
+**Tests:** 63 unit tests pass, 7 integration tests pass (real API: Male 100%, Female 100%).
 
 END OF ROADMAP
 =============================================================================

@@ -1,14 +1,14 @@
 """API2Glossary module for CherryAI.
 
 Purpose:
-- Optional LLM-based name translation and gender inference using OpenAI-compatible API
+- Optional LLM-based gender inference using OpenAI-compatible API
 - Designed for use with free Gemini API (or any OpenAI-format endpoint)
 - Called by analysis.py when the API enrichment option is enabled
 
 Entry point: enrich_speakers_via_api(speaker_data: Dict[str, List[str]]) -> Dict[str, Dict[str, str]]
   - Takes a dict mapping speaker names to their lines from the file
   - Constructs excerpts with X lines where name appears as speaker Y times
-  - Returns dict mapping name -> {"romaji": ..., "gender": ..., "note": ...}
+  - Returns dict mapping name -> {"gender": ..., "checks": ...}
   - Uses structured output (JSON schema) for reliable parsing
   - Implements multi-check validation for conflicting gender results
 
@@ -61,19 +61,17 @@ INITIAL_CHECKS: int = 2  # Number of different excerpts to send initially
 MAX_VALIDATION_CHECKS: int = 10  # Maximum total checks for conflicting results
 CONFIDENCE_THRESHOLD: float = 70.0  # Required confidence % (51-90) to stop validation
 
-# System prompt template for name translation and gender inference from excerpts
-# {excerpt} will be replaced with the actual text excerpt
-# {name} will be replaced with the speaker name to analyze
+# System prompt template for gender inference from excerpts
+# {excerpt} / {Excerpt} will be replaced with the actual text excerpt
+# {name} / {Original_Name} will be replaced with the speaker name to analyze
 PROMPT_TEMPLATE: str = (
-    "Infer the gender of the speaker \"{name}\" from the dialogue excerpt "
+    'Infer the gender of the speaker "{name}" from the dialogue excerpt '
     "below. Base your answer on how others address this speaker, their "
-    "speech patterns, and contextual clues.\n\n"
-    "Excerpt:\n{excerpt}\n\n"
+    "speech patterns, and contextual clues. "
+    "Don't guess a gender if you are unsure.\n\n"
+    "{excerpt}\n\n"
     "Return a JSON object with exactly these fields:\n"
-    "- name: the original name\n"
-    "- romaji: romanized reading (repeat if already Latin)\n"
-    "- gender: exactly one of Female, Male, Non-Binary, Unsure\n"
-    "- note: one-word role (e.g. teacher, parent) or empty string"
+    '- details: gender (one word, "Unknown")'
 )
 
 # Default enabled state (set to False to require explicit opt-in via config)
@@ -87,21 +85,17 @@ REQUEST_TIMEOUT: int = 30
 RESPONSE_SCHEMA = {
     "type": "json_schema",
     "json_schema": {
-        "name": "name_analysis_response",
+        "name": "gender_inference_response",
         "strict": True,
         "schema": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "Original name from excerpt"},
-                "romaji": {"type": "string", "description": "Romanized name (Hepburn)"},
-                "gender": {
+                "details": {
                     "type": "string",
-                    "enum": ["Female", "Male", "Non-Binary", "Unsure"],
-                    "description": "Inferred gender",
+                    "description": "Inferred gender in one word, or Unknown",
                 },
-                "note": {"type": "string", "description": "Optional context or notes"},
             },
-            "required": ["name", "romaji", "gender", "note"],
+            "required": ["details"],
             "additionalProperties": False,
         },
     },
@@ -109,8 +103,16 @@ RESPONSE_SCHEMA = {
 
 # ---------------- End Configuration ---------------- #
 
-# Canonical gender values accepted by the schema.
-_VALID_GENDERS = frozenset({"Female", "Male", "Non-Binary", "Unsure"})
+# Canonical gender values for title-case normalization.
+_KNOWN_GENDERS = {
+    "female": "Female",
+    "male": "Male",
+    "non-binary": "Non-Binary",
+    "nonbinary": "Non-Binary",
+    "nb": "Non-Binary",
+    "transwoman": "Transwoman",
+    "transman": "Transman",
+}
 
 
 def _get_gender_prompt(name: str, excerpt: str) -> str:
@@ -118,6 +120,8 @@ def _get_gender_prompt(name: str, excerpt: str) -> str:
 
     Reads the template from CherryAI.ini ``[prompts] gender_inference``,
     falling back to the compiled-in default from global_options.py.
+    Supports both ``{name}/{excerpt}`` and ``{Original_Name}/{Excerpt}``
+    placeholder styles.
     """
     from CherryAI.gui.dialogs.global_options import DEFAULT_GENDER_INFERENCE_PROMPT
 
@@ -134,22 +138,31 @@ def _get_gender_prompt(name: str, excerpt: str) -> str:
     if template == PROMPT_TEMPLATE:
         template = DEFAULT_GENDER_INFERENCE_PROMPT
 
-    return template.format(name=name, excerpt=excerpt)
+    return template.format(
+        name=name, excerpt=excerpt,
+        Original_Name=name, Excerpt=excerpt,
+    )
 
 
 def _normalize_gender(raw: str) -> str:
-    """Map API gender strings to canonical values.
+    """Normalize any gender string to canonical title-case form.
 
-    ``'Unsure'`` and ``'Unknown'`` both map to ``'Unknown'`` for
-    downstream compatibility.  ``'Neutral'`` maps to ``'Non-Binary'``.
+    Case-insensitive: ``'female'``, ``'FEMALE'``, ``'Female'`` all
+    become ``'Female'``.  ``'Unsure'``, ``'Unknown'``, and empty
+    strings map to ``'Unknown'``.
     """
-    if raw in ("Unsure", "Unknown"):
+    stripped = raw.strip()
+    if not stripped:
         return "Unknown"
-    if raw == "Neutral":
+    lowered = stripped.lower()
+    if lowered in ("unsure", "unknown"):
+        return "Unknown"
+    if lowered in ("neutral",):
         return "Non-Binary"
-    if raw in _VALID_GENDERS:
-        return raw
-    return "Unknown"
+    if lowered in _KNOWN_GENDERS:
+        return _KNOWN_GENDERS[lowered]
+    # Accept any other value — title-case it for consistency
+    return stripped.title()
 
 
 def _get_api_key() -> Optional[str]:
@@ -320,16 +333,14 @@ def _call_api_for_excerpt(speaker: str, excerpt: str) -> Dict[str, str]:
 
     # Return the single result with normalized gender
     result = {
-        "romaji": parsed.get("romaji", ""),
-        "gender": _normalize_gender(parsed.get("gender", "Unsure")),
-        "note": parsed.get("note", ""),
+        "gender": _normalize_gender(parsed.get("details", "Unknown")),
     }
     return result
 
 
 def _validate_gender_with_checks(
     speaker: str, excerpts: List[str]
-) -> Tuple[str, str, str, int]:
+) -> Tuple[str, int]:
     """Run multiple checks to validate gender inference with confidence tracking.
 
     Args:
@@ -337,12 +348,12 @@ def _validate_gender_with_checks(
         excerpts: List of available excerpts (should have at least INITIAL_CHECKS)
 
     Returns:
-        Tuple of (romaji, gender, note, total_checks)
+        Tuple of (gender, total_checks)
         - gender will be the consensus or "Unknown" if no consensus
         - total_checks is the number of API calls made
     """
     if not excerpts:
-        return ("", "Unknown", "", 0)
+        return ("Unknown", 0)
 
     # Clamp confidence threshold to valid range
     confidence = max(51.0, min(90.0, CONFIDENCE_THRESHOLD))
@@ -363,7 +374,7 @@ def _validate_gender_with_checks(
             )
 
     if not results:
-        return ("", "Unknown", "", checks_made)
+        return ("Unknown", checks_made)
 
     # Analyze results: count genders (skip Unknown)
     def _analyze_results(res_list: List[Dict[str, str]]) -> Tuple[str, float, bool]:
@@ -387,10 +398,6 @@ def _validate_gender_with_checks(
 
     # If no conflict or confidence is high enough, stop
     if not has_conflict or conf_pct >= confidence:
-        # Pick romaji and note from most common gender result
-        best_result = next(
-            (r for r in results if r["gender"] == consensus), results[0]
-        )
         logging.info(
             "API2Glossary: '%s' resolved with %d checks (gender=%s, confidence=%.1f%%)",
             speaker,
@@ -398,7 +405,7 @@ def _validate_gender_with_checks(
             consensus,
             conf_pct,
         )
-        return (best_result["romaji"], consensus, best_result["note"], checks_made)
+        return (consensus, checks_made)
 
     # Continue with additional checks for conflicting results
     logging.info(
@@ -439,7 +446,6 @@ def _validate_gender_with_checks(
             excerpt_idx += 1
 
     # Final result
-    best_result = next((r for r in results if r["gender"] == consensus), results[0])
     logging.info(
         "API2Glossary: '%s' finished with %d checks (gender=%s, confidence=%.1f%%)",
         speaker,
@@ -447,7 +453,7 @@ def _validate_gender_with_checks(
         consensus,
         conf_pct,
     )
-    return (best_result["romaji"], consensus, best_result["note"], checks_made)
+    return (consensus, checks_made)
 
 
 def enrich_speakers_via_api(
@@ -465,7 +471,7 @@ def enrich_speakers_via_api(
         write_to_glossary: If True, write enriched data to unified glossary
 
     Returns:
-        Dict mapping name -> {"romaji": str, "gender": str, "note": str, "checks": int}
+        Dict mapping name -> {"gender": str, "checks": int}
         Empty dict if disabled or error occurs.
 
     Raises:
@@ -499,14 +505,12 @@ def enrich_speakers_via_api(
                 continue
 
             # Run validation with multiple checks
-            romaji, gender, note, checks = _validate_gender_with_checks(
+            gender, checks = _validate_gender_with_checks(
                 speaker, excerpts
             )
 
             results[speaker] = {
-                "romaji": romaji,
                 "gender": gender,
-                "note": note,
                 "checks": checks,
             }
 
@@ -532,7 +536,7 @@ def _write_enriched_to_glossary(enriched_data: Dict[str, Dict[str, Any]]) -> Non
     
     Args:
         enriched_data: Dict mapping speaker name to enrichment data
-                      (romaji, gender, note, checks)
+                      (gender, checks)
     """
     from .glossary import (
         read_unified_glossary,
@@ -548,13 +552,9 @@ def _write_enriched_to_glossary(enriched_data: Dict[str, Dict[str, Any]]) -> Non
         # Update existing entry if present, otherwise create new
         if speaker in existing:
             entry = existing[speaker]
-            # Only update if fields are empty (preserve user edits)
-            if not entry.translation and data.get("romaji"):
-                entry.translation = data["romaji"]
+            # Only update gender if empty (preserve user edits)
             if not entry.gender and data.get("gender"):
                 entry.gender = data["gender"]
-            if not entry.notes and data.get("note"):
-                entry.notes = data["note"]
             # Always update source to indicate API enrichment
             if entry.source != "API":
                 entry.source = f"{entry.source}+API" if entry.source else "API"
@@ -562,8 +562,8 @@ def _write_enriched_to_glossary(enriched_data: Dict[str, Dict[str, Any]]) -> Non
             # Create new entry
             entry = GlossaryEntry(
                 original=speaker,
-                translation=data.get("romaji", ""),
-                notes=data.get("note", ""),
+                translation="",
+                notes="",
                 source="API",
                 entry_type=TYPE_NAME,
                 gender=data.get("gender", ""),
@@ -620,7 +620,7 @@ def test_api_connection() -> Tuple[bool, Dict[str, Any]]:
                 "result": str(result)
             })
         
-        required_keys = {"romaji", "gender", "note"}
+        required_keys = {"gender"}
         missing_keys = required_keys - set(result.keys())
         if missing_keys:
             logging.error("API2Glossary: test result missing keys: %s", missing_keys)
@@ -632,20 +632,16 @@ def test_api_connection() -> Tuple[bool, Dict[str, Any]]:
             })
         
         gender = result.get("gender", "Unknown")
-        romaji = result.get("romaji", "")
-        note = result.get("note", "")
         
-        logging.info("API2Glossary: test result - romaji=%s, gender=%s, note=%s", romaji, gender, note)
+        logging.info("API2Glossary: test result - gender=%s", gender)
         
         # Check for correct Male inference
         if gender == "Male":
             return (True, {
                 "status": "success",
-                "message": f"'太郎' correctly inferred as 'Male'",
+                "message": "'太郎' correctly inferred as 'Male'",
                 "result": result,
-                "romaji": romaji,
                 "gender": gender,
-                "note": note
             })
         
         # Female or Unknown = model not suitable
@@ -657,9 +653,7 @@ def test_api_connection() -> Tuple[bool, Dict[str, Any]]:
                 "error": "LLM failed basic gender inference test",
                 "guidance": "Consider using a more capable model (e.g., Gemini 1.5 Flash/Pro or GPT-4)",
                 "result": result,
-                "romaji": romaji,
                 "gender": gender,
-                "note": note
             })
         
         # Non-Binary is acceptable but log as warning
@@ -667,20 +661,18 @@ def test_api_connection() -> Tuple[bool, Dict[str, Any]]:
             logging.warning("API2Glossary: test resulted in 'Non-Binary' gender (acceptable but not ideal)")
             return (True, {
                 "status": "nonbinary_result",
-                "message": f"'太郎' inferred as 'Non-Binary' (acceptable but 'Male' expected)",
+                "message": "'太郎' inferred as 'Non-Binary' (acceptable but 'Male' expected)",
                 "result": result,
-                "romaji": romaji,
                 "gender": gender,
-                "note": note
             })
         
-        # Unexpected gender value
-        logging.error("API2Glossary: test returned unexpected gender: %s", gender)
-        return (False, {
-            "status": "invalid_gender",
-            "message": f"API returned unexpected gender value: '{gender}'",
-            "error": f"Gender must be Female/Male/Non-Binary/Unknown, got '{gender}'",
-            "result": result
+        # Any other gender value — accept but warn
+        logging.warning("API2Glossary: test returned unexpected gender: %s", gender)
+        return (True, {
+            "status": "unexpected_gender",
+            "message": f"API returned gender value: '{gender}' (expected 'Male')",
+            "result": result,
+            "gender": gender,
         })
         
     except ValueError as exc:
@@ -890,9 +882,7 @@ def _call_api_for_excerpt_custom(
         pass
 
     return {
-        "romaji": parsed.get("romaji", ""),
-        "gender": _normalize_gender(parsed.get("gender", "Unsure")),
-        "note": parsed.get("note", ""),
+        "gender": _normalize_gender(parsed.get("details", "Unknown")),
     }
 
 

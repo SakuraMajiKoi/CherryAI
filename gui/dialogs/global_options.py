@@ -505,15 +505,13 @@ DEFAULT_TERM_CODE_PROMPT = (
 )
 
 DEFAULT_GENDER_INFERENCE_PROMPT = (
-    "Infer the gender of the speaker \"{name}\" from the dialogue excerpt "
+    'Infer the gender of the speaker "{name}" from the dialogue excerpt '
     "below. Base your answer on how others address this speaker, their "
-    "speech patterns, and contextual clues.\n\n"
-    "Excerpt:\n{excerpt}\n\n"
+    "speech patterns, and contextual clues. "
+    "Don't guess a gender if you are unsure.\n\n"
+    "{excerpt}\n\n"
     "Return a JSON object with exactly these fields:\n"
-    "- name: the original name\n"
-    "- romaji: romanized reading (repeat if already Latin)\n"
-    "- gender: exactly one of Female, Male, Non-Binary, Unsure\n"
-    "- note: one-word role (e.g. teacher, parent) or empty string"
+    '- details: gender (one word, "Unknown")'
 )
 
 

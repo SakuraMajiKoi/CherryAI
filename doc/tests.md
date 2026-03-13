@@ -3228,7 +3228,8 @@ Thank you.
 | test_api_log.py | 44 | API Log: LogEntry serialization, APILogStore CRUD/filtering/subscription/persistence, singleton management, enum values, dataclass defaults, status string compatibility (5), manifest save thread safety (2) |
 | test_bugfix_batch_79.py | 33 | Bugfix Batch 79: API Log visibility (lift/non-modal), global glossary merge (4), ellipsis-only detection (14), ellipsis compression order (5), dedup/skip progress (3), cached/reasoning tokens (5) |
 | test_unified_request_builder.py | 28 | Unified Request Builder: gather_prompt_data (importable, keys, None/unloaded mgr, sample_lines, metadata read, fallback field merging), build_request_prompt (importable, tuple return, language prompt, style/tone/summary/genre enabled/disabled, rolling context, chunk_lines), unified call sites (costs 3 methods, translate 2 methods, no direct build_full_system_prompt), API Log full prompt (no truncation, line-by-line system_prompt), identical prompt output (deterministic, same data same prompt) |
-| **Total Script Tests** | **4453** | (+188 provider handshake, +11 live API, +108 pricing/reasoning, +44 API log, +33 bugfix batch 79, +28 unified builder) |
+| test_glossary_term_link.py | 19 | Glossary ↔ Term Translation link: character round-trip (2), on_enter load order AST (3), on_leave dual-storage sync AST (2), import_analysis_speakers persistence AST (1), dual-storage simulation (4), CharacterInfo preservation (3), ProjectMetadata preservation (2), load guard (2) |
+| **Total Script Tests** | **4472** | (+188 provider handshake, +11 live API, +108 pricing/reasoning, +44 API log, +33 bugfix batch 79, +28 unified builder, +19 glossary term link) |
 | One_Click_Test.py | 7 stages | API integration |
 
 ### TASK 11: Integration Test - 200 Lines (Completed)
@@ -5984,14 +5985,15 @@ python -c "from functions.API2Glossary import test_api_connection; print(test_ap
 **Expected Result (Success):**
 ```
 (True, {'status': 'success', 'message': "'太郎' correctly inferred as 'Male'", 
-        'result': {'romaji': 'Tarou', 'gender': 'Male', 'note': '...'}, ...})
+        'result': {'gender': 'Male'}, ...})
 ```
 
 **Verification Status:** ✅ PASSED (2025-11-29)
 - API key loaded from CherryAI.ini [api] section
 - Model: gemini-2.0-flash-lite
 - Test speaker: 太郎 → correctly inferred as Male
-- Romanization: Tarou (correct)
+- Gender values are case-insensitive normalized (e.g. "female" → "Female")
+- Any non-"Unknown" gender accepted as valid connection test result
 
 ---
 
@@ -11359,6 +11361,32 @@ python -m pytest CherryAI/dev/test_pov_inference.py -v --timeout=10
 python -m pytest CherryAI/dev/test_protagonist_romanization.py -v --timeout=10
 ```
 
+### Glossary ↔ Term Translation Link (19 tests)
+
+**File:** `dev/test_glossary_term_link.py`
+
+Tests for the dual-storage desync fix between Term Translation (Analysis step)
+and the Glossary widget (Information step). Verifies that `on_enter()` loads
+characters from the authoritative top-level manifest key AFTER `_load_metadata()`
+replaces `self._metadata` from step_state. Verifies `on_leave()` syncs to
+top-level. Verifies `_import_analysis_speakers()` persists immediately.
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestCharacterRoundTrip | 2 | CharacterInfo to_dict/from_dict preserves translation, from_dict handles missing translation |
+| TestOnEnterLoadOrder | 3 | AST verification: _load_metadata called before _load_characters_from_manifest and _load_code_patterns_from_manifest in on_enter |
+| TestOnLeaveSyncToManifest | 2 | AST verification: on_leave calls _save_characters_to_manifest and _save_code_patterns_to_manifest |
+| TestImportAnalysisSpeakersPersistence | 1 | AST verification: _import_analysis_speakers calls _save_characters_to_manifest |
+| TestDualStorageSync | 4 | Top-level overrides stale step_state, translations survive tab round-trip, empty top-level doesn't wipe step_state, concurrent writes don't lose data |
+| TestCharacterInfoPreservation | 3 | All fields preserved in round-trip, empty/missing fields default cleanly, count field preserved as int |
+| TestProjectMetadataPreservation | 2 | ProjectMetadata.characters round-trip, metadata to_dict/from_dict preserves character translations |
+| TestLoadGuardBehavior | 2 | Non-empty top-level overrides, empty top-level leaves existing characters untouched |
+
+```bash
+# Run glossary term link tests
+python -m pytest CherryAI/dev/test_glossary_term_link.py -v --timeout=10
+```
+
 ### Term Translation & Global Options Extensions (100 tests)
 
 **File:** `dev/test_term_translation.py`
@@ -11389,15 +11417,15 @@ python -m pytest CherryAI/dev/test_protagonist_romanization.py -v --timeout=10
 python -m pytest CherryAI/dev/test_term_translation.py -v --timeout=10
 ```
 
-### Utility Settings Unit Tests (57 tests)
+### Utility Settings Unit Tests (63 tests)
 
 **File:** `dev/test_utility_settings.py`
 
 Tests for the expanded UtilitySettings dataclass (17 fields), term translation
 batch splitting, mode detection, API key resolution, gender inference confidence
 logic, error abort behaviour, prompt-type routing, configurable prompts,
-`_normalize_gender` mapping, JSON-schema validation, and model dropdown
-auto-population.
+`_normalize_gender` case-insensitive normalization, JSON-schema validation
+(single `details` field, no enum), and model dropdown auto-population.
 
 | Test Class | Count | Coverage |
 |-----------|-------|----------|
@@ -11406,12 +11434,12 @@ auto-population.
 | TestTranslateTerm | 4 | Empty term passthrough, empty list passthrough, Romaji dispatch, LLM batch splitting (batch size = 2) |
 | TestLLMBatchErrorAbort | 2 | Missing API key raises RuntimeError, API timeout raises RuntimeError |
 | TestGenderInferenceConsensus | 5 | Empty results, not enough votes, consensus reached, consensus with mixed votes, no consensus when evenly split |
-| TestInferGenderLLM | 3 | Male consensus (mocked), missing key raises RuntimeError, insufficient lines |
+| TestInferGenderLLM | 3 | Male consensus (mocked, returns {"gender": "Male"}), missing key raises RuntimeError, insufficient lines |
 | TestPromptsSettingsUtilityFields | 5 | Defaults match constants, to_dict includes utility keys, from_dict roundtrip, missing keys use defaults, default prompts contain lang placeholders |
 | TestPromptTypeRouting | 3 | translate_term passes prompt_type to LLM, translate_terms passes prompt_type, default prompt_type is glossary |
 | TestGetPromptTemplate | 4 | Returns ini value for glossary, returns ini value for code, fallback to default glossary, fallback to default code |
-| TestNormalizeGender | 8 | Female passthrough, Male passthrough, Non-Binary passthrough, Unsure → Unknown, Unknown → Unknown, Neutral → Non-Binary, garbage → Unknown, empty → Unknown |
-| TestGenderInferenceSchema | 3 | Schema has correct gender enum (Female/Male/Non-Binary/Unsure), schema is strict, schema disallows additionalProperties |
+| TestNormalizeGender | 8 | Female passthrough, Male passthrough, Non-Binary passthrough, Unsure → Unknown, Unknown → Unknown, Neutral → Non-Binary, arbitrary value title-cased, empty → Unknown |
+| TestGenderInferenceSchema | 3 | Schema has `details` string field (no enum), schema is strict, schema has no name/romaji fields |
 | TestTermTranslationSchema | 3 | Schema is strict, schema has translations array, schema disallows additionalProperties |
 | TestUtilityModelDropdown | 4 | Term model list populated from get_provider_models, gender model list populated, empty provider no crash, unknown provider fallback |
 

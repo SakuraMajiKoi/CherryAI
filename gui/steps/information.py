@@ -5358,12 +5358,19 @@ class InformationStep(BaseStep):
         # TASK 23.1: Load all manifest-bound fields
         self._load_from_manifest_bindings()
         
-        # TASK 23.3: Load characters and code patterns from manifest
-        self._load_characters_from_manifest()
-        self._load_code_patterns_from_manifest()
-        
         # Legacy: Load from session state (for backward compatibility)
         self._load_metadata()
+
+        # TASK 23.3: Load characters and code patterns from manifest.
+        # These MUST run AFTER _load_metadata() because _load_metadata()
+        # replaces self._metadata entirely from step_state, which may
+        # contain stale character/code data (e.g. missing Term Translation
+        # results).  The top-level manifest keys written by
+        # save_character_notes() / save_code_glossary() are the
+        # authoritative source.
+        self._load_characters_from_manifest()
+        self._load_code_patterns_from_manifest()
+
         # Task 18.4: Import characters from Analysis step if available
         self._import_analysis_speakers()
         # Check for suggested project name from Input step
@@ -5686,6 +5693,7 @@ class InformationStep(BaseStep):
             
             if imported_count > 0:
                 self._refresh_character_list()
+                self._save_characters_to_manifest()
                 logger.info(f"Imported {imported_count} speakers from Analysis")
                 
         except (AttributeError, KeyError, IndexError):
@@ -5782,6 +5790,10 @@ class InformationStep(BaseStep):
         Collects form data and persists it together with section toggle
         states so that the ``*_enabled`` flags survive the full metadata
         dict replacement performed by ``set_step_data()``.
+
+        Also syncs characters and code patterns to the top-level
+        manifest keys so that they stay in sync with step_state and
+        other consumers (Term Translation, prompt builder, etc.).
         """
         self._collect_metadata()
         data = self.get_step_data()
@@ -5797,6 +5809,11 @@ class InformationStep(BaseStep):
         meta_dict["code_database_enabled"] = self._code_db_enabled_var.get()
         data["metadata"] = meta_dict
         self.set_step_data(data)
+
+        # Sync characters and code patterns to top-level manifest keys
+        # so that the authoritative source stays up to date.
+        self._save_characters_to_manifest()
+        self._save_code_patterns_to_manifest()
 
     # ========================================================================
     # Public API

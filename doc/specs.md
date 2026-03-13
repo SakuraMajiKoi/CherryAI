@@ -2237,6 +2237,13 @@ Characters:
 
 **Manifest Key**: `characters[]` (via `save_character_notes()` / `load_character_notes()`). Saved in count-descending order for consistent manifest ordering.
 
+**Dual-Storage Sync (Bug Fix):** Characters exist in two manifest locations: the authoritative top-level `characters` key (written by `save_character_notes()` in Analysis step's Term Translation and by `_save_characters_to_manifest()` in Information step) and the nested `step_state.Information.data.metadata.characters` (written by `on_leave()` via `set_step_data()`). To prevent stale step_state from overwriting translations:
+1. `on_enter()` loads from step_state first (`_load_metadata()`), then overrides with top-level manifest data (`_load_characters_from_manifest()`) — authoritative source always wins
+2. `on_leave()` saves to both step_state and top-level (`_save_characters_to_manifest()`) to keep storage locations in sync
+3. `_import_analysis_speakers()` persists auto-imported entries to top-level immediately via `_save_characters_to_manifest()`
+
+Tests: `dev/test_glossary_term_link.py` (19 tests)
+
 ---
 
 #### Right Column Layout & Collapsible Widgets
@@ -5480,6 +5487,7 @@ symbol-only dialogue, skip generic placeholders.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 3.7 | 2026-03-07 | Bug Fix — Glossary ↔ Term Translation Dual-Storage Desync: Fixed `on_enter()` in information.py loading characters from top-level manifest BEFORE `_load_metadata()` replaced `self._metadata` with stale step_state (reordered to load after). Fixed `on_leave()` not syncing characters/code_patterns to top-level manifest (added `_save_characters_to_manifest()` and `_save_code_patterns_to_manifest()` calls). Fixed `_import_analysis_speakers()` not persisting auto-imported entries to top-level key. 19 new tests (test_glossary_term_link.py). |
 | 3.6 | 2026-03-06 | Bug Fix — Section Toggle Persistence & Preview Gating: Fixed `on_leave()` in information.py erasing `*_enabled` flags (root cause: `ProjectMetadata.to_dict()` excludes them, then `set_step_data()` replaced entire metadata dict). Fixed `_build_preview_requests()` in translate.py ignoring enabled flags (now gates sys_instructions, style, tone, summary, genre, glossary, character sections). Removed redundant Save button from Information step header (auto-save on tab change is sufficient). 35 new tests (test_section_toggles.py). |
 | 3.5 | 2026-03-05 | Task 42 — Per-Request Prompt Overhead: `_estimate_via_formation()` returns `FormationResult` dataclass (num_requests + request_line_lists). New `_compute_per_request_prompt_overhead()` builds each request's prompt individually via `build_full_system_prompt(chunk_lines=...)` for selective glossary/conditional filtering, sums token counts. Display format changed from `~Z total (Y Requests, ~X per)` to `~Z total (Y Requests, ~X avg/request)`. 29 new tests (test_prompt_overhead_fix.py). |
 | 3.4 | 2026-03-04 | Task 41 — Max Input Tokens: Added `max_input_tokens` field to RequestSettings (0 = no limit, input lines only), Global Options spinbox (0–128000, increment 500), INI persistence (`[api].max_input_tokens`), wired into translate.py `_build_chunks()` and costs.py `_estimate_via_formation()` via `RequestFormationConfig.max_tokens`. 34 new tests (test_max_input_tokens.py). |

@@ -2450,7 +2450,8 @@ TERM TRANSLATION — MULTI-MODE DISPATCHER (Implemented)
 - **GUI Integration:** Analysis step "Translate Terms" button reads source/target language from manifest metadata, calls `translate_terms()` in batches with correct language pair and `prompt_type`. After translation, the findings table Details column updates immediately. Code pattern translations are saved to the project manifest only (not the global TSV).
 - **Immediate Persistence:** Translation results are written to disk immediately after each chunk completes via `manifest_manager.save()`, not deferred to the 60-second autosave timer.
 - **Code Patterns in Prompt (§5.7):** Code patterns with action "Translate" are included in the glossary section (slot 9) of the system prompt, with per-chunk selective filtering like glossary entries and characters.
-- Test suite: `dev/test_term_translation.py` (100 tests), `dev/test_utility_settings.py` (57 tests), `dev/test_utility_integration.py` (7 live API tests)
+- **Dual-Storage Sync (Bug Fix):** Term Translation writes characters to the authoritative top-level `characters` manifest key, but the Information step's Glossary widget previously loaded from stale `step_state` data — overwriting translations. Fixed: `on_enter()` now loads from step_state first, then overrides with top-level manifest data; `on_leave()` syncs to both locations; `_import_analysis_speakers()` persists immediately.
+- Test suite: `dev/test_term_translation.py` (100 tests), `dev/test_utility_settings.py` (57 tests), `dev/test_utility_integration.py` (7 live API tests), `dev/test_glossary_term_link.py` (19 tests)
 
 CONSISTENCY SYSTEM (Implemented)
 - Ensures consistent translation of recurring terms across all requests
@@ -3092,9 +3093,9 @@ inference before being added to the glossary.
 - **Script only** (default) — Built-in script analysis using pronouns, honorifics, and explicit markers. No API required.
 - **Script + LLM** — Runs script first, then uses the configured LLM API to resolve remaining unknowns via dialogue excerpt analysis. LLM pass executes in a background thread with queue-based polling (`after(100)`) to keep the UI responsive; a Cancel button allows aborting early.
 
-**Structured Output**: LLM mode uses strict JSON-schema (`response_format=json_schema`) with a gender enum of `[Female, Male, Non-Binary, Unsure]`. Output capped with `max_tokens=150` and `store=False` to minimise token waste. "Unsure" maps to "Unknown" internally.
+**Structured Output**: LLM mode uses strict JSON-schema (`response_format=json_schema`) with a single `details` string field for free-form gender output. Output capped with `max_tokens=150` and `store=False` to minimise token waste. Responses are normalized case-insensitively (e.g., "female" → "Female", "MALE" → "Male"). "Unsure" and "Unknown" map to "Unknown"; empty responses clear the field.
 
-**Configurable prompt**: Global Options → Prompts shows a "Gender Inference" section. The template uses `{name}` and `{excerpt}` placeholders. Stored in CherryAI.ini `[prompts] gender_inference` with a compiled-in default as fallback.
+**Configurable prompt**: Global Options → Prompts shows a "Gender Inference" section. The template uses `{name}`/`{Original_Name}` and `{excerpt}`/`{Excerpt}` placeholders. Stored in CherryAI.ini `[prompts] gender_inference` with a compiled-in default as fallback.
 
 **API key/model selection**: Like Term Translation, the Gender Inference section in Global Options → Utility provides dropdowns for API key and model. Settings are persisted to API.ini `[gender_inference]` section.
 
@@ -3139,11 +3140,9 @@ Workflow Integration:
 
 Optional LLM Enhancement:
 
-For speaker names specifically, CherryAI can use an AI model to suggest:
+For speaker names specifically, CherryAI can use an AI model to:
 
-- **Name translation**: Convert Japanese name to target language (e.g., イオリ → Iori)
-- **Gender inference**: Determine likely gender from speech patterns (Female/Male/Non-Binary/Unsure → maps internally to Unknown)
-- **Context notes**: Infer role or relationship from dialogue context
+- **Gender inference**: Determine likely gender from speech patterns and contextual clues. Output is free-form and normalized (e.g., "female" → "Female"). "Unknown" and below-threshold results leave the gender field empty.
 
 How it works:
 
@@ -3151,7 +3150,7 @@ How it works:
 2. Set mode to "Script + LLM"
 3. During analysis: Script runs first, LLM resolves unknowns via dialogue excerpts
 4. You review suggestions: Accept, edit, or reject
-5. Glossary entries are updated with inferred values
+5. Character entries are updated with inferred genders
 
 Example:
 

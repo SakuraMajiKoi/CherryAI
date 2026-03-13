@@ -63,7 +63,7 @@ TABLE OF CONTENTS
    ✅ = Verified exists | ⚠️ = Needs documentation | 🔗 = GUI integrated
    
    3.1  analysis.py ✅ - File analysis, metrics, glossary extraction
-   3.2  API2Glossary.py ✅ - LLM gender inference with json_schema structured output, configurable prompt
+   3.2  API2Glossary.py ✅ - LLM gender inference with json_schema structured output (details field), configurable prompt, case-insensitive normalization
    3.3  api_client.py ✅🔗 - LLM API communication (Step 5)
    3.4  auto_tagger.py ✅ - Automatic line tagging/classification
    3.5  chunker.py ✅ - Text chunking for API batches
@@ -235,7 +235,7 @@ TABLE OF CONTENTS
        - input_extract.py - Step 0: Input/Extraction 🔗formats/ (Phase 60: clickable column header sort with ▲/▼ indicators, file list filter entry, type column refresh fix, cross-file preview search with idx column and auto file-switching; non-destructive file addition with source root validation; Import Translation selection dialog with line fields and settings sections; preview columns: Project/File 1-based)
        - analysis.py - Step 1: Analysis ❌NO shared imports
        - costs.py - Step 4: Costs (renamed from estimate.py in Phase 40; _estimate_via_formation() returns FormationResult with per-request line lists; _compute_per_request_prompt_overhead() uses gather_prompt_data()+build_request_prompt() per chunk for selective filtering; _get_prompt_tokens() and _get_static_prompt_tokens() also unified via gather_prompt_data()+build_request_prompt(); syncs chunk_size from GlobalOptions; respects request_slicing mode; Per-model settings saved/loaded via api_config; "📤 Apply Settings to Model" button is a one-way write to API.ini — model changes do NOT reload settings, loaded once on first tab entry via _settings_loaded_once flag; Translation Options row with Thinking, Translated Context, Rolling Context spinboxes; Request Mode 2×2 grid (Normal/Batch/Flex/Priority) with "(Available)"/"(Unavailable)" suffix labels and Selected (blue) states driving mode-specific pricing; _recalculate_costs_for_mode() instantly updates costs from existing token counts without re-estimation; _reprice_for_model() fast-reprices all cost and time labels when model changes using stored EstimationResult token counts — no re-estimation required; EstimationResult.num_requests stores per-side request count to enable fast reprice; EstimationProgressDialog is a non-blocking Toplevel that shows 7 step indicators (○/●/✓) and a ttk.Progressbar — opened by _run_estimation(), updated via _report_progress() from background thread using after(), closed by _estimation_complete(); Model combo disabled during estimation (_run_estimation sets state="disabled", _estimation_complete restores state="readonly"); CACHE_HIT_RATE=0.80 applied to static prompt prefix via _get_static_prompt_tokens() for cache savings calculation; Token Counts panel shows Input/Prompt/Cached/Total/Output rows; EstimationResult dataclass includes content_tokens, prompt_tokens, cached_tokens, num_requests; Full estimation persisted to manifest via _save_estimation_to_manifest(); Estimate button renamed to "↻ Update Counts" after first run)
-       - information.py - Step 2: Information 🔗manifest_fields (Bug Fix: on_leave() and _save_metadata() now merge *_enabled toggle BooleanVar values into metadata dict after ProjectMetadata.to_dict() — fixes toggle state erasure on tab change; Save button removed from header — auto-save on tab change is sufficient)
+       - information.py - Step 2: Information 🔗manifest_fields (Bug Fix: on_leave() and _save_metadata() now merge *_enabled toggle BooleanVar values into metadata dict after ProjectMetadata.to_dict() — fixes toggle state erasure on tab change; Save button removed from header — auto-save on tab change is sufficient; Bug Fix: on_enter() reordered to load _load_metadata() BEFORE _load_characters_from_manifest()/_load_code_patterns_from_manifest() so authoritative top-level manifest data overrides stale step_state; on_leave() now calls _save_characters_to_manifest() and _save_code_patterns_to_manifest() to sync dual storage; _import_analysis_speakers() persists to top-level immediately)
        - preprocess.py - Step 3: Preprocessing 🔗manifest_fields
        - translate.py - Step 5: Translation 🔗api_client, mock_translator, prompt_adapter, manifest_fields (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching; Preview Requests: PreviewRequest dataclass with _format_input_lines() for numbered line display and io_examples field, FILTER_PARTS constant (13 entries: meta, language, system_instructions, io_examples, style, tone, summary, genre, pov, conditional_prompts, glossary, rolling_context, input_lines), RequestPreviewDialog class with Pure/Formatted/Plain views and Jump/Search/Filter toolbar, _plain_text() preserves curly braces for game text, _build_preview_requests() mirrors real translation request building and gates each labeled section by *_enabled metadata flags, generates io_examples block with fill mode support; _build_system_prompt_from_manifest() reads from `step_state.Information.data.metadata`; Request Options: Key, Model, Request Mode combobox (Normal/Batch/Flex/Priority with "(Unavailable)" suffixes via _refresh_request_mode_options()), Model Settings/Translation Options Change… buttons, Character Whitelist/Blacklist (manifest-bound), Ban Tokens; TranslationOptions.request_mode field passed to APIConfig.request_mode in _do_translation(); _apply_char_filters() post-processes translations; _sync_from_global_options() syncs all hidden vars from GlobalOptions including TranslationSettings; _get_request_slicing_mode() reads slicing from GlobalOptions.translation)
        - postprocess.py - Step 6: Postprocess 🔗postprocess, manifest_fields; _FAILURE_POLICY_MAP for legacy enum mapping
@@ -1028,7 +1028,7 @@ CherryAI/
 │   ├── consistency.py      Consistency system (Phase 55)
 │   ├── glossary.py         Unified glossary (globalglossary.tsv path + auto-migration; codedatabase.tsv path)
 │   ├── languages.py        Language definitions (single source of truth) - TASK 16.1
-│   ├── API2Glossary.py     Optional LLM-based name enrichment
+│   ├── API2Glossary.py     Optional LLM-based gender inference
 │   ├── dedup.py            Deduplication logic
 │   ├── config.py           Config persistence (Session 4)
 │   ├── options.py          Options dialog + API_PROVIDERS (single source) - TASK 16.2
@@ -3938,7 +3938,7 @@ Dependencies (glossaries/):
 
 API2GLOSSARY.PY (Optional LLM Enhancement)
 
-Purpose: Optional LLM-based name translation and gender inference as fallback
+Purpose: Optional LLM-based gender inference as fallback
 
 Configuration (editable):
 - API_KEY: OpenAI or Gemini API key (reads from CherryAI.ini [api] section)
@@ -3961,11 +3961,14 @@ Main Functions:
 - enrich_speakers_via_api(speaker_data, all_lines, enabled, write_to_glossary) → Dict[speaker, enrichment_data]
   - Takes: Dict mapping speaker names to line indices
   - Extracts: Dialogue excerpts with 5+ context lines
-  - Sends: To LLM with structured output schema
-  - Returns: {speaker → {"romaji": ..., "gender": ..., "note": ...}}
+  - Sends: To LLM with structured output schema (single `details` string field)
+  - Returns: {speaker → {"gender": ..., "checks": ...}}
+  - Gender values are case-insensitive normalized (e.g. "female" → "Female")
+  - Accepts any gender value from the LLM; no enum constraint
   - Multi-check: Validates conflicting results up to MAX_VALIDATION_CHECKS
 - test_api_connection() → (success: bool, details: dict)
   - Tests API connectivity with sample "太郎" (expected: Male)
+  - Accepts any non-"Unknown" gender as a valid response
   - Returns detailed status and error information
   - Used to verify API configuration is working
 
@@ -3986,8 +3989,9 @@ How It Works:
 
 2. LLM Inference:
    - Sends structured prompt with excerpt
-   - Uses JSON schema for reliable parsing
-   - Requests: romanization, gender, optional note
+   - Uses JSON schema for reliable parsing (single `details` field)
+   - Requests: gender only (no romanization, no note)
+   - Case-insensitive normalization maps any response to canonical form
    - Uses free Gemini API by default
 
 3. Multi-Check Validation:
@@ -4002,8 +4006,9 @@ How It Works:
 
 Advantages:
 - Free tier support (Gemini)
-- No manual romanization lookup needed
-- Context-based gender inference
+- Context-based gender inference from dialogue
+- Accepts any gender value (not limited to Male/Female)
+- Case-insensitive normalization for consistent output
 - Configurable confidence threshold
 - Optional (off by default)
 
@@ -5249,16 +5254,16 @@ enrichment = enrich_speakers_via_api(
 # enrichment contains:
 # {
 #     "Alice": {
-#         "romaji": "Arisu",
 #         "gender": "Female",
-#         "note": "protagonist"
+#         "checks": 2
 #     },
 #     "Bob": {
-#         "romaji": "Bobu",
 #         "gender": "Male",
-#         "note": "friend"
+#         "checks": 2
 #     }
 # }
+# Gender values are case-insensitive normalized (e.g. "female" → "Female")
+# Any gender value is accepted; no enum constraint
 ```
 
 DEDUP API
