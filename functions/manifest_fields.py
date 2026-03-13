@@ -1625,6 +1625,52 @@ def load_glossary_entries(
     return result
 
 
+def load_all_glossary_entries(
+    manager: "ManifestManager",
+) -> List[Dict[str, Any]]:
+    """Load project + global glossary entries for prompt assembly (§5.2 slot 9).
+
+    Loads project entries from manifest and, when ``use_global`` is enabled,
+    merges active entries from ``user/globalglossary.tsv``.  Project entries
+    take precedence — global entries with duplicate source terms are skipped.
+
+    Args:
+        manager: ManifestManager instance.
+
+    Returns:
+        Combined list of glossary entry dicts (source, target, notes, active).
+    """
+    result = load_glossary_entries(manager)
+
+    glossary_config = manager.get_glossary_config()
+    if not glossary_config.use_global:
+        return result
+
+    try:
+        from CherryAI.functions.glossary import read_unified_glossary
+
+        global_entries = read_unified_glossary()
+        existing_sources = {e.get("source", "") for e in result}
+        for _orig, ge in global_entries.items():
+            if ge.original in existing_sources:
+                continue
+            active = getattr(ge, "active", True)
+            if active is False or (
+                isinstance(active, str) and active.lower() == "false"
+            ):
+                continue
+            result.append({
+                "source": ge.original,
+                "target": ge.translation or "",
+                "notes": ge.notes or "",
+                "active": True,
+            })
+    except Exception as exc:
+        logger.warning("Failed to load global glossary: %s", exc)
+
+    return result
+
+
 # ========================== Information Metadata Helpers ========================== #
 
 

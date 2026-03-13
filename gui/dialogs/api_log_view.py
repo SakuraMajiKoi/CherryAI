@@ -101,6 +101,9 @@ class APILogViewDialog(tk.Toplevel):
         # Subscribe for live updates
         self._store.subscribe(self._on_new_entry)
 
+        # Ensure window is visible above other windows on open
+        self.lift()
+
     # ------------------------------------------------------------------ #
     #  UI Construction                                                     #
     # ------------------------------------------------------------------ #

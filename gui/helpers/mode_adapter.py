@@ -705,18 +705,8 @@ def apply_preprocessing(
                     tags_by_line.setdefault(dup_idx, []).append("dedup")
                     tags_by_line[dup_idx].append(f"D{src_idx}")
 
-    # P20. Ellipsis compression
-    _report("Ellipsis Compression", 0.15)
-    if config.get("ellipsis_enabled", True):
-        result, count, indices = apply_ellipsis_batch(result)
-        if count:
-            stats["changes_by_rule"]["ellipsis"] = count
-            stats["total_changes"] += count
-            stats["changed_lines"].update(indices)
-            _tag_indices(indices, "ellipsis")
-
-    # P30. Symbol conversion
-    _report("Symbol Conversion", 0.30)
+    # P30. Symbol conversion (before ellipsis so …→... conversion is done first)
+    _report("Symbol Conversion", 0.20)
     if config.get("symbol_conversion_enabled", True):
         src = config.get("symbol_src_lang", "ja")
         tgt = config.get("symbol_tgt_lang", "en")
@@ -726,6 +716,16 @@ def apply_preprocessing(
             stats["total_changes"] += count
             stats["changed_lines"].update(indices)
             _tag_indices(indices, "symbol_conversion")
+
+    # P36. Ellipsis compression (after symbol + width conversion)
+    _report("Ellipsis Compression", 0.30)
+    if config.get("ellipsis_enabled", True):
+        result, count, indices = apply_ellipsis_batch(result)
+        if count:
+            stats["changes_by_rule"]["ellipsis"] = count
+            stats["total_changes"] += count
+            stats["changed_lines"].update(indices)
+            _tag_indices(indices, "ellipsis")
 
     # P40. Speaker Name Replacement
     _report("Speaker Name Replacement", 0.38)

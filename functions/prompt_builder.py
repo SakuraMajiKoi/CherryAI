@@ -177,15 +177,25 @@ _PLACEHOLDER_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Matches lines that consist only of dots/periods and whitespace.
+# These are non-translatable ellipsis or separator lines that should be
+# preserved as-is (e.g. "...", "..................", ". . . . .").
+_DOTS_ONLY_RE = re.compile(r"^[\s.…．·•・]+$")
+
 
 def is_placeholder_only(text: str) -> bool:
-    """Return ``True`` when *text* consists entirely of placeholder tokens.
+    """Return ``True`` when *text* consists entirely of placeholder tokens
+    or non-translatable punctuation (dot-only lines).
 
     A line is "placeholder-only" when, after removing every recognised
     placeholder token (any ``__UPPERCASE_WORD__`` pattern such as
     ``__PROTECTED__``, ``__DEDUP__``, ``__COLOR__``, ``__FONT__``,
     ``__TEMPREPL_0_1__``, and user-defined tokens), nothing but
     whitespace remains.
+
+    Lines consisting solely of dots, ellipsis characters, and whitespace
+    (e.g. ``"..."``, ``".................."``, ``". . ."``) are also
+    treated as non-translatable.
 
     Empty / whitespace-only strings return ``False`` (they are handled
     separately as "empty lines").
@@ -204,10 +214,17 @@ def is_placeholder_only(text: str) -> bool:
         False
         >>> is_placeholder_only("")
         False
+        >>> is_placeholder_only("..................")
+        True
+        >>> is_placeholder_only("...")
+        True
     """
     stripped = text.strip()
     if not stripped:
         return False
+    # Check for dot-only / ellipsis-only lines
+    if _DOTS_ONLY_RE.match(stripped):
+        return True
     remaining = _PLACEHOLDER_TOKEN_RE.sub("", stripped)
     return not remaining.strip()
 

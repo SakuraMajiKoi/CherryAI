@@ -1843,16 +1843,21 @@ class APIClient:
                         model=self.config.model,
                         provider=self.config.provider,
                         temperature=self.config.temperature,
+                        system_prompt=system_prompt,
                         user_content=user_content[:2000],
                         line_count=1,
                         extra={"mode": "line_by_line", "line_index": line_index},
                     )
                     _usage_lbl = response.usage
+                    _ptd_lbl = getattr(_usage_lbl, "prompt_tokens_details", None) if _usage_lbl else None
+                    _ctd_lbl = getattr(_usage_lbl, "completion_tokens_details", None) if _usage_lbl else None
                     recv_entry = LogEntryReceived(
                         content=result[:2000],
                         prompt_tokens=_usage_lbl.prompt_tokens if _usage_lbl else 0,
                         completion_tokens=_usage_lbl.completion_tokens if _usage_lbl else 0,
                         total_tokens=getattr(_usage_lbl, "total_tokens", 0) if _usage_lbl else 0,
+                        cached_tokens=(getattr(_ptd_lbl, "cached_tokens", 0) or 0) if _ptd_lbl else 0,
+                        reasoning_tokens=(getattr(_ctd_lbl, "reasoning_tokens", 0) or 0) if _ctd_lbl else 0,
                     )
                     self._api_log_store.log_pair(
                         LogCategory.MAIN_TRANSLATION, sent_entry, recv_entry,
@@ -2134,7 +2139,7 @@ class APIClient:
                 model=self.config.model,
                 provider=self.config.provider,
                 temperature=self.config.temperature,
-                system_prompt=final_system_prompt[:2000],
+                system_prompt=final_system_prompt,
                 user_content=user_content[:2000],
                 chunk_index=self._chunk_counter,
                 total_chunks=self._initial_chunk_count,
@@ -2142,12 +2147,14 @@ class APIClient:
             )
             _usage = response.usage
             _ptd = getattr(_usage, "prompt_tokens_details", None) if _usage else None
+            _ctd = getattr(_usage, "completion_tokens_details", None) if _usage else None
             recv_entry = LogEntryReceived(
                 content=content[:2000],
                 prompt_tokens=_usage.prompt_tokens if _usage else 0,
                 completion_tokens=_usage.completion_tokens if _usage else 0,
                 total_tokens=_usage.total_tokens if _usage else 0,
                 cached_tokens=(getattr(_ptd, "cached_tokens", 0) or 0) if _ptd else 0,
+                reasoning_tokens=(getattr(_ctd, "reasoning_tokens", 0) or 0) if _ctd else 0,
                 finish_reason=response.choices[0].finish_reason or "" if response.choices else "",
             )
             self._api_log_store.log_pair(

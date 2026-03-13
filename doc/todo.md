@@ -55,6 +55,64 @@ MODULE COUNTS (Verified January 2026)
 =============================================================================
 [Archived: Sessions 43–24 + Phase 62 → see doc/archived.md]
 
+### BUG FIX: Batch 79 — Translation Pipeline Issues (6 Fixes)
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 4 hours
+
+Goal: Fix 6 issues found during a sample Japanese→English translation run.
+
+**Changes:**
+1. **API Log pushed to background** — `APILogViewDialog.__init__` now calls `self.lift()` at the end to stay visible above other windows. `TranslationProgressWindow` no longer calls `grab_set()` (non-modal) so users can interact with the API Log during translation.
+2. **Global glossary missing from prompts** — Created `load_all_glossary_entries()` in `manifest_fields.py` that merges project-specific entries with global glossary entries (respects `use_global` flag, deduplicates by source, skips inactive). Updated all 4 call sites in `translate.py` (×2) and `costs.py` (×2).
+3. **Ellipsis-only lines still sent to API** — Enhanced `is_placeholder_only()` in `prompt_builder.py` with `_DOTS_ONLY_RE` regex to detect dot/ellipsis-only lines (`"..."`, `".................."`, `"…"`, `"．．．"`).
+4. **Ellipsis compression before symbol conversion** — Changed `ellipsis_compression` priority from P20→P36 in `process_order.py` so it runs after symbol conversion (P30) and width conversion (P35). Reordered `mode_adapter.py` accordingly. Enhanced `ELLIPSIS_PATTERN` and `compress_ellipsis_line()` to handle fullwidth period (`．`) and Unicode ellipsis (`…`).
+5. **Dedup/placeholder lines never reach 100% progress** — Added pre-translation scan in `translate.py` that marks placeholder-only and empty lines as `LineStatus.SKIPPED` before progress initialization, with correct `skipped_lines` count.
+6. **Cached/reasoning tokens not shown in API Log** — Added `reasoning_tokens` extraction to both `log_pair` calls in `api_client.py` (main translation + line-by-line).
+
+**Files Modified:**
+- `gui/dialogs/api_log_view.py` — `self.lift()` in `__init__`
+- `gui/steps/translate.py` — removed `grab_set()`, glossary loader swap, pre-scan skip logic
+- `gui/steps/costs.py` — glossary loader swap (2 sites)
+- `functions/manifest_fields.py` — `load_all_glossary_entries()` function
+- `functions/prompt_builder.py` — `_DOTS_ONLY_RE` regex, `is_placeholder_only()` enhanced
+- `functions/process_order.py` — `ellipsis_compression` P20→P36
+- `gui/helpers/mode_adapter.py` — reordered symbol before ellipsis
+- `modi/standard_mode.py` — `ELLIPSIS_PATTERN` + `compress_ellipsis_line()` enhanced
+- `functions/api_client.py` — `reasoning_tokens` in both `LogEntryReceived` calls
+
+**Tests:** `dev/test_bugfix_batch_79.py` — 33 tests (2 API Log visibility, 4 global glossary merge, 14 ellipsis detection, 5 compression order, 3 progress tracking, 5 cached tokens)
+
+---
+
+### TASK 80: Unified Request Builder — All Features Use Same Prompts
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Ensure Estimation (Step 4), Request Preview, and Start Translation (Step 5) all use the same request builder so prompts are guaranteed identical. Fix API Log to store full system prompts.
+
+**Problem:** Data gathering for prompts was duplicated 5+ times (costs.py × 3, translate.py × 2), with costs.py missing fallback field merging for source_language/target_language/genre. This caused Estimation to produce different prompts than Translation. API Log truncated system_prompt to 2000 chars, and line-by-line mode omitted system_prompt entirely.
+
+**Changes:**
+1. **`gather_prompt_data(mgr)`** — New function in `prompt_adapter.py` centralises ALL data gathering (metadata with fallback field merging, glossary entries, characters, code patterns, POV, sample lines).
+2. **`build_request_prompt(prompt_data)`** — New wrapper in `prompt_adapter.py` calls `build_full_system_prompt()` with gathered data. All features call this instead of `build_full_system_prompt()` directly.
+3. **costs.py `_get_prompt_tokens()`** — Replaced ~40-line data-gathering block with `gather_prompt_data()` + `build_request_prompt()`.
+4. **costs.py `_get_static_prompt_tokens()`** — Replaced ~30-line data-gathering block with `gather_prompt_data()` + `build_request_prompt(chunk_lines=[])`.
+5. **costs.py `_compute_per_request_prompt_overhead()`** — Replaced ~45-line data-gathering block with `gather_prompt_data()` once + `build_request_prompt(chunk_lines=...)` per request.
+6. **translate.py `_build_system_prompt_from_manifest()`** — Replaced ~40-line data-gathering block with `gather_prompt_data()` + `build_request_prompt()`.
+7. **translate.py `_build_preview_requests()`** — Replaced ~70-line data-gathering block with `gather_prompt_data()`. Per-chunk prompt now uses `build_request_prompt()`.
+8. **API Log full prompt** — Removed `[:2000]` truncation on `system_prompt` in `api_client.py` main translation log.
+9. **Line-by-line log** — Added missing `system_prompt=system_prompt` field to `LogEntrySent` in line-by-line path.
+
+**Files Modified:**
+- `gui/helpers/prompt_adapter.py` — `gather_prompt_data()` + `build_request_prompt()` functions
+- `gui/steps/costs.py` — 3 methods updated to use unified functions
+- `gui/steps/translate.py` — 2 methods updated to use unified functions
+- `functions/api_client.py` — removed truncation + added line-by-line system_prompt
+- `dev/test_prompt_overhead_fix.py` — 2 tests updated for new code pattern
+- `dev/test_unified_request_builder.py` — 28 new tests
+
+**Tests:** `dev/test_unified_request_builder.py` — 28 tests (7 gather_prompt_data, 10 build_request_prompt, 7 unified call sites, 2 API Log, 2 identical output)
+
+---
+
 ### BUG FIX: Input Step Non-Destructive Addition, Import Dialog, OutputFormat Crash
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 4 hours
 

@@ -936,6 +936,125 @@ def handle_failed_lines(
 # ---------------- Prompt Builder Functions ---------------- #
 
 
+def gather_prompt_data(
+    mgr: Any,
+    sample_lines: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Gather all data needed for prompt assembly from the manifest.
+
+    This is the **single data-gathering entry point** for all features
+    that build translation prompts (Estimation, Request Preview, Start
+    Translation).  It reads metadata, loads glossary entries, characters,
+    code patterns, and POV data from the manifest — ensuring that every
+    caller sees identical prompt context.
+
+    The returned dict can be passed directly to
+    ``build_request_prompt()`` or used to extract individual section
+    texts for UI display (e.g. Request Preview labelled sections).
+
+    Args:
+        mgr: ManifestManager instance (must be loaded).
+        sample_lines: First ~200 preprocessed line texts for
+            conditional prompt detection fallback.  Optional.
+
+    Returns:
+        Dict with keys: metadata, glossary_entries, characters,
+        code_patterns, pov_data, sample_lines.
+    """
+    metadata: Dict[str, Any] = {}
+    glossary_entries: List[Dict[str, Any]] = []
+    characters: List[Dict[str, Any]] = []
+    code_patterns: List[Dict[str, Any]] = []
+    pov_data: Dict[str, Any] = {}
+
+    if mgr is not None and getattr(mgr, "is_loaded", False):
+        # Read Information step metadata (step index 2)
+        metadata = mgr.get_step_data_value(2, "metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        # Merge fallback fields so language direction and genre are
+        # always present even when saved at the top-level info key
+        # rather than inside step_state metadata.
+        for field_name in ("source_language", "target_language", "genre"):
+            if not metadata.get(field_name):
+                fb = mgr.get_info_metadata_field(field_name, "")
+                if fb:
+                    metadata[field_name] = fb
+
+        # Glossary (project + global entries per §5.2 slot 9)
+        try:
+            from CherryAI.functions.manifest_fields import (
+                load_all_glossary_entries,
+            )
+            glossary_entries = load_all_glossary_entries(mgr)
+        except ImportError:
+            pass
+
+        # Characters from metadata + manifest top-level
+        characters = metadata.get("characters", [])
+        if not characters:
+            characters = mgr._manifest_data.get("characters", [])
+
+        # Code patterns from manifest (§5.7)
+        try:
+            from CherryAI.functions.manifest_fields import load_code_glossary
+            code_patterns = load_code_glossary(mgr)
+        except ImportError:
+            pass
+
+        # POV from manifest top-level
+        pov_data = mgr._manifest_data.get("POV", {})
+
+    return {
+        "metadata": metadata,
+        "glossary_entries": glossary_entries,
+        "characters": characters,
+        "code_patterns": code_patterns,
+        "pov_data": pov_data,
+        "sample_lines": sample_lines or [],
+    }
+
+
+def build_request_prompt(
+    prompt_data: Dict[str, Any],
+    chunk_lines: Optional[List[str]] = None,
+    rolling_context_text: str = "",
+    merge_instruction: str = "",
+    context_type: str = "",
+) -> Tuple[str, Dict[str, int]]:
+    """Build a translation request prompt from gathered data.
+
+    Thin wrapper around ``build_full_system_prompt()`` that accepts
+    the dict returned by ``gather_prompt_data()``.  All features
+    (Estimation, Request Preview, Start Translation) should call this
+    instead of ``build_full_system_prompt()`` directly to ensure
+    identical prompts.
+
+    Args:
+        prompt_data: Dict from ``gather_prompt_data()``.
+        chunk_lines: Per-chunk lines for selective filtering.
+        rolling_context_text: Pre-formatted rolling context.
+        merge_instruction: Merged-request instruction (Step 5).
+        context_type: Resolved content type for this chunk.
+
+    Returns:
+        Tuple of (assembled_prompt, token_breakdown).
+    """
+    return build_full_system_prompt(
+        metadata=prompt_data.get("metadata", {}),
+        glossary_entries=prompt_data.get("glossary_entries"),
+        characters=prompt_data.get("characters"),
+        sample_lines=prompt_data.get("sample_lines"),
+        rolling_context_text=rolling_context_text,
+        pov_data=prompt_data.get("pov_data"),
+        chunk_lines=chunk_lines,
+        code_patterns=prompt_data.get("code_patterns"),
+        merge_instruction=merge_instruction,
+        context_type=context_type,
+    )
+
+
 def build_full_system_prompt(
     metadata: Dict[str, Any],
     glossary_entries: Optional[List[Dict[str, Any]]] = None,

@@ -270,14 +270,16 @@ FULL TABLE VIEW
 
 API LOG
 - **Menu Bar Access**: Direct access via "API Log" entry in the menu bar (direct button, no dropdown)
-- **Non-Blocking Window**: Opens as a separate Toplevel window; does not lock the main application
+- **Non-Blocking Window**: Opens as a separate Toplevel window; does not lock the main application; lifts to front on open to stay visible above translation progress
+- **Non-Modal Progress**: Translation progress window is non-modal — users can interact with API Log and other windows during translation
 - **Live Updates**: Subscribes to the API log store for real-time display of new entries as API calls complete
 - **Category Filter**: Dropdown to filter by Main Translation, Term Translation, Gender Inference, or Other (probing/testing)
 - **View Mode Switch**: Radio buttons to toggle between Sent, Received, or Both views
 - **Search Bar**: Case-insensitive text search across all entry fields with yellow highlights
 - **Color-Coded Headers**: Green (✔ success), Yellow (⚠ recovered), Red (✘ failed) status indicators
-- **Sent Block**: Displays model, provider, temperature, chunk info, system prompt, and user content
+- **Sent Block**: Displays model, provider, temperature, chunk info, full system prompt (not truncated), and user content
 - **Received Block**: Displays token statistics (prompt/completion/total/cached/reasoning), duration, finish reason, error messages, and response content
+- **Exact Request Copy**: API Log only stores copies of the actual sent/received data — it does not build its own requests. Line-by-line mode also includes the system prompt.
 - **Status Bar**: Shows entry count (filtered vs. total) and aggregated token totals
 - **Per-Project Persistence**: Log stored as `.api_log.jsonl` alongside the manifest file; referenced by manifest "log" key
 - **Infinite Scroll**: Text widget with word wrap supports unlimited entries
@@ -390,7 +392,7 @@ CONDITIONAL PROMPT INSTRUCTIONS ✓ (Enhanced - Session 14+)
   - **Media commands**: Preserves \\se[], \\pic[], \\wait[], \\fadein[]
   - **Text formatting**: Preserves \\fb, \\fr, \\i[], \\b codes
   - **Ruby text**: Preserves \\rb[text,reading] furigana
-  - **Ellipsis**: Maintains …/... dramatic pauses
+  - **Ellipsis**: Maintains …/... dramatic pauses; compression runs after symbol and width conversion (P36)
   - **Speaker dialogue format**: Preserves Speaker: "Dialogue" format (Analysis-style detection)
 - All pattern-triggered prompts configurable: enabled/disabled + instruction text editable in Global Options → Prompts → Conditional Prompts (Pattern Triggered)
 - Settings stored in CherryAI.ini [pattern_prompts] section
@@ -410,6 +412,7 @@ API RESPONSE VALIDATION ✓ (Enhanced - Session 14+)
   - Skip empty lines, __COMMENT__-prefixed lines
   - Skip context markers (__DIALOGUE__, __MENU__, __CHOICE__, __FILE__)
   - Skip __DEDUP__ and __PROTECTED__ only lines
+  - Skip dot/ellipsis-only lines (e.g., "...", "..................", "…", "．．．")
   - Skip lines without Japanese characters
   - Skip already translated lines
   - Auto-translate symbol-only lines (…→..., 。→., etc.)
@@ -438,7 +441,7 @@ API RESPONSE VALIDATION ✓ (Enhanced - Session 14+)
   - Punctuation: 、→,, 。→., ：→:, ；→;, ！→!, ？→?
   - Operators: ＝→=, ＋→+, －→-, ＊→*, ／→/, ～→~
   - Misc: ％→%, ＆→&, ＠→@
-  - Ellipsis: …→... (language-specific)
+  - Ellipsis: …→... (language-specific); compression handles ．(fullwidth period) and …(Unicode ellipsis) in addition to ASCII dots
   - Configurable per-language (jpn→eng, eng→jpn, etc.)
 - Batch processing with proper line reassembly
 - 108 unit tests for validation logic (56 core + 52 API validation)
@@ -489,6 +492,7 @@ GLOSSARY & AUTOMATIC DETECTION
 - Track context for proper names (female/male, pronouns, honorifics)
 - Optional LLM-based enhancement: Get AI-suggested translations and gender for names
 - Helps AI translator maintain consistency across files
+- **Global Glossary Merge**: When "Use Global Glossary" is enabled, `load_all_glossary_entries()` merges project-specific entries with global glossary entries (from `read_unified_glossary()`). Project entries take priority — duplicate source terms from the global glossary are skipped. Inactive global entries are excluded.
 - **Table Sorting**: Glossary and Code Database tables sort by count (highest first) by default. All column headers are clickable — ascending (A→Z), descending (Z→A), third click resets to count. Active sort column shows ▲/▼ arrow. Manifest saves entries in count-descending order.
 
 GAME SUMMARY & PROJECT CONTEXT

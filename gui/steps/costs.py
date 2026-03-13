@@ -69,6 +69,8 @@ from CherryAI.gui.helpers.chunker_adapter import (
 from CherryAI.gui.helpers.prompt_adapter import (
     build_prompt_preview,
     build_full_system_prompt,
+    gather_prompt_data,
+    build_request_prompt,
 )
 
 if TYPE_CHECKING:
@@ -1292,70 +1294,24 @@ class CostsStep(BaseStep):
     def _get_prompt_tokens(self) -> int:
         """Get estimated token count for the system prompt overhead.
 
-        Builds the full §5.2 system prompt using
-        ``build_full_system_prompt`` so the estimate covers all
-        sections: Language, System Instructions, Style, Tone,
-        Summary, Genre, POV, Conditional, Glossary, and Characters.
+        Uses ``gather_prompt_data`` + ``build_request_prompt`` (the
+        unified request builder) so the estimate covers all §5.2
+        sections identically to how Request Preview and Start
+        Translation build them.
 
         Returns:
             Estimated token count for system prompt.
         """
         try:
-            # Read Information step metadata — prefer manifest over session
             mgr = self.manifest_manager
-            metadata: dict = {}
-            if mgr is not None and mgr.is_loaded:
-                metadata = mgr.get_step_data_value(2, "metadata", {})
-                if not isinstance(metadata, dict):
-                    metadata = {}
-            if not metadata:
-                info_data = self.session.get_step(2).data
-                metadata = info_data.get("metadata", {})
-
-            # Glossary from manifest
-            glossary_entries: list[dict] = []
-            if mgr is not None and mgr.is_loaded:
-                try:
-                    from CherryAI.functions.manifest_fields import (
-                        load_glossary_entries,
-                    )
-                    glossary_entries = load_glossary_entries(mgr)
-                except ImportError:
-                    pass
-
-            # Characters from metadata + manifest top-level
-            characters = metadata.get("characters", [])
-            if not characters and mgr is not None and mgr.is_loaded:
-                characters = mgr._manifest_data.get("characters", [])
-
-            # Code patterns from manifest (§5.7)
-            code_pats: list[dict] = []
-            if mgr is not None and mgr.is_loaded:
-                try:
-                    from CherryAI.functions.manifest_fields import (
-                        load_code_glossary,
-                    )
-                    code_pats = load_code_glossary(mgr)
-                except ImportError:
-                    pass
-
-            # POV from manifest top-level
-            pov_data: dict = {}
-            if mgr is not None and mgr.is_loaded:
-                pov_data = mgr._manifest_data.get("POV", {})
-
-            # Sample preprocessed lines for conditional prompt detection
-            sample_lines = self._lines_preprocessed[:200] if self._lines_preprocessed else []
+            sample_lines = (
+                self._lines_preprocessed[:200]
+                if self._lines_preprocessed else []
+            )
+            prompt_data = gather_prompt_data(mgr, sample_lines=sample_lines)
 
             # Build the full prompt using the shared builder
-            prompt_text, breakdown = build_full_system_prompt(
-                metadata=metadata,
-                glossary_entries=glossary_entries,
-                characters=characters,
-                sample_lines=sample_lines,
-                pov_data=pov_data,
-                code_patterns=code_pats,
-            )
+            prompt_text, breakdown = build_request_prompt(prompt_data)
 
             if not prompt_text:
                 return 0
@@ -1375,52 +1331,24 @@ class CostsStep(BaseStep):
     def _get_static_prompt_tokens(self) -> int:
         """Get token count for the static (cacheable) prompt portion.
 
-        Builds the system prompt with an empty chunk context so that
-        dynamic per-chunk sections (conditional prompts, glossary,
-        characters, rolling context) are excluded.  The resulting
-        token count represents §5.2 slots 1-7b which are identical
-        across all requests and eligible for prompt caching.
+        Uses ``gather_prompt_data`` + ``build_request_prompt`` with
+        empty ``chunk_lines`` so that dynamic per-chunk sections
+        (conditional prompts, glossary, characters, rolling context)
+        are excluded.  The resulting token count represents §5.2
+        slots 1-7b which are identical across all requests and
+        eligible for prompt caching.
 
         Returns:
             Estimated token count for static prompt sections.
         """
         try:
             mgr = self.manifest_manager
-            metadata: dict = {}
-            if mgr is not None and mgr.is_loaded:
-                metadata = mgr.get_step_data_value(2, "metadata", {})
-                if not isinstance(metadata, dict):
-                    metadata = {}
-            if not metadata:
-                info_data = self.session.get_step(2).data
-                metadata = info_data.get("metadata", {})
-
-            characters = metadata.get("characters", [])
-            if not characters and mgr is not None and mgr.is_loaded:
-                characters = mgr._manifest_data.get("characters", [])
-
-            code_pats: list[dict] = []
-            if mgr is not None and mgr.is_loaded:
-                try:
-                    from CherryAI.functions.manifest_fields import (
-                        load_code_glossary,
-                    )
-                    code_pats = load_code_glossary(mgr)
-                except ImportError:
-                    pass
-
-            pov_data: dict = {}
-            if mgr is not None and mgr.is_loaded:
-                pov_data = mgr._manifest_data.get("POV", {})
+            prompt_data = gather_prompt_data(mgr)
 
             # Build with empty chunk_lines to exclude dynamic sections
-            # (conditional prompts, glossary, characters, rolling context).
-            prompt_text, _ = build_full_system_prompt(
-                metadata=metadata,
-                characters=characters,
+            prompt_text, _ = build_request_prompt(
+                prompt_data,
                 chunk_lines=[],
-                pov_data=pov_data,
-                code_patterns=code_pats,
                 rolling_context_text="",
             )
 
@@ -1480,10 +1408,9 @@ class CostsStep(BaseStep):
     ) -> Tuple[int, int]:
         """Compute prompt overhead by building each request's prompt individually.
 
-        Instead of building one maximum-sized prompt and multiplying by
-        the number of requests, this builds the selective prompt for each
-        request's chunk lines (applying glossary/conditional filtering)
-        and sums the individual token counts.
+        Uses ``gather_prompt_data`` once, then ``build_request_prompt``
+        per request with selective chunk lines — identical to how
+        Request Preview and Start Translation build their prompts.
 
         Args:
             request_line_lists: Per-request translatable line texts
@@ -1496,55 +1423,18 @@ class CostsStep(BaseStep):
             return 0, 0
 
         try:
-            # Read Information step metadata — prefer manifest over session
             mgr = self.manifest_manager
-            metadata: dict = {}
-            if mgr is not None and mgr.is_loaded:
-                metadata = mgr.get_step_data_value(2, "metadata", {})
-                if not isinstance(metadata, dict):
-                    metadata = {}
-            if not metadata:
-                info_data = self.session.get_step(2).data
-                metadata = info_data.get("metadata", {})
-
-            glossary_entries: list[dict] = []
-            if mgr is not None and mgr.is_loaded:
-                try:
-                    from CherryAI.functions.manifest_fields import (
-                        load_glossary_entries,
-                    )
-                    glossary_entries = load_glossary_entries(mgr)
-                except ImportError:
-                    pass
-
-            characters = metadata.get("characters", [])
-            if not characters and mgr is not None and mgr.is_loaded:
-                characters = mgr._manifest_data.get("characters", [])
-
-            # Code patterns from manifest (§5.7)
-            code_pats2: list[dict] = []
-            if mgr is not None and mgr.is_loaded:
-                try:
-                    from CherryAI.functions.manifest_fields import (
-                        load_code_glossary,
-                    )
-                    code_pats2 = load_code_glossary(mgr)
-                except ImportError:
-                    pass
-
-            pov_data: dict = {}
-            if mgr is not None and mgr.is_loaded:
-                pov_data = mgr._manifest_data.get("POV", {})
+            sample_lines = (
+                self._lines_preprocessed[:200]
+                if self._lines_preprocessed else []
+            )
+            prompt_data = gather_prompt_data(mgr, sample_lines=sample_lines)
 
             total_tokens = 0
             for chunk_lines in request_line_lists:
-                prompt_text, _ = build_full_system_prompt(
-                    metadata=metadata,
-                    glossary_entries=glossary_entries,
-                    characters=characters,
+                prompt_text, _ = build_request_prompt(
+                    prompt_data,
                     chunk_lines=chunk_lines,
-                    pov_data=pov_data,
-                    code_patterns=code_pats2,
                 )
                 if not prompt_text:
                     continue

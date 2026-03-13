@@ -223,8 +223,7 @@ class TranslationProgressWindow(tk.Toplevel):
 
         self._build_ui()
 
-        # Make modal
-        self.grab_set()
+        # Focus this window (non-modal to allow API Log interaction)
         self.focus_set()
 
         # Prevent closing while running
@@ -2142,8 +2141,11 @@ class TranslationStep(BaseStep):
     ) -> str:
         """Build the system prompt from manifest Information step metadata.
 
-        Delegates to ``build_full_system_prompt()`` in prompt_adapter.py
-        which is the single source of truth for §5.2 injection order.
+        Uses ``gather_prompt_data()`` and ``build_request_prompt()``
+        from prompt_adapter.py — the single source of truth for both
+        data gathering and §5.2 injection order.  All features
+        (Estimation, Request Preview, Start Translation) share the
+        same code path so the resulting prompts are identical.
 
         Args:
             rolling_context_text: Pre-formatted rolling context lines to
@@ -2158,54 +2160,25 @@ class TranslationStep(BaseStep):
         Returns:
             Assembled system prompt string.
         """
-        from CherryAI.gui.helpers.prompt_adapter import build_full_system_prompt
+        from CherryAI.gui.helpers.prompt_adapter import (
+            gather_prompt_data,
+            build_request_prompt,
+        )
 
         mgr = self.manifest_manager
         if mgr is not None and mgr.is_loaded:
-            # Read from step_state.Information.data.metadata (index 2)
-            metadata = mgr.get_step_data_value(2, "metadata", {})
-            if not isinstance(metadata, dict):
-                metadata = {}
-
-            # Merge fallback fields read from manifest info section
-            for field_name in ("source_language", "target_language", "genre"):
-                if not metadata.get(field_name):
-                    fb = mgr.get_info_metadata_field(field_name, "")
-                    if fb:
-                        metadata[field_name] = fb
-
-            # Glossary
-            from CherryAI.functions.manifest_fields import load_glossary_entries
-            glossary_entries = load_glossary_entries(mgr)
-
-            # Characters from metadata + manifest top-level
-            characters = metadata.get("characters", [])
-            if not characters:
-                characters = mgr._manifest_data.get("characters", [])
-
-            # Code patterns from manifest (§5.7 — "Translate" action
-            # patterns are sent in the glossary section)
-            from CherryAI.functions.manifest_fields import load_code_glossary
-            code_pats = load_code_glossary(mgr)
-
-            # POV from manifest top-level
-            pov_data = mgr._manifest_data.get("POV", {})
-
-            # Sample lines for conditional prompt detection
+            # Gather all prompt data from manifest (shared with costs
+            # and request preview to guarantee identical prompts).
             sample_lines = [
                 (line.edited_prepro or line.preprocessed or line.original)
                 for line in self._lines[:200]
             ]
+            prompt_data = gather_prompt_data(mgr, sample_lines=sample_lines)
 
-            prompt_text, _ = build_full_system_prompt(
-                metadata=metadata,
-                glossary_entries=glossary_entries,
-                characters=characters,
-                sample_lines=sample_lines,
-                rolling_context_text=rolling_context_text,
-                pov_data=pov_data,
+            prompt_text, _ = build_request_prompt(
+                prompt_data,
                 chunk_lines=chunk_lines,
-                code_patterns=code_pats,
+                rolling_context_text=rolling_context_text,
                 merge_instruction=merge_instruction,
                 context_type=context_type,
             )
@@ -2271,10 +2244,30 @@ class TranslationStep(BaseStep):
             if not self._show_edit_dialog(pending_lines):
                 return  # User cancelled edit dialog
 
+        # Mark dedup/placeholder-only lines as SKIPPED before translation
+        # so they don't inflate total_lines and prevent 100% progress.
+        from CherryAI.functions.prompt_builder import is_placeholder_only
+        skipped_before_start = 0
+        translatable_lines: list[TranslatableLine] = []
+        for line in pending_lines:
+            text = (
+                line.edited_prepro or line.preprocessed or line.original
+            )
+            if not text.strip() or is_placeholder_only(text):
+                line.status = LineStatus.SKIPPED
+                skipped_before_start += 1
+            else:
+                translatable_lines.append(line)
+
         # Initialize progress
         self._progress = TranslationProgress(
             total_lines=len(pending_lines),
-            total_chunks=math.ceil(len(pending_lines) / self._translation_options.chunk_size),
+            translated_lines=0,
+            failed_lines=0,
+            skipped_lines=skipped_before_start,
+            total_chunks=math.ceil(
+                len(translatable_lines) / self._translation_options.chunk_size
+            ) if translatable_lines else 0,
             start_time=time.time(),
         )
 
@@ -4119,15 +4112,19 @@ class TranslationStep(BaseStep):
     def _build_preview_requests(self) -> "list[PreviewRequest]":
         """Build preview request objects mirroring the real translation flow.
 
-        Uses ``build_full_system_prompt`` from prompt_adapter.py
-        (single source of truth) for the assembled system prompt,
-        and reads individual metadata fields for the labelled preview
-        parts so the dialog can highlight each section.
+        Uses ``gather_prompt_data`` + ``build_request_prompt`` from
+        prompt_adapter.py (single source of truth) for both data
+        gathering and §5.2 prompt assembly.  Individual metadata
+        fields are extracted from the gathered data for the labelled
+        preview parts so the dialog can highlight each section.
 
         Returns:
             List of :class:`PreviewRequest` with labelled parts.
         """
-        from CherryAI.gui.helpers.prompt_adapter import build_full_system_prompt
+        from CherryAI.gui.helpers.prompt_adapter import (
+            gather_prompt_data,
+            build_request_prompt,
+        )
 
         # Gather options from UI
         opts = self._get_options_from_ui()
@@ -4157,8 +4154,22 @@ class TranslationStep(BaseStep):
         except (TypeError, ValueError, AttributeError):
             rolling_ctx_max = 3
 
-        # Read metadata from Information step
+        # Gather all prompt data from manifest — single entry point
+        # shared with costs and translation to guarantee identical
+        # prompts.
         mgr = self.manifest_manager
+        sample_lines = [
+            (line.edited_prepro or line.preprocessed or line.original)
+            for line in self._lines[:200]
+        ]
+        prompt_data = gather_prompt_data(mgr, sample_lines=sample_lines)
+
+        metadata = prompt_data["metadata"]
+        glossary_entries = prompt_data["glossary_entries"]
+        characters = prompt_data["characters"]
+        pov_data = prompt_data["pov_data"]
+
+        # Initialise labelled section blocks for the preview UI
         language_block = ""
         sys_instructions = ""
         io_examples_block = ""
@@ -4167,49 +4178,6 @@ class TranslationStep(BaseStep):
         tone_block = ""
         genre_block = ""
         pov_block = ""
-        glossary_block = ""
-        conditional_block = ""
-        full_system_prompt = ""
-
-        metadata: dict = {}
-        glossary_entries: list[dict] = []
-        characters: list[dict] = []
-        pov_data: dict = {}
-
-        if mgr is not None and mgr.is_loaded:
-            metadata = mgr.get_step_data_value(2, "metadata", {})
-            if not isinstance(metadata, dict):
-                metadata = {}
-
-            # Merge fallback fields
-            for field_name in ("source_language", "target_language", "genre"):
-                if not metadata.get(field_name):
-                    fb = mgr.get_info_metadata_field(field_name, "")
-                    if fb:
-                        metadata[field_name] = fb
-
-            # Glossary
-            from CherryAI.functions.manifest_fields import load_glossary_entries
-            glossary_entries = load_glossary_entries(mgr)
-
-            # Characters from metadata + manifest top-level
-            characters = metadata.get("characters", [])
-            if not characters:
-                characters = mgr._manifest_data.get("characters", [])
-
-            pov_data = mgr._manifest_data.get("POV", {})
-
-        # Code patterns from manifest (§5.7)
-        code_pats: list[dict] = []
-        if mgr is not None and mgr.is_loaded:
-            from CherryAI.functions.manifest_fields import load_code_glossary
-            code_pats = load_code_glossary(mgr)
-
-        # Sample lines for conditional (fallback when no per-chunk filtering)
-        sample_lines = [
-            (line.edited_prepro or line.preprocessed or line.original)
-            for line in self._lines[:200]
-        ]
 
         # Extract individual labelled sections (non-per-chunk sections)
         src = (metadata.get("source_language", "") or "").strip()
@@ -4401,14 +4369,9 @@ class TranslationStep(BaseStep):
             resolved_type = resolve_chunk_type(
                 chunk_line_indices, m_lines, m_filedir,
             )
-            chunk_full_prompt, _ = build_full_system_prompt(
-                metadata=metadata,
-                glossary_entries=glossary_entries,
-                characters=characters,
-                sample_lines=sample_lines,
-                pov_data=pov_data,
+            chunk_full_prompt, _ = build_request_prompt(
+                prompt_data,
                 chunk_lines=filtered_lines,
-                code_patterns=code_pats,
                 context_type=resolved_type,
             )
 

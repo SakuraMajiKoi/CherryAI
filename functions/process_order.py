@@ -20,9 +20,9 @@ from typing import Dict, List, Tuple
 
 PRE_PRIORITIES: Dict[str, int] = {
     "deduplication": 10,
-    "ellipsis_compression": 20,
     "symbol_conversion": 30,
     "width_conversion": 35,
+    "ellipsis_compression": 36,
     "speaker_replacement": 40,
     "code_spacing": 50,
     "prot_compression": 60,

@@ -848,13 +848,17 @@ def _commonlines_import_tsv(tsv_path: str, src_lang: str = "ja", tgt_lang: str =
 
 # Additionally, provide helper functions that other plugins or tests can import.
 
-ELLIPSIS_PATTERN = re.compile(r"(\.{3,}|(?:\.{1}(?:\s*\.){2,}))")
+ELLIPSIS_PATTERN = re.compile(
+    r"([.．…]{3,}|(?:[.．…](?:\s*[.．…]){2,}))"
+)
 
 
 def compress_ellipsis_line(line: str) -> Tuple[str, List[int]]:
     """Compress runs of ellipsis-like sequences into a normalized '...' and return a list
     of triplet counts per match. Each integer indicates how many '...' groups the original
     run represents (so 1 means a single '...' originally, 3 means '.........' -> 3 triplets).
+
+    Handles ASCII period (.), fullwidth period (．), and Unicode ellipsis (…).
     """
     matches = list(ELLIPSIS_PATTERN.finditer(line))
     if not matches:
@@ -864,8 +868,12 @@ def compress_ellipsis_line(line: str) -> Tuple[str, List[int]]:
     # Replace from right to left to preserve indices
     for m in reversed(matches):
         s = m.group(0)
-        # Count dots ignoring spaces
-        dots = len([c for c in s if c == "."])
+        # Count dots: ASCII '.', fullwidth '．', and '…' (counts as 3 dots each)
+        dots = sum(
+            3 if c == "…" else 1
+            for c in s
+            if c in (".", "．", "…")
+        )
         triplets = dots // 3
         if triplets <= 0:
             triplets = 1

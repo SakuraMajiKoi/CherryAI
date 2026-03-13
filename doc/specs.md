@@ -446,6 +446,8 @@ The system prompt is assembled in the following fixed order. Empty sections are 
 - Rolling Context (slot 10) appears just before Input Lines to maximise contextual proximity
 - Meta Settings (URL, key, model, temperature, etc.) are passed separately and never counted
 - **Single source of truth**: `build_full_system_prompt()` in `gui/helpers/prompt_adapter.py` assembles the prompt for Costs (Step 4) and Translation (Step 5)
+- **Unified data gathering**: `gather_prompt_data(mgr)` centralises all data gathering (metadata with fallback field merging for source_language/target_language/genre, glossary entries via `load_all_glossary_entries`, characters, code patterns, POV) into a single function. `build_request_prompt(prompt_data)` wraps `build_full_system_prompt()` with the gathered data. All features (Estimation, Request Preview, Start Translation) call these two functions to guarantee identical prompts.
+- **API Log stores exact copies**: `LogEntrySent.system_prompt` stores the full system prompt that was actually sent (not truncated). Line-by-line mode also includes the system_prompt field. The API Log viewer only displays stored entries — it never builds its own requests.
 - **Section toggles**: Each togglable slot reads a `*_enabled` boolean from `step_state.Information.data.metadata`. When the key is missing, backward-compatible defaults apply (System Instructions/Glossary: enabled; Genre/Summary/Style/Tone: disabled)
 
 #### Prompt Caching (OpenAI)
@@ -802,7 +804,7 @@ The following table lists all processes in their execution order. Preprocessing 
 | 6 | Custom Placeholder | P70 | P30 | Custom named replacement tokens for variables |
 | 7 | Placeholder | P80 | P20 | Generic `__PROTECTED__` / `__PROTECTED_X__` protection |
 | 8 | PROTECTED Compression | P60 | P40 | Adjacent `__PROTECTED__` → `__PROTECTED_N__` |
-| 9 | Ellipsis Compression | P20 | P80 | Normalize ellipsis length |
+| 9 | Ellipsis Compression | P36 | P80 | Normalize ellipsis length; runs after symbol (P30) and width (P35) conversion; handles ASCII dots, fullwidth periods (\uff0e), and Unicode ellipsis (\u2026) |
 | 10 | Symbol Conversion | P30 (Pre only) | P70 | JP→EN symbols; Post optionally converts back |
 | 11 | Width Conversion | P35 (Pre only) | — | Fullwidth↔Halfwidth character width; Pre only |
 | 12 | Anchoring | P75 | P10 | Remove code at anchors; restore first in Post |
@@ -1945,7 +1947,7 @@ The Costs step has **two distinct estimation states** tracked separately:
 
 1. **Prompt Construction**: Every relevant field feeds into the translation prompt sent to the LLM
 2. **Project Persistence**: All data saved to manifest for session recovery
-3. **Glossary Integration**: Project-specific and global glossaries support selective prompt inclusion
+3. **Glossary Integration**: Project-specific and global glossaries support selective prompt inclusion. `load_all_glossary_entries()` merges project entries with global glossary entries when enabled; project entries take priority over global duplicates
 4. **Code Pattern Management**: Detected patterns from Analysis can be managed with preservation rules
 
 ---
