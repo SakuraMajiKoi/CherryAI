@@ -3137,6 +3137,7 @@ Thank you.
 | test_input_step_improvements.py | 60 | Input step Phase 60 improvements (type column refresh, clickable sort headers, file filter, cross-file preview search) |
 | test_costs_step_phase40.py | 57 | Costs step Phase 40+78 improvements (rename, dual estimation, dual ticks, concurrent time, prepro lines, prompt overhead, preview tokens) |
 | test_costs_api_rework.py | 35 | API Requests & Costs rework (cache calculation, mode buttons, instant recalculation, model lock, settings decoupling, button rename, translation request mode, fast reprice on model change) |
+| test_costs_additive_display.py | 30 | Additive cost display rework (ceil-to-cents, content-only input_cost, non-cached prompt tokens, label layout, additive total) |
 | test_estimate_manifest.py | 33 | Estimation/Analysis manifest integration (TASK 25.1, 25.2) |
 | test_qa_manifest.py | 17 | QA step manifest integration (TASK 26.1) |
 | test_translate_manifest.py | 47 | Translation step manifest integration (TASK 26.2) |
@@ -3214,6 +3215,7 @@ Thank you.
 | test_estimation_skip.py | 41 | Estimation skip logic Phase 78 (Task 3) |
 | test_costs_step_phase40.py | 57 | Costs step Phase 40+78 improvements (rename, dual estimation, dual ticks, concurrent time, prepro lines, prompt overhead format, request preview tokens) |
 | test_costs_api_rework.py | 35 | API Requests & Costs rework (cache calculation, mode buttons, instant recalculation, model lock, settings decoupling, button rename, translation request mode) |
+| test_costs_additive_display.py | 30 | Additive cost display rework (ceil-to-cents, content-only input_cost, non-cached prompt tokens, label layout, additive total) |
 | test_rolling_context_phase78.py | 10 | Rolling context file-boundary fix Phase 78 (Task 7) |
 | test_rolling_context_merge.py | 37 | Rolling context between/after, Step 5 efficient merge, merged-request conditional prompt (Task 78) |
 | test_slicing_phase78.py | 11 | Slicing efficient mode Phase 78 (Task 8) |
@@ -9095,6 +9097,93 @@ and translation request mode selector.
 | `test_estimation_result_fields` | EstimationResult has required fields |
 | `test_mode_price_keys_normal` | Normal mode uses standard price keys |
 | `test_model_setting_keys_include_request_mode` | _MODEL_SETTING_KEYS includes request_mode |
+
+---
+
+### dev/test_costs_additive_display.py (30 tests) - Additive Cost Display Rework
+
+Tests for the purely additive cost display rework: ceil-to-cents rounding, content-only
+input_cost, non-cached prompt token display, label layout, and additive total verification.
+
+#### TestCeilToCents (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_small_fraction_rounds_up` | $0.001 → $0.01 (rounds up to next cent) |
+| `test_exact_cent_stays` | $0.05 stays $0.05 |
+| `test_zero_stays_zero` | $0.00 stays $0.00 |
+| `test_negative_stays_zero_or_negative` | Negative input does not produce positive |
+| `test_large_value` | $12.344 → $12.35 |
+
+#### TestFmtCost (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_fmt_cost_dollar_prefix` | Result starts with "$" |
+| `test_fmt_cost_two_decimals` | Result has exactly 2 decimal places |
+| `test_fmt_cost_ceil` | Uses ceil-to-cents (not round) |
+
+#### TestEstimationResultSemantics (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_input_cost_is_content_only` | input_cost + prompt_cost + cached_input_cost + output_cost ≈ total_cost |
+| `test_prompt_tokens_minus_cached_display` | prompt_tokens − cached_tokens ≥ 0 |
+
+#### TestAdditiveCostCalculation (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_four_components_sum_to_total` | content + prompt + cached + output = total |
+| `test_total_matches_old_approach` | New split produces same total as old bundled approach |
+| `test_no_caching_prompt_equals_full` | When cached_tokens=0, prompt_cost covers full prompt |
+
+#### TestRecalculateStructure (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_recalculate_uses_content_tokens` | Source code references content_tokens for input_cost |
+| `test_recalculate_uses_fmt_cost` | Source code uses _fmt_cost for display |
+| `test_reprice_uses_content_tokens` | _reprice_for_model uses content_tokens |
+| `test_reprice_uses_fmt_cost` | _reprice_for_model uses _fmt_cost |
+
+#### TestPromptTokenDisplay (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_update_ui_subtracts_cached_from_prompt` | _update_ui shows prompt − cached |
+| `test_prompt_saved_uses_non_cached` | Saved column uses non-cached delta |
+| `test_non_cached_ge_zero` | Non-cached prompt tokens ≥ 0 |
+
+#### TestCostLabelLayout (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_prompt_cost_no_indent` | "Prompt Cost:" label has no leading spaces |
+| `test_cached_cost_no_indent` | "Cached Cost:" label has no leading spaces |
+| `test_cached_label_renamed` | Label is "Cached Cost:" not "Cached Input Cost:" |
+
+#### TestCostDisplayAlwaysShown (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_recalculate_always_shows_prompt` | _recalculate always configures prompt cost label |
+| `test_recalculate_always_shows_cached` | _recalculate always configures cached cost label |
+| `test_no_conditional_dash_hide` | No `configure(text="-")` pattern for cost rows |
+
+#### TestDoEstimationCalculation (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_do_estimation_no_estimate_cost_call` | _do_estimation does not call estimate_cost() for cache path |
+| `test_do_estimation_has_content_cost` | _do_estimation computes orig_content_cost |
+| `test_do_estimation_four_components` | _do_estimation sums 4 components to total |
+
+#### TestCostsAdditiveDisplayTestCount (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_total_test_count` | Verifies exactly 30 tests in the file |
 
 ---
 

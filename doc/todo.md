@@ -55,6 +55,28 @@ MODULE COUNTS (Verified January 2026)
 =============================================================================
 [Archived: Sessions 43–24 + Phase 62 → see doc/archived.md]
 
+### BUG FIX: Costs Additive Display Rework
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Make the Costs step token/cost display purely additive. Prompt Tokens and Cached Tokens were not additive (Cached was a subset of Prompt, so Input + Prompt ≠ Total). Cost sub-rows for Prompt Cost and Cached Input Cost were indented and conditionally hidden. Cost rounding was inconsistent.
+
+**Changes:**
+1. **Prompt Tokens display** — Now shows `prompt_tokens − cached_tokens` (non-cached portion) so that Input + Prompt + Cached = Total Input.
+2. **Cost display layout** — All four cost rows (Input, Prompt, Cached, Output) are now primary non-indented rows that sum to Total. "Cached Input Cost:" renamed to "Cached Cost:". Rows always shown (no conditional hiding).
+3. **input_cost semantics** — `EstimationResult.input_cost` now stores content-only cost (content_tokens × rate), not the combined input+prompt+cached bundle.
+4. **Direct 4-component calculation** — `_do_estimation()` no longer uses `estimate_cost()` + cache savings subtraction. Computes content_cost, prompt_cost, cached_cost, output_cost directly.
+5. **Ceil-to-cents rounding** — Module-level `_ceil_to_cents()` extracted from `estimate_cost()`. New `_fmt_cost()` helper formats all displayed dollar amounts rounded up to the next cent.
+6. **All three recalculation paths updated** — `_do_estimation()`, `_recalculate_costs_for_mode()`, and `_reprice_for_model()` all use the same 4-component pattern and `_fmt_cost()`.
+
+**Mathematical equivalence:** Total cost is unchanged. `content × rate + (prompt − cached) × rate + cached × cached_rate` = `(content + prompt − cached) × rate + cached × cached_rate` (the old formula).
+
+**Files Modified:**
+- `gui/steps/costs.py` — All calculation and display changes
+
+**Tests:** `dev/test_costs_additive_display.py` — 30 tests (ceil-to-cents, fmt_cost, EstimationResult semantics, additive calculation, recalculate/reprice structure, prompt token display, label layout, always-shown rows, _do_estimation calculation)
+
+---
+
 ### BUG FIX: Glossary ↔ Term Translation Dual-Storage Desync (3 Fixes)
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
 

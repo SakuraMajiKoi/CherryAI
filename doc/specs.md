@@ -1749,15 +1749,19 @@ Displays token breakdown in a grid format:
 
 #### Cost Estimate Panel Details
 
-**Current Display**:
-- Input cost: (input_tokens / 1M) × model_input_price
-- Output cost: (output_tokens / 1M) × model_output_price
-- Total cost: Input + Output
+**Current Display (Purely Additive)**:
+- **Input Cost**: (content_tokens / 1M) × model_input_price — content/line tokens only
+- **Prompt Cost**: ((prompt_tokens − cached_tokens) / 1M) × model_input_price — non-cached prompt overhead
+- **Cached Cost**: (cached_tokens / 1M) × model_cached_input_price — cached prompt portion
+- **Output Cost**: (output_tokens / 1M) × model_output_price
+- **Total Cost**: Input + Prompt + Cached + Output (four additive components)
 
-**Required Behavior**:
-- Pull calculated costs from Model Comparison table for consistency
-- Show both Original estimate and Preprocessed estimate
-- Show Savings percentage
+All displayed dollar amounts are rounded up to the next cent via `_ceil_to_cents()`.
+All four cost rows are primary non-indented rows (same hierarchy as Input/Output).
+
+**Token Display**:
+- Prompt Tokens row shows the non-cached portion: prompt_tokens − cached_tokens
+- This ensures Input + Prompt + Cached = Total Input (purely additive)
 
 #### Time Estimate Panel Details
 
@@ -1900,8 +1904,15 @@ The Costs step has **two distinct estimation states** tracked separately:
 - `_get_static_prompt_tokens()` builds the prompt with `chunk_lines=[]` and `rolling_context_text=""` to isolate static sections (slots 1-7b)
 - Cache eligible = static_prompt_tokens × (n_requests − 1)
 - Cached tokens = cache_eligible × CACHE_HIT_RATE
-- Cache savings = cached_tokens / 1M × (input_rate − cached_rate) subtracted from total cost
+- Direct 4-component cost calculation (no `estimate_cost()` + savings subtraction):
+  - `content_cost = content_tokens / 1M × input_rate`
+  - `prompt_cost  = (prompt_tokens − cached_tokens) / 1M × input_rate`
+  - `cached_cost  = cached_tokens / 1M × cached_rate`
+  - `output_cost  = output_tokens / 1M × output_rate`
+  - `total_cost   = content_cost + prompt_cost + cached_cost + output_cost`
+- `EstimationResult.input_cost` stores content-only cost (not the full input bundle)
 - Guard: no caching applied when static prefix < 1024 tokens or only 1 request
+- Module-level `_ceil_to_cents()` and `_fmt_cost()` helpers ensure all displayed costs are rounded up to the next cent
 
 **Mode Button Labels**:
 - Non-normal modes (Batch/Flex/Priority) show "(Available)" or "(Unavailable)" suffix

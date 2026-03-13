@@ -1035,21 +1035,28 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Hybrid chunking mode: whichever limit is reached first triggers chunk boundary
   - **Revised token breakdown** (Task 6): Token Counts panel shows:
     - Input Tokens — content/line tokens only
-    - Prompt Tokens — overhead across all requests
+    - Prompt Tokens — non-cached prompt overhead (prompt_tokens − cached_tokens)
     - Cached Tokens — prompt portion cached after first request
     - Total Input (bold) — content + prompt (what gets billed)
     - Output Tokens (est)
   - **Formation-based request counting**: Uses the same 4-step formation pipeline (prompt_builder.py) as Translation step for accurate request counting via `_estimate_via_formation()`
   - **GlobalOptions sync**: Chunk size, max input tokens, and request slicing mode read from Global Options at estimation time
   - Lines/Request spinbox range expanded to 1–99999 to match Model Settings
-  - Cost estimate panel with input/output/total breakdown
-  - **Prompt Cost** and **Cached Input Cost** sub-rows shown when model supports
-    prompt caching (≥1024 token static prefix).  Uses `_get_static_prompt_tokens()`
+  - **Purely additive cost breakdown**: Cost Estimate panel shows four non-indented
+    primary rows that sum to Total:
+    - **Input Cost** — content tokens at input rate
+    - **Prompt Cost** — non-cached prompt tokens at input rate
+    - **Cached Cost** — cached prompt tokens at cached rate
+    - **Output Cost** — output tokens at output rate
+    - **Total Cost** = Input + Prompt + Cached + Output
+    All displayed costs are rounded up to the next cent (ceil-to-cents).
+  - **Prompt caching**: Uses `_get_static_prompt_tokens()`
     to measure the static/cacheable prompt portion (slots 1-7b: language,
     system_instructions, io_examples, style, tone, protagonist, summary, genre,
     pov, context_type).  Applies `CACHE_HIT_RATE = 0.80` (80%) to the static
-    prefix across (n_requests - 1) repeat requests.  Cache savings formula:
-    `cached_tokens / 1M × (input_rate - cached_rate)` subtracted from total cost.
+    prefix across (n_requests - 1) repeat requests.  Cached tokens are deducted
+    from Prompt Tokens before display. Guard: no caching when static prefix
+    < 1024 tokens or only 1 request.
   - **Model comparison table** with Cached $/1M column, mode-specific pricing (Normal/Batch/Flex/Priority rates)
   - **Dual estimation workflow** (Task 40.4):
     - Tracks original_complete and preprocessed_complete states separately

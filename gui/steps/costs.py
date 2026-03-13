@@ -132,6 +132,20 @@ class ComparisonResult:
 CACHE_HIT_RATE = 0.80
 
 
+def _ceil_to_cents(x: float) -> float:
+    """Round *up* to the next cent (e.g. $0.003 → $0.01).
+
+    A tiny epsilon is subtracted so that exact-cent values like $0.05
+    are not bumped to $0.06 by floating-point noise.
+    """
+    return math.ceil(x * 100.0 - 1e-12) / 100.0
+
+
+def _fmt_cost(v: float) -> str:
+    """Format a cost value, ceiling to the next cent."""
+    return f"${_ceil_to_cents(v):.2f}"
+
+
 def estimate_cost(
     input_tokens: int,
     output_tokens: int,
@@ -153,10 +167,6 @@ def estimate_cost(
 
     input_cost = (input_tokens / 1_000_000) * input_rate
     output_cost = (output_tokens / 1_000_000) * output_rate
-
-    # Ceil to nearest cent
-    def _ceil_to_cents(x: float) -> float:
-        return math.ceil(x * 100.0 - 1e-12) / 100.0
 
     return {
         "input_usd": round(_ceil_to_cents(input_cost), 2),
@@ -697,31 +707,29 @@ class CostsStep(BaseStep):
         self._cost_input_prep_label = ttk.Label(self._cost_grid, text="-")
         self._cost_input_prep_label.grid(row=2, column=2)
 
-        # Prompt cost row (non-cached portion of input)
+        # Prompt cost row (non-cached prompt portion)
         ttk.Label(
-            self._cost_grid, text="  Prompt Cost:",
-            foreground=THEME.text_secondary,
+            self._cost_grid, text="Prompt Cost:",
         ).grid(row=3, column=0, sticky="w")
         self._cost_prompt_orig_label = ttk.Label(
-            self._cost_grid, text="-", foreground=THEME.text_secondary,
+            self._cost_grid, text="-",
         )
         self._cost_prompt_orig_label.grid(row=3, column=1)
         self._cost_prompt_prep_label = ttk.Label(
-            self._cost_grid, text="-", foreground=THEME.text_secondary,
+            self._cost_grid, text="-",
         )
         self._cost_prompt_prep_label.grid(row=3, column=2)
 
-        # Cached input cost row
+        # Cached cost row
         ttk.Label(
-            self._cost_grid, text="  Cached Input Cost:",
-            foreground=THEME.text_secondary,
+            self._cost_grid, text="Cached Cost:",
         ).grid(row=4, column=0, sticky="w")
         self._cost_cached_orig_label = ttk.Label(
-            self._cost_grid, text="-", foreground=THEME.text_secondary,
+            self._cost_grid, text="-",
         )
         self._cost_cached_orig_label.grid(row=4, column=1)
         self._cost_cached_prep_label = ttk.Label(
-            self._cost_grid, text="-", foreground=THEME.text_secondary,
+            self._cost_grid, text="-",
         )
         self._cost_cached_prep_label.grid(row=4, column=2)
 
@@ -849,8 +857,9 @@ class CostsStep(BaseStep):
         """Recalculate cost labels using existing token counts and new mode.
 
         Called on mode change to instantly update costs without running
-        a full re-estimation.  Adjusts input/output costs for the
-        selected mode while preserving the caching split.
+        a full re-estimation.  Splits costs into four additive
+        components: Input (content) + Prompt (non-cached) + Cached +
+        Output = Total.
         """
         result = self._estimation_result
         if result is None:
@@ -864,94 +873,68 @@ class CostsStep(BaseStep):
         mode_output = pricing.get(out_key) or pricing.get("output", 0.0)
         cached_rate = pricing.get("cached_input")
 
-        for est_result, prefix in (
-            (result.original, "orig"),
-            (result.preprocessed, "prep"),
-        ):
-            non_cached_input = est_result.input_tokens - est_result.cached_tokens
-            input_cost = (non_cached_input / 1_000_000) * mode_input
+        for est_result in (result.original, result.preprocessed):
+            content_cost = (est_result.content_tokens / 1_000_000) * mode_input
+            non_cached_prompt = max(
+                0, est_result.prompt_tokens - est_result.cached_tokens,
+            )
+            prompt_cost_val = (non_cached_prompt / 1_000_000) * mode_input
             cached_cost = 0.0
             if cached_rate is not None and est_result.cached_tokens > 0:
                 cached_cost = (
                     est_result.cached_tokens / 1_000_000
                 ) * cached_rate
             output_cost = (est_result.output_tokens / 1_000_000) * mode_output
-            total_cost = round(input_cost + cached_cost + output_cost, 2)
 
-            est_result.input_cost = round(input_cost + cached_cost, 2)
-            est_result.output_cost = round(output_cost, 2)
-            est_result.total_cost = total_cost
-            est_result.prompt_cost = round(
-                (max(0, est_result.prompt_tokens - est_result.cached_tokens)
-                 / 1_000_000) * mode_input, 4,
+            est_result.input_cost = content_cost
+            est_result.prompt_cost = prompt_cost_val
+            est_result.cached_input_cost = cached_cost
+            est_result.output_cost = output_cost
+            est_result.total_cost = (
+                content_cost + prompt_cost_val + cached_cost + output_cost
             )
-            est_result.cached_input_cost = round(cached_cost, 4)
 
         # Recalculate savings
         result.cost_saved = (
             result.original.total_cost - result.preprocessed.total_cost
         )
 
-        # Update cost labels
+        # Update cost labels (all ceil-to-cents)
         self._cost_input_orig_label.configure(
-            text=f"${result.original.input_cost:.2f}",
+            text=_fmt_cost(result.original.input_cost),
         )
         self._cost_input_prep_label.configure(
-            text=f"${result.preprocessed.input_cost:.2f}",
+            text=_fmt_cost(result.preprocessed.input_cost),
+        )
+        self._cost_prompt_orig_label.configure(
+            text=_fmt_cost(result.original.prompt_cost),
+        )
+        self._cost_prompt_prep_label.configure(
+            text=_fmt_cost(result.preprocessed.prompt_cost),
+        )
+        self._cost_cached_orig_label.configure(
+            text=_fmt_cost(result.original.cached_input_cost),
+        )
+        self._cost_cached_prep_label.configure(
+            text=_fmt_cost(result.preprocessed.cached_input_cost),
         )
         self._cost_output_orig_label.configure(
-            text=f"${result.original.output_cost:.2f}",
+            text=_fmt_cost(result.original.output_cost),
         )
         self._cost_output_prep_label.configure(
-            text=f"${result.preprocessed.output_cost:.2f}",
+            text=_fmt_cost(result.preprocessed.output_cost),
         )
         self._cost_total_orig_label.configure(
-            text=f"${result.original.total_cost:.2f}",
+            text=_fmt_cost(result.original.total_cost),
         )
         self._cost_total_prep_label.configure(
-            text=f"${result.preprocessed.total_cost:.2f}",
+            text=_fmt_cost(result.preprocessed.total_cost),
         )
-
-        # Prompt / cached cost breakdown
-        if (
-            result.preprocessed.cached_input_cost > 0
-            or result.original.cached_input_cost > 0
-        ):
-            self._cost_prompt_orig_label.configure(
-                text=(
-                    f"${result.original.prompt_cost:.4f}"
-                    if result.original.prompt_cost else "-"
-                ),
-            )
-            self._cost_prompt_prep_label.configure(
-                text=(
-                    f"${result.preprocessed.prompt_cost:.4f}"
-                    if result.preprocessed.prompt_cost else "-"
-                ),
-            )
-            self._cost_cached_orig_label.configure(
-                text=(
-                    f"${result.original.cached_input_cost:.4f}"
-                    if result.original.cached_input_cost else "-"
-                ),
-            )
-            self._cost_cached_prep_label.configure(
-                text=(
-                    f"${result.preprocessed.cached_input_cost:.4f}"
-                    if result.preprocessed.cached_input_cost else "-"
-                ),
-            )
-        else:
-            for lbl in (
-                self._cost_prompt_orig_label, self._cost_prompt_prep_label,
-                self._cost_cached_orig_label, self._cost_cached_prep_label,
-            ):
-                lbl.configure(text="-")
 
         # Savings summary
         if result.cost_saved > 0:
             self._savings_label.configure(
-                text=f"💰 Save ${result.cost_saved:.2f} "
+                text=f"💰 Save {_fmt_cost(result.cost_saved)} "
                      f"({result.savings_percent:.1f}% tokens)",
             )
         else:
@@ -1031,25 +1014,25 @@ class CostsStep(BaseStep):
         mode_input = pricing.get(in_key) or pricing.get("input", 0.0)
         mode_output = pricing.get(out_key) or pricing.get("output", 0.0)
         cached_rate = pricing.get("cached_input")
-        input_rate = pricing.get("input", mode_input)
 
         for est_result in (result.original, result.preprocessed):
-            non_cached_input = est_result.input_tokens - est_result.cached_tokens
-            input_cost = (non_cached_input / 1_000_000) * mode_input
+            content_cost = (est_result.content_tokens / 1_000_000) * mode_input
+            non_cached_prompt = max(
+                0, est_result.prompt_tokens - est_result.cached_tokens,
+            )
+            prompt_cost_val = (non_cached_prompt / 1_000_000) * mode_input
             cached_cost = 0.0
             if cached_rate is not None and est_result.cached_tokens > 0:
                 cached_cost = (est_result.cached_tokens / 1_000_000) * cached_rate
             output_cost = (est_result.output_tokens / 1_000_000) * mode_output
-            total_cost = round(input_cost + cached_cost + output_cost, 2)
 
-            est_result.input_cost = round(input_cost + cached_cost, 2)
-            est_result.output_cost = round(output_cost, 2)
-            est_result.total_cost = total_cost
-            est_result.prompt_cost = round(
-                (max(0, est_result.prompt_tokens - est_result.cached_tokens)
-                 / 1_000_000) * mode_input, 4,
+            est_result.input_cost = content_cost
+            est_result.prompt_cost = prompt_cost_val
+            est_result.cached_input_cost = cached_cost
+            est_result.output_cost = output_cost
+            est_result.total_cost = (
+                content_cost + prompt_cost_val + cached_cost + output_cost
             )
-            est_result.cached_input_cost = round(cached_cost, 4)
 
         # Recalculate comparison savings
         result.cost_saved = (
@@ -1060,66 +1043,42 @@ class CostsStep(BaseStep):
                 result.tokens_saved / result.original.input_tokens * 100
             )
 
-        # Refresh cost labels (re-use existing helper)
+        # Refresh cost labels (all ceil-to-cents)
         self._cost_input_orig_label.configure(
-            text=f"${result.original.input_cost:.2f}",
+            text=_fmt_cost(result.original.input_cost),
         )
         self._cost_input_prep_label.configure(
-            text=f"${result.preprocessed.input_cost:.2f}",
+            text=_fmt_cost(result.preprocessed.input_cost),
+        )
+        self._cost_prompt_orig_label.configure(
+            text=_fmt_cost(result.original.prompt_cost),
+        )
+        self._cost_prompt_prep_label.configure(
+            text=_fmt_cost(result.preprocessed.prompt_cost),
+        )
+        self._cost_cached_orig_label.configure(
+            text=_fmt_cost(result.original.cached_input_cost),
+        )
+        self._cost_cached_prep_label.configure(
+            text=_fmt_cost(result.preprocessed.cached_input_cost),
         )
         self._cost_output_orig_label.configure(
-            text=f"${result.original.output_cost:.2f}",
+            text=_fmt_cost(result.original.output_cost),
         )
         self._cost_output_prep_label.configure(
-            text=f"${result.preprocessed.output_cost:.2f}",
+            text=_fmt_cost(result.preprocessed.output_cost),
         )
         self._cost_total_orig_label.configure(
-            text=f"${result.original.total_cost:.2f}",
+            text=_fmt_cost(result.original.total_cost),
         )
         self._cost_total_prep_label.configure(
-            text=f"${result.preprocessed.total_cost:.2f}",
+            text=_fmt_cost(result.preprocessed.total_cost),
         )
-
-        # Prompt / cached cost breakdown
-        if (
-            result.preprocessed.cached_input_cost > 0
-            or result.original.cached_input_cost > 0
-        ):
-            self._cost_prompt_orig_label.configure(
-                text=(
-                    f"${result.original.prompt_cost:.4f}"
-                    if result.original.prompt_cost else "-"
-                ),
-            )
-            self._cost_prompt_prep_label.configure(
-                text=(
-                    f"${result.preprocessed.prompt_cost:.4f}"
-                    if result.preprocessed.prompt_cost else "-"
-                ),
-            )
-            self._cost_cached_orig_label.configure(
-                text=(
-                    f"${result.original.cached_input_cost:.4f}"
-                    if result.original.cached_input_cost else "-"
-                ),
-            )
-            self._cost_cached_prep_label.configure(
-                text=(
-                    f"${result.preprocessed.cached_input_cost:.4f}"
-                    if result.preprocessed.cached_input_cost else "-"
-                ),
-            )
-        else:
-            for lbl in (
-                self._cost_prompt_orig_label, self._cost_prompt_prep_label,
-                self._cost_cached_orig_label, self._cost_cached_prep_label,
-            ):
-                lbl.configure(text="-")
 
         # Savings summary
         if result.cost_saved > 0:
             self._savings_label.configure(
-                text=f"💰 Save ${result.cost_saved:.2f} "
+                text=f"💰 Save {_fmt_cost(result.cost_saved)} "
                      f"({result.savings_percent:.1f}% tokens)",
             )
         else:
@@ -1769,10 +1728,6 @@ class CostsStep(BaseStep):
 
             # Step 5: Applying pricing & cache adjustments
             self._report_progress(5)
-            # Estimate costs (including prompt overhead) at full input rate
-            # as baseline.  Caching adjustments are applied below.
-            orig_cost = estimate_cost(orig_total_input, orig_output_tokens, model_id)
-            prep_cost = estimate_cost(prep_total_input, prep_output_tokens, model_id)
 
             # ── Prompt caching with static / dynamic split ──
             # Only the *static* prompt (§5.2 slots 1-7b) is eligible for
@@ -1782,75 +1737,74 @@ class CostsStep(BaseStep):
             # Cache hit rate is ~80 % (CACHE_HIT_RATE).
             static_prompt_tokens = self._get_static_prompt_tokens()
 
-            prep_prompt_cost = 0.0
-            prep_cached_cost = 0.0
-            orig_prompt_cost = 0.0
-            orig_cached_cost = 0.0
             orig_cached_tokens = 0
             prep_cached_tokens = 0
 
             pricing_info = get_model_pricing(model_id)
             cached_rate = pricing_info.get("cached_input")
             input_rate = pricing_info["input"]
+            output_rate = pricing_info["output"]
 
             if (
                 cached_rate is not None
                 and static_prompt_tokens >= 1024
             ):
-                # Preprocessed path
-                if prep_requests > 1:
-                    cache_eligible = static_prompt_tokens * (prep_requests - 1)
-                    prep_cached_tokens = int(cache_eligible * CACHE_HIT_RATE)
-                    non_cached_prompt = prep_prompt_total - prep_cached_tokens
-                    prep_prompt_cost = (
-                        max(0, non_cached_prompt) / 1_000_000
-                    ) * input_rate
-                    prep_cached_cost = (
-                        prep_cached_tokens / 1_000_000
-                    ) * cached_rate
-                    # Adjust totals: subtract the savings from caching
-                    cache_savings = (
-                        prep_cached_tokens / 1_000_000
-                    ) * (input_rate - cached_rate)
-                    prep_cost["total_usd"] = round(
-                        max(0.0, prep_cost["total_usd"] - cache_savings), 2,
-                    )
-                    prep_cost["input_usd"] = round(
-                        max(0.0, prep_cost["input_usd"] - cache_savings), 2,
-                    )
-
-                # Original path — same logic
                 if orig_requests > 1:
                     cache_eligible = static_prompt_tokens * (orig_requests - 1)
                     orig_cached_tokens = int(cache_eligible * CACHE_HIT_RATE)
-                    non_cached_prompt = orig_prompt_total - orig_cached_tokens
-                    orig_prompt_cost = (
-                        max(0, non_cached_prompt) / 1_000_000
-                    ) * input_rate
-                    orig_cached_cost = (
-                        orig_cached_tokens / 1_000_000
-                    ) * cached_rate
-                    cache_savings = (
-                        orig_cached_tokens / 1_000_000
-                    ) * (input_rate - cached_rate)
-                    orig_cost["total_usd"] = round(
-                        max(0.0, orig_cost["total_usd"] - cache_savings), 2,
-                    )
-                    orig_cost["input_usd"] = round(
-                        max(0.0, orig_cost["input_usd"] - cache_savings), 2,
-                    )
+                if prep_requests > 1:
+                    cache_eligible = static_prompt_tokens * (prep_requests - 1)
+                    prep_cached_tokens = int(cache_eligible * CACHE_HIT_RATE)
+
+            # ── Cost components: Input + Prompt + Cached + Output = Total ──
+            # Input  = content tokens at input rate (line content only)
+            # Prompt = non-cached prompt tokens at input rate
+            # Cached = cached prompt tokens at cached rate
+            # Output = output tokens at output rate
+
+            # Original path
+            orig_content_cost = (orig_input_tokens / 1_000_000) * input_rate
+            orig_non_cached_prompt = max(0, orig_prompt_total - orig_cached_tokens)
+            orig_prompt_cost = (orig_non_cached_prompt / 1_000_000) * input_rate
+            orig_cached_cost = (
+                (orig_cached_tokens / 1_000_000) * cached_rate
+                if cached_rate is not None and orig_cached_tokens > 0
+                else 0.0
+            )
+            orig_output_cost = (orig_output_tokens / 1_000_000) * output_rate
+            orig_total_cost = (
+                orig_content_cost + orig_prompt_cost
+                + orig_cached_cost + orig_output_cost
+            )
+
+            # Preprocessed path
+            prep_content_cost = (prep_input_tokens / 1_000_000) * input_rate
+            prep_non_cached_prompt = max(0, prep_prompt_total - prep_cached_tokens)
+            prep_prompt_cost_val = (prep_non_cached_prompt / 1_000_000) * input_rate
+            prep_cached_cost = (
+                (prep_cached_tokens / 1_000_000) * cached_rate
+                if cached_rate is not None and prep_cached_tokens > 0
+                else 0.0
+            )
+            prep_output_cost = (prep_output_tokens / 1_000_000) * output_rate
+            prep_total_cost = (
+                prep_content_cost + prep_prompt_cost_val
+                + prep_cached_cost + prep_output_cost
+            )
 
             # Build results — content_tokens stores line-only tokens,
             # input_tokens stores total (content + prompt) for billing.
+            # input_cost stores content-only cost; prompt_cost and
+            # cached_input_cost are separate additive components.
             original = EstimationResult(
                 input_tokens=orig_total_input,
                 output_tokens=orig_output_tokens,
-                input_cost=orig_cost["input_usd"],
-                output_cost=orig_cost["output_usd"],
-                total_cost=orig_cost["total_usd"],
+                input_cost=orig_content_cost,
+                output_cost=orig_output_cost,
+                total_cost=orig_total_cost,
                 token_method=orig_method,
-                prompt_cost=round(orig_prompt_cost, 4),
-                cached_input_cost=round(orig_cached_cost, 4),
+                prompt_cost=orig_prompt_cost,
+                cached_input_cost=orig_cached_cost,
                 content_tokens=orig_input_tokens,
                 prompt_tokens=orig_prompt_total,
                 cached_tokens=orig_cached_tokens,
@@ -1860,12 +1814,12 @@ class CostsStep(BaseStep):
             preprocessed = EstimationResult(
                 input_tokens=prep_total_input,
                 output_tokens=prep_output_tokens,
-                input_cost=prep_cost["input_usd"],
-                output_cost=prep_cost["output_usd"],
-                total_cost=prep_cost["total_usd"],
+                input_cost=prep_content_cost,
+                output_cost=prep_output_cost,
+                total_cost=prep_total_cost,
                 token_method=prep_method,
-                prompt_cost=round(prep_prompt_cost, 4),
-                cached_input_cost=round(prep_cached_cost, 4),
+                prompt_cost=prep_prompt_cost_val,
+                cached_input_cost=prep_cached_cost,
                 content_tokens=prep_input_tokens,
                 prompt_tokens=prep_prompt_total,
                 cached_tokens=prep_cached_tokens,
@@ -1873,7 +1827,7 @@ class CostsStep(BaseStep):
             )
 
             tokens_saved = orig_total_input - prep_total_input
-            cost_saved = orig_cost["total_usd"] - prep_cost["total_usd"]
+            cost_saved = orig_total_cost - prep_total_cost
             savings_pct = (tokens_saved / orig_total_input * 100) if orig_total_input else 0
 
             self._estimation_result = ComparisonResult(
@@ -2067,14 +2021,16 @@ class CostsStep(BaseStep):
             text=f"-{content_saved:,}" if content_saved > 0 else "0",
         )
 
-        # Prompt tokens (overhead across all requests)
+        # Prompt tokens — non-cached portion only (cached shown separately)
+        non_cached_prompt_orig = original.prompt_tokens - original.cached_tokens
+        non_cached_prompt_prep = preprocessed.prompt_tokens - preprocessed.cached_tokens
         self._prompt_orig_label.configure(
-            text=f"{original.prompt_tokens:,}",
+            text=f"{non_cached_prompt_orig:,}",
         )
         self._prompt_prep_label.configure(
-            text=f"{preprocessed.prompt_tokens:,}",
+            text=f"{non_cached_prompt_prep:,}",
         )
-        prompt_saved = original.prompt_tokens - preprocessed.prompt_tokens
+        prompt_saved = non_cached_prompt_orig - non_cached_prompt_prep
         self._prompt_saved_label.configure(
             text=f"-{prompt_saved:,}" if prompt_saved > 0 else "0",
         )
@@ -2114,39 +2070,33 @@ class CostsStep(BaseStep):
             text=f"-{out_saved:,}" if out_saved > 0 else "0",
         )
 
-        # Update cost labels
+        # Update cost labels (all ceil-to-cents)
         pricing = get_model_pricing(model_id)
         self._model_label.configure(text=f"{pricing['name']} ({model_id})")
 
-        self._cost_input_orig_label.configure(text=f"${original.input_cost:.2f}")
-        self._cost_input_prep_label.configure(text=f"${preprocessed.input_cost:.2f}")
+        self._cost_input_orig_label.configure(text=_fmt_cost(original.input_cost))
+        self._cost_input_prep_label.configure(text=_fmt_cost(preprocessed.input_cost))
 
-        # Prompt cost and cached input cost (only shown when caching applies)
-        if preprocessed.cached_input_cost > 0 or original.cached_input_cost > 0:
-            self._cost_prompt_orig_label.configure(
-                text=f"${original.prompt_cost:.4f}" if original.prompt_cost else "-",
-            )
-            self._cost_prompt_prep_label.configure(
-                text=f"${preprocessed.prompt_cost:.4f}" if preprocessed.prompt_cost else "-",
-            )
-            self._cost_cached_orig_label.configure(
-                text=f"${original.cached_input_cost:.4f}" if original.cached_input_cost else "-",
-            )
-            self._cost_cached_prep_label.configure(
-                text=f"${preprocessed.cached_input_cost:.4f}" if preprocessed.cached_input_cost else "-",
-            )
-        else:
-            for lbl in (
-                self._cost_prompt_orig_label, self._cost_prompt_prep_label,
-                self._cost_cached_orig_label, self._cost_cached_prep_label,
-            ):
-                lbl.configure(text="-")
+        # Prompt cost (non-cached prompt portion) and cached cost —
+        # always shown as primary additive rows.
+        self._cost_prompt_orig_label.configure(
+            text=_fmt_cost(original.prompt_cost),
+        )
+        self._cost_prompt_prep_label.configure(
+            text=_fmt_cost(preprocessed.prompt_cost),
+        )
+        self._cost_cached_orig_label.configure(
+            text=_fmt_cost(original.cached_input_cost),
+        )
+        self._cost_cached_prep_label.configure(
+            text=_fmt_cost(preprocessed.cached_input_cost),
+        )
 
-        self._cost_output_orig_label.configure(text=f"${original.output_cost:.2f}")
-        self._cost_output_prep_label.configure(text=f"${preprocessed.output_cost:.2f}")
+        self._cost_output_orig_label.configure(text=_fmt_cost(original.output_cost))
+        self._cost_output_prep_label.configure(text=_fmt_cost(preprocessed.output_cost))
 
-        self._cost_total_orig_label.configure(text=f"${original.total_cost:.2f}")
-        self._cost_total_prep_label.configure(text=f"${preprocessed.total_cost:.2f}")
+        self._cost_total_orig_label.configure(text=_fmt_cost(original.total_cost))
+        self._cost_total_prep_label.configure(text=_fmt_cost(preprocessed.total_cost))
 
         # Savings summary
         if self._estimation_result:
@@ -2154,7 +2104,7 @@ class CostsStep(BaseStep):
             cost = self._estimation_result.cost_saved
             if cost > 0:
                 self._savings_label.configure(
-                    text=f"💰 Save ${cost:.2f} ({pct:.1f}% tokens)"
+                    text=f"💰 Save {_fmt_cost(cost)} ({pct:.1f}% tokens)"
                 )
             else:
                 self._savings_label.configure(text="")
