@@ -1017,7 +1017,7 @@ File format handlers and parser scripts.
 **Classes:**
 - `WordwrapConfig` - Wordwrap configuration
 - `ForbiddenChars` - Banned characters
-- `ContextMarkerRules` - Context patterns
+- `TagRules` - Context patterns
 - `ParserScript (ABC)` - Abstract parser base
 
 ---

@@ -1,7 +1,7 @@
 """RPG Maker Parser Script implementation (Phase 53 — Task 53.2).
 
 Implements the :class:`ParserScript` interface for RPG Maker MV/MZ games.
-Provides wordwrap defaults, context marker rules for Show Text / Show Choices
+Provides wordwrap defaults, tag rules for Show Text / Show Choices
 commands, and forbidden-character definitions.
 
 Note: The ``extract`` and ``inject`` methods delegate to the existing
@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from .parser_base import (
-    ContextMarkerRules,
+    TagRules,
     ForbiddenChars,
     ParserScript,
     WordwrapConfig,
@@ -102,8 +102,8 @@ class RpgMakerMVParser(ParserScript):
         )
 
     @property
-    def context_marker_rules(self) -> Optional[ContextMarkerRules]:
-        return ContextMarkerRules(
+    def tag_rules(self) -> Optional[TagRules]:
+        return TagRules(
             scene_pattern=_SCENE_PATTERN,
             dialogue_pattern=_DIALOGUE_PATTERN,
             menu_pattern=_MENU_PATTERN,
@@ -175,8 +175,8 @@ class RpgMakerMZParser(ParserScript):
         )
 
     @property
-    def context_marker_rules(self) -> Optional[ContextMarkerRules]:
-        return ContextMarkerRules(
+    def tag_rules(self) -> Optional[TagRules]:
+        return TagRules(
             scene_pattern=_SCENE_PATTERN,
             dialogue_pattern=_DIALOGUE_PATTERN,
             menu_pattern=_MENU_PATTERN,

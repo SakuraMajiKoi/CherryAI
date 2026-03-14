@@ -8,7 +8,7 @@ Handles:
 - Glossary injection (selective based on content)
 - Context injection (file metadata, speaker list)
 - Rolling context management
-- Request batching with context markers
+- Request batching with tags
 - Conditional prompt instructions (pattern-triggered)
 """
 
@@ -241,15 +241,15 @@ class LineInfo:
     Attributes:
         index: Original manifest line index (0-based).
         text: Text to translate (prepro or orig).
-        is_invalid: True for placeholder, dedup, or context marker lines.
-        context_marker: Optional marker type (``"file_end"``, ``"dialogue"``,
-            ``"menu"``, ``"choice"``).  ``None`` means no marker.
+        is_invalid: True for placeholder, dedup, or tag lines.
+        tag: Optional tag type (``"file_end"``, ``"dialogue"``,
+            ``"menu"``, ``"choice"``).  ``None`` means no tag.
     """
 
     index: int
     text: str
     is_invalid: bool = False
-    context_marker: Optional[str] = None
+    tag: Optional[str] = None
 
 
 @dataclass
@@ -348,7 +348,7 @@ def _step1_split_menu_choice(
 ) -> Tuple[List[TranslationRequest], List[LineInfo]]:
     """Step 1: Split Menu and Choice blocks into their own requests.
 
-    Consecutive lines with the same ``context_marker`` of ``"menu"`` or
+    Consecutive lines with the same ``tag`` of ``"menu"`` or
     ``"choice"`` are grouped into dedicated requests.  All other valid
     lines are returned as remaining for subsequent steps.
 
@@ -376,7 +376,7 @@ def _step1_split_menu_choice(
         requests.append(req)
 
     for li in line_infos:
-        marker = li.context_marker
+        marker = li.tag
         if marker in ("menu", "choice"):
             if marker == current_marker:
                 current_block.append(li)
@@ -400,7 +400,7 @@ def _step2_split_at_file_boundaries(
     """Step 2: Split remaining lines at File End context markers.
 
     Each file boundary produces a separate candidate group.  Lines with
-    ``context_marker == "file_end"`` act as separators and are discarded
+    ``tag == "file_end"`` act as separators and are discarded
     (they are invalid and already excluded from valid lines, but if they
     somehow appear here they are dropped).
 
@@ -417,7 +417,7 @@ def _step2_split_at_file_boundaries(
     current: List[LineInfo] = []
 
     for li in line_infos:
-        if li.context_marker == "file_end":
+        if li.tag == "file_end":
             if current:
                 groups.append(current)
                 current = []
@@ -485,7 +485,7 @@ def _step3_split_and_balance(
 
         if line_count <= config.max_lines and not exceeds_tokens:
             # Fits in one request
-            ctx = group[0].context_marker if group[0].context_marker in (
+            ctx = group[0].tag if group[0].tag in (
                 "dialogue", "menu", "choice",
             ) else "unknown"
             requests.append(TranslationRequest(
@@ -514,7 +514,7 @@ def _step3_split_and_balance(
             size = base_size + (1 if i < remainder else 0)
             chunk = group[offset : offset + size]
             if chunk:
-                ctx = chunk[0].context_marker if chunk[0].context_marker in (
+                ctx = chunk[0].tag if chunk[0].tag in (
                     "dialogue", "menu", "choice",
                 ) else "unknown"
                 requests.append(TranslationRequest(
@@ -726,7 +726,7 @@ def build_requests(
     # Collect file_end markers separately — they are boundaries, not content
     file_ends: List[LineInfo] = [
         li for li in line_infos
-        if li.is_invalid and li.context_marker == "file_end"
+        if li.is_invalid and li.tag == "file_end"
     ]
 
     if not valid:
@@ -919,17 +919,17 @@ def build_line_infos(
     * **is_invalid** — ``True`` for context-marker lines, placeholder-only
       lines (``__PROTECTED__``, ``__DEDUP__``, ``__CUSTOM__``), or entries whose
       ``orig`` is empty.
-    * **context_marker** — propagated from the ``LineEntry.context_marker``
+    * **tag** — propagated from the ``LineEntry.tag``
       field first; if that is ``None``, the ``detected_markers`` list is
       consulted.  Normal (non-marker) lines inherit the *active* context
       type from the most recent preceding marker.
 
     Args:
         entries: Manifest ``LineEntry`` objects (duck-typed — only ``idx``,
-            ``orig``, ``prepro``, ``context_marker``, and
-            ``is_context_marker()`` are accessed).
+            ``orig``, ``prepro``, ``tag``, and
+            ``is_tag()`` are accessed).
         detected_markers: Optional per-line marker list produced by
-            :func:`analysis.detect_context_markers`.  Must be the same
+            :func:`analysis.detect_tags`.  Must be the same
             length as *entries* when provided.
 
     Returns:
@@ -940,10 +940,10 @@ def build_line_infos(
     n = len(entries)
     result: List[LineInfo] = []
 
-    # Build a merged marker list: entry.context_marker > detected_markers
+    # Build a merged marker list: entry.tag > detected_markers
     merged: List[Optional[str]] = [None] * n
     for i, entry in enumerate(entries):
-        cm = getattr(entry, "context_marker", None)
+        cm = getattr(entry, "tag", None)
         if cm is not None:
             merged[i] = cm
         elif detected_markers is not None and i < len(detected_markers):
@@ -961,7 +961,7 @@ def build_line_infos(
         text = getattr(entry, "prepro", None) or getattr(entry, "orig", "")
 
         # Determine if invalid
-        is_marker = getattr(entry, "is_context_marker", lambda: False)()
+        is_marker = getattr(entry, "is_tag", lambda: False)()
         is_placeholder = is_placeholder_only(text) if text else False
         is_empty = not text.strip()
         invalid = is_marker or is_placeholder or is_empty
@@ -977,7 +977,7 @@ def build_line_infos(
             index=getattr(entry, "idx", i),
             text=text,
             is_invalid=invalid,
-            context_marker=ctx,
+            tag=ctx,
         ))
 
     return result

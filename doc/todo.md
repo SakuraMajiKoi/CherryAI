@@ -55,6 +55,31 @@ MODULE COUNTS (Verified January 2026)
 =============================================================================
 [Archived: Sessions 43–24 + Phase 62 → see doc/archived.md]
 
+### BUG FIX: LightVN Detection, Tag Propagation, Input Step Fixes (4 Fixes)
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Fix LightVN parser failing to detect files like `chara_make.txt` (whose characteristic patterns appear after line 200), ensure parser extraction tags propagate to manifest `tag`, fix `messagebox` UnboundLocalError in Input step, and fix source file copy matching wrong files in subdirectories.
+
+**Root Causes:**
+1. `can_handle()` only checked for `~【` and `~文字` in first 200 lines — files with `~絵` or `栞` as only early patterns were rejected.
+2. `_extract_lines()` discarded `ExtractedLine.tag` values from `extract_tagged()` — tags never reached the manifest.
+3. Two `from tkinter import messagebox` local imports inside `_load_selected_paths()` created local variable bindings that shadowed the module-level import, causing `UnboundLocalError` when code paths did not enter those branches.
+4. `_copy_originals_to_project()` matched LoadedFile to filedir entries by filename only (`path.name == entry_name`), failing when identically named files exist in different subdirectories.
+
+**Changes:**
+1. **LightVN `can_handle()` expanded** — Added `_DETECT_PATTERNS` set (`{"~【", "~文字", "~ボタン", "~絵", "~効果音", "~選択"}`) and `_DETECT_LINE_PREFIXES` tuple (`("栞 ",)`). Detection now matches ANY of these patterns/prefixes in the first 200 lines.
+2. **Tag propagation via `LoadedFile.tags`** — Added `tags: Optional[List[str]]` field to `LoadedFile` class. `_load_file()` extracts tags from `extract_tagged()` results. `_sync_lines_to_manifest()` sets `entry["tag"]` from tags. `_add_files_to_existing_manifest()` applies tags after `mgr.add_files()`. `_wire_parser_optionals` O8 skips lines already tagged by parser extraction.
+3. **Removed local `messagebox` imports** — Deleted two `from tkinter import messagebox` statements inside `_load_selected_paths()`. The module-level import (line 15) is now the sole binding.
+4. **Rel-path matching for source copy** — `_copy_originals_to_project()` now computes `base = mgr._find_common_base(all_abs)` and matches by `entry.rel_path == str(loaded_file.path.relative_to(base))` instead of filename only.
+
+**Files Modified:**
+- `formats/LightVN.py` — `_DETECT_PATTERNS`, `_DETECT_LINE_PREFIXES`, `can_handle()` rewritten
+- `gui/steps/input_extract.py` — `LoadedFile` (tags field), `_load_file()` (tag extraction), `_sync_lines_to_manifest()` (tag from tags), `_add_files_to_existing_manifest()` (tag propagation), `_wire_parser_optionals` O8 (skip pre-tagged), `_load_selected_paths()` (removed local imports), `_copy_originals_to_project()` (rel_path matching)
+
+**Tests:** `dev/test_lightvn_fixes.py` — 31 tests (11 can_handle expanded, 6 ~文字 menu parsing, 4 tag propagation, 2 messagebox AST check, 3 source copy rel_path, 5 full file integration)
+
+---
+
 ### BUG FIX: Costs Additive Display Rework
 **Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 3 hours
 
@@ -260,7 +285,7 @@ Goal: Spreadsheet-like view of all manifest line entries accessible via menu bar
 - Menu bar restructured: File (dropdown), Full Table View (direct), Options (direct), Help (dropdown)
 - Edit menu removed; Tools menu replaced by direct Options entry
 - Toolbar removed from app.py (all access via menu bar)
-- 11 columns with display names: Line # (idx), Tags (context_marker), Original (orig), Preprocessed (prepro), Translated (tl), Postprocessed (postpro), Wrapped (wordwr), Overwrite, Quality Assurance (qa_overwrite), Log, Tags (Internal) (tags)
+- 11 columns with display names: Line # (idx), Tags (tag), Original (orig), Preprocessed (prepro), Translated (tl), Postprocessed (postpro), Wrapped (wordwr), Overwrite, Quality Assurance (qa_overwrite), Log, Tags (Internal) (tags)
 - Removed deprecated columns: edited_prepro, edit1-3, tlc1-3
 - Column filter: slim tk.Menu dropdown with Show All / Show Visible / Show Latest presets + individual toggles
 - All columns hideable including Line #; Tags hidden by default (DEFAULT_HIDDEN)
@@ -1572,8 +1597,8 @@ Two parallel hierarchies already exist in `formats/`:
 2. **`ParserScript`** (ABC in `formats/parser_base.py`)
    - Wraps a FormatHandler and adds game-engine-specific features.
    - `name: str`, `extract()`, `inject()`, optional `wordwrap_config`,
-     `forbidden_chars`, `context_marker_rules`, `can_handle()`.
-   - Dataclasses: `WordwrapConfig`, `ForbiddenChars`, `ContextMarkerRules`.
+     `forbidden_chars`, `tag_rules`, `can_handle()`.
+   - Dataclasses: `WordwrapConfig`, `ForbiddenChars`, `TagRules`.
    - Registered via `ParserRegistry` with `can_handle()` auto-detection.
    - Concrete parsers: `RpgMakerMVParser`, `RpgMakerMZParser`
      (in `formats/parser_rpgmaker.py`).
@@ -1629,7 +1654,7 @@ before using them. Missing optionals never raise errors.
 | O6 | **Wordwrap Function** | `wordwrap(line, config) → list[str]` | Custom wrapping logic that **replaces** the built-in `pretty_wrap`. When present, Step 7 calls this instead of `functions/wordwrap.py`. The return value is the wrapped lines list. | `lines[].wordwr` |
 | O9 | **Pretty Wrap Hook** | `pretty_wrap(text, width, break_char, max_lines) → Optional[str]` | Lighter core-wrap replacement. Replaces built-in `pretty_wrap` while keeping speaker handling and pipeline logic intact. Used for user-managed tags or as fallback when O6 is absent. | `lines[].wordwr` |
 | O7 | **Forbidden/Allowed Chars** | `forbidden_chars: ForbiddenChars` | Characters the engine cannot render. Added to logit bias during Translation (Step 5) and to the Blacklist/Whitelist during Postprocessing (Step 6). | `Options.ForbiddenChars`, `Options.LogitBias` |
-| O8 | **Context Markers** | `context_marker_rules: ContextMarkerRules` | Regex patterns for scene, dialogue, menu, and choice boundaries. Injected during Input to tag lines. | `lines[].tag` |
+| O8 | **Tags** | `tag_rules: TagRules` | Regex patterns for scene, dialogue, menu, and choice boundaries. Injected during Input to tag lines. | `lines[].tag` |
 
 #### C. Dataclass Reference (existing + extensions)
 
@@ -1649,7 +1674,7 @@ class ForbiddenChars:
     output_action: str = "replace"  # "replace" | "flag"
 
 @dataclass
-class ContextMarkerRules:
+class TagRules:
     scene_pattern: str = ""         # regex
     dialogue_pattern: str = ""
     menu_pattern: str = ""
@@ -1784,8 +1809,8 @@ Wired each optional component to its consuming pipeline step:
   `forbidden_chars.to_dict()` to `Options.ParserForbiddenChars`. Translation
   step calls `api_client.apply_parser_forbidden_chars()` to merge into logit bias.
 - **O8 Context Markers**: `_wire_parser_optionals()` compiles
-  `context_marker_rules` and applies regex to extracted lines, writing
-  `context_marker` tags. `detect_context_markers()` in `functions/analysis.py`
+  `tag_rules` and applies regex to extracted lines, writing
+  `tag` tags. `detect_tags()` in `functions/analysis.py`
   accepts optional `parser_rules` parameter to override built-in heuristics.
 - **O1/O2 Decrypt/Encrypt**: Deferred — requires permission UX design.
 
@@ -1797,7 +1822,7 @@ Wired each optional component to its consuming pipeline step:
   to `parser.wordwrap()` per line
 - `gui/steps/output_inject.py` — reads `ParserName`, routes through `parser.inject()`
 - `gui/steps/translate.py` — reads `ParserName`, calls `apply_parser_forbidden_chars()`
-- `functions/analysis.py` — `detect_context_markers()` accepts `parser_rules` kwarg
+- `functions/analysis.py` — `detect_tags()` accepts `parser_rules` kwarg
 
 **Tests:** `dev/test_parser_optional_wiring.py` — 28 tests (all passing):
 - TestO4SpeakerDetection (4): returns list, name+idx, no-override returns None, override check

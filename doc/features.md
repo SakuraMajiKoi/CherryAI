@@ -250,7 +250,7 @@ FULL TABLE VIEW
 - **Menu Bar Layout**: File (dropdown), Full Table View (direct), API Log (direct), Options (direct), Help (dropdown)
 - **Spreadsheet View**: Displays all manifest line entries with named columns (Line #, Tags, Original, Preprocessed, Translated, Postprocessed, Wrapped, Overwrite, Quality Assurance, Log, Tags (Internal))
 - **Column Display Names**: All columns use human-readable display names (e.g., idx→Line #, orig→Original, tl→Translated)
-- **Column Auto-Hide**: Empty columns hidden by default; Tags (context_marker) hidden by default
+- **Column Auto-Hide**: Empty columns hidden by default; Tags (tag) hidden by default
 - **Column Filter Dropdown**: Slim tk.Menu dropdown with presets — Show All, Show Visible, Show Latest (furthest non-empty right column per line) plus individual column toggles
 - **All Columns Hideable**: Every column including Line # can be hidden via the column filter
 - **Column Selection Bar**: Each column has a "Select / Selected" bar above the header for search/replace scoping; same visual style as column headers
@@ -262,7 +262,7 @@ FULL TABLE VIEW
 - **File Filter**: Hierarchical dropdown with folder navigation (click folders, Back button, scrollable); larger font for readability
 - **RegEx Search & Replace**: Two-row toolbar layout — search row on top, replace row below; search across visible or selected columns; toggle RegEx mode; Results Only mode with Prev (◀) / Next (▶) navigation
 - **Results Only**: Inverted "Show Misses" — when checked, only matching rows are displayed
-- **Searchable Tags & Line #**: Tags (context_marker) and Line # (idx) are searchable (not limited to metadata)
+- **Searchable Tags & Line #**: Tags (tag) and Line # (idx) are searchable (not limited to metadata)
 - **Row Selection**: Click-based selection with Ctrl+click and Shift+click; highlighted rows
 - **Pagination**: Show All / Show X with configurable page size (default 100); "Showing X / Y Lines" status
 - **Save/Reset/Diff**: Save changes to manifest (all or selected); Reset from manifest data; Diff mode shows only changed rows
@@ -1733,7 +1733,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Manifest Metrics: set_step_metrics()/get_step_metrics() on ManifestManager for per-step metric storage with merge-update and deepcopy retrieval
     - Log Export: _export_logs() discovers {pname}.*.log step logs via glob pattern; copies to logs/ subfolder in export destination
 - **Request Formation 4-Step Process (Phase 49):**
-    - Data Model: LineInfo (index, text, is_invalid, context_marker), RequestFormationConfig (max_lines, min_lines, max_tokens, model), TranslationRequest (lines, line_indices, context_type, is_split, provides_context, receives_context)
+    - Data Model: LineInfo (index, text, is_invalid, tag), RequestFormationConfig (max_lines, min_lines, max_tokens, model), TranslationRequest (lines, line_indices, context_type, is_split, provides_context, receives_context)
     - build_requests(): Shared builder for Estimation and Translation ensuring cost estimates match actual usage
     - Step 1 — Menu/Choice Splitting: _step1_split_menu_choice() groups consecutive menu/choice-marked lines into dedicated requests with no rolling context
     - Step 2 — File Boundary Split: _step2_split_at_file_boundaries() splits at file_end markers; drops marker lines
@@ -1742,11 +1742,11 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Invalid Line Exclusion: _extract_valid_lines() filters placeholders, dedup, context markers before formation
     - Document Order: Final requests sorted by first line index
 - **Context Markers Full Implementation (Phase 50):**
-    - Data Model: LineEntry.context_marker field (Optional[str]: None, "file_end", "dialogue", "menu", "choice")
-    - Helper methods: is_context_marker(), get_marker_type(), VALID_MARKERS constant
-    - Serialization: to_dict/from_dict round-trip preserves context_marker
+    - Data Model: LineEntry.tag field (Optional[str]: None, "file_end", "dialogue", "menu", "choice")
+    - Helper methods: is_tag(), get_tag(), VALID_TAGS constant
+    - Serialization: to_dict/from_dict round-trip preserves tag
     - Detection: _is_choice_item() (numbered/bulleted patterns), _is_menu_item() (short non-speaker items), _is_dialogue_line() (speaker:dialogue pattern)
-    - detect_context_markers() scans contiguous runs of similar-pattern lines with min_run threshold
+    - detect_tags() scans contiguous runs of similar-pattern lines with min_run threshold
     - get_active_context_type() scans backwards from any position to find active marker
     - Integration: build_line_infos() converts LineEntry to LineInfo with context propagation
     - File-section tracking: _file_section field prevents Step 4 from merging across file boundaries
@@ -2293,7 +2293,7 @@ TYPING (Implemented)
 PARSER SCRIPTS (Implemented)
 - Game-engine-specific scripts that extend the format system with engine-aware logic
 - **Base interface** (`formats/parser_base.py`): `ParserScript` ABC with mandatory `name`, `extract`, `inject` methods
-- **Configuration dataclasses:** `WordwrapConfig`, `ForbiddenChars`, `ContextMarkerRules`
+- **Configuration dataclasses:** `WordwrapConfig`, `ForbiddenChars`, `TagRules`
 - **RPG Maker MV/MZ** (`formats/parser_rpgmaker.py`): Full implementations with wordwrap defaults, forbidden chars, context markers
 - **Parser Registry** (`formats/__init__.py`): `ParserRegistry` with register, get, detect, list_parsers
 - Auto-detection via `can_handle()` probes file structure (e.g. www/data/*.json, null-first arrays)
@@ -2325,7 +2325,7 @@ PIPELINE WIRING OF OPTIONAL COMPONENTS (Implemented — P3)
 - **O6 Custom Wordwrap:** Sets `Options.ParserHandlesWordwrap = True`; wordwrap step delegates to `parser.wordwrap(line)` per line instead of built-in `apply_wordwrap`
 - **O9 Pretty Wrap Hook:** `parser.pretty_wrap(text, width, break_char, max_lines)` replaces built-in `pretty_wrap` core algorithm while keeping speaker handling and pipeline logic intact; lighter alternative to O6, used for user-managed tags or as fallback
 - **O7 Forbidden Chars:** Serialises `forbidden_chars.to_dict()` to `Options.ParserForbiddenChars`; translation step calls `api_client.apply_parser_forbidden_chars()` to merge into logit bias
-- **O8 Context Markers:** Compiles `context_marker_rules`, applies regex patterns to extracted lines, writes `context_marker` tags; `detect_context_markers()` accepts optional `parser_rules` parameter to override built-in heuristics
+- **O8 Tags:** Compiles `tag_rules`, applies regex patterns to extracted lines, writes `tag` tags; `detect_tags()` accepts optional `parser_rules` parameter to override built-in heuristics
 - **Output Injection:** Output step reads `Options.ParserName`, routes through `parser.inject()` instead of standard format-based writers
 - **Manifest Options written:** `ParserName`, `ParserHandlesSpeakers`, `ParserHandlesWordwrap`, `ParserForbiddenChars` (dict), `ParserHandlesContextMarkers`
 
@@ -2343,7 +2343,8 @@ LIGHT VN PARSER (Implemented)
 - **Pretty wrap hook:** O9 `pretty_wrap()` — lighter core-wrap replacement used by Step 7 for user-managed tags
 - **Tag-specific wrapping:** Dialogue=wrap (60 chars, 3 lines), menu/variable=no wrap
 - **Encoding detection:** Priority chain: utf-8, utf-8-sig, shift_jis, cp932, euc-jp, utf-16
-- **Auto-detection:** `can_handle()` scans first 200 lines for `~【` or `~文字` patterns
+- **Auto-detection:** `can_handle()` scans first 200 lines for any of the `_DETECT_PATTERNS` set (`~【`, `~文字`, `~ボタン`, `~絵`, `~効果音`, `~選択`) or `_DETECT_LINE_PREFIXES` (`栞 `). Files like `chara_make.txt` that have non-dialogue LightVN commands (e.g. `~絵`) near the top are now correctly detected.
+- **Tag propagation:** Parser extraction tags (`dialogue`, `menu`, `variable`) from `extract_tagged()` are stored in `LoadedFile.tags` and written to the manifest `tag` field during loading. The O8 regex pass skips lines already tagged by the parser.
 - **Corpus verified:** 55604 total lines, 50212 unique across 1056 .txt files, 843 speakers
 
 WIDTH CONVERSION (Implemented)

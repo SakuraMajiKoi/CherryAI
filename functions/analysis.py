@@ -921,36 +921,36 @@ def _is_dialogue_line(line: str) -> bool:
     return detect_speaker(line.strip()) is not None
 
 
-def detect_context_markers(
+def detect_tags(
     lines: List[str],
     min_run: int = 3,
     parser_rules: Optional[Dict[str, Optional["re.Pattern"]]] = None,
 ) -> List[Optional[str]]:
-    """Detect context marker annotations for a list of raw lines.
+    """Detect tag annotations for a list of raw lines.
 
     Scans *lines* for contiguous runs of menu items, choice items, or
     dialogue lines.  A run of ``min_run`` or more consecutive matching
-    lines earns a marker annotation; shorter runs are left as ``None``
+    lines earns a tag annotation; shorter runs are left as ``None``
     (treated as "unknown").
 
     When *parser_rules* is provided (compiled patterns from a
-    ``ContextMarkerRules``), those patterns are used **instead** of the
+    ``TagRules``), those patterns are used **instead** of the
     built-in heuristics.  This allows parser scripts to define
-    engine-specific context marker patterns (Parser Handshake O8).
+    engine-specific tag patterns (Parser Handshake O8).
 
     This function does **not** produce file_end markers — those come from
     the file-loading layer or from Parser Scripts.
 
     Args:
         lines: Raw text lines (orig or prepro).
-        min_run: Minimum consecutive lines to trigger a marker annotation.
+        min_run: Minimum consecutive lines to trigger a tag annotation.
         parser_rules: Optional compiled regex dict from
-            ``ContextMarkerRules.compiled()``.  Keys are pattern names
+            ``TagRules.compiled()``.  Keys are pattern names
             (e.g. ``"dialogue_pattern"``), values are compiled regex or
             ``None``.
 
     Returns:
-        List of marker strings or ``None`` per line, same length as *lines*.
+        List of tag strings or ``None`` per line, same length as *lines*.
         Possible values: ``"dialogue"``, ``"menu"``, ``"choice"``, ``None``.
     """
     n = len(lines)
@@ -1008,18 +1008,22 @@ def detect_context_markers(
     return markers
 
 
+# Backward alias
+detect_context_markers = detect_tags
+
+
 def get_active_context_type(
-    context_markers: List[Optional[str]],
+    tags: List[Optional[str]],
     index: int,
 ) -> str:
     """Return the active context type at *index* by scanning backwards.
 
-    Context markers apply from their position until the next marker.  If no
-    marker precedes *index*, the result is ``"unknown"``.
+    Tags apply from their position until the next tag.  If no
+    tag precedes *index*, the result is ``"unknown"``.
 
     Args:
-        context_markers: Per-line marker list (from :func:`detect_context_markers`
-            or from LineEntry.context_marker values).
+        tags: Per-line tag list (from :func:`detect_tags`
+            or from LineEntry.tag values).
         index: The line index to query.
 
     Returns:
@@ -1027,7 +1031,7 @@ def get_active_context_type(
         ``"unknown"``.
     """
     for i in range(index, -1, -1):
-        marker = context_markers[i]
+        marker = tags[i]
         if marker is not None:
             return marker
     return "unknown"
@@ -2227,8 +2231,8 @@ def detect_pov(
         language: Source language key (``"japanese"``, ``"english"``, etc.).
         protagonist_name: Protagonist name from Character Notes (used for
             3rd-person detection).  Empty string disables 3rd-person probe.
-        context_markers: Optional per-line marker list from
-            :func:`detect_context_markers`.
+        context_markers: Optional per-line tag list from
+            :func:`detect_tags`.
 
     Returns:
         :class:`POVResult` with detected perspective and confidence.
@@ -2467,7 +2471,7 @@ def run_pov_with_protagonists(
         language: Source language key.
         characters: Character list from manifest.
         code_patterns: Code patterns from manifest (optional).
-        context_markers: Per-line context markers (optional).
+        context_markers: Per-line tags (optional).
 
     Returns:
         :class:`POVResult` with detected perspective and confidence.

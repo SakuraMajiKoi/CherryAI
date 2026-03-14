@@ -2,7 +2,7 @@
 
 Parser Scripts are game-engine-specific or format-specific scripts that
 handle extraction, injection, and optionally provide wordwrap settings,
-forbidden characters, and context marker rules.
+forbidden characters, and tag rules.
 
 Usage::
 
@@ -33,7 +33,8 @@ __all__ = [
     "ParserScript",
     "WordwrapConfig",
     "ForbiddenChars",
-    "ContextMarkerRules",
+    "TagRules",
+    "ContextMarkerRules",  # backward-compatible alias
     "ExtractedLine",
     "SpeakerInfo",
     "ParserError",
@@ -116,8 +117,8 @@ class ForbiddenChars:
 
 
 @dataclass
-class ContextMarkerRules:
-    """Engine-specific patterns for detecting context markers.
+class TagRules:
+    """Engine-specific patterns for detecting per-line tags.
 
     Attributes:
         scene_pattern: Regex for scene/file boundaries.
@@ -150,7 +151,7 @@ class ContextMarkerRules:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ContextMarkerRules":
+    def from_dict(cls, data: Dict[str, Any]) -> "TagRules":
         """Deserialise from dictionary."""
         return cls(
             scene_pattern=str(data.get("scene_pattern", "")),
@@ -158,6 +159,10 @@ class ContextMarkerRules:
             menu_pattern=str(data.get("menu_pattern", "")),
             choice_pattern=str(data.get("choice_pattern", "")),
         )
+
+
+# Backward-compatible alias
+ContextMarkerRules = TagRules
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +180,7 @@ class ParserScript(ABC):
     Subclasses may override:
     - :attr:`wordwrap_config`: engine-specific wrapping defaults.
     - :attr:`forbidden_chars`: characters to ban during translation.
-    - :attr:`context_marker_rules`: patterns for context detection.
+    - :attr:`tag_rules`: patterns for tag detection.
     - :meth:`can_handle`: probe whether a file belongs to this engine.
     """
 
@@ -226,9 +231,15 @@ class ParserScript(ABC):
         return None
 
     @property
-    def context_marker_rules(self) -> Optional[ContextMarkerRules]:
-        """Context marker detection patterns, or ``None``."""
+    def tag_rules(self) -> Optional[TagRules]:
+        """Tag detection patterns, or ``None``."""
         return None
+
+    # Backward-compatible alias
+    @property
+    def context_marker_rules(self) -> Optional[TagRules]:
+        """Deprecated alias for :attr:`tag_rules`."""
+        return self.tag_rules
 
     def can_handle(self, file_path: Path) -> bool:
         """Probe whether *file_path* is handled by this parser.
@@ -357,7 +368,7 @@ class ParserScript(ABC):
             "name": self.name,
             "has_wordwrap": self.wordwrap_config is not None,
             "has_forbidden_chars": self.forbidden_chars is not None,
-            "has_context_markers": self.context_marker_rules is not None,
+            "has_tag_rules": self.tag_rules is not None,
             "has_tagged_extraction": (
                 type(self).extract_tagged is not ParserScript.extract_tagged
             ),

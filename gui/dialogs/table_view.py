@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 # All possible line entry fields in display order
 LINE_FIELDS: List[str] = [
-    "idx", "context_marker", "orig", "prepro", "tl",
+    "idx", "tag", "orig", "prepro", "tl",
     "postpro", "wordwr", "overwrite", "qa_overwrite",
     "log", "tags",
 ]
@@ -44,7 +44,7 @@ NON_EDITABLE_FIELDS: Set[str] = {"idx", "orig"}
 # Display names for columns
 COLUMN_DISPLAY_NAMES: Dict[str, str] = {
     "idx": "Line #",
-    "context_marker": "Tags",
+    "tag": "Tags",
     "orig": "Original",
     "prepro": "Preprocessed",
     "tl": "Translated",
@@ -57,7 +57,7 @@ COLUMN_DISPLAY_NAMES: Dict[str, str] = {
 }
 
 # Columns hidden by default even when populated
-DEFAULT_HIDDEN: Set[str] = {"context_marker"}
+DEFAULT_HIDDEN: Set[str] = {"tag"}
 
 # Reverse lookup: display name → field name
 DISPLAY_NAME_TO_FIELD: Dict[str, str] = {v: k for k, v in COLUMN_DISPLAY_NAMES.items()}
@@ -697,7 +697,7 @@ class FullTableViewDialog(tk.Toplevel):
         """
         pipeline_cols = [
             f for f in LINE_FIELDS
-            if f not in {"idx", "context_marker", "log", "tags"}
+            if f not in {"idx", "tag", "log", "tags"}
         ]
         visible: Set[str] = {"idx"}
         for line in self._all_lines:

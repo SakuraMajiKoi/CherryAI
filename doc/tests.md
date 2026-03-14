@@ -342,7 +342,7 @@ Full Table View dialog unit tests. Mocks Tkinter to test data logic independentl
 | `test_line_fields_starts_with_idx` | LINE_FIELDS starts with idx |
 | `test_line_fields_contains_core_fields` | Essential fields present |
 | `test_non_editable_contains_idx` | idx is non-editable |
-| `test_metadata_fields_defined` | METADATA_FIELDS correct (idx/context_marker now searchable) |
+| `test_metadata_fields_defined` | METADATA_FIELDS correct (idx/tag now searchable) |
 | `test_default_page_size` | Default page size is 100 |
 | `test_color_constants_are_hex` | Color constants validation |
 
@@ -377,14 +377,14 @@ Full Table View dialog unit tests. Mocks Tkinter to test data logic independentl
 | `test_display_names_are_unique` | No display name collisions |
 | `test_idx_renamed_to_line_number` | idx → Line # |
 | `test_orig_renamed_to_original` | orig → Original |
-| `test_context_marker_renamed_to_tags` | context_marker → Tags |
+| `test_context_marker_renamed_to_tags` | tag → Tags |
 | `test_qa_overwrite_renamed` | qa_overwrite → Quality Assurance |
 
 #### TestDefaultHidden (3 tests)
 
 | Test | Purpose |
 |------|---------|
-| `test_context_marker_hidden_by_default` | context_marker in DEFAULT_HIDDEN |
+| `test_context_marker_hidden_by_default` | tag in DEFAULT_HIDDEN |
 | `test_idx_not_hidden_by_default` | idx not hidden |
 | `test_orig_not_hidden_by_default` | orig not hidden |
 
@@ -5561,10 +5561,10 @@ postprocessing recovery, wordwrap, game update detection, and import translation
 | `test_hash_lines_are_normal_text` | # lines are valid text (not comments) |
 | `test_hash_only_no_japanese` | # without Japanese → NO_JAPANESE |
 | `test_equals_lines_are_normal_text` | = lines are valid text |
-| `test_context_marker_dialogue` | __DIALOGUE__ → CONTEXT_MARKER |
-| `test_context_marker_menu` | __MENU__ → CONTEXT_MARKER |
-| `test_context_marker_choice` | __CHOICE__ → CONTEXT_MARKER |
-| `test_context_marker_file` | __FILE__ → CONTEXT_MARKER |
+| `test_context_marker_dialogue` | __DIALOGUE__ → TAG |
+| `test_context_marker_menu` | __MENU__ → TAG |
+| `test_context_marker_choice` | __CHOICE__ → TAG |
+| `test_context_marker_file` | __FILE__ → TAG |
 | `test_context_marker_case_insensitive` | Case-insensitive matching |
 | `test_context_marker_with_whitespace` | Whitespace around markers |
 | `test_context_marker_in_text_not_matched` | Embedded markers not caught |
@@ -5577,7 +5577,7 @@ postprocessing recovery, wordwrap, game update detection, and import translation
 
 | Test | Purpose |
 |------|---------|
-| `test_context_marker_field` | LineEntry context_marker field |
+| `test_context_marker_field` | LineEntry tag field |
 | `test_file_end_marker` | __FILE__ → file_end |
 | `test_no_marker` | Regular lines have no marker |
 | `test_marker_serialization` | to_dict/from_dict roundtrip |
@@ -5627,7 +5627,7 @@ postprocessing recovery, wordwrap, game update detection, and import translation
 |------|---------|
 | `test_basic_conversion` | Normal lines become valid LineInfo |
 | `test_comment_lines_not_filtered` | __COMMENT__ not filtered by build_line_infos |
-| `test_context_markers_invalid` | Context marker lines marked is_invalid=True |
+| `test_context_markers_invalid` | Tag lines marked is_invalid=True |
 | `test_context_type_propagation` | Context type propagates to subsequent lines |
 | `test_placeholder_lines_invalid` | __PROTECTED__ and __DEDUP__ lines marked invalid |
 | `test_empty_lines_invalid` | Empty/whitespace lines marked invalid |
@@ -11223,7 +11223,7 @@ python -m pytest CherryAI/dev/test_request_formation.py -v --timeout=10
 
 | Test Class | Count | Coverage |
 |-----------|-------|----------|
-| TestLineEntryContextMarker | 5 | Default None, set marker, all valid types, get_marker_type, VALID_MARKERS |
+| TestLineEntryContextMarker | 5 | Default None, set marker, all valid types, get_marker_type, VALID_TAGS |
 | TestLineEntryContextMarkerSerialization | 6 | to_dict without/with marker, from_dict with/without marker, roundtrip both |
 | TestIsChoiceItem | 7 | Numbered, bullet, CJK bullet, circled number, long reject, empty, plain |
 | TestIsMenuItem | 5 | Short items, speaker reject, long reject, multi-sentence reject, empty |
@@ -11296,7 +11296,7 @@ python -m pytest CherryAI/dev/test_glossary_selective.py -v --timeout=10
 |-----------|-------|----------|
 | TestWordwrapConfig | 4 | Defaults, custom values, roundtrip serialisation, from_dict defaults |
 | TestForbiddenChars | 4 | Defaults, custom values, roundtrip serialisation, from_dict defaults |
-| TestContextMarkerRules | 4 | Defaults, compiled empty patterns, compiled valid regex, roundtrip |
+| TestTagRules | 4 | Defaults, compiled empty patterns, compiled valid regex, roundtrip |
 | TestParserScriptABC | 3 | Cannot instantiate base, minimal implementation, info summary |
 | TestRpgMakerMVParser | 7 | Name, wordwrap config, forbidden chars, context markers, can_handle www/data, non-json rejected, info capabilities |
 | TestRpgMakerMZParser | 4 | Name, wider wordwrap than MV, same forbidden chars as MV, non-json rejected |
@@ -12470,6 +12470,29 @@ Tests for Input step fixes and Import Translation improvements.
 
 ```bash
 python -m pytest dev/test_input_import_fixes.py -v --timeout=10
+```
+
+---
+
+### dev/test_lightvn_fixes.py (31 tests) — LightVN Detection, Tags & Input Fixes
+
+Tests for LightVN parser detection expansion, ~文字 menu parsing, tag propagation
+to manifest tag, messagebox import shadowing fix, and source file copy
+rel_path matching.
+
+**Files Tested:** `formats/LightVN.py`, `gui/steps/input_extract.py`, `functions/manifest_manager.py`
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestCanHandleExpanded | 11 | Speaker tag, ~文字, ~絵, ~ボタン, ~効果音, ~選択, 栞 prefix, plain text reject, non-txt reject, chara_make pattern, bookmark without tilde |
+| TestMojiMenuParsing | 6 | Basic ~文字, fullwidth parens, multiple lines, full context, ~文字窓 variant, no quoted text |
+| TestTagPropagation | 4 | LoadedFile stores tags, default None, sync sets tag, tag assignment |
+| TestMessageboxFix | 2 | No local messagebox import in _load_selected_paths (AST), module-level import exists |
+| TestCopyOriginalsRelPathMatching | 3 | No filename-only matching (AST), uses _find_common_base, matches entry rel_path |
+| TestFullFileIntegration | 5 | chara_make-style file, dialogue tags, mixed tags, _DETECT_PATTERNS set, _DETECT_LINE_PREFIXES tuple |
+
+```bash
+python -m pytest dev/test_lightvn_fixes.py -v --timeout=10
 ```
 
 

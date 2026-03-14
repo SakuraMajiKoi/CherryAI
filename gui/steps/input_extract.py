@@ -77,6 +77,7 @@ class LoadedFile:
         manifest_path: Path to associated manifest, if found.
         line_count: Number of lines.
         encoding: Detected or assumed encoding.
+        tags: Per-line parser tags (dialogue, menu, variable, etc.).
     """
 
     def __init__(
@@ -86,6 +87,7 @@ class LoadedFile:
         lines: List[str],
         manifest_path: Optional[Path] = None,
         encoding: str = "utf-8",
+        tags: Optional[List[str]] = None,
     ) -> None:
         """Initialize LoadedFile.
 
@@ -95,12 +97,14 @@ class LoadedFile:
             lines: Extracted lines.
             manifest_path: Associated manifest path.
             encoding: File encoding.
+            tags: Per-line parser tags from extract_tagged.
         """
         self.path = path
         self.format_id = format_id
         self.lines = lines
         self.manifest_path = manifest_path
         self.encoding = encoding
+        self.tags = tags
 
     @property
     def line_count(self) -> int:
@@ -655,7 +659,6 @@ class InputExtractionStep(BaseStep):
                 files_to_load.extend(folder_files)
 
         if not files_to_load:
-            from tkinter import messagebox
             messagebox.showinfo(
                 "No Files Found",
                 "No supported files found in the selected paths.",
@@ -756,7 +759,6 @@ class InputExtractionStep(BaseStep):
 
         # Warn about skipped files
         if skipped_files:
-            from tkinter import messagebox
             names = "\n".join(skipped_files[:10])
             if len(skipped_files) > 10:
                 names += f"\n...and {len(skipped_files) - 10} more"
@@ -1368,14 +1370,19 @@ class InputExtractionStep(BaseStep):
             )
 
         # ------------------------------------------------------------------
-        # O8: Context Markers
+        # O8: Tags
+        # When parser tags were already applied during extraction (via
+        # extract_tagged), only tag lines that don't have a tag yet.
         # ------------------------------------------------------------------
-        if parser.context_marker_rules is not None:
-            rules = parser.context_marker_rules
+        if parser.tag_rules is not None:
+            rules = parser.tag_rules
             compiled = rules.compiled()
             lines_data = mgr.get_lines()  # list of dicts with 'idx', 'orig'
             tagged_count = 0
             for entry in lines_data:
+                if entry.get("tag"):
+                    tagged_count += 1
+                    continue
                 text = entry.get("orig", "")
                 tag = None
                 for pattern_name, pattern in compiled.items():
@@ -1383,12 +1390,12 @@ class InputExtractionStep(BaseStep):
                         tag = pattern_name.replace("_pattern", "")
                         break
                 if tag:
-                    entry["context_marker"] = tag
+                    entry["tag"] = tag
                     tagged_count += 1
             if tagged_count > 0:
                 mgr.set_lines(lines_data)
                 save_nested_bool_field(
-                    mgr, "Options", "ParserHandlesContextMarkers", True,
+                    mgr, "Options", "ParserHandlesTags", True,
                 )
                 logger.info(
                     "O8: Parser '%s' tagged %d lines with context markers",
@@ -1535,6 +1542,28 @@ class InputExtractionStep(BaseStep):
         added = mgr.add_files(new_file_infos, new_lines_by_rel)
         logger.info("Added %d new file(s) to manifest", added)
 
+        # Apply parser tags for newly added lines
+        _tags_by_rel: Dict[str, List[str]] = {}
+        for loaded_file in new_loaded:
+            if loaded_file.tags:
+                try:
+                    rp = str(loaded_file.path.relative_to(base))
+                except ValueError:
+                    rp = loaded_file.path.name
+                _tags_by_rel[rp] = loaded_file.tags
+        if _tags_by_rel:
+            lines_data = mgr.get_lines()
+            filedir = mgr.get_filedir()
+            for entry in filedir:
+                t_list = _tags_by_rel.get(entry.rel_path)
+                if t_list is None:
+                    continue
+                for j, tag_val in enumerate(t_list):
+                    m_idx = entry.first_idx + j
+                    if m_idx <= entry.last_idx and m_idx < len(lines_data):
+                        lines_data[m_idx]["tag"] = tag_val
+            mgr.set_lines(lines_data)
+
         # Copy only the new originals to the project
         try:
             filedir = mgr.get_filedir()
@@ -1588,11 +1617,14 @@ class InputExtractionStep(BaseStep):
         
         for loaded_file in self._loaded_files:
             _file_start_idx = idx
-            for line_text in loaded_file.lines:
-                lines.append({
+            for j, line_text in enumerate(loaded_file.lines):
+                entry: Dict[str, Any] = {
                     "idx": idx,
                     "orig": line_text,
-                })
+                }
+                if loaded_file.tags and j < len(loaded_file.tags):
+                    entry["tag"] = loaded_file.tags[j]
+                lines.append(entry)
                 idx += 1
             
             # Classify file type when typing is enabled
@@ -1628,6 +1660,8 @@ class InputExtractionStep(BaseStep):
         
         TASK 35.2: Ensures the project can be reopened and processed
         even if original source files are moved or deleted.
+        Matches by computed rel_path instead of filename to handle
+        duplicate filenames in different subdirectories correctly.
         """
         mgr = self.manifest_manager
         if mgr is None or not mgr.is_loaded:
@@ -1637,11 +1671,19 @@ class InputExtractionStep(BaseStep):
             # Build rel_path → absolute source path mapping from loaded files
             filedir = mgr.get_filedir()
             source_paths: Dict[str, Path] = {}
+
+            # Compute the same common base used when building filedir
+            all_abs = [lf.path for lf in self._loaded_files]
+            base = mgr._find_common_base(all_abs)
+
             for loaded_file in self._loaded_files:
-                # Match by filename against filedir entries
+                try:
+                    rel = str(loaded_file.path.relative_to(base))
+                except ValueError:
+                    rel = loaded_file.path.name
+                # Match by rel_path to filedir entries
                 for entry in filedir:
-                    entry_name = Path(entry.rel_path).name
-                    if loaded_file.path.name == entry_name:
+                    if entry.rel_path == rel:
                         source_paths[entry.rel_path] = loaded_file.path
                         break
 
@@ -2234,6 +2276,18 @@ class InputExtractionStep(BaseStep):
             # Extract lines using format handler
             lines = self._extract_lines(path, format_id, encoding)
 
+            # Extract per-line tags when parser supports tagged extraction
+            tags: Optional[List[str]] = None
+            try:
+                from CherryAI.formats import get_parser_registry
+                _parser = get_parser_registry().get(format_id)
+                if _parser is not None and hasattr(_parser, "extract_tagged"):
+                    _tagged = _parser.extract_tagged(path)
+                    if _tagged is not None and len(_tagged) == len(lines):
+                        tags = [t.tag for t in _tagged]
+            except Exception:
+                pass
+
             # Handshake: per-line token validation
             if not self._validate_extracted_lines(lines, path.name):
                 return False
@@ -2249,6 +2303,7 @@ class InputExtractionStep(BaseStep):
                 lines=lines,
                 manifest_path=manifest_path,
                 encoding=encoding,
+                tags=tags,
             )
 
             self._loaded_files.append(loaded)

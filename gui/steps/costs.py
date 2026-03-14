@@ -1951,7 +1951,7 @@ class CostsStep(BaseStep):
                         index=last + 1,
                         text="",
                         is_invalid=True,
-                        context_marker="file_end",
+                        tag="file_end",
                     ))
             except Exception:
                 pass

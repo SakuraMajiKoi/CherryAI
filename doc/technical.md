@@ -217,7 +217,7 @@ TABLE OF CONTENTS
    5.3 document.py ✅ - PDF, EPUB handlers (placeholder)
    5.4 html.py ✅ - HTML parsing (under development)
    5.5 rpgmaker.py ✅ - RPG Maker MV/MZ (placeholder)
-   5.6 parser_base.py ✅ - ParserScript ABC, WordwrapConfig, ForbiddenChars, ContextMarkerRules, ExtractedLine, SpeakerInfo
+   5.6 parser_base.py ✅ - ParserScript ABC, WordwrapConfig, ForbiddenChars, TagRules, ExtractedLine, SpeakerInfo
    5.7 parser_rpgmaker.py ✅ - RpgMakerMVParser, RpgMakerMZParser implementations
    5.8 json_lenient.py ✅ - Lenient JSON parsing with error recovery
    5.9 handshake.py ✅ - ParserHandshake protocol: SpeakerInfo, ExtractedLine, ParserError, validate_parser()
@@ -334,8 +334,8 @@ TABLE OF CONTENTS
          - All dialogs delegate to functions/api_config.py for hashing and encryption
        - table_view.py - Full Table View dialog (2026):
          - FullTableViewDialog: Spreadsheet-like view of all manifest line entries
-         - Constants: LINE_FIELDS (11 fields), COLUMN_DISPLAY_NAMES (human-readable names), DISPLAY_NAME_TO_FIELD (reverse lookup), DEFAULT_HIDDEN (context_marker), NON_EDITABLE_FIELDS (idx, orig), METADATA_FIELDS (log, tags, prepro_ops)
-         - Column display names: idx→Line #, context_marker→Tags, orig→Original, prepro→Preprocessed, tl→Translated, postpro→Postprocessed, wordwr→Wrapped, qa_overwrite→Quality Assurance
+         - Constants: LINE_FIELDS (11 fields), COLUMN_DISPLAY_NAMES (human-readable names), DISPLAY_NAME_TO_FIELD (reverse lookup), DEFAULT_HIDDEN (tag), NON_EDITABLE_FIELDS (idx, orig), METADATA_FIELDS (log, tags, prepro_ops)
+         - Column display names: idx→Line #, tag→Tags, orig→Original, prepro→Preprocessed, tl→Translated, postpro→Postprocessed, wordwr→Wrapped, qa_overwrite→Quality Assurance
          - Column visibility: auto-hides empty columns; slim tk.Menu dropdown with Show All/Show Visible/Show Latest presets; all columns including Line # are hideable; Tags hidden by default
          - Column selection bar: "Select / Selected" labels above each column, synced widths via Canvas, for search/replace scoping
          - Sort indicators: ▲/▼ arrows in column headers; _sort_column and _sort_reverse state tracking
@@ -345,7 +345,7 @@ TABLE OF CONTENTS
          - Two-row toolbar: search row (top) with file filter, search entry, column selector, Results Only toggle, Prev/Next arrows; replace row (bottom) with replace entry, Replace All, action buttons
          - Results Only mode: inverted Show Misses (_on_toggle_results_only)
          - Search/replace scopes to visible columns or _selected_columns when populated
-         - Tags (context_marker) and Line # (idx) are searchable (removed from METADATA_FIELDS)
+         - Tags (tag) and Line # (idx) are searchable (removed from METADATA_FIELDS)
          - Row selection with highlighting; Ctrl+click and Shift+click support
          - Pagination: Show All / Show X with configurable page size (default 100)
          - Save/Reset/Diff buttons: saves changes to manifest, resets from snapshot, diff mode
@@ -728,7 +728,7 @@ TABLE OF CONTENTS
 
       6.17 Request Formation 4-Step Process (Phase 49)
          - Data Model:
-           - LineInfo dataclass: index, text, is_invalid, context_marker fields
+           - LineInfo dataclass: index, text, is_invalid, tag fields
            - RequestFormationConfig dataclass: max_lines, min_lines, max_tokens, model (max_tokens wired from RequestSettings.max_input_tokens — Task 41)
            - TranslationRequest dataclass: lines, line_indices, context_type, is_split, provides_context, receives_context
          - Shared Functions:
@@ -748,17 +748,17 @@ TABLE OF CONTENTS
 
    6.18 Context Markers Full Implementation (Phase 50)
          - Data Model (Task 50.1):
-           - LineEntry.context_marker: Optional[str] field (None, "file_end", "dialogue", "menu", "choice")
-           - LineEntry.VALID_MARKERS: frozenset of accepted marker types
-           - is_context_marker() → bool: True when line is metadata-only
-           - get_marker_type() → Optional[str]: returns marker type
-           - Sparse serialization: to_dict() includes context_marker only when set
-           - from_dict() restores context_marker (defaults to None)
+           - LineEntry.tag: Optional[str] field (None, "file_end", "dialogue", "menu", "choice")
+           - LineEntry.VALID_TAGS: frozenset of accepted marker types
+           - is_tag() → bool: True when line is metadata-only
+           - get_tag() → Optional[str]: returns marker type
+           - Sparse serialization: to_dict() includes tag only when set
+           - from_dict() restores tag (defaults to None)
          - Detection in Analysis (Task 50.2):
            - _is_choice_item(line) → bool: regex for numbered/bulleted choice patterns
            - _is_menu_item(line) → bool: short non-speaker items (≤60 chars)
            - _is_dialogue_line(line) → bool: speaker:dialogue via detect_speaker()
-           - detect_context_markers(lines, min_run=3) → List[Optional[str]]: contiguous run detection
+           - detect_tags(lines, min_run=3) → List[Optional[str]]: contiguous run detection
            - get_active_context_type(markers, index) → str: backwards scan for nearest marker
            - Modified: functions/analysis.py
          - Integration with Request Builder (Task 50.3):
@@ -2385,8 +2385,8 @@ Pipeline Wiring of Optional Components (P3):
   `parser.inject(output_path, lines)` with fallback to standard format writers on failure
 - `gui/steps/translate.py`: After logit bias setup, reads `ParserName`, calls
   `api_client.apply_parser_forbidden_chars(parser_name)` to merge O7 into logit bias
-- `functions/analysis.py` `detect_context_markers()`: Accepts optional `parser_rules` kwarg
-  (compiled regex dict from `ContextMarkerRules.compiled()`); when provided, uses parser patterns
+- `functions/analysis.py` `detect_tags()`: Accepts optional `parser_rules` kwarg
+  (compiled regex dict from `TagRules.compiled()`); when provided, uses parser patterns
   instead of built-in heuristics (`_is_choice_item`, `_is_dialogue_line`, `_is_menu_item`)
 
 Light VN Parser (formats/LightVN.py):
@@ -2395,7 +2395,8 @@ Light VN Parser (formats/LightVN.py):
   stores per-line entries so dedup is handled by the Preprocessing step if enabled
 - **M1 Extract**: `extract(path)` → flat list; `extract_tagged(path)` → `List[ExtractedLine]`
 - **M2 Inject**: `inject(path, lines)` — writes to `{stem}_translated.txt`
-- **M3 Identity**: `can_handle()` probes for `~【` or `~文字` in first 200 lines
+- **M3 Identity**: `can_handle()` probes first 200 lines for `_DETECT_PATTERNS` (`~【`, `~文字`, `~ボタン`, `~絵`, `~効果音`, `~選択`) or `_DETECT_LINE_PREFIXES` (`栞 `)
+- **Tag propagation**: `LoadedFile.tags` stores per-line tags from `extract_tagged()`; `_sync_lines_to_manifest()` writes them to `tag`; O8 regex pass skips pre-tagged lines
 - **O3 Encoding**: Priority chain: utf-8, utf-8-sig, shift_jis, cp932, euc-jp, utf-16
 - **O4 Speakers**: `detect_speakers()` parses `Speaker: text` format from extracted lines
 - **O5 Wordwrap**: 60 chars, 3 lines per textbox, `\w` textbox injection
@@ -2859,7 +2860,7 @@ API VALIDATION (functions/validation.py) ✓ Enhanced Session 14+
 Purpose: Multi-layer validation of lines before and after API translation.
 
 Classes:
-- SkipReason: Enum for why a line is skipped (EMPTY, COMMENT, CONTEXT_MARKER, DEDUP_ONLY, etc.)
+- SkipReason: Enum for why a line is skipped (EMPTY, COMMENT, TAG, DEDUP_ONLY, etc.)
 - ValidationResult: Dataclass for single-line validation outcome
 - BatchValidationResult: Dataclass for batch processing results
 - PlaceholderValidationResult: Dataclass for placeholder preservation (NEW - TASK 4)

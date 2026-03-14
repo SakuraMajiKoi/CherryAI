@@ -30,7 +30,8 @@ class SkipReason(Enum):
     
     EMPTY = "empty"
     COMMENT = "comment"
-    CONTEXT_MARKER = "context_marker"
+    CONTEXT_MARKER = "context_marker"  # keep enum value for serialized data compat
+    TAG = "tag"
     DEDUP_ONLY = "dedup_only"
     PROT_ONLY = "prot_only"
     NO_JAPANESE = "no_japanese"
@@ -128,9 +129,11 @@ PROT_PATTERN = re.compile(
     r"^\s*__\s*(?:PROTECTED|PROT)(?:_\d+)?\s*__(?:\d*)\s*$", re.IGNORECASE,
 )
 COMMENT_PATTERN = re.compile(r"^\s*__COMMENT__")
-CONTEXT_MARKER_PATTERN = re.compile(
+TAG_PATTERN = re.compile(
     r"^\s*__(DIALOGUE|MENU|CHOICE|FILE)__\s*$", re.IGNORECASE
 )
+# Backward alias
+CONTEXT_MARKER_PATTERN = TAG_PATTERN
 
 # Pattern to find __PROTECTED__ placeholders in text (with optional index)
 PROT_PLACEHOLDER_PATTERN = re.compile(r"__\s*PROT(?:_\d+)?\s*__", re.IGNORECASE)
@@ -853,11 +856,11 @@ def validate_line_pre(
             skip_reason=SkipReason.COMMENT,
         )
     
-    # 3. Context marker lines (__DIALOGUE__, __MENU__, __CHOICE__, __FILE__)
-    if CONTEXT_MARKER_PATTERN.match(stripped):
+    # 3. Tag lines (__DIALOGUE__, __MENU__, __CHOICE__, __FILE__)
+    if TAG_PATTERN.match(stripped):
         return ValidationResult(
             is_valid=False,
-            skip_reason=SkipReason.CONTEXT_MARKER,
+            skip_reason=SkipReason.TAG,
         )
     
     # 4. Lines containing only __DEDUP__ placeholder
@@ -1142,7 +1145,7 @@ def reassemble_translations(
         for idx, line, reason in skipped_lines:
             if idx not in auto_translations:
                 # For comments and special lines, preserve original
-                if reason in (SkipReason.COMMENT, SkipReason.CONTEXT_MARKER,
+                if reason in (SkipReason.COMMENT, SkipReason.TAG,
                               SkipReason.DEDUP_ONLY, SkipReason.PROT_ONLY):
                     result[idx] = line
                 # For empty lines, keep empty

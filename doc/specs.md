@@ -683,7 +683,7 @@ Code Spacing Rules (processed in both Pre and Post steps) apply these extended p
 
 **Purpose**: Parser Scripts are game-engine-specific or format-specific scripts that handle extraction, injection, and optionally provide wordwrap settings and context markers. They extend the base format handlers in `formats/` with engine-aware logic.
 
-**Status**: Implemented (Phase 53 + Parser Handshake) — `formats/parser_base.py` defines the `ParserScript` ABC with `WordwrapConfig`, `ForbiddenChars`, and `ContextMarkerRules` dataclasses plus optional handshake methods (`extract_tagged`, `detect_speakers`, `wordwrap_for_tag`, `wordwrap`, `detect_encoding`). `formats/handshake.py` defines the handshake protocol types (`ExtractedLine`, `SpeakerInfo`, `ParserError`) and `validate_parser()`. RPG Maker MV/MZ parsers live in `formats/parser_rpgmaker.py`. The Light VN parser lives in `formats/LightVN.py` and is the reference handshake-compliant implementation. A `ParserRegistry` in `formats/__init__.py` handles discovery and auto-detection. Wordwrap step auto-populates settings from detected parsers; forbidden characters integrate with logit bias and postprocessing.
+**Status**: Implemented (Phase 53 + Parser Handshake) — `formats/parser_base.py` defines the `ParserScript` ABC with `WordwrapConfig`, `ForbiddenChars`, and `TagRules` dataclasses plus optional handshake methods (`extract_tagged`, `detect_speakers`, `wordwrap_for_tag`, `wordwrap`, `detect_encoding`). `formats/handshake.py` defines the handshake protocol types (`ExtractedLine`, `SpeakerInfo`, `ParserError`) and `validate_parser()`. RPG Maker MV/MZ parsers live in `formats/parser_rpgmaker.py`. The Light VN parser lives in `formats/LightVN.py` and is the reference handshake-compliant implementation. A `ParserRegistry` in `formats/__init__.py` handles discovery and auto-detection. Wordwrap step auto-populates settings from detected parsers; forbidden characters integrate with logit bias and postprocessing.
 
 #### Handshake Protocol
 
@@ -707,7 +707,7 @@ The Parser Handshake (`formats/handshake.py`) formalizes what every parser must 
 | O6 | `wordwrap(line, config)` | Custom wrapping function |
 | O9 | `pretty_wrap(text, width, break_char, max_lines)` | Custom core-wrap replacement (lighter than O6) |
 | O7 | `forbidden_chars` | Characters that must not appear in output |
-| O8 | `context_marker_rules` | Engine-specific context marker definitions |
+| O8 | `tag_rules` | Engine-specific context marker definitions |
 
 **Tagged Extraction** (extends M1): `extract_tagged(file_path) → List[ExtractedLine]` returns lines with tag, speaker, and context metadata. When provided, `extract()` delegates to it for backward compatibility.
 
@@ -762,7 +762,9 @@ Reference handshake-compliant parser for Light VN visual novel scripts. Adapted 
 | `menu` | `~文字` and `~ボタン文字` menu strings | No wrap |
 | `variable` | `臨時全域変数` and `保存変数` assignments | No wrap |
 
-**Detection**: Scans first 200 lines for `~【` (speaker tags) or `~文字` (menu commands).
+**Detection**: Scans first 200 lines for any of the `_DETECT_PATTERNS` set (`~【`, `~文字`, `~ボタン`, `~絵`, `~効果音`, `~選択`) or `_DETECT_LINE_PREFIXES` (`栞 `). Files like `chara_make.txt` that contain `~絵` near the top but no `~【` or `~文字` until much later are now correctly detected.
+
+**Tag Propagation**: When `extract_tagged()` is used during loading, per-line tags (`dialogue`, `menu`, `variable`) are stored in `LoadedFile.tags` and written to the manifest's `tag` field during `_sync_lines_to_manifest()`. The O8 tag_rules regex pass in `_wire_parser_optionals` skips lines already tagged by the parser.
 
 #### Wordwrap Integration
 
@@ -5063,7 +5065,7 @@ This catalog lists every existing function that participates in recovery, valida
 **Validation** (`functions/validation.py`):
 | Function / Class | Purpose |
 |------------------|---------|
-| `SkipReason` (enum) | Why a line was skipped (EMPTY, COMMENT, CONTEXT_MARKER, DEDUP_ONLY, PROT_ONLY, NO_JAPANESE, ALREADY_TRANSLATED, SYMBOL_ONLY) |
+| `SkipReason` (enum) | Why a line was skipped (EMPTY, COMMENT, TAG, DEDUP_ONLY, PROT_ONLY, NO_JAPANESE, ALREADY_TRANSLATED, SYMBOL_ONLY) |
 | `ValidationResult` | Single validation finding |
 | `BatchValidationResult` | Aggregate validation for a batch |
 | `PlaceholderValidationResult` | Placeholder-specific validation |

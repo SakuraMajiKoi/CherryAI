@@ -81,13 +81,15 @@ class LineEntry:
     # Tags (v2.1) - Content classification, status, and quality tags
     tags: Optional[Any] = None  # LineTags from auto_tagger module
 
-    # Context marker (Phase 50) — marks this line as a section boundary.
+    # Tag (per-line) — marks this line's content type or section boundary.
     # Values: None (normal line), "file_end", "dialogue", "menu", "choice".
-    # Marker lines are metadata — never translated, never sent to LLM.
-    context_marker: Optional[str] = None
+    # Marker lines (file_end) are metadata — never translated, never sent to LLM.
+    tag: Optional[str] = None
 
-    # --- Valid marker constants ---
-    VALID_MARKERS = frozenset({"file_end", "dialogue", "menu", "choice"})
+    # --- Valid tag constants ---
+    VALID_TAGS = frozenset({"file_end", "dialogue", "menu", "choice", "variable"})
+    # Backward-compatible alias
+    VALID_MARKERS = VALID_TAGS
 
     def __post_init__(self) -> None:
         """Initialize dynamic tlc/edit attributes storage."""
@@ -115,16 +117,22 @@ class LineEntry:
         """Get Edit pass N result, or None if not set."""
         return getattr(self, f"edit{pass_num}", None)
 
-    def is_context_marker(self) -> bool:
-        """Return ``True`` if this line is a context marker (metadata only).
+    def is_tag(self) -> bool:
+        """Return ``True`` if this line has a tag set.
 
-        Context marker lines are never translated and never sent to the LLM.
+        Lines tagged ``file_end`` are metadata — never translated, never sent to the LLM.
         """
-        return self.context_marker is not None
+        return self.tag is not None
 
-    def get_marker_type(self) -> Optional[str]:
-        """Return the context marker type, or ``None`` for normal lines."""
-        return self.context_marker
+    # Backward-compatible alias
+    is_context_marker = is_tag
+
+    def get_tag(self) -> Optional[str]:
+        """Return the line tag, or ``None`` for untagged lines."""
+        return self.tag
+
+    # Backward-compatible alias
+    get_marker_type = get_tag
 
     def get_input_for_translation(self) -> str:
         """Input for Translation API call.
@@ -370,9 +378,9 @@ class LineEntry:
             if tags_dict:  # Only include if non-empty
                 result["tags"] = tags_dict
 
-        # Context marker (Phase 50) — only serialise when set
-        if self.context_marker is not None:
-            result["context_marker"] = self.context_marker
+        # Tag (per-line) — only serialise when set
+        if self.tag is not None:
+            result["tag"] = self.tag
 
         # Dynamic TLC/Edit fields
         for n in range(1, _MAX_PASS_SEARCH + 1):
@@ -420,7 +428,7 @@ class LineEntry:
             deleted=data.get("deleted", False),
             updated=data.get("updated"),
             tags=tags,
-            context_marker=data.get("context_marker"),
+            tag=data.get("tag") or data.get("context_marker"),
         )
 
         # Restore dynamic TLC/Edit fields

@@ -24,7 +24,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from .handshake import ExtractedLine, ParserError, SpeakerInfo
 from .parser_base import (
-    ContextMarkerRules,
+    TagRules,
     ForbiddenChars,
     ParserScript,
     WordwrapConfig,
@@ -61,7 +61,7 @@ class LightVNParser(ParserScript):
         - O5: ``wordwrap_config``
         - O6: ``wordwrap`` (custom balanced wrapping)
         - O7: ``forbidden_chars``
-        - O8: ``context_marker_rules``
+        - O8: ``tag_rules``
     """
 
     # -- Patterns ----------------------------------------------------------
@@ -147,21 +147,31 @@ class LightVNParser(ParserScript):
     def name(self) -> str:  # noqa: D401
         return "LightVN"
 
+    # Patterns that reliably identify a Light VN script.
+    _DETECT_PATTERNS: Set[str] = {
+        "~【", "~文字", "~ボタン", "~絵", "~効果音", "~選択",
+    }
+    _DETECT_LINE_PREFIXES: Tuple[str, ...] = ("栞 ",)
+
     def can_handle(self, file_path: Path) -> bool:
         """Probe whether *file_path* is a Light VN script.
 
-        Heuristic: ``.txt`` file containing ``~【`` speaker tags or
-        ``~文字`` menu commands within the first 200 lines.
+        Heuristic: ``.txt`` file containing Light VN command patterns
+        (``~【``, ``~文字``, ``~ボタン``, ``~絵``, ``~効果音``,
+        ``~選択``, or ``栞``) anywhere in the file.  The entire file
+        is scanned because characteristic patterns may appear late
+        (e.g. ``chara_make.txt`` has ``~文字`` only after line 2600).
         """
         if file_path.suffix.lower() != ".txt":
             return False
         try:
             enc = self._detect_encoding_raw(file_path)
             with open(file_path, "r", encoding=enc) as fh:
-                for idx, line in enumerate(fh):
-                    if idx >= 200:
-                        break
-                    if "~【" in line or "~文字" in line:
+                for line in fh:
+                    if any(p in line for p in self._DETECT_PATTERNS):
+                        return True
+                    stripped = line.lstrip()
+                    if any(stripped.startswith(pfx) for pfx in self._DETECT_LINE_PREFIXES):
                         return True
         except Exception:
             pass
@@ -335,12 +345,12 @@ class LightVNParser(ParserScript):
         )
 
     # ======================================================================
-    # O8 — Context marker rules
+    # O8 — Tag rules
     # ======================================================================
 
     @property
-    def context_marker_rules(self) -> Optional[ContextMarkerRules]:
-        return ContextMarkerRules(
+    def tag_rules(self) -> Optional[TagRules]:
+        return TagRules(
             scene_pattern=r"^~スクリプト\s+",
             dialogue_pattern=r'^["\-"]',
             menu_pattern=r"^~?(?:文字窓?0?|ボタン文字)\s+",

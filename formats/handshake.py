@@ -17,7 +17,7 @@ Optional components (O1-O8):
     - O5: wordwrap_config: WordwrapConfig
     - O6: wordwrap(line, config) → list[str]
     - O7: forbidden_chars: ForbiddenChars
-    - O8: context_marker_rules: ContextMarkerRules
+    - O8: tag_rules: TagRules
 """
 
 from __future__ import annotations
