@@ -653,6 +653,7 @@ Only matching entries appear — the LLM never sees the full glossary.
 | Action | Translation Behaviour | Postprocessing Behaviour |
 |--------|----------------------|-------------------------|
 | **Translate** | Added to prompt with notes for contextual translation | No special handling |
+| **Preserve** | Added to prompt with "do not translate" instruction; validated after translation and recovered or retried when missing | Code Pattern Recovery restores translated patterns from original |
 | **Protect** | Optionally replaced with `__PROTECTED__` token during Preproccessing, checks translation and tries to recover or retry when missing | Restored from `prepro_ops` |
 | **Custom Placeholder** | Replaced with custom named token during Preproccessing, checks translation and tries to recover or retry when missing | Restored from `prepro_ops` |
 | **Placeholder** | Generic `__PROTECTED__` / `__PROTECTED_X__` replacement during Preproccessing, checks translation and tries to recover or retry when missing | Restored from `prepro_ops` |
@@ -798,20 +799,22 @@ The following table lists all processes in their execution order. Preprocessing 
 
 | Order | Process | Pre Step | Post Step | Notes |
 |-------|---------|----------|-----------|-------|
-| 1 | Deduplication | First (P10) | Last (P90) | Replaces duplicates with `__DEDUP__`; post recovers from unique translation; GUI: `apply_dedup_batch()` in mode_adapter; tags D{idx} |
-| 2 | Code Spacing Rules | — | P50 (Post only for recovery) | Post-exclusive spacing recovery; also pre for normalization |
-| 3 | Whitespace Normalization | — | P120 (Post-exclusive) | Post-exclusive: matches indentation to original |
-| 4 | Bracket Balance | — | P110 (Post-exclusive) | Post-exclusive: fixes unmatched brackets |
-| 5 | Quote Balance | — | P100 (Post-exclusive) | Post-exclusive: fixes unmatched quotes |
-| 6 | Custom Placeholder | P70 | P30 | Custom named replacement tokens for variables |
-| 7 | Placeholder | P80 | P20 | Generic `__PROTECTED__` / `__PROTECTED_X__` protection |
-| 8 | PROTECTED Compression | P60 | P40 | Adjacent `__PROTECTED__` → `__PROTECTED_N__` |
-| 9 | Ellipsis Compression | P36 | P80 | Normalize ellipsis length; runs after symbol (P30) and width (P35) conversion; handles ASCII dots, fullwidth periods (\uff0e), and Unicode ellipsis (\u2026) |
-| 10 | Symbol Conversion | P30 (Pre only) | P70 | JP→EN symbols; Post optionally converts back |
-| 11 | Width Conversion | P35 (Pre only) | — | Fullwidth↔Halfwidth character width; Pre only |
-| 12 | Anchoring | P75 | P10 | Remove code at anchors; restore first in Post |
-| 13 | Quote Stripping | P76 (after Anchoring) | P9 (before Anchoring restore) | Strip quotes at dialogue boundaries to save tokens |
-| 14 | Aggressive Deduplication | Last (P90) | First (P5) | Variant-aware dedup with generic substitutions; GUI: `apply_aggressive_dedup_batch()` in mode_adapter; tags AD{idx} |
+| 1 | Deduplication | First (P10) | Last (P90) | Replaces duplicates with `__DEDUP__`; post recovers from unique translation via `postpro → tl → prepro → orig` resolution; GUI: `apply_dedup_batch()` in mode_adapter; tags D{idx}; reduplication reads step data from ManifestManager |
+| 2 | Protect Code Patterns | P15 | P20 | Generic `__PROTECTED__` / `__PROTECTED_X__` protection; runs before symbol conversion so fullwidth patterns (e.g. `（圧縮あり）`) still match the original text |
+| 3 | Custom Placeholder | P17 | P30 | Custom named replacement tokens for variables; runs before symbol conversion to capture fullwidth originals |
+| 4 | Anchoring | P20 | P10 | Remove code at anchor-relative positions; records anchor char, side, and type for restoration; patterns without adjacent anchors are left in place; restore first in Post using symbol-conversion equivalents |
+| 5 | Symbol Conversion | P30 (Pre only) | P70 | JP→EN symbols; Post optionally converts back; runs after protection/placeholders so `__PROTECTED__` tokens remain intact |
+| 6 | Width Conversion | P35 (Pre only) | — | Fullwidth↔Halfwidth character width; Pre only |
+| 7 | Ellipsis Compression | P36 | P80 | Normalize ellipsis length; runs after symbol (P30) and width (P35) conversion; handles ASCII dots, fullwidth periods (\uff0e), and Unicode ellipsis (\u2026); stores per-line triplet counts for postprocessing decompression |
+| 8 | Speaker Name Replacement | P38 | P60 | Replaces speaker names with translations from character glossary |
+| 9 | Code Spacing Rules | P50 | P50 (Post for recovery) | Post-exclusive spacing recovery; also pre for normalization |
+| 10 | PROTECTED Compression | P60 | P40 | Adjacent `__PROTECTED__` → `__PROTECTED_N__` |
+| 11 | Quote Stripping | P76 (after PROT) | P9 (before Anchoring restore) | Strip quotes at dialogue boundaries to save tokens |
+| 12 | Aggressive Deduplication | Last (P90) | First (P5) | Variant-aware dedup with generic substitutions; GUI: `apply_aggressive_dedup_batch()` in mode_adapter; tags AD{idx} |
+| 13 | Whitespace Normalization | — | P120 (Post-exclusive) | Post-exclusive: matches indentation to original |
+| 14 | Bracket Balance | — | P110 (Post-exclusive) | Post-exclusive: fixes unmatched brackets |
+| 15 | Quote Balance | — | P100 (Post-exclusive) | Post-exclusive: fixes unmatched quotes |
+| 16 | Code Pattern Recovery | — | P105 (Post-exclusive) | Post-exclusive: restores preserve-action code patterns translated by the LLM; uses delimiter-aware regex matching to find translated substitutes and replace with originals; flags unrecoverable patterns as NEEDS_RETRY |
 
 #### Width Conversion (Pre only)
 
@@ -2665,10 +2668,13 @@ The Preprocessing tab is organized into three sections:
 **Priority**: 75 (After Custom Placeholders, Before Protect Code Patterns)
 
 **Behavior**:
-- Removes matched pattern completely from the line
-- Stores removal position relative to anchors (start, end, punctuation, brackets)
+- Removes matched pattern ONLY when adjacent to a valid anchor character (punctuation, bracket, quote) or at line start/end
+- Patterns surrounded by normal text on both sides are left in place (not removed)
+- Stores anchor-relative removal data: anchor character, side (left/right of anchor), and anchor type (char/line_start/line_end)
+- Does NOT use absolute character positions or proportional positioning
 - Does NOT leave any placeholder token in text
-- Anchor characters: Line start `^`, Line end `$`, Punctuation `.!?`, Brackets `[]<>{}`
+- Anchor characters: Line start, Line end, Punctuation `.!?;:,`, Brackets `()[]<>{}「」『』【】〔〕《》〈〉（）`, Quotes `"'""''`
+- During restoration, finds anchor character (or its symbol-conversion equivalent) via `rfind`, processing records from right to left
 
 **Postprocessing Priority**: 10 (Restored FIRST, before other restorations)
 
@@ -3430,19 +3436,30 @@ The Postprocessing tab is organized into four sections:
 | Whitespace Normalization | Checkbox | ✓ | Restore indentation and spacing to match original |
 
 **Bracket Balance Recovery** (Post-Exclusive):
-- Compares bracket pairs in translated text against the original
-- Uses anchor logic (line start `^`, end `$`, punctuation) to determine insertion points for missing brackets
-- Supports all bracket types: `[]`, `{}`, `<>`, `()`, `「」`, `『』`, `【】`, `〔〕`, `《》`, `〈〉`, plus fullwidth variants
-- If a bracket is missing, only use the direct position (before/after) from anchor
-- If balance cannot be achieved (no anchor), flags the line for review
+- Compares bracket pairs in translated text against the original using ANCHOR_EQUIVS equivalence (fullwidth/halfwidth variants treated as the same bracket)
+- Uses anchor-relative logic (line start `^`, end `$`, adjacent punctuation via `get_equivs()`) to determine insertion points for missing brackets
+- Bracket-quote hybrids (e.g. `「」` whose canonical form is `"`) are deferred to Quote Balance Recovery to avoid double-counting
+- Supports all bracket types: `[]`, `{}`, `<>`, `()`, `『』`, `【】`, `〔〕`, `《》`, `〈〉`, plus fullwidth variants `［］`, `｛｝`, `＜＞`, `（）`
+- If a bracket is missing, only insert at the direct position (before/after) from a located anchor — no absolute positional calculations
+- If balance cannot be achieved (no anchor found in translated text), flags the line for review (`NEEDS_RETRY`)
+
+**Code Pattern Recovery** (Post-Exclusive):
+- For each code pattern with `action='preserve'`, uses `generate_regex_pattern()` to find all occurrences in the original text
+- If an original occurrence is missing in the translation, scans for content wrapped in the same delimiters (e.g. `{...}`, `[...]`, `<...>`) that does NOT appear in the original text — these are likely translated substitutes
+- Replaces the first unmatched candidate with the original pattern (e.g. `{anchor}` → `{アンカー}`)
+- If no candidate is found (pattern completely missing), flags the line as `NEEDS_RETRY` for QA review
+- Runs inside `recover_line()` after placeholder recovery and before bracket/quote balance recovery
+- Also validated during translation: `validate_translation_comprehensive()` check #7 detects missing preserve-action patterns and adds `CODE_PATTERN_TRANSLATED` retry reason
 
 **Quote Balance Recovery** (Post-Exclusive):
-- **Important**: Quote recovery runs BEFORE quote balance check. Quotes stripped during Preprocessing Symbol Conversion must be recovered first, then balance is verified.
+- **Important**: Quote recovery runs BEFORE bracket balance check. Quotes stripped during Preprocessing Symbol Conversion must be recovered first, then balance is verified.
+- Uses ANCHOR_EQUIVS equivalence to recognise bracket-quote conversions (`「」` → `""`, `＂` → `"`, curly `""` → straight `"`) — converted quotes are NOT counted as missing
 - Distinct from Preprocessing quote stripping — Symbol Conversion may convert `「」` to `""` during pre; here we ensure the translated text has matching quote pairs
-- Supports: `""`, `''`, `""`, `''`, fullwidth `＂＂`
-- Missing opening / closing quotes are easily inserted at dialogue start / line end
-- Missing quotes within the dialogue use anchors or are skipped and flagged. 
-- Handles same-character quote pairs (straight quotes) via open/close state tracking
+- Supports: `""`, `''`, `""`, `''`, fullwidth `＂＂`, plus bracket-quotes `「」` via equivalence
+- Missing closing quotes → inserted at line end (dialogue end)
+- Missing opening quotes at line start → inserted at line start (dialogue start)
+- Interior missing quotes use anchor-relative logic (`_find_anchor_near` + `get_equivs`) or are flagged `NEEDS_RETRY`
+- Handles same-character quote pairs (straight quotes) via open/close alternating state tracking
 
 **Whitespace Normalization** (Post-Exclusive):
 - Matches indentation of translated lines to their originals

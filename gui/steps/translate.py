@@ -3290,6 +3290,38 @@ class TranslationStep(BaseStep):
                         line.idx, translation,
                     )
 
+            # Validate preserve-action code patterns after translation.
+            # Attempt recovery for each line where the LLM translated
+            # a code pattern instead of preserving it.  If recovery
+            # fails, flag the line for QA review.
+            if self._manifest_manager is not None:
+                _cp = self._manifest_manager.get_code_patterns()
+                if _cp:
+                    from CherryAI.functions.postprocess import (
+                        recover_code_patterns as _rcp,
+                        RecoveryAction as _RA,
+                    )
+                    for line in chunk:
+                        if not line.translated:
+                            continue
+                        _orig = (
+                            line.edited_prepro
+                            or line.preprocessed
+                            or line.original
+                        )
+                        _fixed, _iss = _rcp(
+                            line.translated, _orig, _cp,
+                        )
+                        if _fixed != line.translated:
+                            line.translated = _fixed
+                            self._manifest_manager.update_translation(
+                                line.idx, _fixed,
+                            )
+                        if any(
+                            i.action == _RA.NEEDS_RETRY for i in _iss
+                        ):
+                            line.status = LineStatus.NEEDS_REVIEW
+
             # Flush to disk immediately so no chunk is lost
             if self._manifest_manager is not None:
                 self._manifest_manager.save()

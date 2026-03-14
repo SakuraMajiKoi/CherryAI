@@ -91,6 +91,13 @@ TABLE OF CONTENTS
    3.21 options.py ✅ - Option management
    3.22 postanalysis.py ✅ - Post-translation analysis
    3.23 postprocess.py ✅🔗 - Post-processing utilities (Step 6, moved from Step 7)
+        * Bracket/Quote Balance Recovery uses anchor-relative positioning with ANCHOR_EQUIVS equivalence
+        * Key constants: BRACKET_EQUIV, QUOTE_EQUIV, _CANON_MAP, _CLOSING_TO_OPENING, _RECOVERY_ANCHOR_CHARS
+        * Key functions: _normalize_bracket(), _find_anchor_near(), _try_anchor_bracket_insert()
+        * recover_bracket_balance() defers bracket-quote hybrids (「」→ canon ") to quote recovery
+        * recover_quote_balance() handles bracket-quote equivalents (「」≡"") via ANCHOR_EQUIVS
+        * No absolute positional calculations — all insertion is line-start/end or anchor-relative
+        * Code Pattern Recovery: recover_code_patterns() restores preserve-action patterns translated by the LLM using delimiter-aware regex matching; _detect_delimiters() identifies bracket pairs; RecoveryType.CODE_PATTERN added
    3.24 project_config.py ✅ - Per-project configuration
    3.25 prompt_builder.py ✅ - Build system prompts for API
    3.26 rate_limiter.py ✅ - API rate limiting
@@ -99,6 +106,8 @@ TABLE OF CONTENTS
    3.29 retry_handler.py ✅ - Retry logic for API calls
    3.30 style_presets.py ✅ - Translation style presets
    3.31 validation.py ✅🔗 - Translation validation (Step 8, moved from Step 6)
+        * validate_translation_comprehensive() check #7: code pattern preservation — verifies preserve-action patterns survive translation; triggers RetryReason.CODE_PATTERN_TRANSLATED
+        * validate_line_post() treats code pattern failures as errors (not warnings)
    3.32 wordwrap.py ✅🔗 - Word wrapping (Step 7, moved from Step 8)
    3.33 ini_manager.py ✅ - INI path resolution, typed access, preset management, defaults (TASK 21.1 + 2026)
         * INI location: user/CherryAI.ini (automigrared from root on first run)
@@ -638,7 +647,7 @@ TABLE OF CONTENTS
        - **Phase 45 Integration:** Postprocessing Tab Overhaul:
          - FailurePolicy enum: SKIP→WRITE (value="write"), FLAG (value="flag"), RETRY kept hidden
          - PostprocessOptions: convert_halfwidth_to_fullwidth bool field; placeholder/code/br hardcoded True
-         - PostprocessLine: written/flagged bool fields for new filter system
+         - PostprocessLine: written/flagged bool fields for new filter system; preprocessed str field for dedup source resolution
          - HALFWIDTH_TO_FULLWIDTH: reverse dict comprehension from FULLWIDTH_TO_HALFWIDTH (30 entries)
          - Mutual exclusion: _on_fullwidth_change/_on_halfwidth_change trace callbacks
          - Diff View editing: _edit_text ScrolledText (height=4), _mark_fixed_btn, _mark_line_as_fixed()
@@ -1922,21 +1931,33 @@ Key methods:
 - Processor.execute_auto_translate(batches) → Tuple[str, Dict]: Executes API calls and Post-processing
 - Processor.run_full_auto_translate(input_text, callback) → Optional[str]: Orchestrates full pipeline
 
-Pipeline (Pre-TL):
-1. Deduplication (deduplicate_pre, runs first)
-2. Custom Placeholder (priority 10)
-3. Remove and Restore at Anchor (priority 15)
-4. Protect Code (priority 20)
-5. Standard Helpers (priority 50) - ellipsis, empty lines, PROTECTED compression
-6. Other operations in UI order
+Pipeline (Pre-TL) — lower priority number runs first:
+1. Deduplication (P10, runs first)
+2. Protect Code Patterns (P15, before symbol conversion so fullwidth chars match)
+3. Custom Placeholders (P17, before symbol conversion to capture originals)
+4. Anchoring / Remove and Restore at Anchor (P20, before symbol conversion)
+5. Symbol Conversion (P30, JP→EN symbols)
+6. Width Conversion (P35)
+7. Ellipsis Compression (P36, after symbol/width conversion)
+8. Speaker Name Replacement (P38)
+9. Code Spacing (P50)
+10. PROTECTED Token Compression (P60, after all __PROTECTED__ tokens exist)
+11. Quote Stripping (P76)
+12. Aggressive Deduplication (P90, runs last)
 
-Pipeline (Post-TL):
-1. Protect Code restore (mode)
-2. Remove and Restore restore (mode)
-3. Custom Placeholder restore (mode)
-4. Standard Helpers restore (mode)
-5. Other operations in UI order
-6. Deduplicate restore (if enabled)
+Pipeline (Post-TL) — Phase 1: preprocessing reversal, Phase 2: post-exclusive LLM recovery:
+Phase 1 reversal (MUST run before LLM recovery to avoid token corruption):
+1. PROT Token Decompression (P40) — __PROTECTED_N__ → N × __PROTECTED__
+2. Protect Code Restoration (P20) — __PROTECTED__ → captured originals
+3. Custom Placeholder Restoration (P30) — tokens → captured originals
+4. Ellipsis Expansion (P80) — ... → original length using stored counts
+5. Anchoring Restoration (P10) — re-insert anchors using anchor-relative records (rfind with symbol-conversion equivalents); patterns only removed during preprocessing when adjacent to a valid anchor character
+6. <NUM> Restoration — replace <NUM> tokens with original numbers from aggr_numbers
+Phase 2: recover_line(enable_placeholder_recovery=False) — bracket/quote balance (anchor-relative with ANCHOR_EQUIVS equivalence), whitespace normalization on restored text
+7. Symbol Conversion (P70, optional reverse)
+After all lines:
+8. Deduplication Restoration (P90) — copy postprocessed text from source lines
+9. Aggressive Dedup Restoration (P5) — restore numbers from per-line data
 
 =============================================================================
 

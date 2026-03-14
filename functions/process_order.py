@@ -20,16 +20,16 @@ from typing import Dict, List, Tuple
 
 PRE_PRIORITIES: Dict[str, int] = {
     "deduplication": 10,
+    "protect_code": 15,
+    "custom_placeholders": 17,
+    "anchoring": 20,
     "symbol_conversion": 30,
     "width_conversion": 35,
     "ellipsis_compression": 36,
-    "speaker_replacement": 40,
+    "speaker_replacement": 38,
     "code_spacing": 50,
     "prot_compression": 60,
-    "custom_placeholders": 70,
-    "anchoring": 75,
     "quote_stripping": 76,
-    "protect_code": 80,
     "aggressive_dedup": 90,
 }
 

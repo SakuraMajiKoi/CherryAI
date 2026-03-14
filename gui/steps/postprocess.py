@@ -8,6 +8,7 @@ Also includes character/word validation per TASK 36.3.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from dataclasses import dataclass, field
 from difflib import unified_diff
@@ -40,6 +41,12 @@ try:
     _HAS_POSTPROCESS = True
 except ImportError:  # pragma: no cover
     _HAS_POSTPROCESS = False
+
+try:
+    from CherryAI.modi.standard_mode import decompress_ellipsis_line  # noqa: F401
+    HAS_STANDARD_MODE = True
+except ImportError:
+    HAS_STANDARD_MODE = False
 
 # TASK 36.3: Import character/word validation functions
 try:
@@ -143,6 +150,7 @@ class PostprocessLine:
     original: str
     translated: str
     postprocessed: str = ""
+    preprocessed: str = ""
     issues: List[RecoveryIssue] = field(default_factory=list)
     has_changes: bool = False
     needs_retry: bool = False
@@ -1132,6 +1140,15 @@ class PostprocessingStep(BaseStep):
                 if idx is not None and pp:
                     postpro_map[idx] = pp
 
+        # Batch-read existing prepro from manifest
+        prepro_map: dict[int, str] = {}
+        if mgr is not None and mgr.is_loaded:
+            for ln in mgr.get_lines():
+                idx = ln.get("idx")
+                pp = ln.get("prepro", "")
+                if idx is not None and pp:
+                    prepro_map[idx] = pp
+
         # Create PostprocessLine objects
         self._lines = []
         for idx, (orig, trans) in enumerate(zip(original, translated)):
@@ -1141,6 +1158,7 @@ class PostprocessingStep(BaseStep):
                 original=orig,
                 translated=trans,
                 postprocessed=pp,
+                preprocessed=prepro_map.get(idx, ""),
                 has_changes=pp != trans,
             )
             self._lines.append(line)
@@ -1468,26 +1486,106 @@ class PostprocessingStep(BaseStep):
 
         import time as _time
         _pp_start = _time.perf_counter()
+
+        # Load preprocessing reversal data from step 3
+        # Prefer ManifestManager (where preprocess writes data) over session
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            prepro_data = mgr.get_step_data(3)
+        elif self.session:
+            prepro_data = self.session.get_step(3).data
+        else:
+            prepro_data = {}
+        prot_captured = {
+            int(k): v
+            for k, v in (prepro_data.get("protect_code_captured") or {}).items()
+        }
+        ph_captured = {
+            int(k): v
+            for k, v in (prepro_data.get("placeholder_captured") or {}).items()
+        }
+        ell_counts = {
+            int(k): v
+            for k, v in (prepro_data.get("ellipsis_counts") or {}).items()
+        }
+        anchor_captured = {
+            int(k): v
+            for k, v in (prepro_data.get("anchor_captured") or {}).items()
+        }
+        # Build placeholder token → pattern map from config rules
+        ph_rules = (prepro_data.get("config") or {}).get("placeholder_rules", [])
+
+        # Aggressive dedup numbers for ALL lines (source + dup)
+        aggr_nums = {
+            int(k): list(v)
+            for k, v in (prepro_data.get("aggr_numbers") or {}).items()
+        }
+
+        # Load code patterns for preserve-action recovery
+        code_patterns = []
+        if mgr is not None and mgr.is_loaded:
+            code_patterns = mgr.get_code_patterns()
+
         try:
             for line in self._lines:
                 self._stats.lines_processed += 1
+
+                # Skip dedup sentinel lines — they are restored later
+                if line.translated == "__DEDUP__":
+                    line.postprocessed = line.translated
+                    continue
+
+                text = line.translated
+
+                # ── Phase 1: Reverse preprocessing operations ──────────
+                # MUST run before LLM artifact recovery (bracket/quote
+                # balance) because tokens like __PROTECTED_2__ would be
+                # corrupted by bracket insertion from the original text.
+                # Order follows specs §5.9 postprocessing priorities.
+
+                text = self._reverse_prot_compression(text)
+                text = self._reverse_protect_code(
+                    text, line.idx, prot_captured,
+                )
+                text = self._reverse_custom_placeholders(
+                    text, line.idx, ph_captured, ph_rules,
+                )
+                text = self._reverse_ellipsis(
+                    text, line.idx, ell_counts,
+                )
+                text = self._reverse_anchoring(
+                    text, line.idx, anchor_captured,
+                )
+
+                # Save text before aggressive number restoration so
+                # _restore_dedup_lines can use this template (with <NUM>
+                # tokens intact) for dup lines that need different numbers.
+                line._pre_aggr_text = text
+
+                # Restore <NUM> tokens from aggressive dedup
+                text = self._reverse_aggr_numbers(
+                    text, line.idx, aggr_nums,
+                )
+
+                # ── Phase 2: Post-exclusive LLM artifact recovery ──────
+                # Bracket/quote balance now operates on restored text
+                # where original brackets are present, not hidden inside
+                # preprocessing tokens.
                 if _HAS_POSTPROCESS:
-                    # Use functions module
                     result = recover_line(
                         original=line.original,
-                        translated=line.translated,
-                        enable_placeholder_recovery=self._pp_options.enable_placeholder_recovery,
+                        translated=text,
+                        enable_placeholder_recovery=False,
                         enable_bracket_recovery=self._pp_options.enable_bracket_recovery,
                         enable_quote_recovery=self._pp_options.enable_quote_recovery,
                         enable_whitespace_normalization=self._pp_options.enable_whitespace_normalization,
+                        code_patterns=code_patterns,
                     )
 
-                    line.postprocessed = result.recovered
-                    line.has_changes = result.original != result.recovered
+                    text = result.recovered
 
-                    # Convert issues
+                    # Convert issues from recover_line
                     for func_issue in result.issues:
-                        # Map function recovery type and action to GUI enums
                         try:
                             recovery_type = RecoveryType(func_issue.type.value)
                         except Exception:
@@ -1508,7 +1606,6 @@ class PostprocessingStep(BaseStep):
                         )
                         line.issues.append(issue)
 
-                        # Update stats
                         self._stats.total_issues += 1
                         if action == RecoveryAction.RECOVERED:
                             self._stats.issues_recovered += 1
@@ -1518,17 +1615,12 @@ class PostprocessingStep(BaseStep):
                             self._stats.issues_skipped += 1
 
                     line.needs_retry = result.needs_retry
-                else:
-                    # Basic fallback processing
-                    line.postprocessed = self._basic_postprocess(line)
-                    line.has_changes = line.translated != line.postprocessed
 
                 # Apply symbol conversion if enabled
                 if self._pp_options.enable_symbol_conversion:
-                    converted = self._apply_symbol_conversion(line.postprocessed)
-                    if converted != line.postprocessed:
-                        line.postprocessed = converted
-                        line.has_changes = True
+                    converted = self._apply_symbol_conversion(text)
+                    if converted != text:
+                        text = converted
                         line.issues.append(
                             RecoveryIssue(
                                 line_idx=line.idx,
@@ -1539,6 +1631,9 @@ class PostprocessingStep(BaseStep):
                         )
                         self._stats.total_issues += 1
                         self._stats.issues_recovered += 1
+
+                line.postprocessed = text
+                line.has_changes = line.translated != text
 
                 if line.has_changes:
                     self._stats.lines_with_changes += 1
@@ -1634,7 +1729,14 @@ class PostprocessingStep(BaseStep):
         the per-line numbers list stored in ``aggr_numbers``.
         """
         # Load dedup maps from preprocessing step data
-        prepro_data = self.session.get_step(3).data
+        # Prefer ManifestManager (where preprocess writes data) over session
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            prepro_data = mgr.get_step_data(3)
+        elif self.session:
+            prepro_data = self.session.get_step(3).data
+        else:
+            prepro_data = {}
         if not prepro_data:
             return
 
@@ -1682,8 +1784,14 @@ class PostprocessingStep(BaseStep):
             src_line = by_idx.get(src_idx)
             if dup_line is None or src_line is None:
                 continue
-            text = self._best_text(src_line)
-            if not text:
+            # Use the pre-number-restoration text from the source line
+            # (still has <NUM> tokens) so the dup's own numbers can be
+            # inserted.  Falls back to _best_text when the attribute is
+            # not available (e.g. source was not postprocessed yet).
+            template = getattr(src_line, "_pre_aggr_text", None)
+            if not template:
+                template = self._best_text(src_line)
+            if not template:
                 continue
             # Restore numbers from this specific line's original
             nums = aggr_nums.get(dup_idx, [])
@@ -1692,10 +1800,10 @@ class PostprocessingStep(BaseStep):
                     from CherryAI.gui.helpers.mode_adapter import (
                         aggressive_restore_line,
                     )
-                    text = aggressive_restore_line(text, nums)
+                    template = aggressive_restore_line(template, nums)
                 except ImportError:
                     pass
-            dup_line.postprocessed = text
+            dup_line.postprocessed = template
             dup_line.has_changes = True
             restored += 1
 
@@ -1707,7 +1815,7 @@ class PostprocessingStep(BaseStep):
     def _best_text(line: PostprocessLine) -> str:
         """Return the most up-to-date text for *line*.
 
-        Resolution order: postprocessed → translated → original.
+        Resolution order: postprocessed → translated → preprocessed → original.
         Skips ``__DEDUP__`` sentinel values.
 
         Args:
@@ -1716,10 +1824,207 @@ class PostprocessingStep(BaseStep):
         Returns:
             Best available text, or empty string.
         """
-        for candidate in (line.postprocessed, line.translated, line.original):
+        for candidate in (
+            line.postprocessed,
+            line.translated,
+            line.preprocessed,
+            line.original,
+        ):
             if candidate and candidate != "__DEDUP__":
                 return candidate
         return ""
+
+    # ────────────────────────────────────────────────────────────────────
+    # Preprocessing Reversal Methods
+    # ────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _reverse_prot_compression(text: str) -> str:
+        """Decompress ``__PROTECTED_N__`` back to N individual tokens.
+
+        Args:
+            text: Line text potentially containing compressed tokens.
+
+        Returns:
+            Text with compressed tokens expanded.
+        """
+        import re as _re
+        prot_n = _re.compile(r"__PROTECTED_(\d+)__")
+
+        def _expand(m: _re.Match) -> str:
+            count = int(m.group(1))
+            return "__PROTECTED__" * count
+
+        return prot_n.sub(_expand, text)
+
+    @staticmethod
+    def _reverse_protect_code(
+        text: str,
+        idx: int,
+        captured: Dict[int, List[str]],
+    ) -> str:
+        """Restore ``__PROTECTED__`` tokens with their captured originals.
+
+        Replaces each ``__PROTECTED__`` occurrence left-to-right with the
+        corresponding captured original value from preprocessing.
+
+        Args:
+            text: Line text with ``__PROTECTED__`` tokens.
+            idx: Line index.
+            captured: Per-line captured originals from preprocessing.
+
+        Returns:
+            Text with tokens replaced by originals.
+        """
+        originals = captured.get(idx)
+        if not originals:
+            return text
+
+        result = text
+        for orig_val in originals:
+            pos = result.find("__PROTECTED__")
+            if pos < 0:
+                break
+            result = result[:pos] + orig_val + result[pos + len("__PROTECTED__"):]
+        return result
+
+    @staticmethod
+    def _reverse_custom_placeholders(
+        text: str,
+        idx: int,
+        captured: Dict[int, List[str]],
+        rules: List[Dict[str, Any]],
+    ) -> str:
+        """Restore custom placeholder tokens with their captured originals.
+
+        For each rule's token, replaces occurrences left-to-right with
+        the original captured values.
+
+        Args:
+            text: Line text with placeholder tokens.
+            idx: Line index.
+            captured: Per-line captured originals from preprocessing.
+            rules: Placeholder rules with ``pattern`` and ``token`` keys.
+
+        Returns:
+            Text with placeholder tokens restored.
+        """
+        line_captured = captured.get(idx)
+        if not line_captured:
+            return text
+
+        # Build per-token queues from captured values and rules
+        # The captured list is in the order values were found across all rules
+        result = text
+        cap_iter = iter(line_captured)
+        for rule in rules:
+            token = rule.get("token", "__CUST__").strip() or "__CUST__"
+            while token in result:
+                orig_val = next(cap_iter, None)
+                if orig_val is None:
+                    break
+                pos = result.find(token)
+                if pos < 0:
+                    break
+                result = result[:pos] + orig_val + result[pos + len(token):]
+        return result
+
+    @staticmethod
+    def _reverse_ellipsis(
+        text: str,
+        idx: int,
+        counts: Dict[int, List[int]],
+    ) -> str:
+        """Expand compressed ``...`` back to original ellipsis length.
+
+        Args:
+            text: Line text with compressed ellipsis.
+            idx: Line index.
+            counts: Per-line triplet count lists from preprocessing.
+
+        Returns:
+            Text with ellipsis expanded to original length.
+        """
+        line_counts = counts.get(idx)
+        if not line_counts:
+            return text
+        try:
+            if HAS_STANDARD_MODE:
+                from CherryAI.modi.standard_mode import decompress_ellipsis_line
+                return decompress_ellipsis_line(text, line_counts)
+        except ImportError:
+            pass
+
+        # Fallback manual decompression
+        import re as _re
+        matches = list(_re.finditer(re.escape("..."), text))
+        if not matches:
+            return text
+        result = text
+        for i, cnt in sorted(enumerate(line_counts), key=lambda x: x[0],
+                             reverse=True):
+            if i >= len(matches):
+                continue
+            m = matches[i]
+            insert_at = m.end()
+            result = result[:insert_at] + ("..." * (cnt - 1)) + result[insert_at:]
+        return result
+
+    @staticmethod
+    def _reverse_anchoring(
+        text: str,
+        idx: int,
+        captured: Dict[int, List[Dict[str, Any]]],
+    ) -> str:
+        """Re-insert previously removed anchor patterns.
+
+        Args:
+            text: Translated line text.
+            idx: Line index.
+            captured: Per-line anchor records from preprocessing.
+
+        Returns:
+            Text with anchor patterns re-inserted.
+        """
+        records = captured.get(idx)
+        if not records:
+            return text
+        try:
+            from CherryAI.gui.helpers.mode_adapter import restore_anchors_in_line
+            return restore_anchors_in_line(text, records)
+        except ImportError:
+            return text
+
+    @staticmethod
+    def _reverse_aggr_numbers(
+        text: str,
+        idx: int,
+        aggr_nums: Dict[int, List[str]],
+    ) -> str:
+        """Restore ``<NUM>`` tokens with original numbers.
+
+        Applies to both aggressive-dedup SOURCE lines and their
+        duplicates.  Each ``<NUM>`` occurrence is replaced left-to-right
+        with the corresponding original number from the stored list.
+
+        Args:
+            text: Line text potentially containing ``<NUM>``.
+            idx: Line index.
+            aggr_nums: Per-line original number lists from preprocessing.
+
+        Returns:
+            Text with ``<NUM>`` tokens replaced by original numbers.
+        """
+        numbers = aggr_nums.get(idx)
+        if not numbers:
+            return text
+        result = text
+        for num in numbers:
+            pos = result.find("<NUM>")
+            if pos < 0:
+                break
+            result = result[:pos] + num + result[pos + 5:]
+        return result
 
     def _apply_symbol_conversion(self, text: str) -> str:
         """Apply symbol conversion to text (TASK 45.5: bidirectional).

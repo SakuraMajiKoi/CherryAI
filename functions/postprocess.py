@@ -39,6 +39,7 @@ class RecoveryType(Enum):
     BRACKET_BALANCE = "bracket_balance"  # Missing bracket pairs
     WHITESPACE_NORMALIZATION = "whitespace_normalization"  # Errant spacing
     CODE_CHARACTER = "code_character"  # Missing code characters
+    CODE_PATTERN = "code_pattern"  # Preserve-action code pattern translated
     BR_TAG = "br_tag"  # Missing <br> tags
     SPEAKER_FORMAT = "speaker_format"  # Speaker: "Dialogue" format
 
@@ -181,6 +182,56 @@ QUOTE_PAIRS: Dict[str, str] = {
     "\u2018": "\u2019",  # Left/right curly single quotes ' '
     "＂": "＂",  # Fullwidth double quote (same open/close)
 }
+
+# ---------------------------------------------------------------------------
+# Equivalence maps derived from ANCHOR_EQUIVS (modehelper)
+# ---------------------------------------------------------------------------
+
+# Build bracket equivalence from ANCHOR_EQUIVS: maps fullwidth → canonical
+BRACKET_EQUIV: Dict[str, str] = {}
+for _canon, _equivs in ANCHOR_EQUIVS.items():
+    for _ch in _equivs:
+        if _ch in BRACKET_PAIRS or any(
+            _ch == v for v in BRACKET_PAIRS.values()
+        ):
+            if _ch != _canon:
+                BRACKET_EQUIV[_ch] = _canon
+
+# Build quote equivalence from ANCHOR_EQUIVS: maps fullwidth → canonical
+QUOTE_EQUIV: Dict[str, str] = {}
+for _canon, _equivs in ANCHOR_EQUIVS.items():
+    for _ch in _equivs:
+        if _ch in QUOTE_PAIRS or any(
+            _ch == v for v in QUOTE_PAIRS.values()
+        ):
+            if _ch != _canon:
+                QUOTE_EQUIV[_ch] = _canon
+
+# Unified canonical map for ALL bracket/quote characters
+_CANON_MAP: Dict[str, str] = {}
+for _canon, _equivs in ANCHOR_EQUIVS.items():
+    for _ch in _equivs:
+        _CANON_MAP[_ch] = _canon
+
+# Reverse bracket map: closing → opening
+_CLOSING_TO_OPENING: Dict[str, str] = {v: k for k, v in BRACKET_PAIRS.items()}
+
+# Characters that can serve as positional anchors for recovery
+_RECOVERY_ANCHOR_CHARS: Set[str] = set(
+    list(".,!?;:。、！？；：")
+    + list("()[]<>{}（）「」『』【】〔〕《》〈〉［］｛｝＜＞")
+    + ['"', "'", "＂", "\u201c", "\u201d", "\u2018", "\u2019"]
+)
+
+
+def _normalize_bracket(ch: str) -> str:
+    """Return the canonical (halfwidth) form of a bracket character.
+
+    Uses ANCHOR_EQUIVS to find the canonical form.  Characters not
+    in any equivalence group are returned unchanged.
+    """
+    return _CANON_MAP.get(ch, ch)
+
 
 # All opening characters
 OPENING_CHARS: Set[str] = set(BRACKET_PAIRS.keys()) | set(QUOTE_PAIRS.keys())
@@ -480,71 +531,254 @@ def recover_bracket_balance(
     text: str,
     original: str,
 ) -> Tuple[str, List[RecoveryIssue]]:
-    """Attempt to fix unbalanced brackets by comparing with original.
-    
+    """Fix unbalanced brackets using anchor-relative positioning.
+
+    Compares brackets in *text* against *original* using ANCHOR_EQUIVS
+    to treat fullwidth/halfwidth variants as equivalent.  Missing
+    brackets are re-inserted only when a reliable anchor (adjacent
+    punctuation, line start, or line end) can be found in the
+    translated text.  If no anchor is available the line is flagged
+    for review instead of guessing a position.
+
     Args:
         text: The translated text.
         original: The original text.
-        
+
     Returns:
         Tuple of (fixed_text, list of issues found).
     """
     issues: List[RecoveryIssue] = []
     result = text
-    
-    # Get bracket sequences from both
-    orig_brackets = [(ch, i) for i, ch in enumerate(original) if ch in OPENING_CHARS or ch in CLOSING_CHARS]
-    trans_brackets = [(ch, i) for i, ch in enumerate(text) if ch in OPENING_CHARS or ch in CLOSING_CHARS]
-    
-    # Check for missing brackets
-    orig_bracket_chars = [b[0] for b in orig_brackets]
-    trans_bracket_chars = [b[0] for b in trans_brackets]
-    
-    # Count brackets by type
-    for bracket in set(orig_bracket_chars):
-        orig_count = orig_bracket_chars.count(bracket)
-        trans_count = trans_bracket_chars.count(bracket)
-        
-        if trans_count < orig_count:
-            # Missing brackets - try to insert
-            for _ in range(orig_count - trans_count):
-                # Find where in original this bracket appears
-                for i, (ch, pos) in enumerate(orig_brackets):
-                    if ch == bracket:
-                        # Calculate relative position
-                        rel_pos = pos / len(original) if len(original) > 0 else 0.5
-                        insert_at = int(rel_pos * len(result))
-                        
-                        # Insert bracket
-                        result = result[:insert_at] + bracket + result[insert_at:]
-                        
-                        issue = RecoveryIssue(
-                            type=RecoveryType.BRACKET_BALANCE,
-                            description=f"Missing bracket inserted: '{bracket}' at position {insert_at}",
-                            position=insert_at,
-                            original_text="",
-                            recovered_text=bracket,
-                            action=RecoveryAction.RECOVERED,
-                        )
-                        issues.append(issue)
-                        break
-    
-    # Check if brackets are now balanced
+
+    all_brackets = set(BRACKET_PAIRS.keys()) | set(BRACKET_PAIRS.values())
+
+    # Bracket-quote hybrids (e.g. 「」 → canon ") are handled by quote
+    # recovery, not bracket recovery.  Skip them here.
+    _quote_canons = set(QUOTE_PAIRS.keys()) | set(QUOTE_PAIRS.values())
+
+    # Extract brackets with canonical forms and open/close role
+    def _extract(s: str) -> List[Tuple[str, str, str, int]]:
+        """Return (canonical, role, actual_char, position) list."""
+        out: List[Tuple[str, str, str, int]] = []
+        for i, ch in enumerate(s):
+            if ch not in all_brackets:
+                continue
+            canon = _CANON_MAP.get(ch, ch)
+            if canon in _quote_canons:
+                continue  # Defer to quote recovery
+            if ch in BRACKET_PAIRS:
+                out.append((canon, "open", ch, i))
+            elif ch in _CLOSING_TO_OPENING:
+                out.append((canon, "close", ch, i))
+        return out
+
+    orig_seq = _extract(original)
+    trans_seq = _extract(result)
+
+    # Count by (canonical, role)
+    from collections import Counter
+    orig_counts: Dict[Tuple[str, str], int] = Counter(
+        (canon, role) for canon, role, _, _ in orig_seq
+    )
+    trans_counts: Dict[Tuple[str, str], int] = Counter(
+        (canon, role) for canon, role, _, _ in trans_seq
+    )
+
+    # For each (canonical, role) pair that is under-represented in trans
+    for (canon_ch, role), orig_count in sorted(orig_counts.items()):
+        trans_count = trans_counts.get((canon_ch, role), 0)
+        if trans_count >= orig_count:
+            continue
+
+        # Entries from original of this type, sorted by position
+        orig_of_type = [
+            (ch, pos) for c, r, ch, pos in orig_seq
+            if c == canon_ch and r == role
+        ]
+        # The first trans_count are considered matched; remainder missing
+        missing = orig_of_type[trans_count:]
+
+        for _, orig_pos in missing:
+            inserted = _try_anchor_bracket_insert(
+                result, original, orig_pos, canon_ch,
+                is_opening=(role == "open"),
+            )
+            if inserted is not None:
+                result, desc = inserted
+                issues.append(RecoveryIssue(
+                    type=RecoveryType.BRACKET_BALANCE,
+                    description=desc,
+                    position=-1,
+                    original_text="",
+                    recovered_text=canon_ch,
+                    action=RecoveryAction.RECOVERED,
+                ))
+            else:
+                issues.append(RecoveryIssue(
+                    type=RecoveryType.BRACKET_BALANCE,
+                    description=(
+                        f"Missing bracket '{canon_ch}' could not "
+                        f"be placed (no anchor found)"
+                    ),
+                    position=-1,
+                    original_text="",
+                    recovered_text=canon_ch,
+                    action=RecoveryAction.NEEDS_RETRY,
+                ))
+
+    # Final balance check — report any remaining imbalance
     unmatched = check_bracket_balance(result)
     if unmatched:
-        # Still unbalanced - may need retry
         for bracket, pos in unmatched:
-            issue = RecoveryIssue(
+            issues.append(RecoveryIssue(
                 type=RecoveryType.BRACKET_BALANCE,
-                description=f"Unbalanced bracket at position {pos}: '{bracket}'",
+                description=(
+                    f"Unbalanced bracket at position {pos}: "
+                    f"'{bracket}'"
+                ),
                 position=pos,
                 original_text=bracket,
                 recovered_text="",
                 action=RecoveryAction.NEEDS_RETRY,
-            )
-            issues.append(issue)
-    
+            ))
+
     return result, issues
+
+
+def _find_anchor_near(
+    text: str,
+    pos: int,
+    direction: str,
+    skip_chars: Optional[Set[str]] = None,
+) -> Optional[Tuple[str, int]]:
+    """Find nearest punctuation anchor from *pos* in *direction*.
+
+    Args:
+        text: The text to search.
+        pos: Starting position (exclusive — search begins at pos±1).
+        direction: ``"left"`` (search backwards) or ``"right"``.
+        skip_chars: Characters to skip (e.g. the bracket itself).
+
+    Returns:
+        ``(anchor_char, anchor_pos)`` or ``None``.
+    """
+    skip = skip_chars or set()
+    if direction == "left":
+        for i in range(pos - 1, -1, -1):
+            ch = text[i]
+            if ch in skip or ch.isspace():
+                continue
+            if ch in _RECOVERY_ANCHOR_CHARS:
+                return ch, i
+            # Non-anchor, non-space character blocks further search
+            return None
+    else:
+        for i in range(pos + 1, len(text)):
+            ch = text[i]
+            if ch in skip or ch.isspace():
+                continue
+            if ch in _RECOVERY_ANCHOR_CHARS:
+                return ch, i
+            return None
+    return None
+
+
+def _try_anchor_bracket_insert(
+    result: str,
+    original: str,
+    orig_pos: int,
+    bracket_ch: str,
+    is_opening: bool,
+) -> Optional[Tuple[str, str]]:
+    """Try to insert *bracket_ch* into *result* using anchor-relative logic.
+
+    Returns ``(new_result, description)`` on success, ``None`` if no
+    anchor could be found.
+    """
+    all_brackets = set(BRACKET_PAIRS.keys()) | set(BRACKET_PAIRS.values())
+    orig_len = len(original)
+
+    # --- Line-start / line-end anchors ---
+    if is_opening:
+        # Check if bracket is at or near start of original
+        leading = original[:orig_pos].lstrip()
+        if not leading:
+            return (
+                bracket_ch + result,
+                f"Missing opening '{bracket_ch}' inserted at line start",
+            )
+    else:
+        trailing = original[orig_pos + 1:].rstrip()
+        if not trailing:
+            return (
+                result + bracket_ch,
+                f"Missing closing '{bracket_ch}' inserted at line end",
+            )
+
+    # --- Character-anchor search ---
+    # For opening bracket: look LEFT for a punctuation anchor
+    # For closing bracket: look RIGHT for a punctuation anchor
+    primary = "left" if is_opening else "right"
+    secondary = "right" if is_opening else "left"
+
+    for direction in (primary, secondary):
+        anchor_info = _find_anchor_near(
+            original, orig_pos, direction, skip_chars=all_brackets,
+        )
+        if anchor_info is None:
+            continue
+        anchor_found, _ = anchor_info
+
+        # Canonicalise the anchor char so get_equivs returns all variants
+        canon_anchor = _CANON_MAP.get(anchor_found, anchor_found)
+
+        # Find anchor (or equivalent) in the translated text
+        for equiv in get_equivs(canon_anchor):
+            # Use rfind for "right" side insertion stability
+            if direction == primary and is_opening:
+                # Bracket is left of anchor → insert AFTER anchor
+                pos = result.find(equiv)
+                if pos >= 0:
+                    insert_at = pos + len(equiv)
+                    new = result[:insert_at] + bracket_ch + result[insert_at:]
+                    return (
+                        new,
+                        f"Missing '{bracket_ch}' inserted after anchor "
+                        f"'{equiv}'",
+                    )
+            elif direction == primary and not is_opening:
+                # Bracket is right of anchor → insert BEFORE anchor
+                pos = result.rfind(equiv)
+                if pos >= 0:
+                    new = result[:pos] + bracket_ch + result[pos:]
+                    return (
+                        new,
+                        f"Missing '{bracket_ch}' inserted before anchor "
+                        f"'{equiv}'",
+                    )
+            elif direction == secondary and is_opening:
+                # Fallback: bracket before some anchor on the right
+                pos = result.find(equiv)
+                if pos >= 0:
+                    new = result[:pos] + bracket_ch + result[pos:]
+                    return (
+                        new,
+                        f"Missing '{bracket_ch}' inserted before anchor "
+                        f"'{equiv}' (secondary)",
+                    )
+            else:
+                # Fallback: closing bracket after some anchor on the left
+                pos = result.rfind(equiv)
+                if pos >= 0:
+                    insert_at = pos + len(equiv)
+                    new = result[:insert_at] + bracket_ch + result[insert_at:]
+                    return (
+                        new,
+                        f"Missing '{bracket_ch}' inserted after anchor "
+                        f"'{equiv}' (secondary)",
+                    )
+
+    return None
 
 
 def check_quote_balance(text: str) -> List[Tuple[str, int]]:
@@ -604,63 +838,176 @@ def recover_quote_balance(
     text: str,
     original: str,
 ) -> Tuple[str, List[RecoveryIssue]]:
-    """Attempt to fix unbalanced quotes by comparing with original.
-    
+    """Fix unbalanced quotes using anchor-relative positioning.
+
+    Uses ANCHOR_EQUIVS to treat fullwidth/halfwidth and JP/EN quote
+    variants as equivalent.  Missing closing quotes are inserted at
+    line end; missing opening quotes at line start (dialogue start).
+    Interior missing quotes use anchor-relative logic or are flagged
+    for review.
+
     Args:
         text: The translated text.
         original: The original text.
-        
+
     Returns:
         Tuple of (fixed_text, list of issues found).
     """
     issues: List[RecoveryIssue] = []
     result = text
-    
-    # Get quote info from original
-    orig_unmatched = check_quote_balance(original)
-    trans_unmatched = check_quote_balance(text)
-    
-    if not trans_unmatched:
-        return result, issues  # Already balanced
-    
-    # Count quotes by type in both
-    orig_quotes = [ch for ch in original if ch in QUOTE_PAIRS or ch in QUOTE_PAIRS.values()]
-    trans_quotes = [ch for ch in text if ch in QUOTE_PAIRS or ch in QUOTE_PAIRS.values()]
-    
-    # Look for missing quotes
-    for quote in set(orig_quotes):
-        orig_count = orig_quotes.count(quote)
-        trans_count = trans_quotes.count(quote)
-        
-        if trans_count < orig_count:
-            # Missing quotes
-            missing_count = orig_count - trans_count
-            
-            # Try to add missing quote at end or start based on type
-            if quote in QUOTE_PAIRS.values() and quote not in QUOTE_PAIRS:
-                # Closing quote - add at end
-                result = result.rstrip() + quote
-                issue = RecoveryIssue(
+
+    all_quote_chars = set(QUOTE_PAIRS.keys()) | set(QUOTE_PAIRS.values())
+    # Also include bracket-pair quotes (「」 etc.) that are quote-equivalent
+    bracket_quote_chars: Set[str] = set()
+    for canon, equivs in ANCHOR_EQUIVS.items():
+        if canon in QUOTE_PAIRS or canon in QUOTE_PAIRS.values():
+            bracket_quote_chars.update(equivs)
+    combined = all_quote_chars | bracket_quote_chars
+
+    # Extract quotes with canonical forms and open/close roles
+    def _extract_quotes(s: str) -> List[Tuple[str, str, str, int]]:
+        """Return (canonical, role, actual_char, position)."""
+        out: List[Tuple[str, str, str, int]] = []
+        same_char_state: Dict[str, bool] = {}
+        for i, ch in enumerate(s):
+            if ch not in combined:
+                continue
+            canon = _CANON_MAP.get(ch, ch)
+            # Check if this char is a clear opening bracket-quote
+            if ch in BRACKET_PAIRS and ch in bracket_quote_chars:
+                out.append((canon, "open", ch, i))
+            elif ch in _CLOSING_TO_OPENING and ch in bracket_quote_chars:
+                out.append((canon, "close", ch, i))
+            elif ch in QUOTE_PAIRS:
+                closing = QUOTE_PAIRS[ch]
+                if ch == closing:
+                    # Same char open/close — track alternating state
+                    is_open = not same_char_state.get(canon, False)
+                    same_char_state[canon] = is_open
+                    role = "open" if is_open else "close"
+                    out.append((canon, role, ch, i))
+                else:
+                    out.append((canon, "open", ch, i))
+            elif any(ch == v for v in QUOTE_PAIRS.values()):
+                out.append((canon, "close", ch, i))
+        return out
+
+    orig_quotes = _extract_quotes(original)
+    trans_quotes = _extract_quotes(result)
+
+    # Count by (canonical, role)
+    from collections import Counter
+    orig_counts: Dict[Tuple[str, str], int] = Counter(
+        (canon, role) for canon, role, _, _ in orig_quotes
+    )
+    trans_counts: Dict[Tuple[str, str], int] = Counter(
+        (canon, role) for canon, role, _, _ in trans_quotes
+    )
+
+    # Already balanced according to equivalences → nothing to do
+    if not any(
+        trans_counts.get(k, 0) < v for k, v in orig_counts.items()
+    ):
+        return result, issues
+
+    for (canon_ch, role), orig_count in sorted(orig_counts.items()):
+        trans_count = trans_counts.get((canon_ch, role), 0)
+        if trans_count >= orig_count:
+            continue
+
+        orig_of_type = [
+            (ch, pos) for c, r, ch, pos in orig_quotes
+            if c == canon_ch and r == role
+        ]
+        missing = orig_of_type[trans_count:]
+
+        for _, orig_pos in missing:
+            # Closing quote → easy: append at line end
+            if role == "close":
+                # Use canonical form (halfwidth)
+                close_ch = canon_ch
+                # If the canonical quote char has a distinct opening form,
+                # use the correct closing char
+                if canon_ch in QUOTE_PAIRS and QUOTE_PAIRS[canon_ch] != canon_ch:
+                    close_ch = QUOTE_PAIRS[canon_ch]
+                result = result.rstrip() + close_ch
+                issues.append(RecoveryIssue(
                     type=RecoveryType.QUOTE_BALANCE,
-                    description=f"Missing closing quote added at end: '{quote}'",
+                    description=(
+                        f"Missing closing quote '{close_ch}' "
+                        f"inserted at line end"
+                    ),
                     position=len(result) - 1,
                     original_text="",
-                    recovered_text=quote,
+                    recovered_text=close_ch,
                     action=RecoveryAction.RECOVERED,
-                )
-                issues.append(issue)
-            elif quote in QUOTE_PAIRS and quote not in QUOTE_PAIRS.values():
-                # Opening quote - harder to place, flag for retry
-                issue = RecoveryIssue(
+                ))
+                continue
+
+            # Opening quote → try line start first
+            leading = original[:orig_pos].lstrip()
+            if not leading:
+                result = canon_ch + result
+                issues.append(RecoveryIssue(
                     type=RecoveryType.QUOTE_BALANCE,
-                    description=f"Missing opening quote could not be auto-placed: '{quote}'",
+                    description=(
+                        f"Missing opening quote '{canon_ch}' "
+                        f"inserted at line start"
+                    ),
+                    position=0,
+                    original_text="",
+                    recovered_text=canon_ch,
+                    action=RecoveryAction.RECOVERED,
+                ))
+                continue
+
+            # Interior opening quote → try anchor-relative
+            all_brackets = set(BRACKET_PAIRS.keys()) | set(
+                BRACKET_PAIRS.values()
+            )
+            anchor_info = _find_anchor_near(
+                original, orig_pos, "left",
+                skip_chars=all_brackets | combined,
+            )
+            placed = False
+            if anchor_info:
+                anchor_ch, _ = anchor_info
+                for equiv in get_equivs(anchor_ch):
+                    pos = result.find(equiv)
+                    if pos >= 0:
+                        insert_at = pos + len(equiv)
+                        result = (
+                            result[:insert_at]
+                            + canon_ch
+                            + result[insert_at:]
+                        )
+                        issues.append(RecoveryIssue(
+                            type=RecoveryType.QUOTE_BALANCE,
+                            description=(
+                                f"Missing opening quote '{canon_ch}' "
+                                f"inserted after anchor '{equiv}'"
+                            ),
+                            position=insert_at,
+                            original_text="",
+                            recovered_text=canon_ch,
+                            action=RecoveryAction.RECOVERED,
+                        ))
+                        placed = True
+                        break
+
+            if not placed:
+                issues.append(RecoveryIssue(
+                    type=RecoveryType.QUOTE_BALANCE,
+                    description=(
+                        f"Missing opening quote '{canon_ch}' could "
+                        f"not be auto-placed (no anchor)"
+                    ),
                     position=-1,
                     original_text="",
-                    recovered_text=quote,
+                    recovered_text=canon_ch,
                     action=RecoveryAction.NEEDS_RETRY,
-                )
-                issues.append(issue)
-    
+                ))
+
     return result, issues
 
 
@@ -763,6 +1110,151 @@ def detect_extra_tokens(
 
 
 # ============================================================================
+# Code Pattern Recovery
+# ============================================================================
+
+
+def recover_code_patterns(
+    text: str,
+    original: str,
+    code_patterns: List[Dict[str, Any]],
+) -> Tuple[str, List[RecoveryIssue]]:
+    """Recover preserve-action code patterns translated by the LLM.
+
+    For each code pattern with ``action='preserve'``, use its regex to
+    find all occurrences in *original*.  For each original occurrence,
+    search for it in *text*.  If missing, scan *text* with a broad regex
+    that matches any content wrapped in the same delimiters (e.g.
+    ``{...}``, ``[...]``, ``<...>``) and identify candidates that do
+    NOT appear in *original* — these are likely translated versions.
+    Replace the first unmatched candidate with the original pattern.
+
+    Args:
+        text: The translated text.
+        original: The original (preprocessed) text.
+        code_patterns: Code pattern dicts from the manifest.
+
+    Returns:
+        Tuple of (fixed_text, list of issues found).
+    """
+    from CherryAI.functions.glossaries.code_glossary_functions import (
+        generate_regex_pattern,
+    )
+
+    issues: List[RecoveryIssue] = []
+    result = text
+
+    for cp in code_patterns:
+        if not isinstance(cp, dict):
+            continue
+        action = cp.get("action", "preserve")
+        if action != "preserve":
+            continue
+        pat = cp.get("pattern", "")
+        raw_type = cp.get("raw_type", "UNKNOWN")
+        if not pat:
+            continue
+
+        regex_str = generate_regex_pattern(pat, raw_type)
+        try:
+            regex = re.compile(regex_str)
+        except re.error:
+            continue
+
+        orig_matches = regex.findall(original)
+        if not orig_matches:
+            continue
+
+        # Check each original match instance in the translated text
+        for orig_instance in orig_matches:
+            if orig_instance in result:
+                continue  # This instance is preserved — good
+
+            # Pattern is missing in translation.  Try to find a
+            # translated substitute: look for content wrapped in the
+            # same delimiters that does NOT exist in original.
+            candidate_found = False
+            delimiters = _detect_delimiters(pat)
+            if delimiters:
+                open_d, close_d = delimiters
+                # Build regex to find anything in those delimiters
+                open_esc = re.escape(open_d)
+                close_esc = re.escape(close_d)
+                broad_pat = re.compile(
+                    open_esc + r"[^" + close_esc + r"]+" + close_esc
+                )
+                for m in broad_pat.finditer(result):
+                    candidate = m.group(0)
+                    # Skip if candidate exists in original (it belongs)
+                    if candidate in original:
+                        continue
+                    # Skip if candidate matches a known code pattern
+                    # occurrence (don't clobber a different valid pattern)
+                    if regex.fullmatch(candidate):
+                        continue
+                    # This candidate is likely the translated version
+                    result = (
+                        result[:m.start()]
+                        + orig_instance
+                        + result[m.end():]
+                    )
+                    issues.append(RecoveryIssue(
+                        type=RecoveryType.CODE_PATTERN,
+                        description=(
+                            f"Code pattern '{orig_instance}' recovered "
+                            f"from translated '{candidate}'"
+                        ),
+                        position=m.start(),
+                        original_text=candidate,
+                        recovered_text=orig_instance,
+                        action=RecoveryAction.RECOVERED,
+                    ))
+                    candidate_found = True
+                    break
+
+            if not candidate_found:
+                issues.append(RecoveryIssue(
+                    type=RecoveryType.CODE_PATTERN,
+                    description=(
+                        f"Code pattern '{orig_instance}' missing "
+                        f"and could not be recovered"
+                    ),
+                    position=-1,
+                    original_text=orig_instance,
+                    recovered_text="",
+                    action=RecoveryAction.NEEDS_RETRY,
+                ))
+
+    return result, issues
+
+
+def _detect_delimiters(pattern: str) -> Optional[Tuple[str, str]]:
+    """Detect the outermost delimiter pair of a code pattern.
+
+    Returns:
+        Tuple of (opening, closing) delimiter or ``None``.
+    """
+    _DELIMITER_PAIRS = {
+        "{": "}", "[": "]", "<": ">", "(": ")",
+        "{": "}", "\uff5b": "\uff5d",
+        "\uff3b": "\uff3d", "\uff08": "\uff09",
+        "\uff1c": "\uff1e", "\u300a": "\u300b",
+        "\u3008": "\u3009", "\u3010": "\u3011",
+    }
+    if not pattern:
+        return None
+    first = pattern[0]
+    if first in _DELIMITER_PAIRS:
+        return first, _DELIMITER_PAIRS[first]
+    last = pattern[-1]
+    # Try reverse lookup for closing-first patterns
+    for opener, closer in _DELIMITER_PAIRS.items():
+        if last == closer and opener in pattern:
+            return opener, closer
+    return None
+
+
+# ============================================================================
 # Main Recovery Functions
 # ============================================================================
 
@@ -774,6 +1266,7 @@ def recover_line(
     enable_bracket_recovery: bool = True,
     enable_quote_recovery: bool = True,
     enable_whitespace_normalization: bool = True,
+    code_patterns: Optional[List[Dict[str, Any]]] = None,
 ) -> RecoveryResult:
     """Apply all recovery operations to a single translated line.
     
@@ -784,6 +1277,7 @@ def recover_line(
         enable_bracket_recovery: Enable bracket balancing.
         enable_quote_recovery: Enable quote balancing.
         enable_whitespace_normalization: Enable whitespace fixes.
+        code_patterns: Code pattern dicts for preserve-action recovery.
         
     Returns:
         RecoveryResult with recovered text and issue details.
@@ -824,6 +1318,13 @@ def recover_line(
         # TASK 42.10: Detect extra tokens
         extra_issues = detect_extra_tokens(current_text, original_placeholders)
         all_issues.extend(extra_issues)
+
+    # 4b. Recover preserve-action code patterns translated by the LLM
+    if code_patterns:
+        current_text, issues = recover_code_patterns(
+            current_text, original, code_patterns,
+        )
+        all_issues.extend(issues)
     
     if enable_bracket_recovery:
         # 5. Fix bracket balance
@@ -851,6 +1352,7 @@ def recover_batch(
     enable_bracket_recovery: bool = True,
     enable_quote_recovery: bool = True,
     enable_whitespace_normalization: bool = True,
+    code_patterns: Optional[List[Dict[str, Any]]] = None,
 ) -> BatchRecoveryResult:
     """Apply recovery operations to a batch of translated lines.
     
@@ -861,6 +1363,7 @@ def recover_batch(
         enable_bracket_recovery: Enable bracket balancing.
         enable_quote_recovery: Enable quote balancing.
         enable_whitespace_normalization: Enable whitespace fixes.
+        code_patterns: Code pattern dicts for preserve-action recovery.
         
     Returns:
         BatchRecoveryResult with all results.
@@ -878,6 +1381,7 @@ def recover_batch(
             enable_bracket_recovery=enable_bracket_recovery,
             enable_quote_recovery=enable_quote_recovery,
             enable_whitespace_normalization=enable_whitespace_normalization,
+            code_patterns=code_patterns,
         )
         batch_result.add_result(result)
     
@@ -902,6 +1406,7 @@ class PostProcessManager:
         enable_quote_recovery: bool = True,
         enable_whitespace_normalization: bool = True,
         auto_retry_on_failure: bool = False,
+        code_patterns: Optional[List[Dict[str, Any]]] = None,
     ):
         """Initialize the post-process manager.
         
@@ -911,12 +1416,14 @@ class PostProcessManager:
             enable_quote_recovery: Enable quote balancing.
             enable_whitespace_normalization: Enable whitespace fixes.
             auto_retry_on_failure: Automatically flag unrecoverable issues for retry.
+            code_patterns: Code pattern dicts for preserve-action recovery.
         """
         self.enable_placeholder_recovery = enable_placeholder_recovery
         self.enable_bracket_recovery = enable_bracket_recovery
         self.enable_quote_recovery = enable_quote_recovery
         self.enable_whitespace_normalization = enable_whitespace_normalization
         self.auto_retry_on_failure = auto_retry_on_failure
+        self.code_patterns = code_patterns
         self.stats = RecoveryStats()
     
     def process_line(self, original: str, translated: str) -> RecoveryResult:
@@ -936,6 +1443,7 @@ class PostProcessManager:
             enable_bracket_recovery=self.enable_bracket_recovery,
             enable_quote_recovery=self.enable_quote_recovery,
             enable_whitespace_normalization=self.enable_whitespace_normalization,
+            code_patterns=self.code_patterns,
         )
         
         # Update statistics
@@ -1031,6 +1539,7 @@ def create_postprocess_manager(
     enable_quote_recovery: bool = True,
     enable_whitespace_normalization: bool = True,
     auto_retry_on_failure: bool = False,
+    code_patterns: Optional[List[Dict[str, Any]]] = None,
 ) -> PostProcessManager:
     """Create a PostProcessManager with specified settings.
     
@@ -1040,6 +1549,7 @@ def create_postprocess_manager(
         enable_quote_recovery: Enable quote balancing.
         enable_whitespace_normalization: Enable whitespace fixes.
         auto_retry_on_failure: Automatically flag unrecoverable issues for retry.
+        code_patterns: Code pattern dicts for preserve-action recovery.
         
     Returns:
         Configured PostProcessManager instance.
@@ -1050,6 +1560,7 @@ def create_postprocess_manager(
         enable_quote_recovery=enable_quote_recovery,
         enable_whitespace_normalization=enable_whitespace_normalization,
         auto_retry_on_failure=auto_retry_on_failure,
+        code_patterns=code_patterns,
     )
 
 

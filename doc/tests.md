@@ -2713,7 +2713,7 @@ Comprehensive tests for all modi modules verifying attributes, functions, and op
 
 | Test | Purpose |
 |------|---------|
-| `test_attributes` | Protect Code has NAME, PHASE, PRIORITY=20 |
+| `test_attributes` | Protect Code has NAME, PHASE, PRIORITY=15 |
 | `test_apply_pre_replaces_with_prot` | Replaces with __PROTECTED__ |
 | `test_apply_post_restores_values` | Restores protected values |
 
@@ -3232,7 +3232,8 @@ Thank you.
 | test_bugfix_batch_79.py | 33 | Bugfix Batch 79: API Log visibility (lift/non-modal), global glossary merge (4), ellipsis-only detection (14), ellipsis compression order (5), dedup/skip progress (3), cached/reasoning tokens (5) |
 | test_unified_request_builder.py | 28 | Unified Request Builder: gather_prompt_data (importable, keys, None/unloaded mgr, sample_lines, metadata read, fallback field merging), build_request_prompt (importable, tuple return, language prompt, style/tone/summary/genre enabled/disabled, rolling context, chunk_lines), unified call sites (costs 3 methods, translate 2 methods, no direct build_full_system_prompt), API Log full prompt (no truncation, line-by-line system_prompt), identical prompt output (deterministic, same data same prompt) |
 | test_glossary_term_link.py | 19 | Glossary ↔ Term Translation link: character round-trip (2), on_enter load order AST (3), on_leave dual-storage sync AST (2), import_analysis_speakers persistence AST (1), dual-storage simulation (4), CharacterInfo preservation (3), ProjectMetadata preservation (2), load guard (2) |
-| **Total Script Tests** | **4472** | (+188 provider handshake, +11 live API, +108 pricing/reasoning, +44 API log, +33 bugfix batch 79, +28 unified builder, +19 glossary term link) |
+| test_code_pattern_recovery.py | 28 | Code Pattern Recovery: _detect_delimiters (8), recover_code_patterns (9: anchor→english, preserved, non-preserve skipped, square brackets, unrecoverable, multiple patterns, empty, not-in-original, candidate conflict), validate_code_patterns_preserved (4), validate_translation_comprehensive code_patterns check #7 (3), recover_line pipeline integration (2), idx 8 end-to-end bug scenario (2) |
+| **Total Script Tests** | **4500** | (+188 provider handshake, +11 live API, +108 pricing/reasoning, +44 API log, +33 bugfix batch 79, +28 unified builder, +19 glossary term link, +28 code pattern recovery) |
 | One_Click_Test.py | 7 stages | API integration |
 
 ### TASK 11: Integration Test - 200 Lines (Completed)
@@ -3825,9 +3826,9 @@ per-line tag storage, and top-N group limiting.
 
 ---
 
-### dev/test_dedup_pipeline.py (26 tests)
+### dev/test_dedup_pipeline.py (33 tests)
 
-GUI dedup pipeline tests validating apply_dedup_batch, apply_aggressive_dedup_batch, preprocessing integration, and postprocessing _best_text resolution.
+GUI dedup pipeline tests validating apply_dedup_batch, apply_aggressive_dedup_batch, preprocessing integration, postprocessing _best_text resolution, and dedup restoration end-to-end.
 
 #### TestApplyDedupBatch (6 tests)
 
@@ -3871,7 +3872,7 @@ GUI dedup pipeline tests validating apply_dedup_batch, apply_aggressive_dedup_ba
 | `test_progress_callback` | progress_cb called with float values |
 | `test_dedup_map_string_keys_for_json` | Map keys are strings for JSON |
 
-#### TestBestText (4 tests)
+#### TestBestText (7 tests)
 
 | Test | Purpose |
 |------|---------|  
@@ -3879,6 +3880,157 @@ GUI dedup pipeline tests validating apply_dedup_batch, apply_aggressive_dedup_ba
 | `test_falls_back_to_translated` | Falls back to translated |
 | `test_skips_dedup_sentinel` | __DEDUP__ sentinel skipped |
 | `test_all_empty_returns_empty` | All empty returns empty string |
+| `test_falls_back_to_preprocessed` | Falls back to preprocessed when tl empty |
+| `test_preprocessed_skips_dedup_sentinel` | __DEDUP__ in preprocessed skipped |
+| `test_priority_order_postpro_tl_prepro_orig` | Full priority chain verified |
+
+#### TestDedupRestoration (4 tests)
+
+| Test | Purpose |
+|------|---------|  
+| `test_standard_dedup_restored_from_postprocessed` | Source postpro copied to dup |
+| `test_standard_dedup_falls_back_to_translated` | Falls back to tl when no postpro |
+| `test_standard_dedup_falls_back_to_preprocessed` | Falls back to prepro when no tl |
+| `test_aggressive_dedup_with_number_restoration` | Numbers restored from aggr_numbers |
+
+---
+
+### dev/test_recovery_anchor.py (73 tests)
+
+Comprehensive tests for anchor-relative bracket and quote recovery. Validates ANCHOR_EQUIVS equivalence-aware comparison, anchor-relative insertion (line start/end, punctuation anchors), NEEDS_RETRY flagging when no anchor found, helper functions, and integration with recover_line().
+
+#### TestBracketEquivalence (9 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_fullwidth_parens_to_halfwidth` | （）→() no spurious insertion |
+| `test_fullwidth_square_to_halfwidth` | ［］→[] no spurious insertion |
+| `test_fullwidth_curly_to_halfwidth` | ｛｝→{} no spurious insertion |
+| `test_fullwidth_angle_to_halfwidth` | ＜＞→<> no spurious insertion |
+| `test_japanese_corner_brackets_unchanged` | 「」 survives translation |
+| `test_multiple_fullwidth_pairs` | Multiple （）→() pairs balanced |
+| `test_mixed_bracket_types_all_equivalent` | Different types all converted |
+| `test_halfwidth_to_halfwidth_same` | Identical brackets unchanged |
+| `test_corner_brackets_as_quote_equivalents` | 「」 treated as own type |
+
+#### TestBracketAnchorInsertion (7 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_missing_opening_bracket_at_line_start` | ( at line start → insert at start |
+| `test_missing_closing_bracket_at_line_end` | ) at line end → insert at end |
+| `test_missing_opening_square_bracket_start` | [ at start → insert at start |
+| `test_missing_closing_square_bracket_end` | ] at end → insert at end |
+| `test_missing_bracket_with_punctuation_anchor` | Anchor-relative via 。→. equiv |
+| `test_both_brackets_missing_with_anchors` | Both brackets recovered |
+| `test_insert_uses_canonical_halfwidth` | Canonical halfwidth used |
+
+#### TestBracketNeedsRetry (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_missing_bracket_in_middle_no_anchor` | No punctuation → graceful handling |
+| `test_no_absolute_position_algorithm` | Regression: no rel_pos formula |
+
+#### TestQuoteEquivalence (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_fullwidth_double_quote_to_halfwidth` | ＂→" no spurious insertion |
+| `test_curly_double_quotes_to_straight` | ""→"" no spurious insertion |
+| `test_jp_corner_brackets_to_en_quotes` | 「」→"" via ANCHOR_EQUIVS equiv |
+| `test_mixed_quote_styles_balanced` | Curly vs straight balanced |
+| `test_identical_quotes_no_change` | Same quotes unchanged |
+| `test_single_quotes_equivalent` | ''→'' no crash |
+
+#### TestQuoteAnchorInsertion (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_missing_closing_quote_at_line_end` | Closing " appended at end |
+| `test_missing_opening_quote_at_line_start` | Same-char balanced after insert |
+| `test_closing_curly_quote_recovered` | Missing \u201d recovered |
+| `test_missing_quote_fullwidth_original` | ＂→" recovered at end |
+
+#### TestQuoteNeedsRetry (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_interior_opening_quote_no_anchor` | Interior quote handled gracefully |
+| `test_no_absolute_position_for_quotes` | Regression: no rel_pos formula |
+
+#### TestFindAnchorNear (10 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_find_punctuation_left` | Finds . to the left |
+| `test_find_punctuation_right` | Finds . to the right |
+| `test_no_anchor_left` | No punctuation → None |
+| `test_no_anchor_right` | No punctuation → None |
+| `test_skip_chars_parameter` | Skip chars respected |
+| `test_anchor_at_boundary` | Anchor at text end found |
+| `test_skip_whitespace_to_anchor` | Spaces skipped to find anchor |
+| `test_left_from_start` | Pos 0 left → None |
+| `test_right_from_end` | Last pos right → None |
+| `test_japanese_punctuation_found` | 。 found as anchor |
+
+#### TestTryAnchorBracketInsert (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_opening_at_line_start` | Opening at orig start → result start |
+| `test_closing_at_line_end` | Closing at orig end → result end |
+| `test_anchor_based_insertion` | Punctuation anchor-relative insert |
+| `test_no_anchor_returns_none` | No anchor → None |
+| `test_opening_at_near_start` | Whitespace before → line start |
+| `test_closing_at_near_end` | Whitespace after → line end |
+
+#### TestNormalizeBracket (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_fullwidth_to_halfwidth` | （→(, ）→), etc. |
+| `test_halfwidth_passthrough` | (→(, )→) unchanged |
+| `test_non_bracket_passthrough` | a→a unchanged |
+| `test_jp_corner_bracket_canonical` | 「→", 」→" |
+
+#### TestRecoverLineIntegration (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_fullwidth_brackets_no_spurious_insertion` | recover_line: （）→() clean |
+| `test_fullwidth_quotes_no_spurious_insertion` | recover_line: ＂→" clean |
+| `test_missing_bracket_recovered_via_anchor` | recover_line: ( inserted |
+| `test_missing_quote_recovered_at_end` | recover_line: " at end |
+| `test_jp_to_en_complete_conversion` | 「」（）→""() no corruption |
+| `test_no_issues_when_balanced` | Balanced text has zero issues |
+
+#### TestModuleConstants (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_canon_map_has_all_equivs` | _CANON_MAP covers ANCHOR_EQUIVS |
+| `test_closing_to_opening_complete` | _CLOSING_TO_OPENING complete |
+| `test_recovery_anchor_chars_include_punctuation` | Punctuation in set |
+| `test_bracket_equiv_subset_of_canon_map` | BRACKET_EQUIV ⊂ _CANON_MAP |
+| `test_quote_equiv_subset_of_canon_map` | QUOTE_EQUIV ⊂ _CANON_MAP |
+
+#### TestEdgeCases (12 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_empty_texts` | Empty orig+trans no crash |
+| `test_empty_translated` | Empty trans with bracket orig |
+| `test_empty_original` | Empty orig with bracket trans |
+| `test_only_brackets` | Text is only brackets |
+| `test_nested_brackets_balanced` | Nested (()) balanced |
+| `test_multiple_bracket_types_mixed` | Multiple types in one line |
+| `test_empty_texts_quote_recovery` | Empty texts for quotes |
+| `test_quote_inside_brackets` | Quotes inside brackets |
+| `test_very_long_line` | 1000+ char line no crash |
+| `test_unicode_content_between_brackets` | Unicode content in brackets |
+| `test_single_bracket_in_original` | Unmatched bracket graceful |
+| `test_extra_brackets_in_translated` | Extra brackets not removed |
 
 ---
 
@@ -8662,6 +8814,74 @@ python -m pytest CherryAI/dev/test_code_pattern_actions.py -v --timeout=10
 
 ---
 
+### dev/test_code_pattern_recovery.py (28 tests) - Code Pattern Recovery
+
+Tests for preserve-action code pattern recovery, validation, and the full pipeline fix for the idx 8 bug ({アンカー} translated as {anchor}).
+
+#### TestDetectDelimiters (8 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_curly_braces` | `{アンカー}` → `{`, `}` |
+| `test_square_brackets` | `[font_COLOR]` → `[`, `]` |
+| `test_angle_brackets` | `<br>` → `<`, `>` |
+| `test_parentheses` | `(hello)` → `(`, `)` |
+| `test_empty_string` | Empty → None |
+| `test_no_delimiters` | `plain_text` → None |
+| `test_fullwidth_curly` | `｛test｝` → `｛`, `｝` |
+| `test_cjk_angle` | `《test》` → `《`, `》` |
+
+#### TestRecoverCodePatterns (9 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_anchor_translated_to_english` | Core bug: `{anchor}` → `{アンカー}` recovered |
+| `test_pattern_already_preserved` | No-op when pattern survives translation |
+| `test_non_preserve_action_skipped` | translate-action patterns not checked |
+| `test_square_bracket_recovery` | `[name]` → `[名前]` recovered |
+| `test_unrecoverable_pattern_flagged` | NEEDS_RETRY when no candidate found |
+| `test_multiple_patterns_recovered` | Two patterns both recovered |
+| `test_empty_code_patterns` | No-op with empty list |
+| `test_pattern_not_in_original` | Skip when pattern absent from original |
+| `test_candidate_matches_different_known_pattern` | Don't clobber valid patterns |
+
+#### TestValidateCodePatternsPreserved (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_missing_pattern_detected` | Warning for missing `{アンカー}` |
+| `test_preserved_pattern_no_warning` | No warning when preserved |
+| `test_translate_action_not_checked` | translate-action skipped |
+| `test_multiple_occurrences_partial` | Partial preservation flagged |
+
+#### TestValidateTranslationComprehensiveCodePatterns (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_code_pattern_error_and_retry` | Check #7 fires, CODE_PATTERN_TRANSLATED retry reason |
+| `test_no_error_when_preserved` | No error when pattern survives |
+| `test_no_code_patterns_param` | Without code_patterns, check #7 is no-op |
+
+#### TestRecoverLineCodePatterns (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_code_pattern_recovered_in_pipeline` | recover_line passes code_patterns through |
+| `test_no_code_patterns_param_skipped` | Without code_patterns, recovery skipped |
+
+#### TestIdx8BugScenario (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_full_recovery_pipeline` | End-to-end: validate → comprehensive → recover → re-validate |
+| `test_unrecoverable_flags_qa` | Unrecoverable patterns set needs_retry=True |
+
+```
+python -m pytest CherryAI/dev/test_code_pattern_recovery.py -v --timeout=10
+```
+
+---
+
 ### dev/test_session_loading.py (28 tests) - TASKS 18.1-18.8
 
 Tests for session loading and state restoration fixes.
@@ -12593,6 +12813,33 @@ rel_path matching.
 
 ```bash
 python -m pytest dev/test_lightvn_fixes.py -v --timeout=10
+```
+
+---
+
+### dev/test_postpro_pipeline.py (48 tests) — Preprocessing/Postprocessing Round-Trip
+
+Tests for the full preprocessing → postprocessing reversal pipeline. Validates that
+every preprocessing transformation is correctly reversed during postprocessing,
+including protect code, custom placeholders, ellipsis compression, anchoring,
+deduplication, and PROTECTED token compression/decompression.
+
+**Files Tested:** `gui/helpers/mode_adapter.py`, `gui/steps/postprocess.py`
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestPreprocessingOrder | 3 | Protect code before symbol conversion, custom placeholder before symbol, symbol conversion after protection |
+| TestProtCompression | 4 | Compress 2, compress 3, no compress single, decompress roundtrip |
+| TestProtectCodeRestore | 5 | Capture single, capture multiple, restore single, restore multiple order, restore no data noop |
+| TestCustomPlaceholderRestore | 3 | Capture literal, restore literal, restore no data noop |
+| TestEllipsisRoundtrip | 4 | Batch captures counts, compress and decompress, reverse ellipsis method, JP ellipsis roundtrip |
+| TestAnchoring | 5 | Remove anchors with adjacent anchors, remove no adjacent anchor (stays), anchor records capture values, restore anchors new format (anchor-relative), anchor batch captures |
+| TestDedupRestoration | 3 | Standard dedup map, aggressive dedup numbers, aggressive restore line |
+| TestFullPipelineRoundtrip | 16 | Per-index preprocessing checks (idx 0–8), postprocess prot decompression, protect restore, full idx6/idx7/idx5/idx8 roundtrips, stats completeness |
+| TestEdgeCases | 5 | Empty line, no changes no stats, prot decompression no tokens, restore more tokens than values, anchor no entries |
+
+```bash
+python -m pytest dev/test_postpro_pipeline.py -v --timeout=10
 ```
 
 

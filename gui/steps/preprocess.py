@@ -1237,6 +1237,34 @@ class PreprocessingStep(BaseStep):
                 str(k): v for k, v in aggr_numbers.items()
             }
 
+        # Persist protect code captured values for postprocessing restoration
+        prot_captured = last_stats.get("protect_code_captured", {})
+        if prot_captured:
+            data["protect_code_captured"] = {
+                str(k): v for k, v in prot_captured.items()
+            }
+
+        # Persist custom placeholder captured values
+        ph_captured = last_stats.get("placeholder_captured", {})
+        if ph_captured:
+            data["placeholder_captured"] = {
+                str(k): v for k, v in ph_captured.items()
+            }
+
+        # Persist ellipsis counts for decompression
+        ell_counts = last_stats.get("ellipsis_counts", {})
+        if ell_counts:
+            data["ellipsis_counts"] = {
+                str(k): v for k, v in ell_counts.items()
+            }
+
+        # Persist anchor captured data for restoration
+        anchor_captured = last_stats.get("anchor_captured", {})
+        if anchor_captured:
+            data["anchor_captured"] = {
+                str(k): v for k, v in anchor_captured.items()
+            }
+
         self.set_step_data(data)
 
         # Persist each preprocessed line to the manifest

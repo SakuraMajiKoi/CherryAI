@@ -55,6 +55,76 @@ MODULE COUNTS (Verified January 2026)
 =============================================================================
 [Archived: Sessions 43–24 + Phase 62 → see doc/archived.md]
 
+### BUG FIX: Bracket/Quote Balance Recovery Too Aggressive (Anchor-Relative Rewrite)
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Rewrite Bracket Balance Recovery and Quote Balance Recovery to use anchor-relative positioning with ANCHOR_EQUIVS equivalence instead of absolute positional data. Both recoveries were inserting brackets/quotes at computed positions using `rel_pos = pos / len(original)` which produced wrong results when translation length differs from original.
+
+**Root Causes:**
+1. `recover_bracket_balance()` used `rel_pos = pos / len(original)` then `insert_at = int(rel_pos * len(result))` — absolute positional mapping that fails when translated text has different structure/length.
+2. No equivalence awareness — fullwidth/halfwidth bracket/quote conversions (e.g. `（`→`(`, `「`→`"`) counted as "missing" because the recovery compared exact characters, not canonical forms.
+3. Bracket-quote hybrids (`「`/`」`, canon=`"`) were counted as brackets AND handled by quote recovery, causing double-insertion.
+
+**Changes:**
+1. **Equivalence infrastructure** — Added `BRACKET_EQUIV`, `QUOTE_EQUIV`, `_CANON_MAP` (from ANCHOR_EQUIVS), `_CLOSING_TO_OPENING`, `_RECOVERY_ANCHOR_CHARS`, `_normalize_bracket()` to `functions/postprocess.py`.
+2. **`recover_bracket_balance()` rewritten** — Extracts brackets from both texts using canonical forms via `_CANON_MAP`. Counts by `(canonical, role)` pairs. Defers bracket-quote hybrids (`「」` etc. whose canonical is `"`) to quote recovery. Missing brackets use `_try_anchor_bracket_insert()` with line-start/end detection and `_find_anchor_near()` + `get_equivs()` (canonicalised) for character anchors. Flags `NEEDS_RETRY` when no anchor found.
+3. **`_find_anchor_near()`** — New helper that finds nearest punctuation anchor from a position. Skips whitespace and specified skip chars. Stops at first non-anchor, non-space character.
+4. **`_try_anchor_bracket_insert()`** — New helper that tries line-start/end first, then character-anchor search using `get_equivs(_CANON_MAP.get(anchor_ch, anchor_ch))` for bidirectional equivalence lookup.
+5. **`recover_quote_balance()` rewritten** — Extracts quotes including bracket-quote equivalents (`「`→`"` via ANCHOR_EQUIVS). Uses canonical comparison to detect truly missing quotes. Closing quotes → line end. Opening quotes → line start or anchor-relative. Interior quotes → anchor or `NEEDS_RETRY`.
+6. **Anchor canonicalization fix** — `get_equivs()` calls in `_try_anchor_bracket_insert()` now canonicalize anchor chars first (`_CANON_MAP.get(anchor_ch, anchor_ch)`) so that `。` correctly resolves to `.` equivalents in translated text.
+
+**Files Modified:**
+- `functions/postprocess.py` — `BRACKET_EQUIV`, `QUOTE_EQUIV`, `_CANON_MAP`, `_CLOSING_TO_OPENING`, `_RECOVERY_ANCHOR_CHARS`, `_normalize_bracket()`, `recover_bracket_balance()` (rewritten), `_find_anchor_near()` (new), `_try_anchor_bracket_insert()` (new), `recover_quote_balance()` (rewritten)
+
+**Tests:** `dev/test_recovery_anchor.py` — 73 tests (9 bracket equivalence, 7 bracket anchor insertion, 2 NEEDS_RETRY, 6 quote equivalence, 4 quote anchor insertion, 2 quote NEEDS_RETRY, 10 _find_anchor_near, 6 _try_anchor_bracket_insert, 4 _normalize_bracket, 6 recover_line integration, 5 module constants, 12 edge cases). Plus `dev/test_postprocess_fixes.py` — 9 existing bracket/quote tests all passing.
+
+---
+
+### BUG FIX: Preserve-Action Code Patterns Not Validated or Recovered
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Fix the pipeline so that code patterns with `action='preserve'` are validated after translation and recovered during postprocessing. The bug manifested as `{アンカー}` at idx 8 being translated as `{anchor}` with no validation, recovery, retry, or QA flagging.
+
+**Root Causes:**
+1. `validate_translation_comprehensive()` had no `code_patterns` parameter — preserve-action patterns were never validated during translation.
+2. `validate_code_patterns_preserved()` results were treated as warnings-only in `validate_line_post()`, not errors.
+3. `recover_line()` had no code pattern recovery mechanism at all.
+4. `RetryReason` enum lacked a code pattern entry.
+5. GUI translation step applied translations without content validation for code patterns.
+
+**Changes:**
+1. **`functions/postprocess.py`** — Added `RecoveryType.CODE_PATTERN` to enum. New `recover_code_patterns(text, original, code_patterns)` function: for each preserve-action pattern, uses `generate_regex_pattern()` to find occurrences in original; if missing in translation, scans for content in same delimiters not present in original (translated substitutes); replaces first match or flags `NEEDS_RETRY`. New `_detect_delimiters(pattern)` helper identifies `{}`, `[]`, `<>`, `()`, fullwidth, and CJK delimiter pairs. Integrated into `recover_line()` pipeline between placeholder and bracket recovery. Updated `recover_batch()`, `PostProcessManager`, and `create_postprocess_manager()` factory.
+2. **`functions/validation.py`** — Added `RetryReason.CODE_PATTERN_TRANSLATED` to enum. Added `code_patterns` parameter to `validate_translation_comprehensive()` and `validate_batch_comprehensive()`. Added check #7 that calls `validate_code_patterns_preserved()` and adds missing patterns as errors + retry reasons. Changed `validate_line_post()` to treat code pattern failures as errors instead of warnings.
+3. **`gui/steps/postprocess.py`** — Loads `code_patterns` from `ManifestManager.get_code_patterns()` before the processing loop. Passes `code_patterns` to `recover_line()` calls.
+4. **`gui/steps/translate.py`** — After applying translations, validates preserve-action code patterns using `recover_code_patterns()`. If recovery succeeds, updates the translation. If recovery fails, marks line as `NEEDS_REVIEW` for QA.
+5. **`dev/test_code_pattern_actions.py`** — Updated `test_validate_line_post_with_code_patterns` to check `result.errors` instead of `result.warnings` to match new severity.
+
+**Tests:** `dev/test_code_pattern_recovery.py` — 28 tests (8 delimiter detection, 9 recovery scenarios, 4 validation, 3 comprehensive validation, 2 recover_line integration, 2 end-to-end idx 8 bug scenario). All 74 code pattern tests passing (28 new + 46 existing in test_code_pattern_actions.py).
+
+---
+
+### BUG FIX: Deduplication Reduplication Broken in Postprocessing
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 1 hour
+
+Goal: Fix reduplication so that deduplicated lines (`__DEDUP__`) are correctly restored to the source line's translated/postprocessed text after clicking Apply Rules (preprocessing) and Apply Postprocessing.
+
+**Root Causes:**
+1. `_restore_dedup_lines()` and the main postprocessing loop read preprocessing step data from `self.session.get_step(3).data` (SessionState), but `_update_step_data()` in the preprocessing step saves data via `self.set_step_data()` which writes to ManifestManager when loaded — NOT to the session. The two stores are not synchronized, so `dedup_map` was never seen by the postprocessing step.
+2. `_best_text()` resolution chain was `postprocessed → translated → original`, missing `preprocessed`. The intended priority per spec §5.9 is `postpro → tl → prepro → orig`.
+3. `PostprocessLine` dataclass lacked a `preprocessed` field, making it impossible to resolve from prepro when tl is empty (e.g., when running postprocessing before translation).
+
+**Changes:**
+1. **Data source fix** — Both `_restore_dedup_lines()` and the main postprocessing loop now read step 3 data from ManifestManager first (`mgr.get_step_data(3)`), falling back to session only when ManifestManager is unavailable.
+2. **`PostprocessLine.preprocessed` field** — Added `preprocessed: str = ""` field to the dataclass. `_refresh_lines()` now batch-reads `prepro` values from the manifest and populates this field.
+3. **`_best_text()` updated** — Resolution chain is now `postprocessed → translated → preprocessed → original`, matching the spec priority and skipping `__DEDUP__` sentinels at each level.
+
+**Files Modified:**
+- `gui/steps/postprocess.py` — `PostprocessLine` (preprocessed field), `_refresh_lines()` (prepro map), `_best_text()` (4-field priority), `_restore_dedup_lines()` (ManifestManager data source), main loop (ManifestManager data source)
+
+**Tests:** `dev/test_dedup_pipeline.py` — 33 tests (was 26; +3 TestBestText, +4 TestDedupRestoration)
+
+---
+
 ### BUG FIX: LightVN Detection, Tag Propagation, Input Step Fixes (4 Fixes)
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
 
@@ -1165,6 +1235,7 @@ FUTURE IDEAS (No Phase Commitment)
 
 ### Preprocessing/Postprocessing Future Enhancements
 - [x] **Line Field Persistence (Task 3)**: Fixed critical bug where preprocessing, postprocessing, and wordwrap steps stored per-line results only in step_state but never wrote to manifest `lines[].prepro` / `lines[].postpro` / `lines[].wordwr` via `set_line_field()`. Also fixed `_mark_line_as_fixed()` calling nonexistent `update_line_field()` → `set_line_field()`. 39 tests in `dev/test_line_saving.py`.
+- [x] **Pipeline Order Fix & Postprocessing Reversal**: Fixed 6 root causes of broken postprocessing. (1) Protect Code (P15) and Custom Placeholders (P17) now run before Symbol Conversion (P30) so fullwidth patterns match original text. (2) Anchoring (P20) added to pipeline before Symbol Conversion. (3) All preprocessing data (protect_code_captured, placeholder_captured, ellipsis_counts, anchor_captured, aggr_numbers) stored in step data for postprocessing. (4) Postprocessing now runs full reversal pipeline first (Phase 1: PROT decompression → Protect Code restoration → Custom Placeholder restoration → Ellipsis expansion → Anchoring restoration → `<NUM>` restoration), then `recover_line()` with `enable_placeholder_recovery=False` as Phase 2 on restored text. (5) Protect code capture order fixed: positions collected across all patterns first, overlaps resolved, captured in left-to-right order. (6) Anchoring rewritten to anchor-relative system: patterns only removed when adjacent to a valid anchor character; restoration uses `rfind` with symbol-conversion equivalents instead of absolute/proportional positioning. Updated process_order.py and specs.md §5.9. 48 tests in `dev/test_postpro_pipeline.py`.
 - **Speaker Name Replacement Rework**: Handle edge cases (speakers with colons in name, multiple dialogue formats, speaker extraction from non-standard patterns)
 - **Code Spacing Rules Expansion**: Deeper integration with Code Database, expanded rule definitions, per-pattern spacing tags (visible/invisible, variable handling)
 - **Advanced Deduplication Rules**: Pattern-based deduplication using Increase/Decrease equivalence, RPG stat names (Strength/Willpower/Dexterity) as equivalent, database of auto-translations for common patterns

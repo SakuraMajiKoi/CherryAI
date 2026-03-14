@@ -429,9 +429,12 @@ API RESPONSE VALIDATION ✓ (Enhanced - Session 14+)
 - **Comprehensive Validation** ✓ (NEW - TASK 4):
   - Combines all checks: empty, placeholder, speaker, Japanese, anchors
   - Per-line retry reasons: EMPTY_TRANSLATION, PLACEHOLDER_MISSING,
-    SPEAKER_FORMAT_LOST, TOO_MANY_JAPANESE, LINE_COUNT_MISMATCH
+    SPEAKER_FORMAT_LOST, TOO_MANY_JAPANESE, LINE_COUNT_MISMATCH,
+    CODE_PATTERN_TRANSLATED
   - Batch validation with lines_to_retry list for targeted retries
   - Success rate calculation for batch quality assessment
+  - Code pattern preservation check: verifies preserve-action patterns
+    survive translation; triggers retry when missing
 - **Symbol Conversion** (Standard Mode):
   - Enabled by default via `symbol_conversion_enabled` config
   - Fullwidth digits → ASCII: ０１２３４５６７８９ → 0123456789
@@ -997,6 +1000,8 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - Apply Rules button with threaded background processing
   - Auto-Suggest button leveraging analysis results
   - Tooltips explaining each rule's behavior
+  - **Pipeline Execution Order:** Dedup (P10) → Protect Code (P15) → Custom Placeholders (P17) → Anchoring (P20) → Symbol Conversion (P30) → Ellipsis (P36) → Speaker (P38) → PROT Compression (P60) → Aggressive Dedup (P90). Protect Code and Custom Placeholders run before Symbol Conversion so fullwidth patterns (e.g. `（圧縮あり）`) still match the original text. All captured data (protect_code_captured, placeholder_captured, ellipsis_counts, anchor_captured) is stored in step data for postprocessing reversal.
+  - **Postprocessing Reversal:** Phase 1 (preprocessing reversal): PROT decompression → Protect Code restoration → Custom Placeholder restoration → Ellipsis expansion → Anchoring restoration → `<NUM>` restoration from aggressive dedup numbers. Phase 2 (post-exclusive LLM recovery): `recover_line()` fixes LLM artifacts (bracket/quote balance, whitespace normalization) on the already-restored text, with `enable_placeholder_recovery=False`. After all lines: Dedup restoration → Aggressive Dedup restoration. Reduplication reads step 3 data from ManifestManager (not session) and resolves source text via `postpro → tl → prepro → orig` priority chain.
   - **Manifest Integration (Phase 24):**
     - All toggles persist to manifest: Deduplication, DeduplicationThreshold, EllipsisCompression,
       SymbolConversion, ProtCompression, SpeakerNameReplacement, CodeSpacingRules
@@ -1227,8 +1232,8 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Changes count display per line
   - **Recovery Options Panel:**
     - Placeholder Recovery toggle
-    - Bracket Balance Recovery toggle
-    - Quote Balance Recovery toggle
+    - Bracket Balance Recovery toggle (anchor-relative, ANCHOR_EQUIVS equivalence-aware)
+    - Quote Balance Recovery toggle (anchor-relative, bracket-quote equivalence-aware)
     - Whitespace Normalization toggle
     - Restore Code Characters toggle
     - Restore <br> Tags toggle
@@ -1248,8 +1253,8 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - PLACEHOLDER_CASE - Fix __PROTECTED__ → __PROTECTED__
     - PLACEHOLDER_MANGLED - Fix __PR OT__ → __PROTECTED__
     - PLACEHOLDER_MISSING - Restore missing placeholders
-    - BRACKET_BALANCE - Fix unbalanced brackets
-    - QUOTE_BALANCE - Fix unbalanced quotes
+    - BRACKET_BALANCE - Fix unbalanced brackets (anchor-relative positioning, ANCHOR_EQUIVS equivalence)
+    - QUOTE_BALANCE - Fix unbalanced quotes (anchor-relative positioning, bracket-quote equivalence)
     - WHITESPACE - Normalize whitespace issues
     - CODE_CHARACTER - Restore code characters (<{[]}>)
     - BR_TAG - Restore missing <br> tags
@@ -2157,7 +2162,7 @@ PERSISTENT API LOGGING (Implemented)
   - api_log_summary.csv for quick overview
   - Fields: date, requests, tokens, cost, model
 
-AUTOMATIC LINE RECOVERY (Planned)
+AUTOMATIC LINE RECOVERY (Implemented)
 - Fix malformed translations without retrying when possible
 - **Recovery Strategies (No LLM Required):**
   - **Placeholder Case Fix**: `__PROTECTED__` → `__PROTECTED__`
@@ -2167,9 +2172,12 @@ AUTOMATIC LINE RECOVERY (Planned)
   - **Speaker Format Fix**: Add missing colon or quotes
   - **Code Character Recovery**: Insert missing CODE_CHARS in order
   - **<br> Tag Recovery**: Insert missing line break tags
+  - **Code Pattern Recovery**: Restore preserve-action patterns translated
+    by the LLM (e.g. `{anchor}` → `{アンカー}`) using delimiter-aware
+    regex matching against the original text
 - **Recovery vs Retry Decision:**
   - If local recovery possible: Apply fix, log warning, continue
-  - If recovery impossible: Queue for LLM retry
+  - If recovery impossible: Queue for LLM retry or flag for QA review
 - **Benefits:**
   - Faster than LLM retries
   - Lower cost (no API calls)

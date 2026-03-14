@@ -1061,7 +1061,8 @@ def validate_line_post(
         cp_warnings = validate_code_patterns_preserved(
             original, translated, code_patterns,
         )
-        warnings.extend(cp_warnings)
+        # Missing preserve-action patterns are errors, not just warnings
+        errors.extend(cp_warnings)
     
     is_valid = len(errors) == 0
     return ValidationResult(
@@ -1395,6 +1396,7 @@ class RetryReason(Enum):
     TOO_MANY_JAPANESE = "too_many_japanese"
     LINE_COUNT_MISMATCH = "line_count_mismatch"
     REPETITION_DETECTED = "repetition_detected"
+    CODE_PATTERN_TRANSLATED = "code_pattern_translated"
 
 
 @dataclass
@@ -1438,6 +1440,7 @@ def validate_translation_comprehensive(
     check_speaker_format: bool = True,
     check_anchors: bool = True,
     check_repetition: bool = True,
+    code_patterns: Optional[List[Dict[str, Any]]] = None,
 ) -> TranslationValidationResult:
     """Perform comprehensive validation on a translated line.
     
@@ -1448,6 +1451,7 @@ def validate_translation_comprehensive(
     4. Japanese character limit
     5. Anchor preservation
     6. Repetition detection (infinite loops, runaway patterns)
+    7. Code pattern preservation (preserve-action patterns)
     
     Args:
         original: Original (preprocessed) line.
@@ -1458,6 +1462,7 @@ def validate_translation_comprehensive(
         check_speaker_format: Whether to check speaker format.
         check_anchors: Whether to check anchor preservation.
         check_repetition: Whether to check for repetitive patterns.
+        code_patterns: Code pattern dicts from manifest for preservation check.
         
     Returns:
         TranslationValidationResult with all validation details.
@@ -1525,6 +1530,15 @@ def validate_translation_comprehensive(
         if repetition_result.has_repetition:
             errors.append(f"Repetition detected: {repetition_result.details}")
             retry_reasons.append(RetryReason.REPETITION_DETECTED)
+
+    # 7. Code pattern preservation (preserve-action patterns)
+    if code_patterns:
+        cp_warnings = validate_code_patterns_preserved(
+            original, translated, code_patterns,
+        )
+        if cp_warnings:
+            errors.extend(cp_warnings)
+            retry_reasons.append(RetryReason.CODE_PATTERN_TRANSLATED)
     
     is_valid = len(errors) == 0
     should_retry = len(retry_reasons) > 0
@@ -1548,6 +1562,7 @@ def validate_batch_comprehensive(
     check_speaker_format: bool = True,
     check_anchors: bool = True,
     check_repetition: bool = True,
+    code_patterns: Optional[List[Dict[str, Any]]] = None,
 ) -> BatchTranslationValidationResult:
     """Validate a batch of translations comprehensively.
     
@@ -1561,6 +1576,7 @@ def validate_batch_comprehensive(
         check_speaker_format: Whether to check speaker format.
         check_anchors: Whether to check anchor preservation.
         check_repetition: Whether to check for repetitive patterns.
+        code_patterns: Code pattern dicts from manifest for preservation check.
         
     Returns:
         BatchTranslationValidationResult with all line results.
@@ -1591,6 +1607,7 @@ def validate_batch_comprehensive(
             check_speaker_format=check_speaker_format,
             check_anchors=check_anchors,
             check_repetition=check_repetition,
+            code_patterns=code_patterns,
         )
         line_results.append(result)
         
