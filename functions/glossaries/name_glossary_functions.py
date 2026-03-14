@@ -28,6 +28,7 @@ from .name_glossary_constants import (
     PLACEHOLDER_NAME_RE,
     PRONOUN_ROMANIZATION,
     PRONOUN_GENDER,
+    MIN_GENDER_SIGNAL_SAMPLES,
     MIN_SPEAKER_OCCURRENCES,
     MAX_SPEAKER_LENGTH,
     DEFAULT_GENDER_CONFIDENCE_THRESHOLD,
@@ -483,6 +484,8 @@ def detect_honorific_gender_from_others(
     
     male_score = 0.0
     female_score = 0.0
+    male_samples = 0
+    female_samples = 0
     
     # Pattern to find name+honorific combinations (e.g., リリィちゃん)
     for honorific, gender in STRONG_GENDER_HONORIFICS.items():
@@ -499,12 +502,15 @@ def detect_honorific_gender_from_others(
                     count = len(matches)
                     if gender == "female":
                         female_score += count * REFERRED_BY_OTHERS_WEIGHT
+                        female_samples += count
                     elif gender == "male":
                         male_score += count * REFERRED_BY_OTHERS_WEIGHT
+                        male_samples += count
     
     # Calculate confidence
     total = male_score + female_score
-    if total == 0:
+    total_samples = male_samples + female_samples
+    if total == 0 or total_samples < MIN_GENDER_SIGNAL_SAMPLES:
         return None, 0.0
     
     if female_score > male_score:
@@ -596,7 +602,7 @@ def infer_gender_from_context(
     
     # Calculate confidence (only from male/female, exclude unknown)
     total_gendered = male_count + female_count
-    if total_gendered == 0:
+    if total_gendered < MIN_GENDER_SIGNAL_SAMPLES:
         # No gendered indicators
         confidence = 0.0
         inferred_gender = GENDER_UNKNOWN
@@ -839,6 +845,7 @@ def infer_genders_batch(
     honorific_strings = list(STRONG_GENDER_HONORIFICS.keys())
     # Pre-filter set for fast "any honorific in line?" check
     hon_evidence: Dict[str, Dict[str, float]] = {}
+    hon_samples: Dict[str, Dict[str, int]] = {}
 
     for i, raw_line in enumerate(all_lines):
         if cancel_check and i % 5000 == 0 and cancel_check():
@@ -856,6 +863,10 @@ def infer_genders_batch(
                         target, {"male": 0.0, "female": 0.0},
                     )
                     bucket[hon_gender] += REFERRED_BY_OTHERS_WEIGHT
+                    sample_bucket = hon_samples.setdefault(
+                        target, {"male": 0, "female": 0},
+                    )
+                    sample_bucket[hon_gender] += 1
 
     if cancel_check and cancel_check():
         return results
@@ -973,11 +984,15 @@ def infer_genders_batch(
 
         # Priority 2: Honorific from others
         hon = hon_evidence.get(name)
-        if hon:
+        hon_count = hon_samples.get(name)
+        if hon and hon_count:
             female_s = hon.get("female", 0.0)
             male_s = hon.get("male", 0.0)
+            female_samples = hon_count.get("female", 0)
+            male_samples = hon_count.get("male", 0)
+            total_samples = female_samples + male_samples
             total_s = female_s + male_s
-            if total_s > 0:
+            if total_s > 0 and total_samples >= MIN_GENDER_SIGNAL_SAMPLES:
                 if female_s > male_s:
                     conf = (female_s / total_s) * 100.0
                     if conf >= confidence_threshold:
