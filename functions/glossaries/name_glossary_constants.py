@@ -170,6 +170,31 @@ STRONG_GENDER_HONORIFICS = {
     "姫": "female",       # Princess (hime)
 }
 
+# Clear gender markers that can appear directly in speaker names.
+# Japanese markers are substring-based; Latin-script markers are matched as
+# standalone words by the inference helper.
+NAME_GENDER_MARKERS = {
+    "male": (
+        "男",
+        "少年",
+        "Mister",
+        "Boy",
+        "Man",
+        "Herr",
+        "Junge",
+        "Mann",
+    ),
+    "female": (
+        "女",
+        "Missus",
+        "Miss",
+        "Girl",
+        "Woman",
+        "Frau",
+        "Mädchen",
+    ),
+}
+
 # ---------------- Script type detection ---------------- #
 
 # Unicode ranges for Japanese scripts

@@ -3124,6 +3124,7 @@ Thank you.
 | test_functions_v2.py | 15 | Functions integration |
 | test_game_summary.py | 22 | Game summary & project config |
 | test_gender_inference.py | 21 | Gender inference |
+| test_gender_batch.py | 31 | Batch gender inference |
 | test_glossary.py | 30 | Glossary management |
 | test_gui_analysis_integration.py | 45 | GUI-Analysis integration (TASK 16.6 + 18.1) |
 | test_gui_chunker_integration.py | 87 | GUI-Chunker integration (TASK 16.8) |
@@ -5538,6 +5539,99 @@ Integration tests for リリィ (Lily) character edge case.
 
 ---
 
+### dev/test_gender_batch.py (31 tests)
+
+Tests for batch gender inference via `infer_genders_batch()`, optimized for large manifests.
+
+**Test Classes:**
+
+#### TestBatchBasic (9 tests)
+Tests basic batch inference functionality.
+
+| Test | Purpose |
+|------|---------|
+| `test_empty_names` | Empty names list returns empty dict |
+| `test_empty_lines` | Empty lines returns Unknown for all |
+| `test_single_speaker_no_signals` | Single speaker with no evidence → Unknown |
+| `test_explicit_gender_female` | Status card "性別：女性" detected as Female |
+| `test_explicit_gender_male` | Status card "性別：男性" detected as Male |
+| `test_honorific_chan_female` | ちゃん from others → Female |
+| `test_honorific_kun_male` | くん from others → Male |
+| `test_self_pronoun_ore_male` | 俺 in own dialogue → Male |
+| `test_self_pronoun_atashi_female` | あたし in own dialogue → Female |
+
+#### TestBatchPriority (2 tests)
+Tests multi-signal priority ordering.
+
+| Test | Purpose |
+|------|---------|
+| `test_explicit_overrides_honorific` | Explicit gender wins over conflicting honorifics |
+| `test_honorific_overrides_pronoun` | Others' honorifics win over self-pronouns |
+
+#### TestBatchLimits (5 tests)
+Tests `max_lines_per_speaker` and `min_evidence` settings.
+
+| Test | Purpose |
+|------|---------|
+| `test_max_lines_limits_scanning` | Only scans up to max_lines dialogue lines |
+| `test_min_evidence_threshold` | Requires min evidence points for decision |
+| `test_do_all_false_early_exit` | Stops scanning early when consensus reached |
+| `test_do_all_true_full_scan` | Forces full scan even with early consensus |
+| `test_ignore_unknown_excludes` | No-evidence lines excluded from max count |
+
+#### TestBatchCancel (2 tests)
+Tests cancellation support.
+
+| Test | Purpose |
+|------|---------|
+| `test_cancel_returns_partial` | Cancel callback stops processing, returns partial results |
+| `test_cancel_check_called` | Cancel callback is polled during processing |
+
+#### TestBatchProgress (1 test)
+Tests progress reporting.
+
+| Test | Purpose |
+|------|---------|
+| `test_progress_callback_called` | Progress callback receives (current, total, name) updates |
+
+#### TestBatchMultiSpeaker (2 tests)
+Tests with multiple simultaneous speakers.
+
+| Test | Purpose |
+|------|---------|
+| `test_multiple_speakers_batch` | Correctly infers gender for many speakers at once |
+| `test_speakers_not_in_lines` | Speakers with no dialogue lines → Unknown |
+
+#### TestBatchPerformance (2 tests)
+Tests performance characteristics.
+
+| Test | Purpose |
+|------|---------|
+| `test_large_input_completes` | 200 speakers + 10K lines completes in <2s |
+| `test_batch_faster_than_individual` | Batch is faster than per-speaker calls |
+
+#### TestBatchEdgeCases (7 tests)
+Tests edge cases and boundary conditions.
+
+| Test | Purpose |
+|------|---------|
+| `test_speaker_talks_to_self` | Self-referencing honorifics not counted as others |
+| `test_mixed_gender_honorifics` | Conflicting honorifics resolved by majority weight |
+| `test_unicode_names` | Full Unicode name handling (kanji, kana) |
+| `test_empty_dialogue_lines` | Lines with empty dialogue portion handled |
+| `test_colon_variants` | Both half-width and full-width colons detected |
+| `test_no_speaker_lines` | Lines without speaker format skipped cleanly |
+| `test_duplicate_names` | Duplicate names in input handled without error |
+
+#### TestBatchGUIIntegration (1 test)
+Tests GUI-facing integration.
+
+| Test | Purpose |
+|------|---------|
+| `test_return_format_matches_gui` | Return tuple format matches GUI expectations |
+
+---
+
 ### dev/test_game_pipeline.py (133 tests)
 
 Test suite for the test_game folder pipeline. Creates manifests from test_game files and validates
@@ -5968,8 +6062,14 @@ The comprehensive gender inference is fully integrated into the analysis workflo
    - Now uses `infer_gender_comprehensive()` instead of `infer_gender_from_context()`
    - Multi-signal priority: explicit > others' honorifics > self-pronouns
 
+3. **_infer_character_genders()** in `gui/steps/information.py`:
+   - Uses `infer_genders_batch()` for batch inference across all speakers
+   - Both script and LLM passes run in background threads with Cancel support
+   - Settings (`gender_script_maximum`, `gender_script_minimum`, `ignore_unknown`, `do_all`) passed through as `max_lines_per_speaker`, `min_evidence`, etc.
+
 **Verification:**
 - All 21 gender inference tests pass
+- All 31 batch gender inference tests pass
 - All 144 core tests pass (options, normalization, config, validation, functions_v2)
 - No regressions in existing functionality
 

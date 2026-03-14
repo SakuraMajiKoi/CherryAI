@@ -1022,6 +1022,7 @@ def build_request_prompt(
     rolling_context_text: str = "",
     merge_instruction: str = "",
     context_type: str = "",
+    code_patterns: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[str, Dict[str, int]]:
     """Build a translation request prompt from gathered data.
 
@@ -1037,6 +1038,7 @@ def build_request_prompt(
         rolling_context_text: Pre-formatted rolling context.
         merge_instruction: Merged-request instruction (Step 5).
         context_type: Resolved content type for this chunk.
+        code_patterns: Optional explicit override for code patterns.
 
     Returns:
         Tuple of (assembled_prompt, token_breakdown).
@@ -1049,7 +1051,11 @@ def build_request_prompt(
         rolling_context_text=rolling_context_text,
         pov_data=prompt_data.get("pov_data"),
         chunk_lines=chunk_lines,
-        code_patterns=prompt_data.get("code_patterns"),
+        code_patterns=(
+            code_patterns
+            if code_patterns is not None
+            else prompt_data.get("code_patterns")
+        ),
         merge_instruction=merge_instruction,
         context_type=context_type,
     )

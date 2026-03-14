@@ -1191,7 +1191,7 @@ When `auto_inference` is enabled (Global Option), the pipeline offers several in
 | `infer_speakers_to_glossary` | Analysis speakers | characters[] | Add detected speakers as character glossary entries with empty Translation |
 | `infer_codes_to_database` | Analysis code_patterns | CodeGlossary[] | Add detected code patterns to Code Database with default "Preserve" action; prefers `individual_codes` (per-code detail) over grouped `code_patterns` when available |
 | `infer_pov` | Analysis non-dialogue | POVResult | Detect Point of View (1st/2nd/3rd person) for prompt context |
-| `infer_gender` | Input step text + Analysis speaker counts | characters[].gender | Two modes: "Script only" uses `infer_gender_comprehensive()` heuristics; "Script + LLM" runs script first then `infer_gender_llm()` for unknowns via dialogue excerpts. LLM pass runs in a background thread with queue-based polling (`after(100)`) and a Cancel button to keep the UI responsive. Configurable confidence spinboxes (min/max, ignore_unknown, do_all). Settings read from CherryAI.ini [utility] and API.ini [gender_inference]. |
+| `infer_gender` | Input step text + Analysis speaker counts | characters[].gender | Two modes: "Script only" uses `infer_genders_batch()` for single-pass batch inference across all speakers; "Script + LLM" runs batch script first then `infer_gender_llm()` for unknowns via dialogue excerpts. Both passes run in a background thread with queue-based polling (`after(100)`) and a Cancel button visible from the start to keep the UI responsive. Script pass uses five-phase batch processing (index pass → explicit gender → honorifics from others → self-pronouns → combine signals) optimized for large manifests (845+ speakers, 64K+ lines). Configurable confidence spinboxes: `gender_script_maximum` controls max lines scanned per speaker, `gender_script_minimum` controls minimum evidence required. `ignore_unknown` excludes no-evidence lines from the limit; `do_all` forces full scan even after consensus. Settings read from CherryAI.ini [utility] and API.ini [gender_inference]. |
 
 **Manifest Keys**: Each inference option has a corresponding boolean in `Options.AutoInference.*`.
 
@@ -2237,7 +2237,7 @@ The Costs step has **two distinct estimation states** tracked separately:
 | Add Character | Button | Add new character entry |
 | Edit | Button | Edit selected character via CharacterDialog (Notes field) |
 | Remove | Button | Remove selected character(s) |
-| Infer Gender | Button | Heuristic gender inference using loaded text data; LLM pass runs in background thread with Cancel support |
+| Infer Gender | Button | Batch gender inference using `infer_genders_batch()`; both script and LLM passes run in background threads with Cancel button visible from the start |
 | Import from Analysis | Button | Import detected speakers using `_get_analysis_step_data()` helper |
 
 **Table Sorting**: Characters display sorted by internal `count` field (highest first) by default. Clicking any column header sorts alphabetically A→Z; clicking the same header again reverses to Z→A; a third click resets to the default count-based order. Sort state tracked via `_char_sort_col`, `_char_sort_reverse`, `_char_sort_clicks`. Row-to-data mapping uses `char_{idx}` tags (via `_get_char_idx()`) so display order is independent of `_metadata.characters` list order.

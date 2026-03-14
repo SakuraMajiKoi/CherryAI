@@ -1612,7 +1612,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Confirmation dialog with "Don't ask again" option for removal
     - Import from glossary functionality
     - Export character list support
-    - Gender inference progress dialog: shows "Checking 'name'" label, progress bar, and count (X / Y); LLM pass runs in background thread to keep UI responsive; Cancel button aborts inference early
+    - Gender inference progress dialog: shows "Checking 'name'" label, progress bar, and count (X / Y); both script and LLM passes run in background threads to keep UI responsive; Cancel button visible from the start aborts either pass
   - **Style & Tone Panel (Phase 60):**
     - Style preset dropdown (combobox) with full list of built-in + user presets
     - Editable ScrolledText field (height=1) showing the preset's LLM prompt text
@@ -3049,7 +3049,7 @@ When you analyze a file, the tool automatically detects:
 1. SPEAKERS (from dialogue)
    - Extracts character names from lines like "Character: dialogue"
    - Identifies gender cues from speech patterns (pronouns: 私, 僕, etc.)
-   - Detects honorifics (さん, ちゃん, etc.)
+   - Detects honorifics (さん, ちゃん, etc.) attached to that name
    - Learns how each character refers to themselves
    - Learns how others address them
 
@@ -3098,8 +3098,8 @@ inference before being added to the glossary.
 
 **Two modes** (configurable in Global Options → Utility → Gender Inference):
 
-- **Script only** (default) — Built-in script analysis using pronouns, honorifics, and explicit markers. No API required.
-- **Script + LLM** — Runs script first, then uses the configured LLM API to resolve remaining unknowns via dialogue excerpt analysis. LLM pass executes in a background thread with queue-based polling (`after(100)`) to keep the UI responsive; a Cancel button allows aborting early.
+- **Script only** (default) — Built-in batch analysis using `infer_genders_batch()`: single-pass line scanning with five phases (index pass → explicit gender → honorifics from others → self-pronouns → combine signals). Optimized for large manifests (845+ speakers, 64K+ lines processed in ~5 seconds). Runs in a background thread with Cancel button visible from the start. No API required.
+- **Script + LLM** — Runs batch script first in a background thread, then uses the configured LLM API to resolve remaining unknowns via dialogue excerpt analysis. Both passes run in background threads with queue-based polling (`after(100)`) to keep the UI responsive; a Cancel button allows aborting either pass.
 
 **Structured Output**: LLM mode uses strict JSON-schema (`response_format=json_schema`) with a single `details` string field for free-form gender output. Output capped with `max_tokens=150` and `store=False` to minimise token waste. Responses are normalized case-insensitively (e.g., "female" → "Female", "MALE" → "Male"). "Unsure" and "Unknown" map to "Unknown"; empty responses clear the field.
 
@@ -3108,7 +3108,7 @@ inference before being added to the glossary.
 **API key/model selection**: Like Term Translation, the Gender Inference section in Global Options → Utility provides dropdowns for API key and model. Settings are persisted to API.ini `[gender_inference]` section.
 
 **Confidence controls**:
-- **Script Confidence**: Two spinboxes (minimum / maximum) control how many script checks run and how many must agree. "Ignore Unknown" excludes no-result checks from the count. "Do all Requests" forces all maximum checks to run (vs. early stop on consensus).
+- **Script Confidence**: Two spinboxes (minimum / maximum) control batch inference behaviour. Maximum (`gender_script_maximum`) sets the max dialogue lines scanned per speaker for self-pronoun analysis. Minimum (`gender_script_minimum`) sets the minimum evidence points required before deciding. "Ignore Unknown" excludes no-evidence lines from the max count. "Do all Requests" forces scanning all max lines even after consensus is reached.
 - **LLM Confidence**: Same spinbox pair for LLM checks. Defaults: minimum=3, maximum=5, Ignore Unknown=True, Do all Requests=False (early stop on consensus).
 
 **Error abort**: LLM mode raises `RuntimeError` on API failure (missing key, network error) and shows a messagebox instead of silently skipping.
@@ -3124,7 +3124,9 @@ inference before being added to the glossary.
    - Handles transformed characters correctly (e.g., former male now female)
 
 3. **Self-Pronouns** (fallback)
+   - Batch mode actively scans each speaker's dialogue lines for pronoun usage
    - Analyzes pronouns used: 俺/僕 (male), あたし/わたくし (female), 私 (neutral/female)
+   - Limited by `gender_script_maximum` setting (default 50 lines per speaker)
    - Weighted by occurrence count
    - 75% confidence threshold for automatic assignment
 

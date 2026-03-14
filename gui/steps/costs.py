@@ -1270,7 +1270,10 @@ class CostsStep(BaseStep):
             prompt_data = gather_prompt_data(mgr, sample_lines=sample_lines)
 
             # Build the full prompt using the shared builder
-            prompt_text, breakdown = build_request_prompt(prompt_data)
+            prompt_text, breakdown = build_request_prompt(
+                prompt_data,
+                code_patterns=prompt_data.get("code_patterns"),
+            )
 
             if not prompt_text:
                 return 0
@@ -1309,6 +1312,7 @@ class CostsStep(BaseStep):
                 prompt_data,
                 chunk_lines=[],
                 rolling_context_text="",
+                code_patterns=prompt_data.get("code_patterns"),
             )
 
             if not prompt_text:

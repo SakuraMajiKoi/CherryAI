@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 # Import constants from name_glossary_constants
 from .name_glossary_constants import (
@@ -33,6 +33,7 @@ from .name_glossary_constants import (
     DEFAULT_GENDER_CONFIDENCE_THRESHOLD,
     EXPLICIT_GENDER_PATTERNS,
     EXPLICIT_GENDER_VALUES,
+    NAME_GENDER_MARKERS,
     REFERRED_BY_OTHERS_WEIGHT,
     STRONG_GENDER_HONORIFICS,
 )
@@ -516,6 +517,33 @@ def detect_honorific_gender_from_others(
         return None, 50.0
 
 
+def detect_name_marker_gender(name: str) -> Tuple[Optional[str], float, str]:
+    """Detect gender from explicit markers present in the speaker name itself."""
+    from ..glossary import GENDER_MALE, GENDER_FEMALE
+
+    lowered_name = name.casefold()
+    latin_boundary = r"[A-Za-zÀ-ÖØ-öø-ÿ]"
+
+    def _contains_marker(marker: str) -> bool:
+        if any(ord(ch) > 127 for ch in marker) and marker not in {"Mädchen"}:
+            return marker in name
+        pattern = re.compile(
+            rf"(?<!{latin_boundary}){re.escape(marker.casefold())}(?!{latin_boundary})"
+        )
+        return bool(pattern.search(lowered_name))
+
+    male_found = any(_contains_marker(marker) for marker in NAME_GENDER_MARKERS["male"])
+    female_found = any(
+        _contains_marker(marker) for marker in NAME_GENDER_MARKERS["female"]
+    )
+
+    if male_found == female_found:
+        return None, 0.0, ""
+    if male_found:
+        return GENDER_MALE, 100.0, "name_marker"
+    return GENDER_FEMALE, 100.0, "name_marker"
+
+
 # ---------------- Gender inference ---------------- #
 
 
@@ -657,6 +685,15 @@ def infer_gender_comprehensive(
                 name, explicit_source, explicit_gender
             )
             return explicit_gender, explicit_conf, refers_to, referred_to, "explicit"
+
+    # 1.5. Try clear gender markers inside the name itself.
+    marker_gender, marker_conf, marker_source = detect_name_marker_gender(name)
+    if marker_gender:
+        logging.info(
+            "Gender for %s determined by name marker (%s): %s",
+            name, marker_source, marker_gender,
+        )
+        return marker_gender, marker_conf, refers_to, referred_to, marker_source
     
     # 2. Try honorifics used by others (high weight)
     if lines and speaker_counts:
@@ -681,6 +718,292 @@ def infer_gender_comprehensive(
         source = "unknown"
     
     return basic_gender, basic_conf, refers_to, referred_to, source
+
+
+# ---------------- Batch gender inference (optimised) ---------------- #
+
+
+def infer_genders_batch(
+    names: List[str],
+    all_lines: List[str],
+    speaker_counts: Dict[str, int],
+    *,
+    confidence_threshold: float = DEFAULT_GENDER_CONFIDENCE_THRESHOLD,
+    max_lines_per_speaker: int = 50,
+    min_evidence: int = 30,
+    ignore_unknown: bool = True,
+    do_all: bool = False,
+    cancel_check: Optional[Callable[[], bool]] = None,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> Dict[str, Tuple[str, float, str, str, str]]:
+    """Batch gender inference for multiple speakers via single-pass scanning.
+
+    Optimised for large manifests (hundreds of speakers, tens of thousands of
+    lines).  Instead of rescanning every line per speaker, the function:
+
+    1. **Index pass** — one sweep over *all_lines* to detect speakers and map
+       each line to its speaker.
+    2. **Explicit gender** — four regex scans on the joined text, results
+       matched to *names* via set lookup.
+    3. **Honorific-from-others** — single sweep with quick pre-filter (skip
+       lines without any strong honorific substring).
+    4. **Self-pronoun analysis** — per-speaker dialogue lines sampled up to
+       *max_lines_per_speaker*.  Supports early exit via *min_evidence* /
+       *do_all* / *ignore_unknown* semantics.
+    5. **Combine signals** per speaker using the same priority as
+       ``infer_gender_comprehensive``: explicit > others_honorific > pronouns.
+
+    Args:
+        names: Speaker names to infer genders for.
+        all_lines: Every line of the loaded project.
+        speaker_counts: ``{name: occurrence_count}`` from the analysis step.
+        confidence_threshold: Minimum confidence (0–100) for a gendered result.
+        max_lines_per_speaker: Cap on dialogue lines examined per speaker for
+            self-pronoun / self-honorific evidence.
+        min_evidence: Minimum gendered evidence hits before early exit
+            (ignored when *do_all* is ``True``).
+        ignore_unknown: When ``True``, lines without gendered evidence do not
+            count toward *max_lines_per_speaker*.
+        do_all: Always examine *max_lines_per_speaker* lines even if
+            *min_evidence* is already reached.
+        cancel_check: Callable returning ``True`` to abort. Checked
+            periodically during scanning.
+        progress_callback: ``(current_index, total, speaker_name)`` called
+            after each speaker is resolved.
+
+    Returns:
+        ``{name: (gender, confidence, refers_to, referred_to, source)}``
+        for every name that was processed before cancellation.
+    """
+    from ..glossary import GENDER_MALE, GENDER_FEMALE, GENDER_UNKNOWN
+
+    name_set = frozenset(names)
+    results: Dict[str, Tuple[str, float, str, str, str]] = {}
+    if not names or not all_lines:
+        return results
+
+    total_speakers = len(names)
+
+    # ------------------------------------------------------------------
+    # Phase 1: Index pass — detect line speakers, build dialogue map
+    # ------------------------------------------------------------------
+    line_speakers: List[Optional[str]] = []
+    # speaker -> [(line_idx, dialogue_text)]
+    speaker_dialogue: Dict[str, List[Tuple[int, str]]] = {n: [] for n in names}
+
+    for i, raw_line in enumerate(all_lines):
+        if cancel_check and i % 5000 == 0 and cancel_check():
+            return results
+        spk = detect_speaker(raw_line)
+        line_speakers.append(spk)
+        if spk and spk in name_set:
+            colon_pos = raw_line.find(":")
+            if colon_pos == -1:
+                colon_pos = raw_line.find("\uff1a")  # fullwidth ：
+            dialogue = raw_line[colon_pos + 1:] if colon_pos >= 0 else raw_line
+            speaker_dialogue[spk].append((i, dialogue))
+
+    if cancel_check and cancel_check():
+        return results
+
+    # ------------------------------------------------------------------
+    # Phase 2: Explicit gender detection — run 4 regexes on joined text
+    # ------------------------------------------------------------------
+    full_text = "\n".join(all_lines)
+    explicit_genders: Dict[str, Tuple[str, float, str]] = {}
+
+    for pattern, source_type in EXPLICIT_GENDER_PATTERNS.items():
+        regex = re.compile(pattern, re.IGNORECASE)
+        for match in regex.finditer(full_text):
+            matched_name = match.group(1) if (match.lastindex or 0) >= 1 else None
+            matched_gender_str = (
+                match.group(2) if (match.lastindex or 0) >= 2 else None
+            )
+            if not matched_name or not matched_gender_str:
+                continue
+            gender_value = EXPLICIT_GENDER_VALUES.get(matched_gender_str)
+            if not gender_value:
+                continue
+            g = GENDER_FEMALE if gender_value == "female" else GENDER_MALE
+            # Match against our names
+            for n in name_set:
+                if n in matched_name and n not in explicit_genders:
+                    explicit_genders[n] = (g, 100.0, source_type)
+
+    if cancel_check and cancel_check():
+        return results
+
+    # ------------------------------------------------------------------
+    # Phase 3: Honorific-from-others — single pass with pre-filter
+    # ------------------------------------------------------------------
+    honorific_strings = list(STRONG_GENDER_HONORIFICS.keys())
+    # Pre-filter set for fast "any honorific in line?" check
+    hon_evidence: Dict[str, Dict[str, float]] = {}
+
+    for i, raw_line in enumerate(all_lines):
+        if cancel_check and i % 5000 == 0 and cancel_check():
+            return results
+        # Quick pre-filter: skip lines without any strong honorific
+        if not any(h in raw_line for h in honorific_strings):
+            continue
+        spk = line_speakers[i]
+        for target in name_set:
+            if spk == target:
+                continue  # skip self-references
+            for hon_str, hon_gender in STRONG_GENDER_HONORIFICS.items():
+                if target + hon_str in raw_line:
+                    bucket = hon_evidence.setdefault(
+                        target, {"male": 0.0, "female": 0.0},
+                    )
+                    bucket[hon_gender] += REFERRED_BY_OTHERS_WEIGHT
+
+    if cancel_check and cancel_check():
+        return results
+
+    # ------------------------------------------------------------------
+    # Phase 4: Self-pronoun / self-suffix analysis (per speaker, limited)
+    # ------------------------------------------------------------------
+    pronoun_tokens = list(PRONOUN_ROMANIZATION.keys())
+    pronoun_re = re.compile(
+        "(" + "|".join(re.escape(t) for t in pronoun_tokens) + ")"
+    )
+    speaker_pronouns: Dict[str, Dict[str, int]] = {}
+    speaker_suffixes: Dict[str, Dict[str, int]] = {}
+
+    for idx, name in enumerate(names):
+        if cancel_check and cancel_check():
+            return results
+        if progress_callback:
+            progress_callback(idx, total_speakers, name)
+
+        dialogue_lines = speaker_dialogue.get(name, [])
+        pron_counts: Dict[str, int] = {}
+        suf_counts: Dict[str, int] = {}
+        lines_checked = 0
+        evidence_hits = 0
+
+        for _li, text in dialogue_lines:
+            if not do_all and evidence_hits >= min_evidence:
+                break
+            if lines_checked >= max_lines_per_speaker:
+                break
+
+            found_evidence = False
+
+            # Check pronouns
+            for pm in pronoun_re.finditer(text):
+                jp_token = pm.group(1)
+                rom = PRONOUN_ROMANIZATION.get(jp_token, jp_token)
+                pron_counts[rom] = pron_counts.get(rom, 0) + 1
+                if PRONOUN_GENDER.get(rom, "unknown") != "unknown":
+                    found_evidence = True
+
+            # Only count self-honorifics when attached to this speaker's own
+            # name. Scanning bare suffix words (e.g. 姉ちゃん in dialogue)
+            # misclassifies ordinary references to other people as self-cues.
+            for sm in HONORIFIC_RE.finditer(text):
+                base_token = sm.group(1)
+                if base_token != name:
+                    continue
+                jp_token = sm.group(2)
+                rom = HONORIFIC_ROMANIZATION.get(jp_token, jp_token)
+                suf_counts[rom] = suf_counts.get(rom, 0) + 1
+                if HONORIFIC_GENDER.get(rom, "unknown") != "unknown":
+                    found_evidence = True
+
+            if found_evidence:
+                evidence_hits += 1
+                lines_checked += 1
+            elif not ignore_unknown:
+                lines_checked += 1
+
+        if pron_counts:
+            speaker_pronouns[name] = pron_counts
+        if suf_counts:
+            speaker_suffixes[name] = suf_counts
+
+    if cancel_check and cancel_check():
+        return results
+
+    # ------------------------------------------------------------------
+    # Phase 5: Combine signals per speaker
+    # ------------------------------------------------------------------
+    for idx, name in enumerate(names):
+        if cancel_check and cancel_check():
+            return results
+        if progress_callback:
+            progress_callback(idx, total_speakers, name)
+
+        pronouns = speaker_pronouns.get(name, {})
+        suffixes = speaker_suffixes.get(name, {})
+
+        refers_to = (
+            ",".join(
+                f"{p}:{c}"
+                for p, c in sorted(
+                    pronouns.items(), key=lambda x: x[1], reverse=True,
+                )
+            )
+            if pronouns
+            else ""
+        )
+        referred_to = (
+            ",".join(
+                f"{h}:{c}"
+                for h, c in sorted(
+                    suffixes.items(), key=lambda x: x[1], reverse=True,
+                )
+            )
+            if suffixes
+            else ""
+        )
+
+        # Priority 1: Explicit gender
+        if name in explicit_genders:
+            g, conf, src = explicit_genders[name]
+            results[name] = (g, conf, refers_to, referred_to, "explicit")
+            continue
+
+        marker_gender, marker_conf, marker_source = detect_name_marker_gender(name)
+        if marker_gender:
+            results[name] = (
+                marker_gender, marker_conf, refers_to, referred_to, marker_source,
+            )
+            continue
+
+        # Priority 2: Honorific from others
+        hon = hon_evidence.get(name)
+        if hon:
+            female_s = hon.get("female", 0.0)
+            male_s = hon.get("male", 0.0)
+            total_s = female_s + male_s
+            if total_s > 0:
+                if female_s > male_s:
+                    conf = (female_s / total_s) * 100.0
+                    if conf >= confidence_threshold:
+                        results[name] = (
+                            GENDER_FEMALE, conf, refers_to,
+                            referred_to, "others_honorific",
+                        )
+                        continue
+                elif male_s > female_s:
+                    conf = (male_s / total_s) * 100.0
+                    if conf >= confidence_threshold:
+                        results[name] = (
+                            GENDER_MALE, conf, refers_to,
+                            referred_to, "others_honorific",
+                        )
+                        continue
+
+        # Priority 3: Self-pronoun + self-honorific analysis
+        gender, conf, _, _ = infer_gender_from_context(
+            pronouns, suffixes, confidence_threshold,
+        )
+
+        source = "pronouns" if gender != GENDER_UNKNOWN else "unknown"
+        results[name] = (gender, conf, refers_to, referred_to, source)
+
+    return results
 
 
 # ---------------- Speaker validation ---------------- #

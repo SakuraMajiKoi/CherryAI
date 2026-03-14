@@ -642,7 +642,7 @@ class App(tk.Tk):
         # Load current options from session or config
         current_options = getattr(self.session, "global_options", None)
         if current_options is None:
-            current_options = GlobalOptions()
+            current_options = GlobalOptions.load_from_ini()
 
         def on_save(options: GlobalOptions) -> None:
             """Handle options save callback."""

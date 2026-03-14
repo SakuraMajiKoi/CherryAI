@@ -2179,6 +2179,7 @@ class TranslationStep(BaseStep):
                 prompt_data,
                 chunk_lines=chunk_lines,
                 rolling_context_text=rolling_context_text,
+                code_patterns=prompt_data.get("code_patterns"),
                 merge_instruction=merge_instruction,
                 context_type=context_type,
             )
@@ -4732,7 +4733,7 @@ class TranslationStep(BaseStep):
             go = getattr(self.session, "global_options", None)
             if go is None:
                 from CherryAI.gui.dialogs.global_options import GlobalOptions
-                go = GlobalOptions()
+                go = GlobalOptions.load_from_ini()
 
             def _on_save(options):
                 self.session.global_options = options
@@ -4756,7 +4757,7 @@ class TranslationStep(BaseStep):
             go = getattr(self.session, "global_options", None)
             if go is None:
                 from CherryAI.gui.dialogs.global_options import GlobalOptions
-                go = GlobalOptions()
+                go = GlobalOptions.load_from_ini()
 
             def _on_save(options):
                 self.session.global_options = options

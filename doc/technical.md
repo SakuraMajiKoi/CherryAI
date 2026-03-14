@@ -567,7 +567,7 @@ TABLE OF CONTENTS
            - `confirm_action()` for preset deletion with opt-out
          - Glossary table: 4-column Treeview (Active ✓/✗, Original, Translation, Notes)
          - Speaker multi-select removal: selectmode="extended" with reverse-index batch deletion
-         - Gender inference progress dialog: Toplevel with progress bar, "Checking 'name'" label, X/Y count; LLM pass runs in background thread with queue-based polling via `after(100)` to keep UI responsive; Cancel button via `threading.Event`
+         - Gender inference progress dialog: Toplevel with progress bar, "Checking 'name'" label, X/Y count; both script and LLM passes run in background threads with queue-based polling via `after(100)` to keep UI responsive; Cancel button visible from the start via `threading.Event`
          - Inline editing via double-click with Entry overlay; Delete key removes entries
          - Import from Analysis: choice dialog (Top N / All) with spinbox; code patterns → category="Detected"; speakers → character glossary entries; non-destructive merge; uses `_get_analysis_step_data()` (ManifestManager first, session fallback)
          - Code Database actions in prompt_builder: Preserve="Do not translate", Provides Context="Translate as" hint, Custom Placeholder/Protect/Strip with Anchor/Part of a Span=default "Do not translate"; legacy migration: translate→provides_context, remove→preserve; action sync via sync_code_pattern_actions() auto-populates ProtectCodePatterns/CustomPlaceholders/AnchorRemoval
@@ -3887,6 +3887,7 @@ name_glossary_functions.py:
 - detect_honorific_gender_from_others(name, lines, speaker_counts) → (gender, confidence): Weighted others' honorifics
 - infer_gender_from_context(pronouns, honorifics, threshold) → (gender, confidence, pronoun_found, honorific_found)
 - infer_gender_comprehensive(name, pronouns, honorifics, full_text, lines, speaker_counts, threshold) → (gender, confidence, pronoun_found, honorific_found, source): Multi-signal inference
+- infer_genders_batch(names, all_lines, speaker_counts, *, confidence_threshold, max_lines_per_speaker, min_evidence, ignore_unknown, do_all, cancel_check, progress_callback) → Dict[str, Tuple]: Batch gender inference optimized for large manifests. Uses five-phase single-pass scanning (index pass → explicit gender → honorifics from others → self-pronouns → combine signals) instead of per-speaker rescanning. Supports cancellation and progress reporting.
 - romanize_pronoun(jp_pronoun) → str: Convert to romaji
 - romanize_honorific(jp_honorific) → str: Convert to romaji
 - update_speakers_in_glossary(speakers_count, speaker_pronoun_counts, speaker_suffix_counts, additional_data, confidence_threshold, update_mode, full_text, lines) → Path
@@ -3902,6 +3903,7 @@ Key Features:
   1. Explicit markers (status cards) → 100% confidence
   2. Others' honorifics (weighted 3x) → high confidence
   3. Self-pronouns (ore→male, atashi→female) → normal weight
+- Batch processing via `infer_genders_batch()`: single-pass scanning for all speakers simultaneously, optimized for large manifests (845+ speakers, 64K+ lines in ~5 seconds)
 - Handles edge cases like transformed characters (male pronouns, female identity)
 - Detects gender from pronouns (watashi→female, ore→male, etc.)
 - Extracts honorific suffixes and infers gender from them (chan→female, kun→male)

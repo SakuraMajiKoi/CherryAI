@@ -759,6 +759,15 @@ class UtilitySettings:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "UtilitySettings":
         """Create from dictionary."""
+        def _as_bool(value: Any, default: bool) -> bool:
+            if value is None:
+                return default
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                return value.strip().lower() in ("1", "true", "yes", "on")
+            return bool(value)
+
         mode = str(data.get("term_translation_mode", "Romaji"))
         if mode in ("Simple", "MTL"):
             mode = "Romaji"
@@ -777,12 +786,20 @@ class UtilitySettings:
             gender_model=str(data.get("gender_model", "")),
             gender_script_minimum=int(data.get("gender_script_minimum", 30)),
             gender_script_maximum=int(data.get("gender_script_maximum", 50)),
-            gender_script_ignore_unknown=bool(data.get("gender_script_ignore_unknown", True)),
-            gender_script_do_all=bool(data.get("gender_script_do_all", True)),
+            gender_script_ignore_unknown=_as_bool(
+                data.get("gender_script_ignore_unknown"), True,
+            ),
+            gender_script_do_all=_as_bool(
+                data.get("gender_script_do_all"), True,
+            ),
             gender_llm_minimum=int(data.get("gender_llm_minimum", 3)),
             gender_llm_maximum=int(data.get("gender_llm_maximum", 5)),
-            gender_llm_ignore_unknown=bool(data.get("gender_llm_ignore_unknown", True)),
-            gender_llm_do_all=bool(data.get("gender_llm_do_all", False)),
+            gender_llm_ignore_unknown=_as_bool(
+                data.get("gender_llm_ignore_unknown"), True,
+            ),
+            gender_llm_do_all=_as_bool(
+                data.get("gender_llm_do_all"), False,
+            ),
             speaker_threshold=int(data.get("speaker_threshold", 10)),
         )
 
@@ -851,6 +868,104 @@ class GlobalOptions:
             prompts=PromptsSettings.from_dict(data.get("prompts", {})),
             providers=providers,
         )
+
+    @classmethod
+    def load_from_ini(cls) -> "GlobalOptions":
+        """Load persisted Global Options values relevant to the Utility UI."""
+        try:
+            from CherryAI.functions import api_config, ini_manager
+        except Exception:
+            return cls()
+
+        utility = UtilitySettings.from_dict({
+            "term_translation_mode": (
+                ini_manager.get_user_default("utility", "term_translation_mode")
+                or "Romaji"
+            ),
+            "term_api_key_provider": (
+                api_config.get_profile_setting("term_translation", "provider") or ""
+            ),
+            "term_api_key_name": (
+                api_config.get_profile_setting("term_translation", "key_name") or ""
+            ),
+            "term_model": (
+                api_config.get_profile_setting("term_translation", "model") or ""
+            ),
+            "term_batch_size": (
+                ini_manager.get_user_default("utility", "term_batch_size") or 10
+            ),
+            "gender_inference_mode": (
+                ini_manager.get_user_default("utility", "gender_inference_mode")
+                or "Script only"
+            ),
+            "gender_api_key_provider": (
+                api_config.get_profile_setting("gender_inference", "provider") or ""
+            ),
+            "gender_api_key_name": (
+                api_config.get_profile_setting("gender_inference", "key_name") or ""
+            ),
+            "gender_model": (
+                api_config.get_profile_setting("gender_inference", "model") or ""
+            ),
+            "gender_script_minimum": (
+                ini_manager.get_user_default("utility", "gender_script_minimum") or 30
+            ),
+            "gender_script_maximum": (
+                ini_manager.get_user_default("utility", "gender_script_maximum") or 50
+            ),
+            "gender_script_ignore_unknown": (
+                ini_manager.get_user_default(
+                    "utility", "gender_script_ignore_unknown",
+                )
+                if ini_manager.get_user_default(
+                    "utility", "gender_script_ignore_unknown",
+                ) is not None
+                else True
+            ),
+            "gender_script_do_all": (
+                ini_manager.get_user_default("utility", "gender_script_do_all")
+                if ini_manager.get_user_default("utility", "gender_script_do_all") is not None
+                else True
+            ),
+            "gender_llm_minimum": (
+                ini_manager.get_user_default("utility", "gender_llm_minimum") or 3
+            ),
+            "gender_llm_maximum": (
+                ini_manager.get_user_default("utility", "gender_llm_maximum") or 5
+            ),
+            "gender_llm_ignore_unknown": (
+                ini_manager.get_user_default("utility", "gender_llm_ignore_unknown")
+                if ini_manager.get_user_default(
+                    "utility", "gender_llm_ignore_unknown",
+                ) is not None
+                else True
+            ),
+            "gender_llm_do_all": (
+                ini_manager.get_user_default("utility", "gender_llm_do_all")
+                if ini_manager.get_user_default("utility", "gender_llm_do_all") is not None
+                else False
+            ),
+            "speaker_threshold": (
+                ini_manager.get_user_default("utility", "speaker_threshold") or 10
+            ),
+        })
+
+        prompts = PromptsSettings.from_dict({
+            "term_glossary": (
+                ini_manager.get_user_default("prompts", "term_glossary")
+                or DEFAULT_TERM_GLOSSARY_PROMPT
+            ),
+            "term_code": (
+                ini_manager.get_user_default("prompts", "term_code")
+                or DEFAULT_TERM_CODE_PROMPT
+            ),
+            "gender_inference": (
+                ini_manager.get_user_default("prompts", "gender_inference")
+                or DEFAULT_GENDER_INFERENCE_PROMPT
+            ),
+        })
+
+        return cls(utility=utility, prompts=prompts)
 
     def get_model_list(self) -> List[str]:
         """Return list of available model names from providers (Task 43.6).

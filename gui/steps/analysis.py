@@ -58,7 +58,7 @@ def _sanitize_translation(text: str) -> str:
 
     Replaces tab characters with spaces and literal newlines with ``/n``.
     """
-    return text.replace("\t", " ").replace("\r\n", "/n").replace("\n", "/n")
+    return text.strip().replace("\t", " ").replace("\r\n", "/n").replace("\n", "/n")
 
 
 class AnalysisStep(BaseStep):
@@ -1087,7 +1087,7 @@ class AnalysisStep(BaseStep):
 
             from CherryAI.functions.term_translation import (
                 _get_utility_batch_size,
-                validate_translation_code,
+                prepare_translation_result,
             )
             batch_size = _get_utility_batch_size()
 
@@ -1105,9 +1105,10 @@ class AnalysisStep(BaseStep):
                     for (idx, name), result in zip(batch, results):
                         if cancel_event.is_set():
                             break
-                        if result and result.strip() and result != name:
-                            valid, missing = validate_translation_code(
-                                name, result,
+                        cleaned_result = result.strip() if result else ""
+                        if cleaned_result and cleaned_result != name.strip():
+                            prepared, valid, missing = prepare_translation_result(
+                                name, cleaned_result,
                             )
                             if not valid:
                                 logger.warning(
@@ -1118,7 +1119,7 @@ class AnalysisStep(BaseStep):
                                 skipped_code.append(name)
                             else:
                                 characters[idx]["translation"] = (
-                                    _sanitize_translation(result)
+                                    _sanitize_translation(prepared)
                                 )
                                 updated_chars += 1
                                 translated_speakers.append(name)
@@ -1138,9 +1139,10 @@ class AnalysisStep(BaseStep):
                     for (idx, pattern), result in zip(batch, results):
                         if cancel_event.is_set():
                             break
-                        if result and result.strip() and result != pattern:
-                            valid, missing = validate_translation_code(
-                                pattern, result,
+                        cleaned_result = result.strip() if result else ""
+                        if cleaned_result and cleaned_result != pattern.strip():
+                            prepared, valid, missing = prepare_translation_result(
+                                pattern, cleaned_result,
                             )
                             if not valid:
                                 logger.warning(
@@ -1151,7 +1153,7 @@ class AnalysisStep(BaseStep):
                                 skipped_code.append(pattern)
                             else:
                                 manifest_pats[idx]["translation"] = (
-                                    _sanitize_translation(result)
+                                    _sanitize_translation(prepared)
                                 )
                                 updated_codes += 1
                                 translated_patterns[pattern] = (

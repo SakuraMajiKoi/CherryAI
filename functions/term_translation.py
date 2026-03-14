@@ -13,6 +13,7 @@ Public API
 - :func:`get_current_mode`    — read the configured mode
 - :func:`extract_code_segments` — extract bracket-delimited code from text
 - :func:`validate_translation_code` — check code preservation in translation
+- :func:`prepare_translation_result` — strip, recover, and validate code terms
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ _BRACKET_PAIRS: Dict[str, str] = {
     "⟨": "⟩", "⟪": "⟫",
     "〈": "〉", "《": "》",
 }
+_CLOSING_TO_OPENING: Dict[str, str] = {close: open_ for open_, close in _BRACKET_PAIRS.items()}
 
 
 # ============================================================================
@@ -73,6 +75,96 @@ def extract_code_segments(text: str) -> List[str]:
     return segments
 
 
+def _is_balanced_code(text: str) -> bool:
+    """Return ``True`` when bracket-delimited code in *text* is balanced."""
+    stack: List[str] = []
+    openers = set(_BRACKET_PAIRS)
+    closers = set(_CLOSING_TO_OPENING)
+
+    for char in text:
+        if char in openers:
+            stack.append(char)
+            continue
+        if char in closers:
+            if not stack:
+                return False
+            opener = stack.pop()
+            if _BRACKET_PAIRS[opener] != char:
+                return False
+    return not stack
+
+
+def _get_full_code_wrapper(text: str) -> Optional[Tuple[str, str]]:
+    """Return ``(prefix, suffix)`` if *text* is entirely one balanced code entry."""
+    stripped = text.strip()
+    if not stripped:
+        return None
+
+    segments = extract_code_segments(stripped)
+    if len(segments) != 1 or segments[0] != stripped:
+        return None
+
+    open_char = stripped[0]
+    close_char = _BRACKET_PAIRS.get(open_char)
+    if not close_char:
+        return None
+
+    prefix_len = 0
+    while prefix_len < len(stripped) and stripped[prefix_len] == open_char:
+        prefix_len += 1
+
+    suffix_len = 0
+    while suffix_len < len(stripped) and stripped[len(stripped) - 1 - suffix_len] == close_char:
+        suffix_len += 1
+
+    if prefix_len != suffix_len:
+        return None
+
+    return open_char * prefix_len, close_char * suffix_len
+
+
+def _has_matching_full_code_wrapper(original: str, translated: str) -> bool:
+    """Return ``True`` when translated preserves the full-entry code wrapper."""
+    wrapper = _get_full_code_wrapper(original)
+    if not wrapper:
+        return False
+
+    stripped = translated.strip()
+    prefix, suffix = wrapper
+    if not stripped.startswith(prefix) or not stripped.endswith(suffix):
+        return False
+    if not _is_balanced_code(stripped):
+        return False
+
+    segments = extract_code_segments(stripped)
+    return len(segments) == 1 and segments[0] == stripped
+
+
+def recover_full_code_translation(original: str, translated: str) -> str:
+    """Recover missing wrapper code when the original entry is entirely code."""
+    stripped = translated.strip()
+    if not stripped:
+        return stripped
+
+    wrapper = _get_full_code_wrapper(original)
+    if not wrapper:
+        return stripped
+    if _has_matching_full_code_wrapper(original, stripped):
+        return stripped
+
+    prefix, suffix = wrapper
+    open_char = prefix[0]
+    close_char = suffix[0]
+    inner = stripped
+
+    while inner.startswith(open_char):
+        inner = inner[1:].lstrip()
+    while inner.endswith(close_char):
+        inner = inner[:-1].rstrip()
+
+    return f"{prefix}{inner}{suffix}"
+
+
 def validate_translation_code(
     original: str, translated: str,
 ) -> Tuple[bool, List[str]]:
@@ -87,15 +179,36 @@ def validate_translation_code(
         ``True`` when all code segments are present and *missing_segments*
         lists those that are absent from the translation.
     """
-    orig_codes = extract_code_segments(original)
+    original_stripped = original.strip()
+    translated_stripped = translated.strip()
+
+    orig_codes = extract_code_segments(original_stripped)
     if not orig_codes:
         return True, []
 
+    if len(orig_codes) == 1 and orig_codes[0] == original_stripped:
+        if orig_codes[0] in translated_stripped:
+            return True, []
+        if _has_matching_full_code_wrapper(original_stripped, translated_stripped):
+            return True, []
+        return False, [orig_codes[0]]
+
     missing: List[str] = []
     for code in orig_codes:
-        if code not in translated:
+        if code not in translated_stripped:
             missing.append(code)
     return len(missing) == 0, missing
+
+
+def prepare_translation_result(
+    original: str,
+    translated: str,
+) -> Tuple[str, bool, List[str]]:
+    """Strip, recover, and validate a translated term before storage."""
+    candidate = translated.strip()
+    candidate = recover_full_code_translation(original, candidate)
+    valid, missing = validate_translation_code(original, candidate)
+    return candidate, valid, missing
 
 
 # ============================================================================

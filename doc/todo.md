@@ -517,6 +517,9 @@ communication:
 5. Completion callback `_finish_inference()` handles dialog close, refresh, and
    notification on the main thread
 
+**Superseded by:** Gender Inference Batch Optimization (below) — script pass also
+moved to background thread with batch processing via `infer_genders_batch()`.
+
 **Files Modified:** `gui/steps/information.py`
 
 ---
@@ -3036,6 +3039,57 @@ below confidence threshold.
 - `dev/test_utility_settings.py` — Updated tests for new schema/normalization (57→63 tests)
 
 **Tests:** 63 unit tests pass, 7 integration tests pass (real API: Male 100%, Female 100%).
+
+---
+
+### Gender Inference Batch Optimization
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** Session
+
+Goal: Fix UI freeze, add cancellation, respect limit settings, and optimize script-based
+gender inference for large manifests (845+ speakers, 64K+ lines).
+
+**Root Cause:** `_infer_character_genders()` called `infer_gender_comprehensive()` per-speaker
+on the GUI thread, scanning ALL lines for each speaker. With 845 speakers × 5 honorifics ×
+64,520 lines, this produced ~273M regex operations, freezing the UI for minutes. The script
+pass had no cancel button, `WM_DELETE_WINDOW` was disabled, and `gender_script_maximum` /
+`gender_script_minimum` settings were computed into a confidence threshold but never used to
+limit actual line scanning. Self-pronouns were not analyzed (empty dicts passed).
+
+**Solution — Batch Processing (`infer_genders_batch()`):**
+New function in `name_glossary_functions.py` replaces per-speaker rescanning with five-phase
+single-pass batch processing:
+1. **Index pass** — detect line speakers in one sweep, build `speaker_dialogue` map
+2. **Explicit gender** — 4 regex scans on joined full text (not per-speaker)
+3. **Honorific from others** — single pass with pre-filter (skip lines without honorific
+   substrings), only count when spoken by someone OTHER than the target
+4. **Self-pronoun analysis** — per-speaker dialogue lines limited by `max_lines_per_speaker`
+   with early exit when `min_evidence` reached (unless `do_all=True`)
+5. **Combine signals** — same priority ordering as `infer_gender_comprehensive()`
+
+**Solution — Background Thread + Cancel:**
+- Script pass now runs in a background thread (was synchronous on GUI thread)
+- Cancel button visible from the start (was only for LLM pass)
+- `WM_DELETE_WINDOW` triggers cancel (was `lambda: None` / disabled)
+- Progress dialog is non-modal (removed `grab_set()`)
+- Queue-based messages: `("progress", cur, speaker)`, `("script_done", results)`, `("error", str)`
+- `_poll_script()` polls via `after(100)`, chains into `_on_script_done()` → `_start_llm_pass()`
+
+**Solution — Settings Respected:**
+- `gender_script_maximum` → `max_lines_per_speaker` (limits dialogue lines scanned per speaker)
+- `gender_script_minimum` → `min_evidence` (minimum evidence points required)
+- `gender_script_ignore_unknown` → `ignore_unknown` (no-evidence lines excluded from limit)
+- `gender_script_do_all` → `do_all` (force full scan even after consensus)
+
+**Performance:** Real UCS data (845 speakers, 64,520 lines) → 5.12 seconds (was minutes/frozen).
+Synthetic 200 speakers + 10K lines → under 2 seconds.
+
+**Files Modified:**
+- `functions/glossaries/name_glossary_functions.py` — Added `infer_genders_batch()`, added `Callable` to imports
+- `gui/steps/information.py` — Rewrote `_infer_character_genders()` for background thread + batch
+
+**Tests:** `dev/test_gender_batch.py` — 31 tests (9 basic, 2 priority, 5 limits, 2 cancel,
+1 progress, 2 multi-speaker, 2 performance, 7 edge cases, 1 GUI integration). All 52 gender
+tests pass (31 new + 21 existing).
 
 END OF ROADMAP
 =============================================================================
