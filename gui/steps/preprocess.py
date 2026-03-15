@@ -1209,15 +1209,19 @@ class PreprocessingStep(BaseStep):
 
         Deduplication maps (dedup_map, aggr_dedup_map, aggr_numbers)
         are stored in step data so postprocessing can restore duplicates.
+
+        Preserves existing step data keys (e.g. dedup maps from a
+        previous preprocessing run) when they are not regenerated
+        during the current visit.
         """
-        data = {
-            "config": dict(self._config),
-            "processed_count": len(self._preview_lines),
-            "changed_count": sum(
-                1 for entry in self._preview_lines
-                if (entry[3] if len(entry) == 4 else entry[2])
-            ),
-        }
+        # Start from existing step data to preserve keys not regenerated
+        data = self.get_step_data()
+        data["config"] = dict(self._config)
+        data["processed_count"] = len(self._preview_lines)
+        data["changed_count"] = sum(
+            1 for entry in self._preview_lines
+            if (entry[3] if len(entry) == 4 else entry[2])
+        )
 
         # Persist dedup mappings for postprocessing restoration
         last_stats = getattr(self, "_last_stats", {})

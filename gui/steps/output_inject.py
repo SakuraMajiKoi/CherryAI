@@ -39,6 +39,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+SAME_AS_SOURCE_DESTINATION = "Same as Source"
+DEFAULT_OUTPUT_PAIR_MODE = "custom"
+DEFAULT_OUTPUT_NAMING = "subfolder"
+DEFAULT_OUTPUT_TEXT_OPTION = "translated"
+DEFAULT_OUTPUT_BACKUP = "timestamp"
+DEFAULT_OUTPUT_BACKUP_EXTENSION = ".bk"
+
+
 # ============================================================================
 # Enums
 # ============================================================================
@@ -52,6 +60,7 @@ class OutputFormat(Enum):
     TSV = "tsv"
     JSON = "json"
     XLSX = "xlsx"
+    INJECTION = "injection"
 
 
 class NamingStrategy(Enum):
@@ -96,6 +105,7 @@ class BackupStrategy(Enum):
 class PairMode(Enum):
     """How to handle original/translated pairs."""
 
+    CUSTOM = "custom"
     TRANSLATED_ONLY = "translated_only"
     SIDE_BY_SIDE = "side_by_side"
     INTERLEAVED = "interleaved"
@@ -168,12 +178,12 @@ class OutputOptions:
     """Options for output generation."""
 
     format: OutputFormat = OutputFormat.TXT
-    destination: str = ""
+    destination: str = SAME_AS_SOURCE_DESTINATION
     naming: NamingOptions = field(default_factory=NamingOptions)
     backup: BackupOptions = field(default_factory=BackupOptions)
-    pair_mode: PairMode = PairMode.TRANSLATED_ONLY
+    pair_mode: PairMode = PairMode.CUSTOM
     preserve_structure: bool = True
-    overwrite: bool = False
+    overwrite: bool = True
     encoding: str = "utf-8"
 
 
@@ -228,6 +238,7 @@ FORMAT_DESCRIPTIONS: Dict[OutputFormat, str] = {
     OutputFormat.TSV: "Tab-separated values",
     OutputFormat.JSON: "JSON array of lines",
     OutputFormat.XLSX: "Excel spreadsheet",
+    OutputFormat.INJECTION: "Parser injection (original format preserved)",
 }
 
 
@@ -237,10 +248,12 @@ FORMAT_EXTENSIONS: Dict[OutputFormat, str] = {
     OutputFormat.TSV: ".tsv",
     OutputFormat.JSON: ".json",
     OutputFormat.XLSX: ".xlsx",
+    OutputFormat.INJECTION: "",
 }
 
 
 PAIR_MODE_DESCRIPTIONS: Dict[PairMode, str] = {
+    PairMode.CUSTOM: "Custom pair handling for format-specific exporters",
     PairMode.TRANSLATED_ONLY: "Output translated text only",
     PairMode.SIDE_BY_SIDE: "Original and translated in columns",
     PairMode.INTERLEAVED: "Alternating original/translated lines",
@@ -493,7 +506,7 @@ class OutputInjectStep(BaseStep):
         path_frame = ttk.Frame(frame)
         path_frame.pack(fill="x", padx=5, pady=5)
 
-        self._dest_var = tk.StringVar(value="")
+        self._dest_var = tk.StringVar(value=SAME_AS_SOURCE_DESTINATION)
         dest_entry = ttk.Entry(
             path_frame,
             textvariable=self._dest_var,
@@ -506,6 +519,18 @@ class OutputInjectStep(BaseStep):
             text="Browse...",
             command=self._browse_destination,
         ).pack(side="right", padx=(5, 0))
+
+        if self._manifest_manager:
+            self._manifest_bindings.append(
+                bind_entry_to_field(
+                    entry=dest_entry,
+                    var=self._dest_var,
+                    manager_getter=lambda: self.manifest_manager,
+                    field_key="Destination",
+                    default=SAME_AS_SOURCE_DESTINATION,
+                    parent_key="OutputFormat",
+                )
+            )
 
         # Quick options
         opts_frame = ttk.Frame(frame)
@@ -597,7 +622,7 @@ class OutputInjectStep(BaseStep):
         ttk.Label(pair_frame, text="Pair Mode:").pack(side="left")
 
         pair_options = [p.value for p in PairMode]
-        self._pair_var = tk.StringVar(value=PairMode.TRANSLATED_ONLY.value)
+        self._pair_var = tk.StringVar(value=PairMode.CUSTOM.value)
         pair_combo = ttk.Combobox(
             pair_frame,
             textvariable=self._pair_var,
@@ -616,7 +641,7 @@ class OutputInjectStep(BaseStep):
                     manager_getter=lambda: self.manifest_manager,
                     field_key="PairMode",
                     options=pair_options,
-                    default="translated_only",
+                    default=DEFAULT_OUTPUT_PAIR_MODE,
                     parent_key="OutputFormat",
                 )
             )
@@ -657,7 +682,7 @@ class OutputInjectStep(BaseStep):
         frame.pack(fill="x", padx=5, pady=5)
 
         # Strategy selection
-        self._naming_var = tk.StringVar(value=NamingStrategy.SUFFIX.value)
+        self._naming_var = tk.StringVar(value=NamingStrategy.SUBFOLDER.value)
 
         strategies = [
             (NamingStrategy.SUFFIX, "Add suffix"),
@@ -695,7 +720,7 @@ class OutputInjectStep(BaseStep):
 
         ttk.Label(value_frame, text="Text Option:").pack(side="left")
 
-        self._naming_value_var = tk.StringVar(value="_translated")
+        self._naming_value_var = tk.StringVar(value=DEFAULT_OUTPUT_TEXT_OPTION)
         self._naming_entry = ttk.Entry(
             value_frame,
             textvariable=self._naming_value_var,
@@ -711,7 +736,7 @@ class OutputInjectStep(BaseStep):
                     var=self._naming_value_var,
                     manager_getter=lambda: self.manifest_manager,
                     field_key="TextOption",
-                    default="_translated",
+                    default=DEFAULT_OUTPUT_TEXT_OPTION,
                     parent_key="OutputFormat",
                 )
             )
@@ -722,7 +747,7 @@ class OutputInjectStep(BaseStep):
         frame.pack(fill="x", padx=5, pady=5)
 
         # Overwrite checkbox
-        self._overwrite_var = tk.BooleanVar(value=False)
+        self._overwrite_var = tk.BooleanVar(value=True)
         overwrite_cb = ttk.Checkbutton(
             frame,
             text="Overwrite existing files",
@@ -739,7 +764,7 @@ class OutputInjectStep(BaseStep):
                     var=self._overwrite_var,
                     manager_getter=lambda: self.manifest_manager,
                     field_key="OverwriteExistingFiles",
-                    default=False,
+                    default=True,
                     parent_key="OutputFormat",
                 )
             )
@@ -770,7 +795,7 @@ class OutputInjectStep(BaseStep):
                     manager_getter=lambda: self.manifest_manager,
                     field_key="Backup",
                     options=backup_options,
-                    default="timestamp",
+                    default=DEFAULT_OUTPUT_BACKUP,
                     parent_key="OutputFormat",
                 )
             )
@@ -781,7 +806,7 @@ class OutputInjectStep(BaseStep):
 
         ttk.Label(ext_frame, text="Backup ext:").pack(side="left")
 
-        self._backup_ext_var = tk.StringVar(value=".bak")
+        self._backup_ext_var = tk.StringVar(value=DEFAULT_OUTPUT_BACKUP_EXTENSION)
         backup_ext_entry = ttk.Entry(
             ext_frame,
             textvariable=self._backup_ext_var,
@@ -797,7 +822,7 @@ class OutputInjectStep(BaseStep):
                     var=self._backup_ext_var,
                     manager_getter=lambda: self.manifest_manager,
                     field_key="BackupExtension",
-                    default=".bak",
+                    default=DEFAULT_OUTPUT_BACKUP_EXTENSION,
                     parent_key="OutputFormat",
                 )
             )
@@ -957,11 +982,93 @@ class OutputInjectStep(BaseStep):
         elif strategy == NamingStrategy.PREFIX:
             self._naming_value_var.set("translated_")
         elif strategy == NamingStrategy.SUBFOLDER:
-            self._naming_value_var.set("translated")
+            self._naming_value_var.set(DEFAULT_OUTPUT_TEXT_OPTION)
         else:
             self._naming_value_var.set("")
 
         self._refresh_preview()
+
+    def _get_first_input_file_meta(self) -> Tuple[str, str]:
+        """Return the first available input format and encoding."""
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            filedir = mgr.get_filedir()
+            if filedir:
+                first = filedir[0]
+                return first.format or OutputFormat.TXT.value, first.encoding or "utf-8"
+
+        if self._files:
+            first = self._files[0]
+            return first.format.value, self._encoding_var.get() or "utf-8"
+
+        step_data = self.get_step_data()
+        return (
+            step_data.get("format_override") or OutputFormat.TXT.value,
+            step_data.get("encoding") or "utf-8",
+        )
+
+    def _get_same_as_source_dir(self) -> Path:
+        """Resolve the current "Same as Source" destination folder.
+
+        Returns the project directory (parent of Original/) so that
+        output subfolders like ``translated/`` sit next to ``Original/``
+        rather than inside it.
+        """
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            filedir = mgr.get_filedir()
+            if filedir:
+                return mgr.get_original_dir().parent
+
+        if self._files:
+            source_path = Path(self._files[0].source_path)
+            if source_path.parent.exists():
+                return source_path.parent.parent
+
+        return Path.cwd()
+
+    def _resolve_destination_dir(self, raw_destination: Optional[str] = None) -> Path:
+        """Resolve the destination entry value to a real directory path."""
+        raw_value = (raw_destination if raw_destination is not None else self._dest_var.get()).strip()
+        if not raw_value or raw_value == SAME_AS_SOURCE_DESTINATION:
+            return self._get_same_as_source_dir()
+        return Path(raw_value)
+
+    def _apply_default_output_settings(self) -> None:
+        """Ensure output controls always have valid, input-derived defaults."""
+        default_format, default_encoding = self._get_first_input_file_meta()
+        valid_formats = {fmt.value for fmt in OutputFormat}
+        valid_pair_modes = {mode.value for mode in PairMode}
+        valid_backups = {mode.value for mode in BackupStrategy}
+
+        current_destination = self._dest_var.get().strip()
+        if not current_destination:
+            self._dest_var.set(SAME_AS_SOURCE_DESTINATION)
+
+        current_format = self._format_var.get().strip().lower()
+        if current_format not in valid_formats:
+            self._format_var.set(default_format if default_format in valid_formats else OutputFormat.TXT.value)
+
+        current_pair_mode = self._pair_var.get().strip().lower()
+        if current_pair_mode not in valid_pair_modes:
+            self._pair_var.set(DEFAULT_OUTPUT_PAIR_MODE)
+
+        if not self._encoding_var.get().strip():
+            self._encoding_var.set(default_encoding or "utf-8")
+
+        if not self._naming_var.get().strip():
+            self._naming_var.set(DEFAULT_OUTPUT_NAMING)
+
+        if not self._naming_value_var.get().strip() and self._naming_var.get() == NamingStrategy.SUBFOLDER.value:
+            self._naming_value_var.set(DEFAULT_OUTPUT_TEXT_OPTION)
+
+        if self._backup_var.get().strip().lower() not in valid_backups:
+            self._backup_var.set(DEFAULT_OUTPUT_BACKUP)
+
+        if not self._backup_ext_var.get().strip():
+            self._backup_ext_var.set(DEFAULT_OUTPUT_BACKUP_EXTENSION)
+
+        self._format_desc.configure(text=FORMAT_DESCRIPTIONS[_safe_output_format(self._format_var.get())])
 
     def _on_overwrite_changed(self) -> None:
         """Handle overwrite checkbox change."""
@@ -989,7 +1096,7 @@ class OutputInjectStep(BaseStep):
         """Open folder browser for destination."""
         folder = filedialog.askdirectory(
             title="Select Destination Folder",
-            initialdir=self._dest_var.get() or Path.cwd(),
+            initialdir=str(self._resolve_destination_dir()),
         )
         if folder:
             self._dest_var.set(folder)
@@ -997,11 +1104,8 @@ class OutputInjectStep(BaseStep):
 
     def _use_source_dir(self) -> None:
         """Set destination to source directory."""
-        if self._files:
-            source_path = Path(self._files[0].source_path)
-            if source_path.parent.exists():
-                self._dest_var.set(str(source_path.parent))
-                self._refresh_preview()
+        self._dest_var.set(SAME_AS_SOURCE_DESTINATION)
+        self._refresh_preview()
 
     def _use_output_dir(self) -> None:
         """Set destination to project's Patch directory (TASK 35.3).
@@ -1026,16 +1130,16 @@ class OutputInjectStep(BaseStep):
 
     def _open_destination(self) -> None:
         """Open destination folder in file explorer."""
-        dest = self._dest_var.get()
-        if dest and Path(dest).exists():
+        dest = self._resolve_destination_dir()
+        if dest.exists():
             import subprocess
             import sys
             if sys.platform == "win32":
-                subprocess.run(["explorer", dest], check=False)
+                subprocess.run(["explorer", str(dest)], check=False)
             elif sys.platform == "darwin":
-                subprocess.run(["open", dest], check=False)
+                subprocess.run(["open", str(dest)], check=False)
             else:
-                subprocess.run(["xdg-open", dest], check=False)
+                subprocess.run(["xdg-open", str(dest)], check=False)
         else:
             messagebox.showwarning("Warning", "Destination folder does not exist.")
 
@@ -1186,7 +1290,7 @@ class OutputInjectStep(BaseStep):
 
     def _process_export(self, files: List[OutputFile]) -> None:
         """Process the export operation."""
-        dest_base = Path(self._dest_var.get())
+        dest_base = self._resolve_destination_dir()
         dest_base.mkdir(parents=True, exist_ok=True)
 
         for i, output_file in enumerate(files):
@@ -1223,7 +1327,11 @@ class OutputInjectStep(BaseStep):
             self._export_logs(dest_base)
 
     def _write_file(self, output_file: OutputFile, dest_base: Path) -> None:
-        """Write a single output file."""
+        """Write a single output file.
+
+        Always reads fresh data from the manifest manager to avoid stale
+        lines (e.g. after edits in Full Table View).
+        """
         output_path = Path(output_file.output_path)
 
         # Create backup if needed
@@ -1236,45 +1344,153 @@ class OutputInjectStep(BaseStep):
         # Ensure parent directory exists
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Get lines from session
-        step_data = self.get_step_data()
-        lines = step_data.get("lines", [])
-
-        # Parser Handshake O2: Route through parser.inject() when available
-        try:
-            mgr = self.manifest_manager
-            if mgr is not None and mgr.is_loaded:
-                opts = mgr._manifest_data.get("Options", {})
-                if isinstance(opts, dict):
-                    parser_name = opts.get("ParserName", "")
-                    if parser_name:
-                        from CherryAI.formats import get_parser_registry
-                        parser = get_parser_registry().get(parser_name)
-                        if parser is not None:
-                            parser.inject(output_path, lines)
-                            output_file.line_count = len(lines)
-                            self._stats.total_lines += len(lines)
-                            return
-        except Exception as e:
-            logger.warning("Parser inject failed, falling back: %s", e)
-
-        # Write based on format
         format_val = _safe_output_format(self._format_var.get())
+        mgr = self.manifest_manager
+
+        # --- Injection mode (parser-based standardized handshake) ---
+        if format_val == OutputFormat.INJECTION:
+            if mgr is not None and mgr.is_loaded:
+                self._write_injection(output_file, output_path, mgr)
+                return
+            raise ValueError("Injection format requires a loaded manifest with filedir.")
+
+        # --- Generic format writing (TXT/CSV/TSV/JSON/XLSX) ---
+        # Always read fresh lines from manifest to avoid stale data
+        all_lines = self._get_fresh_lines_for_file(output_file)
         encoding = self._encoding_var.get()
 
         if format_val == OutputFormat.TXT:
-            self._write_txt(output_path, lines, encoding)
+            self._write_txt(output_path, all_lines, encoding)
         elif format_val == OutputFormat.CSV:
-            self._write_csv(output_path, lines, encoding)
+            self._write_csv(output_path, all_lines, encoding)
         elif format_val == OutputFormat.TSV:
-            self._write_tsv(output_path, lines, encoding)
+            self._write_tsv(output_path, all_lines, encoding)
         elif format_val == OutputFormat.JSON:
-            self._write_json(output_path, lines, encoding)
+            self._write_json(output_path, all_lines, encoding)
         elif format_val == OutputFormat.XLSX:
-            self._write_xlsx(output_path, lines)
+            self._write_xlsx(output_path, all_lines)
 
-        output_file.line_count = len(lines)
-        self._stats.total_lines += len(lines)
+        output_file.line_count = len(all_lines)
+        self._stats.total_lines += len(all_lines)
+
+    def _get_fresh_lines_for_file(self, output_file: OutputFile) -> List[str]:
+        """Get fresh resolved lines for a single file from manifest.
+
+        Reads directly from the manifest manager every time to ensure
+        any edits (e.g. from Full Table View) are immediately reflected.
+        """
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            filedir = mgr.get_filedir()
+            if filedir and output_file.idx < len(filedir):
+                entry = filedir[output_file.idx]
+                manifest_lines = mgr.get_lines()
+                from CherryAI.functions.manifest_fields import resolve_line_field
+                result = []
+                for idx in range(entry.first_idx, entry.last_idx + 1):
+                    if idx < len(manifest_lines):
+                        result.append(resolve_line_field(manifest_lines[idx]))
+                    else:
+                        result.append("")
+                return result
+            # No filedir — fall back to all resolved lines
+            return get_all_lines_resolved(mgr)
+
+        # Legacy fallback: session data
+        step_data = self.get_step_data()
+        return step_data.get("lines", [])
+
+    def _write_injection(
+        self,
+        output_file: OutputFile,
+        output_path: Path,
+        mgr: "ManifestManager",
+    ) -> None:
+        """Standard injection handshake for parser-based files.
+
+        0. Load ``\\Original`` into memory.
+        1. Use extract method on ``\\Original`` to get real line positions.
+        2. Sequentially search ``orig`` idx in the manifest in the file
+           and the line.  If match: replace.  If no match: mark as failure.
+        3. Save the new files to the output path.
+        """
+        from CherryAI.formats import get_parser_registry
+        from CherryAI.functions.manifest_fields import resolve_line_field
+
+        filedir = mgr.get_filedir()
+        if output_file.idx >= len(filedir):
+            raise ValueError(
+                f"File index {output_file.idx} out of range "
+                f"(filedir has {len(filedir)} entries)"
+            )
+
+        entry = filedir[output_file.idx]
+
+        # 0. Load Original into memory
+        source_path = mgr.resolve_file_path(entry.rel_path)
+        if not source_path.exists():
+            raise FileNotFoundError(f"Source file not found: {source_path}")
+
+        # Get parser for this format
+        parser = get_parser_registry().get(entry.format)
+        if parser is None:
+            raise ValueError(
+                f"No parser registered for format {entry.format!r}. "
+                "Select a generic format (TXT, CSV, …) instead of Injection."
+            )
+
+        # 1. Extract from Original to get real line positions
+        extracted_keys = parser.extract(source_path)
+
+        # 2. Sequential match against manifest lines
+        manifest_lines = mgr.get_lines()
+        translated_lines: List[str] = []
+        orig_lines: List[str] = []
+        failures: List[str] = []
+
+        for i, key in enumerate(extracted_keys):
+            manifest_idx = entry.first_idx + i
+            if manifest_idx > entry.last_idx or manifest_idx >= len(manifest_lines):
+                failures.append(
+                    f"Position {i}: index {manifest_idx} out of range"
+                )
+                translated_lines.append(key)
+                orig_lines.append(key)
+                continue
+
+            ml = manifest_lines[manifest_idx]
+            orig = ml.get("orig", "")
+            orig_lines.append(orig)
+
+            if orig == key:
+                resolved = resolve_line_field(ml)
+                translated_lines.append(resolved)
+            else:
+                failures.append(
+                    f"Position {i} (idx {manifest_idx}): "
+                    f"orig mismatch — extracted {key!r}, manifest {orig!r}"
+                )
+                translated_lines.append(key)  # Preserve original on mismatch
+
+        # 3. Save via parser injection
+        inject_failures = parser.inject_to(
+            source_path, output_path, translated_lines,
+            orig_lines=orig_lines,
+        )
+
+        output_file.line_count = len(extracted_keys)
+        self._stats.total_lines += len(extracted_keys)
+
+        # Report failures
+        if failures:
+            for msg in failures:
+                logger.warning("Injection verification [%s]: %s", entry.rel_path, msg)
+        if inject_failures:
+            for idx in inject_failures:
+                logger.warning(
+                    "Injection write failure [%s] at position %d",
+                    entry.rel_path, idx,
+                )
 
     def _write_txt(self, path: Path, lines: List[str], encoding: str) -> None:
         """Write lines as plain text."""
@@ -1481,18 +1697,24 @@ class OutputInjectStep(BaseStep):
         from CherryAI.functions.manifest_manager import FileDirEntry
         
         # Get output options
+        mgr = self.manifest_manager
         strategy = _safe_naming_strategy(self._naming_var.get())
         value = self._naming_value_var.get()
-        dest_base = self._dest_var.get() or ""
+        dest_base = self._resolve_destination_dir()
+
+        # Determine extension: for Injection format or parser formats,
+        # keep the original file extension; for standard OutputFormat
+        # use the mapped ext.
+        raw_fmt = self._format_var.get().strip().lower()
+        is_injection = raw_fmt == OutputFormat.INJECTION.value
+        is_parser_format = (
+            is_injection
+            or (raw_fmt and raw_fmt not in {e.value for e in OutputFormat})
+        )
         format_ext = FORMAT_EXTENSIONS.get(
-            _safe_output_format(self._format_var.get()),
+            _safe_output_format(raw_fmt),
             ".txt"
         )
-        
-        # If no destination set, use Patch/ directory
-        mgr = self.manifest_manager
-        if not dest_base and mgr is not None and mgr.is_loaded:
-            dest_base = str(mgr.get_patch_dir())
         
         self._files = []
         
@@ -1501,25 +1723,29 @@ class OutputInjectStep(BaseStep):
             rel_path = Path(entry.rel_path)
             stem = rel_path.stem
             parent = rel_path.parent
+
+            # For parser formats, preserve the original extension
+            if is_parser_format:
+                file_format_ext = rel_path.suffix or ".txt"
+            else:
+                file_format_ext = format_ext
             
             # Generate output name
-            output_name = self._generate_output_name(rel_path, strategy, value, format_ext)
+            output_name = self._generate_output_name(
+                rel_path, strategy, value, file_format_ext,
+            )
             
             # Build full output path preserving structure
             if self._preserve_var.get() and parent != Path("."):
-                if strategy == NamingStrategy.SUBFOLDER and dest_base:
-                    output_path = Path(dest_base) / value / parent / output_name
-                elif dest_base:
-                    output_path = Path(dest_base) / parent / output_name
+                if strategy == NamingStrategy.SUBFOLDER:
+                    output_path = dest_base / value / parent / output_name
                 else:
-                    output_path = parent / output_name
+                    output_path = dest_base / parent / output_name
             else:
-                if strategy == NamingStrategy.SUBFOLDER and dest_base:
-                    output_path = Path(dest_base) / value / output_name
-                elif dest_base:
-                    output_path = Path(dest_base) / output_name
+                if strategy == NamingStrategy.SUBFOLDER:
+                    output_path = dest_base / value / output_name
                 else:
-                    output_path = Path(output_name)
+                    output_path = dest_base / output_name
             
             self._files.append(OutputFile(
                 idx=i,
@@ -1538,7 +1764,7 @@ class OutputInjectStep(BaseStep):
         # Get naming options
         strategy = _safe_naming_strategy(self._naming_var.get())
         value = self._naming_value_var.get()
-        dest_base = self._dest_var.get() or ""
+        dest_base = self._resolve_destination_dir()
         format_ext = FORMAT_EXTENSIONS.get(
             _safe_output_format(self._format_var.get()),
             ".txt"
@@ -1550,7 +1776,7 @@ class OutputInjectStep(BaseStep):
             # Create a single output file if no source files
             if lines:
                 output_name = f"output{value if strategy == NamingStrategy.SUFFIX else ''}{format_ext}"
-                output_path = str(Path(dest_base) / output_name) if dest_base else output_name
+                output_path = str(dest_base / output_name)
 
                 self._files.append(OutputFile(
                     idx=0,
@@ -1565,12 +1791,10 @@ class OutputInjectStep(BaseStep):
             source = Path(source_path)
             output_name = self._generate_output_name(source, strategy, value, format_ext)
 
-            if strategy == NamingStrategy.SUBFOLDER and dest_base:
-                output_path = str(Path(dest_base) / value / output_name)
-            elif dest_base:
-                output_path = str(Path(dest_base) / output_name)
+            if strategy == NamingStrategy.SUBFOLDER:
+                output_path = str(dest_base / value / output_name)
             else:
-                output_path = output_name
+                output_path = str(dest_base / output_name)
 
             self._files.append(OutputFile(
                 idx=i,
@@ -1698,25 +1922,32 @@ class OutputInjectStep(BaseStep):
         try:
             output_format = self._manifest_manager.get_output_options()
 
+            destination = str(output_format.get("Destination", "")).strip()
+            self._dest_var.set(destination or SAME_AS_SOURCE_DESTINATION)
+
             # Load PreserveFolderStructure
             if "PreserveFolderStructure" in output_format:
                 self._preserve_var.set(output_format["PreserveFolderStructure"])
 
             # Load Format
-            if "Format" in output_format:
-                self._format_var.set(output_format["Format"])
+            format_value = str(output_format.get("Format", "")).strip().lower()
+            if format_value in {fmt.value for fmt in OutputFormat}:
+                self._format_var.set(format_value)
 
             # Load PairMode
-            if "PairMode" in output_format:
-                self._pair_var.set(output_format["PairMode"])
+            pair_value = str(output_format.get("PairMode", "")).strip().lower()
+            if pair_value in {mode.value for mode in PairMode}:
+                self._pair_var.set(pair_value)
 
             # Load Encoding
-            if "Encoding" in output_format:
-                self._encoding_var.set(output_format["Encoding"])
+            encoding_value = str(output_format.get("Encoding", "")).strip()
+            if encoding_value:
+                self._encoding_var.set(encoding_value)
 
             # Load FileNaming
-            if "FileNaming" in output_format:
-                self._naming_var.set(output_format["FileNaming"])
+            naming_value = str(output_format.get("FileNaming", "")).strip().lower()
+            if naming_value in {item.value for item in NamingStrategy}:
+                self._naming_var.set(naming_value)
 
             # Load TextOption
             if "TextOption" in output_format:
@@ -1727,8 +1958,9 @@ class OutputInjectStep(BaseStep):
                 self._overwrite_var.set(output_format["OverwriteExistingFiles"])
 
             # Load Backup
-            if "Backup" in output_format:
-                self._backup_var.set(output_format["Backup"])
+            backup_value = str(output_format.get("Backup", "")).strip().lower()
+            if backup_value in {item.value for item in BackupStrategy}:
+                self._backup_var.set(backup_value)
 
             # Load BackupExtension
             if "BackupExtension" in output_format:
@@ -1768,6 +2000,7 @@ class OutputInjectStep(BaseStep):
         # TASK 28.2: Load output settings from manifest
         self._load_output_settings_from_manifest()
         self._load_from_session()
+        self._apply_default_output_settings()
         self._refresh_preview()
         self._update_summary()
 
@@ -1792,11 +2025,11 @@ class OutputInjectStep(BaseStep):
                 step_data["lines"] = resolved
 
         # Load destination if saved
-        if "destination" in step_data:
+        if "destination" in step_data and not self._dest_var.get().strip():
             self._dest_var.set(step_data["destination"])
 
-        # Load options if saved
-        if "output_options" in step_data:
+        # Load legacy options if manifest-backed values are not available yet.
+        if "output_options" in step_data and not self._manifest_manager:
             opts = step_data["output_options"]
             self._format_var.set(opts.get("format", "txt"))
             self._encoding_var.set(opts.get("encoding", "utf-8"))
@@ -1845,6 +2078,8 @@ class OutputInjectStep(BaseStep):
                 strategy=BackupStrategy(self._backup_var.get()),
                 extension=self._backup_ext_var.get(),
             ),
+            pair_mode=PairMode(self._pair_var.get()),
+            preserve_structure=self._preserve_var.get(),
             overwrite=self._overwrite_var.get(),
             encoding=self._encoding_var.get(),
         )

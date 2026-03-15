@@ -765,7 +765,7 @@ def test_api_connection(
             store.log_pair(
                 LogCategory.OTHER,
                 LogEntrySent(provider=provider, extra={"type": "connection_test"}),
-                LogEntryReceived(error_message=err_msg[:500]),
+                LogEntryReceived(error_message=err_msg),
                 LogStatus.FAILED,
             )
         except Exception:
@@ -905,12 +905,12 @@ def test_model_translation(
                 LogEntrySent(
                     model=model_id, provider=provider,
                     temperature=0.2,
-                    system_prompt=system_prompt[:2000],
-                    user_content=user_msg[:2000],
+                    system_prompt=system_prompt,
+                    user_content=user_msg,
                     extra={"type": "model_translation_test"},
                 ),
                 LogEntryReceived(
-                    content=raw[:2000],
+                    content=raw,
                     prompt_tokens=getattr(_usage, "prompt_tokens", 0) if _usage else 0,
                     completion_tokens=getattr(_usage, "completion_tokens", 0) if _usage else 0,
                     total_tokens=getattr(_usage, "total_tokens", 0) if _usage else 0,
@@ -934,12 +934,12 @@ def test_model_translation(
                 LogEntrySent(
                     model=model_id, provider=provider,
                     temperature=0.2,
-                    system_prompt=system_prompt[:2000],
-                    user_content=user_msg[:2000],
+                    system_prompt=system_prompt,
+                    user_content=user_msg,
                     extra={"type": "model_translation_test"},
                 ),
                 LogEntryReceived(
-                    error_message=str(exc)[:500],
+                    error_message=str(exc),
                     duration_ms=round(elapsed * 1000),
                 ),
                 LogStatus.FAILED,

@@ -30,6 +30,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+SAME_AS_SOURCE_DESTINATION = "Same as Source"
+DEFAULT_OUTPUT_PAIR_MODE = "custom"
+DEFAULT_OUTPUT_NAMING = "subfolder"
+DEFAULT_OUTPUT_TEXT_OPTION = "translated"
+DEFAULT_OUTPUT_BACKUP = "timestamp"
+DEFAULT_OUTPUT_BACKUP_EXTENSION = ".bk"
+
 # Supported file extensions for loading (TASK 39.3: rpgmaker and image added)
 SUPPORTED_EXTENSIONS = [
     ("All Supported", "*.txt *.csv *.tsv *.json *.xlsx *.png *.jpg *.jpeg *.bmp"),
@@ -1651,9 +1659,89 @@ class InputExtractionStep(BaseStep):
         # Compute and store source_root as folder name only
         source_paths = [f.path for f in self._loaded_files]
         mgr.source_root = mgr.compute_source_root(source_paths)
+
+        self._sync_output_defaults_to_manifest()
         
         # TASK 35.2: Copy original files to project folder
         self._copy_originals_to_project()
+
+    def _sync_output_defaults_to_manifest(self) -> None:
+        """Ensure manifest output defaults stay valid and input-driven."""
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded or not self._loaded_files:
+            return
+
+        output_options = mgr.get_output_options()
+        first_file = self._loaded_files[0]
+        changed = False
+
+        if not str(output_options.get("Destination", "")).strip():
+            output_options["Destination"] = SAME_AS_SOURCE_DESTINATION
+            changed = True
+
+        if not str(output_options.get("Format", "")).strip():
+            output_options["Format"] = first_file.format_id
+            changed = True
+
+        if not str(output_options.get("Encoding", "")).strip():
+            output_options["Encoding"] = first_file.encoding
+            changed = True
+
+        if not isinstance(output_options.get("PreserveFolderStructure"), bool):
+            output_options["PreserveFolderStructure"] = True
+            changed = True
+
+        if str(output_options.get("PairMode", "")).strip().lower() not in {
+            DEFAULT_OUTPUT_PAIR_MODE,
+            "translated_only",
+            "side_by_side",
+            "interleaved",
+            "separate_files",
+        }:
+            output_options["PairMode"] = DEFAULT_OUTPUT_PAIR_MODE
+            changed = True
+
+        if str(output_options.get("FileNaming", "")).strip().lower() not in {
+            "suffix",
+            "prefix",
+            DEFAULT_OUTPUT_NAMING,
+            "replace",
+        }:
+            output_options["FileNaming"] = DEFAULT_OUTPUT_NAMING
+            changed = True
+
+        if not str(output_options.get("TextOption", "")).strip():
+            output_options["TextOption"] = DEFAULT_OUTPUT_TEXT_OPTION
+            changed = True
+
+        if not isinstance(output_options.get("OverwriteExistingFiles"), bool):
+            output_options["OverwriteExistingFiles"] = True
+            changed = True
+
+        if str(output_options.get("Backup", "")).strip().lower() not in {
+            "none",
+            DEFAULT_OUTPUT_BACKUP,
+            "numbered",
+            "extension",
+        }:
+            output_options["Backup"] = DEFAULT_OUTPUT_BACKUP
+            changed = True
+
+        if not str(output_options.get("BackupExtension", "")).strip():
+            output_options["BackupExtension"] = DEFAULT_OUTPUT_BACKUP_EXTENSION
+            changed = True
+
+        for field_name in (
+            "ExportManifestFile",
+            "ExportProcessingLogs",
+            "ExportGlossaryEntries",
+        ):
+            if not isinstance(output_options.get(field_name), bool):
+                output_options[field_name] = False
+                changed = True
+
+        if changed:
+            mgr.set_output_options(output_options)
 
     def _copy_originals_to_project(self) -> None:
         """Copy source files to the project's Original/ directory.
@@ -2250,10 +2338,6 @@ class InputExtractionStep(BaseStep):
             True if loaded successfully.
         """
         try:
-            # TASK 39.3: Auto-detect encoding if set to "auto"
-            if encoding == "auto":
-                encoding = self._detect_encoding(path)
-
             # Detect format — try parser registry first for auto or parser names
             if format_override != "auto":
                 format_id = format_override
@@ -2268,6 +2352,24 @@ class InputExtractionStep(BaseStep):
                         format_id = FORMAT_MAP.get(path.suffix.lower(), "txt")
                 except Exception:
                     format_id = FORMAT_MAP.get(path.suffix.lower(), "txt")
+
+            # TASK 39.3: Auto-detect encoding if set to "auto"
+            if encoding == "auto":
+                try:
+                    from CherryAI.formats import get_parser_registry
+                    parser = get_parser_registry().get(format_id)
+                except Exception:
+                    parser = None
+
+                if parser is not None:
+                    detect_fn = getattr(parser, "detect_encoding", None)
+                    if callable(detect_fn):
+                        detected_encoding = detect_fn(path)
+                        if detected_encoding:
+                            encoding = detected_encoding
+
+                if encoding == "auto":
+                    encoding = self._detect_encoding(path)
 
             # Handshake: validate parser selection (M1-M3 check)
             if not self._validate_parser_selection(format_id):
@@ -3151,12 +3253,14 @@ class InputExtractionStep(BaseStep):
         filedir, so we no longer duplicate them as ``all_lines``.
         File metadata is stored in the manifest ``filedir`` array, so
         we no longer duplicate it as ``files``.
+
+        Merges into existing step data to preserve keys set elsewhere
+        (e.g. ``manifest_path``, ``suggested_project_name``).
         """
-        data = {
-            "total_lines": sum(f.line_count for f in self._loaded_files),
-            "encoding": self._encoding_var.get() if self._encoding_var else "utf-8",
-            "format_override": self._format_var.get() if self._format_var else "auto",
-        }
+        data = self.get_step_data()
+        data["total_lines"] = sum(f.line_count for f in self._loaded_files)
+        data["encoding"] = self._encoding_var.get() if self._encoding_var else "utf-8"
+        data["format_override"] = self._format_var.get() if self._format_var else "auto"
         self.set_step_data(data)
 
     # ----------------------------- BaseStep Methods ----------------------------- #

@@ -2281,6 +2281,61 @@ GUI widget binding helpers for Task 22.3. Auto-save and auto-load between widget
 
 ---
 
+### dev/test_manifest_overwrite.py (14 tests)
+
+Phase 80 tests for manifest overwrite prevention. Verifies that step data merges preserve existing entries, RequestOptions are not overwritten during init, and info metadata survives round-trips.
+
+#### TestPreprocessingDataPreservation (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_update_step_data_preserves_existing_keys` | `_update_step_data()` keeps `dedup_map` and other stored results |
+| `test_update_step_data_with_stats` | `_update_step_data()` merges `_last_stats` without losing existing keys |
+
+#### TestInputDataPreservation (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_update_step_data_preserves_existing_keys` | `_update_step_data()` keeps `manifest_path` and `suggested_project_name` |
+
+#### TestAnalysisDataPreservation (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_on_leave_preserves_existing_keys` | `on_leave()` merges `analysis_results` without discarding other keys |
+
+#### TestRequestOptionsPreservation (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_init_does_not_overwrite_api_key` | `_initializing` guard prevents `ApiKeyProvider`/`ApiKeyName` overwrites |
+| `test_init_does_not_overwrite_model` | `_initializing` guard prevents `Model` overwrite from trace callback |
+| `test_on_key_changed_skipped_during_init` | `_on_key_changed()` is no-op while `_initializing` is True |
+
+#### TestInfoMetadataPreservation (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_ensure_style_tone_skips_when_no_preset` | `_ensure_style_tone_text()` preserves text when preset missing from INI |
+| `test_ensure_style_tone_replaces_when_preset_exists` | `_ensure_style_tone_text()` replaces text when preset found in INI |
+
+#### TestManifestRoundTrip (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_step_data_roundtrip` | Step data survives save → load cycle unchanged |
+| `test_request_options_roundtrip` | RequestOptions survive save → load cycle unchanged |
+| `test_info_metadata_roundtrip` | Info metadata survives save → load cycle unchanged |
+
+#### TestManifestComparisonRegression (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_request_options_not_reset_to_defaults` | Non-default RequestOptions are preserved after simulated init |
+| `test_preprocessing_results_not_lost` | Preprocessing results survive when `_last_stats` is empty |
+
+---
+
 ### dev/test_information_manifest.py (74 tests)
 
 Phase 23 tests for InformationStep manifest integration. Tests all fields bound to manifest.
@@ -3134,7 +3189,7 @@ Thank you.
 | test_gui_v2.py | 595 | GUI v2 framework (TASK 15.8-15.14: core + theme/CLI/deprecated) |
 | test_session_persistence.py | 40 | Session auto-save/load, step persistence, file restoration (Release Stabilization) |
 | test_folder_loading.py | 23 | Folder loading in InputExtractionStep |
-| test_input_step_phase39.py | 38 | Input step Phase 39 improvements (unified selector, treeview, format filtering, progress) |
+| test_input_step_phase39.py | 40 | Input step Phase 39 improvements (unified selector, treeview, format filtering, progress, parser-selected auto encoding, output default seeding) |
 | test_input_step_improvements.py | 60 | Input step Phase 60 improvements (type column refresh, clickable sort headers, file filter, cross-file preview search) |
 | test_costs_step_phase40.py | 57 | Costs step Phase 40+78 improvements (rename, dual estimation, dual ticks, concurrent time, prepro lines, prompt overhead, preview tokens) |
 | test_costs_api_rework.py | 35 | API Requests & Costs rework (cache calculation, mode buttons, instant recalculation, model lock, settings decoupling, button rename, translation request mode, fast reprice on model change) |
@@ -3144,7 +3199,7 @@ Thank you.
 | test_translate_manifest.py | 47 | Translation step manifest integration (TASK 26.2) |
 | test_postprocess_manifest.py | 35 | Postprocessing step manifest integration (TASK 27.1) |
 | test_wordwrap_manifest.py | 40 | Wordwrap step manifest integration (TASK 28.1) |
-| test_output_manifest.py | 45 | Output step manifest integration (TASK 28.2) |
+| test_output_manifest.py | 48 | Output step manifest integration (TASK 28.2 + output destination/defaults) |
 | test_autosave.py | 24 | ManifestManager autosave system (TASK 29.1) |
 | test_save_triggers.py | 17 | Save trigger functionality (TASK 29.2) |
 | test_preset_manager.py | 42 | Preset save/load/delete (TASK 30.1) |
@@ -3174,6 +3229,7 @@ Thank you.
 | test_project_config.py | 19 | Project configuration |
 | test_quote_stripping.py | 33 | Quote stripping modes |
 | test_rate_limiter.py | 70 | Rate limiting system |
+| test_header_rate_limiter.py | 36 | Header-based rate limiter (duration parser, per-model counters, thread safety, monotonic timer, custom providers) |
 | test_replication.py | 40 | Game updates |
 | test_request_cache.py | 48 | Request caching system (modes, TTL, eviction) |
 | test_retry_handler.py | 47 | Retry strategies (batch, contextual, isolated, skip) |
@@ -3187,7 +3243,7 @@ Thank you.
 | test_unique_placeholders.py | 3 | Unique placeholders (integration) |
 | test_validation.py | 81 | Pre/Post API validation |
 | test_wordwrap.py | 74 | Word wrapping with speaker modes (TASK 15.5) |
-| test_gui_dialogs.py | 21 | GlobalOptions dialog tests plus single-instance API Log / Global Options reuse coverage (TASK 18.7) |
+| test_gui_dialogs.py | 26 | GlobalOptions dialog tests plus single-instance API Log / Global Options reuse coverage and API Log display-limit rendering helpers (TASK 18.7) |
 | test_cli_estimation.py | 13 | CLI estimation verification (TASK 18.6) |
 | test_manifest_automation.py | 12 | Manifest auto-creation (TASK 18.8) |
 | test_glossary_integration.py | 12 | Analysis→Information integration (TASK 18.4) |
@@ -3201,7 +3257,7 @@ Thank you.
 | test_validation_shared.py | 24 | Shared Validation Phase 44 |
 | test_postprocess_phase45.py | 49 | Postprocessing Tab Overhaul Phase 45 |
 | test_wordwrap_phase46.py | 45 | Wordwrap Tab Overhaul Phase 46 |
-| test_output_phase47.py | 51 | Output + Pipeline Completeness + Import Phase 47 |
+| test_output_phase47.py | 52 | Output + Pipeline Completeness + Import Phase 47 |
 | test_pipeline_logging.py | 52 | Pipeline Logging System Phase 48 |
 | test_request_formation.py | 50 | Request Formation 4-Step Process Phase 49 |
 | test_request_preview.py | 42 | Preview Requests dialog: PreviewRequest dataclass with _format_input_lines, FILTER_PARTS, RequestPreviewDialog (Pure/Formatted/Plain views preserving {}, Jump/Search/Filter), _build_preview_requests integration |
@@ -3222,18 +3278,21 @@ Thank you.
 | test_slicing_phase78.py | 11 | Slicing efficient mode Phase 78 (Task 8) |
 | test_char_filter_phase78.py | 32 | Blacklist/whitelist validation Phase 78 (Task 5): parse_filter_entries, check_filter_violations, exchange/retry/flag strategies |
 | test_max_input_tokens.py | 34 | Max Input Tokens (Task 41): RequestSettings field, GlobalOptions integration, RequestFormationConfig plumbing, build_requests token splitting, costs estimation, edge cases, INI persistence |
+| test_ini_persistence.py | 22 | INI persistence: atomic save (3), save_app_state delegation (3), INI wipe prevention (1), set_default routing (1), comprehensive load_from_ini (6), effective default precedence (3), case preservation (1), clear_user_defaults (1), concurrent safety (1), boolean handling (2) |
 | test_prompt_overhead_fix.py | 29 | Per-Request Prompt Overhead (Task 42): FormationResult dataclass, _estimate_via_formation return type, _compute_per_request_prompt_overhead, selective filtering per chunk, _update_ui avg/request format, sum vs flat multiplication, edge cases |
 | test_request_building_unification.py | 75 | Request Building Unification: is_placeholder_only (all placeholder types), PROT_PATTERN fix, build_line_infos placeholder handling, validate_line_pre (no detection_text), _count_formation_input_tokens, formation pipeline for both orig/prep, preview language skip, _apply_language_skip prioritized text with placeholder stripping, _get_skip_indices (no original_lines override), placeholder stripping regression guard |
 | smoke_test/*.py | 5+ | Smoke tests |
 | test_provider_handshake.py | 188 | Provider Handshake: ABC, registry, validation, OpenAI/Google/Mistral/Anthropic/Local providers, APIClient integration, options.py migration, UI constraints, structured output |
 | test_provider_live_api.py | 11 | Live API tests: GPT-5-nano (no temp, reasoning) + GPT-4.1-nano (temp 0-2, no reasoning) |
 | test_pricing_and_reasoning.py | 108 | Pricing + Reasoning: GPT 4.1 no flex/priority, GPT 5 all tiers, ThinkingConfig 5 modes (builtin/explicit/optional/mandatory/""), build_params Chat Completions format, reasoning_effort persistence (RequestSettings/APIConfig/TranslationOptions/INI), provider-based get_thinking_params, THINKING_MODELS, is_openai_reasoning_model |
-| test_api_log.py | 44 | API Log: LogEntry serialization, APILogStore CRUD/filtering/subscription/persistence, singleton management, enum values, dataclass defaults, status string compatibility (5), manifest save thread safety (2) |
+| test_api_log.py | 51 | API Log: LogEntry serialization, APILogStore CRUD/filtering/subscription/persistence, singleton management, enum values, dataclass defaults, status string compatibility (5), manifest save thread safety (2), structured log full-content guardrails (7) |
 | test_bugfix_batch_79.py | 33 | Bugfix Batch 79: API Log visibility (lift/non-modal), global glossary merge (4), ellipsis-only detection (14), ellipsis compression order (5), dedup/skip progress (3), cached/reasoning tokens (5) |
 | test_unified_request_builder.py | 28 | Unified Request Builder: gather_prompt_data (importable, keys, None/unloaded mgr, sample_lines, metadata read, fallback field merging), build_request_prompt (importable, tuple return, language prompt, style/tone/summary/genre enabled/disabled, rolling context, chunk_lines), unified call sites (costs 3 methods, translate 2 methods, no direct build_full_system_prompt), API Log full prompt (no truncation, line-by-line system_prompt), identical prompt output (deterministic, same data same prompt) |
 | test_glossary_term_link.py | 19 | Glossary ↔ Term Translation link: character round-trip (2), on_enter load order AST (3), on_leave dual-storage sync AST (2), import_analysis_speakers persistence AST (1), dual-storage simulation (4), CharacterInfo preservation (3), ProjectMetadata preservation (2), load guard (2) |
 | test_code_pattern_recovery.py | 28 | Code Pattern Recovery: _detect_delimiters (8), recover_code_patterns (9: anchor→english, preserved, non-preserve skipped, square brackets, unrecoverable, multiple patterns, empty, not-in-original, candidate conflict), validate_code_patterns_preserved (4), validate_translation_comprehensive code_patterns check #7 (3), recover_line pipeline integration (2), idx 8 end-to-end bug scenario (2) |
-| **Total Script Tests** | **4500** | (+188 provider handshake, +11 live API, +108 pricing/reasoning, +44 API log, +33 bugfix batch 79, +28 unified builder, +19 glossary term link, +28 code pattern recovery) |
+| test_request_slicing_fix.py | 50 | Request Slicing Fix: is_code_pattern_only (15: exact/multi/NUM wildcard/punctuation/placeholder/empty/no-patterns/mixed/translatable/partial/regex-chars/None/whitespace/multi-NUM/overlapping), CODE_ONLY SkipReason (2: enum value, member exists), validate_line_pre CODE_ONLY (8: skipped/whitespace/NUM/not-code-only/no-patterns/empty/prot-precedence/placeholder-precedence), Efficient Merge Parity (5: conservative stable, efficient fewer, boundaries, estimation-translation parity, default false), Merge Boundaries (2: sum equals lines, single no boundaries), Merged Request Instruction (3: multi-boundary, single-boundary, block count), Manifest Patterns (8: LightVN color/close/var/combined, RPG Maker var/with-text/multi, Wolf var), Config Propagation (4: true/false/efficient/conservative), Preserve Patterns Wiring (3: signature/default/None) |
+| test_request_slicing_settings.py | 30 | Per-Model Settings Priority: TestEfficientAlwaysFewerRequests (7: chunk sizes 10-200, single file, multi file, high chunk, all same file, edge max lines, large dataset), TestMinLinesCalculation (2: conservative/efficient min_lines formula), TestStep5EfficientMerge (5: cross-file merge, no merge same file, preserves boundaries, skips when disabled, merge reduces count), TestConfigPropagation (2: efficient_merge true/false in config), TestCostsEstimationNoOverride (2: source has no go.request override, chunk_var read), TestTranslateLoadModelSettings (2: method exists, has get_model_settings call), TestPreviewUpdatesOptions (1: _translation_options assigned), TestBuildChunksPerModelSettings (4: get_model_settings call, rc_between/rc_after/chunk_max_tokens from model), TestPreviewRollingContextPerModel (1: rolling_context_before per-model), TestFormationPipelineRealWorld (3: 100/500/1000 lines), TestFormationStepsConsistency (1: conservative ≥ efficient) |
+| **Total Script Tests** | **4594** | (+188 provider handshake, +11 live API, +108 pricing/reasoning, +44 API log, +33 bugfix batch 79, +28 unified builder, +19 glossary term link, +28 code pattern recovery, +14 manifest overwrite, +30 request slicing settings) |
 | One_Click_Test.py | 7 stages | API integration |
 
 ### TASK 11: Integration Test - 200 Lines (Completed)
@@ -6804,12 +6863,14 @@ LRU eviction, and different cache matching modes.
 
 **Note:** Some tests previously marked "Planned" have been implemented:
 - Rate Limiter: **70 tests** (dev/test_rate_limiter.py - 752 lines)
+- Header-Based Rate Limiter: **36 tests** (dev/test_header_rate_limiter.py - 360 lines)
 - Chunk Optimizer: **31 tests** (dev/test_chunk_optimizer.py - 447 lines)  
 - Line-by-Line Mode: **15 tests** (dev/test_line_by_line.py - 378 lines)
 
 | Category | Tests | Priority | Depends On | Status |
 |----------|-------|----------|------------|--------|
 | Rate Limiter | 70 | HIGH | None | ✅ Implemented |
+| Header-Based Rate Limiter | 36 | HIGH | None | ✅ Implemented |
 | Chunk Optimizer | 31 | MEDIUM | Validation | ✅ Implemented |
 | Line-by-Line Mode | 15 | LOW | None | ✅ Implemented |
 | API Validator | 27 | HIGH | API Client | Planned |
@@ -7132,6 +7193,50 @@ Rate limiting system tests for API request management and usage tracking.
 | | `test_zero_rpm_limit` | Zero RPM limit |
 | | `test_rapid_requests` | Rapid requests |
 | | `test_model_family_inference` | Model family inference |
+
+#### dev/test_header_rate_limiter.py (36 tests)
+
+Header-based rate limiter tests covering duration parsing, per-model counters,
+thread safety, monotonic timer usage, and custom provider configuration.
+
+| Class | Test | Purpose |
+|-------|------|---------|
+| TestParseResetDuration | `test_plain_seconds` | Plain numeric seconds |
+| | `test_seconds_suffix` | "1s", "30s" format |
+| | `test_minutes_and_seconds` | "6m0s", "1m30s" format |
+| | `test_hours_minutes_seconds` | "1h2m3s" format |
+| | `test_milliseconds` | "200ms" format |
+| | `test_combined_with_millis` | "1s200ms" format |
+| | `test_empty_string` | Empty/whitespace input |
+| | `test_invalid_string` | Non-parseable input |
+| | `test_whitespace_stripped` | Leading/trailing whitespace |
+| TestModelWindowState | `test_defaults` | Default dataclass values |
+| TestProviderRateLimitConfig | `test_openai_defaults` | OpenAI config values |
+| | `test_custom_provider` | Custom header names |
+| TestHeaderBasedRateLimiter | `test_set_and_get_limits` | Set/get RPM/TPM |
+| | `test_unknown_model_returns_zero_limits` | Unknown model handled |
+| | `test_pre_request_increments_counters` | Counter increment |
+| | `test_pre_request_multiple` | Multiple increments |
+| | `test_unlimited_model_never_blocks` | Unlimited pass-through |
+| | `test_request_limit_blocks` | RPM wait enforcement |
+| | `test_token_limit_blocks` | TPM wait enforcement |
+| | `test_update_limits_from_headers` | Header-driven limit update |
+| | `test_update_reset_timing` | Reset timing from headers |
+| | `test_empty_headers_ignored` | Empty/None headers safe |
+| | `test_case_insensitive_headers` | Case-insensitive keys |
+| | `test_counters_reset_after_window` | Auto-reset after window |
+| | `test_reset_model` | Manual counter reset |
+| | `test_per_model_isolation` | Independent model tracking |
+| | `test_max_wait_exceeded_proceeds` | Safety valve timeout |
+| | `test_get_stats_unknown_model` | Stats for unknown model |
+| TestThreadSafety | `test_concurrent_pre_request` | 10 threads × 100 requests |
+| | `test_concurrent_update_from_headers` | 5 threads × 50 updates |
+| TestCustomProviderConfig | `test_custom_header_names` | Custom header integration |
+| TestMonotonicTimer | `test_reset_uses_monotonic` | Monotonic timer verification |
+| TestParseDurationEdgeCases | `test_minutes_only` | "5m" format |
+| | `test_hours_only` | "2h" format |
+| | `test_fractional_seconds` | "1.5s" format |
+| | `test_zero` | "0s" and "0" |
 
 #### dev/test_local_llm.py (63 tests)
 
@@ -8892,6 +8997,101 @@ python -m pytest CherryAI/dev/test_code_pattern_recovery.py -v --timeout=10
 
 ---
 
+### dev/test_request_slicing_settings.py (30 tests) - Per-Model Settings Priority
+
+Tests for the per-model API.ini settings priority fix ensuring Estimation and Preview Requests respect per-model chunk_size, rolling_context, chunk_max_tokens, and temperature from API.ini `[model_settings]` instead of unconditionally using Global Options defaults.
+
+#### TestEfficientAlwaysFewerRequests (7 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_chunk_size_10` | Efficient ≤ conservative with chunk_size=10 |
+| `test_chunk_size_50` | Efficient ≤ conservative with chunk_size=50 |
+| `test_chunk_size_200` | Efficient ≤ conservative with chunk_size=200 |
+| `test_single_file` | Single-file input (no cross-file merge) |
+| `test_multi_file` | Multi-file input triggers cross-file merge |
+| `test_high_chunk_size` | Large chunk covers all lines in one request |
+| `test_all_same_file` | All lines in same file, no merge opportunity |
+
+#### TestMinLinesCalculation (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_conservative_min_lines` | `min_lines = max(2, chunk_size // 5)` |
+| `test_efficient_min_lines` | `min_lines = max(5, chunk_size // 2)` |
+
+#### TestStep5EfficientMerge (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_cross_file_merge` | Step 5 merges small cross-file requests |
+| `test_no_merge_same_file` | No merge when all lines from same file |
+| `test_preserves_boundaries` | Merge preserves original request boundaries |
+| `test_skips_when_disabled` | No merge when efficient_merge=False |
+| `test_merge_reduces_count` | Merged result has fewer requests |
+
+#### TestConfigPropagation (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_efficient_merge_true` | RequestFormationConfig.efficient_merge=True propagates |
+| `test_efficient_merge_false` | RequestFormationConfig.efficient_merge=False propagates |
+
+#### TestCostsEstimationNoOverride (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_no_go_request_override` | costs.py source has no go.request.chunk_size override |
+| `test_chunk_var_read` | _do_estimation reads chunk_size from _chunk_var |
+
+#### TestTranslateLoadModelSettings (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_method_exists` | translate.py defines _load_model_settings |
+| `test_has_get_model_settings_call` | _load_model_settings calls get_model_settings |
+
+#### TestPreviewUpdatesOptions (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_translation_options_assigned` | _build_preview_requests assigns _translation_options |
+
+#### TestBuildChunksPerModelSettings (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_get_model_settings_call` | _build_chunks calls get_model_settings |
+| `test_rc_between_from_model` | rolling_context_between read from per-model settings |
+| `test_rc_after_from_model` | rolling_context_after read from per-model settings |
+| `test_chunk_max_tokens_from_model` | chunk_max_tokens read from per-model settings |
+
+#### TestPreviewRollingContextPerModel (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_rolling_context_before_per_model` | Preview reads rolling_context_before from per-model API.ini |
+
+#### TestFormationPipelineRealWorld (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_100_lines` | Formation pipeline with 100 real-world lines |
+| `test_500_lines` | Formation pipeline with 500 lines |
+| `test_1000_lines` | Formation pipeline with 1000 lines |
+
+#### TestFormationStepsConsistency (1 test)
+
+| Test | Purpose |
+|------|---------|
+| `test_conservative_ge_efficient` | Conservative always produces ≥ efficient request count |
+
+```
+python -m pytest CherryAI/dev/test_request_slicing_settings.py -v --timeout=10
+```
+
+---
+
 ### dev/test_session_loading.py (28 tests) - TASKS 18.1-18.8
 
 Tests for session loading and state restoration fixes.
@@ -9025,7 +9225,7 @@ collection, relative path display, and cleanup verification.
 
 ---
 
-### dev/test_input_step_phase39.py (38 tests) - Phase 39 Input Step Improvements
+### dev/test_input_step_phase39.py (40 tests) - Phase 39 Input Step Improvements
 
 Comprehensive tests for Phase 39 Input step UI/UX improvements including unified
 file selector, Treeview hierarchy, format filtering, encoding auto-detect, and
@@ -9045,14 +9245,16 @@ progress dialog.
 | `test_load_manifest_button_removed` | Load Manifest button removed from toolbar |
 | `test_clear_all_button_removed` | Clear All button removed from toolbar |
 
-#### TestEncodingDropdown (4 tests)
+#### TestEncodingDropdown (6 tests)
 
 | Test | Purpose |
 |------|---------|
-| `test_auto_encoding_option` | "auto" is in encoding values |
-| `test_auto_encoding_default` | Default encoding is "auto" |
-| `test_detect_encoding_method` | `_detect_encoding` static method exists |
-| `test_encoding_values_count` | Correct number of encoding options |
+| `test_auto_encoding_detect_utf8` | UTF-8 auto detection |
+| `test_auto_encoding_detect_utf8_sig` | UTF-8 BOM auto detection |
+| `test_auto_encoding_detect_utf16` | UTF-16 BOM auto detection |
+| `test_auto_encoding_fallback_utf8` | Empty-file fallback |
+| `test_load_file_uses_selected_parser_for_auto_encoding` | Explicit parser selection still uses parser `detect_encoding()` when Encoding stays `auto` |
+| `test_sync_output_defaults_to_manifest_uses_loaded_file_metadata` | Input step seeds manifest Output defaults from loaded file metadata |
 
 #### TestFormatDropdown (3 tests)
 
@@ -10122,20 +10324,21 @@ python -m pytest dev/test_tag_wordwrap.py -v --timeout=60
 
 ---
 
-### test_output_manifest.py (45 tests) - TASK 28.2
+### test_output_manifest.py (48 tests) - TASK 28.2
 
 Output step manifest integration tests. Verifies that OutputInjectStep binds all output format settings to ManifestManager for unified state persistence.
 
 **Bindings Tested:**
+- OutputFormat.Destination (entry, default "Same as Source")
 - OutputFormat.PreserveFolderStructure (checkbox, default true)
 - OutputFormat.Format (combobox, default "txt")
-- OutputFormat.PairMode (combobox, default "translated_only")
+- OutputFormat.PairMode (combobox, default "custom")
 - OutputFormat.Encoding (combobox, default "utf-8")
 - OutputFormat.FileNaming (radio buttons via trace)
-- OutputFormat.TextOption (entry, default "_translated")
-- OutputFormat.OverwriteExistingFiles (checkbox, default false)
+- OutputFormat.TextOption (entry, default "translated")
+- OutputFormat.OverwriteExistingFiles (checkbox, default true)
 - OutputFormat.Backup (combobox, default "timestamp")
-- OutputFormat.BackupExtension (entry, default ".bak")
+- OutputFormat.BackupExtension (entry, default ".bk")
 - OutputFormat.ExportManifestFile (checkbox, default false)
 - OutputFormat.ExportProcessingLogs (checkbox, default false)
 - OutputFormat.ExportGlossaryEntries (checkbox, default false)
@@ -11045,11 +11248,11 @@ If a test takes too long:
 
 ---
 
-### dev/test_mock_translation.py (59 tests) - PHASE 56
+### dev/test_mock_translation.py (70 tests) - PHASE 56
 
 Mock Translation Flaw Testing — validates the deliberate flaw injection engine
 in `functions/mock_translator.py` and its integration with the postprocessing
-recovery pipeline. Uses `dev/example/example.txt` as test fixture.
+recovery pipeline, plus cancellation and speed. Uses `dev/example/example.txt` as test fixture.
 
 #### TestExampleFile (3 tests)
 
@@ -11174,6 +11377,27 @@ recovery pipeline. Uses `dev/example/example.txt` as test fixture.
 | `test_flaw_on_empty_line_no_crash` | Flaws on empty lines don't crash |
 | `test_flaw_severity_increases_corruption` | Severe creates more flaws |
 | `test_delay_per_chunk` | Delay parameter works correctly |
+
+#### TestCancellation (8 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_cancel_event_accepted` | MockTranslator accepts cancel_event parameter |
+| `test_cancel_stops_batch` | Pre-set cancel event stops batch immediately |
+| `test_cancel_returns_correct_length` | Cancelled batch returns same length as input |
+| `test_cancel_preserves_completed_lines` | Lines before cancel are kept |
+| `test_no_cancel_event_works_normally` | Without cancel_event, works as before |
+| `test_unset_cancel_event_no_effect` | Unset event does not interrupt |
+| `test_factory_cancel_event` | create_mock_translator accepts cancel_event |
+| `test_cancel_from_thread` | Cancel from different thread stops processing |
+
+#### TestSpeed (3 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_no_artificial_delay` | Default MockTranslator has no delay |
+| `test_thousand_lines_under_100ms` | 1000 lines translate in < 100 ms |
+| `test_factory_default_no_delay` | Factory defaults to delay=0.0 |
 
 ### Running Phase 56 Tests
 
@@ -11465,7 +11689,7 @@ Test file: `dev/test_wordwrap_phase46.py`
 python -m pytest CherryAI/dev/test_wordwrap_phase46.py -v --timeout=10
 ```
 
-### Phase 47: Output + Pipeline Completeness + Import Tests (51 tests)
+### Phase 47: Output + Pipeline Completeness + Import Tests (52 tests)
 
 Test file: `dev/test_output_phase47.py`
 
@@ -11476,7 +11700,7 @@ Test file: `dev/test_output_phase47.py`
 | TestGetSourceBreakdown | 2 | Source field counting across lines |
 | TestPriorityChainConstant | 1 | PRIORITY_CHAIN list order and completeness |
 | TestDirtyFlags | 6 | get_dirty_flags, set_dirty_flag, defaults, isolation |
-| TestNonDestructiveDefaults | 4 | NamingOptions default SUBFOLDER, field defaults |
+| TestNonDestructiveDefaults | 5 | NamingOptions default SUBFOLDER, output defaults including overwrite-on and Same-as-Source destination |
 | TestFailureLogging | 4 | ExportStats.failure_log, append entries, empty default |
 | TestImportTranslations | 4 | _on_import_translations method, field copy, matching |
 | TestSkipAlreadyTranslated | 4 | TranslationOptions.skip_already_translated, skip logic |
@@ -11641,6 +11865,25 @@ python -m pytest CherryAI/dev/test_glossary_selective.py -v --timeout=10
 ```bash
 # Run Phase 53 tests
 python -m pytest CherryAI/dev/test_parser_scripts.py -v --timeout=10
+```
+
+### Parser Surgical Injection — inject_to (16 tests)
+
+**File:** `dev/test_parser_injection.py`
+
+Tests for parser-based surgical injection in the Output step. Verifies that `inject_to()` reads from source, surgically replaces translatable text, and writes to output — preserving all non-translatable script structure. Covers the Output step's filedir-based parser routing and per-file line slicing.
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestLightVNInjectTo | 8 | Non-empty output, preserves structure, replaces translated text, doesn't modify source, creates parent dirs, output line count matches, inject delegates to inject_to, empty translations still produce full script |
+| TestBaseInjectToDefault | 1 | Base ParserScript.inject_to moves _translated file to output_path |
+| TestWriteFileParserRouting | 3 | Parser format triggers inject_to, standard format skips parser, per-file line slicing via first_idx/last_idx |
+| TestEndToEndLightVNInjection | 3 | Full script surgical injection, output is not empty (regression), non-translatable lines preserved |
+| TestParserFormatExtension | 1 | lightvn format preserves .txt extension |
+
+```bash
+# Run Parser Surgical Injection tests
+python -m pytest CherryAI/dev/test_parser_injection.py -v --timeout=60
 ```
 
 ### Parser Handshake & LightVN Parser (63 + 31 tests)
@@ -12850,6 +13093,35 @@ deduplication, and PROTECTED token compression/decompression.
 
 ```bash
 python -m pytest dev/test_postpro_pipeline.py -v --timeout=10
+```
+
+
+---
+
+## `dev/test_output_injection.py` — 39 tests
+
+Tests for the Output Injection Standardization (Phase 79): standardized inject_to
+handshake with Speaker:Dialogue awareness, INJECTION OutputFormat, fresh line reads,
+Same as Source directory fix, the _write_injection 4-step parser handshake,
+`_split_speaker_dialogue` helper, and Speaker:Dialogue-aware injection scenarios.
+
+**Files Tested:** `formats/parser_base.py`, `formats/LightVN.py`, `gui/steps/output_inject.py`
+
+| Test Class | Count | Coverage |
+|-----------|-------|----------|
+| TestStandardInjectTo | 8 | Simple replacement, duplicate handling, failure on missing, no-change same text, fallback without orig_lines, parent dir creation, long JSON sequential, returns list type |
+| TestLightVNInjectSignature | 2 | Accepts orig_lines kwarg, returns list |
+| TestFreshLineReads | 2 | _get_fresh_lines_for_file reads from manifest not stale cache, fallback to session |
+| TestSameAsSourceDir | 3 | Parent of Original, translated next to Original, fallback to cwd |
+| TestInjectionFormat | 4 | Enum member exists, in descriptions, in extensions (empty), _safe_output_format parses it |
+| TestWriteInjection | 2 | Full handshake simple case, mismatch preserves original |
+| TestBuildFileListInjection | 1 | Injection format preserves extension |
+| TestInjectToEdgeCases | 3 | Empty lines, source not found, partial replacement |
+| TestSplitSpeakerDialogue | 4 | Half-width colon split, fullwidth colon split, no colon returns empty speaker, multiple colons splits on first |
+| TestSpeakerDialogueInjection | 10 | Speaker+dialogue replaced separately, consecutive same-speaker skip, narration plain replace, same-speaker preserved, dialogue not found failure, spaces preserved, mixed speaker/plain lines, alternating speakers, no-change tracking, fallback without extract_tagged |
+
+```bash
+python -m pytest dev/test_output_injection.py -v --timeout=10
 ```
 
 

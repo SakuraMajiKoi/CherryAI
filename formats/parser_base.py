@@ -22,11 +22,14 @@ Usage::
 
 from __future__ import annotations
 
+import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 __all__ = [
@@ -42,6 +45,21 @@ __all__ = [
 
 # Re-export handshake types for convenience
 from .handshake import ExtractedLine, ParserError, SpeakerInfo
+
+# Regex matching "Speaker: dialogue" or "Speaker： dialogue" (half/fullwidth colon)
+_SPEAKER_DIALOGUE_RE = re.compile(r"^(.+?)(?:：|: )(.+)$", re.DOTALL)
+
+
+def _split_speaker_dialogue(text: str) -> Tuple[str, str]:
+    """Split ``'Speaker: dialogue'`` into ``(speaker, dialogue)``.
+
+    Recognises both half-width ``: `` and fullwidth ``： `` separators.
+    Returns ``("", text)`` when no separator is found.
+    """
+    m = _SPEAKER_DIALOGUE_RE.match(text)
+    if m:
+        return m.group(1), m.group(2)
+    return "", text
 
 
 # ---------------------------------------------------------------------------
@@ -357,6 +375,161 @@ class ParserScript(ABC):
             Encoding string, or ``None`` to use the global heuristic.
         """
         return None
+
+    def inject_to(
+        self,
+        source_path: Path,
+        output_path: Path,
+        lines: List[str],
+        *,
+        orig_lines: Optional[List[str]] = None,
+    ) -> List[int]:
+        """Standard injection handshake: inject translated *lines* into *output_path*.
+
+        Implements the standardized injection process with Speaker:Dialogue
+        awareness.  When ``extract_tagged`` is available, each extracted
+        line carries a *speaker* field.  Lines with a non-empty speaker are
+        split into a **speaker part** and a **dialogue part** which are
+        replaced independently in the file content:
+
+        * The speaker name is replaced **only on its first occurrence** for
+          consecutive lines with the same speaker.  Subsequent dialogue
+          lines that share the speaker skip the speaker replacement.
+        * The dialogue part is searched and replaced separately (no leading
+          or trailing spaces unless present in the original).
+
+        Lines without a speaker (narration, menu, variable) are handled as
+        a plain find-and-replace on the full text.
+
+        **4-step process:**
+
+        0. Load ``\\Original`` into memory.
+        1. Use :meth:`extract_tagged` (or :meth:`extract`) on the original
+           to get per-line keys and speaker metadata.
+        2. For each position, split Speaker:Dialogue when applicable and
+           sequentially find-and-replace speaker and dialogue independently.
+        3. Save the result to *output_path*.
+
+        When *orig_lines* is provided the method uses those as the
+        authority for what was stored in the manifest and verifies them
+        against extracted keys.  When ``None``, the extracted keys are
+        used directly (legacy compatibility).
+
+        Args:
+            source_path: Path to the original source file.
+            output_path: Path to write the injected output.
+            lines: Translated lines in extraction order.
+            orig_lines: Original text for each position (from manifest
+                ``orig`` field).  When ``None``, falls back to extracted
+                keys.
+
+        Returns:
+            List of indices that failed to match (empty on full success).
+        """
+        enc = self.detect_encoding(source_path) or "utf-8"
+        try:
+            with open(source_path, "r", encoding=enc) as fh:
+                content = fh.read()
+        except Exception as exc:
+            raise ParserError(
+                f"Failed to read {source_path}: {exc}",
+                parser_name=self.name,
+                component="inject_to",
+            ) from exc
+
+        # Step 1: Extract keys with tagged metadata when available
+        tagged = self.extract_tagged(source_path)
+        if tagged is not None:
+            search_keys = orig_lines if orig_lines is not None else [
+                el.text for el in tagged
+            ]
+            speakers = [el.speaker for el in tagged]
+        else:
+            search_keys = (
+                orig_lines if orig_lines is not None
+                else self.extract(source_path)
+            )
+            speakers = [""] * len(search_keys)
+
+        # Step 2: Sequential search-and-replace with speaker awareness
+        failures: List[int] = []
+        last_replaced_speaker: Optional[str] = None
+
+        for i, (search, translated) in enumerate(zip(search_keys, lines)):
+            if search == translated:
+                # No change — but still track speaker for skip logic
+                if i < len(speakers) and speakers[i]:
+                    last_replaced_speaker = _split_speaker_dialogue(search)[0]
+                continue
+
+            speaker = speakers[i] if i < len(speakers) else ""
+
+            if speaker:
+                # --- Speaker:Dialogue line ---
+                orig_sp, orig_dlg = _split_speaker_dialogue(search)
+                trans_sp, trans_dlg = _split_speaker_dialogue(translated)
+
+                # Replace speaker name only on first occurrence for this
+                # speaker (consecutive same-speaker dialogue lines skip).
+                if orig_sp and orig_sp != last_replaced_speaker:
+                    if trans_sp and trans_sp != orig_sp:
+                        pos = content.find(orig_sp)
+                        if pos >= 0:
+                            content = (
+                                content[:pos]
+                                + trans_sp
+                                + content[pos + len(orig_sp):]
+                            )
+                    last_replaced_speaker = orig_sp
+
+                # Replace dialogue text (no leading/trailing space changes)
+                if orig_dlg and trans_dlg != orig_dlg:
+                    pos = content.find(orig_dlg)
+                    if pos >= 0:
+                        content = (
+                            content[:pos]
+                            + trans_dlg
+                            + content[pos + len(orig_dlg):]
+                        )
+                    else:
+                        failures.append(i)
+                        logger.warning(
+                            "inject_to [%s]: dialogue not found at "
+                            "position %d: %r",
+                            self.name, i,
+                            orig_dlg[:80] if orig_dlg else "",
+                        )
+            else:
+                # --- Plain line (no speaker) ---
+                last_replaced_speaker = None
+                pos = content.find(search)
+                if pos >= 0:
+                    content = (
+                        content[:pos]
+                        + translated
+                        + content[pos + len(search):]
+                    )
+                else:
+                    failures.append(i)
+                    logger.warning(
+                        "inject_to [%s]: failed to find text at "
+                        "position %d: %r",
+                        self.name, i, search[:80] if search else "",
+                    )
+
+        # Step 3: Save
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(output_path, "w", encoding=enc) as fh:
+                fh.write(content)
+        except Exception as exc:
+            raise ParserError(
+                f"Failed to write {output_path}: {exc}",
+                parser_name=self.name,
+                component="inject_to",
+            ) from exc
+
+        return failures
 
     # ------------------------------------------------------------------
     # Convenience

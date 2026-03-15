@@ -2507,7 +2507,10 @@ class AnalysisStep(BaseStep):
     def on_leave(self) -> None:
         """Called when leaving this step tab.
 
-        Saves analysis results to session state.
+        Saves analysis results to session state, merging into
+        existing step data to preserve other keys.
         """
         if self._analysis_results:
-            self.set_step_data({"analysis_results": self._analysis_results})
+            data = self.get_step_data()
+            data["analysis_results"] = self._analysis_results
+            self.set_step_data(data)

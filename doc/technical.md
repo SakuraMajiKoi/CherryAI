@@ -100,7 +100,8 @@ TABLE OF CONTENTS
         * Code Pattern Recovery: recover_code_patterns() restores preserve-action patterns translated by the LLM using delimiter-aware regex matching; _detect_delimiters() identifies bracket pairs; RecoveryType.CODE_PATTERN added
    3.24 project_config.py ✅ - Per-project configuration
    3.25 prompt_builder.py ✅ - Build system prompts for API
-   3.26 rate_limiter.py ✅ - API rate limiting
+   3.26 rate_limiter.py ✅ - API rate limiting (sliding window)
+   3.26b header_rate_limiter.py ✅ - Header-based rate limiting (per-model, response-header driven)
    3.27 replication.py ✅ - Translation replication/update detection
    3.28 request_cache.py ✅ - Cache API requests
    3.29 retry_handler.py ✅ - Retry logic for API calls
@@ -226,7 +227,7 @@ TABLE OF CONTENTS
    5.3 document.py ✅ - PDF, EPUB handlers (placeholder)
    5.4 html.py ✅ - HTML parsing (under development)
    5.5 rpgmaker.py ✅ - RPG Maker MV/MZ (placeholder)
-   5.6 parser_base.py ✅ - ParserScript ABC, WordwrapConfig, ForbiddenChars, TagRules, ExtractedLine, SpeakerInfo
+   5.6 parser_base.py ✅ - ParserScript ABC, WordwrapConfig, ForbiddenChars, TagRules, ExtractedLine, SpeakerInfo; _split_speaker_dialogue() helper; inject_to() standardized 4-step Speaker:Dialogue-aware handshake (load→extract_tagged with speaker metadata→split speaker/dialogue and replace independently→save) returning List[int] failures
    5.7 parser_rpgmaker.py ✅ - RpgMakerMVParser, RpgMakerMZParser implementations
    5.8 json_lenient.py ✅ - Lenient JSON parsing with error recovery
    5.9 handshake.py ✅ - ParserHandshake protocol: SpeakerInfo, ExtractedLine, ParserError, validate_parser()
@@ -243,14 +244,14 @@ TABLE OF CONTENTS
        - base.py - BaseStep abstract class (TASK 43.14: tab caching infra; on_new_project() lifecycle method for state flush)
        - input_extract.py - Step 0: Input/Extraction 🔗formats/ (Phase 60: clickable column header sort with ▲/▼ indicators, file list filter entry, type column refresh fix, cross-file preview search with idx column and auto file-switching; non-destructive file addition with source root validation; Import Translation selection dialog with line fields and settings sections; preview columns: Project/File 1-based)
        - analysis.py - Step 1: Analysis ❌NO shared imports
-       - costs.py - Step 4: Costs (renamed from estimate.py in Phase 40; _estimate_via_formation() returns FormationResult with per-request line lists; _compute_per_request_prompt_overhead() uses gather_prompt_data()+build_request_prompt() per chunk for selective filtering; _get_prompt_tokens() and _get_static_prompt_tokens() also unified via gather_prompt_data()+build_request_prompt(); syncs chunk_size from GlobalOptions; respects request_slicing mode; Per-model settings saved/loaded via api_config; "📤 Apply Settings to Model" button is a one-way write to API.ini — model changes do NOT reload settings, loaded once on first tab entry via _settings_loaded_once flag; Translation Options row with Thinking, Translated Context, Rolling Context spinboxes; Request Mode 2×2 grid (Normal/Batch/Flex/Priority) with "(Available)"/"(Unavailable)" suffix labels and Selected (blue) states driving mode-specific pricing; _recalculate_costs_for_mode() instantly updates costs from existing token counts without re-estimation; _reprice_for_model() fast-reprices all cost and time labels when model changes using stored EstimationResult token counts — no re-estimation required; EstimationResult.num_requests stores per-side request count to enable fast reprice; EstimationProgressDialog is a non-blocking Toplevel that shows 7 step indicators (○/●/✓) and a ttk.Progressbar — opened by _run_estimation(), updated via _report_progress() from background thread using after(), closed by _estimation_complete(); Model combo disabled during estimation (_run_estimation sets state="disabled", _estimation_complete restores state="readonly"); CACHE_HIT_RATE=0.80 applied to static prompt prefix via _get_static_prompt_tokens() for cache savings calculation; Token Counts panel shows Input/Prompt/Cached/Total/Output rows — Prompt Tokens displays the non-cached portion (prompt_tokens − cached_tokens) so that Input + Prompt + Cached = Total Input; EstimationResult dataclass includes content_tokens, prompt_tokens, cached_tokens, num_requests; input_cost stores content-only cost, prompt_cost stores non-cached prompt cost, cached_input_cost stores cached portion cost; Cost Estimate panel is purely additive: Input (content) + Prompt (non-cached) + Cached + Output = Total; all four cost rows are primary un-indented rows; module-level _ceil_to_cents() and _fmt_cost() helpers format every displayed dollar amount rounded up to the next cent; Full estimation persisted to manifest via _save_estimation_to_manifest(); Estimate button renamed to "↻ Update Counts" after first run)
+       - costs.py - Step 4: Costs (renamed from estimate.py in Phase 40; _estimate_via_formation() returns FormationResult with per-request line lists; _compute_per_request_prompt_overhead() uses gather_prompt_data()+build_request_prompt() per chunk for selective filtering; _get_prompt_tokens() and _get_static_prompt_tokens() also unified via gather_prompt_data()+build_request_prompt(); per-model API.ini settings take priority over Global Options — _do_estimation() reads chunk_size/tokens_limit from _chunk_var/_tokens_var (set by _load_model_settings()), only request_slicing read from GlobalOptions; respects request_slicing mode; Per-model settings saved/loaded via api_config; "📤 Apply Settings to Model" button is a one-way write to API.ini — model changes do NOT reload settings, loaded once on first tab entry via _settings_loaded_once flag; Translation Options row with Thinking, Translated Context, Rolling Context spinboxes; Request Mode 2×2 grid (Normal/Batch/Flex/Priority) with "(Available)"/"(Unavailable)" suffix labels and Selected (blue) states driving mode-specific pricing; _recalculate_costs_for_mode() instantly updates costs from existing token counts without re-estimation; _reprice_for_model() fast-reprices all cost and time labels when model changes using stored EstimationResult token counts — no re-estimation required; EstimationResult.num_requests stores per-side request count to enable fast reprice; EstimationProgressDialog is a non-blocking Toplevel that shows 7 step indicators (○/●/✓) and a ttk.Progressbar — opened by _run_estimation(), updated via _report_progress() from background thread using after(), closed by _estimation_complete(); Model combo disabled during estimation (_run_estimation sets state="disabled", _estimation_complete restores state="readonly"); CACHE_HIT_RATE=0.80 applied to static prompt prefix via _get_static_prompt_tokens() for cache savings calculation; Token Counts panel shows Input/Prompt/Cached/Total/Output rows — Prompt Tokens displays the non-cached portion (prompt_tokens − cached_tokens) so that Input + Prompt + Cached = Total Input; EstimationResult dataclass includes content_tokens, prompt_tokens, cached_tokens, num_requests; input_cost stores content-only cost, prompt_cost stores non-cached prompt cost, cached_input_cost stores cached portion cost; Cost Estimate panel is purely additive: Input (content) + Prompt (non-cached) + Cached + Output = Total; all four cost rows are primary un-indented rows; module-level _ceil_to_cents() and _fmt_cost() helpers format every displayed dollar amount rounded up to the next cent; Full estimation persisted to manifest via _save_estimation_to_manifest(); Estimate button renamed to "↻ Update Counts" after first run)
        - information.py - Step 2: Information 🔗manifest_fields (Bug Fix: on_leave() and _save_metadata() now merge *_enabled toggle BooleanVar values into metadata dict after ProjectMetadata.to_dict() — fixes toggle state erasure on tab change; Save button removed from header — auto-save on tab change is sufficient; Bug Fix: on_enter() reordered to load _load_metadata() BEFORE _load_characters_from_manifest()/_load_code_patterns_from_manifest() so authoritative top-level manifest data overrides stale step_state; on_leave() now calls _save_characters_to_manifest() and _save_code_patterns_to_manifest() to sync dual storage; _import_analysis_speakers() persists to top-level immediately)
        - preprocess.py - Step 3: Preprocessing 🔗manifest_fields
-       - translate.py - Step 5: Translation 🔗api_client, mock_translator, prompt_adapter, manifest_fields (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching; Preview Requests: PreviewRequest dataclass with _format_input_lines() for numbered line display and io_examples field, FILTER_PARTS constant (13 entries: meta, language, system_instructions, io_examples, style, tone, summary, genre, pov, conditional_prompts, glossary, rolling_context, input_lines), RequestPreviewDialog class with Pure/Formatted/Plain views and Jump/Search/Filter toolbar, _plain_text() preserves curly braces for game text, _build_preview_requests() mirrors real translation request building and gates each labeled section by *_enabled metadata flags, generates io_examples block with fill mode support; _build_system_prompt_from_manifest() reads from `step_state.Information.data.metadata`; Request Options: Key, Model, Request Mode combobox (Normal/Batch/Flex/Priority with "(Unavailable)" suffixes via _refresh_request_mode_options()), Model Settings/Translation Options Change… buttons, Character Whitelist/Blacklist (manifest-bound), Ban Tokens; TranslationOptions.request_mode field passed to APIConfig.request_mode in _do_translation(); _apply_char_filters() post-processes translations; _sync_from_global_options() syncs all hidden vars from GlobalOptions including TranslationSettings; _get_request_slicing_mode() reads slicing from GlobalOptions.translation)
+       - translate.py - Step 5: Translation 🔗api_client, mock_translator, prompt_adapter, manifest_fields (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching; Preview Requests: PreviewRequest dataclass with _format_input_lines() for numbered line display and io_examples field, FILTER_PARTS constant (13 entries: meta, language, system_instructions, io_examples, style, tone, summary, genre, pov, conditional_prompts, glossary, rolling_context, input_lines), RequestPreviewDialog class with Pure/Formatted/Plain views and Jump/Search/Filter toolbar, _plain_text() preserves curly braces for game text, _build_preview_requests() mirrors real translation request building and gates each labeled section by *_enabled metadata flags, generates io_examples block with fill mode support, syncs _translation_options from current UI before _build_chunks(); _build_system_prompt_from_manifest() reads from `step_state.Information.data.metadata`; _load_model_settings() loads per-model API.ini settings (chunk_size, temperature, rolling_context, thinking) with Global Options fallback on tab entry; _build_chunks() reads rolling_context_between/after and chunk_max_tokens from per-model API.ini via get_model_settings() with Global Options fallback; Request Options: Key, Model, Request Mode combobox (Normal/Batch/Flex/Priority with "(Unavailable)" suffixes via _refresh_request_mode_options()), Model Settings/Translation Options Change… buttons, Character Whitelist/Blacklist (manifest-bound), Ban Tokens; TranslationOptions.request_mode field passed to APIConfig.request_mode in _do_translation(); _apply_char_filters() post-processes translations; _sync_from_global_options() syncs all hidden vars from GlobalOptions including TranslationSettings; _get_request_slicing_mode() reads slicing from GlobalOptions.translation)
        - postprocess.py - Step 6: Postprocess 🔗postprocess, manifest_fields; _FAILURE_POLICY_MAP for legacy enum mapping
        - wordwrap_overwrite.py - Step 7: Wordwrap 🔗wordwrap, manifest_fields; column "Latest" (renamed from "Original")
        - qa.py - Step 8: QA 🔗validation, manifest_fields; persists qa_overwrite field; column "Overwrite" (renamed from "Translated")
-       - output_inject.py - Step 9: Output/Inject 🔗manifest_fields; _NAMING_STRATEGY_MAP for legacy enum mapping
+       - output_inject.py - Step 9: Output/Inject 🔗manifest_fields; _NAMING_STRATEGY_MAP for legacy enum mapping; OutputFormat.INJECTION enum; _get_fresh_lines_for_file() for stale-data fix; _write_injection() 4-step parser handshake; _get_same_as_source_dir() returns parent of Original/
    
    6.5 gui/components/ (2 files)
        - __init__.py - Component exports
@@ -365,10 +366,11 @@ TABLE OF CONTENTS
        - api_log_view.py - API Log viewer dialog (2026):
          - APILogViewDialog: Non-blocking Toplevel window for viewing structured API log entries; calls self.lift() at end of __init__ to stay visible above translation progress
          - open_or_focus(): single-instance dialog helper keyed on the root window; reuses the existing API Log window and focuses it instead of creating duplicates
-         - Toolbar: search entry, category filter combobox, view mode radio buttons (Sent/Received/Both), Clear Log button
+         - Toolbar: search entry, category filter combobox, view mode radio buttons (Sent/Received/Both), display-limit spinbox (All/1000/2500/5000/Nothing), Clear Log button
          - Log display: tk.Text widget with word wrap, color-coded tags (success=green, recovered=yellow, failed=red, pending=grey)
+         - Display limit is persisted via `ini_manager` in `[log].api_log_display_limit`; default is `All`, so `_render_wrapped_content()` renders every stored line unless the user chooses a smaller viewer-only limit
          - Entry status handling: `LogEntry.status` is plain `str` (deserialized from JSON); `_render_entry()` uses `entry.status.upper()` (not `.value.upper()`); dict lookups with `LogStatus` enum keys work via str-enum equality
-         - Sent blocks: model, provider, temperature, chunk info, system prompt, user content
+         - Sent blocks: model, provider, temperature, chunk info, full system prompt, full user content
          - Received blocks: token statistics, duration, finish reason, error messages, response content
          - Status bar: filtered/total entry count, aggregated token totals
          - Live updates: subscribes to APILogStore for real-time display; thread-safe via after() scheduling
@@ -428,6 +430,8 @@ TABLE OF CONTENTS
        - Central INI path resolution relative to main module
        - Typed access: get_str(), get_int(), get_float(), get_bool(), get_list()
        - Manifest defaults: get_all_manifest_defaults(), get_manifest_default()
+       - **Atomic save:** _save_ini() writes to `.tmp` file, fsync, `os.replace()` to final path — prevents corruption from interrupted writes. All write paths (set_default, clear_user_defaults, save_ui_state) route through _save_ini().
+       - **Centralized UI state:** load_ui_state() / save_ui_state() — JSON-serializable dict stored in [ui] state; uses shared _ini_cache and atomic save so UI state writes never wipe other INI sections. mainhelper.save_app_state() and load_app_state() delegate to these functions.
        - **Phase 62:** Directory initialisation on startup:
          - ensure_app_dirs() — creates user/, Projects/, logs/, cache/ under app root; called from _load_ini()
        - TASK 21.4: Recent/Session management:
@@ -544,11 +548,15 @@ TABLE OF CONTENTS
            MaxLines (int), PreventOrphans (bool), PreferPunctuationBreaks (bool),
            SpeakerHandling (text), Typography (text), TagConfigs (list of dicts)
        - **Phase 28 Integration:** OutputInjectStep manifest bindings:
-         - OutputFormat nested: PreserveFolderStructure (bool), Format (text),
+         - OutputFormat nested: Destination (text), PreserveFolderStructure (bool), Format (text),
            PairMode (text), Encoding (text), FileNaming (text: suffix/prefix/subfolder),
            TextOption (text), OverwriteExistingFiles (bool), Backup (text),
            BackupExtension (text), ExportManifestFile (bool), ExportProcessingLogs (bool),
            ExportGlossaryEntries (bool)
+         - Defaults are manifest-backed: Destination=`Same as Source`, PreserveFolderStructure=True,
+           PairMode=`custom`, FileNaming=`subfolder`, OverwriteExistingFiles=True,
+           Backup=`timestamp`, BackupExtension=`.bk`, export extras disabled
+         - Format and Encoding are seeded from the first loaded input file when the manifest has no valid OutputFormat values yet
        - **Phase 29 Integration:** ManifestManager autosave system (TASK 29.1):
          - Background thread with configurable interval (default 60s, clamped 5-300s)
          - Only saves when `_dirty` flag is set
@@ -626,7 +634,7 @@ TABLE OF CONTENTS
        - **Phase 43 Integration:** Translation Tab Overhaul:
          - Merged Column: "To be Translated" replaces Original+Preprocessed (resolution: edited_prepro → preprocessed → original)
          - Newline Rendering: ↵ symbol in table cells, 200-char truncation
-         - Mock Translation: MODEL_OPTIONS[0] = "Mock Translation", routes to MockTranslator(delay_per_chunk=0.1)
+         - Mock Translation: MODEL_OPTIONS[0] = "Mock Translation", routes to MockTranslator (no delay, cancel_event from _cancel_event)
          - API Provider Management: APIProviderEntry dataclass, PROVIDER_PRESETS (5), "Saved API Keys" Treeview with Save/Load/Remove; _PresetPickerDialog
          - Settings Migration: CachingSettings.mode, RequestSettings.thinking_enabled/budget/reasoning_effort/rolling_context_lines
          - _sync_from_global_options() applies Global Options overrides on tab enter
@@ -1057,6 +1065,8 @@ CherryAI/
 │   ├── validation.py       Pre/Post API validation (Session 13)
 │   ├── prompt_builder.py   Dynamic prompt construction with game summary
 │   ├── project_config.py   Project-level configuration (game summary, API profiles)
+│   ├── rate_limiter.py     Sliding-window rate limiter
+│   ├── header_rate_limiter.py  Header-based rate limiter (per-model, response-header driven) [NEW]
 │   ├── romanization.py     Japanese kana → rōmaji (Modified Hepburn, Task 75)
 │   ├── term_translation.py Unified term translation dispatcher (Romaji/LLM)
 │   ├── wordwrap.py         Text analysis and wordwrap
@@ -2380,13 +2390,14 @@ Parser Input Routing (gui/steps/input_extract.py):
 - `list_parser_names() → List[str]`: Returns display names from ParserRegistry
 - Dynamic format combobox: Parser names appended to base format values in input dialog
 - `_extract_lines()`: Routes to `parser.extract()` when format_id is a parser name
-- `_load_file()`: Auto-detect parser via `detect_parser()` for format="auto"
+- `_load_file()`: Resolves parser/format before encoding; auto-detects parser via `detect_parser()` for format="auto" and, when a parser format is explicitly forced, uses that parser's `detect_encoding()` before generic fallback
 - `_file_matches_format()`: Delegates to `parser.can_handle()` for parser format IDs
 - `_collect_files_for_format()`: Collects files via `can_handle()` for parser filters
 - `_validate_parser_selection(format_id)`: Runs `validate_parser()`, error popup if fails
 - `_validate_extracted_lines(lines, filename)`: Per-line token check (>2048 error, >1024 warning)
 - `_estimate_tokens(text)`: Static — tiktoken with `len(text) * 0.3` fallback
 - `_detect_encoding(path)`: 8 KB probe: BOM → parser `detect_encoding()` → utf-8 → shift_jis → cp932 → latin-1
+- `_sync_output_defaults_to_manifest()`: Seeds manifest `OutputFormat` with Destination=`Same as Source`, the loaded input Format/Encoding, PairMode=`custom`, FileNaming=`subfolder`, OverwriteExistingFiles=True, Backup=`timestamp`, BackupExtension=`.bk`, and all export extras off when those values are missing or invalid
 
 Pipeline Wiring of Optional Components (P3):
 - `_wire_parser_optionals(format_id)`: Post-extraction hook in `_load_selected_paths` between
@@ -2405,8 +2416,11 @@ Pipeline Wiring of Optional Components (P3):
   Per-tag processing via `_build_tag_maps()`: resolves line tag → filedir type → "dialogue" fallback,
   applies per-tag `TagWrapConfig` settings. Parser-managed tags use O6→O9→passthrough chain;
   user-managed tags use O9→built-in `pretty_wrap` with per-tag width/break_char/max_lines.
-- `gui/steps/output_inject.py` `_write_file()`: Reads `ParserName`; when set, routes through
-  `parser.inject(output_path, lines)` with fallback to standard format writers on failure
+- `gui/steps/output_inject.py` `_write_file()`: Detects parser format from `filedir[].format`; when a
+  parser is found via `get_parser_registry().get(format)`, slices per-file lines using
+  `all_lines[entry.first_idx:entry.last_idx + 1]` and calls `parser.inject_to(source, output, lines)`
+  for surgical injection that preserves script structure. Falls back to standard format writers when
+  no parser matches or when inject_to raises an exception.
 - `gui/steps/translate.py`: After logit bias setup, reads `ParserName`, calls
   `api_client.apply_parser_forbidden_chars(parser_name)` to merge O7 into logit bias
 - `functions/analysis.py` `detect_tags()`: Accepts optional `parser_rules` kwarg
@@ -2418,10 +2432,10 @@ Light VN Parser (formats/LightVN.py):
 - **No deduplication**: Every occurrence is returned including duplicates; CherryAI's manifest
   stores per-line entries so dedup is handled by the Preprocessing step if enabled
 - **M1 Extract**: `extract(path)` → flat list; `extract_tagged(path)` → `List[ExtractedLine]`
-- **M2 Inject**: `inject(path, lines)` — writes to `{stem}_translated.txt`
-- **M3 Identity**: `can_handle()` probes first 200 lines for `_DETECT_PATTERNS` (`~【`, `~文字`, `~ボタン`, `~絵`, `~効果音`, `~選択`) or `_DETECT_LINE_PREFIXES` (`栞 `)
+- **M2 Inject**: `inject(path, lines)` — writes to `{stem}_translated.txt` (delegates to `inject_to`); `inject_to(source, output, lines)` — surgical injection reading from source, writing to output
+- **M3 Identity**: `can_handle()` scans the file for `_DETECT_PATTERNS` (`~【`, `~文字`, `~ボタン`, `~絵`, `~効果音`, `~選択`) or `_DETECT_LINE_PREFIXES` (`栞 `)
 - **Tag propagation**: `LoadedFile.tags` stores per-line tags from `extract_tagged()`; `_sync_lines_to_manifest()` writes them to `tag`; O8 regex pass skips pre-tagged lines
-- **O3 Encoding**: Priority chain: utf-8, utf-8-sig, shift_jis, cp932, euc-jp, utf-16
+- **O3 Encoding**: Priority chain: utf-8, utf-8-sig, shift_jis, cp932, euc-jp, utf-16; this path is now used both for auto-detected LightVN files and for explicit `lightvn` input selection when Encoding remains `auto`
 - **O4 Speakers**: `detect_speakers()` parses `Speaker: text` format from extracted lines
 - **O5 Wordwrap**: 60 chars, 3 lines per textbox, `\w` textbox injection
 - **O6 Custom Wrap**: Balanced wrapping with orphan avoidance (`_pretty_wrap`)
@@ -2607,7 +2621,8 @@ Structured API Log (NEW - 2026):
 - Persistence: `.api_log.jsonl` file alongside manifest, atomic writes (write .tmp → fsync → os.replace)
 - Manifest integration: `"log"` key in manifest with log filename; reset/load on create_new/load, save on manifest save, save+clear on close
 - Hooked into: api_client._translate_chunk (success), api_client._translate_single_line (success+failure), term_translation._translate_llm_batch (success+failure), API2Glossary._call_api_for_excerpt_custom (success), api_config.test_api_connection (success+failure), api_config.test_model_translation (success+failure)
-- GUI: `gui/dialogs/api_log_view.py` — non-blocking Toplevel, subscribes for live updates, search/filter/view mode controls
+- Structured log producers pass full prompt/content text to `LogEntrySent` / `LogEntryReceived`; viewer limits are applied only at render time, never during storage
+- GUI: `gui/dialogs/api_log_view.py` — non-blocking Toplevel, subscribes for live updates, search/filter/view mode controls, and keeps a persistent per-block display-limit preference
 
 Statistics Tracking (NEW - TASK 12):
 - `_total_prompt_tokens`: Running total of input tokens
@@ -2682,13 +2697,24 @@ Key Features:
    - Enables test assertions that know exactly what was broken
    - Reports: total_lines, flawed_lines, per-type counters, details list
 
+4. CANCELLATION SUPPORT:
+   - Optional `cancel_event: threading.Event` parameter on constructor and factory
+   - `translate_batch()` checks event between lines; early-exits with empty padding
+   - GUI translate step passes `_cancel_event` so Cancel button stops mock processing
+
+5. SPEED:
+   - No artificial delay (default `delay_per_chunk=0.0`)
+   - 1000 lines in < 100 ms without delay
+   - GUI table updates throttled to 150 ms minimum interval via `_schedule_table_update()`
+
 Factory Function:
-- `create_mock_translator(enable_flaws, intensity, seed, delay_per_chunk)`
+- `create_mock_translator(enable_flaws, intensity, seed, delay, context_type, cancel_event)`
   Convenience factory for creating configured MockTranslator instances.
 
 Integration:
 - Called from `api_client.py._mock_translate()` when `model == "mock"`
-- No external dependencies — uses only stdlib (random, re, time, logging)
+- GUI route in `gui/steps/translate.py._do_translation()` when model is "Mock Translation"
+- No external dependencies — uses only stdlib (random, re, time, logging, threading)
 
 Dependencies:
 - Standard library only (no third-party packages)
@@ -2764,6 +2790,7 @@ Classes:
 - ConditionalPromptManager: Pattern-triggered instruction injection.
 - RequestFormationConfig: 4+1 step formation settings (max_lines, min_lines, max_tokens, model, efficient_merge, rolling_context_between, rolling_context_after).
 - TranslationRequest: Request produced by `build_requests()` with `_merge_boundaries` and `is_merged` for Step 5 efficient merge.
+- `is_code_pattern_only(text, preserve_patterns)`: Returns True when text consists entirely of preserved code patterns (`<NUM>` wildcard → `\d+`); used as CODE_ONLY skip condition in both Estimation and Translation.
 
 Constructor:
 ```python
@@ -2884,7 +2911,7 @@ API VALIDATION (functions/validation.py) ✓ Enhanced Session 14+
 Purpose: Multi-layer validation of lines before and after API translation.
 
 Classes:
-- SkipReason: Enum for why a line is skipped (EMPTY, COMMENT, TAG, DEDUP_ONLY, etc.)
+- SkipReason: Enum for why a line is skipped (EMPTY, COMMENT, TAG, DEDUP_ONLY, PROT_ONLY, CODE_ONLY, NO_JAPANESE, ALREADY_TRANSLATED, SYMBOL_ONLY)
 - ValidationResult: Dataclass for single-line validation outcome
 - BatchValidationResult: Dataclass for batch processing results
 - PlaceholderValidationResult: Dataclass for placeholder preservation (NEW - TASK 4)
@@ -2897,6 +2924,7 @@ Key Features:
    - Skip empty lines, __COMMENT__-prefixed lines
    - Skip context marker lines (__DIALOGUE__, __MENU__, __CHOICE__, __FILE__)
    - Skip __DEDUP__ and __PROTECTED__ only lines
+   - Skip lines consisting entirely of preserved code patterns (CODE_ONLY)
    - Skip lines without Japanese characters
    - Skip already translated lines
    - Auto-translate symbol-only lines (normalize fullwidth → halfwidth)
@@ -3257,6 +3285,43 @@ Persistent Storage (user/rate_limits.json):
 Dependencies:
 - Standard: datetime, time, threading
 - Local: config (for settings)
+
+HEADER-BASED RATE LIMITER (functions/header_rate_limiter.py - Implemented)
+
+Purpose: Per-model rate limiting driven by API response headers. Reusable
+across providers with different URLs and header names.
+
+Classes:
+- `ProviderRateLimitConfig`: Configurable header names and defaults per provider
+- `ModelWindowState`: Runtime counters and reset timers for a single model
+- `HeaderBasedRateLimiter`: Thread-safe, per-model rate limit enforcement
+
+Pre-built configs:
+- `OPENAI_RATE_LIMIT_CONFIG` — x-ratelimit-limit-requests/tokens headers
+- `GEMINI_RATE_LIMIT_CONFIG` — same header names (Gemini-compatible)
+
+Flow:
+1. On startup: `_init_header_rate_limiter()` loads stored RPM/TPM from API.ini
+2. Before each request: `pre_request(model, estimated_tokens)` — blocks until capacity
+3. After each response: `update_from_headers(model, headers)` — reads reset timing
+4. Counters reset automatically when the monotonic reset instant elapses
+
+Token estimation formula:
+```
+estimated_tokens = sent_request_token_count + (input_line_token_count × 1.5)
+```
+
+Duration parser handles OpenAI reset header formats: "1s", "6m0s", "200ms", "1h2m3s"
+
+Dependencies:
+- Standard: threading, time, re, logging
+- Local: api_config (for stored limits)
+
+Integration:
+- `api_client.py._wait_for_rate_limit()` — primary enforcement (priority over sliding window)
+- `api_client.py._translate_chunk()` — uses `with_raw_response` to capture HTTP headers
+- `model_registry.py.refresh_models()` — calls `fetch_openai_model_limits()` after model update
+- `providers/openai_provider.py.send_request()` — returns headers in `ProviderResponse`
 
 SPEAKER QUOTE STRIPPER (functions/quote_stripper.py - Planned)
 
@@ -5818,3 +5883,135 @@ enabling §5.2 item 7b (context-type conditional prompt) injection.
 | `dev/test_concurrent_execution.py` | 23 | _process_single_chunk, _execute_string_sequential, ThreadPoolExecutor parallel, thread safety |
 | `dev/test_context_type_prompts.py` | 18 | get_context_prompt, build_full_system_prompt context_type, _translate_chunk flow |
 | **Total** | **133** | |
+
+## Phase 79 — Output Injection Standardization
+
+### Overview
+
+Adds explicit INJECTION output format with standardized parser handshake,
+fixes stale data in Output step, and corrects Same as Source directory
+resolution.
+
+### formats/parser_base.py Changes
+
+**`inject_to()` rewrite:** New signature `inject_to(self, source_path,
+output_path, lines, *, orig_lines=None) -> List[int]`. Default
+implementation follows 4-step Speaker:Dialogue-aware handshake:
+(0) Load source file into memory (respects `detect_encoding()`).
+(1) Extract keys via `self.extract_tagged()` (preferred) or `self.extract()`
+for search strings and per-line speaker metadata.
+(2) Speaker-aware replacement — lines with a non-empty speaker are split
+via `_split_speaker_dialogue()` (half-width `: ` or fullwidth `：`)
+into speaker and dialogue parts. Speaker name replaced only on first
+occurrence for consecutive same-speaker lines (`last_replaced_speaker`
+tracking). Dialogue text replaced separately. Lines without a speaker
+use plain `content.find(search)` find-and-replace. No-change positions
+(search == translated) are skipped. Failures (not found) appended to
+return list with logger warning.
+(3) Save to output_path (creates parent dirs).
+When `orig_lines` is provided, uses those as search strings instead of
+extracted keys. Returns `List[int]` of failed indices.
+
+**`_split_speaker_dialogue()` helper (NEW):** Module-level function that
+splits `"Speaker: dialogue"` into `(speaker, dialogue)` tuple using
+`_SPEAKER_DIALOGUE_RE` regex (half-width `: ` or fullwidth `：`).
+Returns `("", text)` when no separator found.
+
+### formats/LightVN.py Changes
+
+**`inject_to()` signature updated:** Accepts `*, orig_lines=None` kwarg
+(ignored — LightVN uses its own `_extract_all_keys()` / `_inject_all()`
+pipeline since extracted keys like "Speaker: dialogue" differ from raw
+file text). Returns `List[int]`. Internal logic unchanged.
+
+### gui/steps/output_inject.py Changes
+
+**`OutputFormat.INJECTION` enum:** New member `INJECTION = "injection"`.
+FORMAT_DESCRIPTIONS: "Parser injection (original format preserved)".
+FORMAT_EXTENSIONS: empty string (preserves original file extension).
+
+**`_get_same_as_source_dir()` fix:** Returns `mgr.get_original_dir().parent`
+instead of `mgr.get_original_dir()`. Fallback returns
+`source_path.parent.parent`. Output subfolders (e.g. `translated/`) now
+sit next to `Original/` rather than inside it.
+
+**`_write_file()` rewrite:** Routes to `_write_injection()` for INJECTION
+format. For generic formats, calls `_get_fresh_lines_for_file()` instead
+of stale `step_data["lines"]` cache.
+
+**`_get_fresh_lines_for_file(output_file) -> List[str]` (NEW):** Reads
+directly from manifest manager using filedir entry's `first_idx:last_idx+1`
+range. Calls `resolve_line_field()` per line. Falls back to
+`get_all_lines_resolved(mgr)` or legacy session data.
+
+**`_write_injection(output_file, output_path, mgr)` (NEW):** Implements
+standardized 4-step handshake:
+(0) Load `\Original` via `mgr.resolve_file_path(entry.rel_path)`.
+(1) Get parser from `ParserRegistry` by `entry.format`. Extract keys.
+(2) Sequential match — verify each extracted key matches manifest `orig`
+field. Resolve best text via `resolve_line_field()`. Mismatches preserve
+original text and log warnings.
+(3) Call `parser.inject_to(source, output, translated_lines,
+orig_lines=orig_lines)`. Report inject failures via logger.
+
+**`_build_file_list_from_filedir()`:** Updated `is_parser_format` check
+to include `is_injection = raw_fmt == OutputFormat.INJECTION.value`.
+INJECTION format preserves original file extension.
+
+### Tests
+
+| Test File | Count | Focus |
+|-----------|-------|-------|
+| `dev/test_output_injection.py` | 39 | Standardized inject_to (8), LightVN signature (2), fresh line reads (2), Same as Source dir (3), INJECTION format enum (4), write injection handshake (2), build file list (1), edge cases (3), _split_speaker_dialogue helper (4), Speaker:Dialogue injection (10) |
+
+---
+
+## Phase 80 — Manifest Overwrite Prevention
+
+### Problem
+
+Loading a manifest and then saving (via step change or close) silently overwrites stored `RequestOptions`, `Information` metadata, and step results (preprocessing maps, input paths, analysis results). Root causes:
+
+1. **`TranslationStep.__init__()`** fires `_populate_key_dropdown()` which calls `_on_key_changed()` → writes default `ApiKeyProvider`/`ApiKeyName` to manifest. The Model combobox's `trace_add("write")` fires on `.set()` during init, writing the first filtered model over the stored one.
+2. **`InformationStep._ensure_style_tone_text()`** unconditionally deletes text widget content, then only inserts replacement if the active `si_preset` exists in the INI. When the preset is missing, text is wiped. `_ensure_default_texts()` then detects empty fields and overwrites `si_preset` to "Default".
+3. **`PreprocessingStep._update_step_data()`**, **`InputStep._update_step_data()`**, and **`AnalysisStep.on_leave()`** create fresh dicts with only current config/counts, discarding all other stored keys when calling `set_step_data()`.
+
+### gui/steps/translate.py Changes
+
+**`_initializing` guard pattern:**
+- Flag set `True` before `super().__init__()`, `False` after `_build_ui()` completes.
+- `_populate_key_dropdown()` calls `_filter_models_by_provider()` directly during init (no `_on_key_changed()`, no manifest writes).
+- `_on_key_changed()` returns early when `_initializing` is `True`.
+- `bind_combobox_to_field` for Model and RequestMode uses a `manager_getter` lambda that returns `None` during init, suppressing the trace callback's save path.
+
+### gui/steps/information.py Changes
+
+**`_ensure_style_tone_text()` conditional delete:**
+- Each of the three sections (Style Instructions, Tone Instructions, System Instructions) now guards both `delete("1.0", "end")` and `insert("1.0", prompt_text)` inside `if prompt_text:`.
+- When the preset is missing from the INI (empty `prompt_text`), the existing widget text is preserved.
+
+### gui/steps/preprocess.py Changes
+
+**`_update_step_data()` merge pattern:**
+- Changed from `data = {"key": val, ...}` to `data = self.get_step_data()` followed by `data["key"] = val` for each updated key.
+- Preserves `dedup_map`, `aggr_dedup_map`, `aggr_numbers`, `ellipsis_counts`, `placeholder_captured`, `anchor_captured` when `_last_stats` is empty.
+
+### gui/steps/input_extract.py Changes
+
+**`_update_step_data()` merge pattern:**
+- Same change as preprocess.py. Starts from existing step data and merges config keys.
+- Preserves `manifest_path`, `suggested_project_name`, and other stored keys.
+
+### gui/steps/analysis.py Changes
+
+**`on_leave()` merge pattern:**
+- Changed from `self.set_step_data({"analysis_results": results})` to get existing data, update `analysis_results` key, then `set_step_data(merged)`.
+- Preserves all other analysis step keys.
+
+### Tests
+
+| Test File | Count | Focus |
+|-----------|-------|-------|
+| `dev/test_manifest_overwrite.py` | 14 | Preprocessing data preservation (2), Input data preservation (1), Analysis data preservation (1), RequestOptions preservation (3), Info metadata preservation (2), Manifest round-trip (3), Manifest comparison regression (2) |
+
+(End of technical.md)

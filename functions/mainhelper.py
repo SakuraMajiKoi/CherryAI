@@ -899,7 +899,17 @@ def load_app_state(config_file: Optional[Path] = None) -> Dict[str, Any]:
 
     The state is stored in the [ui] section under the `state` key as JSON.
     Returns an empty dict on any error.
+
+    Routes through ``ini_manager`` for cache coherence; the *config_file*
+    parameter is accepted for backward compatibility but ignored when
+    ``ini_manager`` is available.
     """
+    try:
+        from CherryAI.functions import ini_manager
+        return ini_manager.load_ui_state()
+    except Exception:
+        pass
+    # Legacy fallback — only reached if ini_manager cannot be imported.
     import configparser
 
     if config_file is None:
@@ -922,24 +932,44 @@ def load_app_state(config_file: Optional[Path] = None) -> Dict[str, Any]:
 def save_app_state(state: Dict[str, Any], config_file: Optional[Path] = None) -> None:
     """Save a JSON-serializable application state into the INI config.
 
-    Keeps other INI sections intact.
+    Routes through ``ini_manager`` which uses the shared in-memory cache
+    and atomic file writes, preventing accidental data loss.
+
+    The *config_file* parameter is accepted for backward compatibility but
+    ignored when ``ini_manager`` is available.
     """
+    try:
+        from CherryAI.functions import ini_manager
+        ini_manager.save_ui_state(state)
+        return
+    except Exception:
+        pass
+    # Legacy fallback — only reached if ini_manager cannot be imported.
     import configparser
 
     if config_file is None:
         config_file = _resolve_config_file()
     config = configparser.ConfigParser()
+    config.optionxform = str  # type: ignore[method-assign]
     if config_file.exists():
         try:
             config.read(config_file, encoding="utf-8")
         except Exception:
-            config = configparser.ConfigParser()
+            # Do NOT reset to empty — that would wipe the file.
+            logging.warning("Failed to read INI for UI state save; skipping.")
+            return
     if "ui" not in config:
         config["ui"] = {}
     try:
         config["ui"]["state"] = json.dumps(state, ensure_ascii=False)
-        with config_file.open("w", encoding="utf-8", newline="") as fh:
+        tmp_path = config_file.with_suffix(".tmp")
+        with tmp_path.open("w", encoding="utf-8") as fh:
             config.write(fh)
+            fh.flush()
+            import os
+            os.fsync(fh.fileno())
+        import os
+        os.replace(str(tmp_path), str(config_file))
     except Exception:
         # best-effort: ignore write failures
         return

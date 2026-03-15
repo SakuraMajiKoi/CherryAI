@@ -277,11 +277,12 @@ API LOG
 - **Live Updates**: Subscribes to the API log store for real-time display of new entries as API calls complete
 - **Category Filter**: Dropdown to filter by Main Translation, Term Translation, Gender Inference, or Other (probing/testing)
 - **View Mode Switch**: Radio buttons to toggle between Sent, Received, or Both views
+- **Display Limit Spinbox**: Toolbar spinbox controls how many lines each prompt/content block shows: All (default), 1000, 2500, 5000, or Nothing; this changes display only and does not alter stored log data
 - **Search Bar**: Case-insensitive text search across all entry fields with yellow highlights
 - **Color-Coded Headers**: Green (✔ success), Yellow (⚠ recovered), Red (✘ failed) status indicators
-- **Sent Block**: Displays model, provider, temperature, chunk info, full system prompt (not truncated), and user content
-- **Received Block**: Displays token statistics (prompt/completion/total/cached/reasoning), duration, finish reason, error messages, and response content
-- **Exact Request Copy**: API Log only stores copies of the actual sent/received data — it does not build its own requests. Line-by-line mode also includes the system prompt.
+- **Sent Block**: Displays model, provider, temperature, chunk info, full system prompt, and full user content from the structured log store
+- **Received Block**: Displays token statistics (prompt/completion/total/cached/reasoning), duration, finish reason, full error messages, and full response content from the structured log store
+- **Exact Request Copy**: API Log only stores copies of the actual sent/received data — it does not build its own requests. Main translation, line-by-line translation, term translation, gender inference, and model tests now hand their full prompt/content text to the structured log when available.
 - **Status Bar**: Shows entry count (filtered vs. total) and aggregated token totals
 - **Per-Project Persistence**: Log stored as `.api_log.jsonl` alongside the manifest file; referenced by manifest "log" key
 - **Infinite Scroll**: Text widget with word wrap supports unlimited entries
@@ -471,6 +472,8 @@ MANIFESTS
 - When translating the same file later, load the manifest to use the same rules
 - Tracks what was protected in each file
 - Helps with consistency
+- Data integrity: loading a manifest preserves all stored settings — API keys, models, preprocessing results, style/tone text, and step data are never silently overwritten by GUI initialization
+- Configuration persistence: all INI writes use atomic saves (temp file → fsync → rename) to prevent corruption; Global Options loads all settings sections from INI using the user defaults → factory defaults → fallback chain
 
 PROJECT FILE STAGING (v3.1)
 - Input/output decoupling via `filedir` field maps line index ranges to files
@@ -1047,7 +1050,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Total Input (bold) — content + prompt (what gets billed)
     - Output Tokens (est)
   - **Formation-based request counting**: Uses the same 4-step formation pipeline (prompt_builder.py) as Translation step for accurate request counting via `_estimate_via_formation()`
-  - **GlobalOptions sync**: Chunk size, max input tokens, and request slicing mode read from Global Options at estimation time
+  - **Per-model settings priority**: Chunk size, max input tokens, rolling context, and temperature are loaded from per-model API.ini `[model_settings]` via `_load_model_settings()` on first tab entry. Global Options values serve as fallback only. `_do_estimation()` reads `chunk_size` and `tokens_limit` from `_chunk_var`/`_tokens_var` (already set by per-model load). Only `request_slicing` is read from Global Options at estimation time (no per-model override exists).
   - Lines/Request spinbox range expanded to 1–99999 to match Model Settings
   - **Purely additive cost breakdown**: Cost Estimate panel shows four non-indented
     primary rows that sum to Total:
@@ -1134,6 +1137,9 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - `_apply_char_filters()` post-processes each chunk's translations
     - Hidden backward-compat variables for: chunk_size, retry, retries, cache, edit_before, skip_translated, skip_non_source, line_by_line, context_lines (no UI, synced from GlobalOptions)
     - `_sync_from_global_options()` applies GlobalOptions overrides including TranslationSettings (overwrite_translation, skip_non_source_language, retry_strategy, request_slicing)
+    - `_load_model_settings()` loads per-model API.ini settings (chunk_size, temperature, rolling_context_before/between/after, thinking) with Global Options fallback; called after `_sync_from_global_options()` on tab entry
+    - `_build_preview_requests()` syncs `_translation_options` from current UI before building chunks, ensuring Preview Requests respects current settings
+    - `_build_chunks()` reads rolling_context_between, rolling_context_after, and chunk_max_tokens from per-model API.ini via `get_model_settings()`, falling back to Global Options
     - **Edit Before Translation (Task 33.1):**
       - Toggle to enable pre-translation editing
       - Shows EditPreviewDialog modal when enabled
@@ -1411,12 +1417,13 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - TSV: Tab-separated values
     - JSON: JSON array of lines
     - XLSX: Excel spreadsheet
-    - Format descriptions and file extension mapping
+    - INJECTION: Parser injection (original format preserved) — uses standardized 4-step handshake via registered parser's `inject_to()`
+    - Format descriptions and file extension mapping (INJECTION uses empty extension — preserves original)
   - **Naming Strategy Panel (NamingStrategy enum):**
-    - SUFFIX: file_translated.txt (default)
+    - SUFFIX: file_translated.txt
     - PREFIX: translated_file.txt
     - REPLACE: Custom pattern replacement
-    - SUBFOLDER: output/file.txt
+    - SUBFOLDER: translated/file.txt (default)
     - Examples shown for each strategy
   - **Backup Strategy Panel (BackupStrategy enum):**
     - NONE: No backup, overwrite directly
@@ -1424,14 +1431,17 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - NUMBERED: file.txt.1.bak, file.txt.2.bak
     - EXTENSION: file.txt.bak
   - **Pair Mode Panel (PairMode enum):**
+    - CUSTOM: Format-specific pair/export behavior; mainly relevant to TXT/JSON-style paired output and otherwise uses the standard resolved export path
     - TRANSLATED_ONLY: Output translated text only
     - SIDE_BY_SIDE: Original and translated in columns
     - INTERLEAVED: Alternating original/translated lines
     - SEPARATE_FILES: Separate files for each
   - **Destination Browser:**
-    - Path entry with browse button
-    - Preserve structure option
-    - Overwrite existing files toggle
+    - Path entry default is `Same as Source`; the actual folder is resolved to the **parent** of the `Original/` directory so that output subfolders (e.g. `translated/`) sit next to `Original/` rather than inside it
+    - Preserve structure option defaults to on
+    - Overwrite existing files defaults to on
+    - Backup defaults to `timestamp` with backup extension `.bk`
+    - Format and Encoding defaults are seeded from the loaded Input metadata and persisted in manifest `OutputFormat`
   - **Export Options Panel:**
     - Export manifest checkbox
     - Export logs checkbox
@@ -1458,12 +1468,13 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - NAMING_EXAMPLES: Visual examples (input.txt → output.txt)
   - **Manifest Integration (Phase 28):**
     - OutputFormat nested structure with all output settings:
-      - PreserveFolderStructure (bool), Format (text), PairMode (text)
+      - Destination (text), PreserveFolderStructure (bool), Format (text), PairMode (text)
       - Encoding (text), FileNaming (text), TextOption (text)
       - OverwriteExistingFiles (bool), Backup (text), BackupExtension (text)
       - ExportManifestFile (bool), ExportProcessingLogs (bool), ExportGlossaryEntries (bool)
-    - All 12 options persist to manifest and load on step enter
-    - 45 tests in dev/test_output_manifest.py
+    - Input step seeds valid Output defaults into the manifest after files load so Step 9 always opens with resolved format/encoding and safe non-destructive defaults
+    - All 13 options persist to manifest and load on step enter
+    - 48 tests in dev/test_output_manifest.py
 - **Autosave System (Phase 29, Task 29.1):**
   - ManifestManager autosave with configurable interval
   - **Configuration (from INI [autosave] section):**
@@ -1743,13 +1754,14 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Manifest Metrics: set_step_metrics()/get_step_metrics() on ManifestManager for per-step metric storage with merge-update and deepcopy retrieval
     - Log Export: _export_logs() discovers {pname}.*.log step logs via glob pattern; copies to logs/ subfolder in export destination
 - **Request Formation 4-Step Process (Phase 49):**
-    - Data Model: LineInfo (index, text, is_invalid, tag), RequestFormationConfig (max_lines, min_lines, max_tokens, model), TranslationRequest (lines, line_indices, context_type, is_split, provides_context, receives_context)
+    - Data Model: LineInfo (index, text, is_invalid, tag), RequestFormationConfig (max_lines, min_lines, max_tokens, model, efficient_merge), TranslationRequest (lines, line_indices, context_type, is_split, provides_context, receives_context, _merge_boundaries)
     - build_requests(): Shared builder for Estimation and Translation ensuring cost estimates match actual usage
     - Step 1 — Menu/Choice Splitting: _step1_split_menu_choice() groups consecutive menu/choice-marked lines into dedicated requests with no rolling context
     - Step 2 — File Boundary Split: _step2_split_at_file_boundaries() splits at file_end markers; drops marker lines
     - Step 3 — Size Splitting & Balancing: _step3_split_and_balance() splits oversized groups; balances sub-groups evenly; respects both max_lines and max_tokens limits
     - Step 4 — Short Request Merging: _step4_merge_short_requests() merges below-minimum same-type requests up to max_lines; menu/choice never merged
-    - Invalid Line Exclusion: _extract_valid_lines() filters placeholders, dedup, context markers before formation
+    - Invalid Line Exclusion: _extract_valid_lines() filters placeholders, dedup, context markers, code-pattern-only lines before formation
+    - Code-Only Skip: Lines consisting entirely of preserved code patterns (action="preserve") are skipped; `is_code_pattern_only()` in prompt_builder.py; `<NUM>` wildcard matches concrete numbers
     - Document Order: Final requests sorted by first line index
 - **Context Markers Full Implementation (Phase 50):**
     - Data Model: LineEntry.tag field (Optional[str]: None, "file_end", "dialogue", "menu", "choice")
@@ -1793,6 +1805,14 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - _translate_chunk() now extracts context_type from _formation_ctx and passes it to _build_system_prompt_from_manifest()
     - Enables §5.2 item 7b injection: context-type prompt (Dialogue/Menu/Choice/Mixed) appears in system prompt
     - Previously context_type parameter was accepted but never supplied — prompts were always empty
+- **Output Injection Standardization (Phase 79):**
+    - INJECTION OutputFormat: New `OutputFormat.INJECTION` enum member for explicit parser-based injection; empty file extension (preserves original); FORMAT_DESCRIPTIONS entry "Parser injection (original format preserved)"
+    - Standardized inject_to Handshake: `parser_base.py` `inject_to(source, output, lines, *, orig_lines=None) → List[int]` default impl with Speaker:Dialogue awareness: (0) load source into memory, (1) extract keys via `extract_tagged()` (preferred) or `extract()` with speaker metadata, (2) split speaker/dialogue via `_split_speaker_dialogue()` and replace independently — speaker name only on first occurrence for consecutive same-speaker lines, dialogue replaced separately; plain find-replace for non-speaker lines, (3) save to output; returns failed indices
+    - Fresh Line Reads: `_get_fresh_lines_for_file()` reads directly from manifest manager using `resolve_line_field()` per line; ensures Full Table View edits are immediately reflected without restart (fixes stale `step_data["lines"]` cache)
+    - Same as Source Fix: `_get_same_as_source_dir()` now returns `mgr.get_original_dir().parent` so output subfolders (e.g. `translated/`) sit next to `Original/` rather than inside it
+    - Write Injection Handshake: `_write_injection()` implements the 4-step handshake: load `\Original`, extract keys, sequential match against manifest (verify orig == key, resolve via `resolve_line_field()`), call `parser.inject_to()` with `orig_lines`; mismatches preserve original text and log warnings
+    - LightVN Signature Update: `inject_to()` updated to accept `*, orig_lines=None` kwarg (ignored — LightVN uses own key extraction) and return `List[int]`; internal logic unchanged
+    - Build File List: `_build_file_list_from_filedir()` updated — INJECTION format preserves original file extension
 - **Speaker Duplicate Removal (Phase 51):**
     - Detection: detect_consecutive_speakers() identifies lines with same speaker as previous
     - Regex: _SPEAKER_PREFIX_RE handles half-width `:` and fullwidth `：` colons
@@ -2092,6 +2112,19 @@ RATE LIMIT MANAGEMENT (Implemented)
 - **Persistent Storage:**
   - user/rate_limits.json tracks usage
   - Survives application restarts
+- **Header-Based Rate Limiting (New):**
+  - Per-model runtime counters: `requests_in_window` and `tokens_in_window`
+  - Token estimation: `estimated_tokens = sent_request_token_count + (input_line_token_count × 1.5)`
+  - Reads `x-ratelimit-reset-requests` and `x-ratelimit-reset-tokens` from every API response
+  - Monotonic timer (immune to system clock changes) for reset timing
+  - Default 60-second reset window when headers are missing
+  - Waits instead of failing when limits would be exceeded
+  - Stored limits loaded from API.ini on startup for immediate enforcement
+  - Provider-agnostic: configurable header names for reuse with Gemini, Mistral, etc.
+- **Model Limits Fetch:**
+  - Fetches per-model rate limits from OpenAI `fine_tuning/model_limits` endpoint during Available Models Update
+  - Stores RPM and TPM per model in API.ini `[rate_limits]` section
+  - Falls back to response-header probing for models not covered by the endpoint
 
 ADAPTIVE CHUNK SIZING (Implemented)
 - Automatically adjust chunk size based on error rates
@@ -2305,7 +2338,7 @@ TYPING (Implemented)
 
 PARSER SCRIPTS (Implemented)
 - Game-engine-specific scripts that extend the format system with engine-aware logic
-- **Base interface** (`formats/parser_base.py`): `ParserScript` ABC with mandatory `name`, `extract`, `inject` methods
+- **Base interface** (`formats/parser_base.py`): `ParserScript` ABC with mandatory `name`, `extract`, `inject` methods and default `inject_to(source, output, lines, *, orig_lines=None) → List[int]` implementing standardized 4-step Speaker:Dialogue-aware surgical injection handshake (load original → extract keys via `extract_tagged()` with speaker metadata → split speaker/dialogue via `_split_speaker_dialogue()` and replace independently, speaker only on first occurrence for consecutive same-speaker lines → save; returns failed indices)
 - **Configuration dataclasses:** `WordwrapConfig`, `ForbiddenChars`, `TagRules`
 - **RPG Maker MV/MZ** (`formats/parser_rpgmaker.py`): Full implementations with wordwrap defaults, forbidden chars, context markers
 - **Parser Registry** (`formats/__init__.py`): `ParserRegistry` with register, get, detect, list_parsers
@@ -2339,7 +2372,7 @@ PIPELINE WIRING OF OPTIONAL COMPONENTS (Implemented — P3)
 - **O9 Pretty Wrap Hook:** `parser.pretty_wrap(text, width, break_char, max_lines)` replaces built-in `pretty_wrap` core algorithm while keeping speaker handling and pipeline logic intact; lighter alternative to O6, used for user-managed tags or as fallback
 - **O7 Forbidden Chars:** Serialises `forbidden_chars.to_dict()` to `Options.ParserForbiddenChars`; translation step calls `api_client.apply_parser_forbidden_chars()` to merge into logit bias
 - **O8 Tags:** Compiles `tag_rules`, applies regex patterns to extracted lines, writes `tag` tags; `detect_tags()` accepts optional `parser_rules` parameter to override built-in heuristics
-- **Output Injection:** Output step reads `Options.ParserName`, routes through `parser.inject()` instead of standard format-based writers
+- **Output Injection:** Output step detects parser format from `filedir[].format`, looks up the parser via `ParserRegistry`, slices per-file lines using `first_idx:last_idx+1`, and calls `parser.inject_to(source, output, lines)` for surgical injection that preserves script structure. Falls back to standard format writers when no parser matches.
 - **Manifest Options written:** `ParserName`, `ParserHandlesSpeakers`, `ParserHandlesWordwrap`, `ParserForbiddenChars` (dict), `ParserHandlesContextMarkers`
 
 LIGHT VN PARSER (Implemented)
@@ -2351,12 +2384,14 @@ LIGHT VN PARSER (Implemented)
 - **Conditional dialogue:** `~もし (condition)` prefix stripped from keys, preserved during injection
 - **Code handling:** Balanced bracket matching for `[] {} <> ［］ ｛｝ ＜＞ ⟨⟩ ⟪⟫ 〈〉 《》`
 - **Code recovery:** Restores accidentally translated code during injection
+- **Surgical injection:** `inject_to(source, output, lines, *, orig_lines=None) → List[int]` reads original, re-extracts keys, maps translations, and writes complete script with only translatable text replaced — overrides the standard speaker-aware handshake because extracted text is cleaned (\w markers stripped, " prefixes removed, multi-line joined) and does not appear verbatim in raw files; `orig_lines` parameter accepted for API compatibility but ignored internally
 - **Angle bracket safety:** Converts non-code `<>` to fullwidth `＜＞` during injection
 - **Custom wordwrap:** Balanced line wrapping with orphan avoidance, textbox splitting (O6)
 - **Pretty wrap hook:** O9 `pretty_wrap()` — lighter core-wrap replacement used by Step 7 for user-managed tags
 - **Tag-specific wrapping:** Dialogue=wrap (60 chars, 3 lines), menu/variable=no wrap
 - **Encoding detection:** Priority chain: utf-8, utf-8-sig, shift_jis, cp932, euc-jp, utf-16
-- **Auto-detection:** `can_handle()` scans first 200 lines for any of the `_DETECT_PATTERNS` set (`~【`, `~文字`, `~ボタン`, `~絵`, `~効果音`, `~選択`) or `_DETECT_LINE_PREFIXES` (`栞 `). Files like `chara_make.txt` that have non-dialogue LightVN commands (e.g. `~絵`) near the top are now correctly detected.
+- **Auto-detection:** `can_handle()` scans the file for any of the `_DETECT_PATTERNS` set (`~【`, `~文字`, `~ボタン`, `~絵`, `~効果音`, `~選択`) or `_DETECT_LINE_PREFIXES` (`栞 `), so files that only show characteristic LightVN commands later in the script are still detected.
+- **Input override behavior:** When Input format is left on `auto`, LightVN can provide both parser format and parser encoding. When the user explicitly selects `lightvn` while leaving Encoding on `auto`, the Input step now resolves encoding through `LightVNParser.detect_encoding()` before extraction so the parser's encoding still wins.
 - **Tag propagation:** Parser extraction tags (`dialogue`, `menu`, `variable`) from `extract_tagged()` are stored in `LoadedFile.tags` and written to the manifest `tag` field during loading. The O8 regex pass skips lines already tagged by the parser.
 - **Corpus verified:** 55604 total lines, 50212 unique across 1056 .txt files, 843 speakers
 
@@ -2505,7 +2540,13 @@ MOCK TRANSLATION — FLAW TESTING (Implemented)
 - Deterministic via seed-based `random.Random` for reproducible tests
 - Tests that Postprocessing recovery handles all failure modes correctly
 - No API key or network required
-- Test suite: `dev/test_mock_translation.py` (59 tests)
+- **Cancellation support**: `threading.Event`-based cooperative cancellation stops
+  mock translation mid-batch, returning partial results padded with empty strings
+- **Speed**: No artificial delay; 1000 lines in < 100 ms; UI table updates
+  throttled to prevent Tkinter event loop flooding during fast mock runs
+- **Graceful shutdown**: Cancel sets event + flag; in-flight API chunks finish
+  naturally before the background thread exits; no new work is submitted
+- Test suite: `dev/test_mock_translation.py` (70 tests)
 
 =============================================================================
 

@@ -47,6 +47,11 @@ from .logit_bias import (
 )
 from .request_cache import RequestCache, CacheConfig, CacheMode, parse_cache_mode_arg, create_request_cache
 from .rate_limiter import RateLimiter, RateLimiterConfig, create_rate_limiter
+from .header_rate_limiter import (
+    HeaderBasedRateLimiter,
+    OPENAI_RATE_LIMIT_CONFIG,
+    ProviderRateLimitConfig,
+)
 
 
 @dataclass
@@ -316,6 +321,9 @@ class APIClient:
         # Rate limiter (initialized lazily when needed)
         self._rate_limiter: Optional[RateLimiter] = None
 
+        # Header-based rate limiter (per-model, response-header driven)
+        self._header_rate_limiter: Optional[HeaderBasedRateLimiter] = None
+
         # Resolve provider from ProviderRegistry (V6 Provider Handshake)
         self._provider = None
         try:
@@ -349,6 +357,9 @@ class APIClient:
                 max_concurrent=self.config.max_concurrent,
                 safety_margin=self.config.rate_limit_margin,
             )
+
+        # Always initialise the header-based rate limiter with stored limits
+        self._init_header_rate_limiter()
 
     def _load_api_config(self) -> APIConfig:
         """Load configuration from CherryAI.ini."""
@@ -385,6 +396,37 @@ class APIClient:
             max_retries=0  # We handle retries manually
         )
         self.logger.info(f"API Client initialized for {self.config.provider} ({self.config.model})")
+
+    def _init_header_rate_limiter(self) -> None:
+        """Initialise the header-based rate limiter with stored limits.
+
+        Reads per-model RPM/TPM values from ``API.ini`` (via
+        :func:`functions.api_config.get_rate_limit`) and seeds the
+        limiter so enforcement starts immediately, before any response
+        headers are received.
+        """
+        self._header_rate_limiter = HeaderBasedRateLimiter(
+            OPENAI_RATE_LIMIT_CONFIG,
+        )
+        try:
+            from functions.api_config import get_rate_limit
+            limits = get_rate_limit(self.config.model)
+            if limits and (limits.get("rpm") or limits.get("tpm")):
+                self._header_rate_limiter.set_model_limits(
+                    self.config.model,
+                    rpm=limits.get("rpm", 0),
+                    tpm=limits.get("tpm", 0),
+                )
+                self.logger.info(
+                    "Header rate limiter: loaded %s limits (rpm=%d, tpm=%d)",
+                    self.config.model,
+                    limits.get("rpm", 0),
+                    limits.get("tpm", 0),
+                )
+        except Exception as exc:
+            self.logger.debug(
+                "Header rate limiter: no stored limits found: %s", exc,
+            )
     
     def apply_preset(self, preset_name: str) -> bool:
         """Apply an API preset to the client configuration.
@@ -976,14 +1018,25 @@ class APIClient:
 
     def _wait_for_rate_limit(self, estimated_tokens: int = 0) -> None:
         """Enforce rate limiting (requests per minute).
-        
-        Uses the advanced rate limiter if enabled, otherwise falls back to the
-        simple timestamp-based rate limiting.
-        
+
+        Priority order:
+        1. Header-based rate limiter (per-model, response-header driven).
+        2. Advanced sliding-window rate limiter (if enabled).
+        3. Simple timestamp-based fallback.
+
         Args:
-            estimated_tokens: Estimated tokens for the request (used by advanced rate limiter).
+            estimated_tokens: Estimated tokens for the request.
         """
-        # Use advanced rate limiter if enabled and available
+        # 1. Header-based rate limiter — always active when initialised
+        if self._header_rate_limiter is not None:
+            self._header_rate_limiter.pre_request(
+                self.config.model,
+                estimated_tokens,
+            )
+            # Do NOT return — still record in the old rate limiter (if present)
+            # so that capacity estimates remain accurate.
+
+        # 2. Advanced rate limiter (sliding window)
         if self._rate_limiter and self.config.rate_limit_enabled:
             result = self._rate_limiter.check_rate_limit(
                 model=self.config.model,
@@ -993,38 +1046,31 @@ class APIClient:
             if not result.allowed and result.wait_time > 0:
                 self.logger.info(f"Rate limit: waiting {result.wait_time:.1f}s ({result.reason})")
                 time.sleep(result.wait_time)
-                # Check again after waiting
                 result = self._rate_limiter.check_rate_limit(
                     model=self.config.model,
                     estimated_tokens=estimated_tokens,
                 )
             
-            if not result.allowed:
-                # Still not allowed after waiting - wait the suggested time again
-                if result.wait_time > 0:
-                    self.logger.warning(f"Rate limit denied: waiting {result.wait_time:.1f}s ({result.reason})")
-                    time.sleep(result.wait_time)
+            if not result.allowed and result.wait_time > 0:
+                self.logger.warning(f"Rate limit denied: waiting {result.wait_time:.1f}s ({result.reason})")
+                time.sleep(result.wait_time)
             
-            # Record the request (tokens will be updated after response)
             self._rate_limiter.record_request(
                 model=self.config.model,
                 input_tokens=estimated_tokens,
             )
             return
         
-        # Fallback: Simple timestamp-based rate limiting
+        # 3. Fallback: simple timestamp-based rate limiting
         now = time.time()
-        # Remove timestamps older than 1 minute
         self._request_timestamps = [t for t in self._request_timestamps if now - t < 60]
 
         if len(self._request_timestamps) >= self.config.rate_limit_requests:
-            # Calculate wait time
             oldest = self._request_timestamps[0]
-            wait_time = 60 - (now - oldest) + 1  # +1 buffer
+            wait_time = 60 - (now - oldest) + 1
             if wait_time > 0:
                 self.logger.info(f"Rate limit reached. Waiting {wait_time:.1f}s...")
                 time.sleep(wait_time)
-                # Clean up again after waiting
                 now = time.time()
                 self._request_timestamps = [t for t in self._request_timestamps if now - t < 60]
 
@@ -1844,7 +1890,7 @@ class APIClient:
                         provider=self.config.provider,
                         temperature=self.config.temperature,
                         system_prompt=system_prompt,
-                        user_content=user_content[:2000],
+                        user_content=user_content,
                         line_count=1,
                         extra={"mode": "line_by_line", "line_index": line_index},
                     )
@@ -1852,7 +1898,7 @@ class APIClient:
                     _ptd_lbl = getattr(_usage_lbl, "prompt_tokens_details", None) if _usage_lbl else None
                     _ctd_lbl = getattr(_usage_lbl, "completion_tokens_details", None) if _usage_lbl else None
                     recv_entry = LogEntryReceived(
-                        content=result[:2000],
+                        content=result,
                         prompt_tokens=_usage_lbl.prompt_tokens if _usage_lbl else 0,
                         completion_tokens=_usage_lbl.completion_tokens if _usage_lbl else 0,
                         total_tokens=getattr(_usage_lbl, "total_tokens", 0) if _usage_lbl else 0,
@@ -1887,12 +1933,16 @@ class APIClient:
                 LogCategory, LogStatus, LogEntrySent, LogEntryReceived,
             )
             sent_entry = LogEntrySent(
-                model=self.config.model, provider=self.config.provider,
+                model=self.config.model,
+                provider=self.config.provider,
+                temperature=self.config.temperature,
+                system_prompt=system_prompt,
+                user_content=user_content,
                 line_count=1,
                 extra={"mode": "line_by_line", "line_index": line_index},
             )
             recv_entry = LogEntryReceived(
-                error_message=str(last_error)[:500],
+                error_message=str(last_error) if last_error is not None else "",
             )
             self._api_log_store.log_pair(
                 LogCategory.MAIN_TRANSLATION, sent_entry, recv_entry,
@@ -1918,7 +1968,12 @@ class APIClient:
         last_error: Exception | None = None
         max_retries = max(self.config.retries, 5)
 
-        estimated_tokens = sum(len(line) // 4 + 1 for line in chunk)
+        # Token estimation per spec:
+        # estimated_tokens = sent_request_token_count + (input_line_token_count * 1.5)
+        input_line_tokens = sum(len(line) // 4 + 1 for line in chunk)
+        # Approximate system prompt tokens (sent_request overhead)
+        sent_request_tokens = input_line_tokens + 200  # ~200 tok for system prompt
+        estimated_tokens = int(sent_request_tokens + input_line_tokens * 1.5)
 
         while attempt < max_retries:
             try:
@@ -2079,7 +2134,18 @@ class APIClient:
                 raise TranslationError("API client not initialized")
             from typing import Any, cast
             client_any = cast(Any, self.client)
-            response = client_any.chat.completions.create(**api_params)
+            raw_resp = client_any.chat.completions.with_raw_response.create(
+                **api_params,
+            )
+            response = raw_resp.parse()
+            resp_headers = {
+                k.lower(): v for k, v in raw_resp.headers.items()
+            }
+            # Feed response headers into the header-based rate limiter
+            if self._header_rate_limiter is not None:
+                self._header_rate_limiter.update_from_headers(
+                    self.config.model, resp_headers,
+                )
         except TranslationError:
             raise
         except TranslationAbortError:
@@ -2140,7 +2206,7 @@ class APIClient:
                 provider=self.config.provider,
                 temperature=self.config.temperature,
                 system_prompt=final_system_prompt,
-                #user_content=user_content[:2000],
+                user_content=user_content,
                 chunk_index=self._chunk_counter,
                 total_chunks=self._initial_chunk_count,
                 line_count=len(chunk),
@@ -2149,7 +2215,7 @@ class APIClient:
             _ptd = getattr(_usage, "prompt_tokens_details", None) if _usage else None
             _ctd = getattr(_usage, "completion_tokens_details", None) if _usage else None
             recv_entry = LogEntryReceived(
-                #content=content[:2000],
+                content=content,
                 prompt_tokens=_usage.prompt_tokens if _usage else 0,
                 completion_tokens=_usage.completion_tokens if _usage else 0,
                 total_tokens=_usage.total_tokens if _usage else 0,

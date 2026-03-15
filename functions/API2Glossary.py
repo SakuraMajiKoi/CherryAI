@@ -867,11 +867,12 @@ def _call_api_for_excerpt_custom(
         store.log_pair(
             LogCategory.GENDER_INFERENCE,
             LogEntrySent(
-                model=model, user_content=user_prompt[:2000],
+                model=model,
+                user_content=user_prompt,
                 extra={"speaker": speaker},
             ),
             LogEntryReceived(
-                content=(content or "")[:2000],
+                content=content or "",
                 prompt_tokens=_usage.prompt_tokens if _usage else 0,
                 completion_tokens=_usage.completion_tokens if _usage else 0,
                 total_tokens=getattr(_usage, "total_tokens", 0) if _usage else 0,

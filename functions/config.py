@@ -12,6 +12,7 @@ from __future__ import annotations
 import configparser
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -406,6 +407,8 @@ def _merge_with_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
 def save_config(state: Dict[str, Any], config_file: Optional[Path] = None) -> None:
 	"""Save application configuration to an INI file.
 
+	Uses atomic write (temp file + rename) to prevent corruption.
+
 	Args:
 		state: Dictionary mapping section names to key-value pairs.
 		config_file: Path to INI config. If None, uses default resolved path.
@@ -414,13 +417,16 @@ def save_config(state: Dict[str, Any], config_file: Optional[Path] = None) -> No
 		config_file = _resolve_config_file()
 
 	config = configparser.ConfigParser()
+	config.optionxform = str  # type: ignore[method-assign]
 
 	# Load existing config to preserve other sections
 	try:
 		if config_file.exists():
 			config.read(config_file, encoding="utf-8")
 	except Exception:
-		pass  # start fresh if read fails
+		# Do NOT start fresh — that would wipe the file.
+		logging.warning("Failed to read config for save; aborting to prevent data loss.")
+		return
 
 	# Update with provided state
 	for section, items in state.items():
@@ -436,13 +442,21 @@ def save_config(state: Dict[str, Any], config_file: Optional[Path] = None) -> No
 			except Exception as exc:
 				logging.warning(f"Skipping config item {section}.{key}: {exc}")
 
-	# Write to file
+	# Write to file using atomic pattern
 	try:
 		config_file.parent.mkdir(parents=True, exist_ok=True)
-		with config_file.open("w", encoding="utf-8") as f:
+		tmp_file = config_file.with_suffix(".tmp")
+		with tmp_file.open("w", encoding="utf-8") as f:
 			config.write(f)
+			f.flush()
+			os.fsync(f.fileno())
+		os.replace(str(tmp_file), str(config_file))
 	except Exception as exc:
 		logging.error(f"Failed to save config to {config_file}: {exc}")
+		try:
+			tmp_file.unlink(missing_ok=True)
+		except Exception:
+			pass
 
 
 def get_config_file() -> Path:

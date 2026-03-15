@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import random
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -147,10 +148,12 @@ class MockTranslator:
         flaw_config: Optional[FlawConfig] = None,
         delay_per_chunk: float = 0.0,
         context_type: Optional[str] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> None:
         self.flaw_config = flaw_config or FlawConfig(enabled=False)
         self.delay_per_chunk = delay_per_chunk
         self.context_type: Optional[str] = context_type
+        self._cancel_event = cancel_event
         self._rng = random.Random(self.flaw_config.seed)
         self.flaw_report = FlawReport()
         logger.info(
@@ -188,6 +191,10 @@ class MockTranslator:
         results: List[str] = []
 
         for idx, line in enumerate(lines):
+            if self._cancel_event is not None and self._cancel_event.is_set():
+                logger.info("MockTranslator cancelled at line %d/%d", idx, len(lines))
+                results.extend([""] * (len(lines) - idx))
+                break
             translated = self._translate_line(line)
             if self.flaw_config.enabled and self._should_flaw_line():
                 translated = self._apply_flaws(translated, idx)
@@ -583,6 +590,7 @@ def create_mock_translator(
     flaw_line_ratio: float = 0.20,
     delay: float = 0.0,
     context_type: Optional[str] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> MockTranslator:
     """Factory function to create a configured MockTranslator.
 
@@ -594,6 +602,7 @@ def create_mock_translator(
         delay: Simulated delay per chunk in seconds.
         context_type: Optional content context hint (``dialogue``, ``menu``,
             ``choice``, ``unknown``).
+        cancel_event: Optional threading event to signal cancellation.
 
     Returns:
         A configured ``MockTranslator`` instance.
@@ -605,4 +614,9 @@ def create_mock_translator(
         flaw_line_ratio=flaw_line_ratio,
         seed=seed,
     )
-    return MockTranslator(flaw_config=config, delay_per_chunk=delay, context_type=context_type)
+    return MockTranslator(
+        flaw_config=config,
+        delay_per_chunk=delay,
+        context_type=context_type,
+        cancel_event=cancel_event,
+    )

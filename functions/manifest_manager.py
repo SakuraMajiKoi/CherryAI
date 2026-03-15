@@ -649,14 +649,15 @@ class ManifestManager:
             
             # === v3.0 Output Format ===
             "OutputFormat": {
+                "Destination": defaults.get("output_destination", "Same as Source"),
                 "PreserveFolderStructure": defaults.get("output_preserve_folder_structure", True),
                 "Format": "",  # Auto-detect from input
-                "PairMode": defaults.get("output_pair_mode", "translated_only"),
+                "PairMode": defaults.get("output_pair_mode", "custom"),
                 "Encoding": "",  # Auto-detect
                 "FileNaming": defaults.get("output_file_naming", "subfolder"),
                 "TextOption": defaults.get("output_text_option", "translated"),
-                "OverwriteExistingFiles": defaults.get("output_overwrite_existing_files", False),
-                "Backup": defaults.get("output_backup", "Timestamp"),
+                "OverwriteExistingFiles": defaults.get("output_overwrite_existing_files", True),
+                "Backup": defaults.get("output_backup", "timestamp"),
                 "BackupExtension": defaults.get("output_backup_extension", ".bk"),
                 "ExportManifestFile": defaults.get("output_export_manifest_file", False),
                 "ExportProcessingLogs": defaults.get("output_export_processing_logs", False),
@@ -735,12 +736,13 @@ class ManifestManager:
             "wordwrap_speaker_handling": "Sameline",
             "wordwrap_ignore_patterns": "Angle,Square,Curly,En",
             "wordwrap_typography": "Western",
+            "output_destination": "Same as Source",
             "output_preserve_folder_structure": True,
-            "output_pair_mode": "translated_only",
+            "output_pair_mode": "custom",
             "output_file_naming": "subfolder",
             "output_text_option": "translated",
-            "output_overwrite_existing_files": False,
-            "output_backup": "Timestamp",
+            "output_overwrite_existing_files": True,
+            "output_backup": "timestamp",
             "output_backup_extension": ".bk",
             "output_export_manifest_file": False,
             "output_export_processing_logs": False,
@@ -2778,6 +2780,7 @@ class ManifestManager:
         """Get output format options.
         
         Returns output configuration:
+        - Destination: Destination mode or path
         - PreserveFolderStructure: Keep folder structure
         - Format: Output format (auto-detect if empty)
         - PairMode: How to output pairs
@@ -2792,14 +2795,15 @@ class ManifestManager:
         - ExportGlossaryEntries: Export glossary
         """
         return deepcopy(self._manifest_data.get("OutputFormat", {
+            "Destination": "Same as Source",
             "PreserveFolderStructure": True,
             "Format": "",
-            "PairMode": "translated_only",
+            "PairMode": "custom",
             "Encoding": "",
             "FileNaming": "subfolder",
             "TextOption": "translated",
-            "OverwriteExistingFiles": False,
-            "Backup": "Timestamp",
+            "OverwriteExistingFiles": True,
+            "Backup": "timestamp",
             "BackupExtension": ".bk",
             "ExportManifestFile": False,
             "ExportProcessingLogs": False,

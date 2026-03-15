@@ -34,6 +34,7 @@ class SkipReason(Enum):
     TAG = "tag"
     DEDUP_ONLY = "dedup_only"
     PROT_ONLY = "prot_only"
+    CODE_ONLY = "code_only"
     NO_JAPANESE = "no_japanese"
     ALREADY_TRANSLATED = "already_translated"
     SYMBOL_ONLY = "symbol_only"
@@ -813,6 +814,7 @@ def validate_line_pre(
     existing_translation: Optional[str] = None,
     skip_comments: bool = True,
     skip_equals: bool = True,
+    preserve_patterns: Optional[List[str]] = None,
 ) -> ValidationResult:
     """Validate a line before sending to API.
     
@@ -832,10 +834,13 @@ def validate_line_pre(
     translation; if only non-source text remains, the line is skipped.
     
     Args:
-        line: The preprocessed line to validate
-        existing_translation: If the line already has a translation
-        skip_comments: Skip lines starting with __COMMENT__
-        skip_equals: Kept for API compatibility (no longer used)
+        line: The preprocessed line to validate.
+        existing_translation: If the line already has a translation.
+        skip_comments: Skip lines starting with __COMMENT__.
+        skip_equals: Kept for API compatibility (no longer used).
+        preserve_patterns: Code pattern strings with action ``"preserve"``
+            from the manifest.  When provided, lines consisting entirely
+            of these patterns are skipped (``CODE_ONLY``).
     
     Returns:
         ValidationResult with skip_reason or auto_translation if applicable
@@ -885,6 +890,15 @@ def validate_line_pre(
             is_valid=False,
             skip_reason=SkipReason.PROT_ONLY,
         )
+    
+    # 5c. Lines consisting entirely of preserved code patterns
+    if preserve_patterns:
+        from CherryAI.functions.prompt_builder import is_code_pattern_only
+        if is_code_pattern_only(stripped, preserve_patterns):
+            return ValidationResult(
+                is_valid=False,
+                skip_reason=SkipReason.CODE_ONLY,
+            )
     
     # 6. Already translated lines
     if existing_translation and existing_translation.strip():

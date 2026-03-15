@@ -229,6 +229,59 @@ def is_placeholder_only(text: str) -> bool:
     return not remaining.strip()
 
 
+def is_code_pattern_only(
+    text: str,
+    preserve_patterns: List[str],
+) -> bool:
+    """Return ``True`` when *text* consists entirely of preserved code patterns.
+
+    A line is "code-pattern-only" when, after removing every occurrence
+    of each pattern in *preserve_patterns* (and placeholder tokens and
+    whitespace/punctuation connectors), nothing translatable remains.
+
+    This is used as a skip condition: lines that are purely preserved
+    code patterns need not be sent to the LLM because the patterns are
+    kept verbatim.
+
+    ``<NUM>`` in a pattern is treated as a ``\\d+`` wildcard to match
+    concrete numeric instances (e.g. ``<文字色 <NUM>>`` matches
+    ``<文字色 255 50 50>``).
+
+    Args:
+        text: Line text (preprocessed or original).
+        preserve_patterns: Pattern strings from ``code_patterns`` entries
+            with ``action="preserve"``.
+
+    Returns:
+        ``True`` if the line is entirely composed of preserved code
+        patterns (and placeholders / non-translatable glue).
+    """
+    stripped = text.strip()
+    if not stripped:
+        return False
+    if not preserve_patterns:
+        return False
+
+    remaining = stripped
+    for pat in preserve_patterns:
+        if not pat:
+            continue
+        escaped = re.escape(pat)
+        # <NUM> → \d+ wildcard for numeric variants
+        escaped = escaped.replace(re.escape("<NUM>"), r"\d+")
+        try:
+            remaining = re.sub(escaped, "", remaining)
+        except re.error:
+            continue
+
+    # Also strip placeholders and non-translatable punctuation/whitespace
+    remaining = _PLACEHOLDER_TOKEN_RE.sub("", remaining)
+    # Remove common non-translatable connectors: whitespace, +, -, =,
+    # punctuation that wouldn't need translation on its own
+    remaining = re.sub(r"[\s+\-=:;,./\\|!?*#@&^~()\[\]{}<>]+", "", remaining)
+    return not remaining
+
+
 # =============================================================================
 # REQUEST FORMATION (4-STEP PROCESS) — Phase 49
 # =============================================================================

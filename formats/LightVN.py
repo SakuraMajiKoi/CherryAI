@@ -213,14 +213,44 @@ class LightVNParser(ParserScript):
         The translated file is written next to the original with a
         ``_translated`` suffix.
         """
+        out_path = file_path.with_stem(file_path.stem + "_translated")
+        self.inject_to(file_path, out_path, lines)
+
+    def inject_to(
+        self,
+        source_path: Path,
+        output_path: Path,
+        lines: List[str],
+        *,
+        orig_lines: Optional[List[str]] = None,
+    ) -> List[int]:
+        """Inject translated lines from *source_path*, writing to *output_path*.
+
+        Reads the original script, re-extracts translatable keys, maps
+        them to the provided *lines* in extraction order, surgically
+        replaces only the translatable text, and writes the complete
+        script to *output_path*.
+
+        Uses LightVN-specific injection (``_inject_all``) because
+        extracted keys (``Speaker: dialogue``) differ from raw file text.
+
+        Args:
+            source_path: Path to the original source file.
+            output_path: Path to write the injected output.
+            lines: Translated lines in extraction order.
+            orig_lines: Ignored — LightVN uses its own key extraction.
+
+        Returns:
+            List of indices that failed to match (empty on full success).
+        """
         self._reset_state()
-        enc = self._detect_encoding_raw(file_path)
+        enc = self._detect_encoding_raw(source_path)
         try:
-            with open(file_path, "r", encoding=enc) as fh:
+            with open(source_path, "r", encoding=enc) as fh:
                 original_content = fh.read()
         except Exception as exc:
             raise ParserError(
-                f"Failed to read {file_path}: {exc}",
+                f"Failed to read {source_path}: {exc}",
                 parser_name=self.name,
                 component="inject",
             ) from exc
@@ -229,21 +259,24 @@ class LightVNParser(ParserScript):
         # Extraction order matches: we re-extract to get the keys, then zip.
         keys = self._extract_all_keys(original_content)
         translations: Dict[str, str] = {}
-        for key, translated in zip(keys, lines):
+        failures: List[int] = []
+        for i, (key, translated) in enumerate(zip(keys, lines)):
             translations[key] = translated
 
         modified, _removals = self._inject_all(original_content, translations)
 
-        out_path = file_path.with_stem(file_path.stem + "_translated")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            with open(out_path, "w", encoding=enc) as fh:
+            with open(output_path, "w", encoding=enc) as fh:
                 fh.write(modified)
         except Exception as exc:
             raise ParserError(
-                f"Failed to write {out_path}: {exc}",
+                f"Failed to write {output_path}: {exc}",
                 parser_name=self.name,
                 component="inject",
             ) from exc
+
+        return failures
 
     # ======================================================================
     # O3 — Encoding detection

@@ -134,15 +134,27 @@ class OpenAIProvider(ProviderBase):
 
         try:
             from typing import cast
-            response = cast(Any, client).chat.completions.create(**params)
+            raw_response = cast(
+                Any, client,
+            ).chat.completions.with_raw_response.create(**params)
+            response = raw_response.parse()
+            resp_headers = {
+                k.lower(): v
+                for k, v in raw_response.headers.items()
+            }
         except Exception as exc:
             self._raise_provider_error(exc)
 
-        return self.parse_response(response)
+        return self.parse_response(response, headers=resp_headers)
 
     # ---- MP6: parse_response ----
 
-    def parse_response(self, raw_response: Any) -> ProviderResponse:
+    def parse_response(
+        self,
+        raw_response: Any,
+        *,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> ProviderResponse:
         """Extract content, usage, and finish_reason from an OpenAI response."""
         content = ""
         if raw_response.choices:
@@ -180,6 +192,7 @@ class OpenAIProvider(ProviderBase):
             usage=usage,
             finish_reason=finish_reason,
             raw=raw_response,
+            headers=headers or {},
         )
 
     # ---- MP2 / MP3: pricing ----

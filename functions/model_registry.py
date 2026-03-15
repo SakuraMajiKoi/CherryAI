@@ -1166,6 +1166,76 @@ def probe_openai_rate_limits(
     return None
 
 
+def fetch_openai_model_limits(
+    api_key: str,
+) -> Dict[str, Dict[str, int]]:
+    """Fetch per-model rate limits from the OpenAI model_limits endpoint.
+
+    Calls ``GET /v1/fine_tuning/model_limits`` and extracts RPM / TPM
+    values for each model returned.
+
+    The results are also persisted to ``API.ini`` via
+    :func:`functions.api_config.set_rate_limit`.
+
+    Args:
+        api_key: OpenAI API key.
+
+    Returns:
+        Dict mapping ``model_id → {"rpm": int, "tpm": int}``.
+        Empty dict on failure.
+    """
+    url = "https://api.openai.com/v1/fine_tuning/model_limits"
+    result: Dict[str, Dict[str, int]] = {}
+    try:
+        raw = _http_get(url, headers={"Authorization": f"Bearer {api_key}"})
+        data = json.loads(raw)
+    except Exception as exc:
+        logger.warning("fetch_openai_model_limits: request failed: %s", exc)
+        return result
+
+    items = data.get("data", [])
+    if not isinstance(items, list):
+        logger.warning("fetch_openai_model_limits: unexpected response shape")
+        return result
+
+    for item in items:
+        model_id = item.get("model", "")
+        if not model_id:
+            continue
+        limits = item.get("limits", item)
+        rpm = (
+            limits.get("max_requests_per_minute")
+            or limits.get("rpm")
+            or item.get("max_requests_per_minute")
+            or 0
+        )
+        tpm = (
+            limits.get("max_tokens_per_minute")
+            or limits.get("tpm")
+            or item.get("max_tokens_per_minute")
+            or 0
+        )
+        if rpm or tpm:
+            result[model_id] = {"rpm": int(rpm), "tpm": int(tpm)}
+
+    # Persist to API.ini
+    if result:
+        try:
+            from functions.api_config import set_rate_limit
+            for mid, lims in result.items():
+                set_rate_limit(mid, rpm=lims["rpm"], tpm=lims["tpm"])
+            logger.info(
+                "fetch_openai_model_limits: stored limits for %d models",
+                len(result),
+            )
+        except Exception as exc:
+            logger.warning(
+                "fetch_openai_model_limits: failed to persist: %s", exc,
+            )
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Provider-specific fetchers
 # ---------------------------------------------------------------------------
@@ -1554,6 +1624,17 @@ def refresh_models(
 
         save_to_ini(provider, models, path)
         result[provider] = models
+
+    # After saving all models, fetch rate limits from OpenAI model_limits
+    # endpoint and store them in API.ini.
+    openai_key = api_keys.get(PROVIDER_OPENAI, "").strip()
+    if openai_key and PROVIDER_OPENAI in providers:
+        try:
+            fetch_openai_model_limits(openai_key)
+        except Exception as exc:
+            logger.warning(
+                "refresh_models: fetch_openai_model_limits failed: %s", exc,
+            )
 
     return result
 

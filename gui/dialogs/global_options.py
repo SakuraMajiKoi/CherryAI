@@ -871,17 +871,121 @@ class GlobalOptions:
 
     @classmethod
     def load_from_ini(cls) -> "GlobalOptions":
-        """Load persisted Global Options values relevant to the Utility UI."""
+        """Load all persisted Global Options from ``CherryAI.ini``.
+
+        Uses ``get_effective_default`` (user_defaults → factory defaults →
+        fallback) so every field is correctly populated even before the user
+        has ever clicked Apply in Global Options.
+        """
         try:
             from CherryAI.functions import api_config, ini_manager
         except Exception:
             return cls()
 
+        def _str(section: str, key: str, fallback: str = "") -> str:
+            val = ini_manager.get_effective_default(section, key, fallback, str)
+            return str(val) if val is not None else fallback
+
+        def _int(section: str, key: str, fallback: int = 0) -> int:
+            val = ini_manager.get_effective_default(section, key, fallback, int)
+            try:
+                return int(val)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                return fallback
+
+        def _float(section: str, key: str, fallback: float = 0.0) -> float:
+            val = ini_manager.get_effective_default(section, key, fallback, float)
+            try:
+                return float(val)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                return fallback
+
+        def _bool(section: str, key: str, fallback: bool = False) -> bool:
+            val = ini_manager.get_effective_default(section, key, fallback, bool)
+            if isinstance(val, bool):
+                return val
+            if isinstance(val, str):
+                return val.lower() in ("true", "yes", "1", "on")
+            return fallback
+
+        # -- API settings (stored under "api" prefix) --
+        api = APISettings(
+            provider=_str("api", "provider", "openai"),
+            model=_str("api", "model", "gpt-4o-mini"),
+            temperature=_float("api", "temperature", 0.3),
+        )
+
+        # -- Request settings (also stored under "api" prefix) --
+        request = RequestSettings(
+            timeout=_int("api", "timeout", 60),
+            retries=_int("api", "retries", 3),
+            rate_limit=_int("api", "rate_limit_requests", 60),
+            chunk_size=_int("api", "chunk_size", 50),
+            max_input_tokens=_int("api", "max_input_tokens", 0),
+            thinking_enabled=_bool("api", "thinking_enabled", False),
+            thinking_budget=_int("api", "thinking_budget", 10000),
+            rolling_context_lines=_int("api", "rolling_context_lines", 3),
+            rolling_context_between=_int("api", "rolling_context_between", 0),
+            rolling_context_after=_int("api", "rolling_context_after", 0),
+            use_translated_context=_bool("api", "use_translated_context", True),
+            remove_duplicate_speakers=_bool("api", "remove_duplicate_speakers", False),
+            glossary_filter_mode=_str("api", "glossary_filter_mode", "all"),
+            consistency_mode=_str("api", "consistency_mode", "disabled"),
+        )
+
+        # -- Translation settings --
+        translation = TranslationSettings(
+            overwrite_translation=_bool("translation", "overwrite_translation", False),
+            skip_non_source_language=_bool("translation", "skip_non_source_language", True),
+            retry_strategy=_str("translation", "retry_strategy", "batch"),
+            request_slicing=_str("translation", "request_slicing", "conservative"),
+        )
+
+        # -- Caching settings --
+        caching = CachingSettings(
+            enabled=_bool("caching", "enabled", True),
+            dir=_str("caching", "dir", "Cache"),
+            age=_int("caching", "age", 0),
+            size=_int("caching", "size", 0),
+            mode=_str("caching", "mode", "strict"),
+        )
+
+        # -- Logging settings --
+        logging_s = LoggingSettings(
+            level=_str("log", "level", "Error"),
+            location=_str("log", "location", "log/"),
+            debug=_bool("log", "debug", False),
+            api_log=_bool("log", "api_log", True),
+            log_requests=_bool("log", "log_requests", False),
+        )
+
+        # -- Session settings --
+        session = SessionSettings(
+            autosave=_bool("session", "autosave", True),
+            interval=_int("session", "interval", 60),
+            theme=_str("session", "theme", "light"),
+            load_last=_bool("session", "load_last", True),
+        )
+
+        # -- Limit settings --
+        limit = LimitSettings(
+            banned=_str("limit", "banned", "\u2014, \u2013"),
+            output=_int("limit", "output", 4096),
+            warnings=_bool("limit", "warnings", True),
+            safe=_bool("limit", "safe", True),
+        )
+
+        # -- File I/O settings --
+        file_io = FileIOSettings(
+            encoding=_str("fileio", "encoding", "auto"),
+            lines=_str("fileio", "lines", "auto"),
+            preservebom=_bool("fileio", "preservebom", True),
+            backup=_bool("fileio", "backup", True),
+        )
+
+        # -- Utility settings (uses user_defaults + API.ini profiles) --
         utility = UtilitySettings.from_dict({
-            "term_translation_mode": (
-                ini_manager.get_user_default("utility", "term_translation_mode")
-                or "Romaji"
-            ),
+            "term_translation_mode": _str("utility", "term_translation_mode", "Romaji"),
             "term_api_key_provider": (
                 api_config.get_profile_setting("term_translation", "provider") or ""
             ),
@@ -891,12 +995,9 @@ class GlobalOptions:
             "term_model": (
                 api_config.get_profile_setting("term_translation", "model") or ""
             ),
-            "term_batch_size": (
-                ini_manager.get_user_default("utility", "term_batch_size") or 10
-            ),
-            "gender_inference_mode": (
-                ini_manager.get_user_default("utility", "gender_inference_mode")
-                or "Script only"
+            "term_batch_size": _int("utility", "term_batch_size", 10),
+            "gender_inference_mode": _str(
+                "utility", "gender_inference_mode", "Script only",
             ),
             "gender_api_key_provider": (
                 api_config.get_profile_setting("gender_inference", "provider") or ""
@@ -907,65 +1008,52 @@ class GlobalOptions:
             "gender_model": (
                 api_config.get_profile_setting("gender_inference", "model") or ""
             ),
-            "gender_script_minimum": (
-                ini_manager.get_user_default("utility", "gender_script_minimum") or 30
+            "gender_script_minimum": _int("utility", "gender_script_minimum", 30),
+            "gender_script_maximum": _int("utility", "gender_script_maximum", 50),
+            "gender_script_ignore_unknown": _bool(
+                "utility", "gender_script_ignore_unknown", True,
             ),
-            "gender_script_maximum": (
-                ini_manager.get_user_default("utility", "gender_script_maximum") or 50
+            "gender_script_do_all": _bool("utility", "gender_script_do_all", True),
+            "gender_llm_minimum": _int("utility", "gender_llm_minimum", 3),
+            "gender_llm_maximum": _int("utility", "gender_llm_maximum", 5),
+            "gender_llm_ignore_unknown": _bool(
+                "utility", "gender_llm_ignore_unknown", True,
             ),
-            "gender_script_ignore_unknown": (
-                ini_manager.get_user_default(
-                    "utility", "gender_script_ignore_unknown",
-                )
-                if ini_manager.get_user_default(
-                    "utility", "gender_script_ignore_unknown",
-                ) is not None
-                else True
-            ),
-            "gender_script_do_all": (
-                ini_manager.get_user_default("utility", "gender_script_do_all")
-                if ini_manager.get_user_default("utility", "gender_script_do_all") is not None
-                else True
-            ),
-            "gender_llm_minimum": (
-                ini_manager.get_user_default("utility", "gender_llm_minimum") or 3
-            ),
-            "gender_llm_maximum": (
-                ini_manager.get_user_default("utility", "gender_llm_maximum") or 5
-            ),
-            "gender_llm_ignore_unknown": (
-                ini_manager.get_user_default("utility", "gender_llm_ignore_unknown")
-                if ini_manager.get_user_default(
-                    "utility", "gender_llm_ignore_unknown",
-                ) is not None
-                else True
-            ),
-            "gender_llm_do_all": (
-                ini_manager.get_user_default("utility", "gender_llm_do_all")
-                if ini_manager.get_user_default("utility", "gender_llm_do_all") is not None
-                else False
-            ),
-            "speaker_threshold": (
-                ini_manager.get_user_default("utility", "speaker_threshold") or 10
-            ),
+            "gender_llm_do_all": _bool("utility", "gender_llm_do_all", False),
+            "speaker_threshold": _int("utility", "speaker_threshold", 10),
         })
 
+        # -- Prompts settings --
         prompts = PromptsSettings.from_dict({
             "term_glossary": (
-                ini_manager.get_user_default("prompts", "term_glossary")
-                or DEFAULT_TERM_GLOSSARY_PROMPT
+                _str("prompts", "term_glossary", "") or DEFAULT_TERM_GLOSSARY_PROMPT
             ),
             "term_code": (
-                ini_manager.get_user_default("prompts", "term_code")
-                or DEFAULT_TERM_CODE_PROMPT
+                _str("prompts", "term_code", "") or DEFAULT_TERM_CODE_PROMPT
             ),
             "gender_inference": (
-                ini_manager.get_user_default("prompts", "gender_inference")
-                or DEFAULT_GENDER_INFERENCE_PROMPT
+                _str("prompts", "gender_inference", "") or DEFAULT_GENDER_INFERENCE_PROMPT
             ),
+            "edit": _str("prompts", "edit", DEFAULT_EDIT_PROMPT),
+            "tlc": _str("prompts", "tlc", DEFAULT_TLC_PROMPT),
+            "dialogue": _str("prompts", "dialogue", DEFAULT_DIALOGUE_PROMPT),
+            "menu": _str("prompts", "menu", DEFAULT_MENU_PROMPT),
+            "choice": _str("prompts", "choice", DEFAULT_CHOICE_PROMPT),
+            "unknown": _str("prompts", "unknown", DEFAULT_UNKNOWN_PROMPT),
         })
 
-        return cls(utility=utility, prompts=prompts)
+        return cls(
+            api=api,
+            request=request,
+            translation=translation,
+            utility=utility,
+            caching=caching,
+            logging=logging_s,
+            session=session,
+            limit=limit,
+            file_io=file_io,
+            prompts=prompts,
+        )
 
     def get_model_list(self) -> List[str]:
         """Return list of available model names from providers (Task 43.6).

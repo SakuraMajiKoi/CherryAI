@@ -1479,11 +1479,16 @@ class TranslationStep(BaseStep):
         self._progress_window: Optional[TranslationProgressWindow] = None
         self._translation_thread: Optional[threading.Thread] = None
         self._cancel_requested = False
+        self._cancel_event = threading.Event()
         self._pause_requested = False
         self._api_client: Any = None
+        self._last_table_update: float = 0.0
         # TASK 26.2: Track manifest bindings for request options
         self._manifest_bindings: List[BindingInfo] = []
+        # Guard: suppress manifest writes during widget construction
+        self._initializing = True
         super().__init__(parent, session, manifest_manager=manifest_manager)
+        self._initializing = False
 
     def _build_ui(self) -> None:
         """Build the step UI."""
@@ -1650,12 +1655,15 @@ class TranslationStep(BaseStep):
         )
         self._model_combo.pack(side="right")
 
-        # Bind model to manifest
+        # Bind model to manifest (suppress saves during init via guard)
         self._manifest_bindings.append(
             bind_combobox_to_field(
                 combobox=self._model_combo,
                 var=self._model_var,
-                manager_getter=lambda: self.manifest_manager,
+                manager_getter=lambda: (
+                    None if getattr(self, "_initializing", False)
+                    else self.manifest_manager
+                ),
                 field_key="Model",
                 options=self.MODEL_OPTIONS,
                 default="gpt-4o-mini",
@@ -1681,12 +1689,15 @@ class TranslationStep(BaseStep):
             "<<ComboboxSelected>>", self._on_request_mode_changed,
         )
 
-        # Bind request mode to manifest
+        # Bind request mode to manifest (suppress saves during init)
         self._manifest_bindings.append(
             bind_combobox_to_field(
                 combobox=self._request_mode_combo,
                 var=self._request_mode_var,
-                manager_getter=lambda: self.manifest_manager,
+                manager_getter=lambda: (
+                    None if getattr(self, "_initializing", False)
+                    else self.manifest_manager
+                ),
                 field_key="RequestMode",
                 options=["Normal", "Batch", "Flex", "Priority"],
                 default="Normal",
@@ -2289,6 +2300,7 @@ class TranslationStep(BaseStep):
 
         # Reset state
         self._cancel_requested = False
+        self._cancel_event.clear()
         self._pause_requested = False
         self._translation_state = TranslationState.RUNNING
         self._abort_error: TranslationAbortError | None = None
@@ -2391,7 +2403,9 @@ class TranslationStep(BaseStep):
 
             if is_mock:
                 from CherryAI.functions.mock_translator import MockTranslator
-                self._mock_translator = MockTranslator(delay_per_chunk=0.1)
+                self._mock_translator = MockTranslator(
+                    cancel_event=self._cancel_event,
+                )
                 self._api_client = None
                 self._log_progress("Using Mock Translation (no API required)")
             else:
@@ -2661,11 +2675,12 @@ class TranslationStep(BaseStep):
             if (
                 not first_request_validated
                 and not self._cancel_requested
+                and not self._cancel_event.is_set()
                 and request_strings
             ):
                 # Abort — don't process remaining strings
                 pass
-            elif not self._cancel_requested and first_request_validated:
+            elif not self._cancel_requested and not self._cancel_event.is_set() and first_request_validated:
                 # ============================================================
                 # Execute remaining work concurrently
                 # ============================================================
@@ -2683,7 +2698,7 @@ class TranslationStep(BaseStep):
                 if max_concurrent <= 1 or len(work_items) <= 1:
                     # Sequential execution
                     for s_idx, string_chunks in work_items:
-                        if self._cancel_requested:
+                        if self._cancel_requested or self._cancel_event.is_set():
                             break
                         if hasattr(self, "_abort_error") and self._abort_error is not None:
                             break
@@ -2707,6 +2722,8 @@ class TranslationStep(BaseStep):
                     ) as executor:
                         futures: dict[Future, int] = {}
                         for s_idx, string_chunks in work_items:
+                            if self._cancel_event.is_set():
+                                break
                             local_buffer = (
                                 list(rolling_ctx_buffer) if s_idx == 0 else []
                             )
@@ -2723,7 +2740,8 @@ class TranslationStep(BaseStep):
                             )
                             futures[future] = s_idx
 
-                        # Wait for all strings to complete
+                        # Wait for all strings to complete; in-flight
+                        # requests finish gracefully before we exit.
                         for future in as_completed(futures):
                             try:
                                 future.result()
@@ -2732,8 +2750,9 @@ class TranslationStep(BaseStep):
                                 self._log_progress(
                                     f"ABORT: {abort_err.user_message}"
                                 )
-                                # Cancel remaining futures
+                                # Signal all threads to stop new work
                                 self._cancel_requested = True
+                                self._cancel_event.set()
                                 break
                             except Exception as exc:
                                 logger.exception(
@@ -2742,8 +2761,9 @@ class TranslationStep(BaseStep):
                                 )
 
             # Translation complete
-            if self._cancel_requested:
+            if self._cancel_requested or self._cancel_event.is_set():
                 self._translation_state = TranslationState.CANCELLED
+                self._log_progress("Translation cancelled by user.")
             elif hasattr(self, "_abort_error") and self._abort_error is not None:
                 self._translation_state = TranslationState.FAILED
                 self._log_progress("Translation aborted due to API error.")
@@ -2985,8 +3005,22 @@ class TranslationStep(BaseStep):
         try:
             from CherryAI.functions.prompt_builder import (
                 LineInfo, RequestFormationConfig, build_requests,
-                is_placeholder_only,
+                is_placeholder_only, is_code_pattern_only,
             )
+
+            # Collect preserve-action code patterns for CODE_ONLY skip
+            preserve_patterns: list[str] = []
+            mgr = self.manifest_manager
+            if mgr is not None and mgr.is_loaded:
+                code_pats = mgr._manifest_data.get("code_patterns", [])
+                if isinstance(code_pats, list):
+                    preserve_patterns = [
+                        str(p.get("pattern", ""))
+                        for p in code_pats
+                        if isinstance(p, dict)
+                        and p.get("action") == "preserve"
+                        and p.get("pattern")
+                    ]
 
             # Build LineInfo objects from TranslatableLine objects
             idx_to_line: dict[int, TranslatableLine] = {
@@ -3000,6 +3034,8 @@ class TranslationStep(BaseStep):
                 is_invalid = (
                     not text.strip()
                     or is_placeholder_only(text)
+                    or (preserve_patterns
+                        and is_code_pattern_only(text, preserve_patterns))
                 )
                 line_infos.append(LineInfo(
                     index=line.idx,
@@ -3034,27 +3070,59 @@ class TranslationStep(BaseStep):
             else:
                 min_lines = max(2, chunk_size // 5)
 
-            # Fetch rolling-context settings for Step 5 merge blocking
+            # Fetch rolling-context and max-token settings.
+            # Per-model API.ini settings take priority over Global Options.
             rc_between = 0
             rc_after = 0
-            go = getattr(self.session, "global_options", None)
-            if go is not None:
-                try:
-                    rc_between = int(go.request.rolling_context_between)
-                except (TypeError, ValueError, AttributeError):
-                    pass
-                try:
-                    rc_after = int(go.request.rolling_context_after)
-                except (TypeError, ValueError, AttributeError):
-                    pass
-
-            # Fetch max_input_tokens setting for token-based splitting
             max_input_tokens = 0
-            if go is not None:
+            model_id = self._translation_options.model
+            _model_saved: dict[str, str] = {}
+            try:
+                from CherryAI.functions.api_config import (
+                    get_model_settings as _get_ms,
+                )
+                _model_saved = _get_ms(model_id)
+            except ImportError:
+                pass
+
+            if "rolling_context_between" in _model_saved:
                 try:
-                    max_input_tokens = int(go.request.max_input_tokens)
-                except (TypeError, ValueError, AttributeError):
+                    rc_between = int(_model_saved["rolling_context_between"])
+                except (ValueError, TypeError):
                     pass
+            else:
+                go = getattr(self.session, "global_options", None)
+                if go is not None:
+                    try:
+                        rc_between = int(go.request.rolling_context_between)
+                    except (TypeError, ValueError, AttributeError):
+                        pass
+
+            if "rolling_context_after" in _model_saved:
+                try:
+                    rc_after = int(_model_saved["rolling_context_after"])
+                except (ValueError, TypeError):
+                    pass
+            else:
+                go = getattr(self.session, "global_options", None)
+                if go is not None:
+                    try:
+                        rc_after = int(go.request.rolling_context_after)
+                    except (TypeError, ValueError, AttributeError):
+                        pass
+
+            if "chunk_max_tokens" in _model_saved:
+                try:
+                    max_input_tokens = int(_model_saved["chunk_max_tokens"])
+                except (ValueError, TypeError):
+                    pass
+            else:
+                go = getattr(self.session, "global_options", None)
+                if go is not None:
+                    try:
+                        max_input_tokens = int(go.request.max_input_tokens)
+                    except (TypeError, ValueError, AttributeError):
+                        pass
 
             config = RequestFormationConfig(
                 max_lines=chunk_size,
@@ -3207,13 +3275,12 @@ class TranslationStep(BaseStep):
             ``"ok"`` on success, ``"abort"`` if a fatal error occurred,
             ``"cancel"`` if the user cancelled.
         """
-        if self._cancel_requested:
+        if self._cancel_requested or self._cancel_event.is_set():
             return "cancel"
 
         # Wait while paused
         while self._pause_requested:
-            time.sleep(0.1)
-            if self._cancel_requested:
+            if self._cancel_event.wait(timeout=0.1):
                 return "cancel"
 
         self._log_progress(
@@ -3224,7 +3291,7 @@ class TranslationStep(BaseStep):
         for line in chunk:
             line.status = LineStatus.TRANSLATING
             line.chunk_id = chunk_idx
-        self.after(0, self._update_lines_table)
+        self._schedule_table_update()
 
         # Build rolling context text for this chunk
         formation_ctx = (
@@ -3363,7 +3430,7 @@ class TranslationStep(BaseStep):
                 line.error_message = abort_err.user_message
                 with progress_lock:
                     self._progress.failed_lines += 1
-            self.after(0, self._update_lines_table)
+            self._schedule_table_update()
             self._abort_error = abort_err
             return "abort"
 
@@ -3375,7 +3442,7 @@ class TranslationStep(BaseStep):
 
         # Update progress
         self._update_progress_display()
-        self.after(0, self._update_lines_table)
+        self._schedule_table_update()
         return "ok"
 
     # ------------------------------------------------------------------
@@ -3488,7 +3555,7 @@ class TranslationStep(BaseStep):
         """
         total = len(all_chunks)
         for chunk in string_chunks:
-            if self._cancel_requested:
+            if self._cancel_requested or self._cancel_event.is_set():
                 break
             if hasattr(self, "_abort_error") and self._abort_error is not None:
                 break
@@ -3774,6 +3841,20 @@ class TranslationStep(BaseStep):
 
         self.after(0, lambda: self._progress_window.update_progress(self._progress) if self._progress_window else None)
 
+    def _schedule_table_update(self) -> None:
+        """Schedule a table update, throttled to avoid flooding the event loop.
+
+        During fast operations like mock translation, per-chunk UI
+        updates can overwhelm the Tkinter main loop and make the
+        Cancel button unresponsive.  This method limits updates to
+        at most once every 150 ms.
+        """
+        now = time.monotonic()
+        if now - self._last_table_update < 0.15:
+            return
+        self._last_table_update = now
+        self.after(0, self._update_lines_table)
+
     def _log_progress(self, message: str) -> None:
         """Log a message to the progress window.
 
@@ -3801,8 +3882,14 @@ class TranslationStep(BaseStep):
         self._log_progress("Translation resumed")
 
     def _on_cancel(self) -> None:
-        """Handle cancel request."""
+        """Handle cancel request.
+
+        Sets the cancel flag and event so the background thread stops
+        submitting new work.  Already in-flight API requests are allowed
+        to finish naturally (graceful shutdown).
+        """
         self._cancel_requested = True
+        self._cancel_event.set()
         self._translation_state = TranslationState.CANCELLED
         if self._progress_window:
             self._progress_window.set_state(TranslationState.CANCELLED)
@@ -4029,6 +4116,9 @@ class TranslationStep(BaseStep):
         # TASK 43.7/43.8/43.9: Override from Global Options when available
         self._sync_from_global_options()
 
+        # Per-model API.ini settings override Global Options
+        self._load_model_settings()
+
     def _sync_from_global_options(self) -> None:
         """Apply Global Options overrides for caching, thinking, context.
 
@@ -4068,6 +4158,73 @@ class TranslationStep(BaseStep):
             overwrite = getattr(tr, "overwrite_translation", False)
             self._skip_translated_var.set(not overwrite)
             self._edit_before_var.set(False)
+
+    def _load_model_settings(self) -> None:
+        """Load per-model settings from API.ini and apply to UI widgets.
+
+        Per-model settings (stored in ``[model_settings]`` of API.ini)
+        take priority over Global Options defaults.  Falls back to
+        Global Options when no per-model value is saved.
+        """
+        model_id = self._model_var.get()
+        if not model_id:
+            return
+
+        try:
+            from CherryAI.functions.api_config import get_model_settings
+        except ImportError:
+            return
+
+        saved = get_model_settings(model_id)
+        if not saved:
+            return
+
+        go = getattr(self.session, "global_options", None)
+        go_req = getattr(go, "request", None) if go else None
+
+        def _int(key: str, fallback: int) -> int:
+            if key in saved:
+                try:
+                    return int(saved[key])
+                except (ValueError, TypeError):
+                    pass
+            if go_req is not None:
+                return int(getattr(go_req, key, fallback))
+            return fallback
+
+        def _float(key: str, fallback: float) -> float:
+            if key in saved:
+                try:
+                    return float(saved[key])
+                except (ValueError, TypeError):
+                    pass
+            return fallback
+
+        # Chunk size
+        chunk = _int("chunk_size", 30)
+        if chunk >= 1:
+            self._chunk_var.set(chunk)
+
+        # Temperature
+        if "temperature" in saved:
+            temp = _float("temperature", 0.2)
+            self._temp_var.set(temp)
+
+        # Rolling context (Before)
+        rc_before = _int("rolling_context_before", 3)
+        self._context_lines_var.set(rc_before)
+
+        # Thinking
+        if "thinking_enabled" in saved:
+            self._thinking_var.set(
+                saved["thinking_enabled"].lower() in ("true", "1", "yes"),
+            )
+        if "thinking_budget" in saved:
+            self._thinking_budget_var.set(_int("thinking_budget", 10000))
+        if "reasoning_effort" in saved:
+            val = saved["reasoning_effort"]
+            if val in ("low", "medium", "high"):
+                self._reasoning_effort_var.set(val)
 
     def on_leave(self) -> None:
         """Called when leaving step."""
@@ -4175,8 +4332,11 @@ class TranslationStep(BaseStep):
             build_request_prompt,
         )
 
-        # Gather options from UI
+        # Gather options from UI — update _translation_options so
+        # _build_chunks() uses the current settings (chunk_size,
+        # request_slicing, etc.) instead of stale defaults.
         opts = self._get_options_from_ui()
+        self._translation_options = opts
 
         # Gather pending lines (same filtering as _do_translation)
         pending = [
@@ -4196,12 +4356,22 @@ class TranslationStep(BaseStep):
         # Chunk the lines the same way translation does
         chunks = self._build_chunks(pending)
 
-        # Rolling context setting (for preview hint)
-        go = getattr(self.session, "global_options", None)
+        # Rolling context setting (for preview hint).
+        # Per-model API.ini settings take priority over Global Options.
+        rolling_ctx_max = 3
         try:
-            rolling_ctx_max = int(go.request.rolling_context_lines) if go else 3
-        except (TypeError, ValueError, AttributeError):
-            rolling_ctx_max = 3
+            from CherryAI.functions.api_config import (
+                get_model_settings as _get_ms_preview,
+            )
+            _ms = _get_ms_preview(opts.model)
+            if "rolling_context_before" in _ms:
+                rolling_ctx_max = int(_ms["rolling_context_before"])
+            else:
+                go = getattr(self.session, "global_options", None)
+                if go is not None:
+                    rolling_ctx_max = int(go.request.rolling_context_lines)
+        except (ImportError, TypeError, ValueError, AttributeError):
+            pass
 
         # Gather all prompt data from manifest — single entry point
         # shared with costs and translation to guarantee identical
@@ -4409,6 +4579,31 @@ class TranslationStep(BaseStep):
             if cond_text and cond_text.strip():
                 chunk_conditional_block = cond_text.strip()
 
+            # Per-chunk merged-request instruction (slot 8b, Efficient only)
+            merge_instruction = ""
+            formation_ctx = getattr(chunk[0], "_formation_ctx", None) if chunk else None
+            if formation_ctx:
+                boundaries = formation_ctx.get("merge_boundaries", [])
+                if boundaries and len(boundaries) > 1:
+                    try:
+                        from CherryAI.functions.conditional_prompts import (
+                            build_merged_request_instruction,
+                        )
+                        merge_instruction = build_merged_request_instruction(
+                            boundaries,
+                        )
+                    except ImportError:
+                        pass
+            if merge_instruction:
+                if chunk_conditional_block:
+                    chunk_conditional_block += (
+                        "\n\n# Request Structure\n" + merge_instruction
+                    )
+                else:
+                    chunk_conditional_block = (
+                        "# Request Structure\n" + merge_instruction
+                    )
+
             # Build per-chunk full system prompt with selective filtering
             # Resolve context type from tags → filedir → fallback
             from CherryAI.functions.analysis import resolve_chunk_type
@@ -4422,6 +4617,7 @@ class TranslationStep(BaseStep):
                 prompt_data,
                 chunk_lines=filtered_lines,
                 context_type=resolved_type,
+                merge_instruction=merge_instruction,
             )
 
             # Rolling context preview — show actual orig lines for
@@ -4544,7 +4740,10 @@ class TranslationStep(BaseStep):
         # Auto-select the first key if available and nothing is set
         if display_values and not self._key_var.get():
             self._key_var.set(display_values[0])
-            self._on_key_changed()
+            # Only filter models; do not save to manifest during init
+            provider, _ = self._parse_key_selection()
+            if provider:
+                self._filter_models_by_provider(provider)
 
     def _parse_key_selection(self) -> tuple[str, str]:
         """Parse the Key combobox value into (provider, name).
@@ -4622,11 +4821,13 @@ class TranslationStep(BaseStep):
         if not provider:
             return
 
-        # Save key selection to manifest
-        mgr = self.manifest_manager
-        if mgr is not None and mgr.is_loaded:
-            save_nested_text_field(mgr, "RequestOptions", "ApiKeyProvider", provider)
-            save_nested_text_field(mgr, "RequestOptions", "ApiKeyName", name)
+        # Save key selection to manifest (skip during init to
+        # avoid overwriting project-specific saved keys).
+        if not getattr(self, "_initializing", False):
+            mgr = self.manifest_manager
+            if mgr is not None and mgr.is_loaded:
+                save_nested_text_field(mgr, "RequestOptions", "ApiKeyProvider", provider)
+                save_nested_text_field(mgr, "RequestOptions", "ApiKeyName", name)
 
         # Filter models to the selected provider
         self._filter_models_by_provider(provider)

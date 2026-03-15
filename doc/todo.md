@@ -28,7 +28,7 @@ TESTING REFERENCE
 
 For comprehensive test documentation, see `doc/tests.md`
 
-**Current Status:** 6315 tests passing (verified Q2 2026 via pytest)
+**Current Status:** 6329 tests passing (verified Q2 2026 via pytest)
 
 Two test types:
 - **Script Test**: pytest unit tests (fast, no LLM)
@@ -54,6 +54,216 @@ MODULE COUNTS (Verified January 2026)
 
 =============================================================================
 [Archived: Sessions 43–24 + Phase 62 → see doc/archived.md]
+
+### BUG FIX: Per-Model API.ini Settings Not Respected by Estimation & Preview
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Fix four interconnected bugs where Estimation (Step 4) and Preview Requests (Step 5) ignored per-model API.ini settings (chunk_size, chunk_max_tokens, rolling_context_before/between/after, temperature) and instead used Global Options defaults, causing request count mismatches between modes. "Efficient" request slicing appeared broken because Global Options unconditionally overrode per-model values, and "conservative" paradoxically produced fewer requests. Preview Requests always showed 2040 requests regardless of slicing mode.
+
+**Root Causes:**
+1. `_do_estimation()` in `costs.py` unconditionally overwrote per-model `chunk_size` and `max_input_tokens` with Global Options `go.request.chunk_size` / `go.request.max_input_tokens` on every estimation run, erasing values already loaded by `_load_model_settings()`.
+2. `_build_preview_requests()` in `translate.py` called `_build_chunks()` which read from `self._translation_options` — initialized to defaults in `__init__` (chunk_size=30, slicing="conservative") and only updated when `_start_translation()` ran, never during Preview.
+3. `_build_chunks()` in `translate.py` read `rolling_context_between`, `rolling_context_after`, and `max_input_tokens` from Global Options (`go.request.*`), ignoring per-model API.ini settings entirely.
+4. `TranslationStep` had no `_load_model_settings()` method (unlike `CostsStep`), so per-model API.ini settings (chunk_size, temperature, rolling_context, thinking) were never loaded into the UI on tab entry.
+
+**Changes:**
+1. **`gui/steps/costs.py`** — Removed the unconditional Global Options override block in `_do_estimation()` that replaced `chunk_size` and `tokens_limit` with `go.request.*` values. Per-model settings from `_load_model_settings()` (via `_chunk_var`/`_tokens_var`) now flow through correctly. Only `request_slicing` is still read from Global Options (no per-model override exists).
+2. **`gui/steps/translate.py`** — Added `_load_model_settings()` method that loads chunk_size, temperature, rolling_context_before/between/after, thinking settings from API.ini per-model `get_model_settings(model_id)` with Global Options fallback. Called from `_load_request_options_from_manifest()` after `_sync_from_global_options()`.
+3. **`gui/steps/translate.py`** — Fixed `_build_preview_requests()` to execute `self._translation_options = opts` after `opts = self._get_options_from_ui()`, ensuring `_build_chunks()` uses current UI values instead of stale `__init__` defaults.
+4. **`gui/steps/translate.py`** — Fixed `_build_chunks()` to read `rolling_context_between`, `rolling_context_after`, and `chunk_max_tokens` from per-model API.ini via `get_model_settings()`, falling back to Global Options when no per-model setting exists.
+5. **`gui/steps/translate.py`** — Fixed `_build_preview_requests()` rolling context "before" to read per-model `rolling_context_before` from API.ini, falling back to Global Options.
+
+**Settings Priority Chain (established):**
+Per-model API.ini `[model_settings]` → Global Options CherryAI.ini `[request]`/`[translation]` → dataclass defaults
+
+**Files Modified:**
+- `gui/steps/costs.py` — Removed Global Options override in `_do_estimation()`
+- `gui/steps/translate.py` — Added `_load_model_settings()`, fixed `_build_preview_requests()` stale options, fixed `_build_chunks()` per-model settings, fixed rolling context per-model
+
+**Tests:** `dev/test_request_slicing_settings.py` — 30 tests (TestEfficientAlwaysFewerRequests: 7, TestMinLinesCalculation: 2, TestStep5EfficientMerge: 5, TestConfigPropagation: 2, TestCostsEstimationNoOverride: 2, TestTranslateLoadModelSettings: 2, TestPreviewUpdatesOptions: 1, TestBuildChunksPerModelSettings: 4, TestPreviewRollingContextPerModel: 1, TestFormationPipelineRealWorld: 3, TestFormationStepsConsistency: 1). All passing, 0 regressions.
+
+---
+
+### BUG FIX: Request Slicing Estimation ↔ Translation Mismatch + CODE_ONLY Skip
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Fix three issues with Request Slicing: (1) `efficient` mode not respected during Estimation — Step 5 cross-file merge never ran in costs.py because `efficient_merge` was not passed to `RequestFormationConfig`, causing Estimation to produce more requests than Translation; (2) No skip condition for lines consisting entirely of preserved code patterns; (3) Preview Requests did not include the merged-request conditional prompt (slot 8b) for efficiently-merged requests.
+
+**Root Causes:**
+1. `_estimate_via_formation()` in `gui/steps/costs.py` created `RequestFormationConfig` without `efficient_merge=(slicing == "efficient")` — the field defaulted to `False`, so Step 5 never ran during estimation even when the user selected "efficient" mode.
+2. Lines consisting entirely of preserved code patterns (e.g. `{{主人公}}`, `<文字色 255 50 50>`, `</>`) were sent to the LLM unnecessarily because no skip condition existed for code-pattern-only lines.
+3. `_build_preview_requests()` in `gui/steps/translate.py` did not extract `merge_boundaries` from formation context or build/pass `merge_instruction` to the prompt builder.
+
+**Changes:**
+1. **`gui/steps/costs.py`** — Added `efficient_merge=(slicing == "efficient")` to `RequestFormationConfig` in `_estimate_via_formation()`. Added preserve-pattern collection from manifest `code_patterns` (action="preserve") and `is_code_pattern_only()` check in LineInfo construction. Added same pattern collection in `_get_skip_indices()` with `preserve_patterns` passed to `validate_line_pre()`.
+2. **`functions/prompt_builder.py`** — Added `is_code_pattern_only(text, preserve_patterns)` function: strips each preserve pattern (with `<NUM>` → `\d+` wildcard), placeholder tokens, and non-translatable punctuation; returns True when nothing remains.
+3. **`functions/validation.py`** — Added `SkipReason.CODE_ONLY` enum value. Added `preserve_patterns` optional parameter to `validate_line_pre()`. Added step 5c check after placeholder-only (step 5b): if preserve_patterns provided and line is code-pattern-only, return CODE_ONLY skip.
+4. **`gui/steps/translate.py`** — Added `is_code_pattern_only` import and preserve-pattern collection in `_build_chunks()`. Added `merge_boundaries` extraction and `build_merged_request_instruction()` call in `_build_preview_requests()` for slot 8b conditional prompt.
+
+**Files Modified:**
+- `gui/steps/costs.py` — efficient_merge flag, preserve_patterns collection, code-only skip in both `_get_skip_indices()` and `_estimate_via_formation()`
+- `gui/steps/translate.py` — code-only skip in `_build_chunks()`, merge_instruction in `_build_preview_requests()`
+- `functions/prompt_builder.py` — `is_code_pattern_only()` function
+- `functions/validation.py` — `SkipReason.CODE_ONLY`, `preserve_patterns` parameter in `validate_line_pre()`
+
+**Tests:** `dev/test_request_slicing_fix.py` — 50 tests (TestIsCodePatternOnly: 15, TestCodeOnlySkipReason: 2, TestValidateLinePreCodeOnly: 8, TestEfficientMergeParity: 5, TestMergeBoundaries: 2, TestMergedRequestInstruction: 3, TestCodePatternOnlyManifestPatterns: 8, TestRequestFormationConfigPropagation: 4, TestValidateLinePrePreservePatterns: 3). All passing, 0 regressions.
+
+---
+
+### BUG FIX: INI Persistence — Atomic Saves, GUI Mismatch, User Defaults
+**Priority:** CRITICAL | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Fix three interconnected bugs causing CherryAI.ini data loss and GUI settings mismatch: (1) INI file getting wiped to only `[ui] state = {}`, (2) `[user_defaults]` values only saved after clicking Apply in Global Options, (3) GUI showing wrong values despite INI having correct ones (e.g. `request_slicing = efficient` shown as `conservative`).
+
+**Root Causes:**
+1. `mainhelper.save_app_state()` created its own `ConfigParser` (without `optionxform = str`) and on read failure caught the exception, created an empty ConfigParser, and wrote only `[ui] state = {}` — wiping all other sections.
+2. `[user_defaults]` section was only written when Apply/OK was clicked in Global Options dialog. Before that, settings fell back to dataclass defaults.
+3. `GlobalOptions.load_from_ini()` only loaded `UtilitySettings` and `PromptsSettings` from the INI — all other settings sections (API, Request, Translation, Caching, Logging, Session, Limit, FileIO) used hardcoded dataclass defaults, ignoring INI values.
+
+**Changes:**
+1. **Atomic save in `_save_ini()`** — Rewritten to write to a `.tmp` file, `fsync`, then `os.replace()` to prevent corruption on interrupted writes.
+2. **`set_default()` and `clear_user_defaults()`** — Changed from raw `open()/write()` to route through `_save_ini()` for atomic saves.
+3. **Centralized UI state API** — Added `load_ui_state()` and `save_ui_state()` to `ini_manager.py`. These use the shared `_ini_cache` and atomic save, ensuring UI state writes never wipe other sections.
+4. **`mainhelper.save_app_state()` / `load_app_state()`** — Rewritten to delegate to `ini_manager.save_ui_state()` / `load_ui_state()` with a legacy fallback path that also preserves `optionxform = str` and aborts on read failure instead of resetting.
+5. **`config.py:save_config()`** — Made safe: set `optionxform = str`, abort on read failure instead of starting fresh, atomic write pattern.
+6. **Comprehensive `load_from_ini()`** — Rewritten `GlobalOptions.load_from_ini()` to load ALL 10 settings sections (API, Request, Translation, Caching, Logging, Session, Limit, FileIO, Utility, Prompts) using `get_effective_default()` with proper type conversion helpers.
+
+**Files Modified:**
+- `functions/ini_manager.py` — `_save_ini()` atomic rewrite, `set_default()` routing, `clear_user_defaults()` routing, new `load_ui_state()` and `save_ui_state()` functions
+- `functions/mainhelper.py` — `save_app_state()` and `load_app_state()` delegating to ini_manager
+- `functions/config.py` — `save_config()` safety fixes (optionxform, abort on failure, atomic write)
+- `gui/dialogs/global_options.py` — `load_from_ini()` comprehensive rewrite loading all settings sections
+
+**Tests:** `dev/test_ini_persistence.py` — 22 tests (TestAtomicSave: 3, TestSaveAppState: 3, TestSaveAppStateDoesNotWipeIni: 1, TestSetDefaultAtomic: 1, TestLoadFromIniComprehensive: 6, TestEffectiveDefaultPrecedence: 3, TestCasePreservation: 1, TestClearUserDefaults: 1, TestConcurrentSafety: 1, TestBooleanHandling: 2). Net result: 78 previously-failing tests fixed, 0 new regressions.
+
+---
+
+### REWORK: Mock Translation Cancellation & Speed
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 1 hour
+
+Goal: Make mock translation (and general translation) safely cancellable and remove artificial speed bottlenecks. The Cancel button was unresponsive during mock translation because (a) `MockTranslator` had no cancellation mechanism, (b) a `delay_per_chunk=0.1` added unnecessary latency, and (c) per-chunk UI table updates flooded the Tkinter event loop.
+
+**Changes:**
+1. **`functions/mock_translator.py`** — Added optional `cancel_event: threading.Event` parameter to `MockTranslator.__init__()` and `create_mock_translator()`. `translate_batch()` checks the event between lines; on cancellation it pads remaining output with empty strings and returns immediately. Default `delay_per_chunk` remains `0.0`.
+2. **`gui/steps/translate.py`** — Added `_cancel_event: threading.Event` to `TranslationStep`. `_on_cancel()` now sets both `_cancel_requested` flag and `_cancel_event`. Mock translator created with `cancel_event=self._cancel_event` and no delay. Concurrent executor checks event before submitting new work. `_process_single_chunk` and `_execute_string_sequential` check the event. Pause loop uses `cancel_event.wait(timeout=0.1)` instead of `time.sleep`. Added `_schedule_table_update()` that throttles UI refreshes to 150 ms intervals.
+
+**Graceful Shutdown Behaviour:**
+- Cancel sets event + flag → no new chunks submitted
+- In-flight API requests finish naturally (not killed)
+- Mock translator stops processing lines immediately
+- Background thread exits cleanly, `_on_translation_complete` runs on main thread
+
+**Tests:** `dev/test_mock_translation.py` — 11 new tests (TestCancellation: 8 tests, TestSpeed: 3 tests); total file now 70 tests.
+
+**Files Modified:**
+- `functions/mock_translator.py` — `cancel_event` parameter, early-exit in `translate_batch()`
+- `gui/steps/translate.py` — `_cancel_event`, `_schedule_table_update()`, cancel wiring
+- `dev/test_mock_translation.py` — 11 new tests (TestCancellation, TestSpeed)
+
+---
+
+### REWORK: Speaker:Dialogue-Aware Standard Injection
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 1 hour
+
+Goal: Rework the standard `inject_to()` handshake in `parser_base.py` to properly separate Speaker and Dialogue during surgical injection. The original implementation searched for the combined `"Speaker: dialogue"` string literally in the raw file content — but this synthetic key never exists verbatim because speaker and dialogue are separate entities in source files (e.g. `[Speaker]` on its own line, dialogue text on the next). Speaker:Dialogue separation is a core principle (§5.1).
+
+**Rules:**
+- The Speaker can have their own line that needs to be recorded.
+- The same Speaker line can apply to several Dialogue lines during extraction. For subsequent lines with the same speaker, the speaker replacement is skipped.
+- Both Speaker and Dialogue are separated and spaces respected (no leading/trailing spaces unless in the original).
+- The Speaker is replaced first (no leading/trailing spaces), the dialogue line after (no leading spaces unless intended).
+
+**Changes:**
+1. **`formats/parser_base.py`** — Added `_SPEAKER_DIALOGUE_RE` regex and `_split_speaker_dialogue(text)` module-level helper that splits `"Speaker: dialogue"` (half-width `: ` or fullwidth `：`) into `(speaker, dialogue)` tuple; returns `("", text)` when no separator found. Rewrote `inject_to()`: now uses `extract_tagged()` when available to get per-line speaker metadata via `ExtractedLine.speaker`. Lines with a speaker are split into speaker/dialogue parts and replaced independently. Speaker name replaced only on first occurrence for consecutive same-speaker lines (`last_replaced_speaker` tracking). Lines without a speaker use plain find-and-replace. Falls back to `extract()` with empty speaker list when `extract_tagged()` returns `None`.
+2. **`formats/LightVN.py`** — No changes. Override remains necessary because LightVN's raw file format strips `\w` markers, `"` prefixes, joins multi-line dialogue during extraction — cleaned text does not exist literally in the raw file, so standard `content.find()` can never match. LightVN keeps its engine-specific `_extract_all_keys()` / `_inject_all()` pipeline.
+
+**LightVN Universal Handshake Assessment:** LightVN cannot use the standard speaker-aware handshake because extraction fundamentally transforms text: (a) `\w` word-continuation markers removed, (b) `"` dialogue prefixes stripped, (c) multi-line continuations (`-"`) joined into single strings, (d) conditional `~もし` prefixes stripped. The extracted text is a cleaned composite that never appears verbatim in the raw file. For LightVN to use the universal handshake, extraction would need to return raw file text segments — which conflicts with the necessary cleaning that makes keys usable for translation. The current approach (parser-specific override) is the correct architecture.
+
+**Tests:** `dev/test_output_injection.py` — 14 new tests (4 `_split_speaker_dialogue` helper + 10 Speaker:Dialogue injection scenarios); total file now 39 tests.
+
+**Files Modified:**
+- `formats/parser_base.py` — `_SPEAKER_DIALOGUE_RE`, `_split_speaker_dialogue()`, `inject_to()` rewrite
+- `dev/test_output_injection.py` — 14 new tests (TestSplitSpeakerDialogue, TestSpeakerDialogueInjection)
+
+---
+
+### BUG FIX: Output Step Empty Files — Parser Surgical Injection via inject_to
+**Priority:** CRITICAL | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Fix Output step (Step 9) producing entirely empty files when exporting parser formats like LightVN. The root cause was that `_write_file()` looked up `Options.ParserName` (never set) instead of detecting the parser from `filedir[].format`. When no parser was found, the generic TXT writer dumped flat resolved text — destroying all non-translatable script structure. Added `inject_to(source, output, lines)` to the Parser Handshake for surgical injection that reads source files, replaces only translatable text, and writes complete scripts to the output path.
+
+**Changes:**
+1. **`formats/parser_base.py`** — Added `inject_to(source_path, output_path, lines)` to `ParserScript` ABC with a default implementation that calls `inject()` and moves the `_translated` file to the output path.
+2. **`formats/LightVN.py`** — Overrode `inject_to()` with surgical injection: reads original from source, re-extracts keys via `_extract_all_keys()`, builds translation dict by zipping with lines, calls `_inject_all()` for surgical replacement, writes complete modified script to output. `inject()` now delegates to `inject_to()`.
+3. **`gui/steps/output_inject.py`** — `_write_file()`: Detects parser format from `filedir[].format`, queries `ParserRegistry`, slices per-file lines using `first_idx:last_idx+1`, calls `parser.inject_to()`. Falls back to generic writer on failure. `_build_file_list_from_filedir()`: Preserves original file extension for parser formats instead of forcing format-mapped extension.
+
+**Tests:** `dev/test_parser_injection.py` — 16 tests covering inject_to surgical injection, base class default, Output step parser routing, per-file line slicing, extension preservation, and end-to-end regression (output must never be empty).
+
+**Files Modified:**
+- `formats/parser_base.py` — `inject_to()` default method
+- `formats/LightVN.py` — `inject_to()` override, `inject()` delegation
+- `gui/steps/output_inject.py` — `_write_file()` parser detection, `_build_file_list_from_filedir()` extension handling
+- `dev/test_parser_injection.py` — 16 new tests
+
+---
+
+### BUG FIX: Output Defaults Now Track Input + LightVN Auto Encoding Honors Forced Parser
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Ensure Step 9 Output always opens with valid defaults derived from Step 0 Input, make destination/state manifest-backed instead of UI-only, and ensure explicit parser selection such as LightVN still controls encoding when Encoding remains `auto`.
+
+**Root Causes:**
+1. Output defaults were split across INI defaults, manifest fallbacks, and widget initialization, so the tab could open with blank or stale settings.
+2. `OutputFormat.Destination` was not manifest-backed, so `Same as Source` could not be stored and restored cleanly.
+3. Step 0 detected encoding before resolving the effective parser format, so forced parser choices could bypass parser-specific `detect_encoding()`.
+4. Legacy defaults still used `translated_only`, overwrite off, and other values that did not match the current Output behavior requirements.
+
+**Changes:**
+1. **Manifest-backed Output defaults** — Added `OutputFormat.Destination` support and normalized fallback/default values in `functions/manifest_manager.py` and `functions/ini_manager.py`.
+2. **Runtime destination resolution** — `gui/steps/output_inject.py` now stores `Same as Source`, resolves it against the staged source directory at runtime, and uses the same helper for preview, browse, open-folder, and export.
+3. **Input-driven Format/Encoding seeding** — `gui/steps/input_extract.py` now seeds missing or invalid Output format/encoding defaults from the first loaded input file.
+4. **Forced parser + auto encoding fix** — Step 0 now resolves format before encoding so explicitly selected parsers like LightVN still provide encoding through `detect_encoding()` when Encoding is `auto`.
+5. **Regression coverage** — Updated Output/Input regression suites and added focused checks around manifest defaults and parser-driven encoding.
+
+**Files Modified:**
+- `functions/ini_manager.py` — normalized Output defaults (`Same as Source`, `custom`, overwrite on, `timestamp`, `.bk`)
+- `functions/manifest_manager.py` — added `OutputFormat.Destination` and matching Output fallback defaults
+- `gui/steps/output_inject.py` — manifest-backed destination binding, runtime destination resolution, input-aware default application, `custom` pair mode
+- `gui/steps/input_extract.py` — output-default sync from input metadata, parser-first auto-encoding flow
+- `dev/test_output_manifest.py` — updated/default regression expectations
+- `dev/test_output_phase47.py` — updated Output default coverage
+- `dev/test_input_step_phase39.py` — added input-to-output default sync coverage
+
+**Tests:** Focused pytest run passed: `dev/test_output_manifest.py`, `dev/test_output_phase47.py`, `dev/test_input_step_phase39.py`, `dev/test_lightvn_fixes.py` — 171 tests passing.
+
+### BUG FIX: API Log Window Full Content Rendering + Display Limit Control
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Restore full API Log Window content display after the failed truncation-removal attempt commented out the renderer loop, and make the viewer configurable without trimming stored log data.
+
+**Root Causes:**
+1. `APILogViewDialog._render_wrapped_content()` had its line-rendering loop commented out during a truncation-removal attempt, so prompt and response blocks lost all body text.
+2. Several structured log producers still sliced prompt/content fields with `[:2000]` before data reached `APILogStore`, so the viewer could never show the full request/response text even when the UI was fixed.
+3. Some failure-path structured log entries omitted prompt/user hand-off details, making the API Log inconsistent between success and failure cases.
+
+**Changes:**
+1. **Viewer rendering restored** — `gui/dialogs/api_log_view.py` now renders all stored lines by default again via `_render_wrapped_content()`.
+2. **Display-limit spinbox** — Added toolbar control with `All` (default), `1000`, `2500`, `5000`, and `Nothing`. The limit is viewer-only and is persisted in `user/CherryAI.ini` as `[log].api_log_display_limit`.
+3. **Full structured-log capture** — Removed structured-log `[:2000]` slicing from `functions/api_client.py`, `functions/api_config.py`, `functions/term_translation.py`, and `functions/API2Glossary.py` so full prompt/user/response bodies reach `APILogStore`.
+4. **Failure-path hand-off cleanup** — Line-by-line translation failures and term/model test failures now keep the available prompt/user context in the structured API log instead of logging only minimal metadata.
+5. **Regression coverage** — Added display-limit helper/rendering tests and source guards that prevent structured-log prompt/content truncation from being reintroduced.
+
+**Files Modified:**
+- `gui/dialogs/api_log_view.py` — restored content rendering, added display-limit spinbox + persisted setting
+- `functions/api_client.py` — removed structured-log content truncation, improved line-by-line failure hand-off
+- `functions/api_config.py` — removed structured-log prompt/content/error truncation in model + connection tests
+- `functions/term_translation.py` — removed structured-log truncation and logged full failure context
+- `functions/API2Glossary.py` — removed structured-log content truncation
+- `functions/ini_manager.py` — added `[log].api_log_display_limit = All` default
+- `dev/test_api_log.py` — +7 structured-log full-content guard tests
+- `dev/test_gui_dialogs.py` — +5 API Log display-limit tests
+
+**Tests:** Focused pytest run passed: `dev/test_api_log.py` (51), `dev/test_gui_dialogs.py` (26), `dev/test_bugfix_batch_79.py` (33) — 115 tests passing.
 
 ### BUG FIX: Bracket/Quote Balance Recovery Too Aggressive (Anchor-Relative Rewrite)
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
@@ -738,6 +948,51 @@ artificially limiting throughput.
 
 **Tests:** `dev/test_model_registry.py::TestRateLimitProbing` — 5 tests (all passing)
   `dev/test_model_registry.py::TestDerivedConcurrent` — 6 tests (all passing)
+
+---
+
+### FEATURE: Header-Based Rate Limiting with Response Headers
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 4 hours
+
+Goal: Implement per-model rate limiting driven by API response headers, with
+the following behaviours:
+1. Fetch model limits from `fine_tuning/model_limits` endpoint during Available Models Update
+2. Maintain per-model runtime counters (`requests_in_window`, `tokens_in_window`)
+3. Rate limit enforcement waits instead of failing
+4. Reset timing from `x-ratelimit-reset-requests` and `x-ratelimit-reset-tokens`
+   headers using monotonic timer (60s default)
+5. Per-model tracking that never exceeds RPM/TPM limits
+
+Token estimation: `estimated_tokens = sent_request_token_count + (input_line_token_count × 1.5)`
+
+**Solution:**
+- Created `functions/header_rate_limiter.py` — `HeaderBasedRateLimiter` class with
+  `ProviderRateLimitConfig` for provider-agnostic header names
+- `parse_reset_duration()` parses OpenAI duration strings ("6m0s", "1s", "200ms")
+- `pre_request()` blocks (sleeps) until capacity; `update_from_headers()` reads reset timing
+- Modified `providers/openai_provider.py` `send_request()` to use
+  `client.chat.completions.with_raw_response.create()` — captures HTTP headers
+- Added `headers: Dict[str, str]` field to `ProviderResponse` dataclass
+- Modified `functions/api_client.py` `_translate_chunk()` to use `with_raw_response`
+  and feed response headers into the header-based rate limiter
+- `_wait_for_rate_limit()` now uses header-based limiter as primary enforcement
+- Added `_init_header_rate_limiter()` to load stored RPM/TPM from API.ini on startup
+- Added `fetch_openai_model_limits()` to `model_registry.py` — calls
+  `GET /v1/fine_tuning/model_limits` and stores results via `api_config.set_rate_limit()`
+- `refresh_models()` now calls `fetch_openai_model_limits()` after saving models
+
+**Files Modified:**
+- `functions/header_rate_limiter.py` — NEW: per-model rate limiter module
+- `functions/api_client.py` — Integrated header-based limiter, `with_raw_response` API calls
+- `functions/model_registry.py` — Added `fetch_openai_model_limits()`, integrated into `refresh_models()`
+- `providers/__init__.py` — Added `headers` field to `ProviderResponse`
+- `providers/openai_provider.py` — `with_raw_response` in `send_request()`, headers in `parse_response()`
+
+**Tests:** `dev/test_header_rate_limiter.py` — 36 tests (all passing)
+  Classes: TestParseResetDuration (9), TestModelWindowState (1),
+  TestProviderRateLimitConfig (2), TestHeaderBasedRateLimiter (13),
+  TestThreadSafety (2), TestCustomProviderConfig (1), TestMonotonicTimer (1),
+  TestParseDurationEdgeCases (4)
 
 ---
 
@@ -1916,7 +2171,7 @@ Wired each optional component to its consuming pipeline step:
 - `gui/steps/analysis.py` — reads `ParserHandlesSpeakers`, skips generic speakers
 - `gui/steps/wordwrap_overwrite.py` — reads `ParserHandlesWordwrap`, delegates
   to `parser.wordwrap()` per line
-- `gui/steps/output_inject.py` — reads `ParserName`, routes through `parser.inject()`
+- `gui/steps/output_inject.py` — detects parser from `filedir[].format`, routes through `parser.inject_to()`
 - `gui/steps/translate.py` — reads `ParserName`, calls `apply_parser_forbidden_chars()`
 - `functions/analysis.py` — `detect_tags()` accepts `parser_rules` kwarg
 
@@ -3183,6 +3438,56 @@ Synthetic 200 speakers + 10K lines → under 2 seconds.
 **Tests:** `dev/test_gender_batch.py` — 31 tests (9 basic, 2 priority, 5 limits, 2 cancel,
 1 progress, 2 multi-speaker, 2 performance, 7 edge cases, 1 GUI integration). All 52 gender
 tests pass (31 new + 21 existing).
+
+---
+
+## ✅ Phase 79 — Output Injection Standardization (DONE)
+
+**Objective:** Fix stale data in Output step, correct Same as Source directory resolution, add explicit INJECTION output format with standardized parser handshake.
+
+**Changes:**
+
+1. **INJECTION OutputFormat** — New `OutputFormat.INJECTION` enum member; empty file extension (preserves original); FORMAT_DESCRIPTIONS: "Parser injection (original format preserved)". Explicit format choice in the Output Format dropdown.
+
+2. **Standardized inject_to Handshake** — `parser_base.py` `inject_to(source, output, lines, *, orig_lines=None) → List[int]`: (0) Load source, (1) Extract keys, (2) Sequential first-instance find-replace, (3) Save. Returns failed indices.
+
+3. **Fresh Line Reads** — `_get_fresh_lines_for_file()` reads directly from manifest manager via `resolve_line_field()`. Full Table View edits are immediately reflected without restart.
+
+4. **Same as Source Fix** — `_get_same_as_source_dir()` returns `mgr.get_original_dir().parent` so `translated/` sits next to `Original/`.
+
+5. **Write Injection Handshake** — `_write_injection()` 4-step handshake: load Original → extract keys → sequential match with orig verification → `parser.inject_to()`.
+
+6. **LightVN Signature Update** — `inject_to()` accepts `*, orig_lines=None` (ignored) and returns `List[int]`.
+
+**Files Modified:**
+- `formats/parser_base.py` — Rewrote `inject_to()` with standardized handshake
+- `formats/LightVN.py` — Updated `inject_to()` signature
+- `gui/steps/output_inject.py` — INJECTION enum, _get_fresh_lines_for_file(), _write_injection(), _get_same_as_source_dir() fix, _build_file_list_from_filedir() update
+
+**Tests:** `dev/test_output_injection.py` — 25 tests (8 standard inject_to, 2 LightVN signature, 2 fresh lines, 3 Same as Source, 4 INJECTION format, 2 write injection, 1 build file list, 3 edge cases). All 25 tests pass.
+
+---
+
+## ✅ Phase 80 — Manifest Overwrite Prevention (DONE)
+
+**Objective:** Fix manifest corruption where loading or closing a project silently overwrites stored settings and step results. Three root causes identified via manifest diff analysis; two additional similar patterns discovered via codebase audit.
+
+**Changes:**
+
+1. **RequestOptions Overwrite Guard** (`gui/steps/translate.py`) — Added `_initializing` flag set `True` before `super().__init__()` and `False` after. `_populate_key_dropdown()` no longer calls `_on_key_changed()` during init — instead calls `_filter_models_by_provider()` directly without writing to manifest. `_on_key_changed()` skips all manifest writes when `_initializing` is `True`. `bind_combobox_to_field` for Model and RequestMode returns `None` from `manager_getter` during init, suppressing trace-triggered saves. Prevents overwriting `ApiKeyProvider`, `ApiKeyName`, `Model`, and `RequestMode` with defaults on load.
+
+2. **Style/Tone/SI Text Preservation** (`gui/steps/information.py`) — `_ensure_style_tone_text()` now wraps both `delete` and `insert` inside `if prompt_text:` guard. Previously, text was unconditionally deleted then only conditionally inserted — when the active `si_preset` was missing from the INI file, user text was wiped. This also caused `_ensure_default_texts()` to detect empty fields and overwrite `si_preset` from "New Default" to "Default" with Output Examples.
+
+3. **Step Data Merge-Not-Replace** (`gui/steps/preprocess.py`, `gui/steps/input_extract.py`, `gui/steps/analysis.py`) — `_update_step_data()` and `on_leave()` now start from `self.get_step_data()` (existing manifest data) and merge updated keys, instead of creating fresh dicts that discard stored results. Prevents loss of `dedup_map`, `aggr_dedup_map`, `aggr_numbers`, `ellipsis_counts`, `placeholder_captured`, `anchor_captured` (preprocessing), `manifest_path`, `suggested_project_name` (input), and `analysis_results` (analysis).
+
+**Files Modified:**
+- `gui/steps/translate.py` — `_initializing` guard, init-safe `_populate_key_dropdown()`, guarded `_on_key_changed()`, conditional `manager_getter` for Model/RequestMode bindings
+- `gui/steps/information.py` — `_ensure_style_tone_text()` conditional delete+insert
+- `gui/steps/preprocess.py` — `_update_step_data()` merge pattern
+- `gui/steps/input_extract.py` — `_update_step_data()` merge pattern
+- `gui/steps/analysis.py` — `on_leave()` merge pattern
+
+**Tests:** `dev/test_manifest_overwrite.py` — 14 tests (TestPreprocessingDataPreservation: 2, TestInputDataPreservation: 1, TestAnalysisDataPreservation: 1, TestRequestOptionsPreservation: 3, TestInfoMetadataPreservation: 2, TestManifestRoundTrip: 3, TestManifestComparisonRegression: 2). All 14 tests pass.
 
 END OF ROADMAP
 =============================================================================

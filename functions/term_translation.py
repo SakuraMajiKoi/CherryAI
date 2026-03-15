@@ -532,8 +532,14 @@ def _translate_llm_batch(
             store = get_api_log_store()
             store.log_pair(
                 LogCategory.TERM_TRANSLATION,
-                LogEntrySent(model=model, provider=provider, user_content=user_content[:2000]),
-                LogEntryReceived(error_message=str(exc)[:500]),
+                LogEntrySent(
+                    model=model,
+                    provider=provider,
+                    system_prompt=system_prompt,
+                    user_content=user_content,
+                    line_count=len(terms),
+                ),
+                LogEntryReceived(error_message=str(exc)),
                 LogStatus.FAILED,
             )
         except Exception:
@@ -556,12 +562,12 @@ def _translate_llm_batch(
             LogCategory.TERM_TRANSLATION,
             LogEntrySent(
                 model=model, provider=provider,
-                system_prompt=system_prompt[:2000],
-                user_content=user_content[:2000],
+                system_prompt=system_prompt,
+                user_content=user_content,
                 line_count=len(terms),
             ),
             LogEntryReceived(
-                content=(content or "")[:2000],
+                content=content or "",
                 prompt_tokens=_usage.prompt_tokens if _usage else 0,
                 completion_tokens=_usage.completion_tokens if _usage else 0,
                 total_tokens=getattr(_usage, "total_tokens", 0) if _usage else 0,

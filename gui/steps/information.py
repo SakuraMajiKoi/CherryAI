@@ -5585,33 +5585,34 @@ class InformationStep(BaseStep):
         """Populate style, tone, and SI text fields with the selected preset.
 
         Called from ``on_enter`` after manifest bindings are loaded.
-        For named (non-Custom) presets the text field is **always** overwritten
-        with the current INI value so the user sees up-to-date preset content
-        even when the manifest or session state stored a different string.
+        For named (non-Custom) presets the text field is overwritten with
+        the current INI value so the user sees up-to-date preset content.
+        If the preset is not found in INI, the existing manifest text is
+        preserved to avoid silently wiping user data.
         Custom presets are not touched — the user's typed text is preserved.
         """
         # Style
         name = self._style_preset_var.get()
         if name and name != CUSTOM_PRESET_NAME:
             prompt_text = ini_manager.get_all_presets("style").get(name, "")
-            self._style_text.delete("1.0", "end")
             if prompt_text:
+                self._style_text.delete("1.0", "end")
                 self._style_text.insert("1.0", prompt_text)
 
         # Tone
         name = self._tone_preset_var.get()
         if name and name != CUSTOM_PRESET_NAME:
             prompt_text = ini_manager.get_all_presets("tone").get(name, "")
-            self._tone_text.delete("1.0", "end")
             if prompt_text:
+                self._tone_text.delete("1.0", "end")
                 self._tone_text.insert("1.0", prompt_text)
 
         # System Instructions
         si_name = self._si_preset_var.get()
         if si_name and si_name != CUSTOM_PRESET_NAME:
             prompt_text = ini_manager.get_si_preset(si_name) or ""
-            self._notes_text.delete("1.0", "end")
             if prompt_text:
+                self._notes_text.delete("1.0", "end")
                 self._notes_text.insert("1.0", prompt_text)
 
     def _ensure_default_texts(self) -> None:

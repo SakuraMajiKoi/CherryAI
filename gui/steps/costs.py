@@ -1483,6 +1483,20 @@ class CostsStep(BaseStep):
                         ml.get("tl", "") for ml in manifest_lines
                     ]
 
+        # Collect preserve-action code patterns for CODE_ONLY skip
+        preserve_patterns: List[str] = []
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            code_pats = mgr._manifest_data.get("code_patterns", [])
+            if isinstance(code_pats, list):
+                preserve_patterns = [
+                    str(p.get("pattern", ""))
+                    for p in code_pats
+                    if isinstance(p, dict)
+                    and p.get("action") == "preserve"
+                    and p.get("pattern")
+                ]
+
         skip: set[int] = set()
         for i, line in enumerate(lines):
             existing = (
@@ -1493,6 +1507,7 @@ class CostsStep(BaseStep):
             vr = validate_line_pre(
                 line,
                 existing_translation=existing,
+                preserve_patterns=preserve_patterns,
             )
 
             if vr.is_valid:
@@ -1584,30 +1599,12 @@ class CostsStep(BaseStep):
             # Step 0: Preparing lines
             self._report_progress(0)
 
-            # Sync chunk_size from Global Options if available
+            # Per-model API.ini settings (loaded by _load_model_settings
+            # on first enter) take priority.  chunk_size and tokens_limit
+            # already reflect the per-model values via _chunk_var /
+            # _tokens_var.  Only read Global Options for request_slicing
+            # which has no per-model override.
             go = getattr(self.session, "global_options", None)
-            if go is not None and hasattr(go, "request"):
-                try:
-                    go_chunk = int(go.request.chunk_size)
-                    if go_chunk >= 1:
-                        chunk_size = go_chunk
-                        self.after(
-                            0,
-                            lambda v=go_chunk: self._chunk_var.set(v),
-                        )
-                except (TypeError, ValueError, AttributeError):
-                    pass
-                # Sync max_input_tokens from Global Options
-                try:
-                    go_tokens = int(go.request.max_input_tokens)
-                    if go_tokens >= 0:
-                        tokens_limit = go_tokens
-                        self.after(
-                            0,
-                            lambda v=go_tokens: self._tokens_var.set(v),
-                        )
-                except (TypeError, ValueError, AttributeError):
-                    pass
 
             # Read request slicing mode from Global Options
             slicing = "conservative"
@@ -1928,18 +1925,34 @@ class CostsStep(BaseStep):
         try:
             from CherryAI.functions.prompt_builder import (
                 LineInfo, RequestFormationConfig, build_requests,
-                is_placeholder_only,
+                is_placeholder_only, is_code_pattern_only,
             )
         except ImportError:
             return None
 
         _skip = skip_indices or frozenset()
 
+        # Collect preserve-action code patterns for CODE_ONLY skip
+        preserve_patterns: list[str] = []
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            code_pats = mgr._manifest_data.get("code_patterns", [])
+            if isinstance(code_pats, list):
+                preserve_patterns = [
+                    str(p.get("pattern", ""))
+                    for p in code_pats
+                    if isinstance(p, dict)
+                    and p.get("action") == "preserve"
+                    and p.get("pattern")
+                ]
+
         line_infos: list[LineInfo] = []
         for idx, text in enumerate(lines):
             is_invalid = (
                 not text.strip()
                 or is_placeholder_only(text)
+                or (preserve_patterns
+                    and is_code_pattern_only(text, preserve_patterns))
                 or idx in _skip
             )
             line_infos.append(LineInfo(index=idx, text=text, is_invalid=is_invalid))
@@ -1971,6 +1984,7 @@ class CostsStep(BaseStep):
             max_lines=chunk_size,
             min_lines=min_lines,
             max_tokens=max_input_tokens,
+            efficient_merge=(slicing == "efficient"),
             rolling_context_between=self._rc_between_var.get(),
             rolling_context_after=self._rc_after_var.get(),
         )

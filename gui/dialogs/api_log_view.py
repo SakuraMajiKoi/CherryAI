@@ -19,6 +19,7 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Any, Dict, List, Optional
 
+from CherryAI.functions import ini_manager
 from CherryAI.functions.api_log import (
     LogCategory,
     LogEntry,
@@ -58,6 +59,28 @@ CATEGORY_LABELS: Dict[str, str] = {
 }
 
 VIEW_MODES = ["Both", "Sent", "Received"]
+DISPLAY_LIMIT_OPTIONS = ("All", "1000", "2500", "5000", "Nothing")
+_DISPLAY_LIMIT_KEY = "api_log_display_limit"
+
+
+def normalize_api_log_display_limit(value: str) -> str:
+    """Return the canonical display-limit label used by the dialog."""
+    normalized = (value or "").strip().lower()
+    if normalized == "nothing":
+        return "Nothing"
+    if normalized in {"1000", "2500", "5000"}:
+        return normalized
+    return "All"
+
+
+def parse_api_log_display_limit(value: str) -> Optional[int]:
+    """Convert a display-limit label into a per-block line limit."""
+    canonical = normalize_api_log_display_limit(value)
+    if canonical == "All":
+        return None
+    if canonical == "Nothing":
+        return 0
+    return int(canonical)
 
 
 class APILogViewDialog(tk.Toplevel):
@@ -108,6 +131,12 @@ class APILogViewDialog(tk.Toplevel):
         self._category_filter: Optional[str] = None  # None = all
         self._view_mode: str = "Both"
         self._search_text: str = ""
+        self._display_limit_label = normalize_api_log_display_limit(
+            str(ini_manager.get_log_setting(_DISPLAY_LIMIT_KEY, "All") or "All"),
+        )
+        self._content_display_limit = parse_api_log_display_limit(
+            self._display_limit_label,
+        )
 
         # Rendered entry count (for incremental rendering)
         self._rendered_count = 0
@@ -203,6 +232,23 @@ class APILogViewDialog(tk.Toplevel):
                 command=self._on_view_mode_changed,
             )
             rb.pack(side="left", padx=(0, 4))
+
+        tk.Label(
+            toolbar, text="Display:", bg=COLOR_PANEL, fg=COLOR_TEXT,
+            font=("Segoe UI", 9),
+        ).pack(side="left", padx=(8, 4))
+
+        self._display_limit_var = tk.StringVar(value=self._display_limit_label)
+        self._display_limit_var.trace_add("write", self._on_display_limit_changed)
+        display_spinbox = ttk.Spinbox(
+            toolbar,
+            textvariable=self._display_limit_var,
+            values=DISPLAY_LIMIT_OPTIONS,
+            state="readonly",
+            width=8,
+            wrap=False,
+        )
+        display_spinbox.pack(side="left", padx=(0, 12))
 
         # Clear button (right side)
         clear_btn = tk.Button(
@@ -472,18 +518,27 @@ class APILogViewDialog(tk.Toplevel):
     def _render_wrapped_content(self, text: str, indent: int = 4) -> None:
         """Render content text with proper indentation."""
         prefix = " " * indent
+        line_limit = self._content_display_limit
+        if line_limit == 0:
+            self._text.insert(
+                "end",
+                f"{prefix}[hidden by display limit]\n",
+                "meta",
+            )
+            return
+
         lines = text.split("\n")
-        # Limit display for very long content
-        #max_lines = 50
-        #for i, line in enumerate(lines):
-        #    if i >= max_lines:
-        #        self._text.insert(
-        #            "end",
-        #            f"{prefix}... ({len(lines) - max_lines} more lines)\n",
-        #            "meta",
-        #        )
-        #        break
-        #    self._text.insert("end", f"{prefix}{line}\n", "content")
+        visible_lines = lines if line_limit is None else lines[:line_limit]
+        for line in visible_lines:
+            self._text.insert("end", f"{prefix}{line}\n", "content")
+
+        if line_limit is not None and len(lines) > line_limit:
+            remaining = len(lines) - line_limit
+            self._text.insert(
+                "end",
+                f"{prefix}... ({remaining} more lines hidden)\n",
+                "meta",
+            )
 
     def _apply_search_highlights(self) -> None:
         """Highlight search matches in the text widget."""
@@ -562,6 +617,19 @@ class APILogViewDialog(tk.Toplevel):
     def _on_view_mode_changed(self) -> None:
         """Handle view mode switch change."""
         self._view_mode = self._view_var.get()
+        self._render_all()
+
+    def _on_display_limit_changed(self, *_args: Any) -> None:
+        """Handle content display-limit changes."""
+        current = self._display_limit_var.get()
+        canonical = normalize_api_log_display_limit(current)
+        if current != canonical:
+            self._display_limit_var.set(canonical)
+            return
+
+        self._display_limit_label = canonical
+        self._content_display_limit = parse_api_log_display_limit(canonical)
+        ini_manager.set_log_setting(_DISPLAY_LIMIT_KEY, canonical)
         self._render_all()
 
     def _on_new_entry(self, entry: LogEntry) -> None:

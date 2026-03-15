@@ -104,11 +104,12 @@ wordwrap_speaker_handling = Sameline
 wordwrap_ignore_patterns = Angle,Square,Curly,En
 wordwrap_typography = Western
 output_preserve_folder_structure = true
-output_pair_mode = translated_only
+output_destination = Same as Source
+output_pair_mode = custom
 output_file_naming = subfolder
 output_text_option = translated
-output_overwrite_existing_files = false
-output_backup = Timestamp
+output_overwrite_existing_files = true
+output_backup = timestamp
 output_backup_extension = .bk
 output_export_manifest_file = false
 output_export_processing_logs = false
@@ -150,6 +151,7 @@ level = Error
 location = log/
 debug = false
 api_log = true
+api_log_display_limit = All
 
 [limit]
 banned = \u2014, \u2013
@@ -843,7 +845,6 @@ def set_default(section: str, key: str, value: ConfigValue) -> bool:
         True
     """
     config = _load_ini()
-    ini_path = get_ini_path()
 
     try:
         # Create section if needed
@@ -860,9 +861,8 @@ def set_default(section: str, key: str, value: ConfigValue) -> bool:
 
         config.set(section, key, str_value)
 
-        # Save to file
-        with open(ini_path, "w", encoding="utf-8") as f:
-            config.write(f)
+        # Save to file using atomic write
+        _save_ini(config)
 
         logger.debug("Set [%s]%s = %s", section, key, str_value)
         return True
@@ -917,18 +917,33 @@ def has_option(section: str, key: str) -> bool:
 
 
 def _save_ini(config: configparser.ConfigParser) -> None:
-    """Write the config to the INI file on disk.
+    """Write the config to the INI file on disk using atomic write.
+
+    Writes to a temporary file first, then renames to prevent corruption
+    if the process is interrupted or the write fails partway through.
 
     Args:
         config: ConfigParser instance to persist.
     """
     ini_path = get_ini_path()
+    tmp_path = ini_path.with_suffix(".tmp")
     try:
         ini_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(ini_path, "w", encoding="utf-8") as fh:
+        with open(tmp_path, "w", encoding="utf-8") as fh:
             config.write(fh)
+            fh.flush()
+            import os
+            os.fsync(fh.fileno())
+        # Atomic rename (os.replace is atomic on the same filesystem)
+        import os
+        os.replace(str(tmp_path), str(ini_path))
     except Exception as exc:
         logger.error("Failed to write INI file %s: %s", ini_path, exc)
+        # Clean up temp file on failure
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 def remove_section(section: str) -> bool:
@@ -1133,11 +1148,12 @@ def _get_builtin_manifest_defaults() -> Dict[str, Any]:
         "wordwrap_typography": "Western",
         # Output Format
         "output_preserve_folder_structure": True,
-        "output_pair_mode": "translated_only",
+        "output_destination": "Same as Source",
+        "output_pair_mode": "custom",
         "output_file_naming": "subfolder",
         "output_text_option": "translated",
-        "output_overwrite_existing_files": False,
-        "output_backup": "Timestamp",
+        "output_overwrite_existing_files": True,
+        "output_backup": "timestamp",
         "output_backup_extension": ".bk",
         "output_export_manifest_file": False,
         "output_export_processing_logs": False,
@@ -1538,7 +1554,6 @@ def clear_user_defaults(section: Optional[str] = None) -> bool:
         True if successful.
     """
     config = _load_ini()
-    ini_path = get_ini_path()
 
     try:
         if not config.has_section("user_defaults"):
@@ -1557,9 +1572,8 @@ def clear_user_defaults(section: Optional[str] = None) -> bool:
             for key in keys_to_remove:
                 config.remove_option("user_defaults", key)
 
-        # Save to file
-        with open(ini_path, "w", encoding="utf-8") as f:
-            config.write(f)
+        # Save to file using atomic write
+        _save_ini(config)
 
         return True
 
@@ -2364,3 +2378,46 @@ def get_merged_request_text(kind: str, fallback: str = "") -> str:
 def set_merged_request_text(kind: str, value: str) -> bool:
     """Persist merged-request instruction text."""
     return set_default("pattern_prompts", f"merged_{kind}_text", value)
+
+
+# =============================================================================
+# Centralized UI State Helpers (replaces mainhelper.save_app_state)
+# =============================================================================
+
+
+def load_ui_state() -> dict:
+    """Load the JSON-serializable UI state from ``[ui] state``.
+
+    Returns:
+        Parsed dict, or empty dict on any error.
+    """
+    import json as _json
+
+    raw = get_str("ui", "state", "{}")
+    try:
+        result = _json.loads(raw)
+        if isinstance(result, dict):
+            return result
+    except Exception:
+        pass
+    return {}
+
+
+def save_ui_state(state: dict) -> None:
+    """Persist a JSON-serializable UI state dict into ``[ui] state``.
+
+    Uses the centralized cache and atomic save so no data is lost.
+
+    Args:
+        state: Serializable dict to persist.
+    """
+    import json as _json
+
+    config = _load_ini()
+    if not config.has_section("ui"):
+        config.add_section("ui")
+    try:
+        config.set("ui", "state", _json.dumps(state, ensure_ascii=False))
+        _save_ini(config)
+    except Exception as exc:
+        logger.error("Failed to save UI state: %s", exc)

@@ -46,6 +46,7 @@ class ProviderResponse:
     usage: TokenUsage                      # Token counts
     finish_reason: str = "stop"            # "stop", "length", "content_filter"
     raw: Any = None                        # Original response object for debugging
+    headers: Dict[str, str] = field(default_factory=dict)  # HTTP response headers
 
 
 @dataclass
