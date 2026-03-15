@@ -92,8 +92,8 @@ The GUI is organized as:
 - **Menu Bar**: File (dropdown), Full Table View (direct command), API Log (direct command), Options (direct command), Help (dropdown)
   - **New Project** (`_on_new_session`): Resets ManifestManager (creates empty manifest), resets SessionState, and calls `on_new_project()` on ALL step tabs to flush cached instance state (loaded files, analysis results, lines, estimation data, etc.). Prevents old project data from leaking into the new session.
 - **Full Table View** (`_on_full_table_view`): Opens FullTableViewDialog — spreadsheet-like view and editor for all manifest line entries. Requires a loaded project. Features: named columns (Line #, Tags, Original, Preprocessed, Translated, Postprocessed, Wrapped, Overwrite, Quality Assurance, Log, Tags (Internal)), column filter dropdown with Show All/Show Visible/Show Latest presets, all columns hideable, column selection bar for search/replace scoping, sort indicators (▲/▼) in headers, read-only Original with copy support, two-row search/replace toolbar, Results Only mode, file filter, RegEx search/replace, pagination, save/reset/diff.
-- **API Log** (`_on_api_log`): Opens APILogViewDialog — non-blocking viewer for structured API log entries. Requires a loaded project. Features: search bar, category filter (Main Translation/Term Translation/Gender Inference/Other), view mode switch (Sent/Received/Both), color-coded entries (green=success, yellow=recovered, red=failed), live updates via subscription, token statistics, per-project JSONL persistence alongside manifest.
-- **Options** (`_on_options`): Opens Global Options dialog directly from menu bar
+- **API Log** (`_on_api_log`): Opens APILogViewDialog — non-blocking viewer for structured API log entries. Requires a loaded project. Features: search bar, category filter (Main Translation/Term Translation/Gender Inference/Other), view mode switch (Sent/Received/Both), color-coded entries (green=success, yellow=recovered, red=failed), live updates via subscription, token statistics, per-project JSONL persistence alongside manifest. Reopening API Log must reuse the existing window and bring it to the foreground instead of opening duplicates.
+- **Options** (`_on_options`): Opens Global Options dialog directly from menu bar. Reopening Options must reuse the existing dialog and bring it to the foreground instead of opening duplicates.
 - **Step Tabs**: 10 workflow tabs (Steps 0-9) progressing from Input to Output
 - **Global Options**: Application-wide settings accessed via Options menu bar entry
 - **Progress Tracker**: Visual indicator showing completion status of each step
@@ -2918,8 +2918,8 @@ The Translation tab contains four widget sections:
 | Key | Dropdown | (first saved key) | Select API key from saved keys in API.ini |
 | Model | Dropdown | (default for key) | Select LLM model, filtered by selected key's provider |
 | Request Mode | Combobox | Normal | Normal / Batch / Flex / Priority. Unavailable modes have "(Unavailable)" suffix. Selection stored in TranslationOptions.request_mode, passed to APIConfig.request_mode. |
-| Model Settings | Label + Button | — | Opens Global Options at Model Settings section |
-| Translation Options | Label + Button | — | Opens Global Options at Translation Options section |
+| Model Settings | Label + Button | — | Opens Global Options at Model Settings section; reuses the existing Global Options dialog if already open |
+| Translation Options | Label + Button | — | Opens Global Options at Translation Options section; reuses the existing Global Options dialog if already open |
 | Lines/Chunk | Spinbox | 30 | Lines per API request (5-200). Must sync with Estimation step |
 | Retry Strategy | Dropdown | Batch | How failures are retried (Batch, Contextual) |
 | Max Retries | Spinbox | 3 | Round trips of retries (0 = none) |
@@ -3059,12 +3059,13 @@ Deselecting a filter hides that section from the Formatted/Plain views and omits
 | Lines Progress | Translated / Total lines with percentage |
 | ETA | Estimated time remaining based on current throughput |
 
-**Progress Window** (modal, opens during translation):
+**Progress Window** (non-modal, opens during translation):
 - Progress bar with percentage
 - ETA and token speed (tok/s)
 - Lines translated / remaining / failed counts
 - Chunk progress (current chunk / total chunks)
 - Pause/Resume/Cancel controls
+- API Log button that opens or focuses the shared non-blocking API Log window
 - Inline scrollable log pane showing per-chunk status messages
 
 ---

@@ -17,7 +17,7 @@ import logging
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, scrolledtext
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 from pathlib import Path
 
 from CherryAI.gui.dialogs.global_options import GlobalOptionsDialog, GlobalOptions
@@ -102,6 +102,8 @@ class App(tk.Tk):
         # Create session for backward compatibility (no autosave - manifest is primary)
         self._session_path: Optional[Path] = None
         self.session = get_session()
+        self._api_log_dialog: Optional[APILogViewDialog] = None
+        self._global_options_dialog: Optional[GlobalOptionsDialog] = None
         
         # TASK 21.4: Flag to track if startup dialog should be shown
         self._show_startup_dialog = True
@@ -639,18 +641,34 @@ class App(tk.Tk):
 
     def _on_options(self) -> None:
         """Handle Options menu item - opens Global Options dialog."""
-        # Load current options from session or config
+        self.open_global_options_dialog()
+
+    def _on_global_options_saved(self, options: GlobalOptions) -> None:
+        """Persist Global Options in session state after a save."""
+        self.session.global_options = options
+        self._set_status("Options saved")
+        logger.info("Global options updated")
+
+    def open_global_options_dialog(
+        self,
+        section: Optional[object] = None,
+        on_save_extra: Optional[Callable[[GlobalOptions], None]] = None,
+    ) -> GlobalOptionsDialog:
+        """Open or focus the shared Global Options dialog."""
         current_options = getattr(self.session, "global_options", None)
         if current_options is None:
             current_options = GlobalOptions.load_from_ini()
 
-        def on_save(options: GlobalOptions) -> None:
-            """Handle options save callback."""
-            self.session.global_options = options
-            self._set_status("Options saved")
-            logger.info("Global options updated")
-
-        GlobalOptionsDialog(self, initial_options=current_options, on_save=on_save)
+        dialog = GlobalOptionsDialog.open_or_focus(
+            self,
+            initial_options=current_options,
+            on_save=self._on_global_options_saved,
+            section=section,
+        )
+        if on_save_extra is not None:
+            dialog.add_save_listener(on_save_extra)
+        self._global_options_dialog = dialog
+        return dialog
 
     def _on_glossary(self) -> None:
         """Handle Glossary Manager menu item."""
@@ -785,13 +803,20 @@ class App(tk.Tk):
 
     def _on_api_log(self) -> None:
         """Open the API Log viewer window."""
+        self.open_api_log_dialog()
+
+    def open_api_log_dialog(self) -> Optional[APILogViewDialog]:
+        """Open or focus the shared API Log dialog for the current project."""
         if not self._manifest_manager.is_loaded:
             messagebox.showwarning(
                 "No Project",
                 "Please open or create a project first.",
             )
-            return
-        APILogViewDialog(self, self._manifest_manager)
+            return None
+
+        dialog = APILogViewDialog.open_or_focus(self, self._manifest_manager)
+        self._api_log_dialog = dialog
+        return dialog
 
     def _on_help(self) -> None:
         """Handle Documentation menu item."""

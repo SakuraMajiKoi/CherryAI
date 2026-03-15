@@ -2140,7 +2140,7 @@ class APIClient:
                 provider=self.config.provider,
                 temperature=self.config.temperature,
                 system_prompt=final_system_prompt,
-                user_content=user_content[:2000],
+                #user_content=user_content[:2000],
                 chunk_index=self._chunk_counter,
                 total_chunks=self._initial_chunk_count,
                 line_count=len(chunk),
@@ -2149,7 +2149,7 @@ class APIClient:
             _ptd = getattr(_usage, "prompt_tokens_details", None) if _usage else None
             _ctd = getattr(_usage, "completion_tokens_details", None) if _usage else None
             recv_entry = LogEntryReceived(
-                content=content[:2000],
+                #content=content[:2000],
                 prompt_tokens=_usage.prompt_tokens if _usage else 0,
                 completion_tokens=_usage.completion_tokens if _usage else 0,
                 total_tokens=_usage.total_tokens if _usage else 0,

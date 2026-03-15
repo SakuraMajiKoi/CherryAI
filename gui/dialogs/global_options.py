@@ -1065,6 +1065,39 @@ class GlobalOptionsDialog(tk.Toplevel):
     Callback is invoked with GlobalOptions when user saves.
     """
 
+    _ROOT_ATTR = "_global_options_dialog"
+
+    @classmethod
+    def open_or_focus(
+        cls,
+        parent: tk.Misc,
+        initial_options: Optional[GlobalOptions] = None,
+        on_save: Optional[Callable[[GlobalOptions], None]] = None,
+        section: Optional[OptionSection] = None,
+    ) -> "GlobalOptionsDialog":
+        """Open the dialog once per root window or focus the existing one."""
+        root = parent.winfo_toplevel()
+        existing = getattr(root, cls._ROOT_ATTR, None)
+        if isinstance(existing, cls):
+            try:
+                if existing.winfo_exists():
+                    if on_save is not None:
+                        existing.add_save_listener(on_save)
+                    if section is not None:
+                        existing._show_panel(section)
+                    existing._present()
+                    return existing
+            except tk.TclError:
+                pass
+
+        dialog = cls(root, initial_options=initial_options, on_save=on_save)
+        dialog._instance_owner = root
+        setattr(root, cls._ROOT_ATTR, dialog)
+        if section is not None:
+            dialog._show_panel(section)
+        dialog._present()
+        return dialog
+
     def __init__(
         self,
         parent: tk.Tk,
@@ -1087,6 +1120,10 @@ class GlobalOptionsDialog(tk.Toplevel):
 
         self.parent = parent
         self.on_save = on_save
+        self._instance_owner: Optional[tk.Misc] = None
+        self._save_listeners: List[Callable[[GlobalOptions], None]] = []
+        if on_save is not None:
+            self.add_save_listener(on_save)
         self.options = initial_options or GlobalOptions()
 
         logger.debug("GlobalOptionsDialog: Starting initialization")
@@ -1118,6 +1155,40 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.after(50, self._finalize_treeview_selection)
 
         logger.debug("GlobalOptionsDialog initialized")
+
+    @staticmethod
+    def _callback_key(callback: Callable[[GlobalOptions], None]) -> Tuple[Any, Any]:
+        """Return a stable deduplication key for a callback."""
+        return (
+            getattr(callback, "__self__", None),
+            getattr(callback, "__func__", callback),
+        )
+
+    def add_save_listener(self, callback: Callable[[GlobalOptions], None]) -> None:
+        """Register an additional save listener if it is not already tracked."""
+        new_key = self._callback_key(callback)
+        for existing in self._save_listeners:
+            if self._callback_key(existing) == new_key:
+                return
+        self._save_listeners.append(callback)
+
+    def _present(self) -> None:
+        """Bring the dialog to the foreground."""
+        try:
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+        except tk.TclError:
+            logger.debug("Global Options dialog could not be presented", exc_info=True)
+
+    def _clear_root_reference(self) -> None:
+        """Remove the dialog from the root window registry if registered."""
+        owner = self._instance_owner
+        if owner is None:
+            return
+        if getattr(owner, self._ROOT_ATTR, None) is self:
+            setattr(owner, self._ROOT_ATTR, None)
+        self._instance_owner = None
 
     def _finalize_treeview_selection(self) -> None:
         """Set the initial treeview selection after window is fully rendered."""
@@ -4824,9 +4895,9 @@ class GlobalOptionsDialog(tk.Toplevel):
             tlc_input_policy=self.tlc_input_policy_var.get(),
         )
 
-        # Invoke callback
-        if self.on_save:
-            self.on_save(self.options)
+        # Invoke callbacks
+        for callback in list(self._save_listeners):
+            callback(self.options)
 
         # Persist all settings to INI so they survive application restart.
         self._persist_to_ini()
@@ -5060,6 +5131,8 @@ class GlobalOptionsDialog(tk.Toplevel):
         Also cleans up any global mousewheel bindings to prevent
         "invalid command name" errors after dialog destruction.
         """
+        self._clear_root_reference()
+
         try:
             self.unbind_all("<MouseWheel>")
         except tk.TclError:

@@ -3187,7 +3187,7 @@ Thank you.
 | test_unique_placeholders.py | 3 | Unique placeholders (integration) |
 | test_validation.py | 81 | Pre/Post API validation |
 | test_wordwrap.py | 74 | Word wrapping with speaker modes (TASK 15.5) |
-| test_gui_dialogs.py | 14 | GlobalOptions dialog tests (TASK 18.7) |
+| test_gui_dialogs.py | 21 | GlobalOptions dialog tests plus single-instance API Log / Global Options reuse coverage (TASK 18.7) |
 | test_cli_estimation.py | 13 | CLI estimation verification (TASK 18.6) |
 | test_manifest_automation.py | 12 | Manifest auto-creation (TASK 18.8) |
 | test_glossary_integration.py | 12 | Analysis→Information integration (TASK 18.4) |
@@ -8451,7 +8451,7 @@ Note: `test_start_autosave_creates_thread` and `test_stop_autosave_clears_thread
 
 Tests added for the Phase 18 Polish & Fixes tasks.
 
-### dev/test_gui_dialogs.py (14 tests) - TASK 18.7
+### dev/test_gui_dialogs.py (21 tests) - TASK 18.7
 
 Tests for GlobalOptionsDialog freeze fix and lifecycle management.
 **Session 24+:** TestDialogDataHandling and TestDialogCleanup updated to reflect renamed Settings
@@ -8484,6 +8484,16 @@ dataclass fields (autosave, interval, load_last, banned, encoding, lines, preser
 | `test_dialog_has_wm_delete_protocol` | Dialog has WM_DELETE_WINDOW handler |
 | `test_dialog_has_on_close_method` | Dialog has _on_close method |
 | `test_dialog_destroy_releases_grab` | destroy() calls grab_release() |
+
+#### TestDialogReuse (5 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_api_log_open_or_focus_reuses_existing_dialog` | Existing API Log window is focused instead of duplicated |
+| `test_api_log_open_or_focus_creates_and_registers_dialog` | New API Log window is registered on the root window |
+| `test_global_options_add_save_listener_deduplicates_bound_methods` | Save listener registration avoids duplicates |
+| `test_global_options_open_or_focus_reuses_existing_dialog` | Existing Global Options dialog is focused and retargeted to the requested section |
+| `test_global_options_destroy_clears_root_reference` | Destroy clears the root-window dialog registry |
 
 ### dev/test_cli_estimation.py (13 tests) - TASK 18.6
 

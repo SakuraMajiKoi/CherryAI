@@ -288,6 +288,7 @@ TABLE OF CONTENTS
          - CachingSettings: fields renamed — dir, age (days), size (MB), mode; defaults 0=unlimited
          - _persist_to_ini(): Writes ALL settings sections to CherryAI.ini on every Apply/OK
          - _save_options() calls _persist_to_ini() for guaranteed persistence
+         - open_or_focus(): single-instance dialog helper keyed on the root window; reuses existing dialog, switches sections, and deduplicates save listeners
          - Sections organized in CATEGORY_ORDER: Connection (incl. Utility), Processing, Application (incl. Add-ons)
          - UtilitySettings: 18 fields for Term Translation, Gender Inference, and Misc (speaker_threshold) configuration
            - Term Translation: mode (Romaji/LLM), api_key_provider, api_key_name, model, batch_size
@@ -363,6 +364,7 @@ TABLE OF CONTENTS
          - _FileFilterDropdown helper: hierarchical listbox with scrolling and keyboard nav
        - api_log_view.py - API Log viewer dialog (2026):
          - APILogViewDialog: Non-blocking Toplevel window for viewing structured API log entries; calls self.lift() at end of __init__ to stay visible above translation progress
+         - open_or_focus(): single-instance dialog helper keyed on the root window; reuses the existing API Log window and focuses it instead of creating duplicates
          - Toolbar: search entry, category filter combobox, view mode radio buttons (Sent/Received/Both), Clear Log button
          - Log display: tk.Text widget with word wrap, color-coded tags (success=green, recovered=yellow, failed=red, pending=grey)
          - Entry status handling: `LogEntry.status` is plain `str` (deserialized from JSON); `_render_entry()` uses `entry.status.upper()` (not `.value.upper()`); dict lookups with `LogStatus` enum keys work via str-enum equality
@@ -630,6 +632,7 @@ TABLE OF CONTENTS
          - _sync_from_global_options() applies Global Options overrides on tab enter
          - Retry Refinement: RETRY_STRATEGIES (2: Batch+Contextual for UI), ALL_RETRY_STRATEGIES (4 for CLI), min retries=0
          - Prompt Editor: Preview-only button, Ban Tokens LabelFrame with _BAN_PRESETS (None/Clean English/Strict)
+         - TranslationProgressWindow: non-modal progress dialog with shared API Log button; quick-access Global Options buttons route through the root window so API Log and Global Options stay single-instance
          - Chunk Sync: costs.py reads/writes LinesPerChunk to manifest RequestOptions
          - Language Skip: detect_line_script() in analysis.py, _LANG_SCRIPT_MAP, _apply_language_skip() — strips placeholder tokens (via _PLACEHOLDER_TOKEN_RE) before ratio-based script detection so CJK lines with placeholders are not wrongly classified as 'latin'
          - Tab Caching: BaseStep._compute_cache_hash/_is_cache_valid/_update_cache/_invalidate_cache/_force_refresh

@@ -68,12 +68,38 @@ class APILogViewDialog(tk.Toplevel):
     for live updates as new API calls are made.
     """
 
+    _ROOT_ATTR = "_api_log_dialog"
+
+    @classmethod
+    def open_or_focus(
+        cls,
+        parent: tk.Misc,
+        manifest_manager: ManifestManager,
+    ) -> "APILogViewDialog":
+        """Open the API Log dialog or bring the existing one to the front."""
+        root = parent.winfo_toplevel()
+        existing = getattr(root, cls._ROOT_ATTR, None)
+        if isinstance(existing, cls):
+            try:
+                if existing.winfo_exists():
+                    existing._present()
+                    return existing
+            except tk.TclError:
+                pass
+
+        dialog = cls(root, manifest_manager)
+        dialog._instance_owner = root
+        setattr(root, cls._ROOT_ATTR, dialog)
+        dialog._present()
+        return dialog
+
     def __init__(
         self,
         parent: tk.Tk,
         manifest_manager: ManifestManager,
     ) -> None:
         super().__init__(parent)
+        self._instance_owner: Optional[tk.Misc] = None
         self._parent = parent
         self._mgr = manifest_manager
         self._store = get_api_log_store()
@@ -103,6 +129,24 @@ class APILogViewDialog(tk.Toplevel):
 
         # Ensure window is visible above other windows on open
         self.lift()
+
+    def _present(self) -> None:
+        """Bring the dialog to the foreground."""
+        try:
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+        except tk.TclError:
+            logger.debug("API Log dialog could not be presented", exc_info=True)
+
+    def _clear_root_reference(self) -> None:
+        """Remove this dialog from the root window registry if registered."""
+        owner = self._instance_owner
+        if owner is None:
+            return
+        if getattr(owner, self._ROOT_ATTR, None) is self:
+            setattr(owner, self._ROOT_ATTR, None)
+        self._instance_owner = None
 
     # ------------------------------------------------------------------ #
     #  UI Construction                                                     #
@@ -430,16 +474,16 @@ class APILogViewDialog(tk.Toplevel):
         prefix = " " * indent
         lines = text.split("\n")
         # Limit display for very long content
-        max_lines = 50
-        for i, line in enumerate(lines):
-            if i >= max_lines:
-                self._text.insert(
-                    "end",
-                    f"{prefix}... ({len(lines) - max_lines} more lines)\n",
-                    "meta",
-                )
-                break
-            self._text.insert("end", f"{prefix}{line}\n", "content")
+        #max_lines = 50
+        #for i, line in enumerate(lines):
+        #    if i >= max_lines:
+        #        self._text.insert(
+        #            "end",
+        #            f"{prefix}... ({len(lines) - max_lines} more lines)\n",
+        #            "meta",
+        #        )
+        #        break
+        #    self._text.insert("end", f"{prefix}{line}\n", "content")
 
     def _apply_search_highlights(self) -> None:
         """Highlight search matches in the text widget."""
@@ -587,6 +631,14 @@ class APILogViewDialog(tk.Toplevel):
         except ValueError:
             pass
         self.destroy()
+
+    def destroy(self) -> None:
+        """Destroy the dialog and clear any registered root reference."""
+        self._clear_root_reference()
+        try:
+            super().destroy()
+        except tk.TclError:
+            pass
 
 
 # --- Helpers ---------------------------------------------------------------- #

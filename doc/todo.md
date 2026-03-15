@@ -219,6 +219,28 @@ Goal: Fix 6 issues found during a sample Japanese→English translation run.
 
 ---
 
+### BUG FIX: Single-Instance API Log and Global Options Windows
+**Priority:** MEDIUM | **Status:** ✅ COMPLETE | **Effort:** 1 hour
+
+Goal: Let the translation progress window open the same non-blocking API Log window as the main window, and prevent duplicate API Log and Global Options windows across the GUI.
+
+**Changes:**
+1. **Shared API Log window reuse** — Added `APILogViewDialog.open_or_focus()` keyed on the root window. Reopening API Log now lifts and focuses the existing window instead of creating duplicates.
+2. **Translation progress API Log access** — Added an `API Log` button to `TranslationProgressWindow` so users can open or foreground the shared API Log while translation is running.
+3. **Shared Global Options reuse** — Added `GlobalOptionsDialog.open_or_focus()` plus deduplicated save listeners so the main menu and Translation step quick-access buttons reuse the same dialog and can still target the correct section.
+4. **Root-window helpers** — `gui/app.py` now exposes shared open/focus methods for API Log and Global Options so child UI components route through one registry.
+
+**Files Modified:**
+- `gui/dialogs/api_log_view.py` — `open_or_focus()`, root-window registration/cleanup
+- `gui/dialogs/global_options.py` — `open_or_focus()`, save-listener dedup, root-window registration/cleanup
+- `gui/app.py` — shared `open_api_log_dialog()` / `open_global_options_dialog()` helpers
+- `gui/steps/translate.py` — translation progress `API Log` button, quick-access routing through shared dialogs
+- `dev/test_gui_dialogs.py` — 5 new dialog reuse tests
+
+**Tests:** `dev/test_gui_dialogs.py` — 21 tests; `dev/test_bugfix_batch_79.py` — 33 tests. Focused pytest run: 54 tests passing.
+
+---
+
 ### TASK 80: Unified Request Builder — All Features Use Same Prompts
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
 

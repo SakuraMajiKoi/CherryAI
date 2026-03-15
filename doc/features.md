@@ -271,7 +271,9 @@ FULL TABLE VIEW
 API LOG
 - **Menu Bar Access**: Direct access via "API Log" entry in the menu bar (direct button, no dropdown)
 - **Non-Blocking Window**: Opens as a separate Toplevel window; does not lock the main application; lifts to front on open to stay visible above translation progress
+- **Single Window Reuse**: Reopening API Log reuses the same window and brings it to the foreground instead of opening duplicates
 - **Non-Modal Progress**: Translation progress window is non-modal — users can interact with API Log and other windows during translation
+- **Translation Progress Access**: The translation progress window includes an "API Log" button that opens or focuses the same API Log window during active translation
 - **Live Updates**: Subscribes to the API log store for real-time display of new entries as API calls complete
 - **Category Filter**: Dropdown to filter by Main Translation, Term Translation, Gender Inference, or Other (probing/testing)
 - **View Mode Switch**: Radio buttons to toggle between Sent, Received, or Both views
@@ -1118,12 +1120,14 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - API Key selection from saved keys (populated from API.ini)
     - Model selection filtered by selected key's provider
     - Model Settings "Change…" button → opens Global Options at Model Settings panel
+      Reuses the existing Global Options window if it is already open.
     - **Request Mode combobox**: Normal / Batch / Flex / Priority selector.
       Unavailable modes shown with "(Unavailable)" suffix and auto-reset to
       Normal.  Availability determined by `get_model_pricing()` checking for
       batch_input/flex_input/priority_input rates.  Selection stored in
       `TranslationOptions.request_mode` and passed to `APIConfig.request_mode`.
     - Translation Options "Change…" button → opens Global Options at Translation Options panel
+      Reuses the existing Global Options window if it is already open.
     - Character Whitelist: comma-separated ranges of allowed characters (manifest-bound to `RequestOptions.CharacterWhitelist`)
     - Character Blacklist: comma-separated characters stripped from translations (manifest-bound to `RequestOptions.CharacterBlacklist`)
     - Ban Tokens entry with preset dropdown
@@ -1145,12 +1149,13 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Stored in [prompts] section of CherryAI.ini (user preference)
     - Factory defaults embedded in `_FACTORY_DEFAULTS_INI_TEXT` (ini_manager.py)
     - Default prompts provided out of the box
-  - **Translation Progress Window (Modal):**
+  - **Translation Progress Window (Non-Modal):**
     - Progress bar with percentage display
     - ETA calculation based on translation rate
     - Token speed display (tokens/second)
     - Statistics: lines translated/failed, chunks processed, tokens used
     - Pause/Resume/Cancel controls
+    - API Log button that opens or focuses the shared non-blocking API Log window
     - State indicators: ● Running, ● Paused, ✓ Completed, ✗ Failed, ⊘ Cancelled
     - Inline log pane with scrollable history
   - **API Usage Panel (Always Visible):**

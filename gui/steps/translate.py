@@ -200,6 +200,7 @@ class TranslationProgressWindow(tk.Toplevel):
         on_pause: Callable[[], None],
         on_resume: Callable[[], None],
         on_cancel: Callable[[], None],
+        on_open_api_log: Optional[Callable[[], None]] = None,
     ) -> None:
         """Initialize progress window.
 
@@ -208,6 +209,7 @@ class TranslationProgressWindow(tk.Toplevel):
             on_pause: Callback for pause button.
             on_resume: Callback for resume button.
             on_cancel: Callback for cancel button.
+            on_open_api_log: Callback for the API Log button.
         """
         super().__init__(parent)
         self.title("Translation Progress")
@@ -218,6 +220,7 @@ class TranslationProgressWindow(tk.Toplevel):
         self._on_pause = on_pause
         self._on_resume = on_resume
         self._on_cancel = on_cancel
+        self._on_open_api_log = on_open_api_log
         self._state = TranslationState.RUNNING
         self._progress = TranslationProgress()
 
@@ -343,6 +346,13 @@ class TranslationProgressWindow(tk.Toplevel):
             font=("TkDefaultFont", 10, "bold"),
         )
         self._state_label.pack(side="left")
+
+        if self._on_open_api_log is not None:
+            ttk.Button(
+                frame,
+                text="API Log",
+                command=self._on_api_log_click,
+            ).pack(side="left", padx=(12, 0))
 
         # Buttons
         self._cancel_btn = ttk.Button(
@@ -475,6 +485,11 @@ class TranslationProgressWindow(tk.Toplevel):
         else:
             if messagebox.askyesno("Cancel Translation", "Are you sure you want to cancel?"):
                 self._on_cancel()
+
+    def _on_api_log_click(self) -> None:
+        """Open or focus the shared API Log window."""
+        if self._on_open_api_log is not None:
+            self._on_open_api_log()
 
     def _on_close_attempt(self) -> None:
         """Handle window close attempt."""
@@ -2284,6 +2299,7 @@ class TranslationStep(BaseStep):
             on_pause=self._on_pause,
             on_resume=self._on_resume,
             on_cancel=self._on_cancel,
+            on_open_api_log=self._open_api_log,
         )
 
         # Disable start button
@@ -4756,6 +4772,13 @@ class TranslationStep(BaseStep):
     # Quick-access buttons for Global Options dialogs
     # ------------------------------------------------------------------
 
+    def _open_api_log(self) -> None:
+        """Open or focus the shared API Log dialog from the translation UI."""
+        root = self.winfo_toplevel()
+        opener = getattr(root, "open_api_log_dialog", None)
+        if callable(opener):
+            opener()
+
     def _open_model_settings(self) -> None:
         """Open the Global Options dialog at the Model Settings section."""
         try:
@@ -4771,12 +4794,17 @@ class TranslationStep(BaseStep):
                 self.session.global_options = options
                 self._sync_from_global_options()
 
-            dlg = GlobalOptionsDialog(
-                self.winfo_toplevel(),
-                initial_options=go,
-                on_save=_on_save,
-            )
-            dlg._show_panel(OptionSection.REQUEST)
+            root = self.winfo_toplevel()
+            opener = getattr(root, "open_global_options_dialog", None)
+            if callable(opener):
+                opener(section=OptionSection.REQUEST, on_save_extra=_on_save)
+            else:
+                GlobalOptionsDialog.open_or_focus(
+                    root,
+                    initial_options=go,
+                    on_save=_on_save,
+                    section=OptionSection.REQUEST,
+                )
         except Exception:
             logger.debug("Could not open Model Settings dialog", exc_info=True)
 
@@ -4795,12 +4823,17 @@ class TranslationStep(BaseStep):
                 self.session.global_options = options
                 self._sync_from_global_options()
 
-            dlg = GlobalOptionsDialog(
-                self.winfo_toplevel(),
-                initial_options=go,
-                on_save=_on_save,
-            )
-            dlg._show_panel(OptionSection.TRANSLATION)
+            root = self.winfo_toplevel()
+            opener = getattr(root, "open_global_options_dialog", None)
+            if callable(opener):
+                opener(section=OptionSection.TRANSLATION, on_save_extra=_on_save)
+            else:
+                GlobalOptionsDialog.open_or_focus(
+                    root,
+                    initial_options=go,
+                    on_save=_on_save,
+                    section=OptionSection.TRANSLATION,
+                )
         except Exception:
             logger.debug(
                 "Could not open Translation Options dialog", exc_info=True,
