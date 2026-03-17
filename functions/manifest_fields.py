@@ -23,17 +23,26 @@ logger = logging.getLogger(__name__)
 
 # ========================== Line Priority Resolution ========================== #
 
-# Canonical pipeline field order (latest result first).
-# Each downstream step writes its own field; reading backwards finds the
-# most-processed version of a line.
+# Canonical final-display pipeline field order (latest result first).
+# This is appropriate for output/final display, but individual workflow steps
+# should use the stage-specific helpers below so they do not read their own or
+# later fields.
 PIPELINE_FIELDS: List[str] = [
-    "qa_overwrite",  # QA manual overwrite (Step 8)
-    "wordwr",        # Wordwrapped text    (Step 7)
+    "wordwr",        # Wordwrapped text     (Step 8)
+    "qa_overwrite",  # QA manual overwrite  (Step 7)
+    "qa",            # QA reviewed text     (Step 7)
     "postpro",       # Postprocessed text   (Step 6)
     "tl",            # Translation          (Step 5)
     "prepro",        # Preprocessed text    (Step 4)
     "orig",          # Original text        (Step 0)
 ]
+
+STAGE_INPUT_FIELDS: Dict[str, Sequence[str]] = {
+    "postprocessing": ("tl", "prepro", "orig"),
+    "qa": ("postpro", "tl", "prepro", "orig"),
+    "wordwrap": ("qa_overwrite", "qa", "postpro", "tl", "prepro", "orig"),
+    "latest": tuple(PIPELINE_FIELDS),
+}
 
 
 def resolve_line_field(
@@ -49,7 +58,7 @@ def resolve_line_field(
     Args:
         line: A single manifest line dict (must contain at least ``orig``).
         priority: Field names to try in order.  Defaults to
-            :data:`PIPELINE_FIELDS` (qa_overwrite → wordwr → … → orig).
+            :data:`PIPELINE_FIELDS` (wordwr → qa_overwrite → qa → … → orig).
 
     Returns:
         The first non-empty string found, or ``""`` if the line is
@@ -94,8 +103,32 @@ def resolve_line_field_from(
     return resolve_line_field(line, PIPELINE_FIELDS[idx:])
 
 
+def resolve_line_field_for_stage(
+    line: Dict[str, Any],
+    stage: str,
+) -> str:
+    """Return the best available text that a workflow stage may read.
+
+    Args:
+        line: A single manifest line dict.
+        stage: Workflow stage name. Supported values are ``postprocessing``,
+            ``qa``, ``wordwrap``, and ``latest``.
+
+    Returns:
+        The first non-empty string allowed for that stage, or ``""``.
+    """
+    priority = STAGE_INPUT_FIELDS.get(stage.lower())
+    if priority is None:
+        logger.warning("Unknown stage %r, falling back to latest chain", stage)
+        return resolve_line_field(line)
+    return resolve_line_field(line, priority)
+
+
 def get_latest_line_text(manager: "ManifestManager", idx: int) -> str:
     """Get the most-processed text for a single manifest line by index.
+
+    This helper intentionally uses the full final-display chain. Workflow
+    stages should usually prefer :func:`get_line_text_for_stage`.
 
     Args:
         manager: ManifestManager instance.
@@ -108,6 +141,18 @@ def get_latest_line_text(manager: "ManifestManager", idx: int) -> str:
     if line is None:
         return ""
     return resolve_line_field(line)
+
+
+def get_line_text_for_stage(
+    manager: "ManifestManager",
+    idx: int,
+    stage: str,
+) -> str:
+    """Get the stage-bounded text for a single manifest line by index."""
+    line = manager.get_line(idx)
+    if line is None:
+        return ""
+    return resolve_line_field_for_stage(line, stage)
 
 
 def get_all_lines_resolved(
@@ -129,6 +174,14 @@ def get_all_lines_resolved(
     if start_field is not None:
         return [resolve_line_field_from(ln, start_field) for ln in lines]
     return [resolve_line_field(ln) for ln in lines]
+
+
+def get_all_lines_for_stage(
+    manager: "ManifestManager",
+    stage: str,
+) -> List[str]:
+    """Return all manifest lines resolved using a stage-specific ceiling."""
+    return [resolve_line_field_for_stage(ln, stage) for ln in manager.get_lines()]
 
 
 # ========================== Text Field Helpers ========================== #

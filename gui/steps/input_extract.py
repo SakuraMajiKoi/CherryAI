@@ -22,6 +22,12 @@ from CherryAI.gui.dialogs.input_dialog import UnifiedInputDialog
 
 from CherryAI.functions.analysis import classify_file_type
 from CherryAI.functions.ini_manager import get_default
+from CherryAI.functions.manifest_manager import (
+    DEDUP_PLACEHOLDER,
+    get_primary_line_tag,
+    merge_line_tags,
+    set_primary_line_tag,
+)
 from CherryAI.gui.steps.base import BaseStep
 from CherryAI.gui.theme.colors import THEME
 
@@ -181,7 +187,7 @@ class _ImportTranslationDialog(tk.Toplevel):
         self._add_check(lf, "import_translated", "Translated", True, **pad)
         self._add_check(lf, "import_postpro", "Postprocessed", True, **pad)
         self._add_check(lf, "import_wordwrap", "Wordwrap", True, **pad)
-        self._add_check(lf, "import_qa", "QA (edits, TLC, overwrite)", True, **pad)
+        self._add_check(lf, "import_qa", "QA (reviewed text, overwrite, TLC, edits)", True, **pad)
         ttk.Separator(lf, orient="horizontal").pack(fill="x", padx=8, pady=4)
         self._add_check(
             lf, "skip_new_lines",
@@ -1388,7 +1394,7 @@ class InputExtractionStep(BaseStep):
             lines_data = mgr.get_lines()  # list of dicts with 'idx', 'orig'
             tagged_count = 0
             for entry in lines_data:
-                if entry.get("tag"):
+                if get_primary_line_tag(entry):
                     tagged_count += 1
                     continue
                 text = entry.get("orig", "")
@@ -1398,7 +1404,7 @@ class InputExtractionStep(BaseStep):
                         tag = pattern_name.replace("_pattern", "")
                         break
                 if tag:
-                    entry["tag"] = tag
+                    set_primary_line_tag(entry, tag)
                     tagged_count += 1
             if tagged_count > 0:
                 mgr.set_lines(lines_data)
@@ -1569,7 +1575,7 @@ class InputExtractionStep(BaseStep):
                 for j, tag_val in enumerate(t_list):
                     m_idx = entry.first_idx + j
                     if m_idx <= entry.last_idx and m_idx < len(lines_data):
-                        lines_data[m_idx]["tag"] = tag_val
+                        set_primary_line_tag(lines_data[m_idx], tag_val)
             mgr.set_lines(lines_data)
 
         # Copy only the new originals to the project
@@ -1631,7 +1637,7 @@ class InputExtractionStep(BaseStep):
                     "orig": line_text,
                 }
                 if loaded_file.tags and j < len(loaded_file.tags):
-                    entry["tag"] = loaded_file.tags[j]
+                    set_primary_line_tag(entry, loaded_file.tags[j])
                 lines.append(entry)
                 idx += 1
             
@@ -1943,10 +1949,10 @@ class InputExtractionStep(BaseStep):
         # Determine which field groups are selected
         field_map: Dict[str, List[str]] = {
             "import_prepro": ["prepro"],
-            "import_tags": ["tag"],
             "import_translated": ["tl", "preedit"],
             "import_postpro": ["postpro"],
             "import_wordwrap": ["wordwr"],
+            "import_qa": ["qa", "qa_overwrite"],
         }
 
         fields_to_copy: List[str] = []
@@ -1954,12 +1960,10 @@ class InputExtractionStep(BaseStep):
             if selections.get(key, False):
                 fields_to_copy.extend(fields)
 
-        # QA fields (numbered: edit1, edit2, tlc1, tlc2, overwrite)
-        copy_qa = selections.get("import_qa", False)
-
+        merge_tags = selections.get("import_tags", False)
         skip_new = selections.get("skip_new_lines", False)
 
-        if not fields_to_copy and not copy_qa:
+        if not fields_to_copy and not merge_tags:
             return {"matched": 0, "total": 0}
 
         # Build lookup: orig → source line entry
@@ -1987,16 +1991,51 @@ class InputExtractionStep(BaseStep):
                 continue
 
             matched += 1
+            is_dedup_line = (
+                str(line.get("prepro", "")).strip() == DEDUP_PLACEHOLDER
+                or str(match.get("prepro", "")).strip() == DEDUP_PLACEHOLDER
+            )
+
+            if merge_tags:
+                merged_tags = merge_line_tags(
+                    line.get("tags"),
+                    line.get("tag"),
+                    line.get("context_marker"),
+                    match.get("tags"),
+                    match.get("tag"),
+                    match.get("context_marker"),
+                )
+                if merged_tags:
+                    line["tags"] = merged_tags
+                else:
+                    line.pop("tags", None)
+                line.pop("tag", None)
+                line.pop("context_marker", None)
 
             for field in fields_to_copy:
+                if is_dedup_line and field in {
+                    "tl", "preedit", "postpro", "wordwr", "qa", "qa_overwrite",
+                }:
+                    continue
                 if field in match and match[field]:
                     line[field] = match[field]
 
-            if copy_qa:
+            if selections.get("import_qa", False) and not is_dedup_line:
+                if not line.get("qa"):
+                    if match.get("qa"):
+                        line["qa"] = match["qa"]
+                    elif match.get("wordwr"):
+                        line["qa"] = match["wordwr"]
+                    elif match.get("postpro"):
+                        line["qa"] = match["postpro"]
+
                 for key, val in match.items():
-                    if (key.startswith("edit") or key.startswith("tlc")
-                            or key == "overwrite") and val:
+                    if (key.startswith("edit") or key.startswith("tlc")) and val:
                         line[key] = val
+
+                qa_overwrite = match.get("qa_overwrite") or match.get("overwrite")
+                if qa_overwrite:
+                    line["qa_overwrite"] = qa_overwrite
 
         mgr.set_lines(current_lines)
         return {"matched": matched, "total": total}
@@ -2034,7 +2073,12 @@ class InputExtractionStep(BaseStep):
                 src_ss.get("data", {}).get("metadata", {}) if src_ss else {}
             )
             if src_meta:
-                mgr.set_info_metadata(src_meta)
+                merged_meta = dict(mgr.get_info_metadata())
+                for key, value in src_meta.items():
+                    if key == "project_name":
+                        continue
+                    merged_meta[key] = value
+                mgr.set_info_metadata(merged_meta)
                 count += 1
 
             # Glossary
@@ -3003,7 +3047,7 @@ class InputExtractionStep(BaseStep):
             all_lines = mgr.get_lines()
             for line_data in all_lines:
                 idx_val = line_data.get("idx", -1)
-                line_tag = line_data.get("tag", "")
+                line_tag = get_primary_line_tag(line_data)
                 if line_tag:
                     tag_map[idx_val] = line_tag
 
@@ -3211,10 +3255,7 @@ class InputExtractionStep(BaseStep):
 
         for line_data in all_lines:
             if line_data.get("idx") in idx_set:
-                if tag:
-                    line_data["tag"] = tag
-                else:
-                    line_data.pop("tag", None)
+                set_primary_line_tag(line_data, tag)
 
         mgr.set_lines(all_lines)
         self._update_preview()

@@ -63,8 +63,8 @@ CherryAI features terms that may not be clear at first glance or slightly differ
    - [Step 4: Costs](#step-4-costs)
    - [Step 5: Translation](#step-5-translation)
    - [Step 6: Postprocessing](#step-6-postprocessing)
-   - [Step 7: Wordwrap](#step-7-wordwrap)
-   - [Step 8: Quality Assurance](#step-8-quality-assurance)
+  - [Step 7: Quality Assurance](#step-7-quality-assurance)
+  - [Step 8: Wordwrap](#step-8-wordwrap)
    - [Step 9: Output](#step-9-output)
 7. [CLI Mode: Automatic Pipeline](#7-cli-mode-automatic-pipeline)
 8. [Manifest Structure](#8-manifest-structure)
@@ -91,8 +91,9 @@ CherryAI is designed to achieve high-quality translation using LLMs through exte
 The GUI is organized as:
 - **Menu Bar**: File (dropdown), Full Table View (direct command), API Log (direct command), Options (direct command), Help (dropdown)
   - **New Project** (`_on_new_session`): Resets ManifestManager (creates empty manifest), resets SessionState, and calls `on_new_project()` on ALL step tabs to flush cached instance state (loaded files, analysis results, lines, estimation data, etc.). Prevents old project data from leaking into the new session.
-- **Full Table View** (`_on_full_table_view`): Opens FullTableViewDialog — spreadsheet-like view and editor for all manifest line entries. Requires a loaded project. Features: named columns (Line #, Tags, Original, Preprocessed, Translated, Postprocessed, Wrapped, Overwrite, Quality Assurance, Log, Tags (Internal)), column filter dropdown with Show All/Show Visible/Show Latest presets, all columns hideable, column selection bar for search/replace scoping, sort indicators (▲/▼) in headers, read-only Original with copy support, two-row search/replace toolbar, Results Only mode, file filter, RegEx search/replace, pagination, save/reset/diff.
-- **API Log** (`_on_api_log`): Opens APILogViewDialog — non-blocking viewer for structured API log entries. Requires a loaded project. Features: search bar, category filter (Main Translation/Term Translation/Gender Inference/Other), view mode switch (Sent/Received/Both), display-limit spinbox (All/1000/2500/5000/Nothing), color-coded entries (green=success, yellow=recovered, red=failed), live updates via subscription, token statistics, per-project JSONL persistence alongside manifest. Reopening API Log must reuse the existing window and bring it to the foreground instead of opening duplicates.
+  - **Open Project...** (`_on_load_manifest` / `_load_manifest_from_path`): After the unsaved-changes prompt, loads the selected manifest into a fresh ManifestManager, swaps it in only after successful load, resets SessionState, and calls `on_new_project()` on ALL tabs before entering the saved step. This must behave like New Project plus manifest activation, so an already-open project can never leak cached state into the newly opened project.
+- **Full Table View** (`_on_full_table_view`): Opens FullTableViewDialog — spreadsheet-like view and editor for all manifest line entries. Requires a loaded project. Features: named columns (Line #, Original, Preprocessed, Translated, Postprocessed, Quality Assurance, Overwrite, Wordwrap, Overwrite (Legacy), Log, Tags), column filter dropdown with Show All/Show Visible/Show Latest presets, all columns hideable, column selection bar for search/replace scoping, sort indicators (▲/▼) in headers, read-only Original with copy support, two-row search/replace toolbar, Results Only mode, file filter, RegEx search/replace, pagination, save/reset/diff, and a Clear Columns workflow for `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, and `wordwr`. Clearing `tl` must require a second destructive confirmation because it removes the base translation stage. Show Latest follows the active pipeline `orig → prepro → tl → postpro → qa → qa_overwrite → wordwr`.
+- **API Log** (`_on_api_log`): Opens APILogViewDialog — non-blocking viewer for structured API log entries. Requires a loaded project. Features: search bar, category filter (Main Translation/Term Translation/Gender Inference/Other), view mode switch (Sent/Received/Both), display-limit spinbox (All/1000/2500/5000/Nothing), color-coded entries (green=success, yellow=recovered, red=failed), live updates via subscription, token statistics, per-project JSONL persistence alongside manifest. Sent entries must show actual request metadata from the stored log, including OpenAI `prompt_cache_key` / `prompt_cache_retention` when present. Reopening API Log must reuse the existing window and bring it to the foreground instead of opening duplicates.
 - **Options** (`_on_options`): Opens Global Options dialog directly from menu bar. Reopening Options must reuse the existing dialog and bring it to the foreground instead of opening duplicates.
 - **Step Tabs**: 10 workflow tabs (Steps 0-9) progressing from Input to Output
 - **Global Options**: Application-wide settings accessed via Options menu bar entry
@@ -117,6 +118,7 @@ All application state is stored in the Manifest (`.CherryAI.json`), not in GUI m
 - Skip-unchanged guard: `set_line_field()` returns early when new value equals existing (TASK 72)
 - Per-step data storage with automatic serialization
 - Line-by-line translation state tracking with per-line `tags` field (TASK 72)
+- Manifest line canonicalization on load/save/set: legacy `tag` is merged into `tags`, dedup placeholder rows cannot retain translation-stage outputs, and line keys are written in canonical order `idx`, `tags`, `orig`, `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, then auxiliary fields
 - Project recovery and session restoration
 - Step data merge-not-replace: `on_leave()` and `_update_step_data()` must start from `get_step_data()` and merge updated keys — never create a fresh dict that discards stored results (PHASE 80)
 - Init guard pattern: steps that populate comboboxes during `__init__()` must suppress trace-triggered manifest writes until initialization completes (PHASE 80)
@@ -183,16 +185,16 @@ User Files (TXT/CSV/JSON/XLSX/RPG Maker/Images)
          │
          ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Step 7: Wordwrap       │ Line breaking, typography         │
-│  Produces: wordwr[],    │ wrap_stats, break_positions       │
-│  merge_preview          │                                   │
+│  Step 7: QA             │ Manual review, validation UI      │
+│  Produces: qa[],        │ qa_overwrite[], issues[]          │
+│  report_data            │                                   │
 └─────────────────────────┴───────────────────────────────────┘
          │
          ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Step 8: QA             │ Validate placeholders, anchors    │
-│  Produces: issues[],    │ accepted[], rejected[]            │
-│  suggestions            │                                   │
+│  Step 8: Wordwrap       │ Line breaking, typography         │
+│  Produces: wordwr[],    │ wrap_stats, break_positions       │
+│  merge_preview          │                                   │
 └─────────────────────────┴───────────────────────────────────┘
          │
          ▼
@@ -476,7 +478,7 @@ OpenAI automatically caches identical prompt prefixes (≥1024 tokens) across AP
 
 **Extended retention**: Models prefixed with `gpt-4.1` or `gpt-5` support 24-hour cache retention via the `prompt_cache_retention` API parameter (value `"24h"`). Other supported models (gpt-4o, o1, o3, chatgpt-4o) use default in-memory retention (5-10 minutes).
 
-**Implementation**: `APIClient.get_prompt_cache_params()` in `functions/api_client.py` returns the appropriate parameters. `supports_prompt_caching()` checks model and provider (OpenAI only; Gemini excluded). Cached tokens are tracked via `usage.prompt_tokens_details.cached_tokens` in the API response. Completion token breakdown (reasoning, predictions) tracked via `completion_tokens_details`.
+**Implementation**: `APIClient.get_prompt_cache_params()` in `functions/api_client.py` returns the effective parameters for the current provider/model/project. When `prompt_cache_key` is not explicitly configured, `resolve_prompt_cache_key()` derives one from manifest `project_name` + `created_at`, and both `_translate_chunk()` and `_translate_single_line()` inject that metadata into the live OpenAI request. `supports_prompt_caching()` checks model and provider (OpenAI only; Gemini excluded). Cached tokens are tracked via `usage.prompt_tokens_details.cached_tokens` in the API response. Completion token breakdown (reasoning, predictions) tracked via `completion_tokens_details`. Preview Requests and the structured API Log must surface the same effective cache params so users can verify what is actually being sent.
 
 **Cache key generation**: `generate_prompt_cache_key(project_name, created_at)` builds a semi-unique routing hint from manifest metadata. Format: `"{first 5 alpha chars}-{seconds}"`.
 
@@ -580,8 +582,10 @@ This ensures cost estimates are never out of sync with translation behaviour.
 - **Placeholder-only** is determined by ``is_placeholder_only()`` in ``prompt_builder.py`` which strips all placeholder tokens and checks if anything remains.  A line like ``攻撃力+__PROTECTED__`` is **not** placeholder-only because it contains CJK content alongside the placeholder
 - The optional Global Option rules provide user control over incremental translation and language filtering
 - **Language detection** for the "Skip non-source language" rule operates on the **prioritized** text (``edited_prepro → preprocessed → original``) with placeholder tokens stripped before classification.  Placeholder token names (``PROTECTED``, ``COLOR``, etc.) are Latin letters that would skew ratio-based script detection, so they are removed first.  After stripping, the remaining text is correctly detected as either source or non-source: if CJK content remains the line is kept for translation; if only non-source text remains the line is skipped
+- Preview Requests and Start Translation must classify from the full loaded line set, not only lines still marked pending, so changing overwrite/skip-translated immediately changes the actual request set
+- The Translation tab header shows both the translatable count and a grouped policy-skip breakdown (already translated, non-source, empty, placeholders, code-only, symbols-only, context markers)
 - Lines that are skipped are marked accordingly in the Translation step status column (e.g., "Skipped (already translated)", "Skipped (wrong language)")
-- All three callers — Request Preview, Estimate, and Start Translation — apply the same filtering rules via shared functions: ``is_placeholder_only()`` for mandatory placeholder checks and ``validate_line_pre()`` for optional language checks
+- All three callers — Request Preview, Estimate, and Start Translation — apply the same filtering rules via shared functions: ``validate_line_pre()`` handles already-translated, placeholder, code-only, symbol-only, and source-language checks; callers only decide whether the optional non-source reasons are enforced, and Translation tab entry must re-sync Global Options before any cache short-circuit so the active overwrite setting immediately affects both Preview Requests and Start Translation
 
 ---
 
@@ -672,7 +676,7 @@ Only matching entries appear — the LLM never sees the full glossary.
 | **Translate** | Added to prompt with notes for contextual translation | No special handling |
 | **Preserve** | Added to prompt with "do not translate" instruction; validated after translation and recovered or retried when missing | Code Pattern Recovery restores translated patterns from original |
 | **Protect** | Optionally replaced with `__PROTECTED__` token during Preproccessing, checks translation and tries to recover or retry when missing | Restored from `prepro_ops` |
-| **Custom Placeholder** | Replaced with custom named token during Preproccessing, checks translation and tries to recover or retry when missing | Restored from `prepro_ops` |
+| **Custom Placeholder** | Replaced with a custom named token during Preproccessing; token may be a human-readable replacement such as `Jane` and is tracked with token-aware records | Restored from `prepro_ops`; postprocessing restores per-line first, then batch-wide if the LLM moved the token to another line; dedup-tagged duplicate rows are skipped during that batch fallback and later rebuilt from their dedup source line so duplicate rows do not create false placeholder/code-pattern flags |
 | **Placeholder** | Generic `__PROTECTED__` / `__PROTECTED_X__` replacement during Preproccessing, checks translation and tries to recover or retry when missing | Restored from `prepro_ops` |
 | **Anchor** | Entirely removed; position stored relative to anchors during Preproccessing | Restored at anchor positions |
 
@@ -783,12 +787,19 @@ Reference handshake-compliant parser for Light VN visual novel scripts. Adapted 
 | `dialogue` | Quoted dialogue, continuations, conditional dialogue | 60 chars / 3 lines |
 | `menu` | `~文字` and `~ボタン文字` menu strings | No wrap |
 | `variable` | `臨時全域変数` and `保存変数` assignments | No wrap |
+| `items` | Item-like variable assignments such as `剥ぎ取り素材1` and `獲得食材` | No wrap |
 
-**Detection**: Scans first 200 lines for any of the `_DETECT_PATTERNS` set (`~【`, `~文字`, `~ボタン`, `~絵`, `~効果音`, `~選択`) or `_DETECT_LINE_PREFIXES` (`栞 `). Files like `chara_make.txt` that contain `~絵` near the top but no `~【` or `~文字` until much later are now correctly detected.
+**Variable Classification**: LightVN classifies translatable assignment lines by variable name. Existing story/system assignments such as `スキル名` continue to use the `variable` tag, while loot/material style fields such as `臨時全域変数 剥ぎ取り素材1 = "角兎の素材×1"` and conditional forms such as `もし (獲得ボーナス >= 2) 臨時全域変数 獲得食材 = "食用の肉×3"` are extracted and injected with the `items` tag.
 
-**Surgical Injection**: `inject_to(source, output, lines)` reads the original script, re-extracts translatable keys, maps them 1:1 with the provided translations, and calls `_inject_all()` for surgical replacement of dialogue, menu, and variable text while preserving all non-translatable commands and structure. `inject()` delegates to `inject_to()` for backward compatibility.
+**Detection**: Scans the entire file for any of the `_DETECT_PATTERNS` set (`~【`, `~栞`, `~文字`, `~ボタン`, `~絵`, `~効果音`, `~選択`, `~スクリプト`, `~保存変数`, `~臨時全域変数`) or `_DETECT_LINE_PREFIXES` (`栞 `, `スクリプト `, `保存変数 `, `臨時全域変数 `). This keeps script/config-style LightVN files such as map stubs and variable-only setup files on the parser path instead of falling back to raw `txt` extraction.
 
-**Tag Propagation**: When `extract_tagged()` is used during loading, per-line tags (`dialogue`, `menu`, `variable`) are stored in `LoadedFile.tags` and written to the manifest's `tag` field during `_sync_lines_to_manifest()`. The O8 tag_rules regex pass in `_wire_parser_optionals` skips lines already tagged by the parser.
+**Bookmark Semantics**: `~栞 ...` is treated as a bookmark/interaction anchor rather than a displayed speaker tag. Encountering a bookmark clears any previously active `~【Speaker】` state so later quoted dialogue is not accidentally prefixed with the wrong speaker.
+
+**Placeholder Dialogue Filtering**: Template scaffolding such as `ここにテキストを入力` / `Enter your text here.` is rendered dialogue text in the script, but it is not real game content. The parser excludes these placeholder lines from extraction so they are not translated and do not pollute speaker analysis.
+
+**Surgical Injection**: `inject_to(source, output, lines)` reads the original script, re-extracts translatable keys, maps them 1:1 with the provided translations, and calls `_inject_all()` for surgical replacement of dialogue, menu, variable, and item-assignment text while preserving all non-translatable commands and structure. `inject()` delegates to `inject_to()` for backward compatibility.
+
+**Tag Propagation**: When `extract_tagged()` is used during loading, per-line tags (`dialogue`, `menu`, `variable`, `items`) are stored in `LoadedFile.tags` and merged into the manifest's canonical `tags` field during `_sync_lines_to_manifest()`. The O8 `tag_rules` regex pass in `_wire_parser_optionals` skips lines that already have a primary content tag.
 
 #### Wordwrap Integration
 
@@ -798,7 +809,7 @@ When a Parser Script provides wordwrap settings, these auto-populate the Wordwra
 - `WordwrapCommand` → Break Character
 - `NewTextboxInjection` → Used when overflow exceeds Max Lines to create a new text box instead of flagging
 
-**Per-Tag Wordwrap**: Step 7 resolves each line's tag (line `tag` → filedir `type` → `"dialogue"` fallback) and applies per-tag settings from `WordwrapSettings.TagConfigs`. Tags whose wrapping is dictated by the parser (via `wordwrap_for_tag`) are marked `ParserManaged` and displayed read-only in the UI.
+**Per-Tag Wordwrap**: Step 7 resolves each line's tag (canonical line `tags` primary content tag → filedir `type` → `"dialogue"` fallback) and applies per-tag settings from `WordwrapSettings.TagConfigs`. Tags whose wrapping is dictated by the parser (via `wordwrap_for_tag`) are marked `ParserManaged` and displayed read-only in the UI.
 
 **O9 pretty_wrap Hook**: A lighter alternative to O6. When a parser implements `pretty_wrap(text, width, break_char, max_lines) → Optional[str]`, Step 7 uses it as the core wrapping algorithm while keeping speaker handling, ignore patterns, and the rest of the pipeline intact. If the parser also provides O6, that takes priority for parser-managed tags; O9 is used for user-managed tags or as a fallback when O6 is not present.
 
@@ -824,7 +835,7 @@ The following table lists all processes in their execution order. Preprocessing 
 |-------|---------|----------|-----------|-------|
 | 1 | Deduplication | First (P10) | Last (P90) | Replaces duplicates with `__DEDUP__`; post recovers from unique translation via `postpro → tl → prepro → orig` resolution; GUI: `apply_dedup_batch()` in mode_adapter; tags D{idx}; reduplication reads step data from ManifestManager |
 | 2 | Protect Code Patterns | P15 | P20 | Generic `__PROTECTED__` / `__PROTECTED_X__` protection; runs before symbol conversion so fullwidth patterns (e.g. `（圧縮あり）`) still match the original text |
-| 3 | Custom Placeholder | P17 | P30 | Custom named replacement tokens for variables; runs before symbol conversion to capture fullwidth originals |
+| 3 | Custom Placeholder | P17 | P30 | Custom named replacement tokens for variables; runs before symbol conversion to capture fullwidth originals; postprocessing uses per-line restoration plus a batch-wide exact-token fallback for shifted replacements |
 | 4 | Anchoring | P20 | P10 | Remove code at anchor-relative positions; records anchor char, side, and type for restoration; patterns without adjacent anchors are left in place; restore first in Post using symbol-conversion equivalents |
 | 5 | Symbol Conversion | P30 (Pre only) | P70 | JP→EN symbols; Post optionally converts back; runs after protection/placeholders so `__PROTECTED__` tokens remain intact |
 | 6 | Width Conversion | P35 (Pre only) | — | Fullwidth↔Halfwidth character width; Pre only |
@@ -837,7 +848,7 @@ The following table lists all processes in their execution order. Preprocessing 
 | 13 | Whitespace Normalization | — | P120 (Post-exclusive) | Post-exclusive: matches indentation to original |
 | 14 | Bracket Balance | — | P110 (Post-exclusive) | Post-exclusive: fixes unmatched brackets |
 | 15 | Quote Balance | — | P100 (Post-exclusive) | Post-exclusive: fixes unmatched quotes |
-| 16 | Code Pattern Recovery | — | P105 (Post-exclusive) | Post-exclusive: restores preserve-action code patterns translated by the LLM; uses delimiter-aware regex matching to find translated substitutes and replace with originals; flags unrecoverable patterns as NEEDS_RETRY |
+| 16 | Code Pattern Recovery | — | P105 (Post-exclusive) | Post-exclusive: restores preserve-action code patterns translated by the LLM; uses delimiter-aware regex matching to find translated substitutes and replace with originals, including doubled delimiters such as `{{...}}`; flags unrecoverable patterns as NEEDS_RETRY |
 
 #### Width Conversion (Pre only)
 
@@ -1132,11 +1143,13 @@ select which data to import from a source manifest.
 | Checkbox | Default | Fields Imported |
 |----------|---------|----------------|
 | Preprocessed | ✅ | ``prepro`` |
-| Tags | ✅ | ``tag`` |
+| Tags | ✅ | merge into canonical ``tags`` (deduplicated; legacy ``tag`` migrated but never written) |
 | Translated | ✅ | ``tl``, ``preedit`` |
 | Postprocessed | ✅ | ``postpro`` |
 | Wordwrap | ✅ | ``wordwr`` |
-| QA (edits, TLC, overwrite) | ✅ | ``edit*``, ``tlc*``, ``overwrite`` |
+| QA (reviewed text, overwrite, TLC, edits) | ✅ | ``qa``, ``qa_overwrite``, ``edit*``, ``tlc*`` |
+
+**Dedup Guard**: If either the current line or the imported source line has ``prepro == "__DEDUP__"``, the dialog must not import `tl`, postprocess, QA, or wordwrap stage text for that row.
 | Do not overwrite lines that already have translations | ❌ | Skips lines with existing ``tl`` |
 
 **Settings Sections**:
@@ -1144,7 +1157,7 @@ select which data to import from a source manifest.
 | Checkbox | Default | Keys Imported |
 |----------|---------|---------------|
 | Analysis | ❌ | ``step_state.Analysis`` |
-| Information (metadata, glossary, code DB) | ✅ | ``step_state.Information.data.metadata``, ``glossary``, ``code_patterns``, ``characters`` |
+| Information (metadata, glossary, code DB) | ✅ | ``step_state.Information.data.metadata`` except current ``project_name``, plus ``glossary``, ``code_patterns``, ``characters`` |
 | Preprocessing Settings | ❌ | ``Deduplication``, ``EllipsisCompression``, ``SymbolConversion``, etc. |
 | Costs / Request Settings | ❌ | ``RequestOptions`` |
 | Translation Step State | ❌ | ``step_state.Translation`` |
@@ -2643,10 +2656,10 @@ The Preprocessing tab is organized into three sections:
 **Priority**: 70 (After standard rules, before Protect Code Patterns)
 
 **Behavior**:
-- Replaces Pattern with a unique `__CUSTOM_{idx}__` token
+- Replaces Pattern with the configured placeholder token (for example a visible replacement name such as `Jane`)
 - If RegEx enabled: Pattern interpreted as regular expression
 - If RegEx disabled: Pattern is literal string match
-- Stores original text for restoration
+- Stores original text for restoration, including token-aware per-line records so postprocessing can restore the token even if the translated output moved it to another line
 
 **Postprocessing Priority**: 30 (Restored AFTER Anchoring, BEFORE standard restoration)
 
@@ -2994,11 +3007,13 @@ The Translation tab contains four widget sections:
 - NEW option. Uses language detection (`functions/analysis.py`) to identify lines not in the configured source language.
 - Lines detected as already in the target language or a third language are marked as Skipped.
 - Reduces unnecessary API calls and costs.
+- For Japanese / Chinese / Korean projects, placeholder tokens are stripped before detection and any remaining CJK/Hangul content keeps the line eligible; Latin-only remainder is skipped as non-CJK.
 
 **Skip Already Translated**:
 - NEW option. When enabled, lines that already have a non-empty `tl` field in the manifest are skipped during translation.
 - Useful for **incremental translation**: when new lines are added to a project (e.g., game patch), only untranslated lines are sent to the LLM.
 - Also useful after **Import Translations** (Step 0): imported lines already have translations and don't need re-translation.
+- Request Preview and Start Translation must both re-evaluate the full loaded line set against this option. When overwrite is enabled, already translated lines re-enter the translatable set immediately; when overwrite is disabled, they count toward the policy-skipped summary.
 - Skipped lines are marked as "Skipped (already translated)" in the status column.
 - This does NOT skip lines that have `edit{N}` or `tlc{N}` — it only checks the base `tl` field.
 - Can be combined with Skip Non-Source Language for maximum efficiency.
@@ -3026,9 +3041,9 @@ The Translation tab contains four widget sections:
 
 #### Widget: Preview Requests
 
-**Purpose**: Preview the actual API requests that would be sent during translation. The Preview Requests button builds requests using the same functions and data as the real translation pipeline — reading from the manifest (Summary, Style, Tone, System Instructions, Glossary, Conditional Prompts) and chunking the lines identically.
+**Purpose**: Preview the actual API requests that would be sent during translation. The Preview Requests button builds requests using the same functions and data as the real translation pipeline — reading from the manifest (Summary, Style, Tone, System Instructions, Glossary, Conditional Prompts) and chunking the lines identically. When OpenAI prompt caching applies, the preview must also expose the effective `prompt_cache_key` / `prompt_cache_retention` so users can confirm the request metadata before sending.
 
-**Implementation**: `_build_preview_requests()` gathers options from UI, filters pending lines, chunks them via `_build_chunks()`, reads manifest data (Prompt, Summary, CustomStyle, CustomTone, POV), loads glossary entries via `load_glossary_entries()`, detects conditional prompts via `build_conditional_instructions()`, and produces a list of `PreviewRequest` dataclass instances — one per chunk. `RequestPreviewDialog` displays them.
+**Implementation**: `_build_preview_requests()` gathers options from UI, re-classifies all loaded lines with the same shared skip rules used by Costs and Start Translation, chunks the resulting translatable lines via `_build_chunks()`, reads manifest data (Prompt, Summary, CustomStyle, CustomTone, POV), loads glossary entries via `load_glossary_entries()`, detects conditional prompts via `build_conditional_instructions()`, computes effective prompt cache request params through the shared API-client helper, and produces a list of `PreviewRequest` dataclass instances — one per chunk. `RequestPreviewDialog` displays them.
 
 **UI Components**:
 | Component | Type | Function |
@@ -3045,7 +3060,7 @@ The Translation tab contains four widget sections:
 **View Modes**:
 | Mode | Description |
 |------|-------------|
-| Pure | Raw JSON exactly as sent to the API (`{"messages": [...], "model": ..., "temperature": ...}`) |
+| Pure | Raw JSON exactly as sent to the API (`{"messages": [...], "model": ..., "temperature": ...}`) including request metadata such as `prompt_cache_key` when applicable |
 | Formatted | Section headers (═══ META ═══, ═══ SYSTEM INSTRUCTIONS ═══, etc.) with content below each |
 | Plain | Stripped of JSON syntax, word-wrapped at 100 characters for readability |
 
@@ -3291,7 +3306,7 @@ Local providers (LM Studio, Ollama, local):
 
 ---
 
-### Step 8: Quality Assurance
+### Step 7: Quality Assurance
 
 **Purpose**: Manual inspection of translation quality for issues that automatic recovery and retries could not resolve. Optimally, this step is never needed — the Translation step (Step 5) and Postprocessing step (Step 7) already employ the same validation scripts to automatically recover or retry failed lines. Only when those automated mechanisms are exhausted and issues remain does the QA step become relevant.
 
@@ -3340,7 +3355,10 @@ The following widgets will be activated once the Translation/Edit/TLC mode toggl
 
 **Inputs**:
 - From Step 4: `prepro[]`, `prepro_ops[]` (for placeholder checking)
-- From Step 5: `tl[]` (translation results), `edit{N}[]`, `tlc{N}[]` (when Edit/TLC modes exist)
+- Working text resolved as `postpro[] → tl[] → prepro[] → orig[]`
+- `qa[]` is the reviewed QA text shown in the middle column
+- `qa_overwrite[]` is a manual review/output field only and is never used as QA input
+- From Step 5: `tl[]` remains the primary translation source when no later stage output exists
 
 **Processing** (via `functions/validation.py`):
 1. **Placeholder Check**: Verify all `__PROTECTED__` tokens preserved
@@ -3360,6 +3378,7 @@ The following widgets will be activated once the Translation/Edit/TLC mode toggl
 - `warning_count: int` - Non-critical issues
 - `accepted: List[int]` - User-accepted lines
 - `rejected: List[int]` - Lines marked for retry
+- `qa_overwrite[]` - Explicit manual overwrite text only when the user changes it; unchanged values are not auto-persisted
 
 **Stored In**:
 - Manifest step data (step_id=6)
@@ -3392,6 +3411,8 @@ The following widgets will be activated once the Translation/Edit/TLC mode toggl
 3. **Perfect Restoration**: All Preprocessing changes must be undone to produce accurate final output.
 4. **Post-Exclusive Recovery**: Bracket Balance, Quote Balance, and Whitespace Normalization are Postprocessing-exclusive — they only appear here and address translation-introduced issues.
 5. **Overwrite Semantics**: Postprocessing overwrites any previous postprocessing results. If results already exist, a confirmation warning is shown before overwriting.
+6. **Stage-Bounded Input**: Postprocessing reads only `tl → prepro → orig`; it must never consume `postpro`, `wordwr`, `qa_overwrite`, or Edit/TLC rounds as its working input.
+7. **Sparse Persistence**: `postpro` is only stored when the recovered output differs from `tl → prepro → orig`; unchanged results are removed from `lines[]` instead of being written redundantly.
 
 **Implementation Status:** ✅ Phase 45 DONE — All 10 tasks implemented (49 tests passing, 4755 total suite)
 
@@ -3440,7 +3461,7 @@ The Postprocessing tab is organized into four sections:
 | # | Line index (1-based) |
 | Status | Processing status icon and label |
 | Changes | Count of recovery operations applied |
-| Translated | Input text (from Step 5 or Step 6) |
+| Translated | Input text resolved from `tl → prepro → orig` only |
 | Postprocessed | Output text after postprocessing |
 
 **Status Values**:
@@ -3475,15 +3496,18 @@ The Postprocessing tab is organized into four sections:
 
 | Widget | Type | Default | Function |
 |--------|------|---------|----------|
-| Bracket Balance Recovery | Checkbox | ✓ | Fix unmatched brackets by comparing with original |
+| Bracket Balance Recovery | Checkbox | ✓ | Fix unmatched brackets only when the original bracket structure is balanced |
 | Quote Balance Recovery | Checkbox | ✓ | Fix unmatched quotes by comparing with original |
 | Whitespace Normalization | Checkbox | ✓ | Restore indentation and spacing to match original |
 
 **Bracket Balance Recovery** (Post-Exclusive):
-- Compares bracket pairs in translated text against the original using ANCHOR_EQUIVS equivalence (fullwidth/halfwidth variants treated as the same bracket)
+- Runs only when the original line has balanced recoverable brackets and the latest translated text is unbalanced; rare intentionally unbalanced source lines are left unchanged
+- Compares bracket pairs in translated text against the original using ANCHOR_EQUIVS equivalence (fullwidth/halfwidth variants treated as the same bracket), with `【】` canonicalised to the square-bracket family `[]`
 - Uses anchor-relative logic (line start `^`, end `$`, adjacent punctuation via `get_equivs()`) to determine insertion points for missing brackets
 - Bracket-quote hybrids (e.g. `「」` whose canonical form is `"`) are deferred to Quote Balance Recovery to avoid double-counting
 - Supports all bracket types: `[]`, `{}`, `<>`, `()`, `『』`, `【】`, `〔〕`, `《》`, `〈〉`, plus fullwidth variants `［］`, `｛｝`, `＜＞`, `（）`
+- Balanced latest text is ignored even if it changed bracket style; missing-bracket repair only starts from an actual imbalance
+- Extra unmatched brackets in the translated text are removed when the balanced source proves they are over-insertions (for example an LLM-added third `}` after a `{{...}}` code)
 - If a bracket is missing, only insert at the direct position (before/after) from a located anchor — no absolute positional calculations
 - If balance cannot be achieved (no anchor found in translated text), flags the line for review (`NEEDS_RETRY`)
 
@@ -3493,6 +3517,7 @@ The Postprocessing tab is organized into four sections:
 - Replaces the first unmatched candidate with the original pattern (e.g. `{anchor}` → `{アンカー}`)
 - If no candidate is found (pattern completely missing), flags the line as `NEEDS_RETRY` for QA review
 - Runs inside `recover_line()` after placeholder recovery and before bracket/quote balance recovery
+- Balanced nested substring matches are ignored, so a preserve rule for `{主人公}` does not fire just because `{{主人公}}` was present on the line
 - Also validated during translation: `validate_translation_comprehensive()` check #7 detects missing preserve-action patterns and adds `CODE_PATTERN_TRANSLATED` retry reason
 
 **Quote Balance Recovery** (Post-Exclusive):
@@ -3660,7 +3685,7 @@ Postprocessing reverses the Preprocessing order. Highest priority runs first (op
 |----------|---------|-------------|
 | 10 | Anchoring Restoration | Restore anchored content FIRST (matches Anchoring P75 pre) |
 | 20 | Protect Code Patterns | Restore `__PROTECTED__` tokens to original code |
-| 30 | Custom Placeholders | Restore `__CUSTOM__` tokens to original strings |
+| 30 | Custom Placeholders | Restore configured custom tokens to original strings; unresolved values fall back to a batch-wide exact-token scan so misplaced named replacements can still be restored |
 | 40 | PROTECTED Token Decompression | Decompress `__PROTECTED_N__` → N individual `__PROTECTED__` tokens |
 | 50 | Code Spacing Restoration | Restore original code spacing |
 | 60 | Speaker Name Restoration | (No restoration needed — names stay translated) |
@@ -3713,6 +3738,7 @@ Postprocessing reverses the Preprocessing order. Highest priority runs first (op
 2. For each line with `prepro_ops`:
    a. Execute automatic restorations in priority order (P10→P90)
    b. Each restoration reads its metadata from `prepro_ops` and reverses the transformation
+  c. Custom Placeholder restoration performs a second batch-wide pass for unresolved named tokens so line-shifted replacements can still be restored safely
 3. Execute post-exclusive recovery processes (P100→P120) if enabled
 4. Apply symbol conversion if enabled (direction per Postprocess Options)
 5. Run failure handling policy on any unrecoverable issues
@@ -3774,13 +3800,15 @@ Postprocessing reverses the Preprocessing order. Highest priority runs first (op
 
 ---
 
-### Step 7: Wordwrap
+### Step 8: Wordwrap
 
 **Purpose**: Apply wordwrap rules to format text for game engine display requirements. Wordwrap operates in two conceptual modes: **automatic** (parser-detected settings based on the game engine format) or **manual** (user-configured width, break character, and line limits). The core wrapping algorithm is `pretty_wrap` — punctuation-preferred breaks and anti-orphan handling are always active (no user toggle).
 
 #### Philosophy
 
-Wordwrap is the final text-shaping step before output. It must produce lines that fit within the target engine's display constraints while preserving readability. The step combines wrapping with overwrite preview — the Overwrite column shows the final injected text alongside the wrapped text, enabling side-by-side comparison and filtering for discrepancies.
+Wordwrap is the final text-shaping step before output. It must produce lines that fit within the target engine's display constraints while preserving readability. The step runs after QA, consuming QA-reviewed text when present. The table now separates the stage input from the stored Wordwrap result so the Wordwrap column only shows real `wordwr` values.
+
+Persistence rule: preview refresh and tab leave do not write `wordwr`. Only explicit Apply persists wrapped output, and unchanged results are removed instead of stored redundantly.
 
 Key principles:
 - **Pretty wrap is standard**: Punctuation-preferred line breaks and orphan prevention are always active — no checkboxes.
@@ -3807,8 +3835,6 @@ Key principles:
 | Filter Radios | RadioGroup | All / Changed / Exceeding / Overwrite Differs |
 
 **Removed Widgets** (compared to previous spec):
-- ~~Prevent Orphan Checkbox~~ → Always active (standard `pretty_wrap` behavior)
-- ~~Prefer Punct Breaks Checkbox~~ → Always active (standard `pretty_wrap` behavior)
 - ~~Ignore Patterns Checkboxes~~ → Sourced from Code Database (Step 3), shown as read-only table
 - ~~Typography Style Dropdown~~ → Removed entirely
 - ~~Typography Checkboxes~~ → Removed entirely
@@ -3816,25 +3842,30 @@ Key principles:
 - ~~Merge Method Dropdown~~ → Removed with Overwrite Strategy
 - ~~Backup Suffix Entry~~ → Removed with Overwrite Strategy
 - ~~Format Dropdown~~ → Replaced by parser-aware Mode Dropdown
+- ~~Orphan prevention / Punct breaks (global)~~ → Now configurable per-tag
 
 #### Per-Tag Wordwrap Settings
 
-Wordwrap settings are wrapped in tag sections. Each tag (e.g., `dialogue`, `menu`, `variable`) has its own Width, Break Character, and Max Lines configuration. Standard tags `dialogue` and `menu` are always present; additional tags are discovered from filedir `type` fields and line `tag` fields.
+Wordwrap settings are wrapped in tag sections. Each tag (e.g., `dialogue`, `menu`, `variable`) has its own Width, Break Character, Max Lines, Speaker Handling, Prevent Orphans, Prefer Punctuation Breaks, and New Textbox configuration. Standard tags `dialogue` and `menu` are always present; additional tags are discovered from filedir `type` fields and line `tag` fields.
 
 **TagWrapConfig** (dataclass):
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `tag` | str | — | Tag name (e.g., "dialogue", "menu") |
-| `width` | int | 48 | Characters per line |
+| `width` | int | 48 | Characters per line (0=no wrap) |
 | `break_char` | str | "\\n" | Line break sequence |
 | `max_lines` | int | 4 (dialogue) / 0 (menu) | Max lines per box (0=unlimited) |
-| `parser_managed` | bool | False | True when parser dictates wrapping for this tag |
+| `speaker_handling` | str | "count" | "ignore" or "count" — how speaker prefixes affect wrap width |
+| `prevent_orphans` | bool | True | Prevent tiny orphan words on the last line |
+| `prefer_punct_breaks` | bool | True | Prefer breaking after punctuation when possible |
+| `new_textbox` | bool | False | Create a new textbox when max lines exceeded |
+| `new_textbox_injection` | str | "" | Text injected to signal new textbox (e.g., "\\w" for LightVN) |
 
 **Behavior**:
-- **Parser-managed tags**: When the active parser provides `wordwrap_for_tag(tag)` returning a non-None config, the tag section shows "Wordwrap mandated by Parser Format" (read-only). The parser's O6 `wordwrap()` or O9 `pretty_wrap()` handles wrapping.
-- **User-managed tags**: Width/BreakChar/MaxLines are editable. Width=0 means no wrapping for that tag.
+- **Parser-provided defaults**: When the active parser provides `wordwrap_for_tag(tag)` returning a non-None config, the tag section is pre-populated with the parser's values (width, break char, max lines, new textbox injection). All values remain **editable** — the parser only provides sensible defaults.
+- **Width=0**: Zero width means no wrapping for that tag.
 - **Tag resolution** (per line): Line `tag` field → filedir entry `type` field → `"dialogue"` fallback.
-- **Add Tag**: Dropdown shows tags not yet configured. Adding creates a new section with defaults.
+- **Add Tag**: Dropdown shows tags not yet configured. Adding creates a new section with parser-provided defaults (when available).
 - **Remove Tag**: Non-standard tags (not dialogue/menu) have a "Remove tag" button.
 - **Manifest persistence**: `WordwrapSettings.TagConfigs` stores the list of `TagWrapConfig.to_dict()` entries.
 
@@ -3940,13 +3971,13 @@ Ignore patterns are **no longer configured in Wordwrap settings**. Instead, they
 | Column | Source | Description |
 |--------|--------|-------------|
 | # | Index | Line number |
-| Original | `postpro[]` or best available | Input text (from postprocessing chain) |
+| Original | `qa_overwrite[] → qa[] → postpro[] → tl[] → prepro[] → orig[]` | Input text for wrapping (stage-bounded) |
 | Wordwrap | `wordwr[]` | Wrapped result |
 | Overwrite | `overwrite[]` | Final injected text (populated during wrap) |
 | Status | Computed | OK / Exceeding / Differs |
 
 **Overwrite Column Behavior**:
-- Filled alongside Wordwrap during the wrapping process.
+- Loaded only from stored `wordwr[]` values; it is not prefilled from the current input chain.
 - The Overwrite value represents the text as it will appear in the output file after injection.
 - **Standard behavior**: Output (Step 9) prioritizes `overwrite[]` over `wordwr[]`. 
 - When Overwrite differs from Wordwrap, the line is flagged as "Differs" and can be filtered for (like to undo edits).
@@ -3961,7 +3992,7 @@ Ignore patterns are **no longer configured in Wordwrap settings**. Instead, they
 #### Data Flow
 
 **Inputs**:
-- From Step 7: `postpro[]` (or best available from processing chain)
+- From Step 7: stage-bounded text resolved as `qa_overwrite[] → qa[] → postpro[] → tl[] → prepro[] → orig[]`
 - From Step 3: Code Database patterns (for ignore pattern list)
 - From Manifest: `WordwrapSettings.*` (saved settings)
 
@@ -4042,16 +4073,17 @@ For each line, Output resolves the text to inject by walking the following prior
 
 | Priority | Manifest Field | Source Step | Description |
 |----------|---------------|-------------|-------------|
-| 1 (highest) | `lines[].qa_overwrite` | Step 8: QA | QA-overwritten text |
-| 2 | `lines[].overwrite` | Step 7: Wordwrap | Manually overwritten / injection-ready text |
-| 3 | `lines[].wordwr` | Step 7: Wordwrap | Wordwrapped text |
-| 4 | `lines[].postpro` | Step 6: Postprocessing | Postprocessed text |
-| 5 | `lines[].edit{N}` | Step 5: Translation (Edit mode) | Latest Edit round (highest N) |
-| 6 | `lines[].tlc{N}` | Step 5: Translation (TLC mode) | Latest TLC round (highest N) |
-| 7 | `lines[].tl` | Step 5: Translation | Base translation |
-| 8 | `lines[].preedit` | Step 5: Translation (Pre-edit) | Pre-edit result |
-| 9 | `lines[].prepro` | Step 3: Preprocessing | Preprocessed text |
-| 10 (lowest) | `lines[].orig` | Step 0: Input | Original extracted text |
+| 1 (highest) | `lines[].wordwr` | Step 8: Wordwrap | Wordwrapped text |
+| 2 | `lines[].qa_overwrite` | Step 7: QA | QA-overwritten text |
+| 3 | `lines[].qa` | Step 7: QA | QA-reviewed text |
+| 4 | `lines[].overwrite` | Legacy / compatibility | Legacy overwrite text |
+| 5 | `lines[].postpro` | Step 6: Postprocessing | Postprocessed text |
+| 6 | `lines[].edit{N}` | Step 5: Translation (Edit mode) | Latest Edit round (highest N) |
+| 7 | `lines[].tlc{N}` | Step 5: Translation (TLC mode) | Latest TLC round (highest N) |
+| 8 | `lines[].tl` | Step 5: Translation | Base translation |
+| 9 | `lines[].preedit` | Step 5: Translation (Pre-edit) | Pre-edit result |
+| 10 | `lines[].prepro` | Step 3: Preprocessing | Preprocessed text |
+| 11 (lowest) | `lines[].orig` | Step 0: Input | Original extracted text |
 
 **Notes**:
 - `edit{N}` and `tlc{N}` are round-numbered fields (e.g., `edit1`, `edit2`, `tlc1`). The highest available round number is used.
@@ -4369,11 +4401,12 @@ Each step writes its output field via `ManifestManager.set_line_field(idx, field
 - Step 5 `update_translation()` writes `tl` (and `edited_prepro`)
 - Step 6 `_on_postprocess_complete()` / `_mark_line_as_fixed()` writes `postpro`
 - Step 7 `_save_to_session()` writes `wordwr`
-- Step 8 `on_leave()` writes `qa_overwrite`
+- Step 7 `on_leave()` writes `qa` and `qa_overwrite`
+- Step 8 `_save_to_session()` writes `wordwr`
 
 **All steps now read from manifest** using `manifest_fields.py` shared resolution functions
 instead of session step_data. The priority chain is:
-`qa_overwrite → wordwr → postpro → tl → prepro → orig`
+`wordwr → qa_overwrite → qa → postpro → tl → prepro → orig`
 
 Resolution methods:
 - `resolve_line_field(line_entry, *fields)`: Returns first non-empty field from ordered priority chain
@@ -4382,8 +4415,8 @@ Resolution methods:
 - `get_all_lines_resolved(mgr, field?)`: Returns list of resolved texts for all lines (optional start field)
 - `get_input_for_translation()`: edited_prepro → prepro → orig
 - `get_input_for_tlc(N)`: edit{N-1} → tlc{N-1} → ... → tl
-- `get_input_for_postprocessing()`: Latest in TLC/Edit chain → tl → prepro → orig
-- `get_final_output()`: qa_overwrite → wordwr → postpro
+- `get_input_for_postprocessing()`: tl → prepro → orig
+- `get_final_output()`: wordwr → qa_overwrite → qa → overwrite → postpro
 
 ### 8.4 Options Structure (Phase 58/59 Additions)
 

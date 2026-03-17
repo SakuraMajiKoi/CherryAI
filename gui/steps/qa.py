@@ -1,7 +1,7 @@
 """CherryAI GUI v2 Quality Assurance Step.
 
-Seventh workflow tab for QA checks and issue flagging.
-Provides validation rules, inline fix suggestions, and batch operations.
+Eighth workflow tab for QA checks and issue flagging.
+Provides validation rules, a dedicated QA column, and QA overwrite actions.
 """
 
 from __future__ import annotations
@@ -29,8 +29,7 @@ from CherryAI.gui.helpers.manifest_binding import (
     bind_combobox_to_field,
 )
 from CherryAI.functions.manifest_fields import (
-    get_all_lines_resolved,
-    get_latest_line_text,
+    get_all_lines_for_stage,
     save_nested_bool_field,
     load_nested_bool_field,
     save_nested_int_field,
@@ -44,6 +43,19 @@ if TYPE_CHECKING:
     from CherryAI.functions.manifest_manager import ManifestManager
 
 logger = logging.getLogger(__name__)
+
+
+def _persist_sparse_qa_overwrite(
+    manager: "ManifestManager",
+    idx: int,
+    qa_text: str,
+    overwrite_text: str,
+) -> None:
+    """Persist ``qa_overwrite`` only when it is an explicit override."""
+    if overwrite_text and overwrite_text != qa_text:
+        manager.set_line_field(idx, "qa_overwrite", overwrite_text)
+        return
+    manager.clear_line_field(idx, "qa_overwrite")
 
 
 class IssueType(Enum):
@@ -98,7 +110,8 @@ class QALine:
 
     idx: int
     original: str
-    translated: str
+    qa_text: str = ""
+    overwrite_text: str = ""
     issues: List[QAIssue] = field(default_factory=list)
     accepted: bool = False
     rejected: bool = False
@@ -161,7 +174,7 @@ class QAStep(BaseStep):
     - Export QA report
     """
 
-    step_id = 8  # Moved from position 6
+    step_id = 7
     step_name = "Quality Assurance"
 
     # Test visibility for explicit import expectation
@@ -365,7 +378,8 @@ class QAStep(BaseStep):
             ColumnDef(key="status", title="Status", width=80, anchor="center"),
             ColumnDef(key="issues", title="Issues", width=60, anchor="center"),
             ColumnDef(key="original", title="Original", width=200),
-            ColumnDef(key="translated", title="Overwrite", width=200),
+            ColumnDef(key="qa", title="Quality Assurance", width=220),
+            ColumnDef(key="overwrite", title="Overwrite", width=220, editable=True),
         ]
 
         self._lines_table = SharedTable(
@@ -375,6 +389,7 @@ class QAStep(BaseStep):
             show_checkboxes=True,
             show_count_filter=False,
             on_select=self._on_line_selected,
+            on_edit=self._on_table_edit,
         )
         self._lines_table.pack(fill="both", expand=True, padx=5, pady=5)
 
@@ -398,6 +413,12 @@ class QAStep(BaseStep):
             batch_frame,
             text="🔧 Auto-fix Selected",
             command=self._autofix_selected,
+        ).pack(side="left", padx=2)
+
+        ttk.Button(
+            batch_frame,
+            text="⇢ Copy to Overwrite",
+            command=self._copy_selected_to_overwrite,
         ).pack(side="left", padx=2)
 
         ttk.Button(
@@ -529,8 +550,8 @@ class QAStep(BaseStep):
         )
         self._detail_original.pack(fill="x", pady=2)
 
-        # Translated text
-        ttk.Label(frame, text="Translated:").pack(anchor="w", pady=(5, 0))
+        # QA text
+        ttk.Label(frame, text="Quality Assurance:").pack(anchor="w", pady=(5, 0))
         self._detail_translated = scrolledtext.ScrolledText(
             frame,
             height=3,
@@ -703,32 +724,32 @@ class QAStep(BaseStep):
         )
         self._rejected_label.grid(row=0, column=7, sticky="w", padx=(10, 0))
 
-    def _get_lines_from_previous_steps(self) -> Tuple[List[str], List[str]]:
-        """Get latest-processed lines and existing qa_overwrite from manifest.
+    def _get_lines_from_previous_steps(self) -> Tuple[List[str], List[str], List[str]]:
+        """Get QA stage input plus persisted QA and overwrite lines.
 
-        The *original* column shows the full-chain resolved text
-        (wordwr → postpro → tl → prepro → orig).  The *translated* (Overwrite)
-        column shows any existing ``qa_overwrite`` value, falling back to
-        the latest line.
+        The *original* column shows the stage-bounded QA input chain
+        (postpro → tl → prepro → orig). The QA column loads only ``qa`` and
+        the Overwrite column loads only ``qa_overwrite``.
 
         Returns:
-            Tuple of (latest_lines, overwrite_lines).
+            Tuple of (qa_input_lines, qa_lines, overwrite_lines).
         """
-        latest: List[str] = []
+        qa_input: List[str] = []
+        qa_lines: List[str] = []
         overwrite: List[str] = []
 
         mgr = self.manifest_manager
         if mgr is not None and mgr.is_loaded:
             manifest_lines = mgr.get_lines()
             if manifest_lines:
-                latest = get_all_lines_resolved(mgr)
-                for ln in manifest_lines:
-                    qa = ln.get("qa_overwrite", "")
-                    latest_val = get_latest_line_text(mgr, ln.get("idx", 0))
-                    overwrite.append(qa if qa else latest_val)
+                qa_input = get_all_lines_for_stage(mgr, "qa")
+                for i, ln in enumerate(manifest_lines):
+                    stored_qa = str(ln.get("qa", "") or "")
+                    qa_lines.append(stored_qa or (qa_input[i] if i < len(qa_input) else ""))
+                    overwrite.append(str(ln.get("qa_overwrite", "") or ""))
 
         # Fallback: session data
-        if not latest:
+        if not qa_input:
             try:
                 app = self.winfo_toplevel()
                 if hasattr(app, "_step_tabs") and len(app._step_tabs) > 0:
@@ -737,49 +758,53 @@ class QAStep(BaseStep):
                         loaded_files = input_step.get_loaded_files()
                         for lf in loaded_files:
                             if hasattr(lf, "lines"):
-                                latest.extend(lf.lines)
+                                qa_input.extend(lf.lines)
             except Exception as e:
                 logger.debug("Error getting lines: %s", e)
 
         # Final fallback: manifest orig lines
-        if not latest:
+        if not qa_input:
             mgr = self.manifest_manager
             if mgr is not None and mgr.is_loaded:
-                latest = mgr.get_all_orig_lines()
+                qa_input = mgr.get_all_orig_lines()
 
         # Legacy fallback: old session step data (pre-v3.3)
-        if not latest:
+        if not qa_input:
             input_data = self.session.get_step(0).data
             if "all_lines" in input_data:
-                latest = input_data["all_lines"]
+                qa_input = input_data["all_lines"]
 
-        # If no overwrite, default to latest
-        if not overwrite and latest:
-            overwrite = [""] * len(latest)
+        while len(qa_lines) < len(qa_input):
+            qa_lines.append("")
+        while len(overwrite) < len(qa_input):
+            overwrite.append("")
 
-        return latest, overwrite
+        return qa_input, qa_lines, overwrite
 
     def _refresh_lines(self) -> None:
         """Refresh lines from manifest.
 
-        Populates QALine objects with the latest processed text as
-        *original* and existing ``qa_overwrite`` as *translated*.
+        Populates QALine objects with the QA input chain as *original*,
+        stored ``qa`` as the QA column, and stored ``qa_overwrite`` as Overwrite.
         """
-        latest, overwrite = self._get_lines_from_previous_steps()
+        latest, qa_lines, overwrite = self._get_lines_from_previous_steps()
 
         if not latest:
             self._status_label.configure(text="No lines loaded")
             return
 
+        while len(qa_lines) < len(latest):
+            qa_lines.append("")
         while len(overwrite) < len(latest):
             overwrite.append("")
 
         self._lines = []
-        for idx, (lat, ow) in enumerate(zip(latest, overwrite)):
+        for idx, (lat, qa_text, ow) in enumerate(zip(latest, qa_lines, overwrite)):
             line = QALine(
                 idx=idx,
                 original=lat,
-                translated=ow,
+                qa_text=qa_text,
+                overwrite_text=ow,
             )
             self._lines.append(line)
 
@@ -827,16 +852,9 @@ class QAStep(BaseStep):
                     "idx": str(line.idx + 1),
                     "status": status,
                     "issues": str(line.issue_count) if line.issue_count > 0 else "-",
-                    "original": (
-                        line.original[:100] + "..."
-                        if len(line.original) > 100
-                        else line.original
-                    ),
-                    "translated": (
-                        line.translated[:100] + "..."
-                        if len(line.translated) > 100
-                        else line.translated
-                    ),
+                    "original": line.original,
+                    "qa": line.qa_text,
+                    "overwrite": line.overwrite_text,
                 },
             )
             rows.append(row)
@@ -896,7 +914,7 @@ class QAStep(BaseStep):
             text=f"Line {line.idx + 1} - {len(line.issues)} issue(s)"
         )
         self._set_text(self._detail_original, line.original)
-        self._set_text(self._detail_translated, line.translated)
+        self._set_text(self._detail_translated, line.qa_text)
 
         # Populate issues listbox
         self._issues_listbox.delete(0, "end")
@@ -908,6 +926,22 @@ class QAStep(BaseStep):
         # Clear suggestion
         self._suggestion_label.configure(text="")
         self._apply_fix_btn.configure(state="disabled")
+
+    def _on_table_edit(self, row_id: int, column_key: str, new_value: Any) -> None:
+        """Handle inline edits from the shared table."""
+        if column_key != "overwrite":
+            return
+        if 0 <= row_id < len(self._lines):
+            self._lines[row_id].overwrite_text = str(new_value)
+            if self.manifest_manager is not None:
+                _persist_sparse_qa_overwrite(
+                    self.manifest_manager,
+                    self._lines[row_id].idx,
+                    self._lines[row_id].qa_text,
+                    self._lines[row_id].overwrite_text,
+                )
+            if self._selected_line_idx == row_id:
+                self._show_line_details(self._lines[row_id])
 
     def _set_text(self, widget: scrolledtext.ScrolledText, text: str) -> None:
         """Set text in a ScrolledText widget."""
@@ -1021,7 +1055,7 @@ class QAStep(BaseStep):
                 line.issues = []
 
                 # Skip empty translations check
-                if not line.translated.strip():
+                if not line.qa_text.strip():
                     if self._is_rule_enabled("Empty Translation"):
                         line.issues.append(
                             QAIssue(
@@ -1037,9 +1071,7 @@ class QAStep(BaseStep):
 
                 # Placeholder check
                 if self._is_rule_enabled("Placeholder Preservation") and has_validation:
-                    result = validate_placeholder_preserved(
-                        line.original, line.translated
-                    )
+                    result = validate_placeholder_preserved(line.original, line.qa_text)
                     if not result.is_valid:
                         for ph in result.missing_placeholders:
                             line.issues.append(
@@ -1066,7 +1098,7 @@ class QAStep(BaseStep):
 
                 # Japanese character check
                 if self._is_rule_enabled("Japanese Character Detection") and has_validation:
-                    jp_count = count_japanese(line.translated)
+                    jp_count = count_japanese(line.qa_text)
                     if jp_count > self._qa_options.max_japanese_chars:
                         line.issues.append(
                             QAIssue(
@@ -1083,7 +1115,7 @@ class QAStep(BaseStep):
                 if self._is_rule_enabled("Speaker Format") and has_validation:
                     orig_info = detect_speaker_dialogue_format(line.original)
                     if orig_info.has_speaker_format:
-                        trans_info = detect_speaker_dialogue_format(line.translated)
+                        trans_info = detect_speaker_dialogue_format(line.qa_text)
                         if not trans_info.has_speaker_format:
                             line.issues.append(
                                 QAIssue(
@@ -1113,7 +1145,7 @@ class QAStep(BaseStep):
                 if self._is_rule_enabled("Quote Balance"):
                     quote_pairs = [('"', '"'), ("'", "'"), ("「", "」"), ("『", "』")]
                     for open_q, close_q in quote_pairs:
-                        if line.translated.count(open_q) != line.translated.count(close_q):
+                        if line.qa_text.count(open_q) != line.qa_text.count(close_q):
                             line.issues.append(
                                 QAIssue(
                                     line_idx=line.idx,
@@ -1129,7 +1161,7 @@ class QAStep(BaseStep):
                 # Anchor check
                 if self._is_rule_enabled("Anchor Preservation") and has_validation:
                     orig_anchors = extract_anchors(line.original)
-                    trans_anchors = extract_anchors(line.translated)
+                    trans_anchors = extract_anchors(line.qa_text)
                     missing = orig_anchors - trans_anchors
                     if missing:
                         for anchor in missing:
@@ -1146,14 +1178,14 @@ class QAStep(BaseStep):
 
                 # Line length check
                 if self._qa_options.max_line_length > 0:
-                    if len(line.translated) > self._qa_options.max_line_length:
+                    if len(line.qa_text) > self._qa_options.max_line_length:
                         line.issues.append(
                             QAIssue(
                                 line_idx=line.idx,
                                 issue_type=IssueType.LINE_TOO_LONG,
                                 severity=IssueSeverity.WARNING,
                                 message=(
-                                    f"Line too long: {len(line.translated)} chars "
+                                    f"Line too long: {len(line.qa_text)} chars "
                                     f"(max {self._qa_options.max_line_length})"
                                 ),
                                 suggestion="Split or shorten the line",
@@ -1343,7 +1375,8 @@ class QAStep(BaseStep):
                 line_data = {
                     "line": line.idx + 1,
                     "original": line.original,
-                    "translated": line.translated,
+                    "qa": line.qa_text,
+                    "overwrite": line.overwrite_text,
                     "issues": issues_list,
                 }
                 for issue in line.issues:
@@ -1407,7 +1440,8 @@ class QAStep(BaseStep):
         for line_data in report["lines"]:
             lines.append(f"\nLine {line_data['line']}:")
             lines.append(f"  Original: {line_data['original'][:50]}...")
-            lines.append(f"  Translated: {line_data['translated'][:50]}...")
+            lines.append(f"  QA: {line_data['qa'][:50]}...")
+            lines.append(f"  Overwrite: {line_data['overwrite'][:50]}...")
             for issue in line_data["issues"]:
                 fixed = " (FIXED)" if issue["fixed"] else ""
                 lines.append(
@@ -1484,8 +1518,7 @@ class QAStep(BaseStep):
     def on_leave(self) -> None:
         """Called when leaving step.
 
-        Persists ``qa_overwrite`` to manifest for each line whose
-        *translated* (overwrite) text differs from the latest line.
+        Keeps QA state in session without auto-writing stage fields.
         """
         if not self._full_ui_built:
             return
@@ -1497,13 +1530,30 @@ class QAStep(BaseStep):
             "max_line_length": self._max_len_var.get(),
             "rerun_policy": self._rerun_var.get(),
         }
+        step_data["qa_lines"] = [line.qa_text for line in self._lines]
+        step_data["qa_overwrite_lines"] = [line.overwrite_text for line in self._lines]
 
-        # Persist qa_overwrite to manifest – only for lines that changed
-        mgr = self.manifest_manager
-        if mgr is not None and self._lines:
-            for line in self._lines:
-                if line.translated and line.translated != line.original:
-                    mgr.set_line_field(line.idx, "qa_overwrite", line.translated)
+    def _copy_selected_to_overwrite(self) -> None:
+        """Copy the selected QA values into QA overwrite."""
+        selected = self._lines_table.get_selected_ids()
+        if not selected:
+            messagebox.showinfo("Select", "Please select lines to copy.")
+            return
+
+        for line_idx in selected:
+            if 0 <= line_idx < len(self._lines):
+                self._lines[line_idx].overwrite_text = self._lines[line_idx].qa_text
+                if self.manifest_manager is not None:
+                    _persist_sparse_qa_overwrite(
+                        self.manifest_manager,
+                        self._lines[line_idx].idx,
+                        self._lines[line_idx].qa_text,
+                        self._lines[line_idx].overwrite_text,
+                    )
+
+        self._update_lines_table()
+        if self._selected_line_idx >= 0 and self._selected_line_idx < len(self._lines):
+            self._show_line_details(self._lines[self._selected_line_idx])
 
     def get_qa_results(self) -> Dict[str, Any]:
         """Get QA results.

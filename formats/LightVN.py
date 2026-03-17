@@ -7,7 +7,8 @@ recovery, speaker detection, and engine-specific wordwrap.
 Extraction Tags:
     - ``"dialogue"``: Story dialogue (with optional speaker).
     - ``"menu"``: Menu/button text from ``~文字`` / ``~ボタン文字`` commands.
-    - ``"variable"``: Translatable variable assignments (skill names, items).
+    - ``"variable"``: Translatable variable assignments (skill names, etc.).
+    - ``"items"``: Item-like variable assignments (loot/material names/counts).
 
 Speaker Format:
     Dialogue keys use ``"Speaker: text"`` when a speaker is active.
@@ -30,6 +31,12 @@ from .parser_base import (
     WordwrapConfig,
 )
 
+try:
+    from CherryAI.functions.wordwrap import pretty_wrap as _shared_pretty_wrap
+    _HAS_SHARED_WRAP = True
+except ImportError:
+    _HAS_SHARED_WRAP = False
+
 
 __all__ = ["LightVNParser"]
 
@@ -43,6 +50,7 @@ logger = logging.getLogger("cherryai.formats.lightvn")
 TAG_DIALOGUE = "dialogue"
 TAG_MENU = "menu"
 TAG_VARIABLE = "variable"
+TAG_ITEMS = "items"
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +75,7 @@ class LightVNParser(ParserScript):
     # -- Patterns ----------------------------------------------------------
 
     SPEAKER_PATTERN = re.compile(r"^~【(.*?)】\s*$")
+    BOOKMARK_PATTERN = re.compile(r"^~?栞\s+.+$")
 
     VARIABLE_PATTERN = re.compile(
         r"^(臨時全域変数|保存変数)\s+"
@@ -81,6 +90,11 @@ class LightVNParser(ParserScript):
         "道具名",
         "道具効果",
         "調合素材",
+    }
+
+    ITEM_VARS: Set[str] = {
+        "剥ぎ取り素材",
+        "獲得食材",
     }
 
     CODE_OPEN_BRACKETS: Set[str] = {
@@ -102,6 +116,12 @@ class LightVNParser(ParserScript):
         "アウト", "効果音", "絵", "文字", "文字窓", "文字窓0",
         "文字色", "文字陰", "文字進行", "ジャンプ", "栞", "ループ",
         "画面領域", "もし", "ボタン", "変数", "選択", "スクリプト終了",
+    }
+
+    PLACEHOLDER_DIALOGUE_TEXTS: Set[str] = {
+        "ここにテキストを入力",
+        "Enter your text here",
+        "Enter your text here.",
     }
 
     # -- Defaults ----------------------------------------------------------
@@ -147,11 +167,28 @@ class LightVNParser(ParserScript):
     def name(self) -> str:  # noqa: D401
         return "LightVN"
 
+    @property
+    def display_name(self) -> str:  # noqa: D401
+        return "Light VN"
+
+    @property
+    def tooltip(self) -> str:  # noqa: D401
+        return (
+            "Parser for Light VN visual novel engine scripts. "
+            "Extracts dialogue, menu, and variable text."
+        )
+
     # Patterns that reliably identify a Light VN script.
     _DETECT_PATTERNS: Set[str] = {
-        "~【", "~文字", "~ボタン", "~絵", "~効果音", "~選択",
+        "~【", "~栞", "~文字", "~ボタン", "~絵", "~効果音", "~選択",
+        "~スクリプト", "~保存変数", "~臨時全域変数",
     }
-    _DETECT_LINE_PREFIXES: Tuple[str, ...] = ("栞 ",)
+    _DETECT_LINE_PREFIXES: Tuple[str, ...] = (
+        "栞 ",
+        "スクリプト ",
+        "保存変数 ",
+        "臨時全域変数 ",
+    )
 
     def can_handle(self, file_path: Path) -> bool:
         """Probe whether *file_path* is a Light VN script.
@@ -357,7 +394,13 @@ class LightVNParser(ParserScript):
         self, text: str, width: int, break_char: str = "\n",
         max_lines: Optional[int] = None,
     ) -> Optional[str]:
-        """Engine-specific balanced wrap with orphan avoidance."""
+        """Engine-specific balanced wrap with orphan avoidance.
+
+        Uses the internal balanced-wrap algorithm for dialogue text.
+        Falls back to CherryAI's shared ``pretty_wrap`` when the
+        balanced algorithm is not applicable (e.g. non-CJK text
+        with no bracket codes).
+        """
         if width <= 0:
             return text
         lines = self._pretty_wrap(text, width)
@@ -410,6 +453,18 @@ class LightVNParser(ParserScript):
         if speaker:
             return f"{speaker}: {text}"
         return text
+
+    @classmethod
+    def _is_bookmark_line(cls, line: str) -> bool:
+        """Return True for LightVN bookmark lines such as ``~栞 宿屋``."""
+        return bool(cls.BOOKMARK_PATTERN.match(line.strip()))
+
+    @classmethod
+    def _is_placeholder_dialogue_text(cls, text: str) -> bool:
+        """Return True for editor placeholder dialogue that should not be translated."""
+        normalized = text.replace("\n", " ").strip()
+        normalized = normalized.rstrip("。．.!！？?").strip()
+        return normalized in cls.PLACEHOLDER_DIALOGUE_TEXTS
 
     @staticmethod
     def _parse_translation(translation: str) -> Tuple[str, str]:
@@ -580,16 +635,26 @@ class LightVNParser(ParserScript):
         if not m:
             return False
         var_name = m.group(2)
-        return any(var_name.startswith(tv) for tv in self.TRANSLATABLE_VARS)
+        return self._classify_variable_tag(var_name) is not None
+
+    def _classify_variable_tag(self, var_name: str) -> Optional[str]:
+        if any(var_name.startswith(item_var) for item_var in self.ITEM_VARS):
+            return TAG_ITEMS
+        if any(var_name.startswith(tv) for tv in self.TRANSLATABLE_VARS):
+            return TAG_VARIABLE
+        return None
 
     def _extract_variable_text(
         self, line: str,
-    ) -> Optional[Tuple[str, str, str]]:
+    ) -> Optional[Tuple[str, str, str, str]]:
         stripped = self._strip_conditional_prefix(line.strip())
         m = self.VARIABLE_PATTERN.match(stripped)
         if not m:
             return None
         var_type, var_name, text = m.group(1), m.group(2), m.group(3)
+        tag = self._classify_variable_tag(var_name)
+        if tag is None:
+            return None
         if not text or not text.strip():
             return None
         if re.match(r"^{{[^}]+}}$", text):
@@ -598,7 +663,7 @@ class LightVNParser(ParserScript):
             return None
         if text.strip() in ("-", ""):
             return None
-        return var_type, var_name, text
+        return tag, var_type, var_name, text
 
     # -- Code detection ----------------------------------------------------
 
@@ -879,7 +944,7 @@ class LightVNParser(ParserScript):
             nonlocal in_dialogue, current_dialogue
             if in_dialogue and current_dialogue:
                 dt = self._process_dialogue_text("\n".join(current_dialogue))
-                if dt:
+                if dt and not self._is_placeholder_dialogue_text(dt):
                     key = self._make_dialogue_key(dt, dialogue_speaker)
                     result.append(ExtractedLine(
                         text=key,
@@ -894,6 +959,13 @@ class LightVNParser(ParserScript):
             line = lines[i]
             stripped = line.strip()
             stripped_nc = self._strip_conditional_prefix(stripped)
+
+            if self._is_bookmark_line(stripped) or self._is_bookmark_line(stripped_nc):
+                _flush_dialogue()
+                # Bookmarks select map interactions/scenes, not displayed speaker labels.
+                self._current_speaker = ""
+                i += 1
+                continue
 
             # --- Speaker tag ---
             sm = self.SPEAKER_PATTERN.match(stripped)
@@ -918,10 +990,10 @@ class LightVNParser(ParserScript):
                 _flush_dialogue()
                 vr = self._extract_variable_text(stripped)
                 if vr:
-                    _vt, _vn, text = vr
+                    tag, _vt, _vn, text = vr
                     if not (self._exclude_code_only and self._is_code_only_text(text)):
                         result.append(ExtractedLine(
-                            text=text, tag=TAG_VARIABLE,
+                            text=text, tag=tag,
                         ))
                 i += 1
                 continue
@@ -1064,6 +1136,15 @@ class LightVNParser(ParserScript):
             line = lines[i]
             stripped = line.strip()
             stripped_nc = self._strip_conditional_prefix(stripped)
+
+            if self._is_bookmark_line(stripped) or self._is_bookmark_line(stripped_nc):
+                _process_block()
+                self._current_speaker = ""
+                speaker_line_idx = -1
+                speaker_cond_prefix = ""
+                result_lines.append(line)
+                i += 1
+                continue
 
             sm = self.SPEAKER_PATTERN.match(stripped)
             if not sm and stripped_nc.startswith("【"):
@@ -1278,7 +1359,7 @@ class LightVNParser(ParserScript):
             if not vr:
                 out.append(line)
                 continue
-            _vt, _vn, orig = vr
+            _tag, _vt, _vn, orig = vr
             t = translations.get(orig, "")
             if t:
                 t, rc, nrc, det = self._recover_code_in_translation(

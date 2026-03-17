@@ -145,6 +145,53 @@ python -m pytest CherryAI/dev/test_manifest_v2.py -v --timeout=10
 python -m pytest CherryAI/dev/ -v --timeout=10
 ```
 
+### Focused Workflow Regression
+
+The QA-before-Wordwrap reorder is covered by a focused regression set:
+
+- `dev/test_manifest_fields.py` verifies the shared priority chain `wordwr → qa_overwrite → qa → postpro → tl → prepro → orig` and the stage ceilings for QA and Wordwrap.
+- `dev/test_qa_manifest.py` verifies that QA loads its Original column from `postpro → tl → prepro → orig`, loads the Quality Assurance column from `qa`, and loads Overwrite from `qa_overwrite` only.
+- `dev/test_wordwrap_phase46.py` verifies that Wordwrap uses `qa_overwrite → qa → postpro → tl → prepro → orig` as input and that the Wordwrap column only restores stored `wordwr` values.
+- `dev/test_table_view.py` verifies the Full Table View column names/order for `qa`, `qa_overwrite`, and `wordwr` plus the unified `tags` field.
+
+Verified command:
+
+```bash
+python -m pytest CherryAI/dev/test_manifest_fields.py CherryAI/dev/test_qa_manifest.py CherryAI/dev/test_wordwrap_phase46.py CherryAI/dev/test_table_view.py -q --timeout=10
+```
+
+### Focused Manifest Persistence Regression
+
+The sparse-manifest and import-preservation changes are covered by an additional focused set:
+
+- `dev/test_input_import_fixes.py` verifies that importing Information settings does not overwrite the current `project_name`.
+- `dev/test_table_view.py` verifies the Clear Columns workflow for `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, and `wordwr`, including the second confirmation required for `tl`.
+- `dev/test_postprocess_phase45.py` verifies that unchanged postprocessing output clears `postpro` instead of persisting a redundant copy.
+- `dev/test_postprocess_phase45.py` also verifies flagged-case dropdown population, dedup-restoration flag clearing for duplicate rows, and Processed Lines search matching Recovery Details metadata.
+- `dev/test_qa_manifest.py` verifies that QA does not auto-persist `qa` and only stores explicit `qa_overwrite` edits.
+- `dev/test_wordwrap_phase46.py` verifies that Wordwrap preview/leave do not auto-write `wordwr` and that Apply persists only changed wrapped output.
+- `dev/test_manifest_metadata.py` verifies metadata import and project-name preservation semantics.
+
+Verified command:
+
+```bash
+python -m pytest CherryAI/dev/test_input_import_fixes.py CherryAI/dev/test_table_view.py CherryAI/dev/test_postprocess_phase45.py CherryAI/dev/test_qa_manifest.py CherryAI/dev/test_wordwrap_phase46.py CherryAI/dev/test_manifest_metadata.py -q --timeout=10
+```
+
+### Focused Manifest Loading + Canonical Tags Regression
+
+The active-project load reset and canonical tag import changes are covered by another focused set:
+
+- `dev/test_app_startup.py` verifies that clearing `last_manifest` removes the INI key, session-key storage uses `[session]`, and activating a loaded project flushes tab runtime state before entering the new manifest.
+- `dev/test_input_import_fixes.py` verifies canonical line ordering, `tags` merge semantics, and dedup-safe import behavior that blocks translation-stage text on `__DEDUP__` rows.
+- `dev/test_lightvn_fixes.py` verifies that parser tags still flow through `LoadedFile.tags` but are stored via the canonical `tags` helper instead of legacy `tag` writes.
+
+Verified command:
+
+```bash
+python -m pytest CherryAI/dev/test_app_startup.py CherryAI/dev/test_input_import_fixes.py CherryAI/dev/test_lightvn_fixes.py -q --timeout=10
+```
+
 Plugin installation:
 
 ```bash
@@ -377,14 +424,14 @@ Full Table View dialog unit tests. Mocks Tkinter to test data logic independentl
 | `test_display_names_are_unique` | No display name collisions |
 | `test_idx_renamed_to_line_number` | idx → Line # |
 | `test_orig_renamed_to_original` | orig → Original |
-| `test_context_marker_renamed_to_tags` | tag → Tags |
-| `test_qa_overwrite_renamed` | qa_overwrite → Quality Assurance |
+| `test_context_marker_renamed_to_tags` | tags → Tags and legacy tag removed |
+| `test_qa_overwrite_renamed` | qa_overwrite → Overwrite |
 
 #### TestDefaultHidden (3 tests)
 
 | Test | Purpose |
 |------|---------|
-| `test_context_marker_hidden_by_default` | tag in DEFAULT_HIDDEN |
+| `test_context_marker_hidden_by_default` | Legacy tag field is not hidden because it is no longer a table column |
 | `test_idx_not_hidden_by_default` | idx not hidden |
 | `test_orig_not_hidden_by_default` | orig not hidden |
 
@@ -478,11 +525,11 @@ Core Manifest v2.0 unit tests validating LineEntry and Manifest classes.
 | `test_get_input_for_edit_pass1_with_tlc1` | Edit Pass 1 uses tlc1 if available |
 | `test_get_input_for_edit_pass1_fallback` | Edit Pass 1 falls back to tl |
 | `test_get_input_for_edit_pass2` | Edit Pass 2 backwards resolution |
-| `test_get_input_for_postprocessing_with_edits` | Post uses latest edit/tlc |
-| `test_get_input_for_postprocessing_with_tlc_only` | Post uses latest tlc if no edits |
+| `test_get_input_for_postprocessing_with_edits` | Post ignores Edit/TLC rounds and uses tl |
+| `test_get_input_for_postprocessing_with_tlc_only` | Post ignores TLC-only rounds and uses tl |
 | `test_get_input_for_postprocessing_fallback` | Post falls back through tl → prepro → orig |
 | `test_get_input_for_wordwrap_with_postpro` | Wordwrap uses postpro if available |
-| `test_get_input_for_wordwrap_fallback` | Wordwrap falls back to postprocessing resolution |
+| `test_get_input_for_wordwrap_fallback` | Wordwrap falls back to tl → prepro → orig |
 
 #### TestFinalOutput (5 tests)
 
@@ -1739,11 +1786,24 @@ PHASE 37: Edit/TLC Prompt Components (Configurable Input Sources). Tests for com
 
 ---
 
-### dev/test_manifest_fields.py (188 tests)
+### dev/test_manifest_fields.py (194 tests)
 
 Manifest field type helpers for Task 22.1 and 22.2. Reusable save/load operations for different field types and complex data structures.
 
-**Session 26 additions:** `manifest_fields.py` now also exports shared priority resolution functions used by all GUI steps: `resolve_line_field()`, `resolve_line_field_from()`, `get_latest_line_text()`, `get_all_lines_resolved()`. PIPELINE_FIELDS chain: `qa_overwrite → wordwr → postpro → tl → prepro → orig`.
+**Session 26 additions:** `manifest_fields.py` now also exports shared priority resolution functions used by all GUI steps: `resolve_line_field()`, `resolve_line_field_from()`, `get_latest_line_text()`, `get_all_lines_resolved()`.
+
+**Stage-ceiling additions:** `resolve_line_field_for_stage()`, `get_line_text_for_stage()`, and `get_all_lines_for_stage()` enforce workflow-specific input ceilings while `PIPELINE_FIELDS` remains the full final-display chain: `wordwr → qa_overwrite → qa → postpro → tl → prepro → orig`.
+
+#### TestLinePriorityResolution (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_pipeline_fields_latest_chain` | Full-chain order remains wordwr → qa_overwrite → qa → postpro → tl → prepro → orig |
+| `test_resolve_line_field_prefers_latest_display` | Final-display helper prefers wordwr, then QA overwrite, then QA |
+| `test_resolve_line_field_for_stage_postprocessing_uses_tl_chain` | Postprocessing ceiling is tl → prepro → orig |
+| `test_resolve_line_field_for_stage_wordwrap_uses_postpro_chain` | Wordwrap ceiling is qa_overwrite → qa → postpro → tl → prepro → orig |
+| `test_resolve_line_field_for_stage_qa_ignores_qa_overwrite` | QA ceiling ignores qa_overwrite and wordwr and starts at postpro |
+| `test_get_stage_helpers_resolve_all_lines` | Manager-level stage helpers resolve by idx and in bulk |
 
 #### TestTextFieldSave (6 tests)
 
@@ -3195,7 +3255,7 @@ Thank you.
 | test_costs_api_rework.py | 35 | API Requests & Costs rework (cache calculation, mode buttons, instant recalculation, model lock, settings decoupling, button rename, translation request mode, fast reprice on model change) |
 | test_costs_additive_display.py | 30 | Additive cost display rework (ceil-to-cents, content-only input_cost, non-cached prompt tokens, label layout, additive total) |
 | test_estimate_manifest.py | 33 | Estimation/Analysis manifest integration (TASK 25.1, 25.2) |
-| test_qa_manifest.py | 17 | QA step manifest integration (TASK 26.1) |
+| test_qa_manifest.py | 19 | QA step manifest integration (TASK 26.1 + stage-bounded QA input resolution) |
 | test_translate_manifest.py | 47 | Translation step manifest integration (TASK 26.2) |
 | test_postprocess_manifest.py | 35 | Postprocessing step manifest integration (TASK 27.1) |
 | test_wordwrap_manifest.py | 40 | Wordwrap step manifest integration (TASK 28.1) |
@@ -3225,7 +3285,7 @@ Thank you.
 | test_options.py | 29 | Options dialog & API config |
 | test_partial_translation.py | 18 | Partial translation mode (TASK 9) |
 | test_postprocess.py | 79 | Post-process recovery suite |
-| test_prompt_caching.py | 103 | Prompt caching (ordering, model detection, token tracking, filter logic, cached input column, reasoning/prediction logging, cache key generation, static prompt size check, cost estimation with cached input) |
+| test_prompt_caching.py | 110 | Prompt caching (ordering, model detection, token tracking, filter logic, cached input column, reasoning/prediction logging, explicit vs. auto-generated cache key resolution, support helpers, static prompt size check, cost estimation with cached input) |
 | test_project_config.py | 19 | Project configuration |
 | test_quote_stripping.py | 33 | Quote stripping modes |
 | test_rate_limiter.py | 70 | Rate limiting system |
@@ -3255,12 +3315,12 @@ Thank you.
 | test_preprocess_phase42.py | 80 | Preprocessing & Postprocessing Phase 42 |
 | test_translation_phase43.py | 48 | Translation Tab Overhaul Phase 43 |
 | test_validation_shared.py | 24 | Shared Validation Phase 44 |
-| test_postprocess_phase45.py | 49 | Postprocessing Tab Overhaul Phase 45 |
-| test_wordwrap_phase46.py | 45 | Wordwrap Tab Overhaul Phase 46 |
+| test_postprocess_phase45.py | 54 | Postprocessing Tab Overhaul Phase 45 + stage-bounded translated input + flagged-case/dedup/search regressions |
+| test_wordwrap_phase46.py | 47 | Wordwrap Tab Overhaul Phase 46 + stage-bounded Latest input |
 | test_output_phase47.py | 52 | Output + Pipeline Completeness + Import Phase 47 |
 | test_pipeline_logging.py | 52 | Pipeline Logging System Phase 48 |
 | test_request_formation.py | 50 | Request Formation 4-Step Process Phase 49 |
-| test_request_preview.py | 42 | Preview Requests dialog: PreviewRequest dataclass with _format_input_lines, FILTER_PARTS, RequestPreviewDialog (Pure/Formatted/Plain views preserving {}, Jump/Search/Filter), _build_preview_requests integration |
+| test_request_preview.py | 48 | Preview Requests dialog: PreviewRequest dataclass with _format_input_lines and request_params, FILTER_PARTS, RequestPreviewDialog (Pure/Formatted/Plain views preserving {}, Jump/Search/Filter), `_build_preview_requests()` integration including prompt cache metadata visibility, skip-already-translated parity, Global Options re-sync on Preview, CJK-aware non-source filtering, cached tab-entry coverage, and Translation-tab status summary |
 | test_context_markers.py | 70 | Context Markers Full Implementation Phase 50 |
 | test_speaker_dedup.py | 47 | Speaker Duplicate Removal Phase 51 |
 | test_glossary_selective.py | 28 | Selective Glossary Per Chunk Phase 52 |
@@ -3269,7 +3329,7 @@ Thank you.
 | test_source_root.py | 27 | source_root simplification (Task 2) |
 | test_line_saving.py | 39 | Line field saving across all steps (Task 3) |
 | test_knowledge_base.py | 56 | Knowledge Base widget, Active columns, collapsible design, prompt adapter (TASK 76) |
-| test_estimation_skip.py | 41 | Estimation skip logic Phase 78 (Task 3) |
+| test_estimation_skip.py | 41 | Estimation skip logic Phase 78 (Task 3), kept aligned with Translation/Preview shared skip classification |
 | test_costs_step_phase40.py | 57 | Costs step Phase 40+78 improvements (rename, dual estimation, dual ticks, concurrent time, prepro lines, prompt overhead format, request preview tokens) |
 | test_costs_api_rework.py | 35 | API Requests & Costs rework (cache calculation, mode buttons, instant recalculation, model lock, settings decoupling, button rename, translation request mode) |
 | test_costs_additive_display.py | 30 | Additive cost display rework (ceil-to-cents, content-only input_cost, non-cached prompt tokens, label layout, additive total) |
@@ -3285,11 +3345,12 @@ Thank you.
 | test_provider_handshake.py | 188 | Provider Handshake: ABC, registry, validation, OpenAI/Google/Mistral/Anthropic/Local providers, APIClient integration, options.py migration, UI constraints, structured output |
 | test_provider_live_api.py | 11 | Live API tests: GPT-5-nano (no temp, reasoning) + GPT-4.1-nano (temp 0-2, no reasoning) |
 | test_pricing_and_reasoning.py | 108 | Pricing + Reasoning: GPT 4.1 no flex/priority, GPT 5 all tiers, ThinkingConfig 5 modes (builtin/explicit/optional/mandatory/""), build_params Chat Completions format, reasoning_effort persistence (RequestSettings/APIConfig/TranslationOptions/INI), provider-based get_thinking_params, THINKING_MODELS, is_openai_reasoning_model |
-| test_api_log.py | 51 | API Log: LogEntry serialization, APILogStore CRUD/filtering/subscription/persistence, singleton management, enum values, dataclass defaults, status string compatibility (5), manifest save thread safety (2), structured log full-content guardrails (7) |
+| test_api_log.py | 52 | API Log: LogEntry serialization, APILogStore CRUD/filtering/subscription/persistence, singleton management, enum values, dataclass defaults, prompt-cache metadata preservation, status string compatibility (5), manifest save thread safety (2), structured log full-content guardrails (7) |
 | test_bugfix_batch_79.py | 33 | Bugfix Batch 79: API Log visibility (lift/non-modal), global glossary merge (4), ellipsis-only detection (14), ellipsis compression order (5), dedup/skip progress (3), cached/reasoning tokens (5) |
 | test_unified_request_builder.py | 28 | Unified Request Builder: gather_prompt_data (importable, keys, None/unloaded mgr, sample_lines, metadata read, fallback field merging), build_request_prompt (importable, tuple return, language prompt, style/tone/summary/genre enabled/disabled, rolling context, chunk_lines), unified call sites (costs 3 methods, translate 2 methods, no direct build_full_system_prompt), API Log full prompt (no truncation, line-by-line system_prompt), identical prompt output (deterministic, same data same prompt) |
 | test_glossary_term_link.py | 19 | Glossary ↔ Term Translation link: character round-trip (2), on_enter load order AST (3), on_leave dual-storage sync AST (2), import_analysis_speakers persistence AST (1), dual-storage simulation (4), CharacterInfo preservation (3), ProjectMetadata preservation (2), load guard (2) |
-| test_code_pattern_recovery.py | 28 | Code Pattern Recovery: _detect_delimiters (8), recover_code_patterns (9: anchor→english, preserved, non-preserve skipped, square brackets, unrecoverable, multiple patterns, empty, not-in-original, candidate conflict), validate_code_patterns_preserved (4), validate_translation_comprehensive code_patterns check #7 (3), recover_line pipeline integration (2), idx 8 end-to-end bug scenario (2) |
+| test_code_pattern_recovery.py | 33 | Code Pattern Recovery: _detect_delimiters (8), recover_code_patterns (10, including nested `{...}` inside `{{...}}` filtering), validate_code_patterns_preserved (5, including double-curly overlap regression), validate_translation_comprehensive code_patterns check #7 (3), recover_line pipeline integration (3, including double-curly preserve recovery), idx 8 end-to-end bug scenario (2) |
+| test_custom_placeholder_recovery.py | 2 | Batch custom-placeholder restoration: shifted named token restored on a different line; local per-line restore remains preferred before global fallback |
 | test_request_slicing_fix.py | 50 | Request Slicing Fix: is_code_pattern_only (15: exact/multi/NUM wildcard/punctuation/placeholder/empty/no-patterns/mixed/translatable/partial/regex-chars/None/whitespace/multi-NUM/overlapping), CODE_ONLY SkipReason (2: enum value, member exists), validate_line_pre CODE_ONLY (8: skipped/whitespace/NUM/not-code-only/no-patterns/empty/prot-precedence/placeholder-precedence), Efficient Merge Parity (5: conservative stable, efficient fewer, boundaries, estimation-translation parity, default false), Merge Boundaries (2: sum equals lines, single no boundaries), Merged Request Instruction (3: multi-boundary, single-boundary, block count), Manifest Patterns (8: LightVN color/close/var/combined, RPG Maker var/with-text/multi, Wolf var), Config Propagation (4: true/false/efficient/conservative), Preserve Patterns Wiring (3: signature/default/None) |
 | test_request_slicing_settings.py | 30 | Per-Model Settings Priority: TestEfficientAlwaysFewerRequests (7: chunk sizes 10-200, single file, multi file, high chunk, all same file, edge max lines, large dataset), TestMinLinesCalculation (2: conservative/efficient min_lines formula), TestStep5EfficientMerge (5: cross-file merge, no merge same file, preserves boundaries, skips when disabled, merge reduces count), TestConfigPropagation (2: efficient_merge true/false in config), TestCostsEstimationNoOverride (2: source has no go.request override, chunk_var read), TestTranslateLoadModelSettings (2: method exists, has get_model_settings call), TestPreviewUpdatesOptions (1: _translation_options assigned), TestBuildChunksPerModelSettings (4: get_model_settings call, rc_between/rc_after/chunk_max_tokens from model), TestPreviewRollingContextPerModel (1: rolling_context_before per-model), TestFormationPipelineRealWorld (3: 100/500/1000 lines), TestFormationStepsConsistency (1: conservative ≥ efficient) |
 | **Total Script Tests** | **4594** | (+188 provider handshake, +11 live API, +108 pricing/reasoning, +44 API log, +33 bugfix batch 79, +28 unified builder, +19 glossary term link, +28 code pattern recovery, +14 manifest overwrite, +30 request slicing settings) |
@@ -3954,9 +4015,9 @@ GUI dedup pipeline tests validating apply_dedup_batch, apply_aggressive_dedup_ba
 
 ---
 
-### dev/test_recovery_anchor.py (73 tests)
+### dev/test_recovery_anchor.py (79 tests)
 
-Comprehensive tests for anchor-relative bracket and quote recovery. Validates ANCHOR_EQUIVS equivalence-aware comparison, anchor-relative insertion (line start/end, punctuation anchors), NEEDS_RETRY flagging when no anchor found, helper functions, and integration with recover_line().
+Comprehensive tests for anchor-relative bracket and quote recovery. Validates ANCHOR_EQUIVS equivalence-aware comparison, balanced-original gating for bracket recovery, anchor-relative insertion (line start/end, punctuation anchors), NEEDS_RETRY flagging when no anchor found, helper functions, integration with recover_line(), lenticular `【】` versus square `[]` equivalence, extra unmatched-bracket removal, and the intentional triple-`}` exception.
 
 #### TestBracketEquivalence (9 tests)
 
@@ -3990,6 +4051,17 @@ Comprehensive tests for anchor-relative bracket and quote recovery. Validates AN
 |------|---------|
 | `test_missing_bracket_in_middle_no_anchor` | No punctuation → graceful handling |
 | `test_no_absolute_position_algorithm` | Regression: no rel_pos formula |
+
+#### TestBracketRecoveryGate (6 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_unbalanced_original_skips_recovery` | Unbalanced source lines do not trigger repair |
+| `test_unbalanced_original_skips_retry_flagging` | Unbalanced source also suppresses retry flagging |
+| `test_balanced_latest_with_different_brackets_is_ignored` | Balanced output is ignored despite bracket-style drift |
+| `test_lenticular_brackets_match_square_brackets_and_extra_brace_is_removed` | `【】` and `[]` are equivalent while stray `}` is removed |
+| `test_recover_line_keeps_lenticular_equivalence_without_reinserting_fullwidth` | recover_line keeps `[]` and removes only the extra brace |
+| `test_intentionally_unbalanced_triple_closing_brace_is_kept` | Rare source-side triple `}` lines are left unchanged |
 
 #### TestQuoteEquivalence (6 tests)
 
@@ -8929,9 +9001,9 @@ python -m pytest CherryAI/dev/test_code_pattern_actions.py -v --timeout=10
 
 ---
 
-### dev/test_code_pattern_recovery.py (28 tests) - Code Pattern Recovery
+### dev/test_code_pattern_recovery.py (33 tests) - Code Pattern Recovery
 
-Tests for preserve-action code pattern recovery, validation, and the full pipeline fix for the idx 8 bug ({アンカー} translated as {anchor}).
+Tests for preserve-action code pattern recovery, validation, and the full pipeline fix for the idx 8 bug ({アンカー} translated as {anchor}). Also covers doubled-delimiter preserve tokens such as `{{...}}` so restores replace the whole token instead of leaving a trailing brace.
 
 #### TestDetectDelimiters (8 tests)
 
@@ -8946,7 +9018,7 @@ Tests for preserve-action code pattern recovery, validation, and the full pipeli
 | `test_fullwidth_curly` | `｛test｝` → `｛`, `｝` |
 | `test_cjk_angle` | `《test》` → `《`, `》` |
 
-#### TestRecoverCodePatterns (9 tests)
+#### TestRecoverCodePatterns (10 tests)
 
 | Test | Purpose |
 |------|---------|
@@ -8959,8 +9031,9 @@ Tests for preserve-action code pattern recovery, validation, and the full pipeli
 | `test_empty_code_patterns` | No-op with empty list |
 | `test_pattern_not_in_original` | Skip when pattern absent from original |
 | `test_candidate_matches_different_known_pattern` | Don't clobber valid patterns |
+| `test_nested_single_curly_inside_double_curly_is_ignored` | Inner `{...}` is ignored when only outer `{{...}}` should recover |
 
-#### TestValidateCodePatternsPreserved (4 tests)
+#### TestValidateCodePatternsPreserved (5 tests)
 
 | Test | Purpose |
 |------|---------|
@@ -8968,6 +9041,7 @@ Tests for preserve-action code pattern recovery, validation, and the full pipeli
 | `test_preserved_pattern_no_warning` | No warning when preserved |
 | `test_translate_action_not_checked` | translate-action skipped |
 | `test_multiple_occurrences_partial` | Partial preservation flagged |
+| `test_nested_single_curly_inside_double_curly_is_not_flagged` | Avoid double-flagging `{...}` inside `{{...}}` |
 
 #### TestValidateTranslationComprehensiveCodePatterns (3 tests)
 
@@ -8977,12 +9051,13 @@ Tests for preserve-action code pattern recovery, validation, and the full pipeli
 | `test_no_error_when_preserved` | No error when pattern survives |
 | `test_no_code_patterns_param` | Without code_patterns, check #7 is no-op |
 
-#### TestRecoverLineCodePatterns (2 tests)
+#### TestRecoverLineCodePatterns (3 tests)
 
 | Test | Purpose |
 |------|---------|
 | `test_code_pattern_recovered_in_pipeline` | recover_line passes code_patterns through |
 | `test_no_code_patterns_param_skipped` | Without code_patterns, recovery skipped |
+| `test_double_curly_preserve_does_not_leave_extra_closing_brace` | `{{Guild Name}}` → `{{ギルド呼び名}}` without trailing `}` |
 
 #### TestIdx8BugScenario (2 tests)
 
@@ -8993,6 +9068,21 @@ Tests for preserve-action code pattern recovery, validation, and the full pipeli
 
 ```
 python -m pytest CherryAI/dev/test_code_pattern_recovery.py -v --timeout=10
+```
+
+### dev/test_custom_placeholder_recovery.py (2 tests)
+
+Focused regression tests for line-agnostic custom placeholder restoration.
+
+**Files Tested:** `functions/modehelper.py`
+
+| Test | Purpose |
+|------|---------|
+| `test_restores_named_placeholder_on_different_line` | Restores a named token such as `Jane` even when the LLM moved it to a different line |
+| `test_prefers_local_restore_before_global_fallback` | Ensures per-line restoration still wins before the batch-wide fallback runs |
+
+```
+python -m pytest CherryAI/dev/test_custom_placeholder_recovery.py -v --timeout=10
 ```
 
 ---
@@ -9828,7 +9918,7 @@ Estimation and Analysis step manifest integration for Phase 25.
 
 ---
 
-### dev/test_qa_manifest.py (17 tests)
+### dev/test_qa_manifest.py (19 tests)
 
 QA step manifest integration for Phase 26 Task 26.1.
 
@@ -9873,6 +9963,13 @@ QA step manifest integration for Phase 26 Task 26.1.
 |------|---------|
 | `test_qa_step_has_imports` | QAStep has binding imports |
 | `test_qa_options_coexist_with_validation_rules` | Both sections coexist |
+
+#### TestQAStageInputResolution (2 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_qa_uses_wordwrap_chain_for_original_column` | QA original column uses postpro → tl → prepro → orig |
+| `test_qa_overwrite_falls_back_to_wordwrap_chain_when_empty` | Overwrite column loads only qa_overwrite and stays empty when none is stored |
 
 ---
 
@@ -10227,7 +10324,7 @@ Per-tag wordwrap settings, parser pretty_wrap hook, manifest TagConfigs, and tag
 | `test_set_get_roundtrip` | set/get_wordwrap_tag_configs roundtrip |
 | `test_dirty_flag` | Setting tag configs marks manifest dirty |
 | `test_tag_configs_key` | TagConfigs key exists in WordwrapSettings |
-| `test_parser_managed_flag` | ParserManaged field persists |
+| `test_new_fields_persist` | SpeakerHandling, PreventOrphans, NewTextbox fields persist |
 
 #### TestPrettyWrapHook (12 tests)
 
@@ -10250,9 +10347,9 @@ Per-tag wordwrap settings, parser pretty_wrap hook, manifest TagConfigs, and tag
 
 | Test | Purpose |
 |------|---------|
-| `test_defaults` | Default values (width=48, max_lines=4) |
-| `test_to_dict` | Serialization to dict |
-| `test_parser_managed` | parser_managed=True in dict |
+| `test_defaults` | Default values (width=48, max_lines=4, speaker=count) |
+| `test_to_dict` | Serialization to dict with all new fields |
+| `test_new_fields` | speaker_handling, prevent_orphans, prefer_punct_breaks, new_textbox in dict |
 | `test_roundtrip` | to_dict→from_dict roundtrip |
 | `test_missing_keys` | from_dict handles missing keys gracefully |
 
@@ -10280,7 +10377,7 @@ Per-tag wordwrap settings, parser pretty_wrap hook, manifest TagConfigs, and tag
 | `test_stub_pretty_only` | StubParser has O9 only |
 | `test_null_neither` | NullParser has neither |
 
-#### TestPrettyWrapIntegration (4 tests)
+#### TestPrettyWrapIntegration (5 tests)
 
 | Test | Purpose |
 |------|---------|
@@ -10288,6 +10385,7 @@ Per-tag wordwrap settings, parser pretty_wrap hook, manifest TagConfigs, and tag
 | `test_max_lines` | pretty_wrap max_lines truncation |
 | `test_lightvn_for_tag_dialogue` | LightVN wordwrap_for_tag("dialogue") returns config |
 | `test_lightvn_for_tag_menu` | LightVN wordwrap_for_tag("menu") returns no-wrap config |
+| `test_wordwrap_for_tag_items_no_wrap` | LightVN wordwrap_for_tag("items") returns no-wrap config |
 
 #### TestImportTranslationCompat (3 tests)
 
@@ -10312,8 +10410,8 @@ Per-tag wordwrap settings, parser pretty_wrap hook, manifest TagConfigs, and tag
 | `test_width_zero` | Width=0 means no wrap |
 | `test_single_word` | Single word longer than width |
 | `test_variable_tag` | Variable tag behaviour |
-| `test_parser_managed_omit` | Parser-managed tag omits from user config |
-| `test_parser_managed_include` | Parser-managed=True serializes correctly |
+| `test_parser_defaults_editable` | Parser-provided defaults are still editable |
+| `test_new_textbox_injection` | NewTextboxInjection serializes correctly |
 | `test_no_max_lines` | max_lines=0 means unlimited |
 | `test_empty_dict` | from_dict with empty dict uses defaults |
 
@@ -11660,13 +11758,14 @@ python -m pytest CherryAI/dev/test_validation_shared.py -v --timeout=10
 | TestTask459FilterOptions | 8 | All/Changed/Written/Flagged filters, PostprocessLine.written/flagged fields |
 | TestTask4510OverwriteWarning | 4 | Overwrite dialog on re-run, skip on first run |
 | TestFailurePolicyPropagation | 2 | FailurePolicy WRITE/FLAG propagation in _do_postprocessing |
+| TestStageInputResolution | 2 | Postprocessing translated input stays on tl → prepro → orig while postpro remains separate |
 
 ```bash
 # Run Phase 45 tests
 python -m pytest CherryAI/dev/test_postprocess_phase45.py -v --timeout=10
 ```
 
-### Phase 46: Wordwrap Tab Overhaul Tests (45 tests)
+### Phase 46: Wordwrap Tab Overhaul Tests (47 tests)
 
 Test file: `dev/test_wordwrap_phase46.py`
 
@@ -11683,6 +11782,7 @@ Test file: `dev/test_wordwrap_phase46.py`
 | TestTask469TableFilters | 5 | Filter values All/Changed/Exceeding/Overwrite Differs, _refresh_table filter logic |
 | TestTask4610MaxLinesFlag | 4 | _simple_wrap exceeds_limit detection, WrapLine exceeds_limit field |
 | TestRemainingEnumsDataclasses | 6 | WrapStatus intact, FormatConfig intact, WrapStats intact |
+| TestStageInputResolution | 2 | Input column uses qa_overwrite → qa → postpro → tl → prepro → orig while restoring existing wordwr separately |
 
 ```bash
 # Run Phase 46 tests
@@ -11886,7 +11986,7 @@ Tests for parser-based surgical injection in the Output step. Verifies that `inj
 python -m pytest CherryAI/dev/test_parser_injection.py -v --timeout=60
 ```
 
-### Parser Handshake & LightVN Parser (63 + 31 tests)
+### Parser Handshake & LightVN Parser (focused LightVN regressions documented below)
 
 **File:** `dev/test_lightvn_parser.py`
 
@@ -11913,11 +12013,13 @@ python -m pytest CherryAI/dev/test_parser_injection.py -v --timeout=60
 | **TestDuplicateDialogue** | **4** | **Duplicate dialogue count, text content, tags, speakers — verifies extraction returns all occurrences** |
 | **TestDuplicateMenu** | **3** | **Duplicate menu count, いいえ count, all menu tagged** |
 | **TestDuplicateVariable** | **3** | **Duplicate variable count, text content, all variable tagged** |
+| **TestItemVariables** | **2** | **Item-like variable assignments extract with the `items` tag and inject back through both direct and conditional assignment lines** |
 | **TestMixedDuplicates** | **5** | **Mixed total count, dialogue dupes, menu dupes, variable dupes, document order preserved** |
 | **TestNoDuplicates** | **2** | **Unique-only scripts still extract correctly (regression)** |
 | **TestExtractAgreement** | **2** | **extract() and extract_tagged() return same count/content** |
 | **TestInjectionWithDuplicates** | **2** | **_extract_all_keys includes duplicates, injection dict from duplicates** |
 | **TestRealFileExtraction** | **2** | **skilltext.txt has duplicates (>300 total), small file extraction** |
+| **TestBookmarkHandling** | **2** | **`~栞` bookmarks skip `ここにテキストを入力` placeholders and clear carried speaker state before later dialogue extraction** |
 | **TestSpeakerDetection (new)** | **2** | **Speakers from dialogue, single speaker** |
 | **TestSpeakerAllowlistFiltering** | **6** | **analyze_lines always detects, include_false skips, allowlist keeps valid, removes false positives, empty allowlist filters all, batch counts** |
 
@@ -12623,7 +12725,7 @@ python -m pytest dev/test_api_keys.py -v --timeout=30
 
 =============================================================================
 
-## dev/test_request_preview.py — 42 tests
+## dev/test_request_preview.py — 44 tests
 
 Tests for the Preview Requests feature: `PreviewRequest` dataclass, `FILTER_PARTS` constant, `RequestPreviewDialog` class, and `_build_preview_requests()` integration. Run with:
 ```bash
@@ -12632,18 +12734,18 @@ python -m pytest dev/test_request_preview.py -v --timeout=15
 
 | Class | Tests | Description |
 |-------|-------|-------------|
-| `TestPreviewRequestDataclass` | 8 | `get_part()`, `build_full_request_text()` with/without filters, empty parts skipped, `build_pure_json()` valid JSON, temperature extraction, `line_count` |
-| `TestFilterParts` | 3 | 12 entries in `FILTER_PARTS`, unique keys, keys match dataclass field names |
+| `TestPreviewRequestDataclass` | 8 | `get_part()`, `build_full_request_text()` with/without filters, empty parts skipped, `build_pure_json()` valid JSON, temperature extraction, `request_params` passthrough, `line_count` |
+| `TestFilterParts` | 3 | 13 entries in `FILTER_PARTS`, unique keys, keys match dataclass field names |
 | `TestViewModes` | 4 | Pure returns valid JSON, Formatted has section headers (═══), Plain preserves curly braces but strips brackets/quotes, Plain wraps long lines |
 | `TestRequestPreviewDialogCreation` | 5 | Dialog opens/closes, shows request count, Jump To navigates, clamp high, clamp low |
 | `TestRequestPreviewDialogSearch` | 4 | Search finds matches with highlighting, no-match shows "0 of 0", next wraps around, prev wraps around |
 | `TestRequestPreviewDialogFilter` | 3 | Deselect hides section from display, Select All restores, Deselect All clears |
 | `TestRequestPreviewDialogViewModes` | 3 | Switch to Pure validates JSON, switch to Plain strips markers, switch to Formatted shows headers |
-| `TestBuildPreviewRequests` | 5 | Correct chunk count (3 lines / chunk_size 2 → 2 requests), all parts populated, input_lines valid JSON, POV excluded on low confidence, glossary entries present with selective per-chunk filtering |
+| `TestBuildPreviewRequests` | 6 | Correct chunk count (3 lines / chunk_size 2 → 2 requests), all parts populated, prompt cache key appears in Meta + Pure JSON, input_lines valid JSON, POV excluded on low confidence, glossary entries present with selective per-chunk filtering |
 | `TestEdgeCases` | 7 | Empty request list, all empty parts, Unicode in Pure JSON, case-insensitive search, info label updates, cross-request search counts across all requests, cross-request navigation switches requests |
 
 **Key implementation details tested:**
-- `PreviewRequest.build_pure_json()` — Produces valid JSON with `messages` array (system + user), `model`, `temperature`
+- `PreviewRequest.build_pure_json()` — Produces valid JSON with `messages` array (system + user), `model`, `temperature`, and any effective request metadata such as `prompt_cache_key`
 - `RequestPreviewDialog` — Headless Tk tests (2 may skip on CI where Tk is unavailable)
 - `_build_preview_requests()` — Integration test using mocked `TranslationStep` with `_build_chunks` side effect, patched `build_conditional_instructions` and `load_glossary_entries`
 - Cross-request search — `_do_search()` scans all requests, `_search_next()`/`_search_prev()` navigate across request boundaries with global match index
@@ -12656,6 +12758,11 @@ python -m pytest dev/test_request_preview.py -v --timeout=15
 (language, genre, rolling_context). Updated header assertions for `=== Label (desc) ===` format.
 Updated `_make_request` helper with language/genre/rolling_context fields.
 Updated glossary test for selective per-chunk filtering (source terms in input lines).
+
+**Session 31 updates:** Added prompt-cache metadata coverage for Preview Requests:
+`build_pure_json()` now tests `request_params` passthrough, `_build_preview_requests()`
+verifies `prompt_cache_key` visibility in both Meta and Pure JSON, and fixtures now include
+the current `io_examples` field plus the metadata enable flags used by the live request builder.
 
 ---
 
@@ -13047,7 +13154,7 @@ python -m pytest dev/test_input_import_fixes.py -v --timeout=10
 
 ---
 
-### dev/test_lightvn_fixes.py (31 tests) — LightVN Detection, Tags & Input Fixes
+### dev/test_lightvn_fixes.py (34 tests) — LightVN Detection, Tags & Input Fixes
 
 Tests for LightVN parser detection expansion, ~文字 menu parsing, tag propagation
 to manifest tag, messagebox import shadowing fix, and source file copy
@@ -13057,7 +13164,7 @@ rel_path matching.
 
 | Test Class | Count | Coverage |
 |-----------|-------|----------|
-| TestCanHandleExpanded | 11 | Speaker tag, ~文字, ~絵, ~ボタン, ~効果音, ~選択, 栞 prefix, plain text reject, non-txt reject, chara_make pattern, bookmark without tilde |
+| TestCanHandleExpanded | 14 | Speaker tag, ~文字, ~絵, ~ボタン, ~効果音, ~選択, 栞 prefix, `~栞` prefix, `~スクリプト`, bare script/variable-only files, plain text reject, non-txt reject, chara_make pattern, bookmark without tilde |
 | TestMojiMenuParsing | 6 | Basic ~文字, fullwidth parens, multiple lines, full context, ~文字窓 variant, no quoted text |
 | TestTagPropagation | 4 | LoadedFile stores tags, default None, sync sets tag, tag assignment |
 | TestMessageboxFix | 2 | No local messagebox import in _load_selected_paths (AST), module-level import exists |

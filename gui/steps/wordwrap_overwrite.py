@@ -1,7 +1,7 @@
 """CherryAI GUI v2 Wordwrap Step.
 
-Ninth workflow tab for text formatting and merge strategies.
-Provides wordwrap configuration, preview with line indicators, and overwrite options.
+Ninth workflow tab for text formatting after QA.
+Provides wordwrap configuration and preview based on the QA stage output.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from CherryAI.gui.helpers.manifest_binding import (
     bind_combobox_to_field,
 )
 from CherryAI.functions.manifest_fields import (
-    get_all_lines_resolved,
+    get_all_lines_for_stage,
     save_nested_text_field,
     load_nested_text_field,
     save_nested_int_field,
@@ -58,6 +58,19 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _persist_sparse_wordwrap(
+    manager: "ManifestManager",
+    idx: int,
+    original_text: str,
+    wrapped_text: str,
+) -> None:
+    """Persist ``wordwr`` only when it differs from the stage input."""
+    if wrapped_text and wrapped_text != original_text:
+        manager.set_line_field(idx, "wordwr", wrapped_text)
+        return
+    manager.clear_line_field(idx, "wordwr")
+
+
 # ============================================================================
 # Enums
 # ============================================================================
@@ -67,6 +80,14 @@ class WrapMode(Enum):
     """Wordwrap mode selection."""
 
     MANUAL = "manual"
+
+    @classmethod
+    def from_display(cls, value: str) -> "WrapMode":
+        """Parse from display string (title-case) or raw value."""
+        for member in cls:
+            if member.value == value or member.value == value.lower():
+                return member
+        raise ValueError(f"{value!r} is not a valid WrapMode")
 
 
 class SpeakerMode(Enum):
@@ -173,28 +194,34 @@ class TagWrapConfig:
     """Per-tag wordwrap configuration.
 
     Each extraction tag (dialogue, menu, etc.) can have its own wrap
-    width, break character, and max-lines setting.  When *parser_managed*
-    is ``True``, the parser controls wrapping and the five UI settings
-    are replaced with a single informational label.
+    width, break character, max-lines, speaker handling, and pretty-wrap
+    settings.  The parser provides defaults via ``wordwrap_for_tag``
+    but all values are user-configurable.
     """
 
     tag: str
     width: int = 48
     break_char: str = "\\n"
     max_lines: int = 4
-    parser_managed: bool = False
+    speaker_handling: str = "count"  # "ignore" | "count"
+    prevent_orphans: bool = True
+    prefer_punct_breaks: bool = True
+    new_textbox: bool = False
+    new_textbox_injection: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to manifest-compatible dict."""
-        d: Dict[str, Any] = {
+        return {
             "tag": self.tag,
             "Width": self.width,
             "BreakChar": self.break_char,
             "MaxLines": self.max_lines,
+            "SpeakerHandling": self.speaker_handling,
+            "PreventOrphans": self.prevent_orphans,
+            "PreferPunctuationBreaks": self.prefer_punct_breaks,
+            "NewTextbox": self.new_textbox,
+            "NewTextboxInjection": self.new_textbox_injection,
         }
-        if self.parser_managed:
-            d["ParserManaged"] = True
-        return d
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "TagWrapConfig":
@@ -204,7 +231,11 @@ class TagWrapConfig:
             width=d.get("Width", 48),
             break_char=d.get("BreakChar", "\\n"),
             max_lines=d.get("MaxLines", 4),
-            parser_managed=d.get("ParserManaged", False),
+            speaker_handling=d.get("SpeakerHandling", "count"),
+            prevent_orphans=d.get("PreventOrphans", True),
+            prefer_punct_breaks=d.get("PreferPunctuationBreaks", True),
+            new_textbox=d.get("NewTextbox", False),
+            new_textbox_injection=d.get("NewTextboxInjection", ""),
         )
 
 
@@ -250,7 +281,7 @@ class WordwrapOverwriteStep(BaseStep):
     - Real-time preview updates
     """
 
-    step_id = 7  # Moved from position 8
+    step_id = 8
     step_name = "Wordwrap"
     # Test visibility for explicit import expectation
     _IMPORT_EXPECTATION = "from functions.wordwrap import"
@@ -276,6 +307,7 @@ class WordwrapOverwriteStep(BaseStep):
         self._stats = WrapStats()
         self._process_thread: Optional[threading.Thread] = None
         self._selected_line_idx: int = -1
+        self._persist_after_wrap: bool = False
         self._format_configs = dict(DEFAULT_FORMAT_CONFIGS)
         # TASK 28.1: Manifest bindings for wordwrap settings
         self._manifest_bindings: List[BindingInfo] = []
@@ -405,13 +437,13 @@ class WordwrapOverwriteStep(BaseStep):
                 command=self._refresh_table,
             ).pack(side="left", padx=4)
 
-        # Define columns (Task 46.8: added Overwrite column)
+        # Define columns.
         columns = [
             ColumnDef(key="idx", title="#", width=50, anchor="center"),
             ColumnDef(key="status", title="Status", width=90, anchor="center"),
             ColumnDef(key="chars", title="Chars", width=60, anchor="center"),
             ColumnDef(key="lines", title="Lines", width=50, anchor="center"),
-            ColumnDef(key="original", title="Latest", width=180),
+            ColumnDef(key="original", title="Input", width=180),
             ColumnDef(key="wrapped", title="Wordwrap", width=180),
             ColumnDef(key="overwrite", title="Overwrite", width=180),
         ]
@@ -563,15 +595,6 @@ class WordwrapOverwriteStep(BaseStep):
             textvariable=self._font_size_var, width=5,
         ).pack(side="left", padx=5)
 
-        # Orphan prevention note (always on)
-        opts_frame = ttk.Frame(frame)
-        opts_frame.pack(fill="x", padx=5, pady=(0, 3))
-        ttk.Label(
-            opts_frame,
-            text="✓ Orphan prevention and punctuation breaks (always on)",
-            foreground=THEME.text_secondary,
-        ).pack(anchor="w")
-
         # Separator
         ttk.Separator(frame, orient="horizontal").pack(fill="x", padx=5, pady=3)
 
@@ -697,14 +720,16 @@ class WordwrapOverwriteStep(BaseStep):
         self._tag_widgets.clear()
 
         for tc in self._tag_configs:
-            managed = self._is_tag_parser_managed(tc.tag)
-            tc.parser_managed = managed
             self._build_tag_section(self._tag_sections_frame, tc)
 
     def _build_tag_section(
         self, parent: ttk.Frame, tc: TagWrapConfig,
     ) -> None:
         """Build a single per-tag settings section.
+
+        All fields are always editable.  When a parser provides defaults
+        via ``wordwrap_for_tag``, they are pre-populated but the user can
+        override every value.
 
         Args:
             parent: Container frame for the section.
@@ -715,61 +740,119 @@ class WordwrapOverwriteStep(BaseStep):
 
         widgets: Dict[str, Any] = {"frame": section}
 
-        if tc.parser_managed:
-            ttk.Label(
-                section,
-                text="Wordwrap mandated by Parser Format",
-                foreground=THEME.accent_info,
-                font=("TkDefaultFont", 9, "italic"),
-            ).pack(padx=5, pady=5, anchor="w")
-        else:
-            # Width
-            w_frame = ttk.Frame(section)
-            w_frame.pack(fill="x", padx=5, pady=2)
-            ttk.Label(w_frame, text="Width:").pack(side="left")
-            width_var = tk.IntVar(value=tc.width)
-            width_var.trace_add(
-                "write",
-                lambda *_a, t=tc.tag: self._on_tag_setting_changed(t),
-            )
-            ttk.Spinbox(
-                w_frame, from_=20, to=200,
-                textvariable=width_var, width=8,
-            ).pack(side="left", padx=5)
-            ttk.Label(w_frame, text="characters").pack(side="left")
-            widgets["width_var"] = width_var
+        # Width
+        w_frame = ttk.Frame(section)
+        w_frame.pack(fill="x", padx=5, pady=2)
+        ttk.Label(w_frame, text="Width:").pack(side="left")
+        width_var = tk.IntVar(value=tc.width)
+        width_var.trace_add(
+            "write",
+            lambda *_a, t=tc.tag: self._on_tag_setting_changed(t),
+        )
+        ttk.Spinbox(
+            w_frame, from_=0, to=200,
+            textvariable=width_var, width=8,
+        ).pack(side="left", padx=5)
+        ttk.Label(w_frame, text="chars (0 = no wrap)").pack(side="left")
+        widgets["width_var"] = width_var
 
-            # Break char
-            b_frame = ttk.Frame(section)
-            b_frame.pack(fill="x", padx=5, pady=2)
-            ttk.Label(b_frame, text="Break char:").pack(side="left")
-            break_var = tk.StringVar(value=tc.break_char)
-            break_var.trace_add(
-                "write",
-                lambda *_a, t=tc.tag: self._on_tag_setting_changed(t),
-            )
-            ttk.Combobox(
-                b_frame, textvariable=break_var,
-                values=["\\n", "\n", "<br>", "[r]", "\\r\\n"],
-                width=10,
-            ).pack(side="left", padx=5)
-            widgets["break_var"] = break_var
+        # Break char
+        b_frame = ttk.Frame(section)
+        b_frame.pack(fill="x", padx=5, pady=2)
+        ttk.Label(b_frame, text="Break char:").pack(side="left")
+        break_var = tk.StringVar(value=tc.break_char)
+        break_var.trace_add(
+            "write",
+            lambda *_a, t=tc.tag: self._on_tag_setting_changed(t),
+        )
+        ttk.Combobox(
+            b_frame, textvariable=break_var,
+            values=["\\n", "\n", "<br>", "[r]", "\\r\\n"],
+            width=10,
+        ).pack(side="left", padx=5)
+        widgets["break_var"] = break_var
 
-            # Max lines
-            m_frame = ttk.Frame(section)
-            m_frame.pack(fill="x", padx=5, pady=2)
-            ttk.Label(m_frame, text="Max lines:").pack(side="left")
-            max_lines_var = tk.IntVar(value=tc.max_lines)
-            max_lines_var.trace_add(
-                "write",
-                lambda *_a, t=tc.tag: self._on_tag_setting_changed(t),
-            )
-            ttk.Spinbox(
-                m_frame, from_=0, to=20,
-                textvariable=max_lines_var, width=8,
-            ).pack(side="left", padx=5)
-            ttk.Label(m_frame, text="(0 = unlimited)").pack(side="left")
-            widgets["max_lines_var"] = max_lines_var
+        # Max lines
+        m_frame = ttk.Frame(section)
+        m_frame.pack(fill="x", padx=5, pady=2)
+        ttk.Label(m_frame, text="Max lines:").pack(side="left")
+        max_lines_var = tk.IntVar(value=tc.max_lines)
+        max_lines_var.trace_add(
+            "write",
+            lambda *_a, t=tc.tag: self._on_tag_setting_changed(t),
+        )
+        ttk.Spinbox(
+            m_frame, from_=0, to=20,
+            textvariable=max_lines_var, width=8,
+        ).pack(side="left", padx=5)
+        ttk.Label(m_frame, text="(0 = unlimited)").pack(side="left")
+        widgets["max_lines_var"] = max_lines_var
+
+        # Speaker handling
+        s_frame = ttk.Frame(section)
+        s_frame.pack(fill="x", padx=5, pady=2)
+        ttk.Label(s_frame, text="Speaker:").pack(side="left")
+        speaker_var = tk.StringVar(value=tc.speaker_handling)
+        speaker_var.trace_add(
+            "write",
+            lambda *_a, t=tc.tag: self._on_tag_setting_changed(t),
+        )
+        ttk.Combobox(
+            s_frame, textvariable=speaker_var,
+            values=["ignore", "count"],
+            state="readonly", width=10,
+        ).pack(side="left", padx=5)
+        widgets["speaker_var"] = speaker_var
+
+        # Pretty-wrap toggles
+        pw_frame = ttk.Frame(section)
+        pw_frame.pack(fill="x", padx=5, pady=2)
+        orphan_var = tk.BooleanVar(value=tc.prevent_orphans)
+        orphan_var.trace_add(
+            "write",
+            lambda *_a, t=tc.tag: self._on_tag_setting_changed(t),
+        )
+        ttk.Checkbutton(
+            pw_frame, text="Prevent orphans",
+            variable=orphan_var,
+        ).pack(side="left")
+        widgets["orphan_var"] = orphan_var
+
+        punct_var = tk.BooleanVar(value=tc.prefer_punct_breaks)
+        punct_var.trace_add(
+            "write",
+            lambda *_a, t=tc.tag: self._on_tag_setting_changed(t),
+        )
+        ttk.Checkbutton(
+            pw_frame, text="Prefer punctuation breaks",
+            variable=punct_var,
+        ).pack(side="left", padx=(10, 0))
+        widgets["punct_var"] = punct_var
+
+        # New textbox handling
+        nt_frame = ttk.Frame(section)
+        nt_frame.pack(fill="x", padx=5, pady=2)
+        new_tb_var = tk.BooleanVar(value=tc.new_textbox)
+        new_tb_var.trace_add(
+            "write",
+            lambda *_a, t=tc.tag: self._on_tag_setting_changed(t),
+        )
+        ttk.Checkbutton(
+            nt_frame, text="New textbox on overflow",
+            variable=new_tb_var,
+        ).pack(side="left")
+        widgets["new_tb_var"] = new_tb_var
+
+        ntinj_var = tk.StringVar(value=tc.new_textbox_injection)
+        ntinj_var.trace_add(
+            "write",
+            lambda *_a, t=tc.tag: self._on_tag_setting_changed(t),
+        )
+        ttk.Label(nt_frame, text="Injection:").pack(side="left", padx=(10, 0))
+        ttk.Entry(
+            nt_frame, textvariable=ntinj_var, width=8,
+        ).pack(side="left", padx=2)
+        widgets["ntinj_var"] = ntinj_var
 
         # Remove button (not for the first two default tags)
         is_default = tc.tag in {t.tag for t in DEFAULT_TAG_CONFIGS}
@@ -808,6 +891,25 @@ class WordwrapOverwriteStep(BaseStep):
                         tc.max_lines = w["max_lines_var"].get()
                     except tk.TclError:
                         pass
+                if "speaker_var" in w:
+                    tc.speaker_handling = w["speaker_var"].get()
+                if "orphan_var" in w:
+                    try:
+                        tc.prevent_orphans = w["orphan_var"].get()
+                    except tk.TclError:
+                        pass
+                if "punct_var" in w:
+                    try:
+                        tc.prefer_punct_breaks = w["punct_var"].get()
+                    except tk.TclError:
+                        pass
+                if "new_tb_var" in w:
+                    try:
+                        tc.new_textbox = w["new_tb_var"].get()
+                    except tk.TclError:
+                        pass
+                if "ntinj_var" in w:
+                    tc.new_textbox_injection = w["ntinj_var"].get()
                 break
         self._save_tag_configs_to_manifest()
 
@@ -820,11 +922,23 @@ class WordwrapOverwriteStep(BaseStep):
         self._add_tag_var.set("Add tag…")
 
     def _add_tag_config(self, tag: str) -> None:
-        """Add a new per-tag section with defaults."""
+        """Add a new per-tag section with parser defaults if available."""
         if any(tc.tag == tag for tc in self._tag_configs):
             return
         tc = TagWrapConfig(tag=tag)
-        tc.parser_managed = self._is_tag_parser_managed(tag)
+        # Pre-populate from parser defaults when available
+        parser = self._get_active_parser()
+        if parser is not None:
+            try:
+                wcfg = parser.wordwrap_for_tag(tag)
+                if wcfg is not None:
+                    tc.width = wcfg.max_line_length
+                    tc.break_char = wcfg.wordwrap_command
+                    tc.max_lines = wcfg.max_line_number
+                    tc.new_textbox_injection = wcfg.new_textbox_injection or ""
+                    tc.new_textbox = bool(tc.new_textbox_injection)
+            except Exception:
+                pass
         self._tag_configs.append(tc)
         self._rebuild_tag_sections()
         self._refresh_add_tag_options()
@@ -860,17 +974,6 @@ class WordwrapOverwriteStep(BaseStep):
             if t:
                 tags.add(t)
         return tags
-
-    def _is_tag_parser_managed(self, tag: str) -> bool:
-        """Check whether the active parser mandates wrapping for *tag*."""
-        parser = self._get_active_parser()
-        if parser is None:
-            return False
-        try:
-            cfg = parser.wordwrap_for_tag(tag)
-            return cfg is not None
-        except Exception:
-            return False
 
     def _get_active_parser(self) -> Any:
         """Return the active parser object or ``None``."""
@@ -962,7 +1065,7 @@ class WordwrapOverwriteStep(BaseStep):
 
     def _on_mode_changed(self) -> None:
         """Handle wrap mode change."""
-        mode = WrapMode(self._mode_var.get())
+        mode = WrapMode.from_display(self._mode_var.get())
         self._wrap_options.mode = mode
         self._refresh_preview()
 
@@ -1001,10 +1104,15 @@ class WordwrapOverwriteStep(BaseStep):
 
     def _apply_wordwrap(self) -> None:
         """Apply wordwrap to all lines."""
+        self._run_wordwrap(persist_results=True)
+
+    def _run_wordwrap(self, persist_results: bool) -> None:
+        """Run wordwrap for preview or explicit persistence."""
         if self._status == WrapStatus.RUNNING:
             messagebox.showinfo("Info", "Wordwrap is already running.")
             return
 
+        self._persist_after_wrap = persist_results
         self._status = WrapStatus.RUNNING
         self._status_label.configure(text="Running...")
         self._apply_btn.configure(state="disabled")
@@ -1071,10 +1179,9 @@ class WordwrapOverwriteStep(BaseStep):
 
         For each line the tag is resolved (line tag → filedir type →
         ``"dialogue"`` fallback), then the matching :class:`TagWrapConfig`
-        is looked up.  Parser-managed tags delegate to the parser's O6
-        ``wordwrap()`` or ``pretty_wrap()`` hook.  User-managed tags use
-        the per-tag Width / BreakChar / MaxLines with the standard
-        ``apply_wordwrap`` pipeline.  Speaker handling and ignore patterns
+        is looked up.  All tags use the per-tag Width / BreakChar /
+        MaxLines / SpeakerHandling / PreventOrphans / PreferPunctuationBreaks
+        with the standard ``apply_wordwrap`` pipeline.  Ignore patterns
         are applied globally.
         """
         if not _HAS_WORDWRAP:
@@ -1082,14 +1189,11 @@ class WordwrapOverwriteStep(BaseStep):
             self._simple_wrap()
             return
 
-        parser_obj = self._get_active_parser()
-
         # Tag resolution maps
         line_tag_map, filedir_type_map = self._build_tag_maps()
 
         # Global settings shared across all tags
         global_ignore = self._get_ignore_codes()
-        global_speaker = self._speaker_var.get().upper()
         global_mode = self._mode_var.get()
 
         # Get lines from session
@@ -1097,17 +1201,6 @@ class WordwrapOverwriteStep(BaseStep):
         lines = step_data.get("lines", [])
         if not lines:
             return
-
-        # Pre-check parser capabilities once
-        has_parser_wordwrap = False
-        has_parser_pretty = False
-        if parser_obj is not None:
-            try:
-                pinfo = parser_obj.info()
-                has_parser_wordwrap = pinfo.get("has_custom_wordwrap", False)
-                has_parser_pretty = pinfo.get("has_custom_pretty_wrap", False)
-            except Exception:
-                pass
 
         self._lines = []
         for i, orig in enumerate(lines):
@@ -1129,52 +1222,20 @@ class WordwrapOverwriteStep(BaseStep):
             max_l = tc.max_lines or None
 
             # 3. Wrap the line
-            if tc.parser_managed and parser_obj is not None:
-                # Parser mandates wrapping for this tag
-                wrapped = orig
-                if has_parser_wordwrap:
-                    result = parser_obj.wordwrap(orig)
-                    if result is not None:
-                        wrapped = bc.join(result)
-                    elif has_parser_pretty:
-                        pw = parser_obj.pretty_wrap(
-                            orig, tc.width, bc, max_l,
-                        )
-                        if pw is not None:
-                            wrapped = pw
-                elif has_parser_pretty:
-                    pw = parser_obj.pretty_wrap(
-                        orig, tc.width, bc, max_l,
-                    )
-                    if pw is not None:
-                        wrapped = pw
-            elif tc.width <= 0:
+            if tc.width <= 0:
                 # Zero width → no wrap
                 wrapped = orig
             else:
-                # User-managed tag: check for parser pretty_wrap hook
-                if has_parser_pretty:
-                    pw = parser_obj.pretty_wrap(orig, tc.width, bc, max_l)
-                    if pw is not None:
-                        wrapped = pw
-                    else:
-                        config = WordwrapConfig(
-                            mode=global_mode, in1=tc.width,
-                            in2=bc, in3=max_l,
-                            ignore_codes=global_ignore,
-                            speaker_mode=global_speaker,
-                        )
-                        result_list = apply_wordwrap([orig], config)
-                        wrapped = result_list[0] if result_list else orig
-                else:
-                    config = WordwrapConfig(
-                        mode=global_mode, in1=tc.width,
-                        in2=bc, in3=max_l,
-                        ignore_codes=global_ignore,
-                        speaker_mode=global_speaker,
-                    )
-                    result_list = apply_wordwrap([orig], config)
-                    wrapped = result_list[0] if result_list else orig
+                config = WordwrapConfig(
+                    mode=global_mode, in1=tc.width,
+                    in2=bc, in3=max_l,
+                    ignore_codes=global_ignore,
+                    speaker_mode=tc.speaker_handling.upper(),
+                    prevent_orphan=tc.prevent_orphans,
+                    prefer_punct_breaks=tc.prefer_punct_breaks,
+                )
+                result_list = apply_wordwrap([orig], config)
+                wrapped = result_list[0] if result_list else orig
 
             # 4. Build WrapLine
             lc = wrapped.count(bc) + 1 if bc else 1
@@ -1266,6 +1327,8 @@ class WordwrapOverwriteStep(BaseStep):
 
     def _on_wrap_complete(self) -> None:
         """Handle wrap completion."""
+        if self._persist_after_wrap:
+            self._persist_wrapped_lines()
         self._status_label.configure(text="Completed")
         self._apply_btn.configure(state="normal")
         self._refresh_table()
@@ -1279,7 +1342,7 @@ class WordwrapOverwriteStep(BaseStep):
 
     def _refresh_preview(self) -> None:
         """Refresh the preview with current settings."""
-        self._apply_wordwrap()
+        self._run_wordwrap(persist_results=False)
 
     def _reset_all(self) -> None:
         """Reset all lines to original."""
@@ -1524,11 +1587,13 @@ class WordwrapOverwriteStep(BaseStep):
         logger.debug("Wordwrap settings loaded from manifest")
 
     def _apply_parser_wordwrap_defaults(self) -> None:
-        """Auto-populate format configs from registered parser scripts (TASK 53.4).
+        """Auto-populate format and per-tag configs from parser scripts.
 
         Iterates the parser registry and, for each parser that provides a
         :attr:`wordwrap_config`, registers a :class:`FormatConfig` entry.
-        The format dropdown values are updated accordingly.
+        Also updates existing per-tag :class:`TagWrapConfig` entries
+        with parser defaults for width, break char, max lines, new-textbox
+        injection, and speaker handling.
 
         User-set manifest values take precedence because
         ``_load_wordwrap_settings_from_manifest`` runs after this method.
@@ -1540,6 +1605,9 @@ class WordwrapOverwriteStep(BaseStep):
             registry = get_parser_registry()
         except Exception:
             return
+
+        # Find which parser is active for this project
+        active_parser = self._get_active_parser()
 
         for info in registry.list_parsers():
             parser = registry.get(info["name"])
@@ -1566,6 +1634,26 @@ class WordwrapOverwriteStep(BaseStep):
                 ww.wordwrap_command,
                 ww.max_line_number,
             )
+
+        # Apply per-tag defaults from the active parser
+        if active_parser is not None:
+            for tc in self._tag_configs:
+                try:
+                    tag_cfg = active_parser.wordwrap_for_tag(tc.tag)
+                except Exception:
+                    tag_cfg = None
+                if tag_cfg is not None:
+                    tc.width = tag_cfg.max_line_length
+                    tc.break_char = tag_cfg.wordwrap_command
+                    tc.max_lines = tag_cfg.max_line_number
+                    tc.new_textbox_injection = (
+                        tag_cfg.new_textbox_injection or ""
+                    )
+                    tc.new_textbox = bool(tc.new_textbox_injection)
+                    # Speaker handling: parsers with separate name field
+                    # (like LightVN) should default to "ignore"
+                    if hasattr(active_parser, "detect_speakers"):
+                        tc.speaker_handling = "ignore"
 
         # Refresh format dropdown values
         if hasattr(self, "_format_var"):
@@ -1610,14 +1698,15 @@ class WordwrapOverwriteStep(BaseStep):
     def _load_lines_from_session(self) -> None:
         """Load lines from manifest using postpro → tl → prepro → orig chain.
 
-        Also restores existing ``wordwr`` values when available.
+        The preview input follows the Wordwrap stage ceiling, while the
+        Wordwrap column itself only loads stored ``wordwr`` values.
         """
         latest: list[str] = []
         wordwr_map: dict[int, str] = {}
 
         mgr = self.manifest_manager
         if mgr is not None and mgr.is_loaded:
-            latest = get_all_lines_resolved(mgr, "postpro")
+            latest = get_all_lines_for_stage(mgr, "wordwrap")
             for ln in mgr.get_lines():
                 idx = ln.get("idx")
                 wr = ln.get("wordwr", "")
@@ -1631,7 +1720,7 @@ class WordwrapOverwriteStep(BaseStep):
 
         self._lines = []
         for i, line in enumerate(latest):
-            wr = wordwr_map.get(i, line)
+            wr = wordwr_map.get(i, "")
             wrap_line = WrapLine(
                 idx=i,
                 original=line,
@@ -1642,9 +1731,7 @@ class WordwrapOverwriteStep(BaseStep):
     def _save_to_session(self) -> None:
         """Save current state to session.
 
-        Persists wrapped text to manifest lines[].wordwr via
-        set_line_field.  Only writes lines where the wrapped text
-        differs from the original to avoid unnecessary manifest bloat.
+        Stores preview state in session without auto-writing ``wordwr``.
         """
         step_data = self.get_step_data()
         step_data["wrap_options"] = {
@@ -1658,12 +1745,18 @@ class WordwrapOverwriteStep(BaseStep):
         step_data["wrapped_lines"] = [l.wrapped for l in self._lines]
         self.set_step_data(step_data)
 
-        # Persist only changed wrapped lines to the manifest
+    def _persist_wrapped_lines(self) -> None:
+        """Persist explicit wordwrap results sparsely to the manifest."""
         mgr = self.manifest_manager
-        if mgr is not None:
-            for line in self._lines:
-                if line.wrapped != line.original:
-                    mgr.set_line_field(line.idx, "wordwr", line.wrapped)
+        if mgr is None:
+            return
+        for line in self._lines:
+            _persist_sparse_wordwrap(
+                mgr,
+                line.idx,
+                line.original,
+                line.wrapped,
+            )
 
     # =========================================================================
     # Public API
@@ -1676,8 +1769,8 @@ class WordwrapOverwriteStep(BaseStep):
             WrapOptions with current settings.
         """
         return WrapOptions(
-            mode=WrapMode(self._mode_var.get()),
-            speaker_mode=SpeakerMode(self._speaker_var.get()),
+            mode=WrapMode.from_display(self._mode_var.get()),
+            speaker_mode=SpeakerMode(self._speaker_var.get().lower()),
             width=self._width_var.get(),
             break_char=self._break_var.get(),
             max_lines=self._max_lines_var.get(),

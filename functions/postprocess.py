@@ -196,6 +196,10 @@ for _canon, _equivs in ANCHOR_EQUIVS.items():
         ):
             if _ch != _canon:
                 BRACKET_EQUIV[_ch] = _canon
+BRACKET_EQUIV.update({
+    "【": "[",
+    "】": "]",
+})
 
 # Build quote equivalence from ANCHOR_EQUIVS: maps fullwidth → canonical
 QUOTE_EQUIV: Dict[str, str] = {}
@@ -212,6 +216,10 @@ _CANON_MAP: Dict[str, str] = {}
 for _canon, _equivs in ANCHOR_EQUIVS.items():
     for _ch in _equivs:
         _CANON_MAP[_ch] = _canon
+_CANON_MAP.update({
+    "【": "[",
+    "】": "]",
+})
 
 # Reverse bracket map: closing → opening
 _CLOSING_TO_OPENING: Dict[str, str] = {v: k for k, v in BRACKET_PAIRS.items()}
@@ -502,29 +510,69 @@ def check_bracket_balance(text: str) -> List[Tuple[str, int]]:
     Returns:
         List of (bracket, position) for unmatched brackets.
     """
-    stack: List[Tuple[str, int]] = []
-    unmatched: List[Tuple[str, int]] = []
-    
+    return _find_unmatched_brackets(text)
+
+
+def _get_recoverable_bracket_pair_id(ch: str) -> Optional[str]:
+    """Return the canonical opening bracket for a recoverable bracket char.
+
+    Bracket-quote hybrids such as ``「」`` are excluded here because they are
+    handled by quote recovery.
+    """
+    if ch in BRACKET_PAIRS:
+        opening = ch
+    elif ch in _CLOSING_TO_OPENING:
+        opening = _CLOSING_TO_OPENING[ch]
+    else:
+        return None
+
+    pair_id = _normalize_bracket(opening)
+    if pair_id in QUOTE_PAIRS or pair_id in QUOTE_PAIRS.values():
+        return None
+    return pair_id
+
+
+def _extract_recoverable_brackets(
+    text: str,
+) -> List[Tuple[str, str, str, int]]:
+    """Extract recoverable brackets as ``(pair_id, role, actual, position)``."""
+    extracted: List[Tuple[str, str, str, int]] = []
+    all_brackets = set(BRACKET_PAIRS.keys()) | set(BRACKET_PAIRS.values())
+
     for i, ch in enumerate(text):
-        if ch in BRACKET_PAIRS:
-            # Opening bracket
-            stack.append((ch, i))
-        elif ch in BRACKET_PAIRS.values():
-            # Closing bracket - find matching opening
-            expected_open = None
-            for open_ch, close_ch in BRACKET_PAIRS.items():
-                if close_ch == ch:
-                    expected_open = open_ch
-                    break
-            
-            if stack and stack[-1][0] == expected_open:
-                stack.pop()
-            else:
-                unmatched.append((ch, i))
-    
-    # Any remaining in stack are unmatched opening brackets
-    unmatched.extend(stack)
+        if ch not in all_brackets:
+            continue
+        pair_id = _get_recoverable_bracket_pair_id(ch)
+        if pair_id is None:
+            continue
+        role = "open" if ch in BRACKET_PAIRS else "close"
+        extracted.append((pair_id, role, ch, i))
+
+    return extracted
+
+
+def _find_unmatched_brackets(text: str) -> List[Tuple[str, int]]:
+    """Return unmatched recoverable brackets using stack-based pairing."""
+    stack: List[Tuple[str, str, int]] = []
+    unmatched: List[Tuple[str, int]] = []
+
+    for pair_id, role, actual, pos in _extract_recoverable_brackets(text):
+        if role == "open":
+            stack.append((pair_id, actual, pos))
+            continue
+
+        if stack and stack[-1][0] == pair_id:
+            stack.pop()
+        else:
+            unmatched.append((actual, pos))
+
+    unmatched.extend((actual, pos) for _, actual, pos in stack)
     return unmatched
+
+
+def _has_balanced_brackets(text: str) -> bool:
+    """Return True when recoverable brackets in *text* are properly balanced."""
+    return not _find_unmatched_brackets(text)
 
 
 def recover_bracket_balance(
@@ -533,12 +581,14 @@ def recover_bracket_balance(
 ) -> Tuple[str, List[RecoveryIssue]]:
     """Fix unbalanced brackets using anchor-relative positioning.
 
-    Compares brackets in *text* against *original* using ANCHOR_EQUIVS
-    to treat fullwidth/halfwidth variants as equivalent.  Missing
-    brackets are re-inserted only when a reliable anchor (adjacent
-    punctuation, line start, or line end) can be found in the
-    translated text.  If no anchor is available the line is flagged
-    for review instead of guessing a position.
+    Recovery is only attempted when *original* has balanced recoverable
+    brackets and *text* is currently unbalanced. This prevents rare,
+    intentionally unbalanced source lines from triggering bracket repair.
+
+    When recovery does run, missing brackets are re-inserted only when a
+    reliable anchor (adjacent punctuation, line start, or line end) can be
+    found in the translated text. If no anchor is available the line is
+    flagged for review instead of guessing a position.
 
     Args:
         text: The translated text.
@@ -550,57 +600,69 @@ def recover_bracket_balance(
     issues: List[RecoveryIssue] = []
     result = text
 
-    all_brackets = set(BRACKET_PAIRS.keys()) | set(BRACKET_PAIRS.values())
+    # Only recover lines whose source bracket structure is sound.
+    if not _has_balanced_brackets(original):
+        return result, issues
 
-    # Bracket-quote hybrids (e.g. 「」 → canon ") are handled by quote
-    # recovery, not bracket recovery.  Skip them here.
-    _quote_canons = set(QUOTE_PAIRS.keys()) | set(QUOTE_PAIRS.values())
+    # Skip balanced translations even if they changed bracket style.
+    if _has_balanced_brackets(result):
+        return result, issues
 
-    # Extract brackets with canonical forms and open/close role
-    def _extract(s: str) -> List[Tuple[str, str, str, int]]:
-        """Return (canonical, role, actual_char, position) list."""
-        out: List[Tuple[str, str, str, int]] = []
-        for i, ch in enumerate(s):
-            if ch not in all_brackets:
-                continue
-            canon = _CANON_MAP.get(ch, ch)
-            if canon in _quote_canons:
-                continue  # Defer to quote recovery
-            if ch in BRACKET_PAIRS:
-                out.append((canon, "open", ch, i))
-            elif ch in _CLOSING_TO_OPENING:
-                out.append((canon, "close", ch, i))
-        return out
+    orig_seq = _extract_recoverable_brackets(original)
+    trans_seq = _extract_recoverable_brackets(result)
 
-    orig_seq = _extract(original)
-    trans_seq = _extract(result)
-
-    # Count by (canonical, role)
     from collections import Counter
     orig_counts: Dict[Tuple[str, str], int] = Counter(
-        (canon, role) for canon, role, _, _ in orig_seq
+        (pair_id, role) for pair_id, role, _, _ in orig_seq
     )
     trans_counts: Dict[Tuple[str, str], int] = Counter(
-        (canon, role) for canon, role, _, _ in trans_seq
+        (pair_id, role) for pair_id, role, _, _ in trans_seq
     )
 
-    # For each (canonical, role) pair that is under-represented in trans
-    for (canon_ch, role), orig_count in sorted(orig_counts.items()):
-        trans_count = trans_counts.get((canon_ch, role), 0)
+    extra_positions: List[Tuple[int, str]] = []
+    for bracket_ch, pos in _find_unmatched_brackets(result):
+        pair_id = _get_recoverable_bracket_pair_id(bracket_ch)
+        if pair_id is None:
+            continue
+        role = "open" if bracket_ch in BRACKET_PAIRS else "close"
+        key = (pair_id, role)
+        if trans_counts.get(key, 0) <= orig_counts.get(key, 0):
+            continue
+        trans_counts[key] -= 1
+        extra_positions.append((pos, bracket_ch))
+
+    for pos, bracket_ch in sorted(extra_positions, reverse=True):
+        result = result[:pos] + result[pos + 1:]
+        issues.append(RecoveryIssue(
+            type=RecoveryType.BRACKET_BALANCE,
+            description=f"Extra unmatched bracket '{bracket_ch}' removed",
+            position=pos,
+            original_text=bracket_ch,
+            recovered_text="",
+            action=RecoveryAction.RECOVERED,
+        ))
+
+    if extra_positions:
+        trans_seq = _extract_recoverable_brackets(result)
+        trans_counts = Counter((pair_id, role) for pair_id, role, _, _ in trans_seq)
+
+    # For each recoverable bracket type that is under-represented in text,
+    # use the source positions as anchor hints.
+    for (pair_id, role), orig_count in sorted(orig_counts.items()):
+        trans_count = trans_counts.get((pair_id, role), 0)
         if trans_count >= orig_count:
             continue
 
-        # Entries from original of this type, sorted by position
         orig_of_type = [
-            (ch, pos) for c, r, ch, pos in orig_seq
-            if c == canon_ch and r == role
+            pos for p, r, _, pos in orig_seq
+            if p == pair_id and r == role
         ]
-        # The first trans_count are considered matched; remainder missing
-        missing = orig_of_type[trans_count:]
+        missing_positions = orig_of_type[trans_count:]
+        bracket_ch = pair_id if role == "open" else BRACKET_PAIRS[pair_id]
 
-        for _, orig_pos in missing:
+        for orig_pos in missing_positions:
             inserted = _try_anchor_bracket_insert(
-                result, original, orig_pos, canon_ch,
+                result, original, orig_pos, bracket_ch,
                 is_opening=(role == "open"),
             )
             if inserted is not None:
@@ -610,19 +672,19 @@ def recover_bracket_balance(
                     description=desc,
                     position=-1,
                     original_text="",
-                    recovered_text=canon_ch,
+                    recovered_text=bracket_ch,
                     action=RecoveryAction.RECOVERED,
                 ))
             else:
                 issues.append(RecoveryIssue(
                     type=RecoveryType.BRACKET_BALANCE,
                     description=(
-                        f"Missing bracket '{canon_ch}' could not "
+                        f"Missing bracket '{bracket_ch}' could not "
                         f"be placed (no anchor found)"
                     ),
                     position=-1,
                     original_text="",
-                    recovered_text=canon_ch,
+                    recovered_text=bracket_ch,
                     action=RecoveryAction.NEEDS_RETRY,
                 ))
 
@@ -1138,8 +1200,23 @@ def recover_code_patterns(
         Tuple of (fixed_text, list of issues found).
     """
     from CherryAI.functions.glossaries.code_glossary_functions import (
+        _extract_all_balanced_code,
         generate_regex_pattern,
     )
+
+    def _filter_nested(matches: List[re.Match[str]], haystack: str) -> List[re.Match[str]]:
+        segments = _extract_all_balanced_code(haystack)
+        filtered: List[re.Match[str]] = []
+        for match in matches:
+            start, end = match.span()
+            nested = any(
+                seg_start <= start and end <= seg_end
+                and (seg_start, seg_end) != (start, end)
+                for seg_start, seg_end, _seg_text in segments
+            )
+            if not nested:
+                filtered.append(match)
+        return filtered
 
     issues: List[RecoveryIssue] = []
     result = text
@@ -1161,12 +1238,13 @@ def recover_code_patterns(
         except re.error:
             continue
 
-        orig_matches = regex.findall(original)
+        orig_matches = _filter_nested(list(regex.finditer(original)), original)
         if not orig_matches:
             continue
 
         # Check each original match instance in the translated text
-        for orig_instance in orig_matches:
+        for orig_match in orig_matches:
+            orig_instance = orig_match.group(0)
             if orig_instance in result:
                 continue  # This instance is preserved — good
 
@@ -1180,9 +1258,12 @@ def recover_code_patterns(
                 # Build regex to find anything in those delimiters
                 open_esc = re.escape(open_d)
                 close_esc = re.escape(close_d)
-                broad_pat = re.compile(
-                    open_esc + r"[^" + close_esc + r"]+" + close_esc
-                )
+                if len(open_d) == 1 and len(close_d) == 1:
+                    broad_pat = re.compile(
+                        open_esc + r"[^" + close_esc + r"]+" + close_esc
+                    )
+                else:
+                    broad_pat = re.compile(open_esc + r"[\s\S]+?" + close_esc)
                 for m in broad_pat.finditer(result):
                     candidate = m.group(0)
                     # Skip if candidate exists in original (it belongs)
@@ -1245,7 +1326,12 @@ def _detect_delimiters(pattern: str) -> Optional[Tuple[str, str]]:
         return None
     first = pattern[0]
     if first in _DELIMITER_PAIRS:
-        return first, _DELIMITER_PAIRS[first]
+        closer = _DELIMITER_PAIRS[first]
+        doubled_open = first * 2
+        doubled_close = closer * 2
+        if pattern.startswith(doubled_open) and pattern.endswith(doubled_close):
+            return doubled_open, doubled_close
+        return first, closer
     last = pattern[-1]
     # Try reverse lookup for closing-first patterns
     for opener, closer in _DELIMITER_PAIRS.items():

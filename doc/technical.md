@@ -92,12 +92,14 @@ TABLE OF CONTENTS
    3.22 postanalysis.py ✅ - Post-translation analysis
    3.23 postprocess.py ✅🔗 - Post-processing utilities (Step 6, moved from Step 7)
         * Bracket/Quote Balance Recovery uses anchor-relative positioning with ANCHOR_EQUIVS equivalence
+        * Bracket recovery is gated: it only runs when the original line is bracket-balanced and the latest translated text is not
+        * Bracket canonicalisation treats `【】` as square-bracket equivalents and can remove extra unmatched translated brackets before missing-bracket insertion
         * Key constants: BRACKET_EQUIV, QUOTE_EQUIV, _CANON_MAP, _CLOSING_TO_OPENING, _RECOVERY_ANCHOR_CHARS
-        * Key functions: _normalize_bracket(), _find_anchor_near(), _try_anchor_bracket_insert()
+       * Key functions: _normalize_bracket(), _find_anchor_near(), _try_anchor_bracket_insert(), _has_balanced_brackets()
         * recover_bracket_balance() defers bracket-quote hybrids (「」→ canon ") to quote recovery
         * recover_quote_balance() handles bracket-quote equivalents (「」≡"") via ANCHOR_EQUIVS
         * No absolute positional calculations — all insertion is line-start/end or anchor-relative
-        * Code Pattern Recovery: recover_code_patterns() restores preserve-action patterns translated by the LLM using delimiter-aware regex matching; _detect_delimiters() identifies bracket pairs; RecoveryType.CODE_PATTERN added
+         * Code Pattern Recovery: recover_code_patterns() restores preserve-action patterns translated by the LLM using delimiter-aware regex matching; _detect_delimiters() identifies bracket pairs, including doubled delimiters such as `{{...}}`; nested inner matches (e.g. `{主人公}` inside `{{主人公}}`) are filtered so validation/recovery only acts on the outer token; RecoveryType.CODE_PATTERN added
    3.24 project_config.py ✅ - Per-project configuration
    3.25 prompt_builder.py ✅ - Build system prompts for API
    3.26 rate_limiter.py ✅ - API rate limiting (sliding window)
@@ -108,6 +110,8 @@ TABLE OF CONTENTS
    3.30 style_presets.py ✅ - Translation style presets
    3.31 validation.py ✅🔗 - Translation validation (Step 8, moved from Step 6)
         * validate_translation_comprehensive() check #7: code pattern preservation — verifies preserve-action patterns survive translation; triggers RetryReason.CODE_PATTERN_TRANSLATED
+       * validate_code_patterns_preserved() filters nested balanced-code substring matches so doubled-delimiter patterns do not also trigger single-delimiter warnings on the same text
+       * validate_line_pre() is the shared skip-classification path for Costs, Preview Requests, and Start Translation; it now handles preserve-pattern CODE_ONLY detection plus source-language-aware CJK/Hangul filtering
         * validate_line_post() treats code pattern failures as errors (not warnings)
    3.32 wordwrap.py ✅🔗 - Word wrapping (Step 7, moved from Step 8)
    3.33 ini_manager.py ✅ - INI path resolution, typed access, preset management, defaults (TASK 21.1 + 2026)
@@ -121,7 +125,8 @@ TABLE OF CONTENTS
         * set_last_manifest / get_last_manifest — persist last opened manifest
         * add_to_recent_manifests / get_recent_manifests — manifest history
    3.34 manifest_manager.py ✅🔗 - Unified manifest state management (TASK 19)
-   3.35 manifest_fields.py ✅ - Manifest field type helpers (TASK 22.1) + special format helpers (TASK 22.2) + shared priority resolution API: resolve_line_field(), resolve_line_field_from(), get_latest_line_text(), get_all_lines_resolved(); PIPELINE_FIELDS chain: qa_overwrite → wordwr → postpro → tl → prepro → orig; save_code_glossary/load_code_glossary support count as int or `[total, inst1_ct, ...]` list with instance_counts deserialization; save_character_notes/load_character_notes with count field
+        * Sparse line-field helpers include `clear_line_field()` for removing redundant per-line stage output when a result matches its stage input
+  3.35 manifest_fields.py ✅ - Manifest field type helpers (TASK 22.1) + special format helpers (TASK 22.2) + shared priority resolution API: resolve_line_field(), resolve_line_field_from(), resolve_line_field_for_stage(), get_latest_line_text(), get_line_text_for_stage(), get_all_lines_resolved(), get_all_lines_for_stage(); PIPELINE_FIELDS chain: wordwr → qa_overwrite → qa → postpro → tl → prepro → orig for final display/output, while stage helpers enforce ceilings (Postprocessing: tl → prepro → orig; QA: postpro → tl → prepro → orig; Wordwrap: qa_overwrite → qa → postpro → tl → prepro → orig); save_code_glossary/load_code_glossary support count as int or `[total, inst1_ct, ...]` list with instance_counts deserialization; save_character_notes/load_character_notes with count field
    3.36 preset_manager.py ✅ - Preset save/load/delete operations (TASK 30.1)
    3.37 mock_translator.py ✅ - Mock translation engine with flaw injection (Phase 56)
    3.38 consistency.py ✅ - Consistency system for term translation tracking (Phase 55)
@@ -248,14 +253,14 @@ TABLE OF CONTENTS
        - information.py - Step 2: Information 🔗manifest_fields (Bug Fix: on_leave() and _save_metadata() now merge *_enabled toggle BooleanVar values into metadata dict after ProjectMetadata.to_dict() — fixes toggle state erasure on tab change; Save button removed from header — auto-save on tab change is sufficient; Bug Fix: on_enter() reordered to load _load_metadata() BEFORE _load_characters_from_manifest()/_load_code_patterns_from_manifest() so authoritative top-level manifest data overrides stale step_state; on_leave() now calls _save_characters_to_manifest() and _save_code_patterns_to_manifest() to sync dual storage; _import_analysis_speakers() persists to top-level immediately)
        - preprocess.py - Step 3: Preprocessing 🔗manifest_fields
        - translate.py - Step 5: Translation 🔗api_client, mock_translator, prompt_adapter, manifest_fields (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching; Preview Requests: PreviewRequest dataclass with _format_input_lines() for numbered line display and io_examples field, FILTER_PARTS constant (13 entries: meta, language, system_instructions, io_examples, style, tone, summary, genre, pov, conditional_prompts, glossary, rolling_context, input_lines), RequestPreviewDialog class with Pure/Formatted/Plain views and Jump/Search/Filter toolbar, _plain_text() preserves curly braces for game text, _build_preview_requests() mirrors real translation request building and gates each labeled section by *_enabled metadata flags, generates io_examples block with fill mode support, syncs _translation_options from current UI before _build_chunks(); _build_system_prompt_from_manifest() reads from `step_state.Information.data.metadata`; _load_model_settings() loads per-model API.ini settings (chunk_size, temperature, rolling_context, thinking) with Global Options fallback on tab entry; _build_chunks() reads rolling_context_between/after and chunk_max_tokens from per-model API.ini via get_model_settings() with Global Options fallback; Request Options: Key, Model, Request Mode combobox (Normal/Batch/Flex/Priority with "(Unavailable)" suffixes via _refresh_request_mode_options()), Model Settings/Translation Options Change… buttons, Character Whitelist/Blacklist (manifest-bound), Ban Tokens; TranslationOptions.request_mode field passed to APIConfig.request_mode in _do_translation(); _apply_char_filters() post-processes translations; _sync_from_global_options() syncs all hidden vars from GlobalOptions including TranslationSettings; _get_request_slicing_mode() reads slicing from GlobalOptions.translation)
-       - postprocess.py - Step 6: Postprocess 🔗postprocess, manifest_fields; _FAILURE_POLICY_MAP for legacy enum mapping
-       - wordwrap_overwrite.py - Step 7: Wordwrap 🔗wordwrap, manifest_fields; column "Latest" (renamed from "Original")
-       - qa.py - Step 8: QA 🔗validation, manifest_fields; persists qa_overwrite field; column "Overwrite" (renamed from "Translated")
+      - postprocess.py - Step 6: Postprocess 🔗postprocess, manifest_fields; _FAILURE_POLICY_MAP for legacy enum mapping; translated input uses stage ceiling `tl → prepro → orig`; dedup-tagged rows skip batch placeholder fallback and `recover_line()` so duplicate rows are restored only from source-line postprocessing and do not accumulate false placeholder/code-pattern flags; Processed Lines adds a dynamic flagged-case combobox and stores recovery-detail text in row metadata for searchable filtering
+      - qa.py - Step 7: QA 🔗validation, manifest_fields; table columns are Original / Quality Assurance / Overwrite; review input uses stage ceiling `postpro → tl → prepro → orig`; `qa` is review/display text only, while `qa_overwrite` is only persisted for explicit user edits that differ from QA input; includes inline overwrite editing and Copy to Overwrite action
+      - wordwrap_overwrite.py - Step 8: Wordwrap 🔗wordwrap, manifest_fields; preview column "Input"; input uses stage ceiling `qa_overwrite → qa → postpro → tl → prepro → orig`; stored `wordwr` is restored into the Wordwrap column without input fallback, and only explicit Apply persists sparse `wordwr` output
        - output_inject.py - Step 9: Output/Inject 🔗manifest_fields; _NAMING_STRATEGY_MAP for legacy enum mapping; OutputFormat.INJECTION enum; _get_fresh_lines_for_file() for stale-data fix; _write_injection() 4-step parser handshake; _get_same_as_source_dir() returns parent of Original/
    
    6.5 gui/components/ (2 files)
        - __init__.py - Component exports
-       - table.py - SharedTable, ColumnDef, TableRow (Phase 43: batch insertion for large datasets; Phase 17: version tracking to cancel stale batches; TASK 71: bulk delete, 2000-row batches; TASK 72: page-based display (5000 rows/page), show_count_filter parameter, "Search:" label rename)
+      - table.py - SharedTable, ColumnDef, TableRow (Phase 43: batch insertion for large datasets; Phase 17: version tracking to cancel stale batches; TASK 71: bulk delete, 2000-row batches; TASK 72: page-based display (5000 rows/page), show_count_filter parameter, "Search:" label rename; text search now scans row values, tags, and nested metadata so Processed Lines can match Recovery Details text)
    
    6.6 gui/dialogs/ (7 files - 6 dialog modules)
        - __init__.py - Dialog exports
@@ -345,12 +350,12 @@ TABLE OF CONTENTS
          - All dialogs delegate to functions/api_config.py for hashing and encryption
        - table_view.py - Full Table View dialog (2026):
          - FullTableViewDialog: Spreadsheet-like view of all manifest line entries
-         - Constants: LINE_FIELDS (11 fields), COLUMN_DISPLAY_NAMES (human-readable names), DISPLAY_NAME_TO_FIELD (reverse lookup), DEFAULT_HIDDEN (tag), NON_EDITABLE_FIELDS (idx, orig), METADATA_FIELDS (log, tags, prepro_ops)
-         - Column display names: idx→Line #, tag→Tags, orig→Original, prepro→Preprocessed, tl→Translated, postpro→Postprocessed, wordwr→Wrapped, qa_overwrite→Quality Assurance
-         - Column visibility: auto-hides empty columns; slim tk.Menu dropdown with Show All/Show Visible/Show Latest presets; all columns including Line # are hideable; Tags hidden by default
+         - Constants: LINE_FIELDS (11 fields), COLUMN_DISPLAY_NAMES (human-readable names), DISPLAY_NAME_TO_FIELD (reverse lookup), DEFAULT_HIDDEN (empty set), NON_EDITABLE_FIELDS (idx, orig), METADATA_FIELDS (log, tags, prepro_ops)
+         - Column display names: idx→Line #, orig→Original, prepro→Preprocessed, tl→Translated, postpro→Postprocessed, qa→Quality Assurance, qa_overwrite→Overwrite, wordwr→Wordwrap, overwrite→Overwrite (Legacy), tags→Tags
+         - Column visibility: auto-hides empty columns; slim tk.Menu dropdown with Show All/Show Visible/Show Latest presets; all columns including Line # are hideable
          - Column selection bar: "Select / Selected" labels above each column, synced widths via Canvas, for search/replace scoping
          - Sort indicators: ▲/▼ arrows in column headers; _sort_column and _sort_reverse state tracking
-         - Cell editing (double-click), deletion (Del key), multi-select, column clearing
+          - Cell editing (double-click), deletion (Del key), multi-select, and a Clear Columns dialog for `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, and `wordwr`; clearing `tl` requires double confirmation
          - Read-only Original: double-click shows copyable text widget (_show_readonly_cell)
          - File filter dropdown: hierarchical folder navigation with Back/All navigation; font size 11
          - Two-row toolbar: search row (top) with file filter, search entry, column selector, Results Only toggle, Prev/Next arrows; replace row (bottom) with replace entry, Replace All, action buttons
@@ -391,6 +396,7 @@ TABLE OF CONTENTS
    6.7 gui/helpers/ (9 files - 7 adapter modules + 1 confirmation module)
        - __init__.py - Helper exports
        - mode_adapter.py - Bridge between GUI config and modi/ modules (TASK 16.5; TASK 72: tags_by_line tracking, progress_cb parameter; TASK 73: apply_dedup_batch, apply_aggressive_dedup_batch, DEDUP_PLACEHOLDER, aggressive helper fallbacks)
+         - Custom Placeholder preprocessing persists both flat captures and token-aware `placeholder_records` so postprocessing can restore named replacements batch-wide when an LLM shifts them onto another line
        - analysis_adapter.py - Bridge between GUI and functions/analysis.py (TASK 16.6)
          - detect_individual_codes_batch(): Individual code patterns with counts, types, and instances dict (raw_code → occurrence count per normalized pattern)
          - analyze_lines(): Full analysis with speaker_samples and individual_codes
@@ -615,6 +621,8 @@ TABLE OF CONTENTS
          - `ini_manager.remove_section()`: removes entire INI section
          - App._on_new_session(): calls tab.on_new_project() on ALL tabs then on_enter() on tab 0 after reset; fully flushes cached state (loaded files, analysis results, lines, etc.) via BaseStep.on_new_project() overrides in each step
          - App._on_load_manifest(): unsaved-changes check (askyesnocancel) before loading
+         - App._load_manifest_from_path(): now loads into a fresh ManifestManager first, then swaps it in only after successful load and replays the same runtime reset path as New Project so cached tab state cannot leak into the newly opened project
+         - `ini_manager.set_last_manifest(None)`: removes `[session].last_manifest`; startup seeding no longer recreates an empty placeholder key
          - WelcomeDialog: auto-load checkbox always visible, saves on toggle
          - Global Options Session: reset buttons for confirmations and presets
        - **Phase 42 Integration:** Preprocessing & Postprocessing complete implementation:
@@ -640,10 +648,11 @@ TABLE OF CONTENTS
          - _sync_from_global_options() applies Global Options overrides on tab enter
          - Retry Refinement: RETRY_STRATEGIES (2: Batch+Contextual for UI), ALL_RETRY_STRATEGIES (4 for CLI), min retries=0
          - Prompt Editor: Preview-only button, Ban Tokens LabelFrame with _BAN_PRESETS (None/Clean English/Strict)
+         - Shared skip planning: `_collect_translatable_lines()` and `_build_translation_status_text()` reuse `validate_line_pre()` so refresh, Preview Requests, and execution agree on already-translated, placeholder, code-only, symbol-only, and non-source filtering; the grouped header label now uses `non-source`
          - TranslationProgressWindow: non-modal progress dialog with shared API Log button; quick-access Global Options buttons route through the root window so API Log and Global Options stay single-instance
          - Chunk Sync: costs.py reads/writes LinesPerChunk to manifest RequestOptions
          - Language Skip: detect_line_script() in analysis.py, _LANG_SCRIPT_MAP, _apply_language_skip() — strips placeholder tokens (via _PLACEHOLDER_TOKEN_RE) before ratio-based script detection so CJK lines with placeholders are not wrongly classified as 'latin'
-         - Tab Caching: BaseStep._compute_cache_hash/_is_cache_valid/_update_cache/_invalidate_cache/_force_refresh
+         - Tab Caching: BaseStep._compute_cache_hash/_is_cache_valid/_update_cache/_invalidate_cache/_force_refresh; TranslationStep.on_enter() reloads prompt/request/global-option state before cache checks and refreshes table/status on cache hits so stale overwrite_translation values cannot survive a cached tab re-entry
          - New Project Lifecycle: BaseStep.on_new_project() invalidates cache; each step override clears instance-level cached state (_loaded_files, _lines, _analysis_results, etc.) to prevent old project data from leaking into a new session
          - Performance: SharedTable batch insertion (2000-row batches), bulk *children delete, page-based display (5000 rows/page, TASK 72), _refresh_lines() batch manifest dict read
          - TASK 71: Removed redundant all_lines/processed_lines/postprocessed_lines/files from step_data; manifest migration strips on load; new ManifestManager.get_all_orig_lines() API
@@ -704,11 +713,12 @@ TABLE OF CONTENTS
          - output_inject._update_dirty_flags(): reads flags and updates indicator labels
          - input_extract._on_import_translations(): selection dialog + per-field and per-section import logic
          - _ImportTranslationDialog: Toplevel with Line Fields and Settings Sections checkbox groups
-         - input_extract._import_line_fields(): per-field import with skip_new_lines option
+         - input_extract._import_line_fields(): per-field import with skip_new_lines option, canonical `tags` merge, legacy `tag` migration, and dedup placeholder guards that reject `tl`/postprocess/QA/wordwrap imports when either side has `prepro == __DEDUP__`
          - input_extract._import_settings_sections(): per-section import of manifest top-level and step_state keys
          - input_extract._load_selected_paths(): non-destructive file addition with source root validation
          - input_extract._add_files_to_existing_manifest(): builds file_infos/lines, calls mgr.add_files(), copies new originals
          - ManifestManager.add_files(): merges new files into sorted filedir, recomputes contiguous idx, preserves existing line data
+         - ManifestManager canonicalizes `lines[]` on load/save/set_lines: merges legacy `tag` into `tags`, clears translation-stage text from dedup placeholder rows, and writes canonical key order `idx`, `tags`, `orig`, `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, then auxiliary fields
          - output_inject._safe_output_format(): prevents ValueError on empty/invalid OutputFormat string
          - Preview tree headings: "Idx" → "Project", "#" → "File"; display uses 1-based global idx
          - TranslationOptions.skip_already_translated: bool field for skipping translated lines
@@ -772,8 +782,8 @@ TABLE OF CONTENTS
            - LineEntry.VALID_TAGS: frozenset of accepted marker types
            - is_tag() → bool: True when line is metadata-only
            - get_tag() → Optional[str]: returns marker type
-           - Sparse serialization: to_dict() includes tag only when set
-           - from_dict() restores tag (defaults to None)
+           - Sparse serialization: manifests store canonical `tags`; legacy `tag` remains runtime/backward-compatibility only
+           - from_dict() restores tag semantics from canonical `tags` or legacy `tag`
          - Detection in Analysis (Task 50.2):
            - _is_choice_item(line) → bool: regex for numbered/bulleted choice patterns
            - _is_menu_item(line) → bool: short non-speaker items (≤60 chars)
@@ -1593,21 +1603,10 @@ class LineEntry:
     def get_input_for_postprocessing(self) -> str:
         """Input for Post-processing (restoration).
         
-        Resolution: Find latest in TLC/Edit chain, fallback to tl/prepro/orig.
-        NOTE: Uses prepro_ops separately for restoration mappings.
+      Resolution: tl → prepro → orig.
         
-        Returns: Latest translation result to restore into
+      Returns: Best available pre-postprocessing text
         """
-        # Find highest N with edit{N} or tlc{N}
-        for n in range(100, 0, -1):  # Reasonable upper limit
-            edit_val = getattr(self, f"edit{n}", None)
-            if edit_val is not None:
-                return edit_val
-            tlc_val = getattr(self, f"tlc{n}", None)
-            if tlc_val is not None:
-                return tlc_val
-        
-        # Fallback chain
         if self.tl is not None:
             return self.tl
         if self.prepro is not None:
@@ -1617,7 +1616,7 @@ class LineEntry:
     def get_input_for_wordwrap(self) -> str:
         """Input for Wordwrap operation.
         
-        Returns: postpro if exists, else fallback via get_input_for_postprocessing()
+      Resolution: qa_overwrite → qa → postpro → tl → prepro → orig.
         """
         return self.postpro if self.postpro is not None else self.get_input_for_postprocessing()
     
@@ -1626,20 +1625,24 @@ class LineEntry:
         
         This is the ONLY case where "rightmost available" logic applies.
         
-        Returns: overwrite → wordwr → postpro (first available)
+        Returns: wordwr → qa_overwrite → qa → overwrite → postpro (first available)
         Raises: ValueError if no output available
         """
-        if self.overwrite is not None:
-            return self.overwrite
         if self.wordwr is not None:
-            return self.wordwr
+          return self.wordwr
+        if self.qa_overwrite is not None:
+          return self.qa_overwrite
+        if self.qa is not None:
+          return self.qa
+        if self.overwrite is not None:
+          return self.overwrite
         if self.postpro is not None:
-            return self.postpro
-        raise ValueError(f"Line {self.idx} has no final output (postpro/wordwr/overwrite)")
+          return self.postpro
+        raise ValueError(f"Line {self.idx} has no final output (postpro/qa/qa_overwrite/wordwr/overwrite)")
     
     def has_final_output(self) -> bool:
         """Check if any final output field is populated."""
-        return self.overwrite is not None or self.wordwr is not None or self.postpro is not None
+        return any(field is not None for field in (self.wordwr, self.qa_overwrite, self.qa, self.overwrite, self.postpro))
     
     def get_populated_fields(self) -> List[str]:
         """List of populated text fields (excludes metadata fields).
@@ -1647,7 +1650,7 @@ class LineEntry:
         Excludes: log, prepro_ops, deleted, updated
         Returns: List of field names that have values
         """
-        text_fields = ['orig', 'prepro', 'tl', 'postpro', 'wordwr', 'overwrite']
+        text_fields = ['orig', 'prepro', 'tl', 'postpro', 'qa', 'qa_overwrite', 'wordwr', 'overwrite']
         result = [f for f in text_fields if getattr(self, f, None) is not None]
         
         # Add dynamic TLC/Edit fields
@@ -2411,11 +2414,13 @@ Pipeline Wiring of Optional Components (P3):
 - `gui/steps/analysis.py` `_perform_analysis()`: Reads `ParserHandlesSpeakers` flag; always runs
   speaker detection via `analyze_lines(include_speakers=True)`, then uses parser-detected speaker
   names from `characters[]` as an allowlist to filter false positives from regex-based detection
-- `gui/steps/wordwrap_overwrite.py` `_process_wrap()`: Reads `ParserHandlesWordwrap` + `ParserName`;
-  when set, delegates to `parser.wordwrap(line)` per line instead of `apply_wordwrap(lines, config)`.
+- `gui/steps/wordwrap_overwrite.py` `_process_wrap()`: Reads per-tag `TagWrapConfig` settings
+  (width, break_char, max_lines, speaker_handling, prevent_orphans, prefer_punct_breaks) and
+  delegates to `apply_wordwrap()` with per-tag configuration. Parser provides defaults via
+  `_apply_parser_wordwrap_defaults()` but all settings remain editable.
   Per-tag processing via `_build_tag_maps()`: resolves line tag → filedir type → "dialogue" fallback,
-  applies per-tag `TagWrapConfig` settings. Parser-managed tags use O6→O9→passthrough chain;
-  user-managed tags use O9→built-in `pretty_wrap` with per-tag width/break_char/max_lines.
+  applies per-tag `TagWrapConfig` settings via `apply_wordwrap()` with `prevent_orphan` and
+  `prefer_punct_breaks` forwarded from per-tag config.
 - `gui/steps/output_inject.py` `_write_file()`: Detects parser format from `filedir[].format`; when a
   parser is found via `get_parser_registry().get(format)`, slices per-file lines using
   `all_lines[entry.first_idx:entry.last_idx + 1]` and calls `parser.inject_to(source, output, lines)`
@@ -2433,7 +2438,7 @@ Light VN Parser (formats/LightVN.py):
   stores per-line entries so dedup is handled by the Preprocessing step if enabled
 - **M1 Extract**: `extract(path)` → flat list; `extract_tagged(path)` → `List[ExtractedLine]`
 - **M2 Inject**: `inject(path, lines)` — writes to `{stem}_translated.txt` (delegates to `inject_to`); `inject_to(source, output, lines)` — surgical injection reading from source, writing to output
-- **M3 Identity**: `can_handle()` scans the file for `_DETECT_PATTERNS` (`~【`, `~文字`, `~ボタン`, `~絵`, `~効果音`, `~選択`) or `_DETECT_LINE_PREFIXES` (`栞 `)
+- **M3 Identity**: `can_handle()` scans the entire file for `_DETECT_PATTERNS` (`~【`, `~栞`, `~文字`, `~ボタン`, `~絵`, `~効果音`, `~選択`, `~スクリプト`, `~保存変数`, `~臨時全域変数`) plus `_DETECT_LINE_PREFIXES` (`栞 `, `スクリプト `, `保存変数 `, `臨時全域変数 `) so script/config-style LightVN files do not fall back to plain txt
 - **Tag propagation**: `LoadedFile.tags` stores per-line tags from `extract_tagged()`; `_sync_lines_to_manifest()` writes them to `tag`; O8 regex pass skips pre-tagged lines
 - **O3 Encoding**: Priority chain: utf-8, utf-8-sig, shift_jis, cp932, euc-jp, utf-16; this path is now used both for auto-detected LightVN files and for explicit `lightvn` input selection when Encoding remains `auto`
 - **O4 Speakers**: `detect_speakers()` parses `Speaker: text` format from extracted lines
@@ -2442,7 +2447,10 @@ Light VN Parser (formats/LightVN.py):
 - **O9 Pretty Wrap Hook**: `pretty_wrap()` delegates to `_pretty_wrap`, joins with break_char, truncates to max_lines
 - **O7 Forbidden**: Tab and carriage return characters
 - **O8 Context**: Patterns for dialogue (`^"`), menu (`~?文字`), choice (`~選択`)
-- **Tags**: `dialogue` (with speaker), `menu`, `variable`
+- **Tags**: `dialogue` (with speaker), `menu`, `variable`, `items`
+- **Variable classification**: Shared variable-name classification distinguishes normal translatable assignments from item-like assignments; names such as `剥ぎ取り素材1` and `獲得食材` are tagged as `items`, including when preceded by conditional `もし (...)` prefixes
+- **Bookmark semantics**: `~栞 ...` lines are treated as bookmarks/interaction anchors, not speaker tags; they clear the carried `~【Speaker】` state before later dialogue extraction so prior speakers cannot leak into unrelated map text
+- **Placeholder filtering**: Editor scaffolding lines such as `ここにテキストを入力` / `Enter your text here.` are skipped during extraction and therefore never enter the translation pipeline
 - **Code recovery**: Balanced bracket matching for 10 bracket types, angle bracket safety
 - **Conditional handling**: `~もし (condition)` prefix stripped for keys, preserved on injection
 - **Verified**: 55604 total / 50212 unique from 1056 files, 843 unique speakers
@@ -2489,15 +2497,20 @@ Key Features:
 - **Prompt Caching (OpenAI)**: Automatic prompt prefix caching for gpt-4o+ models
   - `PROMPT_CACHE_MODEL_PREFIXES` — tuple of model prefixes supporting prompt caching
   - `EXTENDED_CACHE_MODEL_PREFIXES` — tuple of model prefixes supporting 24h extended retention
+  - `resolve_prompt_cache_key(explicit_key, project_name, created_at)` — returns configured key or auto-generated manifest-derived key
+  - `build_prompt_cache_params(...)` — shared helper used by translation + Preview Requests to compute the effective OpenAI cache request metadata
   - `supports_prompt_caching()` — checks model/provider compatibility (OpenAI only, Gemini excluded)
   - `supports_extended_cache_retention()` — checks for 24h retention support
-  - `get_prompt_cache_params()` — returns dict with `prompt_cache_retention` and optional `prompt_cache_key` when applicable
+  - `set_prompt_cache_context(project_name, created_at)` — stores manifest context on `APIClient` so auto-generated keys match the current project
+  - `get_prompt_cache_params()` — returns the effective `prompt_cache_retention` and optional `prompt_cache_key` for live requests; safe on spec-mocked clients via `getattr()` fallback for unset manifest context
   - `_total_cached_tokens` — running counter of cached prompt tokens from `usage.prompt_tokens_details.cached_tokens`
   - `_total_reasoning_tokens` — running counter of reasoning tokens from `usage.completion_tokens_details.reasoning_tokens`
   - Completion token breakdown: `reasoning_tokens`, `accepted_prediction_tokens`, `rejected_prediction_tokens` extracted from `completion_tokens_details` and logged per-chunk + footer
   - APIConfig fields: `prompt_cache_enabled` (bool, default True), `prompt_cache_retention` (str, "" / "in_memory" / "24h"), `prompt_cache_key` (str, routing hint for cache slot affinity), `request_mode` (str, "normal" / "batch" / "flex" / "priority" — set from translation step mode selector)
   - `generate_prompt_cache_key(project_name, created_at)` — builds key as `"{first 5 alpha chars}-{seconds}"` from manifest metadata
   - `check_static_prompt_cache_status(token_breakdown)` — evaluates static prefix size: "ok" (≥1280 tokens), "suggest" (1024-1279), "warn" (<1024); uses `_STATIC_PROMPT_SECTIONS` frozenset for section classification
+  - Request propagation: `_translate_chunk()` and `_translate_single_line()` both merge the effective prompt cache params into the OpenAI request metadata and mirror them into plain-text logs + structured API log `LogEntrySent.extra`
+  - Preview propagation: `PreviewRequest.request_params` carries the same effective cache params into Pure JSON output, while `_build_preview_requests()` appends them to the Meta block for visual inspection
   - Logging: per-chunk cached token count, cache hit rate %, savings estimate in footer, CSV summary column
 - **Thinking/Reasoning Mode**: Provider-based thinking parameter generation
   - `THINKING_MODELS` — list of model patterns supporting thinking/reasoning (Claude, o-series, GPT-4.1, GPT-5)
@@ -2615,6 +2628,7 @@ Structured API Log (NEW - 2026):
 - `LogCategory(str, Enum)`: MAIN_TRANSLATION, TERM_TRANSLATION, GENDER_INFERENCE, OTHER
 - `LogStatus(str, Enum)`: SUCCESS (green), RECOVERED (yellow), FAILED (red), PENDING (awaiting response)
 - `LogEntrySent`: model, provider, temperature, system_prompt (full, not truncated), user_content, chunk_index, total_chunks, line_count, extra
+- `LogEntrySent.extra` is also used for sent-only request metadata that is not part of the prompt text itself, including OpenAI `prompt_cache_key` / `prompt_cache_retention` when present
 - `LogEntryReceived`: content, prompt_tokens, completion_tokens, total_tokens, cached_tokens, reasoning_tokens, finish_reason, error_message, duration_ms, extra
 - `LogEntry`: entry_id (int), timestamp, category, status, attempt, max_attempts, sent, received; to_dict() / from_dict()
 - `APILogStore`: singleton per project, entries list, subscribe/unsubscribe, log_sent/log_received/log_pair, get_filtered(category, status, search_text, view_mode), save/load (JSON lines format), clear

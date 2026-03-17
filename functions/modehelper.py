@@ -159,3 +159,106 @@ def restore_placeholders_in_line(
 			pass
 
 	return line, 0, False
+
+
+def _replace_exact_token_occurrences(
+	line: str,
+	token: str,
+	values: List[str],
+) -> Tuple[str, int]:
+	"""Replace exact token occurrences left-to-right using queued values."""
+	if not token or not values:
+		return line, 0
+
+	replaced = 0
+	result = line
+	while values:
+		pos = result.find(token)
+		if pos < 0:
+			break
+		value = values.pop(0)
+		result = result[:pos] + value + result[pos + len(token):]
+		replaced += 1
+	return result, replaced
+
+
+def restore_custom_placeholders_batch(
+	lines: List[str],
+	records_by_line: Dict[int, List[Dict[str, Any]]],
+) -> Tuple[List[str], Dict[str, int], Dict[str, List[str]]]:
+	"""Restore custom placeholders across a whole batch of lines.
+
+	This performs normal per-line restoration first, then a document-wide
+	exact-token fallback for any remaining values. The global fallback lets a
+	placeholder token restored by the LLM on the wrong line still be recovered.
+
+	Args:
+		lines: Translated lines to restore.
+		records_by_line: ``{line_idx: [{token, values}, ...]}`` captured during pre.
+
+	Returns:
+		Tuple of ``(restored_lines, stats, residuals)`` where *stats* contains
+		``local_restored``, ``global_restored``, and ``preexisting_consumed`` counts,
+		and *residuals* maps tokens to unrecovered original values.
+	"""
+	result = list(lines)
+	pending_by_token: Dict[str, List[str]] = {}
+	local_restored = 0
+	global_restored = 0
+	preexisting_consumed = 0
+
+	for idx, line in enumerate(result):
+		recs = records_by_line.get(idx, [])
+		if not recs:
+			continue
+
+		new_line = line
+		for rec in recs:
+			token = str(rec.get("token", "") or "").strip()
+			values = [str(v) for v in (rec.get("values", []) or []) if v is not None]
+			if not token or not values:
+				continue
+
+			# If another path already restored the original value on this line,
+			# consume it so residual reporting stays accurate.
+			while values and values[0] and values[0] in new_line:
+				values.pop(0)
+				preexisting_consumed += 1
+
+			new_line, count, _used_anchor = restore_placeholders_in_line(
+				new_line,
+				token,
+				values,
+				allow_anchor_fallback=False,
+				anchor_hint=None,
+			)
+			local_restored += count
+
+			if values:
+				pending_by_token.setdefault(token, []).extend(values)
+
+		result[idx] = new_line
+
+	if pending_by_token:
+		for idx, line in enumerate(result):
+			new_line = line
+			for token, values in pending_by_token.items():
+				new_line, count = _replace_exact_token_occurrences(
+					new_line,
+					token,
+					values,
+				)
+				global_restored += count
+			result[idx] = new_line
+
+	residuals = {
+		token: list(values)
+		for token, values in pending_by_token.items()
+		if values
+	}
+	stats = {
+		"local_restored": local_restored,
+		"global_restored": global_restored,
+		"preexisting_consumed": preexisting_consumed,
+	}
+	return result, stats, residuals

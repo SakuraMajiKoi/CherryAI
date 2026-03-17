@@ -352,8 +352,8 @@ class PlaceholderStep(BaseStep):
             3: 12,  # Information (moved from position 2)
             4: 5,   # Preprocessing (moved from position 3)
             5: 7,   # Translation
-            6: 8,   # Quality Assurance
-            7: 9,   # Postprocessing
+            6: 9,   # Postprocessing
+            7: 8,   # Quality Assurance
             8: 10,  # Wordwrap
             9: 11,  # Output
         }

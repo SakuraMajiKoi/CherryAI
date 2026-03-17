@@ -424,7 +424,7 @@ def apply_custom_placeholder(
 def apply_placeholder_batch(
     lines: List[str],
     rules: List[Dict[str, Any]],
-) -> Tuple[List[str], int, List[int], Dict[int, List[str]]]:
+) -> Tuple[List[str], int, List[int], Dict[int, List[str]], Dict[int, List[Dict[str, Any]]]]:
     """Apply custom placeholder rules to multiple lines.
 
     Args:
@@ -432,12 +432,14 @@ def apply_placeholder_batch(
         rules: List of placeholder rules with 'pattern', 'token', 'is_regex' keys.
 
     Returns:
-        Tuple of (processed_lines, change_count, changed_indices, captured_by_line).
+        Tuple of (processed_lines, change_count, changed_indices,
+        captured_by_line, records_by_line).
     """
     result = list(lines)
     changed_count = 0
     changed_indices: List[int] = []
     captured_by_line: Dict[int, List[str]] = {}
+    records_by_line: Dict[int, List[Dict[str, Any]]] = {}
 
     for rule in rules:
         pattern = rule.get("pattern", "")
@@ -454,8 +456,18 @@ def apply_placeholder_batch(
                     changed_indices.append(idx)
                     changed_count += 1
                 captured_by_line.setdefault(idx, []).extend(captured)
+                records_by_line.setdefault(idx, []).append({
+                    "token": token,
+                    "values": list(captured),
+                })
 
-    return result, changed_count, sorted(changed_indices), captured_by_line
+    return (
+        result,
+        changed_count,
+        sorted(changed_indices),
+        captured_by_line,
+        records_by_line,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1016,12 +1028,13 @@ def apply_preprocessing(
     _report("Custom Placeholders", 0.15)
     rules = config.get("placeholder_rules", [])
     if rules:
-        result, count, indices, captured = apply_placeholder_batch(result, rules)
+        result, count, indices, captured, records = apply_placeholder_batch(result, rules)
         if count:
             stats["changes_by_rule"]["placeholder"] = count
             stats["total_changes"] += count
             stats["changed_lines"].update(indices)
             stats["placeholder_captured"] = captured
+            stats["placeholder_records"] = records
             _tag_indices(indices, "placeholder")
 
     # P20. Anchoring (before symbol conversion)

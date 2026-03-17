@@ -53,6 +53,8 @@ import difflib
 from dataclasses import dataclass, field
 import os
 
+from .manifest_manager import get_primary_line_tag
+
 logger = logging.getLogger(__name__)
 
 # TASK 59.7: Module-level storage for ignored patterns during analysis
@@ -2376,7 +2378,7 @@ def resolve_chunk_type(
     for line_data in lines:
         idx = line_data.get("idx", -1)
         if idx in idx_set:
-            tag = line_data.get("tag", "")
+            tag = get_primary_line_tag(line_data)
             if tag:
                 tag_counts[tag] = tag_counts.get(tag, 0) + 1
 

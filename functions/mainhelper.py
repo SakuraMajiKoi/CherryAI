@@ -33,9 +33,11 @@ class Operation:
 _MAX_PASS_SEARCH = 100
 
 # Field categories for resolution logic
-TEXT_FIELDS = ["orig", "prepro", "tl", "postpro", "wordwr", "overwrite"]
+TEXT_FIELDS = [
+    "orig", "prepro", "tl", "postpro", "qa", "qa_overwrite", "wordwr", "overwrite",
+]
 METADATA_FIELDS = ["log", "prepro_ops", "deleted", "updated", "idx"]
-OUTPUT_FIELDS = ["overwrite", "wordwr", "postpro"]
+OUTPUT_FIELDS = ["wordwr", "qa_overwrite", "qa", "overwrite", "postpro"]
 
 
 @dataclass
@@ -46,7 +48,7 @@ class LineEntry:
     only fields that are populated are serialized.
 
     Field Progression Order:
-        orig → prepro → edited_prepro → tl → tlc1 → edit1 → tlc2 → edit2 → ... → postpro → wordwr → overwrite
+        orig → prepro → edited_prepro → tl → tlc1 → edit1 → tlc2 → edit2 → ... → postpro → qa → qa_overwrite → wordwr
 
     Special Fields (NEVER used as text input):
         - log: Error/warning messages for this line
@@ -70,6 +72,8 @@ class LineEntry:
 
     # Post-processing (optional, sparse)
     postpro: Optional[str] = None  # Post-processed (restored) text
+    qa: Optional[str] = None  # QA-reviewed text
+    qa_overwrite: Optional[str] = None  # QA manual overwrite
     wordwr: Optional[str] = None  # Word-wrapped text
     overwrite: Optional[str] = None  # User manual override
 
@@ -223,22 +227,15 @@ class LineEntry:
     def get_input_for_postprocessing(self) -> str:
         """Input for Post-processing (restoration).
 
-        Resolution: Find latest in TLC/Edit chain, fallback to tl/prepro/orig.
-        NOTE: Uses prepro_ops separately for restoration mappings.
+        Resolution: tl -> prepro -> orig.
+
+        Postprocessing restores placeholders and anchors into the base
+        translation result. It must not feed on later TLC/Edit rounds or its
+        own postprocessed output.
 
         Returns:
-            Latest translation result to restore into
+            Best available pre-postprocessing text
         """
-        # Find highest N with edit{N} or tlc{N}
-        for n in range(_MAX_PASS_SEARCH, 0, -1):
-            edit_val: Optional[str] = getattr(self, f"edit{n}", None)
-            if edit_val is not None:
-                return edit_val
-            tlc_val: Optional[str] = getattr(self, f"tlc{n}", None)
-            if tlc_val is not None:
-                return tlc_val
-
-        # Fallback chain
         if self.tl is not None:
             return self.tl
         if self.prepro is not None:
@@ -248,8 +245,14 @@ class LineEntry:
     def get_input_for_wordwrap(self) -> str:
         """Input for Wordwrap operation.
 
-        Returns: postpro if exists, else fallback via get_input_for_postprocessing()
+        Resolution: qa_overwrite -> qa -> postpro -> tl -> prepro -> orig.
+
+        Wordwrap must not consume its own ``wordwr`` result or any later field.
         """
+        if self.qa_overwrite is not None:
+            return self.qa_overwrite
+        if self.qa is not None:
+            return self.qa
         if self.postpro is not None:
             return self.postpro
         return self.get_input_for_postprocessing()
@@ -260,28 +263,36 @@ class LineEntry:
         This is the ONLY case where "rightmost available" logic applies.
 
         Returns:
-            overwrite → wordwr → postpro (first available)
+            wordwr → qa_overwrite → qa → overwrite → postpro (first available)
 
         Raises:
             ValueError: If no output available
         """
-        if self.overwrite is not None:
-            return self.overwrite
         if self.wordwr is not None:
             return self.wordwr
+        if self.qa_overwrite is not None:
+            return self.qa_overwrite
+        if self.qa is not None:
+            return self.qa
+        if self.overwrite is not None:
+            return self.overwrite
         if self.postpro is not None:
             return self.postpro
-        raise ValueError(f"Line {self.idx} has no final output (postpro/wordwr/overwrite)")
+        raise ValueError(
+            f"Line {self.idx} has no final output (postpro/qa/qa_overwrite/wordwr/overwrite)"
+        )
 
     def has_final_output(self) -> bool:
         """Check if any final output field is populated.
 
         Returns:
-            True if overwrite, wordwr, or postpro exists
+            True if wordwr, qa_overwrite, qa, overwrite, or postpro exists
         """
         return (
-            self.overwrite is not None
-            or self.wordwr is not None
+            self.wordwr is not None
+            or self.qa_overwrite is not None
+            or self.qa is not None
+            or self.overwrite is not None
             or self.postpro is not None
         )
 
@@ -304,6 +315,10 @@ class LineEntry:
             result.append("tl")
         if self.postpro is not None:
             result.append("postpro")
+        if self.qa is not None:
+            result.append("qa")
+        if self.qa_overwrite is not None:
+            result.append("qa_overwrite")
         if self.wordwr is not None:
             result.append("wordwr")
         if self.overwrite is not None:
@@ -345,7 +360,21 @@ class LineEntry:
 
         Only includes fields that are populated (not None, not False for bools).
         """
-        result: Dict[str, Any] = {"idx": self.idx, "orig": self.orig}
+        from .manifest_manager import canonicalize_line_dict, merge_line_tags
+
+        result: Dict[str, Any] = {"idx": self.idx}
+
+        tags_value: Any = None
+        if self.tags is not None:
+            tags_value = self.tags.to_dict() if hasattr(self.tags, "to_dict") else self.tags
+        if isinstance(tags_value, (str, list, tuple, set)):
+            merged_tags = merge_line_tags(tags_value, self.tag)
+            if merged_tags:
+                result["tags"] = merged_tags
+        elif tags_value:
+            result["tags"] = tags_value
+
+        result["orig"] = self.orig
 
         # Optional static fields
         if self.prepro is not None:
@@ -358,6 +387,10 @@ class LineEntry:
             result["tl"] = self.tl
         if self.postpro is not None:
             result["postpro"] = self.postpro
+        if self.qa is not None:
+            result["qa"] = self.qa
+        if self.qa_overwrite is not None:
+            result["qa_overwrite"] = self.qa_overwrite
         if self.wordwr is not None:
             result["wordwr"] = self.wordwr
         if self.overwrite is not None:
@@ -371,17 +404,6 @@ class LineEntry:
         if self.updated is not None:
             result["updated"] = self.updated
 
-        # Tags (v2.1)
-        if self.tags is not None:
-            # LineTags has to_dict method
-            tags_dict = self.tags.to_dict() if hasattr(self.tags, "to_dict") else self.tags
-            if tags_dict:  # Only include if non-empty
-                result["tags"] = tags_dict
-
-        # Tag (per-line) — only serialise when set
-        if self.tag is not None:
-            result["tag"] = self.tag
-
         # Dynamic TLC/Edit fields
         for n in range(1, _MAX_PASS_SEARCH + 1):
             tlc_val = getattr(self, f"tlc{n}", None)
@@ -391,7 +413,7 @@ class LineEntry:
             if edit_val is not None:
                 result[f"edit{n}"] = edit_val
 
-        return result
+        return canonicalize_line_dict(result)
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> "LineEntry":
@@ -414,6 +436,14 @@ class LineEntry:
                 # Keep as dict if auto_tagger not available
                 tags = data["tags"]
 
+        resolved_tag = data.get("tag") or data.get("context_marker")
+        if not resolved_tag:
+            try:
+                from .manifest_manager import get_primary_line_tag
+                resolved_tag = get_primary_line_tag(data)
+            except Exception:
+                resolved_tag = None
+
         entry = LineEntry(
             idx=data.get("idx", 0),
             orig=data.get("orig", ""),
@@ -422,13 +452,15 @@ class LineEntry:
             edited_prepro=data.get("edited_prepro"),
             tl=data.get("tl"),
             postpro=data.get("postpro"),
+            qa=data.get("qa"),
+            qa_overwrite=data.get("qa_overwrite"),
             wordwr=data.get("wordwr"),
             overwrite=data.get("overwrite"),
             log=data.get("log"),
             deleted=data.get("deleted", False),
             updated=data.get("updated"),
             tags=tags,
-            tag=data.get("tag") or data.get("context_marker"),
+            tag=resolved_tag,
         )
 
         # Restore dynamic TLC/Edit fields

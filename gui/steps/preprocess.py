@@ -1255,6 +1255,13 @@ class PreprocessingStep(BaseStep):
                 str(k): v for k, v in ph_captured.items()
             }
 
+        # Persist token-aware placeholder records for batch restoration
+        ph_records = last_stats.get("placeholder_records", {})
+        if ph_records:
+            data["placeholder_records"] = {
+                str(k): v for k, v in ph_records.items()
+            }
+
         # Persist ellipsis counts for decompression
         ell_counts = last_stats.get("ellipsis_counts", {})
         if ell_counts:

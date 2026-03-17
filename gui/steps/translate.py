@@ -45,6 +45,7 @@ from CherryAI.functions.manifest_fields import (
     save_nested_bool_field,
     load_nested_bool_field,
 )
+from CherryAI.functions.validation import SkipReason, ValidationResult, validate_line_pre
 
 # Import prompt adapter for prompt building and retry handling
 from CherryAI.gui.helpers.prompt_adapter import (
@@ -181,6 +182,17 @@ class TranslatableLine:
     status: LineStatus = LineStatus.PENDING
     error_message: str = ""
     chunk_id: int = -1
+
+
+class _TranslationStatusReason:
+    ALREADY_TRANSLATED = "already translated"
+    NON_SOURCE = "non-source"
+    EMPTY = "empty"
+    PLACEHOLDERS = "placeholders"
+    CODE_ONLY = "code-only"
+    SYMBOLS_ONLY = "symbols-only"
+    CONTEXT_MARKERS = "context markers"
+    COMMENTS = "comments"
 
 
 class TranslationProgressWindow(tk.Toplevel):
@@ -794,6 +806,7 @@ class PreviewRequest:
     input_lines: str
     full_system_prompt: str
     line_count: int = 0
+    request_params: Dict[str, Any] = field(default_factory=dict)
 
     def get_part(self, key: str) -> str:
         """Return the text of a named part."""
@@ -876,6 +889,8 @@ class PreviewRequest:
             "temperature": 0.3,
             "response_format": {"type": "json_object"},
         }
+        if self.request_params:
+            payload.update(self.request_params)
         # Extract temperature from meta
         for line in self.meta.split("\n"):
             if line.startswith("temperature:"):
@@ -1456,6 +1471,9 @@ class TranslationStep(BaseStep):
         (RetryStrategyView.ISOLATED.value, RetryStrategyView.ISOLATED.display_name),
         (RetryStrategyView.SKIP.value, RetryStrategyView.SKIP.display_name),
     ]
+    _OPTIONAL_SKIP_REASONS = frozenset(
+        {SkipReason.NO_JAPANESE, SkipReason.SYMBOL_ONLY},
+    )
 
     def __init__(
         self,
@@ -1989,6 +2007,199 @@ class TranslationStep(BaseStep):
 
         return original, preprocessed
 
+    def _get_line_translation_text(self, line: TranslatableLine) -> str:
+        """Return the text that would be sent to the LLM for a line."""
+        return line.edited_prepro or line.preprocessed or line.original
+
+    def _get_existing_translation_text(self, line: TranslatableLine) -> str:
+        """Return the latest stored translation text for a line, if any."""
+        if line.translated and line.translated.strip():
+            return line.translated
+
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            manifest_line = mgr.get_line(line.idx)
+            if isinstance(manifest_line, dict):
+                return str(manifest_line.get("tl", "") or "")
+
+        return ""
+
+    def _get_source_language(self) -> str:
+        """Return the configured source language from manifest metadata."""
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            source_language = str(
+                mgr.get_info_metadata_field("source_language", "Japanese"),
+            ).strip()
+            if source_language:
+                return source_language
+
+            metadata = mgr.get_step_data_value(2, "metadata", {})
+            if isinstance(metadata, dict):
+                source_language = str(
+                    metadata.get("source_language", "Japanese") or "Japanese",
+                ).strip()
+                if source_language:
+                    return source_language
+        return "Japanese"
+
+    def _get_preserve_patterns(self) -> List[str]:
+        """Return preserve-action code patterns from the manifest."""
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            return []
+
+        code_pats = mgr._manifest_data.get("code_patterns", [])
+        if not isinstance(code_pats, list):
+            return []
+
+        return [
+            str(p.get("pattern", ""))
+            for p in code_pats
+            if isinstance(p, dict)
+            and p.get("action") == "preserve"
+            and p.get("pattern")
+        ]
+
+    def _get_bool_var_value(self, attr_name: str, default: bool) -> bool:
+        """Read a Tk variable-like attribute without trusting loose mocks."""
+        var = getattr(self, attr_name, None)
+        getter = getattr(var, "get", None)
+        if callable(getter):
+            value = getter()
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)):
+                return bool(value)
+            if isinstance(value, str):
+                return value.strip().lower() in {"1", "true", "yes", "on"}
+        return default
+
+    def _collect_translatable_lines(
+        self,
+        lines: Optional[List[TranslatableLine]] = None,
+    ) -> Tuple[List[TranslatableLine], Dict[SkipReason, int], Dict[int, ValidationResult]]:
+        """Classify lines using the shared validation rules.
+
+        Returns lines that should be translated under the current Global
+        Options state plus skip-reason counts for UI summary and preview.
+        """
+        selected_lines = list(lines if lines is not None else self._lines)
+        skip_translated = TranslationStep._get_bool_var_value(
+            self,
+            "_skip_translated_var",
+            getattr(self._translation_options, "skip_already_translated", False),
+        )
+        skip_non_source = TranslationStep._get_bool_var_value(
+            self,
+            "_skip_non_source_var",
+            False,
+        )
+        source_language = TranslationStep._get_source_language(self)
+        preserve_patterns = TranslationStep._get_preserve_patterns(self)
+
+        translatable: List[TranslatableLine] = []
+        skip_counts: Dict[SkipReason, int] = {}
+        validations: Dict[int, ValidationResult] = {}
+
+        for line in selected_lines:
+            if line.status == LineStatus.TRANSLATING:
+                continue
+
+            existing_translation = None
+            if skip_translated:
+                existing_translation = TranslationStep._get_existing_translation_text(self, line)
+
+            validation = validate_line_pre(
+                TranslationStep._get_line_translation_text(self, line),
+                existing_translation=existing_translation,
+                preserve_patterns=preserve_patterns,
+                source_language=source_language,
+            )
+
+            if (
+                not validation.is_valid
+                and not skip_non_source
+                and validation.skip_reason in TranslationStep._OPTIONAL_SKIP_REASONS
+            ):
+                translatable.append(line)
+                continue
+
+            if validation.is_valid:
+                translatable.append(line)
+                continue
+
+            if validation.skip_reason is not None:
+                skip_counts[validation.skip_reason] = (
+                    skip_counts.get(validation.skip_reason, 0) + 1
+                )
+                validations[line.idx] = validation
+
+        return translatable, skip_counts, validations
+
+    def _group_skip_reason_counts(
+        self,
+        skip_counts: Dict[SkipReason, int],
+    ) -> Dict[str, int]:
+        """Collapse raw skip reasons into user-facing status groups."""
+        grouped: Dict[str, int] = {}
+
+        for reason, count in skip_counts.items():
+            if reason == SkipReason.ALREADY_TRANSLATED:
+                label = _TranslationStatusReason.ALREADY_TRANSLATED
+            elif reason == SkipReason.EMPTY:
+                label = _TranslationStatusReason.EMPTY
+            elif reason in (SkipReason.DEDUP_ONLY, SkipReason.PROT_ONLY):
+                label = _TranslationStatusReason.PLACEHOLDERS
+            elif reason == SkipReason.CODE_ONLY:
+                label = _TranslationStatusReason.CODE_ONLY
+            elif reason == SkipReason.SYMBOL_ONLY:
+                label = _TranslationStatusReason.SYMBOLS_ONLY
+            elif reason == SkipReason.TAG:
+                label = _TranslationStatusReason.CONTEXT_MARKERS
+            elif reason == SkipReason.COMMENT:
+                label = _TranslationStatusReason.COMMENTS
+            elif reason == SkipReason.NO_JAPANESE:
+                label = _TranslationStatusReason.NON_SOURCE
+            else:
+                label = reason.value.replace("_", " ")
+
+            grouped[label] = grouped.get(label, 0) + count
+
+        return grouped
+
+    def _build_translation_status_text(self) -> str:
+        """Build the Translation-tab status summary text."""
+        if not self._lines:
+            return "No lines loaded"
+
+        translatable, skip_counts, _ = TranslationStep._collect_translatable_lines(self)
+        total = len(self._lines)
+        skipped_total = sum(skip_counts.values())
+        if skipped_total == 0:
+            return f"{total} lines ready"
+
+        grouped = TranslationStep._group_skip_reason_counts(self, skip_counts)
+        reason_order = [
+            _TranslationStatusReason.ALREADY_TRANSLATED,
+            _TranslationStatusReason.NON_SOURCE,
+            _TranslationStatusReason.EMPTY,
+            _TranslationStatusReason.PLACEHOLDERS,
+            _TranslationStatusReason.CODE_ONLY,
+            _TranslationStatusReason.SYMBOLS_ONLY,
+            _TranslationStatusReason.CONTEXT_MARKERS,
+            _TranslationStatusReason.COMMENTS,
+        ]
+        parts = [
+            f"{grouped[label]} {label}"
+            for label in reason_order
+            if grouped.get(label)
+        ]
+        return (
+            f"{total} lines: {len(translatable)} translatable, "
+            f"{skipped_total} skipped ({', '.join(parts)})"
+        )
+
     def _refresh_lines(self) -> None:
         """Refresh lines from previous steps.
 
@@ -2042,14 +2253,9 @@ class TranslationStep(BaseStep):
         self._update_lines_table()
 
         # Update status
-        completed = sum(1 for l in self._lines if l.status == LineStatus.COMPLETED)
-        total = len(self._lines)
-        if completed > 0:
-            self._status_label.configure(
-                text=f"{total} lines ready ({completed} translated)",
-            )
-        else:
-            self._status_label.configure(text=f"{total} lines ready")
+        self._status_label.configure(
+            text=TranslationStep._build_translation_status_text(self),
+        )
 
     def _update_lines_table(self) -> None:
         """Update the lines table with current data.
@@ -2122,6 +2328,43 @@ class TranslationStep(BaseStep):
             edit_before_translation=self._edit_before_var.get(),
             skip_already_translated=self._skip_translated_var.get(),
             request_slicing=self._get_request_slicing_mode(),
+        )
+
+    def _get_prompt_cache_context(self) -> Tuple[str, str]:
+        """Return manifest metadata used for auto-generated prompt cache keys."""
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            return ("", "")
+
+        created_at = ""
+        try:
+            created_at = str(mgr._manifest_data.get("created_at", ""))
+        except Exception:
+            created_at = ""
+        return (mgr.project_name, created_at)
+
+    def _get_effective_prompt_cache_params(
+        self,
+        *,
+        model: str,
+        provider: str,
+    ) -> Dict[str, Any]:
+        """Build the exact prompt-cache params that live requests will use."""
+        from CherryAI.functions.api_client import APIConfig, build_prompt_cache_params
+        from CherryAI.functions.config import load_config
+
+        api_config = APIConfig.from_dict(load_config().get("api", {}))
+        project_name, created_at = self._get_prompt_cache_context()
+        effective_provider = provider or api_config.provider
+        return build_prompt_cache_params(
+            enabled=api_config.prompt_cache_enabled,
+            provider=effective_provider,
+            model=model,
+            retention=api_config.prompt_cache_retention,
+            explicit_key=api_config.prompt_cache_key,
+            project_name=project_name,
+            created_at=created_at,
+            base_url=api_config.base_url,
         )
 
     def _get_request_slicing_mode(self) -> str:
@@ -2236,6 +2479,8 @@ class TranslationStep(BaseStep):
             messagebox.showwarning("Translation", "Translation already in progress.")
             return
 
+        self._sync_from_global_options()
+
         if not self._lines:
             self._refresh_lines()
 
@@ -2246,49 +2491,54 @@ class TranslationStep(BaseStep):
         # Get options
         self._translation_options = self._get_options_from_ui()
 
-        # Check for pending lines
-        pending_lines = [l for l in self._lines if l.status == LineStatus.PENDING]
-        if not pending_lines:
-            if messagebox.askyesno(
-                "No Pending Lines",
-                "All lines have been processed. Restart translation for failed lines?",
-            ):
-                # Reset failed lines to pending
-                for line in self._lines:
-                    if line.status == LineStatus.FAILED:
-                        line.status = LineStatus.PENDING
-                        line.error_message = ""
-                pending_lines = [l for l in self._lines if l.status == LineStatus.PENDING]
-            else:
-                return
-
-        if not pending_lines:
-            messagebox.showinfo("Translation", "No lines to translate.")
-            return
+        translatable_lines, skip_counts, validations = (
+            TranslationStep._collect_translatable_lines(self)
+        )
 
         # Task 33.1: Show edit dialog if enabled
         if self._translation_options.edit_before_translation:
-            if not self._show_edit_dialog(pending_lines):
+            if not self._show_edit_dialog(translatable_lines):
                 return  # User cancelled edit dialog
 
-        # Mark dedup/placeholder-only lines as SKIPPED before translation
-        # so they don't inflate total_lines and prevent 100% progress.
-        from CherryAI.functions.prompt_builder import is_placeholder_only
-        skipped_before_start = 0
-        translatable_lines: list[TranslatableLine] = []
-        for line in pending_lines:
-            text = (
-                line.edited_prepro or line.preprocessed or line.original
+            translatable_lines, skip_counts, validations = (
+                TranslationStep._collect_translatable_lines(self)
             )
-            if not text.strip() or is_placeholder_only(text):
-                line.status = LineStatus.SKIPPED
-                skipped_before_start += 1
+
+        if not translatable_lines:
+            self._status_label.configure(
+                text=TranslationStep._build_translation_status_text(self),
+            )
+            messagebox.showinfo(
+                "Translation",
+                "No lines are translatable with the current skip settings.",
+            )
+            return
+
+        translatable_ids = {line.idx for line in translatable_lines}
+        skipped_before_start = sum(skip_counts.values())
+
+        for line in self._lines:
+            if line.idx in translatable_ids:
+                line.status = LineStatus.PENDING
+                line.error_message = ""
             else:
-                translatable_lines.append(line)
+                validation = validations.get(line.idx)
+                if validation is None:
+                    continue
+                if (
+                    validation.skip_reason == SkipReason.ALREADY_TRANSLATED
+                    and TranslationStep._get_existing_translation_text(self, line).strip()
+                ):
+                    line.status = LineStatus.COMPLETED
+                else:
+                    line.status = LineStatus.SKIPPED
+                    line.error_message = ""
+
+        self._update_lines_table()
 
         # Initialize progress
         self._progress = TranslationProgress(
-            total_lines=len(pending_lines),
+            total_lines=len(translatable_lines) + skipped_before_start,
             translated_lines=0,
             failed_lines=0,
             skipped_lines=skipped_before_start,
@@ -2496,6 +2746,12 @@ class TranslationStep(BaseStep):
                                 if tl:
                                     self._api_client.config.target_lang = tl
 
+                                project_name, created_at = self._get_prompt_cache_context()
+                                self._api_client.set_prompt_cache_context(
+                                    project_name=project_name,
+                                    created_at=created_at,
+                                )
+
                         if self._translation_options.banned_tokens:
                             self._api_client.configure_logit_bias(
                                 enabled=True,
@@ -2530,29 +2786,6 @@ class TranslationStep(BaseStep):
 
             # Get pending lines
             pending_lines = [l for l in self._lines if l.status == LineStatus.PENDING]
-
-            # Task 47.9: Skip lines that already have a base translation
-            if self._skip_translated_var.get() and self._manifest_manager:
-                skipped_count = 0
-                still_pending = []
-                for line in pending_lines:
-                    manifest_line = self._manifest_manager.get_line(line.idx)
-                    tl_val = manifest_line.get("tl", "") if manifest_line else ""
-                    if tl_val and str(tl_val).strip():
-                        line.status = LineStatus.SKIPPED
-                        self._progress.skipped_lines += 1
-                        skipped_count += 1
-                    else:
-                        still_pending.append(line)
-                pending_lines = still_pending
-                if skipped_count:
-                    self._log_progress(
-                        f"Skipped {skipped_count} already translated lines"
-                    )
-
-            # TASK 43.13: Skip lines not in source language
-            if self._skip_non_source_var.get():
-                pending_lines = self._apply_language_skip(pending_lines)
 
             # Build chunks
             chunks = self._build_chunks(pending_lines)
@@ -3662,7 +3895,18 @@ class TranslationStep(BaseStep):
         )
 
         # Log outgoing request when enabled in Global Options
-        self._log_request_json(system_prompt, filtered_for_api)
+        request_params = {}
+        if self._api_client is not None:
+            try:
+                request_params = self._api_client.get_prompt_cache_params()
+            except Exception:
+                request_params = {}
+
+        self._log_request_json(
+            system_prompt,
+            filtered_for_api,
+            request_params=request_params,
+        )
 
         # Call API
         translations = self._api_client.translate_batch(
@@ -3776,6 +4020,8 @@ class TranslationStep(BaseStep):
         self,
         system_prompt: str,
         lines_to_translate: List[str],
+        *,
+        request_params: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Write outgoing request as JSON when log_requests is enabled.
 
@@ -3808,6 +4054,7 @@ class TranslationStep(BaseStep):
                 "system_prompt": system_prompt,
                 "input_lines": lines_to_translate,
                 "line_count": len(lines_to_translate),
+                "request_params": request_params or None,
             }
 
             (log_dir / filename).write_text(
@@ -3931,8 +4178,9 @@ class TranslationStep(BaseStep):
         # Update status label
         completed = sum(1 for l in self._lines if l.status == LineStatus.COMPLETED)
         failed = sum(1 for l in self._lines if l.status == LineStatus.FAILED)
+        summary = TranslationStep._build_translation_status_text(self)
         self._status_label.configure(
-            text=f"Completed: {completed}, Failed: {failed}"
+            text=f"Completed: {completed}, Failed: {failed} | {summary}"
         )
 
     def _show_abort_error_dialog(self, abort_err: TranslationAbortError) -> None:
@@ -3963,19 +4211,22 @@ class TranslationStep(BaseStep):
         # TASK 43.6: Update model list from Global Options
         self._update_model_list_from_global_options()
 
+        # Global request and translation settings must be reapplied on every
+        # tab entry, even when the line cache is still valid.
+        self._load_prompt_data()
+        self._load_request_options_from_manifest()
+
         # TASK 43.14: Skip refresh when cache is valid
         if self._is_cache_valid():
+            if self._lines:
+                self._update_lines_table()
+                self._status_label.configure(
+                    text=TranslationStep._build_translation_status_text(self),
+                )
             return
 
         # Refresh lines from previous steps
-        if not self._lines:
-            self._refresh_lines()
-
-        # Load prompt data from config if available
-        self._load_prompt_data()
-
-        # Load request options from manifest
-        self._load_request_options_from_manifest()
+        self._refresh_lines()
 
         # TASK 43.14: Update cache hash after full refresh
         self._update_cache()
@@ -4332,26 +4583,17 @@ class TranslationStep(BaseStep):
             build_request_prompt,
         )
 
+        self._sync_from_global_options()
+
         # Gather options from UI — update _translation_options so
         # _build_chunks() uses the current settings (chunk_size,
         # request_slicing, etc.) instead of stale defaults.
         opts = self._get_options_from_ui()
         self._translation_options = opts
 
-        # Gather pending lines (same filtering as _do_translation)
-        pending = [
-            line for line in self._lines
-            if line.status in (LineStatus.PENDING, LineStatus.COMPLETED,
-                               LineStatus.FAILED, LineStatus.SKIPPED)
-        ]
+        pending, _, _ = TranslationStep._collect_translatable_lines(self)
         if not pending:
-            pending = list(self._lines)
-
-        # Apply the same language skip as the real translation flow so
-        # that non-source-language lines (e.g. English in a JP project)
-        # do not appear in the preview.
-        if self._skip_non_source_var.get():
-            pending = self._apply_language_skip(pending)
+            return []
 
         # Chunk the lines the same way translation does
         chunks = self._build_chunks(pending)
@@ -4499,12 +4741,20 @@ class TranslationStep(BaseStep):
             build_conditional_instructions,
         )
 
-        # Meta info
-        meta_block = (
-            f"model: {opts.model}\n"
-            f"temperature: {opts.temperature}\n"
-            f"response_format: {{\"type\": \"json_object\"}}"
+        preview_request_params = self._get_effective_prompt_cache_params(
+            model=opts.model,
+            provider=opts.api_key_provider,
         )
+
+        # Meta info
+        meta_lines = [
+            f"model: {opts.model}",
+            f"temperature: {opts.temperature}",
+            'response_format: {"type": "json_object"}',
+        ]
+        for key, value in preview_request_params.items():
+            meta_lines.append(f"{key}: {value}")
+        meta_block = "\n".join(meta_lines)
 
         # Build preview requests per chunk — glossary, characters, and
         # conditional prompts are selective (only included when their
@@ -4680,6 +4930,7 @@ class TranslationStep(BaseStep):
                 input_lines=user_content,
                 full_system_prompt=chunk_full_prompt,
                 line_count=len(filtered_lines),
+                request_params=preview_request_params.copy(),
             ))
 
         return requests

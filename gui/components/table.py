@@ -482,9 +482,8 @@ class SharedTable(ttk.Frame):
             for row in self._rows:
                 # Text filter: substring match across all column values
                 if self._current_filter:
-                    if not any(
-                        self._current_filter in str(v).lower()
-                        for v in row.values.values()
+                    if not self._row_matches_text_filter(
+                        row, self._current_filter,
                     ):
                         continue
 
@@ -501,6 +500,32 @@ class SharedTable(ttk.Frame):
             self._filtered_rows = filtered
         self._current_page = 0
         self._refresh_display()
+
+    @classmethod
+    def _iter_search_values(cls, value: Any) -> List[str]:
+        """Flatten nested row content into searchable strings."""
+        if value is None:
+            return []
+        if isinstance(value, dict):
+            flattened: List[str] = []
+            for nested in value.values():
+                flattened.extend(cls._iter_search_values(nested))
+            return flattened
+        if isinstance(value, (list, tuple, set)):
+            flattened = []
+            for nested in value:
+                flattened.extend(cls._iter_search_values(nested))
+            return flattened
+        return [str(value).lower()]
+
+    @classmethod
+    def _row_matches_text_filter(cls, row: TableRow, filter_text: str) -> bool:
+        """Return whether a row matches the current text filter."""
+        searchable: List[str] = []
+        searchable.extend(cls._iter_search_values(row.values))
+        searchable.extend(cls._iter_search_values(row.tags))
+        searchable.extend(cls._iter_search_values(row.meta))
+        return any(filter_text in value for value in searchable)
 
     def _refresh_display(self) -> None:
         """Refresh the treeview display with pagination.

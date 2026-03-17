@@ -55,6 +55,246 @@ MODULE COUNTS (Verified January 2026)
 =============================================================================
 [Archived: Sessions 43–24 + Phase 62 → see doc/archived.md]
 
+### BUG FIX: Safe Open Project Reset + Canonical Tags Import
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Make `File → Open Project...` safe when another project is already active, stop stale `last_manifest` entries from being recreated, and normalize manifest/import tagging so CherryAI writes canonical `tags` instead of leaking legacy `tag` or translation-stage text onto dedup placeholder rows.
+
+**Root Causes:**
+1. `gui/app.py::_load_manifest_from_path()` reused the active runtime state instead of replaying the same cache-flush path as New Project, so step tabs could carry old loaded-file and preview state into the newly opened manifest.
+2. `functions/ini_manager.py` cleared `last_manifest` by writing an empty string, while INI startup seeding recreated the placeholder key on later loads.
+3. `gui/steps/input_extract.py` still wrote parser content tags into legacy `tag`, imported `tag` directly from other manifests, and replaced tags instead of merging them.
+4. Dedup placeholder rows (`prepro == "__DEDUP__"`) could acquire imported `tl`/postprocess/QA/wordwrap stage data, polluting the manifest with invalid downstream text.
+
+**Changes:**
+1. **`gui/app.py`** — Open Project now loads into a fresh `ManifestManager`, swaps it in only after successful load, resets `SessionState`, calls `on_new_project()` on all tabs, and then enters the saved step.
+2. **`functions/ini_manager.py`** — `set_last_manifest(None)` now removes `[session].last_manifest`, and startup seeding no longer recreates the key.
+3. **`functions/manifest_manager.py`** — Added canonical line normalization on load/save/set: merges legacy `tag` into `tags`, clears translation-stage text from dedup placeholder rows, and writes line keys in canonical order `idx`, `tags`, `orig`, `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, then auxiliary fields.
+4. **`gui/steps/input_extract.py`** — Parser tag propagation and manual tag edits now write canonical `tags`; translation import merges tags, removes duplicates, migrates legacy `tag` without writing it back, and blocks translation-stage imports for dedup placeholder rows.
+5. **Tests** — Added focused regressions in `dev/test_app_startup.py`, `dev/test_input_import_fixes.py`, and `dev/test_lightvn_fixes.py`.
+
+**Tests:** Focused pytest run passed: `dev/test_app_startup.py`, `dev/test_input_import_fixes.py`, `dev/test_lightvn_fixes.py` — 85 tests passing.
+
+### BUG FIX: LightVN Detection Fallback + Bookmark Placeholder Filtering
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Stop LightVN map/script files from falling back to raw `txt` extraction, remove the unwanted raw-code chunks seen in the provided `Uni105` manifest, and prevent editor placeholder dialogue (`ここにテキストを入力`) from being extracted with leaked speaker names.
+
+**Root Causes:**
+1. `formats/LightVN.py::can_handle()` only looked for a narrow signal set (`~【`, `~文字`, `~ボタン`, `~絵`, `~効果音`, `~選択`, `栞 `), so script/config-style LightVN files such as `battle_test.txt`, `bgm.txt`, `event\event_mainstory_final_map_05.txt`, and `event\event_mainstory_final_map_06.txt` fell back to plain `txt` extraction.
+2. Because those files bypassed the parser entirely, the manifest stored raw code lines with no parser `tag`, which matched the unwanted chunks beginning at indices like `420` and `9999` in the provided project.
+3. Within already-detected LightVN files, `~栞 ...` bookmark lines did not reset `_current_speaker`, so placeholder dialogue under later bookmarks inherited the previous real `~【Speaker】` name.
+4. The repeated `ここにテキストを入力` lines are editor scaffolding rather than real game text, but the parser treated them like normal dialogue and sent them into translation/speaker analysis.
+
+**Changes:**
+1. **`formats/LightVN.py`** — Expanded LightVN auto-detection to include `~栞`, `~スクリプト`, `~保存変数`, `~臨時全域変数`, plus bare `栞 `, `スクリプト `, `保存変数 `, and `臨時全域変数 ` line prefixes.
+2. **`formats/LightVN.py`** — Added bookmark handling so `~栞 ...` clears carried speaker state and no longer leaks the previous `~【Speaker】` into later map/interactable dialogue.
+3. **`formats/LightVN.py`** — Filtered editor placeholder dialogue (`ここにテキストを入力`, `Enter your text here.`) out of extraction so it is not translated and does not pollute speaker tagging.
+4. **Tests** — Added focused regressions for bookmark reset/placeholder filtering and the new detection variants in `dev/test_lightvn_parser.py` and `dev/test_lightvn_fixes.py`.
+5. **Real-file verification** — Confirmed against the supplied `Projects/Uni105/Original` corpus that `battle_test.txt`, `bgm.txt`, `event_mainstory_final_map_04.txt`, `event_mainstory_final_map_05.txt`, and `event_mainstory_final_map_06.txt` are all now detected as LightVN and that the placeholder dialogue no longer appears in extracted output.
+
+**Files Modified:**
+- `formats/LightVN.py` — broader detection, bookmark reset, placeholder filtering
+- `dev/test_lightvn_parser.py` — bookmark/placeholder regressions
+- `dev/test_lightvn_fixes.py` — detection regressions for missed LightVN file variants
+- `doc/features.md` — LightVN detection and placeholder behavior
+- `doc/technical.md` — LightVN implementation notes
+- `doc/specs.md` — LightVN parser specification
+- `doc/tests.md` — focused test coverage updates
+- `doc/todo.md` — completed fix summary
+
+**Tests:** Focused pytest run passed: `dev/test_lightvn_parser.py`, `dev/test_lightvn_fixes.py` — 69 passed. Real-file verification against the supplied `Uni105` sources confirmed the previously missed files are detected and the placeholder dialogue is no longer extracted.
+
+### BUG FIX: Sparse Manifest Persistence + Safe Import Metadata
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Preserve the active project name during translation-settings import, add a bulk clear workflow to Full Table View, and stop Postprocessing, QA, and Wordwrap from auto-writing unchanged per-line results.
+
+**Root Causes:**
+1. Importing Information metadata merged the incoming manifest wholesale, so `project_name` could be replaced by an unrelated project.
+2. Full Table View only supported ad hoc cell deletion and had no guided destructive workflow for clearing stage columns across the manifest.
+3. Postprocessing, QA, and Wordwrap wrote redundant no-op values back into `lines[]`, which made the manifest denser than the actual user-visible pipeline state.
+4. QA and Wordwrap still had automatic persistence paths on tab leave or preview refresh, even when the user had not explicitly accepted any changed output.
+
+**Changes:**
+1. **`gui/steps/input_extract.py`** — Importing Information metadata now preserves the current `project_name` while still merging the rest of the selected metadata sections.
+2. **`gui/dialogs/table_view.py`** — Added a Clear Columns dialog for `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, and `wordwr`; clearing `tl` now requires a second confirmation.
+3. **`functions/manifest_manager.py`**, **`gui/steps/postprocess.py`**, **`gui/steps/qa.py`**, **`gui/steps/wordwrap_overwrite.py`** — Added sparse field clearing so unchanged `postpro`, `qa_overwrite`, and `wordwr` are removed instead of persisted, and removed QA/Wordwrap auto-write paths.
+4. **Tests** — Added focused regressions for import preservation, Clear Columns behavior, sparse postprocess persistence, QA overwrite persistence, Wordwrap explicit-only persistence, and metadata merge semantics.
+
+**Tests:** Focused pytest run passed: `dev/test_input_import_fixes.py`, `dev/test_table_view.py`, `dev/test_postprocess_phase45.py`, `dev/test_qa_manifest.py`, `dev/test_wordwrap_phase46.py`, `dev/test_manifest_metadata.py` — 292 passed, 5 deselected (unrelated pre-existing symbol-conversion regressions).
+
+### BUG FIX: Translation Skip Policy Parity + Status Summary
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Make Translation Refresh, Preview Requests, Start Translation, and Costs estimation respect the same skip policies, especially already translated lines versus the global overwrite option, and surface policy-skipped counts in the Translation header.
+
+**Root Causes:**
+1. `gui/steps/translate.py` used separate ad hoc skip paths for refresh, preview, and execution instead of one shared classifier.
+2. Preview Requests filtered from an inconsistent line set, so already translated lines were not governed by the overwrite/skip-translated option the same way as the live run.
+3. The Translation header only reported a coarse ready/translated count and did not expose policy skips such as empty, placeholders, code-only, symbol-only, or non-source lines.
+4. Shared pre-translation validation was still Japanese-centric for optional language skips and did not treat CJK-family source projects consistently.
+
+**Changes:**
+1. **`functions/validation.py`** — Extended `validate_line_pre()` with source-language-aware detection, CJK/Hangul filtering for Japanese/Chinese/Korean projects, and symbol-only classification ahead of placeholder-only handling so auto-normalized symbol lines remain `SYMBOL_ONLY`.
+2. **`gui/steps/translate.py`** — Added `_collect_translatable_lines()` and `_build_translation_status_text()` so refresh, Preview Requests, and Start Translation all reuse the same shared validation results. Preview now reclassifies all loaded lines, overwrite-enabled runs re-include already translated lines, and `on_enter()` / Preview / Start Translation all re-sync Global Options before using cached state so stale overwrite settings cannot leak across tab re-entry.
+3. **`gui/steps/costs.py`** — `_get_skip_indices()` now passes the manifest source language into `validate_line_pre()` so estimation stays aligned with Translation and Preview for CJK-family projects.
+4. **Tests** — Expanded `dev/test_validation.py` and `dev/test_request_preview.py`; focused regression run passed for `dev/test_validation.py`, `dev/test_estimation_skip.py`, and `dev/test_request_preview.py` (176 passed, 1 skipped).
+
+**Follow-up:**
+- Add separate Global Options toggles for individual optional skip classes shown in the Translation status summary, especially placeholders, code-only, symbols-only, empty, and non-source lines.
+
+### BUG FIX: QA Before Wordwrap + Dedicated QA Field
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Move Quality Assurance ahead of Wordwrap across the GUI, shared stage resolution, import/export behavior, and Full Table View. Split QA-reviewed text from QA overwrite so QA and Wordwrap no longer share the same manifest field.
+
+**Root Causes:**
+1. The old pipeline treated QA as a later pass than Wordwrap, so shared "latest" resolution, Full Table View, and Output all preferred the wrong fields.
+2. QA only had `qa_overwrite`, forcing reviewed text and manual overwrite text into one field.
+3. The Wordwrap preview table restored its Wordwrap column from fallback input text, which made the wrapped column appear prepopulated even when no `wordwr` existed.
+
+**Changes:**
+1. **`functions/manifest_fields.py`** — Reordered the shared priority chain to `wordwr → qa_overwrite → qa → postpro → tl → prepro → orig`, changed QA stage input to `postpro → tl → prepro → orig`, and changed Wordwrap stage input to `qa_overwrite → qa → postpro → tl → prepro → orig`.
+2. **`gui/steps/qa.py`** — Added a dedicated `qa` column, kept `qa_overwrite` as the editable Overwrite column, and added a `Copy to Overwrite` action.
+3. **`gui/steps/wordwrap_overwrite.py`** — Moved Wordwrap after QA and made the Wordwrap column load only stored `wordwr` values.
+4. **`gui/dialogs/table_view.py`** and **`gui/steps/input_extract.py`** — Updated Full Table View and Import Translations for `qa`, `qa_overwrite`, `wordwr`, and the unified `tags` column.
+5. **Tests** — Updated focused regressions for manifest-field priority, QA manifest integration, Wordwrap input/loading, and Full Table View naming.
+
+**Tests:** Focused pytest run passed: `dev/test_manifest_fields.py`, `dev/test_qa_manifest.py`, `dev/test_wordwrap_phase46.py`, `dev/test_table_view.py` — 385 tests passing.
+
+### BUG FIX: LightVN Item Variable Extraction and Injection Tagging
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 1 hour
+
+Goal: Extend the LightVN parser so item-like variable assignments are handled the same way as other translatable assignment lines, but surfaced with a dedicated `items` tag. This specifically covers loot/material values such as `角兎の素材×1` from `臨時全域変数 剥ぎ取り素材1 = "角兎の素材×1"` and conditional item gains such as `食用の肉×3` from `もし (獲得ボーナス >= 2) 臨時全域変数 獲得食材 = "食用の肉×3"`.
+
+**Root Cause:**
+1. `formats/LightVN.py` only recognized a small fixed prefix set in `TRANSLATABLE_VARS`, so item-style variable names like `剥ぎ取り素材1` and `獲得食材` never entered extraction.
+2. Because those lines were not classified as translatable assignments, the LightVN injection path also skipped them.
+3. The parser had no dedicated tag to distinguish regular variable assignments from item/material text even though both need different semantic labeling in the manifest.
+
+**Changes:**
+1. **`formats/LightVN.py`** — Added `TAG_ITEMS` and shared variable-name classification so item-like assignment fields are recognized during both extraction and injection.
+2. **`formats/LightVN.py`** — Added `ITEM_VARS` coverage for names such as `剥ぎ取り素材` and `獲得食材`, including conditional `もし (...)` forms after prefix stripping.
+3. **`dev/test_lightvn_parser.py`** — Added focused regressions for `items` extraction and surgical injection.
+4. **`dev/test_wordwrap_overhaul.py`** — Added a no-wrap regression for `wordwrap_for_tag("items")`.
+
+**Files Modified:**
+- `formats/LightVN.py` — `TAG_ITEMS`, variable classification, item extraction/injection support
+- `dev/test_lightvn_parser.py` — item-variable extraction/injection regressions
+- `dev/test_wordwrap_overhaul.py` — items no-wrap regression
+
+**Tests:** Focused pytest run passed: `dev/test_lightvn_parser.py`, `dev/test_wordwrap_overhaul.py` — 59 tests passing.
+
+### BUG FIX: Line-Agnostic Custom Placeholder Restore + Nested Double-Curly Filtering
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Fix two related postprocessing edge cases. First, restore custom placeholder replacements such as `Jane` even when the LLM moved the token onto a different line that had no original placeholder. Second, stop preserve-action validation/recovery from flagging both `{{主人公}}` and the inner `{主人公}` when only the doubled form is semantically present on the line.
+
+**Root Causes:**
+1. GUI and modi custom placeholder restoration were line-bound: they only consumed captured values from the original source line index, so a named replacement shifted by the LLM could not be restored.
+2. GUI preprocessing stored only flat `placeholder_captured` value lists, which was insufficient for safe batch-wide restoration when multiple custom tokens existed.
+3. Code pattern validation and recovery used plain regex matches, so a preserve rule for `{主人公}` could match the nested substring inside `{{主人公}}` and produce a false second warning/recovery attempt.
+
+**Changes:**
+1. **`functions/modehelper.py`** — Added `restore_custom_placeholders_batch()` with a two-pass restore strategy: local per-line restoration first, then a batch-wide exact-token fallback for unresolved named replacements.
+2. **`gui/helpers/mode_adapter.py`**, **`gui/steps/preprocess.py`**, **`gui/steps/postprocess.py`** — Persist token-aware `placeholder_records` alongside legacy `placeholder_captured` and use them for batch-wide postprocessing restoration.
+3. **`modi/custom_placeholder.py`** — Switched Post restoration to the shared batch helper so the processor path and GUI path behave the same way.
+4. **`functions/validation.py`** and **`functions/postprocess.py`** — Filter nested balanced-code matches so inner `{...}` substrings are ignored when they only exist inside a larger balanced token like `{{...}}`.
+5. **Tests** — Added `dev/test_custom_placeholder_recovery.py` and expanded `dev/test_code_pattern_recovery.py` with the doubled-curly overlap regression.
+
+**Files Modified:**
+- `functions/modehelper.py` — batch custom placeholder restore helper
+- `gui/helpers/mode_adapter.py` — token-aware placeholder capture records
+- `gui/steps/preprocess.py` — persist `placeholder_records`
+- `gui/steps/postprocess.py` — batch placeholder restore before post-exclusive recovery
+- `modi/custom_placeholder.py` — shared batch restoration path
+- `functions/validation.py` — nested code-pattern match filtering
+- `functions/postprocess.py` — nested code-pattern match filtering
+- `dev/test_custom_placeholder_recovery.py` — new regressions
+- `dev/test_code_pattern_recovery.py` — nested double-curly regressions
+
+**Tests:** Focused pytest run passed: `dev/test_code_pattern_recovery.py`, `dev/test_custom_placeholder_recovery.py`, `dev/test_recovery_anchor.py` — 112 tests passing.
+
+### BUG FIX: Dedup False Postprocess Flags + Flag-Case Filtering
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Stop deduplicated duplicate rows from being falsely flagged during postprocessing placeholder/code-pattern recovery, and make the Processed Lines widget filter/search those flags by case and by the exact Recovery Details text.
+
+**Root Causes:**
+1. Deduplicated rows with `tags: "dedup,..."` could still enter the batch custom-placeholder restore fallback and the per-line `recover_line()` phase when they had real `tl` text, even though their final text is supposed to come from dedup source restoration.
+2. That let duplicate rows accumulate transient `placeholder_case` / code-pattern retry flags before `_restore_dedup_lines()` copied the already-correct source output over them.
+3. The Processed Lines widget only exposed a coarse `Flagged` filter and the shared table search only indexed visible column values, so users could not narrow flags by case or find rows by copied Recovery Details text.
+
+**Changes:**
+1. **`gui/steps/postprocess.py`** — Added manifest tag loading on `PostprocessLine`, skipped dedup-tagged rows during batch placeholder fallback and per-line post-exclusive recovery, cleared duplicate-row issue state during dedup restoration, added a dynamic flagged-case combobox next to `Flagged`, and indexed formatted Recovery Details text into table row metadata.
+2. **`gui/components/table.py`** — Extended `SharedTable` text filtering to search row values, tags, and nested metadata so Processed Lines search now matches issue text as well as visible cells.
+3. **Tests** — Expanded `dev/test_postprocess_phase45.py` with regressions for empty/populated flag-case dropdown states, dedup-restoration flag clearing, and metadata-backed Recovery Details search.
+
+**Files Modified:**
+- `gui/steps/postprocess.py` — dedup-aware postprocessing skip/filter/search behavior
+- `gui/components/table.py` — metadata-aware table search
+- `dev/test_postprocess_phase45.py` — flag-case, dedup, and Recovery Details search regressions
+- `doc/features.md` — Processed Lines filter/search behavior and dedup postprocess notes
+- `doc/technical.md` — implementation notes for postprocess and shared-table search
+- `doc/specs.md` — custom placeholder postprocessing behavior for dedup-tagged lines
+- `doc/tests.md` — updated phase-45 test coverage summary
+
+**Tests:** Focused pytest run passed: `dev/test_postprocess_phase45.py -k "flag_case or dedup or recovery_details or refresh_lines_keeps_postpro_separate_from_translated_input or on_complete_only_persists_changed_postpro_lines"` — 6 passed. Full `dev/test_postprocess_phase45.py` still has 4 unrelated pre-existing failures around legacy symbol-conversion expectations.
+
+### BUG FIX: Stage-Bounded Line Preference Resolution
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Stop workflow steps from reading the generic "latest" line value when they should only consume their own stage input or earlier pipeline fields. Postprocessing must use `tl → prepro → orig`, Wordwrap must use `postpro → tl → prepro → orig`, and QA must use `wordwr → postpro → tl → prepro → orig`.
+
+**Root Causes:**
+1. `LineEntry.get_input_for_postprocessing()` still walked the Edit/TLC chain, so postprocessing could restore into newer review passes instead of the base translation.
+2. `functions/manifest_fields.py` exposed a full-chain "latest" helper intended for final display/output, and QA was using it directly for stage input.
+3. Step-specific loaders documented and implied stage ceilings, but only QA still enforced the wrong one at runtime.
+
+**Changes:**
+1. **`functions/mainhelper.py`** — Reworked `get_input_for_postprocessing()` to use `tl → prepro → orig` only. Clarified `get_input_for_wordwrap()` as `postpro → tl → prepro → orig`.
+2. **`functions/manifest_fields.py`** — Added stage-specific helpers `resolve_line_field_for_stage()`, `get_line_text_for_stage()`, and `get_all_lines_for_stage()`. Kept `PIPELINE_FIELDS` / `resolve_line_field()` as the full final-display chain for output and "latest" views.
+3. **`gui/steps/postprocess.py`**, **`gui/steps/wordwrap_overwrite.py`**, **`gui/steps/qa.py`** — Switched stage loaders to explicit stage helpers. QA now falls back from empty `qa_overwrite` to the QA input chain instead of the generic latest value.
+4. **Tests** — Updated `dev/test_manifest_v2.py`, expanded `dev/test_manifest_fields.py`, and added stage-resolution regressions in `dev/test_postprocess_phase45.py`, `dev/test_wordwrap_phase46.py`, and `dev/test_qa_manifest.py`.
+
+**Files Modified:**
+- `functions/mainhelper.py` — stage-bounded LineEntry input resolution
+- `functions/manifest_fields.py` — stage-specific line-resolution helpers
+- `gui/steps/postprocess.py` — explicit postprocessing ceiling
+- `gui/steps/wordwrap_overwrite.py` — explicit wordwrap ceiling
+- `gui/steps/qa.py` — explicit QA ceiling and qa_overwrite fallback behavior
+- `dev/test_manifest_v2.py` — updated LineEntry expectations
+- `dev/test_manifest_fields.py` — stage helper regressions
+- `dev/test_postprocess_phase45.py` — postprocessing stage-input regressions
+- `dev/test_wordwrap_phase46.py` — wordwrap stage-input regressions
+- `dev/test_qa_manifest.py` — QA stage-input regressions
+
+**Tests:** Focused regression run passed (15 tests): `dev/test_manifest_v2.py`, `dev/test_manifest_fields.py`, and targeted stage-resolution tests in `dev/test_postprocess_phase45.py`, `dev/test_wordwrap_phase46.py`, `dev/test_qa_manifest.py`.
+
+### BUG FIX: Bracket Recovery Should Only Run For Balanced Source Lines
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 1 hour
+
+Goal: Stop Bracket Balance Recovery from triggering just because bracket counts differ from the original. Recovery should only engage when the source line itself has balanced recoverable brackets and the latest translated text is actually unbalanced.
+
+**Root Cause:**
+1. `recover_bracket_balance()` used original-vs-translation bracket counts as its trigger, so balanced translations with different bracket styles could still be treated as "missing bracket" cases.
+2. Rare intentionally unbalanced source lines were used as recovery templates even though there was no trustworthy bracket structure to restore.
+3. Lenticular brackets (`【】`) were counted separately from square brackets (`[]`), so symbol-converted lines could be treated as missing-bracket cases.
+4. Extra unmatched translated brackets (especially a third `}` after balanced `{{...}}` code) were only flagged, not repaired.
+
+**Changes:**
+1. **`functions/postprocess.py`** — Added `_get_recoverable_bracket_pair_id()`, `_extract_recoverable_brackets()`, `_find_unmatched_brackets()`, and `_has_balanced_brackets()` to evaluate recoverable bracket structure with quote-equivalent bracket pairs excluded.
+2. **`functions/postprocess.py`** — Reworked `recover_bracket_balance()` to return immediately when the original line is not bracket-balanced, and to skip balanced latest text even when bracket style drifted away from the source.
+3. **`functions/postprocess.py`** — Canonicalised `【】` into the square-bracket family for recovery comparisons, and remove extra unmatched translated brackets before attempting missing-bracket insertion.
+4. **`dev/test_recovery_anchor.py`** — Added regression coverage for unbalanced-original skip behavior, lenticular-vs-square bracket equivalence, extra `}` removal, and the intentional triple-`}` exception. Updated the old "both brackets missing" case to reflect the new gating rule.
+
+**Files Modified:**
+- `functions/postprocess.py` — balanced-source gate + recoverable-bracket helpers
+- `dev/test_recovery_anchor.py` — new gating regressions and updated expectations
+
+**Tests:** `dev/test_recovery_anchor.py` — 79 tests passing.
+
 ### BUG FIX: Per-Model API.ini Settings Not Respected by Estimation & Preview
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
 
@@ -303,13 +543,13 @@ Goal: Fix the pipeline so that code patterns with `action='preserve'` are valida
 5. GUI translation step applied translations without content validation for code patterns.
 
 **Changes:**
-1. **`functions/postprocess.py`** — Added `RecoveryType.CODE_PATTERN` to enum. New `recover_code_patterns(text, original, code_patterns)` function: for each preserve-action pattern, uses `generate_regex_pattern()` to find occurrences in original; if missing in translation, scans for content in same delimiters not present in original (translated substitutes); replaces first match or flags `NEEDS_RETRY`. New `_detect_delimiters(pattern)` helper identifies `{}`, `[]`, `<>`, `()`, fullwidth, and CJK delimiter pairs. Integrated into `recover_line()` pipeline between placeholder and bracket recovery. Updated `recover_batch()`, `PostProcessManager`, and `create_postprocess_manager()` factory.
+1. **`functions/postprocess.py`** — Added `RecoveryType.CODE_PATTERN` to enum. New `recover_code_patterns(text, original, code_patterns)` function: for each preserve-action pattern, uses `generate_regex_pattern()` to find occurrences in original; if missing in translation, scans for content in same delimiters not present in original (translated substitutes); replaces first match or flags `NEEDS_RETRY`. New `_detect_delimiters(pattern)` helper identifies `{}`, `[]`, `<>`, `()`, fullwidth, CJK delimiter pairs, and doubled delimiters such as `{{...}}` so preserve restores replace the whole token instead of leaving trailing braces. Integrated into `recover_line()` pipeline between placeholder and bracket recovery. Updated `recover_batch()`, `PostProcessManager`, and `create_postprocess_manager()` factory.
 2. **`functions/validation.py`** — Added `RetryReason.CODE_PATTERN_TRANSLATED` to enum. Added `code_patterns` parameter to `validate_translation_comprehensive()` and `validate_batch_comprehensive()`. Added check #7 that calls `validate_code_patterns_preserved()` and adds missing patterns as errors + retry reasons. Changed `validate_line_post()` to treat code pattern failures as errors instead of warnings.
 3. **`gui/steps/postprocess.py`** — Loads `code_patterns` from `ManifestManager.get_code_patterns()` before the processing loop. Passes `code_patterns` to `recover_line()` calls.
 4. **`gui/steps/translate.py`** — After applying translations, validates preserve-action code patterns using `recover_code_patterns()`. If recovery succeeds, updates the translation. If recovery fails, marks line as `NEEDS_REVIEW` for QA.
 5. **`dev/test_code_pattern_actions.py`** — Updated `test_validate_line_post_with_code_patterns` to check `result.errors` instead of `result.warnings` to match new severity.
 
-**Tests:** `dev/test_code_pattern_recovery.py` — 28 tests (8 delimiter detection, 9 recovery scenarios, 4 validation, 3 comprehensive validation, 2 recover_line integration, 2 end-to-end idx 8 bug scenario). All 74 code pattern tests passing (28 new + 46 existing in test_code_pattern_actions.py).
+**Tests:** `dev/test_code_pattern_recovery.py` — 29 tests (8 delimiter detection, 9 recovery scenarios, 4 validation, 3 comprehensive validation, 3 recover_line integration including the double-curly regression, 2 end-to-end idx 8 bug scenario). All 75 code pattern tests passing (29 new + 46 existing in test_code_pattern_actions.py).
 
 ---
 
@@ -849,6 +1089,7 @@ configurable APIConfig fields.
 - Tracked reasoning tokens from `usage.completion_tokens_details` (reasoning, accepted/rejected prediction)
 - Added cache hit rate, savings, and cached token counts to all log outputs
 - `generate_prompt_cache_key(project_name, created_at)` — format `"{alpha5}-{seconds}"`
+- Follow-up fix: the auto-generated OpenAI `prompt_cache_key` is now actually resolved from manifest metadata, injected into both chunked and line-by-line requests, and exposed in Preview Requests plus the structured API Log Sent block
 - `check_static_prompt_cache_status(token_breakdown)` — ok/suggest/warn classification
 - Update button now calls `refresh_models()` + `reload_model_pricing()` to save to API.ini
 - Available Models: added Cached Input filter, inverted Thinking filter, Save button, Cached $/1M column
@@ -859,9 +1100,34 @@ configurable APIConfig fields.
 - `functions/config.py` — `estimate_cost()` cached_tokens support
 - `gui/dialogs/global_options.py` — Filters, Save button, Update button fix, Cached $/1M column
 - `gui/steps/costs.py` — EstimationResult extended, Cached $/1M column, Prompt/Cached Input Cost rows
-- `dev/test_prompt_caching.py` — Comprehensive test file (103 tests)
+- `dev/test_prompt_caching.py` — Comprehensive test file (110 tests)
 
-**Tests:** `dev/test_prompt_caching.py` — 103 tests (all passing)
+**Tests:** `dev/test_prompt_caching.py` — 110 tests (all passing)
+
+### BUG FIX: OpenAI Prompt Cache Key Visibility + Wiring
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Fix the missing OpenAI prompt-cache-key wiring so the auto-generated key is not just documented, but actually visible and used.
+
+**Problem:** `generate_prompt_cache_key(project_name, created_at)` already existed, but the generated key was not flowing into live request metadata. Users therefore could not verify prompt cache routing in Preview Requests or the API Log, and line-by-line requests were at risk of omitting the same metadata as chunked requests.
+
+**Solution:**
+- Added shared helpers to resolve the effective prompt cache key and build OpenAI cache params from provider/model/project context
+- `TranslationStep` now passes manifest `project_name` + `created_at` into `APIClient` before translation so auto-generated keys match the loaded project
+- `_translate_chunk()` and `_translate_single_line()` both send the effective prompt cache metadata with the live OpenAI request
+- Preview Requests now shows `prompt_cache_key` / `prompt_cache_retention` in both Meta and Pure JSON views
+- Structured API Log sent entries now preserve the same prompt-cache metadata in `LogEntrySent.extra`
+- Focused regression coverage added for key resolution, preview visibility, and API log metadata persistence
+
+**Files Modified:**
+- `functions/api_client.py` — prompt-cache key resolution, shared param builder, live request wiring, structured log metadata
+- `gui/steps/translate.py` — preview request metadata, API-client prompt-cache context, PreviewRequest `request_params`
+- `dev/test_prompt_caching.py` — key resolution and support-helper coverage
+- `dev/test_request_preview.py` — Preview Requests metadata visibility coverage
+- `dev/test_api_log.py` — prompt-cache metadata persistence coverage
+
+**Tests:** `C:/Python314/python.exe -m pytest dev/test_prompt_caching.py dev/test_request_preview.py dev/test_api_log.py`
+- Result: 204 passed, 2 skipped
 
 ---
 
@@ -1518,6 +1784,7 @@ FUTURE IDEAS (No Phase Commitment)
 - **Advanced Deduplication Rules**: Pattern-based deduplication using Increase/Decrease equivalence, RPG stat names (Strength/Willpower/Dexterity) as equivalent, database of auto-translations for common patterns
 - **Pattern Replacement Mode**: Replace patterns permanently before translation (not restored after)
 - **Pattern Removal Mode**: Remove patterns permanently before translation (not restored after)
+- **Optional Custom Placeholder Mismatch Check**: Add a hidden/default-off postprocessing validation that reports two mismatch classes without changing output: (a) lines tagged with `placeholder` where no custom placeholder was actually restored, and (b) recovered/custom-placeholder tokens found on lines that were never tagged. Wire it to a future manifest/UI toggle later rather than enabling it by default now.
 - **Variable Replacement via Preprocessing**: Replace variable codes (\\v[N], \\n[N]) during preprocessing and restore with postprocessing. Needs improved parser to handle replacements and restore positions correctly. Currently handled only via conditional prompt instruction.
 - **Functions Not Visible in GUI**: Restore additional processing functions that exist in code but lack GUI exposure
 - **Context-Aware Deduplication**: Use semantic similarity rather than exact match for deduplication
@@ -1528,6 +1795,7 @@ FUTURE IDEAS (No Phase Commitment)
 ### Translation Step Future Enhancements
 - **Edit Before Translation**: Button opens a dialog where the LLM is prompted to fix specific mistakes in the original text (not translate). Requires separate prompt design and dedicated LLM pass. Currently hidden from UI.
 - **Line-by-Line Translation Mode**: Translate each line individually with configurable rolling context window. Slower but more precise for difficult content. Currently hidden from UI.
+- **Per-Rule Skip Toggles**: Expose the Translation header skip groups as individual Global Options switches so users can independently enable or disable already-translated, empty, placeholder-only, code-only, symbols-only, and non-CJK/non-source skipping.
 - **NMT Mock Translation**: Replace nonsense Mock Translation output with Neural Machine Translation (NMT) engine for basic but meaningful offline translation. Potential engines: MarianMT, CTranslate2, or local model integration.
 - **Isolated Retry Strategy**: Retry each failed line individually with strict one-line instructions. Needs further refinement before UI exposure.
 - **Skip Retry Strategy**: Mark failed lines as Skipped immediately without retrying. Needs UX design for manual review flow.
@@ -1537,10 +1805,13 @@ FUTURE IDEAS (No Phase Commitment)
 - **Translation / Edit / TLC Mode Toggle**: A three-way toggle switching the Translation step between Translation (default), Edit, and TLC modes. Edit mode prompts the LLM to fix grammar, naturalness, and formatting in existing translations. TLC mode sends original + translation for accuracy verification. Key design challenge: line-matching strategy (line numbers, full lines, or empty lines) since not every line will be edited/TLC'd and unnecessary output tokens are the most expensive component. Each mode writes to its own manifest fields (`lines[].edit{N}`, `lines[].tlc{N}`). Requires dedicated prompt design, matching script development, and cost-optimization testing before UI exposure.
 
 ### Wordwrap Step Future Enhancements
-- ~~**Per-Tag Wordwrap Settings**: Tag-based wordwrap configuration with per-tag Width/BreakChar/MaxLines. TagWrapConfig dataclass, tag resolution (line tag → filedir type → "dialogue" fallback), parser-managed tag detection, manifest persistence via TagConfigs.~~ ✅ IMPLEMENTED
-- **Parser-Driven Wrap Options**: Parsers auto-populate wordwrap settings (width, break char, max lines) based on the game engine format. Requires each format parser to expose a `get_wrap_config()` method returning engine-appropriate defaults.
+- ~~**Per-Tag Wordwrap Settings**: Tag-based wordwrap configuration with per-tag Width/BreakChar/MaxLines. TagWrapConfig dataclass, tag resolution (line tag → filedir type → "dialogue" fallback), manifest persistence via TagConfigs.~~ ✅ IMPLEMENTED
+- ~~**Parser-Driven Wrap Options**: Parsers auto-populate wordwrap settings (width, break char, max lines) based on the game engine format. `_apply_parser_wordwrap_defaults()` reads `wordwrap_for_tag()` and pre-populates per-tag configs. All settings remain editable.~~ ✅ IMPLEMENTED
+- ~~**Per-Tag Speaker Handling / Orphan / Punct Breaks**: SpeakerHandling, PreventOrphans, PreferPunctuationBreaks moved from global to per-tag configurable in TagWrapConfig. WordwrapConfig in functions/wordwrap.py extended with `prevent_orphan` and `prefer_punct_breaks` fields. `apply_wordwrap` uses `pretty_wrap` when either is enabled.~~ ✅ IMPLEMENTED
+- ~~**New Textbox Handling**: Per-tag `new_textbox` and `new_textbox_injection` fields in TagWrapConfig. LightVN uses `\\w` as new textbox injection. UI shows checkbox + injection string entry per tag.~~ ✅ IMPLEMENTED
+- ~~**Parser display_name / tooltip**: ParserScript ABC extended with `display_name` and `tooltip` properties. LightVN implements both.~~ ✅ IMPLEMENTED
+- ~~**Output Format Restriction**: Output step detects parser format from filedir and defaults to INJECTION mode when a parser format is detected.~~ ✅ IMPLEMENTED
 - **RPG Maker as Own Parser**: Move RPG Maker-specific wordwrap logic (pixel-accurate width, `analyze_rpgmaker_project()`, `measure_font_avg_char_px()`) into a dedicated RPG Maker format parser. RPG Maker is no longer a wordwrap mode — it becomes a parser that drives the wordwrap settings automatically.
-- **New Textboxes Structure**: When wrapping overflow exceeds Max Lines, split into a new text box entry instead of flagging. Requires parser support for text box boundaries and understanding of how the engine structures multi-box dialogue sequences.
 - **Font Commands**: Parser-level support for font size commands (`size_up`, `size_down`, `size_increments`, `set_size`, `get_size`) that affect rendered width mid-line. Width calculation must account for font size changes within a single line of text.
 - **Invisible Code and Variable Code**: Distinguish between code that is invisible (zero rendered width, e.g., color codes) and code that represents a variable (rendered width depends on the variable's runtime value). Variable code should use a max-length estimate for width calculation.
 - **Line Break Auto-Detection from Parser**: Parsers identify the engine's native line break character and auto-populate the Break Character field. Currently break char is user-configured with common presets.

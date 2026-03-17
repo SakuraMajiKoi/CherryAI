@@ -259,6 +259,22 @@ class ParserScript(ABC):
         """Deprecated alias for :attr:`tag_rules`."""
         return self.tag_rules
 
+    @property
+    def display_name(self) -> str:
+        """Human-readable name for the parser (shown in the GUI).
+
+        Defaults to :attr:`name`.  Override for a friendlier label.
+        """
+        return self.name
+
+    @property
+    def tooltip(self) -> str:
+        """Short description shown as a tooltip in the GUI.
+
+        Defaults to an empty string.  Override to provide parser info.
+        """
+        return ""
+
     def can_handle(self, file_path: Path) -> bool:
         """Probe whether *file_path* is handled by this parser.
 

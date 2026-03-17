@@ -194,6 +194,115 @@ def generate_prompt_cache_key(
     return f"{prefix}-{seconds}"
 
 
+def resolve_prompt_cache_key(
+    explicit_key: str,
+    project_name: str,
+    created_at: str,
+) -> str:
+    """Resolve the effective prompt cache key.
+
+    Prefers an explicitly configured key. When none is configured,
+    derives a stable routing hint from the manifest metadata.
+    """
+    cache_key = (explicit_key or "").strip()
+    if cache_key:
+        return cache_key
+    return generate_prompt_cache_key(project_name, created_at)
+
+
+def _normalize_prompt_cache_retention(retention: str) -> str:
+    """Normalize retention strings from config or docs aliases."""
+    value = (retention or "").strip().lower().replace("-", "_")
+    if value in {"", "24h", "in_memory"}:
+        return value
+    return ""
+
+
+def supports_prompt_caching_for(
+    provider: str,
+    model: str,
+    *,
+    base_url: Optional[str] = None,
+) -> bool:
+    """Check whether a provider/model combination supports prompt caching."""
+    provider_lower = (provider or "").strip().lower()
+    if provider_lower != "openai":
+        return False
+    from CherryAI.functions.local_llm import is_local_url
+
+    if is_local_url(base_url or ""):
+        return False
+
+    model_lower = (model or "").strip().lower()
+    return any(
+        model_lower.startswith(prefix)
+        for prefix in APIClient.PROMPT_CACHE_MODEL_PREFIXES
+    )
+
+
+def supports_extended_cache_retention_for(
+    provider: str,
+    model: str,
+    *,
+    base_url: Optional[str] = None,
+) -> bool:
+    """Check whether 24h retention is supported for a provider/model."""
+    if not supports_prompt_caching_for(provider, model, base_url=base_url):
+        return False
+
+    model_lower = (model or "").strip().lower()
+    return any(
+        model_lower.startswith(prefix)
+        for prefix in APIClient.EXTENDED_CACHE_MODEL_PREFIXES
+    )
+
+
+def build_prompt_cache_params(
+    *,
+    enabled: bool,
+    provider: str,
+    model: str,
+    retention: str = "",
+    explicit_key: str = "",
+    project_name: str = "",
+    created_at: str = "",
+    base_url: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build effective prompt cache request parameters.
+
+    This helper centralizes the logic used by both the live request path
+    and the Request Preview so they stay identical.
+    """
+    if not enabled:
+        return {}
+    if not supports_prompt_caching_for(provider, model, base_url=base_url):
+        return {}
+
+    params: Dict[str, Any] = {}
+    normalized_retention = _normalize_prompt_cache_retention(retention)
+    if (
+        normalized_retention == "24h"
+        and supports_extended_cache_retention_for(
+            provider,
+            model,
+            base_url=base_url,
+        )
+    ):
+        params["prompt_cache_retention"] = "24h"
+    elif normalized_retention == "in_memory":
+        params["prompt_cache_retention"] = "in_memory"
+
+    cache_key = resolve_prompt_cache_key(
+        explicit_key,
+        project_name,
+        created_at,
+    )
+    if cache_key:
+        params["prompt_cache_key"] = cache_key
+
+    return params
+
+
 # Sections that form the static (cacheable) prefix per §5.2
 _STATIC_PROMPT_SECTIONS = frozenset({
     "language", "system_instructions", "io_examples", "style", "tone",
@@ -301,6 +410,11 @@ class APIClient:
         self._initial_chunk_count = 0
         self._final_chunk_count = 0
         self._content_warnings: List[str] = []
+
+        # Manifest-derived prompt cache context used for auto-generated
+        # prompt_cache_key routing hints.
+        self._prompt_cache_project_name: str = ""
+        self._prompt_cache_created_at: str = ""
         
         # Content warning
         self.content_warning_enabled = content_warning_enabled
@@ -582,14 +696,10 @@ class APIClient:
         Returns:
             True if the model supports prompt caching.
         """
-        if self.is_local_provider():
-            return False
-        if self.config.provider.lower() != "openai":
-            return False
-        model_lower = self.config.model.lower()
-        return any(
-            model_lower.startswith(prefix)
-            for prefix in self.PROMPT_CACHE_MODEL_PREFIXES
+        return supports_prompt_caching_for(
+            self.config.provider,
+            self.config.model,
+            base_url=self.config.base_url,
         )
 
     def supports_extended_cache_retention(self) -> bool:
@@ -601,12 +711,25 @@ class APIClient:
         Returns:
             True if the model supports extended cache retention.
         """
-        if not self.supports_prompt_caching():
-            return False
-        model_lower = self.config.model.lower()
-        return any(
-            model_lower.startswith(prefix)
-            for prefix in self.EXTENDED_CACHE_MODEL_PREFIXES
+        return supports_extended_cache_retention_for(
+            self.config.provider,
+            self.config.model,
+            base_url=self.config.base_url,
+        )
+
+    def set_prompt_cache_context(
+        self,
+        *,
+        project_name: str,
+        created_at: str,
+    ) -> str:
+        """Set manifest context used to auto-generate prompt cache keys."""
+        self._prompt_cache_project_name = project_name or ""
+        self._prompt_cache_created_at = created_at or ""
+        return resolve_prompt_cache_key(
+            self.config.prompt_cache_key,
+            self._prompt_cache_project_name,
+            self._prompt_cache_created_at,
         )
 
     def get_prompt_cache_params(self) -> Dict[str, Any]:
@@ -619,29 +742,18 @@ class APIClient:
         Returns:
             Dict with ``prompt_cache_retention`` key when applicable.
         """
-        if not self.config.prompt_cache_enabled:
-            return {}
-        if not self.supports_prompt_caching():
-            return {}
-
-        params: Dict[str, Any] = {}
-        retention = (self.config.prompt_cache_retention or "").strip().lower()
-
-        if retention == "24h" and self.supports_extended_cache_retention():
-            params["prompt_cache_retention"] = "24h"
-        elif retention == "in_memory":
-            params["prompt_cache_retention"] = "in_memory"
-        # When retention is "" (default), omit the parameter and let
-        # OpenAI use its default (in_memory).  This avoids sending an
-        # unsupported parameter to providers that use an OpenAI-compat
-        # endpoint but don't recognise prompt_cache_retention.
-
-        # Include prompt_cache_key when set for improved cache routing
-        cache_key = (self.config.prompt_cache_key or "").strip()
-        if cache_key:
-            params["prompt_cache_key"] = cache_key
-
-        return params
+        project_name = getattr(self, "_prompt_cache_project_name", "")
+        created_at = getattr(self, "_prompt_cache_created_at", "")
+        return build_prompt_cache_params(
+            enabled=self.config.prompt_cache_enabled,
+            provider=self.config.provider,
+            model=self.config.model,
+            retention=self.config.prompt_cache_retention,
+            explicit_key=self.config.prompt_cache_key,
+            project_name=project_name,
+            created_at=created_at,
+            base_url=self.config.base_url,
+        )
 
     def get_thinking_params(self) -> Dict[str, Any]:
         """Get thinking mode parameters for the current model.
@@ -1823,6 +1935,8 @@ class APIClient:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ]
+
+        cache_params = self.get_prompt_cache_params()
         
         # Execute with retry
         attempt = 0
@@ -1841,11 +1955,14 @@ class APIClient:
                 
                 from typing import Any, cast
                 client_any = cast(Any, self.client)
-                response = client_any.chat.completions.create(
-                    model=self.config.model,
-                    messages=cast(Any, messages),
-                    temperature=self.config.temperature,
-                )
+                request_params: Dict[str, Any] = {
+                    "model": self.config.model,
+                    "messages": cast(Any, messages),
+                    "temperature": self.config.temperature,
+                }
+                if cache_params:
+                    request_params.update(cache_params)
+                response = client_any.chat.completions.create(**request_params)
                 
                 content = response.choices[0].message.content
                 if not content:
@@ -1870,6 +1987,7 @@ class APIClient:
                         "mode": "line_by_line",
                         "line_index": line_index,
                         "messages": messages,
+                        "prompt_cache_params": cache_params if cache_params else None,
                     }
                     response_data = {
                         "content": result,
@@ -1892,7 +2010,11 @@ class APIClient:
                         system_prompt=system_prompt,
                         user_content=user_content,
                         line_count=1,
-                        extra={"mode": "line_by_line", "line_index": line_index},
+                        extra={
+                            "mode": "line_by_line",
+                            "line_index": line_index,
+                            **cache_params,
+                        },
                     )
                     _usage_lbl = response.usage
                     _ptd_lbl = getattr(_usage_lbl, "prompt_tokens_details", None) if _usage_lbl else None
@@ -1939,7 +2061,11 @@ class APIClient:
                 system_prompt=system_prompt,
                 user_content=user_content,
                 line_count=1,
-                extra={"mode": "line_by_line", "line_index": line_index},
+                extra={
+                    "mode": "line_by_line",
+                    "line_index": line_index,
+                    **cache_params,
+                },
             )
             recv_entry = LogEntryReceived(
                 error_message=str(last_error) if last_error is not None else "",
@@ -2210,6 +2336,7 @@ class APIClient:
                 chunk_index=self._chunk_counter,
                 total_chunks=self._initial_chunk_count,
                 line_count=len(chunk),
+                extra=cache_params.copy(),
             )
             _usage = response.usage
             _ptd = getattr(_usage, "prompt_tokens_details", None) if _usage else None

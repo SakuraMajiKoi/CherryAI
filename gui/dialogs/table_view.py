@@ -33,8 +33,8 @@ logger = logging.getLogger(__name__)
 
 # All possible line entry fields in display order
 LINE_FIELDS: List[str] = [
-    "idx", "tag", "orig", "prepro", "tl",
-    "postpro", "wordwr", "overwrite", "qa_overwrite",
+    "idx", "orig", "prepro", "tl",
+    "postpro", "qa", "qa_overwrite", "wordwr", "overwrite",
     "log", "tags",
 ]
 
@@ -44,20 +44,20 @@ NON_EDITABLE_FIELDS: Set[str] = {"idx", "orig"}
 # Display names for columns
 COLUMN_DISPLAY_NAMES: Dict[str, str] = {
     "idx": "Line #",
-    "tag": "Tags",
     "orig": "Original",
     "prepro": "Preprocessed",
     "tl": "Translated",
     "postpro": "Postprocessed",
-    "wordwr": "Wrapped",
-    "overwrite": "Overwrite",
-    "qa_overwrite": "Quality Assurance",
+    "qa": "Quality Assurance",
+    "qa_overwrite": "Overwrite",
+    "wordwr": "Wordwrap",
+    "overwrite": "Overwrite (Legacy)",
     "log": "Log",
-    "tags": "Tags (Internal)",
+    "tags": "Tags",
 }
 
 # Columns hidden by default even when populated
-DEFAULT_HIDDEN: Set[str] = {"tag"}
+DEFAULT_HIDDEN: Set[str] = set()
 
 # Reverse lookup: display name → field name
 DISPLAY_NAME_TO_FIELD: Dict[str, str] = {v: k for k, v in COLUMN_DISPLAY_NAMES.items()}
@@ -76,6 +76,15 @@ DEFAULT_COL_WIDTH = 180
 # Row height for multiline
 DEFAULT_ROW_HEIGHT = 24
 MULTILINE_ROW_HEIGHT = 48
+
+CLEARABLE_COLUMNS: List[str] = [
+    "prepro",
+    "tl",
+    "postpro",
+    "qa",
+    "qa_overwrite",
+    "wordwr",
+]
 
 # Colors matching CherryAI theme
 COLOR_BG = "#E8F4FC"
@@ -274,6 +283,10 @@ class FullTableViewDialog(tk.Toplevel):
         # Right: Action buttons (text-sized)
         btn_frame = ttk.Frame(top_row)
         btn_frame.pack(side="right", padx=(8, 0))
+
+        ttk.Button(
+            btn_frame, text="Clear Columns", command=self._show_clear_columns_dialog,
+        ).pack(side="left", padx=(0, 8))
 
         ttk.Button(
             btn_frame, text="Columns", command=self._show_column_filter,
@@ -691,13 +704,12 @@ class FullTableViewDialog(tk.Toplevel):
     def _compute_latest_columns(self) -> Set[str]:
         """Compute 'Show Latest' — idx + Tags + furthest non-empty right column per line.
 
-        For each line, finds the rightmost populated field in the pipeline
-        (orig → prepro → tl → postpro → wordwr → overwrite → qa_overwrite)
+        For each line, finds the rightmost populated field in the current
+        display pipeline (orig → prepro → tl → postpro → qa → qa_overwrite → wordwr)
         and includes that column. Always includes idx.
         """
         pipeline_cols = [
-            f for f in LINE_FIELDS
-            if f not in {"idx", "tag", "log", "tags"}
+            "orig", "prepro", "tl", "postpro", "qa", "qa_overwrite", "wordwr",
         ]
         visible: Set[str] = {"idx"}
         for line in self._all_lines:
@@ -1037,6 +1049,47 @@ class FullTableViewDialog(tk.Toplevel):
 
         self._refresh_table()
 
+    def _show_clear_columns_dialog(self) -> None:
+        """Open a checkbox dialog for destructive full-column clears."""
+        dialog = _ClearColumnsDialog(self, CLEARABLE_COLUMNS)
+        self.wait_window(dialog)
+        if not dialog.result:
+            return
+        self._clear_columns_completely(dialog.result)
+
+    def _clear_columns_completely(self, columns: List[str]) -> None:
+        """Clear selected columns completely from the affected lines."""
+        if not columns:
+            return
+
+        display_names = [COLUMN_DISPLAY_NAMES.get(col, col) for col in columns]
+        scope = "the current filter" if self._filtered_indices is not None else "all lines"
+        if not messagebox.askyesno(
+            "Clear Columns",
+            "Clear these columns completely from "
+            f"{scope}?\n\n" + "\n".join(display_names),
+        ):
+            return
+
+        if "tl" in columns:
+            if not messagebox.askyesno(
+                "Delete Translations",
+                "This will permanently remove translated text from the selected scope. Continue?",
+            ):
+                return
+
+        for line in self._all_lines:
+            idx = line.get("idx", 0)
+            if self._filtered_indices is not None and idx not in self._filtered_indices:
+                continue
+            for col in columns:
+                if col not in line:
+                    continue
+                line.pop(col, None)
+                self._record_delete(idx, col)
+
+        self._refresh_table()
+
     # ================================================================== #
     #                       TREE INTERACTION                              #
     # ================================================================== #
@@ -1172,7 +1225,16 @@ class FullTableViewDialog(tk.Toplevel):
             if save_indices is not None and idx not in save_indices:
                 continue
             for field, value in fields.items():
+                if field in self._deleted_fields.get(idx, set()):
+                    continue
                 self._mgr.set_line_field(idx, field, value)
+                count += 1
+
+        for idx, deleted_fields in self._deleted_fields.items():
+            if save_indices is not None and idx not in save_indices:
+                continue
+            for field in deleted_fields:
+                self._mgr.clear_line_field(idx, field)
                 count += 1
 
         # Clear saved changes from tracking
@@ -1411,3 +1473,55 @@ class _FileFilterDropdown(tk.Toplevel):
                 self.destroy()
         except tk.TclError:
             pass
+
+
+class _ClearColumnsDialog(tk.Toplevel):
+    """Checkbox dialog for destructive multi-column clears."""
+
+    def __init__(self, parent: tk.Widget, columns: List[str]) -> None:
+        super().__init__(parent)
+        self.title("Clear Columns")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+
+        self.result: Optional[List[str]] = None
+        self._vars: Dict[str, tk.BooleanVar] = {}
+
+        body = ttk.Frame(self, padding=10)
+        body.pack(fill="both", expand=True)
+
+        ttk.Label(
+            body,
+            text="Choose the columns to clear completely:",
+        ).pack(anchor="w", pady=(0, 6))
+
+        for column in columns:
+            var = tk.BooleanVar(value=False)
+            self._vars[column] = var
+            ttk.Checkbutton(
+                body,
+                text=COLUMN_DISPLAY_NAMES.get(column, column),
+                variable=var,
+            ).pack(anchor="w", pady=2)
+
+        ttk.Label(
+            body,
+            text="Deleting 'Translated' requires a second confirmation.",
+            foreground=COLOR_TEXT_SEC,
+        ).pack(anchor="w", pady=(6, 0))
+
+        buttons = ttk.Frame(body)
+        buttons.pack(fill="x", pady=(10, 0))
+        ttk.Button(buttons, text="Clear", command=self._on_ok).pack(side="right")
+        ttk.Button(buttons, text="Cancel", command=self._on_cancel).pack(side="right", padx=(0, 6))
+
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+    def _on_ok(self) -> None:
+        self.result = [name for name, var in self._vars.items() if var.get()]
+        self.destroy()
+
+    def _on_cancel(self) -> None:
+        self.result = None
+        self.destroy()

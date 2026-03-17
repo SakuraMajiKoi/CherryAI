@@ -1486,6 +1486,7 @@ class CostsStep(BaseStep):
         # Collect preserve-action code patterns for CODE_ONLY skip
         preserve_patterns: List[str] = []
         mgr = self.manifest_manager
+        source_language = "Japanese"
         if mgr is not None and mgr.is_loaded:
             code_pats = mgr._manifest_data.get("code_patterns", [])
             if isinstance(code_pats, list):
@@ -1496,6 +1497,9 @@ class CostsStep(BaseStep):
                     and p.get("action") == "preserve"
                     and p.get("pattern")
                 ]
+            source_language = mgr.get_info_metadata_field(
+                "source_language", "Japanese",
+            )
 
         skip: set[int] = set()
         for i, line in enumerate(lines):
@@ -1508,6 +1512,7 @@ class CostsStep(BaseStep):
                 line,
                 existing_translation=existing,
                 preserve_patterns=preserve_patterns,
+                source_language=source_language,
             )
 
             if vr.is_valid:

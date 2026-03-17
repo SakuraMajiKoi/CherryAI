@@ -630,12 +630,6 @@ def _seed_builtin_sections(config: configparser.ConfigParser) -> bool:
                 "Migrated [defaults].SystemInstruction: full text → preset name 'Default'"
             )
 
-    # ── [session] missing keys ───────────────────────────────────────────
-    if not config.has_option("session", "last_manifest"):
-        config.set("session", "last_manifest", "")
-        changed = True
-        logger.debug("Seeded [session].last_manifest (empty placeholder)")
-
     if changed:
         logger.info("Built-in section seeding complete (at least one key written)")
     return changed
@@ -1200,7 +1194,14 @@ def set_last_manifest(manifest_path: Optional[Path]) -> bool:
         True if successful.
     """
     if manifest_path is None:
-        return set_default("session", "last_manifest", "")
+        config = _load_ini()
+        if not config.has_section("session"):
+            return True
+        if not config.has_option("session", "last_manifest"):
+            return True
+        config.remove_option("session", "last_manifest")
+        _save_ini(config)
+        return True
     abs_path = manifest_path.resolve()
     return set_default("session", "last_manifest", str(abs_path))
 

@@ -25,7 +25,7 @@ from CherryAI.gui.helpers.manifest_binding import (
     bind_checkbox_to_field,
 )
 from CherryAI.functions.manifest_fields import (
-    get_all_lines_resolved,
+    get_all_lines_for_stage,
     resolve_line_field_from,
     save_nested_text_field,
     load_nested_text_field,
@@ -72,6 +72,28 @@ if TYPE_CHECKING:
     from CherryAI.functions.manifest_manager import ManifestManager
 
 logger = logging.getLogger(__name__)
+
+
+def _persist_sparse_postpro(
+    manager: "ManifestManager",
+    idx: int,
+    translated_text: str,
+    postprocessed_text: str,
+) -> None:
+    """Persist ``postpro`` only when it differs from the stage input."""
+    if postprocessed_text and postprocessed_text != translated_text:
+        manager.set_line_field(idx, "postpro", postprocessed_text)
+        return
+    manager.clear_line_field(idx, "postpro")
+
+
+def _parse_line_tags(raw_tags: Any) -> Tuple[str, ...]:
+    """Normalize manifest tag storage into a tuple of tag strings."""
+    if isinstance(raw_tags, str):
+        return tuple(tag.strip() for tag in raw_tags.split(",") if tag.strip())
+    if isinstance(raw_tags, (list, tuple, set)):
+        return tuple(str(tag).strip() for tag in raw_tags if str(tag).strip())
+    return ()
 
 
 # ============================================================================
@@ -157,6 +179,7 @@ class PostprocessLine:
     skipped: bool = False
     written: bool = False  # TASK 45.9: Line was written despite failures
     flagged: bool = False  # TASK 45.9: Line flagged for manual review
+    tags: Tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def issue_count(self) -> int:
@@ -299,6 +322,7 @@ class PostprocessingStep(BaseStep):
         # TASK 36.3: Character/word validation state
         self._validation_result: Optional[Any] = None  # CharacterWordValidationResult
         self._validation_run: bool = False
+        self._flag_case_values: List[str] = ["None"]
         super().__init__(parent, session, manifest_manager=manifest_manager)
 
     def _build_ui(self) -> None:
@@ -388,6 +412,20 @@ class PostprocessingStep(BaseStep):
                 value=value,
                 command=self._apply_filter,
             ).pack(side="left", padx=2)
+
+        self._flag_case_var = tk.StringVar(value="None")
+        self._flag_case_combo = ttk.Combobox(
+            filter_frame,
+            textvariable=self._flag_case_var,
+            values=self._flag_case_values,
+            width=24,
+            state="disabled",
+        )
+        self._flag_case_combo.pack(side="left", padx=(8, 0))
+        self._flag_case_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda _event: self._apply_filter(),
+        )
 
         # Define columns
         columns = [
@@ -1086,7 +1124,7 @@ class PostprocessingStep(BaseStep):
             manifest_lines = mgr.get_lines()
             if manifest_lines:
                 original = [ln.get("orig", "") for ln in manifest_lines]
-                translated = get_all_lines_resolved(mgr, "tl")
+                translated = get_all_lines_for_stage(mgr, "postprocessing")
 
         # Fallback: GUI input step for originals
         if not original:
@@ -1142,12 +1180,15 @@ class PostprocessingStep(BaseStep):
 
         # Batch-read existing prepro from manifest
         prepro_map: dict[int, str] = {}
+        tags_map: dict[int, Tuple[str, ...]] = {}
         if mgr is not None and mgr.is_loaded:
             for ln in mgr.get_lines():
                 idx = ln.get("idx")
                 pp = ln.get("prepro", "")
                 if idx is not None and pp:
                     prepro_map[idx] = pp
+                if idx is not None:
+                    tags_map[idx] = _parse_line_tags(ln.get("tags", ""))
 
         # Create PostprocessLine objects
         self._lines = []
@@ -1160,10 +1201,12 @@ class PostprocessingStep(BaseStep):
                 postprocessed=pp,
                 preprocessed=prepro_map.get(idx, ""),
                 has_changes=pp != trans,
+                tags=tags_map.get(idx, ()),
             )
             self._lines.append(line)
 
         # Update table
+        self._update_flag_case_options()
         self._update_lines_table()
         self._update_summary()
 
@@ -1173,6 +1216,9 @@ class PostprocessingStep(BaseStep):
         """Update the lines table with current data (TASK 45.9)."""
         rows: List[TableRow] = []
         filter_value = self._filter_var.get()
+        selected_flag_case = (
+            self._flag_case_var.get() if hasattr(self, "_flag_case_var") else "All"
+        )
 
         for line in self._lines:
             # Apply filter (TASK 45.9: All/Changed/Written/Flagged)
@@ -1180,8 +1226,14 @@ class PostprocessingStep(BaseStep):
                 continue
             elif filter_value == "written" and not line.written:
                 continue
-            elif filter_value == "flagged" and not line.flagged:
-                continue
+            elif filter_value == "flagged":
+                if not line.flagged:
+                    continue
+                if (
+                    selected_flag_case not in ("", "None", "All")
+                    and not self._line_has_flag_case(line, selected_flag_case)
+                ):
+                    continue
 
             # Status display (TASK 45.6: new statuses)
             if line.flagged:
@@ -1209,6 +1261,13 @@ class PostprocessingStep(BaseStep):
                         if len(line.postprocessed) > 100
                         else line.postprocessed
                     ),
+                },
+                meta={
+                    "recovery_details": "\n".join(
+                        self._format_issue_text(issue) for issue in line.issues
+                    ),
+                    "flag_cases": list(self._get_flag_cases_for_line(line)),
+                    "line_tags": list(line.tags),
                 },
             )
             rows.append(row)
@@ -1238,8 +1297,57 @@ class PostprocessingStep(BaseStep):
         self._flagged_label.configure(text=str(flagged))
         self._rate_label.configure(text=f"{rate:.1f}%")
 
+    def _get_flag_cases_for_line(self, line: PostprocessLine) -> Tuple[str, ...]:
+        """Return the flagged recovery cases present on a line."""
+        cases = {
+            issue.recovery_type.value
+            for issue in line.issues
+            if issue.action in {RecoveryAction.NEEDS_RETRY, RecoveryAction.FAILED}
+        }
+        return tuple(sorted(cases))
+
+    def _line_has_flag_case(self, line: PostprocessLine, case_name: str) -> bool:
+        """Return whether a line contains a flagged issue of *case_name*."""
+        return case_name in self._get_flag_cases_for_line(line)
+
+    def _update_flag_case_options(self) -> None:
+        """Refresh the flagged-case dropdown from current recovery issues."""
+        if not hasattr(self, "_flag_case_values"):
+            self._flag_case_values = ["None"]
+
+        cases = sorted({
+            case_name
+            for line in self._lines
+            for case_name in self._get_flag_cases_for_line(line)
+        })
+
+        if not cases:
+            self._flag_case_values = ["None"]
+            if hasattr(self, "_flag_case_var"):
+                self._flag_case_var.set("None")
+        else:
+            self._flag_case_values = ["All", *cases]
+            if (
+                hasattr(self, "_flag_case_var")
+                and self._flag_case_var.get() not in self._flag_case_values
+            ):
+                self._flag_case_var.set("All")
+
+        if hasattr(self, "_flag_case_combo"):
+            self._flag_case_combo.configure(values=self._flag_case_values)
+        self._sync_flag_case_filter_state()
+
+    def _sync_flag_case_filter_state(self) -> None:
+        """Enable the flagged-case dropdown only while the Flagged filter is active."""
+        if not hasattr(self, "_flag_case_combo") or not hasattr(self, "_filter_var"):
+            return
+        has_cases = any(value != "None" for value in self._flag_case_values)
+        state = "readonly" if self._filter_var.get() == "flagged" and has_cases else "disabled"
+        self._flag_case_combo.configure(state=state)
+
     def _apply_filter(self) -> None:
         """Apply the current filter to the table."""
+        self._sync_flag_case_filter_state()
         self._update_lines_table()
 
     def _on_line_selected(self, row_ids: List[int]) -> None:
@@ -1342,17 +1450,22 @@ class PostprocessingStep(BaseStep):
             return
 
         for issue in line.issues:
-            action_symbol = {
-                RecoveryAction.RECOVERED: "✓",
-                RecoveryAction.NEEDS_RETRY: "⚠",
-                RecoveryAction.SKIPPED: "○",
-                RecoveryAction.FAILED: "✗",
-            }.get(issue.action, "?")
+            self._issues_listbox.insert("end", self._format_issue_text(issue))
 
-            self._issues_listbox.insert(
-                "end",
-                f"{action_symbol} [{issue.recovery_type.value}] {issue.description}",
-            )
+    def _format_issue_text(self, issue: RecoveryIssue) -> str:
+        """Return the display and search text for a recovery issue."""
+        action_symbol = {
+            RecoveryAction.RECOVERED: "✓",
+            RecoveryAction.NEEDS_RETRY: "⚠",
+            RecoveryAction.SKIPPED: "○",
+            RecoveryAction.FAILED: "✗",
+        }.get(issue.action, "?")
+        return f"{action_symbol} [{issue.recovery_type.value}] {issue.description}"
+
+    @staticmethod
+    def _is_dedup_line(line: PostprocessLine) -> bool:
+        """Return whether a line is a deduplicated placeholder line."""
+        return "dedup" in line.tags
 
     def _mark_line_as_fixed(self) -> None:
         """Apply manual edit and mark line as fixed (TASK 45.7).
@@ -1378,13 +1491,17 @@ class PostprocessingStep(BaseStep):
         # Write to manifest if available
         if self.manifest_manager is not None:
             try:
-                self.manifest_manager.set_line_field(
-                    line.idx, "postpro", new_text
+                _persist_sparse_postpro(
+                    self.manifest_manager,
+                    line.idx,
+                    line.translated,
+                    new_text,
                 )
             except Exception as exc:
                 logger.debug("Could not write to manifest: %s", exc)
 
         # Refresh display
+        self._update_flag_case_options()
         self._update_lines_table()
         self._update_summary()
         self._show_diff(line)
@@ -1504,6 +1621,10 @@ class PostprocessingStep(BaseStep):
             int(k): v
             for k, v in (prepro_data.get("placeholder_captured") or {}).items()
         }
+        ph_records = {
+            int(k): v
+            for k, v in (prepro_data.get("placeholder_records") or {}).items()
+        }
         ell_counts = {
             int(k): v
             for k, v in (prepro_data.get("ellipsis_counts") or {}).items()
@@ -1526,16 +1647,61 @@ class PostprocessingStep(BaseStep):
         if mgr is not None and mgr.is_loaded:
             code_patterns = mgr.get_code_patterns()
 
+        batch_placeholder_texts: Dict[int, str] = {
+            line.idx: line.translated for line in self._lines
+        }
+
+        if ph_records:
+            dedup_line_ids = {
+                line.idx for line in self._lines if self._is_dedup_line(line)
+            }
+            active_placeholder_records = {
+                idx: records
+                for idx, records in ph_records.items()
+                if idx not in dedup_line_ids
+            }
+            for line in self._lines:
+                if line.translated == "__DEDUP__" or self._is_dedup_line(line):
+                    batch_placeholder_texts[line.idx] = line.translated
+                    continue
+                text = self._reverse_prot_compression(line.translated)
+                text = self._reverse_protect_code(
+                    text, line.idx, prot_captured,
+                )
+                batch_placeholder_texts[line.idx] = text
+
+            try:
+                from CherryAI.functions.modehelper import (
+                    restore_custom_placeholders_batch,
+                )
+
+                ordered_texts = [batch_placeholder_texts[line.idx] for line in self._lines]
+                restored_texts, _restore_stats, _restore_residuals = (
+                    restore_custom_placeholders_batch(
+                        ordered_texts, active_placeholder_records,
+                    )
+                )
+                for pos, line in enumerate(self._lines):
+                    batch_placeholder_texts[line.idx] = restored_texts[pos]
+            except Exception:
+                logger.exception("Batch custom placeholder restoration failed")
+
         try:
             for line in self._lines:
                 self._stats.lines_processed += 1
 
-                # Skip dedup sentinel lines — they are restored later
-                if line.translated == "__DEDUP__":
+                # Skip deduplicated rows here. They are restored from their
+                # source rows after normal lines finish postprocessing, and
+                # running recovery on them can create false retry flags.
+                if line.translated == "__DEDUP__" or self._is_dedup_line(line):
                     line.postprocessed = line.translated
+                    line.issues = []
+                    line.needs_retry = False
+                    line.flagged = False
+                    line.written = False
                     continue
 
-                text = line.translated
+                text = batch_placeholder_texts.get(line.idx, line.translated)
 
                 # ── Phase 1: Reverse preprocessing operations ──────────
                 # MUST run before LLM artifact recovery (bracket/quote
@@ -1543,13 +1709,14 @@ class PostprocessingStep(BaseStep):
                 # corrupted by bracket insertion from the original text.
                 # Order follows specs §5.9 postprocessing priorities.
 
-                text = self._reverse_prot_compression(text)
-                text = self._reverse_protect_code(
-                    text, line.idx, prot_captured,
-                )
-                text = self._reverse_custom_placeholders(
-                    text, line.idx, ph_captured, ph_rules,
-                )
+                if not ph_records:
+                    text = self._reverse_prot_compression(text)
+                    text = self._reverse_protect_code(
+                        text, line.idx, prot_captured,
+                    )
+                    text = self._reverse_custom_placeholders(
+                        text, line.idx, ph_captured, ph_rules,
+                    )
                 text = self._reverse_ellipsis(
                     text, line.idx, ell_counts,
                 )
@@ -1776,6 +1943,10 @@ class PostprocessingStep(BaseStep):
             if text:
                 dup_line.postprocessed = text
                 dup_line.has_changes = True
+                dup_line.issues = []
+                dup_line.needs_retry = False
+                dup_line.flagged = False
+                dup_line.written = False
                 restored += 1
 
         # Aggressive dedup restoration
@@ -1805,6 +1976,10 @@ class PostprocessingStep(BaseStep):
                     pass
             dup_line.postprocessed = template
             dup_line.has_changes = True
+            dup_line.issues = []
+            dup_line.needs_retry = False
+            dup_line.flagged = False
+            dup_line.written = False
             restored += 1
 
         if restored:
@@ -2047,6 +2222,7 @@ class PostprocessingStep(BaseStep):
     def _on_postprocess_complete(self) -> None:
         """Called when postprocessing completes (TASK 45.8: popup)."""
         self._apply_btn.configure(state="normal")
+        self._update_flag_case_options()
         self._update_lines_table()
         self._update_summary()
 
@@ -2073,7 +2249,12 @@ class PostprocessingStep(BaseStep):
         mgr = self.manifest_manager
         if mgr is not None:
             for line in self._lines:
-                mgr.set_line_field(line.idx, "postpro", line.postprocessed)
+                _persist_sparse_postpro(
+                    mgr,
+                    line.idx,
+                    line.translated,
+                    line.postprocessed,
+                )
 
         # TASK 45.8: Completion popup
         messagebox.showinfo(

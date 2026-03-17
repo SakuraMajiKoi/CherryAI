@@ -39,6 +39,192 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+DEDUP_PLACEHOLDER = "__DEDUP__"
+CONTENT_TAGS = frozenset({"file_end", "dialogue", "menu", "choice", "variable"})
+_DEDUP_BLOCKED_LINE_FIELDS = frozenset({
+    "tl",
+    "preedit",
+    "postpro",
+    "qa",
+    "qa_overwrite",
+    "wordwr",
+    "overwrite",
+})
+
+
+def parse_line_tags(raw_tags: Any) -> List[str]:
+    """Normalize manifest line tags into an ordered, duplicate-free list."""
+    if raw_tags is None:
+        return []
+
+    if isinstance(raw_tags, str):
+        candidates = raw_tags.split(",")
+    elif isinstance(raw_tags, (list, tuple, set)):
+        candidates = raw_tags
+    else:
+        candidates = [raw_tags]
+
+    result: List[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        tag = str(candidate).strip()
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        result.append(tag)
+    return result
+
+
+def merge_line_tags(*raw_values: Any) -> str:
+    """Merge one or more raw tag values into a canonical tag string."""
+    merged: List[str] = []
+    seen: set[str] = set()
+    for raw_value in raw_values:
+        for tag in parse_line_tags(raw_value):
+            if tag in seen:
+                continue
+            seen.add(tag)
+            merged.append(tag)
+    return ",".join(merged)
+
+
+def get_primary_line_tag(line_data: Dict[str, Any]) -> str:
+    """Return the line's primary content tag from tags or legacy fields."""
+    for tag in parse_line_tags(line_data.get("tags")):
+        if tag in CONTENT_TAGS:
+            return tag
+
+    for field in ("tag", "context_marker"):
+        raw_tag = str(line_data.get(field, "")).strip()
+        if raw_tag:
+            return raw_tag
+    return ""
+
+
+def set_primary_line_tag(line_data: Dict[str, Any], tag: str) -> None:
+    """Store a content tag in canonical tags form without legacy tag fields."""
+    non_content_tags = [
+        existing_tag
+        for existing_tag in parse_line_tags(line_data.get("tags"))
+        if existing_tag not in CONTENT_TAGS
+    ]
+    clean_tag = tag.strip()
+    if clean_tag:
+        non_content_tags.append(clean_tag)
+
+    merged_tags = merge_line_tags(non_content_tags)
+    if merged_tags:
+        line_data["tags"] = merged_tags
+    else:
+        line_data.pop("tags", None)
+
+    line_data.pop("tag", None)
+    line_data.pop("context_marker", None)
+
+
+def _should_keep_line_value(value: Any) -> bool:
+    """Return True when a sparse manifest field should be serialized."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value != ""
+    if isinstance(value, (list, tuple, dict, set)):
+        return len(value) > 0
+    if isinstance(value, bool):
+        return value
+    return True
+
+
+def canonicalize_line_dict(line_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize a raw line dict into canonical CherryAI manifest order."""
+    source = deepcopy(line_data)
+    merged_tags = merge_line_tags(
+        source.get("tags"),
+        source.get("tag"),
+        source.get("context_marker"),
+    )
+    is_dedup_placeholder = str(source.get("prepro", "")).strip() == DEDUP_PLACEHOLDER
+
+    result: Dict[str, Any] = {"idx": source.get("idx", 0)}
+    if merged_tags:
+        result["tags"] = merged_tags
+    result["orig"] = source.get("orig", "")
+
+    for field in ("prepro", "tl", "postpro", "qa", "qa_overwrite", "wordwr"):
+        if is_dedup_placeholder and field in _DEDUP_BLOCKED_LINE_FIELDS:
+            continue
+        if field in source and _should_keep_line_value(source[field]):
+            result[field] = source[field]
+
+    trailing_fields = [
+        "prepro_ops",
+        "edited_prepro",
+        "preedit",
+        "overwrite",
+        "log",
+        "deleted",
+        "updated",
+    ]
+    for field in trailing_fields:
+        if is_dedup_placeholder and field in _DEDUP_BLOCKED_LINE_FIELDS:
+            continue
+        if field in source and _should_keep_line_value(source[field]):
+            result[field] = source[field]
+
+    dynamic_keys = sorted(
+        key
+        for key in source
+        if (
+            (key.startswith("tlc") and key[3:].isdigit())
+            or (key.startswith("edit") and key[4:].isdigit())
+        )
+    )
+    for key in dynamic_keys:
+        if is_dedup_placeholder:
+            continue
+        if _should_keep_line_value(source[key]):
+            result[key] = source[key]
+
+    handled_keys = {
+        "idx",
+        "tags",
+        "tag",
+        "context_marker",
+        "orig",
+        "prepro",
+        "tl",
+        "postpro",
+        "qa",
+        "qa_overwrite",
+        "wordwr",
+        "prepro_ops",
+        "edited_prepro",
+        "preedit",
+        "overwrite",
+        "log",
+        "deleted",
+        "updated",
+        *dynamic_keys,
+    }
+    for key, value in source.items():
+        if key in handled_keys:
+            continue
+        if is_dedup_placeholder and key in _DEDUP_BLOCKED_LINE_FIELDS:
+            continue
+        if _should_keep_line_value(value):
+            result[key] = value
+
+    return result
+
+
+def canonicalize_lines(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Normalize and sort line dictionaries by idx."""
+    return [
+        canonicalize_line_dict(line)
+        for line in sorted(lines, key=lambda item: int(item.get("idx", 0)))
+    ]
+
+
 class _SafeManifestEncoder(json.JSONEncoder):
     """Defensive JSON encoder for manifest saves.
 
@@ -1124,6 +1310,7 @@ class ManifestManager:
             
             # Migrate older versions if needed
             data = self._migrate_manifest(data)
+            data["lines"] = canonicalize_lines(data.get("lines", []))
             
             self._manifest_path = manifest_path
             self._manifest_data = data
@@ -1423,6 +1610,9 @@ class ManifestManager:
 
                 # Snapshot to prevent concurrent modification
                 data_snapshot = deepcopy(self._manifest_data)
+                data_snapshot["lines"] = canonicalize_lines(
+                    data_snapshot.get("lines", [])
+                )
 
                 # Atomic write: temp file → rename
                 tmp_path = self._manifest_path.with_suffix(".tmp")
@@ -1751,7 +1941,7 @@ class ManifestManager:
     
     def set_lines(self, lines: List[Dict[str, Any]]) -> None:
         """Set all lines."""
-        self._manifest_data["lines"] = lines
+        self._manifest_data["lines"] = canonicalize_lines(lines)
         self._mark_dirty()
     
     def get_line(self, idx: int) -> Optional[Dict[str, Any]]:
@@ -1788,6 +1978,22 @@ class ManifestManager:
         # Line not found - create it
         lines.append({"idx": idx, field: value})
         self._mark_dirty()
+
+    def clear_line_field(self, idx: int, field: str) -> None:
+        """Remove a field from a specific line if it exists.
+
+        This is used for sparse manifest persistence where unchanged stage
+        outputs should be omitted entirely instead of stored as empty strings.
+        """
+        lines = self._manifest_data.get("lines", [])
+        for line in lines:
+            if line.get("idx") != idx:
+                continue
+            if field not in line:
+                return
+            del line[field]
+            self._mark_dirty()
+            return
     
     def update_translation(self, idx: int, translation: str) -> None:
         """Update translation for a line (called during translation)."""
@@ -2922,4 +3128,11 @@ def reset_manifest_manager() -> ManifestManager:
     if _manager is not None:
         _manager.close()
     _manager = ManifestManager()
+    return _manager
+
+
+def replace_manifest_manager(manager: ManifestManager) -> ManifestManager:
+    """Replace the shared manifest manager instance with a loaded manager."""
+    global _manager
+    _manager = manager
     return _manager

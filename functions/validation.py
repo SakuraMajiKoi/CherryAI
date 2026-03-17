@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from .analysis import detect_line_script
 from .modehelper import ANCHOR_EQUIVS, get_equivs
 
 
@@ -23,6 +24,34 @@ HIRAGANA_RANGE = (0x3040, 0x309F)
 KATAKANA_RANGE = (0x30A0, 0x30FF)
 KANJI_RANGE_MAIN = (0x4E00, 0x9FFF)
 KANJI_RANGE_EXT_A = (0x3400, 0x4DBF)
+HANGUL_RANGE_MAIN = (0xAC00, 0xD7AF)
+HANGUL_RANGE_JAMO = (0x1100, 0x11FF)
+
+_CJK_SOURCE_LANGUAGES = {
+    "japanese",
+    "chinese",
+    "chinese (simplified)",
+    "chinese (traditional)",
+    "korean",
+}
+_SOURCE_LANGUAGE_SCRIPT_MAP: Dict[str, str] = {
+    "japanese": "japanese",
+    "chinese": "chinese",
+    "chinese (simplified)": "chinese",
+    "chinese (traditional)": "chinese",
+    "korean": "korean",
+    "english": "latin",
+    "french": "latin",
+    "german": "latin",
+    "spanish": "latin",
+    "portuguese": "latin",
+    "italian": "latin",
+    "russian": "latin",
+    "polish": "latin",
+    "dutch": "latin",
+    "turkish": "latin",
+    "vietnamese": "latin",
+}
 
 
 class SkipReason(Enum):
@@ -301,8 +330,23 @@ def validate_code_patterns_preserved(
         List of warning strings for missing patterns (empty if all good).
     """
     from CherryAI.functions.glossaries.code_glossary_functions import (
+        _extract_all_balanced_code,
         generate_regex_pattern,
     )
+
+    def _filter_nested(matches: List[re.Match[str]], text: str) -> List[re.Match[str]]:
+        segments = _extract_all_balanced_code(text)
+        filtered: List[re.Match[str]] = []
+        for match in matches:
+            start, end = match.span()
+            nested = any(
+                seg_start <= start and end <= seg_end
+                and (seg_start, seg_end) != (start, end)
+                for seg_start, seg_end, _seg_text in segments
+            )
+            if not nested:
+                filtered.append(match)
+        return filtered
 
     warnings: List[str] = []
     for cp in code_patterns:
@@ -318,7 +362,7 @@ def validate_code_patterns_preserved(
 
         regex = generate_regex_pattern(pat, raw_type)
         try:
-            orig_matches = re.findall(regex, original)
+            orig_matches = _filter_nested(list(re.finditer(regex, original)), original)
         except re.error:
             continue
 
@@ -326,7 +370,10 @@ def validate_code_patterns_preserved(
             continue  # pattern not present in this line
 
         try:
-            trans_matches = re.findall(regex, translated)
+            trans_matches = _filter_nested(
+                list(re.finditer(regex, translated)),
+                translated,
+            )
         except re.error:
             continue
 
@@ -775,6 +822,39 @@ def count_japanese(text: str) -> int:
     return count
 
 
+def has_cjk_or_hangul(text: str) -> bool:
+    """Check if text contains East Asian source characters.
+
+    This includes kana, CJK ideographs, and Hangul so Translation-step
+    skip logic can treat CJK-family projects consistently when deciding
+    whether a line is source-language text or non-source text.
+    """
+    for ch in text:
+        code = ord(ch)
+        if (
+            HIRAGANA_RANGE[0] <= code <= HIRAGANA_RANGE[1]
+            or KATAKANA_RANGE[0] <= code <= KATAKANA_RANGE[1]
+            or KANJI_RANGE_MAIN[0] <= code <= KANJI_RANGE_MAIN[1]
+            or KANJI_RANGE_EXT_A[0] <= code <= KANJI_RANGE_EXT_A[1]
+            or HANGUL_RANGE_MAIN[0] <= code <= HANGUL_RANGE_MAIN[1]
+            or HANGUL_RANGE_JAMO[0] <= code <= HANGUL_RANGE_JAMO[1]
+        ):
+            return True
+    return False
+
+
+def _uses_cjk_source_filter(source_language: str) -> bool:
+    """Return whether the source language should use CJK/Hangul filtering."""
+    normalized = (source_language or "Japanese").strip().lower()
+    return normalized in _CJK_SOURCE_LANGUAGES
+
+
+def _get_expected_script(source_language: str) -> Optional[str]:
+    """Return the dominant script identifier for a source language."""
+    normalized = (source_language or "Japanese").strip().lower()
+    return _SOURCE_LANGUAGE_SCRIPT_MAP.get(normalized)
+
+
 def is_symbol_only(text: str) -> bool:
     """Check if text contains only symbols, whitespace, and ASCII punctuation.
     
@@ -815,6 +895,7 @@ def validate_line_pre(
     skip_comments: bool = True,
     skip_equals: bool = True,
     preserve_patterns: Optional[List[str]] = None,
+    source_language: str = "Japanese",
 ) -> ValidationResult:
     """Validate a line before sending to API.
     
@@ -841,6 +922,9 @@ def validate_line_pre(
         preserve_patterns: Code pattern strings with action ``"preserve"``
             from the manifest.  When provided, lines consisting entirely
             of these patterns are skipped (``CODE_ONLY``).
+        source_language: Source language used for optional non-source-line
+            filtering. CJK-family languages use East Asian-script detection;
+            other mapped languages use dominant-script detection.
     
     Returns:
         ValidationResult with skip_reason or auto_translation if applicable
@@ -882,7 +966,20 @@ def validate_line_pre(
             skip_reason=SkipReason.PROT_ONLY,
         )
     
-    # 5b. Lines consisting entirely of ANY placeholder tokens (broader check
+    from CherryAI.functions.prompt_builder import _PLACEHOLDER_TOKEN_RE
+
+    detection_text = _PLACEHOLDER_TOKEN_RE.sub("", stripped).strip()
+
+    # 5b. Symbol-only lines (including placeholder + symbol combinations)
+    if detection_text and is_symbol_only(detection_text):
+        normalized = normalize_symbols(line)
+        return ValidationResult(
+            is_valid=False,
+            skip_reason=SkipReason.SYMBOL_ONLY,
+            auto_translation=normalized,
+        )
+
+    # 5c. Lines consisting entirely of ANY placeholder tokens (broader check
     #     covering __COLOR__, __FONT__, __TEMPREPL__, __NAME__, etc.)
     from CherryAI.functions.prompt_builder import is_placeholder_only
     if is_placeholder_only(stripped):
@@ -891,7 +988,7 @@ def validate_line_pre(
             skip_reason=SkipReason.PROT_ONLY,
         )
     
-    # 5c. Lines consisting entirely of preserved code patterns
+    # 5d. Lines consisting entirely of preserved code patterns
     if preserve_patterns:
         from CherryAI.functions.prompt_builder import is_code_pattern_only
         if is_code_pattern_only(stripped, preserve_patterns):
@@ -907,21 +1004,29 @@ def validate_line_pre(
             skip_reason=SkipReason.ALREADY_TRANSLATED,
         )
     
-    # 7. Lines without Japanese characters
-    if not has_japanese(line):
-        # Check if symbol-only → auto-translate
-        if is_symbol_only(line):
-            normalized = normalize_symbols(line)
+    detection_text = _PLACEHOLDER_TOKEN_RE.sub("", line).strip()
+
+    # 7. Lines without source-language content
+    if _uses_cjk_source_filter(source_language):
+        if not has_cjk_or_hangul(detection_text):
             return ValidationResult(
                 is_valid=False,
-                skip_reason=SkipReason.SYMBOL_ONLY,
-                auto_translation=normalized,
+                skip_reason=SkipReason.NO_JAPANESE,
             )
-        # Otherwise, just skip (no Japanese, but has other content like English)
-        return ValidationResult(
-            is_valid=False,
-            skip_reason=SkipReason.NO_JAPANESE,
-        )
+    else:
+        expected_script = _get_expected_script(source_language)
+        if expected_script is not None:
+            script = detect_line_script(detection_text)
+            if script not in ("unknown", "mixed", expected_script):
+                return ValidationResult(
+                    is_valid=False,
+                    skip_reason=SkipReason.NO_JAPANESE,
+                )
+        elif not has_japanese(line):
+            return ValidationResult(
+                is_valid=False,
+                skip_reason=SkipReason.NO_JAPANESE,
+            )
     
     # Line is valid for translation
     return ValidationResult(is_valid=True)

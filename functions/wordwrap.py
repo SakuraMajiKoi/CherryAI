@@ -31,6 +31,8 @@ class WordwrapConfig:
         in1: Primary input (for manual: width in characters).
         in2: Secondary input (for manual: break char, e.g., "\\n" or "newline").
         in3: Tertiary input (for manual: max lines count; warn if exceeded).
+        prevent_orphan: Ensure the last line is not a tiny orphan word.
+        prefer_punct_breaks: Prefer breaking after punctuation where possible.
     """
 
     mode: str = "manual"
@@ -42,6 +44,8 @@ class WordwrapConfig:
     speaker_mode: Optional[str] = None  # IGNORE|SAMELINE|SAMELINEINDENT|NEWLINE
     modi: Optional[str] = None  # txt|json|tsv|csv|xlsx|RPGMAKERMV|RPGMAKERMZ
     project_dir: Optional[Union[str, Path]] = None  # base directory for RPG data lookups (Actors, system variables)
+    prevent_orphan: bool = True
+    prefer_punct_breaks: bool = True
 
 
 def normalize_break_char(s: Optional[str]) -> str:
@@ -147,6 +151,8 @@ def apply_wordwrap(lines: List[str], config: Union[WordwrapConfig, Dict[str, Any
             speaker_mode=config.get("speaker_mode"),
             modi=config.get("modi"),
             project_dir=config.get("project_dir"),
+            prevent_orphan=config.get("prevent_orphan", True),
+            prefer_punct_breaks=config.get("prefer_punct_breaks", True),
         )
     else:
         cfg = config
@@ -175,10 +181,30 @@ def apply_wordwrap(lines: List[str], config: Union[WordwrapConfig, Dict[str, Any
         if width <= 0:
             # no-op if invalid width
             return list(lines)
+        use_pretty = cfg.prevent_orphan or cfg.prefer_punct_breaks
         for ln in lines:
-            out.append(manual_wrap_line(ln, width=width, break_char=br, max_lines=maxl,
-                                        ignore_patterns=ignore_patterns, speaker_mode=speaker_mode,
-                                        project_dir=cfg.project_dir))
+            if use_pretty:
+                out.append(_wrap_with_speaker(
+                    ln, width, br, maxl, speaker_mode,
+                    lambda t: _wrap_core_with_codes(
+                        t, width, br, maxl, ignore_patterns,
+                        cfg.project_dir,
+                        lambda inner, ew, bc, ml, ip: pretty_wrap(
+                            inner, width=ew, break_char=bc,
+                            max_lines=ml,
+                            prevent_orphan=cfg.prevent_orphan,
+                            prefer_punct_breaks=cfg.prefer_punct_breaks,
+                            ignore_patterns=ip,
+                        ),
+                    ),
+                ))
+            else:
+                out.append(manual_wrap_line(
+                    ln, width=width, break_char=br, max_lines=maxl,
+                    ignore_patterns=ignore_patterns,
+                    speaker_mode=speaker_mode,
+                    project_dir=cfg.project_dir,
+                ))
         return out
 
     if mode in ("rpgmaker", "rpgmaker_mv_mz", "rpgmaker_mz", "rpgmaker_mv"):

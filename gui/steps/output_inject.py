@@ -1035,18 +1035,31 @@ class OutputInjectStep(BaseStep):
         return Path(raw_value)
 
     def _apply_default_output_settings(self) -> None:
-        """Ensure output controls always have valid, input-derived defaults."""
+        """Ensure output controls always have valid, input-derived defaults.
+
+        When a parser format is detected in the filedir, the output
+        format is set to INJECTION and the encoding mirrors the source
+        encoding so the parser's ``inject_to`` method produces correct
+        output without the user having to guess encoding.
+        """
         default_format, default_encoding = self._get_first_input_file_meta()
         valid_formats = {fmt.value for fmt in OutputFormat}
         valid_pair_modes = {mode.value for mode in PairMode}
         valid_backups = {mode.value for mode in BackupStrategy}
+
+        # Detect parser format from filedir
+        parser_format = self._detect_parser_format()
 
         current_destination = self._dest_var.get().strip()
         if not current_destination:
             self._dest_var.set(SAME_AS_SOURCE_DESTINATION)
 
         current_format = self._format_var.get().strip().lower()
-        if current_format not in valid_formats:
+        if parser_format:
+            # Parser-backed files should default to injection
+            if current_format not in valid_formats or current_format != OutputFormat.INJECTION.value:
+                self._format_var.set(OutputFormat.INJECTION.value)
+        elif current_format not in valid_formats:
             self._format_var.set(default_format if default_format in valid_formats else OutputFormat.TXT.value)
 
         current_pair_mode = self._pair_var.get().strip().lower()
@@ -1069,6 +1082,33 @@ class OutputInjectStep(BaseStep):
             self._backup_ext_var.set(DEFAULT_OUTPUT_BACKUP_EXTENSION)
 
         self._format_desc.configure(text=FORMAT_DESCRIPTIONS[_safe_output_format(self._format_var.get())])
+
+    def _detect_parser_format(self) -> str:
+        """Return the parser format name if all filedir entries use one.
+
+        Returns:
+            Parser format string (e.g. ``"lightvn"``) or ``""`` when
+            no consistent parser format is detected.
+        """
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            return ""
+        filedir = mgr.get_filedir()
+        if not filedir:
+            return ""
+        formats = {e.format for e in filedir if e.format}
+        if len(formats) == 1:
+            fmt = formats.pop()
+            # Check if this format corresponds to a registered parser
+            try:
+                from CherryAI.formats import get_parser_registry
+                registry = get_parser_registry()
+                for info in registry.list_parsers():
+                    if info["name"].lower() == fmt.lower():
+                        return fmt
+            except Exception:
+                pass
+        return ""
 
     def _on_overwrite_changed(self) -> None:
         """Handle overwrite checkbox change."""

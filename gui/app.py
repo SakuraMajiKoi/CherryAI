@@ -52,6 +52,7 @@ from CherryAI.functions.manifest_manager import (
     ManifestManager,
     get_manifest_manager,
     reset_manifest_manager,
+    replace_manifest_manager,
     MANIFEST_DIR,
     MANIFEST_EXT,
 )
@@ -327,15 +328,15 @@ class App(tk.Tk):
                     manifest_manager=self._manifest_manager,
                 )
             elif step_id == 7:
-                # Wordwrap & Overwrite - fully implemented (moved from step 8)
-                tab = WordwrapOverwriteStep(
+                # Quality Assurance - fully implemented (moved before Wordwrap)
+                tab = QAStep(
                     self._notebook,
                     self.session,
                     manifest_manager=self._manifest_manager,
                 )
             elif step_id == 8:
-                # Quality Assurance - fully implemented (moved from step 6)
-                tab = QAStep(
+                # Wordwrap - fully implemented (moved after QA)
+                tab = WordwrapOverwriteStep(
                     self._notebook,
                     self.session,
                     manifest_manager=self._manifest_manager,
@@ -485,7 +486,8 @@ class App(tk.Tk):
         Returns:
             True if loaded successfully.
         """
-        if not self._manifest_manager.load(manifest_path):
+        loaded_manager = ManifestManager()
+        if not loaded_manager.load(manifest_path):
             logger.error("Failed to load manifest: %s", manifest_path)
             messagebox.showerror(
                 "Load Error",
@@ -493,33 +495,52 @@ class App(tk.Tk):
             )
             return False
 
-        # Update session with manifest path for legacy compatibility
-        self.session.manifest_path = manifest_path
-
-        # Update all steps with manifest manager
-        for tab in self._step_tabs:
-            tab._manifest_manager = self._manifest_manager
-
-        # Navigate to saved step position
-        saved_step = self._manifest_manager.current_step
-        if 0 <= saved_step < len(self._step_tabs):
-            self._notebook.select(saved_step)
-            # PHASE 58.11: Explicitly call on_enter after loading manifest
-            # This ensures files are populated even if tab didn't change
-            self._step_tabs[saved_step].on_enter()
-
-        # Add to recent manifests and save as last opened
-        ini_manager.set_last_manifest(manifest_path)
-        ini_manager.add_to_recent_manifests(manifest_path)
-        
-        # Refresh UI
-        self._progress_tracker.refresh()
-        self._update_window_title()
+        self._activate_loaded_manifest(loaded_manager, manifest_path)
 
         project_name = self._manifest_manager.project_name or manifest_path.stem
         logger.info("Loaded project: %s from %s", project_name, manifest_path)
         
         return True
+
+    def _reset_runtime_state(self) -> None:
+        """Reset session-bound UI state so another project can be activated safely."""
+        self.session = reset_session()
+        self._session_path = None
+        self._progress_tracker.session = self.session
+
+        for tab in self._step_tabs:
+            tab.session = self.session
+            tab._manifest_manager = self._manifest_manager
+            tab.on_new_project()
+
+        self._current_tab_index = 0
+
+    def _activate_loaded_manifest(
+        self,
+        loaded_manager: ManifestManager,
+        manifest_path: Path,
+    ) -> None:
+        """Swap the app to a freshly loaded manifest and rebuild tab state."""
+        old_manager = self._manifest_manager
+        self._manifest_manager = replace_manifest_manager(loaded_manager)
+        self._reset_runtime_state()
+        self.session.manifest_path = manifest_path
+
+        saved_step = self._manifest_manager.current_step
+        self.session.current_step = saved_step
+        if 0 <= saved_step < len(self._step_tabs):
+            self._notebook.select(saved_step)
+            self._current_tab_index = saved_step
+            self._step_tabs[saved_step].on_enter()
+
+        ini_manager.set_last_manifest(manifest_path)
+        ini_manager.add_to_recent_manifests(manifest_path)
+
+        self._progress_tracker.refresh()
+        self._update_window_title()
+
+        if old_manager is not loaded_manager:
+            old_manager.close()
 
     def _on_new_session(self) -> None:
         """Handle New Project menu item.
@@ -542,17 +563,8 @@ class App(tk.Tk):
         # Reset manifest manager (TASK 19)
         self._manifest_manager.close()
         self._manifest_manager = reset_manifest_manager()
-
-        # Reset session for legacy compatibility (no autosave)
-        self.session = reset_session()
-        self._session_path = None
-
-        # Update all components with new state and flush cached data
-        self._progress_tracker.session = self.session
-        for tab in self._step_tabs:
-            tab.session = self.session
-            tab._manifest_manager = self._manifest_manager
-            tab.on_new_project()
+        self._reset_runtime_state()
+        ini_manager.set_last_manifest(None)
 
         # Select first tab and refresh its widgets
         self._notebook.select(0)

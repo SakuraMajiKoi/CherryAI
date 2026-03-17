@@ -100,8 +100,8 @@ STEP_DEFINITIONS: List[tuple] = [
     (4, "Costs"),            # After Preprocessing for dual estimation
     (5, "Translation"),
     (6, "Postprocessing"),
-    (7, "Wordwrap"),
-    (8, "Quality Assurance"),
+    (7, "Quality Assurance"),
+    (8, "Wordwrap"),
     (9, "Output"),
 ]
 
