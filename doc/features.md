@@ -769,7 +769,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Import Translations button now opens a selection dialog before importing
     - Line Fields group: Preprocessed, Tags, Translated, Postprocessed, Wordwrap, QA
     - Tags import merges into existing `lines[].tags`, removes duplicates, and never writes legacy `tag`
-    - Dedup placeholder rows (`prepro == __DEDUP__`) never import `tl`/postprocess/QA/wordwrap stage text, and stale imported stage text is cleared during manifest normalization
+    - Dedup placeholder rows (`prepro == __DEDUP__`) block only `tl` import during Import Translations; postprocess/QA/wordwrap and related later-stage fields can still import and persist normally
     - QA import maps reviewed text into `qa`, overwrite text into `qa_overwrite`, and keeps backward compatibility with older manifests that only stored `overwrite`
     - Information import preserves the current `project_name` instead of overwriting it from the imported manifest
     - Settings Sections group: Analysis, Information, Preprocessing, Costs, Translation,
@@ -871,7 +871,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - `get_request_options()` - API settings (Model, Temperature, LinesPerChunk)
     - `get_preprocessing_options()` - Deduplication, SymbolConversion, etc.
     - `get_validation_rules()` - PlaceholderPreservation, QuoteBalance, etc.
-    - `get_qa_options()` - RerunPolicy, MaxJapaneseChars, MaxLineLength
+    - `get_qa_options()` - RerunPolicy, MaxSourceLanguageChars, MaxLineLength
     - `get_postprocessing_options()` - Recovery and restoration settings
     - `get_wordwrap_options()` - Width, BreakChar, Typography, etc.
     - `get_output_options()` - Format, Encoding, FileNaming, etc.
@@ -1013,8 +1013,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - Auto-Suggest button leveraging analysis results
   - Tooltips explaining each rule's behavior
   - **Pipeline Execution Order:** Dedup (P10) → Protect Code (P15) → Custom Placeholders (P17) → Anchoring (P20) → Symbol Conversion (P30) → Ellipsis (P36) → Speaker (P38) → PROT Compression (P60) → Aggressive Dedup (P90). Protect Code and Custom Placeholders run before Symbol Conversion so fullwidth patterns (e.g. `（圧縮あり）`) still match the original text. Step data stores both flat capture lists and token-aware placeholder records (`protect_code_captured`, `placeholder_captured`, `placeholder_records`, `ellipsis_counts`, `anchor_captured`) for postprocessing reversal.
-  - **Postprocessing Reversal:** Phase 1 (preprocessing reversal): PROT decompression → Protect Code restoration → Custom Placeholder restoration → Ellipsis expansion → Anchoring restoration → `<NUM>` restoration from aggressive dedup numbers. Custom Placeholder restoration now runs in two passes: per-line replacement first, then a batch-wide exact-token fallback so named replacements that drifted to another line are still restored. Dedup-tagged duplicate rows are excluded from that batch fallback and from per-line post-exclusive recovery so they do not consume another line's placeholder record or produce false preserve/code-pattern flags before source-copy restoration. Phase 2 (post-exclusive LLM recovery): `recover_line()` fixes LLM artifacts (bracket/quote balance, whitespace normalization) on the already-restored text, with `enable_placeholder_recovery=False`. Bracket recovery treats `【】` as equivalent to `[]`, removes truly extra unmatched brackets such as an LLM-added third `}` after `{{...}}`, and only runs when the source bracket structure is balanced. Code pattern recovery matches doubled delimiters such as `{{...}}` as whole tokens and ignores nested inner matches like `{...}` inside a doubled token, so preserve-action restores do not leave trailing braces behind or double-flag the same source code. After all lines: Dedup restoration → Aggressive Dedup restoration. Reduplication reads step 3 data from ManifestManager (not session) and resolves source text via `postpro → tl → prepro → orig` priority chain.
-  - **Postprocessing Reversal:** Phase 1 (preprocessing reversal): PROT decompression → Protect Code restoration → Custom Placeholder restoration → Ellipsis expansion → Anchoring restoration → `<NUM>` restoration from aggressive dedup numbers. Phase 2 (post-exclusive LLM recovery): `recover_line()` fixes LLM artifacts (bracket/quote balance, whitespace normalization) on the already-restored text, with `enable_placeholder_recovery=False`. Bracket recovery treats `【】` as equivalent to `[]`, removes truly extra unmatched brackets such as an LLM-added third `}` after `{{...}}`, and only runs when the source bracket structure is balanced. Code pattern recovery matches doubled delimiters such as `{{...}}` as whole tokens so preserve-action restores do not leave trailing braces behind. After all lines: Dedup restoration → Aggressive Dedup restoration. Reduplication reads step 3 data from ManifestManager (not session) and resolves source text via `postpro → tl → prepro → orig` priority chain.
+  - **Postprocessing Reversal:** Phase 1 (preprocessing reversal): PROT decompression → Protect Code restoration → Custom Placeholder restoration → Ellipsis expansion → Anchoring restoration → `<NUM>` restoration from aggressive dedup numbers. Custom Placeholder restoration now runs in two passes: per-line replacement first, then a batch-wide exact-token fallback so named replacements that drifted to another line are still restored. Dedup-tagged duplicate rows are excluded from that batch fallback and from per-line post-exclusive recovery so they do not consume another line's placeholder record or produce false preserve/code-pattern flags before source-copy restoration. Phase 2 (post-exclusive LLM recovery): `recover_line()` fixes LLM artifacts (bracket/quote balance, whitespace normalization) on the already-restored text, with `enable_placeholder_recovery=False`. Bracket recovery treats `【】` as equivalent to `[]`, removes truly extra unmatched brackets such as an LLM-added third `}` after `{{...}}`, and only runs when the source bracket structure is balanced. Code pattern recovery matches doubled delimiters such as `{{...}}` as whole tokens and ignores nested inner matches like `{...}` inside a doubled token, so preserve-action restores do not leave trailing braces behind or double-flag the same source code. After all lines: Dedup restoration → Aggressive Dedup restoration. Reduplication reads step 3 data from ManifestManager (not session), preserves later-stage fields already stored on duplicate rows, and recursively resolves chained `dedup_map`/`aggr_dedup_map` sources via `postpro → tl → prepro → orig`.
   - **Manifest Integration (Phase 24):**
     - All toggles persist to manifest: Deduplication, DeduplicationThreshold, EllipsisCompression,
       SymbolConversion, ProtCompression, SpeakerNameReplacement, CodeSpacingRules
@@ -1200,25 +1199,26 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - 6 default rules with enable/disable toggles:
       1. Placeholder Preservation (ERROR) - Check __PROTECTED__ preserved
       2. Anchor Preservation (WARNING) - Check < > [ ] { } chars
-      3. Japanese Character Detection (WARNING) - Flag remaining Japanese
+      3. Source Language Detection (WARNING) - Flag remaining source-language text using the manifest source/target language pair
       4. Speaker Format (ERROR) - Check Name: "Dialogue" preserved
       5. Quote Balance (WARNING) - Check quote pairs balanced
       6. Empty Translation (ERROR) - Flag empty translations
     - Severity indicators: [ERROR], [WARNING], [INFO]
   - **Manifest Integration (Phase 25-26):**
     - ValidationRules nested: PlaceholderPreservation, AnchorPreservation,
-      JapaneseCharacterDetection, SpeakerFormat, QuoteBalance, EmptyTranslation
-    - QAOptions nested: RerunPolicy, MaxJapaneseChars, MaxLineLength
+      SourceLanguageDetection, SpeakerFormat, QuoteBalance, EmptyTranslation
+    - QAOptions nested: RerunPolicy, MaxSourceLanguageChars, MaxLineLength
     - All toggles persist to manifest and load on step enter
     - QA does not auto-write `qa`, `qa_overwrite`, or review text on tab leave
     - QA review input is stage-bounded: `postpro → tl → prepro → orig`
-    - `qa` only populates the Quality Assurance column
+    - `qa` only populates the Quality Assurance column; blank `qa` cells stay blank in the table even though QA checks still run on the effective review text
     - `qa_overwrite` only populates the Overwrite column and never becomes QA input
     - `qa_overwrite` is only stored when the user explicitly changes it and it differs from the QA input chain
+    - SourceLanguageDetection ignores preserve-action `code_patterns` and adapts by language pair, including full Japanese detection for Japanese→English, kana-only detection for Japanese→Chinese, distinctive-marker detection for languages such as German, and no regex-based detection for unsupported pairs such as English→German
   - **Issue Types (IssueType enum):**
     - PLACEHOLDER_MISSING, PLACEHOLDER_EXTRA, PLACEHOLDER_MANGLED
     - ANCHOR_MISSING, ANCHOR_EXTRA
-    - JAPANESE_REMAINING
+    - SOURCE_LANGUAGE_REMAINING
     - SPEAKER_FORMAT_LOST, QUOTE_IMBALANCE
     - LINE_TOO_LONG, EMPTY_TRANSLATION, CUSTOM
   - **Issue Details Panel:**
@@ -1766,7 +1766,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Dirty Flags: ManifestManager.get_dirty_flags()/set_dirty_flag() storing {process, wordwrap} booleans; pre-export warning dialog listing dirty stages
     - Non-Destructive Default: NamingOptions.strategy default changed from SUFFIX to SUBFOLDER; "translated" subfolder name
     - Failure Logging: ExportStats.failure_log list of {file, error, timestamp} dicts; appended on write failure in _process_export()
-    - Import Translations: "📥 Import Translations" button in Input step toolbar; loads .CherryAI.json manifest; matches by orig field; imports selected stage fields, merges canonical `tags`, migrates legacy `tag` only into `tags`, and blocks translation-stage imports for dedup placeholder rows; summary dialog
+    - Import Translations: "📥 Import Translations" button in Input step toolbar; loads .CherryAI.json manifest; matches by orig field; imports selected stage fields, merges canonical `tags`, migrates legacy `tag` only into `tags`, blocks only `tl` for dedup placeholder rows, and leaves later-stage imports/persistence to normal manifest handling; summary dialog
     - Skip Already Translated: `overwrite_translation` in Global Options inversely drives Translation-step skip-translated behavior; Preview Requests and Start Translation now both reclassify all loaded lines so already translated text is skipped only when overwrite is off
     - Output Summary Panel: dirty flag indicators (⚠/✓ labels for process and wordwrap); _update_dirty_flags() refreshes on _update_summary()
 - **Pipeline Logging System (Phase 48):**
@@ -2449,10 +2449,8 @@ AGGRESSIVE DEDUPLICATION (Implemented)
     "AD{src_idx}") stored in `lines[].tags` for postprocessing restoration
   - `DEDUP_PLACEHOLDER = "__DEDUP__"` sentinel replaces duplicate content
   - Preprocessing step persists `dedup_map`, `aggr_dedup_map`, `aggr_numbers` in step data
-  - Postprocessing (`_restore_dedup_lines`) reads maps from step 3 data, resolves best text
-    from in-RAM source lines (postprocessed → translated → original), and restores aggressive
-    dedup lines with number substitution via `aggressive_restore_line()`
-  - Test suite: `dev/test_dedup_pipeline.py` (26 tests)
+  - Postprocessing (`_restore_dedup_lines`) reads maps from step 3 data, recursively resolves chained standard/aggressive dedup sources against in-RAM lines (postprocessed → translated → preprocessed → original), and restores aggressive dedup lines with number substitution via `aggressive_restore_line()`
+  - Test suite: `dev/test_dedup_pipeline.py` (37 tests)
 
 SHARED PROMPT BUILDER (Implemented)
 - Single source of truth for system prompt assembly: `build_full_system_prompt()` in

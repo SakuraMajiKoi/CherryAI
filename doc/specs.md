@@ -118,7 +118,7 @@ All application state is stored in the Manifest (`.CherryAI.json`), not in GUI m
 - Skip-unchanged guard: `set_line_field()` returns early when new value equals existing (TASK 72)
 - Per-step data storage with automatic serialization
 - Line-by-line translation state tracking with per-line `tags` field (TASK 72)
-- Manifest line canonicalization on load/save/set: legacy `tag` is merged into `tags`, dedup placeholder rows cannot retain translation-stage outputs, and line keys are written in canonical order `idx`, `tags`, `orig`, `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, then auxiliary fields
+- Manifest line canonicalization on load/save/set: legacy `tag` is merged into `tags`, line keys are written in canonical order `idx`, `tags`, `orig`, `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, then auxiliary fields, and dedup placeholder rows may retain valid later-stage outputs produced or imported elsewhere in the workflow
 - Project recovery and session restoration
 - Step data merge-not-replace: `on_leave()` and `_update_step_data()` must start from `get_step_data()` and merge updated keys — never create a fresh dict that discards stored results (PHASE 80)
 - Init guard pattern: steps that populate comboboxes during `__init__()` must suppress trace-triggered manifest writes until initialization completes (PHASE 80)
@@ -833,7 +833,7 @@ The following table lists all processes in their execution order. Preprocessing 
 
 | Order | Process | Pre Step | Post Step | Notes |
 |-------|---------|----------|-----------|-------|
-| 1 | Deduplication | First (P10) | Last (P90) | Replaces duplicates with `__DEDUP__`; post recovers from unique translation via `postpro → tl → prepro → orig` resolution; GUI: `apply_dedup_batch()` in mode_adapter; tags D{idx}; reduplication reads step data from ManifestManager |
+| 1 | Deduplication | First (P10) | Last (P90) | Replaces duplicates with `__DEDUP__`; post recovers from unique translation via recursive `postpro → tl → prepro → orig` resolution across chained `dedup_map` / `aggr_dedup_map` sources; GUI: `apply_dedup_batch()` in mode_adapter; tags D{idx}; reduplication reads step data from ManifestManager |
 | 2 | Protect Code Patterns | P15 | P20 | Generic `__PROTECTED__` / `__PROTECTED_X__` protection; runs before symbol conversion so fullwidth patterns (e.g. `（圧縮あり）`) still match the original text |
 | 3 | Custom Placeholder | P17 | P30 | Custom named replacement tokens for variables; runs before symbol conversion to capture fullwidth originals; postprocessing uses per-line restoration plus a batch-wide exact-token fallback for shifted replacements |
 | 4 | Anchoring | P20 | P10 | Remove code at anchor-relative positions; records anchor char, side, and type for restoration; patterns without adjacent anchors are left in place; restore first in Post using symbol-conversion equivalents |
@@ -844,7 +844,7 @@ The following table lists all processes in their execution order. Preprocessing 
 | 9 | Code Spacing Rules | P50 | P50 (Post for recovery) | Post-exclusive spacing recovery; also pre for normalization |
 | 10 | PROTECTED Compression | P60 | P40 | Adjacent `__PROTECTED__` → `__PROTECTED_N__` |
 | 11 | Quote Stripping | P76 (after PROT) | P9 (before Anchoring restore) | Strip quotes at dialogue boundaries to save tokens |
-| 12 | Aggressive Deduplication | Last (P90) | First (P5) | Variant-aware dedup with generic substitutions; GUI: `apply_aggressive_dedup_batch()` in mode_adapter; tags AD{idx} |
+| 12 | Aggressive Deduplication | Last (P90) | First (P5) | Variant-aware dedup with generic substitutions; GUI: `apply_aggressive_dedup_batch()` in mode_adapter; tags AD{idx}; chained standard dedup rows may resolve through aggressive sources during postprocessing |
 | 13 | Whitespace Normalization | — | P120 (Post-exclusive) | Post-exclusive: matches indentation to original |
 | 14 | Bracket Balance | — | P110 (Post-exclusive) | Post-exclusive: fixes unmatched brackets |
 | 15 | Quote Balance | — | P100 (Post-exclusive) | Post-exclusive: fixes unmatched quotes |
@@ -1149,7 +1149,7 @@ select which data to import from a source manifest.
 | Wordwrap | ✅ | ``wordwr`` |
 | QA (reviewed text, overwrite, TLC, edits) | ✅ | ``qa``, ``qa_overwrite``, ``edit*``, ``tlc*`` |
 
-**Dedup Guard**: If either the current line or the imported source line has ``prepro == "__DEDUP__"``, the dialog must not import `tl`, postprocess, QA, or wordwrap stage text for that row.
+**Dedup Guard**: If either the current line or the imported source line has ``prepro == "__DEDUP__"``, the dialog must not import `tl` for that row. Postprocess, QA, wordwrap, and related later-stage fields may still import and persist normally.
 | Do not overwrite lines that already have translations | ❌ | Skips lines with existing ``tl`` |
 
 **Settings Sections**:
@@ -3312,26 +3312,13 @@ Local providers (LM Studio, Ollama, local):
 
 **Philosophy**: QA is a safety net, not a primary mechanism. The same scripts used in QA (`functions/validation.py`) are also called during translation (automatic recovery after each chunk) and postprocessing (restoration validation). The QA step surfaces what those automatic passes could not fix, allowing manual review, acceptance, or rejection.
 
-**Current State (Placeholder)**: The QA step is currently rendered non-functional. A toggle switch (on by default, meaning the placeholder is active) replaces all QA widgets with a single informational label:
-
-> *"Yet to be fully Implemented — Translation Step and Postprocessing Step currently employ all automatic fixes and log failures."*
-
-When the toggle is turned off, the full QA interface loads (once implemented). This provides a clean, non-misleading UI until the step is fully built out.
+**Current State**: The QA step is active and delegates all validation logic to shared helpers in `functions/validation.py`. The GUI is responsible for display, filtering, acceptance/rejection state, and sparse manifest persistence only.
 
 ---
 
-#### Widgets (Current — Placeholder Mode)
+#### Widgets
 
-| Widget | Type | Function |
-|--------|------|----------|
-| Placeholder Toggle | Switch/Checkbutton | On (default): show placeholder. Off: load full QA UI (future) |
-| Placeholder Label | Label | Informational text explaining the step is not yet active |
-
----
-
-#### Widgets (Future — Full Implementation)
-
-The following widgets will be activated once the Translation/Edit/TLC mode toggle and full QA pipeline are implemented:
+The QA tab exposes the following widgets:
 
 | Widget | Type | Function |
 |--------|------|----------|
@@ -3356,18 +3343,25 @@ The following widgets will be activated once the Translation/Edit/TLC mode toggl
 **Inputs**:
 - From Step 4: `prepro[]`, `prepro_ops[]` (for placeholder checking)
 - Working text resolved as `postpro[] → tl[] → prepro[] → orig[]`
-- `qa[]` is the reviewed QA text shown in the middle column
+- `qa[]` is the sparse reviewed QA text shown in the middle column only
 - `qa_overwrite[]` is a manual review/output field only and is never used as QA input
 - From Step 5: `tl[]` remains the primary translation source when no later stage output exists
 
 **Processing** (via `functions/validation.py`):
 1. **Placeholder Check**: Verify all `__PROTECTED__` tokens preserved
 2. **Anchor Check**: Verify `<>[]{}` characters preserved
-3. **Japanese Check**: Flag remaining Japanese characters
+3. **SourceLanguageDetection**: Flag remaining source-language text using `source_language` and `target_language` from manifest metadata
 4. **Speaker Format**: Verify `Name: "Dialogue"` preserved
 5. **Quote Balance**: Check matching quote pairs
 6. **Empty Check**: Flag empty translations
 7. **Line Length**: Flag lines exceeding limit
+
+**SourceLanguageDetection Rules**:
+- Preserve-action `code_patterns` are stripped before counting so protected code is never counted as untranslated source text.
+- Japanese→English and other non-Han targets use full Japanese detection.
+- Japanese→Chinese uses kana-only detection because Han ideographs are shared.
+- Latin-script languages use distinctive marker characters only when reliable, such as German umlauts.
+- Unsupported same-script pairs such as English→German do not apply regex-based residue detection.
 
 **Note**: Steps 1-7 are the same validation rules already used by both the Translation step (post-chunk automatic recovery) and the Postprocessing step (restoration validation). QA does NOT add new validation logic — it provides a UI for manually reviewing what the automated passes left unresolved.
 

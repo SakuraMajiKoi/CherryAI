@@ -1931,15 +1931,21 @@ class PostprocessingStep(BaseStep):
         }
 
         restored = 0
+        resolved_cache: Dict[int, str] = {}
 
         # Standard dedup restoration
         for dup_idx, src_idx in dedup_map.items():
             dup_line = by_idx.get(dup_idx)
-            src_line = by_idx.get(src_idx)
-            if dup_line is None or src_line is None:
+            if dup_line is None:
                 continue
-            # Pick latest text from source: postpro → tl → prepro → orig
-            text = self._best_text(src_line)
+            text = self._resolve_dedup_text(
+                src_idx,
+                by_idx,
+                dedup_map,
+                aggr_map,
+                aggr_nums,
+                resolved_cache,
+            )
             if text:
                 dup_line.postprocessed = text
                 dup_line.has_changes = True
@@ -1952,29 +1958,19 @@ class PostprocessingStep(BaseStep):
         # Aggressive dedup restoration
         for dup_idx, src_idx in aggr_map.items():
             dup_line = by_idx.get(dup_idx)
-            src_line = by_idx.get(src_idx)
-            if dup_line is None or src_line is None:
+            if dup_line is None:
                 continue
-            # Use the pre-number-restoration text from the source line
-            # (still has <NUM> tokens) so the dup's own numbers can be
-            # inserted.  Falls back to _best_text when the attribute is
-            # not available (e.g. source was not postprocessed yet).
-            template = getattr(src_line, "_pre_aggr_text", None)
-            if not template:
-                template = self._best_text(src_line)
-            if not template:
+            text = self._resolve_dedup_text(
+                dup_idx,
+                by_idx,
+                dedup_map,
+                aggr_map,
+                aggr_nums,
+                resolved_cache,
+            )
+            if not text:
                 continue
-            # Restore numbers from this specific line's original
-            nums = aggr_nums.get(dup_idx, [])
-            if nums:
-                try:
-                    from CherryAI.gui.helpers.mode_adapter import (
-                        aggressive_restore_line,
-                    )
-                    template = aggressive_restore_line(template, nums)
-                except ImportError:
-                    pass
-            dup_line.postprocessed = template
+            dup_line.postprocessed = text
             dup_line.has_changes = True
             dup_line.issues = []
             dup_line.needs_retry = False
@@ -1985,6 +1981,96 @@ class PostprocessingStep(BaseStep):
         if restored:
             self._stats.lines_with_changes += restored
             logger.info("Restored %d deduplicated lines", restored)
+
+    def _resolve_dedup_text(
+        self,
+        idx: int,
+        by_idx: Dict[int, PostprocessLine],
+        dedup_map: Dict[int, int],
+        aggr_map: Dict[int, int],
+        aggr_nums: Dict[int, List[str]],
+        cache: Dict[int, str],
+        visiting: Optional[set[int]] = None,
+        *,
+        prefer_pre_aggr: bool = False,
+    ) -> str:
+        """Resolve final text for a line across chained dedup relationships."""
+        if idx in cache and not prefer_pre_aggr:
+            return cache[idx]
+
+        if visiting is None:
+            visiting = set()
+        if idx in visiting:
+            line = by_idx.get(idx)
+            return self._line_base_text(line, prefer_pre_aggr=prefer_pre_aggr)
+
+        visiting.add(idx)
+        try:
+            if idx in aggr_map:
+                src_idx = aggr_map[idx]
+                template = self._resolve_dedup_text(
+                    src_idx,
+                    by_idx,
+                    dedup_map,
+                    aggr_map,
+                    aggr_nums,
+                    cache,
+                    visiting,
+                    prefer_pre_aggr=True,
+                )
+                if not template:
+                    return ""
+
+                nums = aggr_nums.get(idx, [])
+                if nums:
+                    try:
+                        from CherryAI.gui.helpers.mode_adapter import (
+                            aggressive_restore_line,
+                        )
+                        template = aggressive_restore_line(template, nums)
+                    except ImportError:
+                        pass
+
+                cache[idx] = template
+                return template
+
+            if idx in dedup_map:
+                resolved = self._resolve_dedup_text(
+                    dedup_map[idx],
+                    by_idx,
+                    dedup_map,
+                    aggr_map,
+                    aggr_nums,
+                    cache,
+                    visiting,
+                )
+                cache[idx] = resolved
+                return resolved
+
+            line = by_idx.get(idx)
+            resolved = self._line_base_text(line, prefer_pre_aggr=prefer_pre_aggr)
+            if not prefer_pre_aggr:
+                cache[idx] = resolved
+            return resolved
+        finally:
+            visiting.discard(idx)
+
+    def _line_base_text(
+        self,
+        line: Optional[PostprocessLine],
+        *,
+        prefer_pre_aggr: bool = False,
+    ) -> str:
+        """Return the best available base text for a resolved line."""
+        if line is None:
+            return ""
+
+        if prefer_pre_aggr:
+            template = getattr(line, "_pre_aggr_text", None)
+            if template and template != "__DEDUP__":
+                return template
+
+        return self._best_text(line)
 
     @staticmethod
     def _best_text(line: PostprocessLine) -> str:

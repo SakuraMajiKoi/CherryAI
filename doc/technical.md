@@ -538,9 +538,9 @@ TABLE OF CONTENTS
        - **Phase 25 Integration:** CostsStep (renamed from EstimationStep) and QAStep manifest bindings:
          - Analysis results: InputLines, InputTokens, OutputTokens (int fields)
          - ValidationRules nested: PlaceholderPreservation, AnchorPreservation,
-           JapaneseCharacterDetection, SpeakerFormat, QuoteBalance, EmptyTranslation
+           SourceLanguageDetection, SpeakerFormat, QuoteBalance, EmptyTranslation
        - **Phase 26 Integration:** QAStep and TranslationStep manifest bindings:
-         - QAOptions nested: RerunPolicy (text), MaxJapaneseChars (int), MaxLineLength (int)
+         - QAOptions nested: RerunPolicy (text), MaxSourceLanguageChars (int), MaxLineLength (int)
          - RequestOptions nested: Model (text), Temperature (float), LinesPerChunk (int),
            RetryStrategy (text), MaxRetries (int), EnableRequestCaching (bool),
            LineByLineMode (bool), ContextLines (int), Thinking (bool), ThinkingBudget (int), ReasoningEffort (str: low/medium/high)
@@ -713,12 +713,12 @@ TABLE OF CONTENTS
          - output_inject._update_dirty_flags(): reads flags and updates indicator labels
          - input_extract._on_import_translations(): selection dialog + per-field and per-section import logic
          - _ImportTranslationDialog: Toplevel with Line Fields and Settings Sections checkbox groups
-         - input_extract._import_line_fields(): per-field import with skip_new_lines option, canonical `tags` merge, legacy `tag` migration, and dedup placeholder guards that reject `tl`/postprocess/QA/wordwrap imports when either side has `prepro == __DEDUP__`
+         - input_extract._import_line_fields(): per-field import with skip_new_lines option, canonical `tags` merge, legacy `tag` migration, and a dedup placeholder guard that rejects only `tl` import when either side has `prepro == __DEDUP__`
          - input_extract._import_settings_sections(): per-section import of manifest top-level and step_state keys
          - input_extract._load_selected_paths(): non-destructive file addition with source root validation
          - input_extract._add_files_to_existing_manifest(): builds file_infos/lines, calls mgr.add_files(), copies new originals
          - ManifestManager.add_files(): merges new files into sorted filedir, recomputes contiguous idx, preserves existing line data
-         - ManifestManager canonicalizes `lines[]` on load/save/set_lines: merges legacy `tag` into `tags`, clears translation-stage text from dedup placeholder rows, and writes canonical key order `idx`, `tags`, `orig`, `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, then auxiliary fields
+         - ManifestManager canonicalizes `lines[]` on load/save/set_lines: merges legacy `tag` into `tags` and writes canonical key order `idx`, `tags`, `orig`, `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, then auxiliary fields without stripping later-stage fields from dedup placeholder rows
          - output_inject._safe_output_format(): prevents ValueError on empty/invalid OutputFormat string
          - Preview tree headings: "Idx" → "Project", "#" → "File"; display uses 1-based global idx
          - TranslationOptions.skip_already_translated: bool field for skipping translated lines
@@ -1354,7 +1354,7 @@ class ManifestManager:
         """Update validation rules in manifest."""
     
     def get_qa_options(self) -> Dict[str, Any]:
-        """Get QA options (RerunPolicy, MaxJapaneseChars, etc.)."""
+        """Get QA options (RerunPolicy, MaxSourceLanguageChars, etc.)."""
     
     def set_qa_options(self, options: Dict[str, Any]) -> None:
         """Update QA options in manifest."""
@@ -1972,8 +1972,8 @@ Phase 1 reversal (MUST run before LLM recovery to avoid token corruption):
 Phase 2: recover_line(enable_placeholder_recovery=False) — bracket/quote balance (anchor-relative with ANCHOR_EQUIVS equivalence), whitespace normalization on restored text
 7. Symbol Conversion (P70, optional reverse)
 After all lines:
-8. Deduplication Restoration (P90) — copy postprocessed text from source lines
-9. Aggressive Dedup Restoration (P5) — restore numbers from per-line data
+8. Deduplication Restoration (P90) — recursively resolve source text through chained `dedup_map` / `aggr_dedup_map` links using `postpro → tl → prepro → orig`
+9. Aggressive Dedup Restoration (P5) — restore numbers from per-line data, including sources reached through chained dedup resolution
 
 =============================================================================
 

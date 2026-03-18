@@ -183,7 +183,7 @@ python -m pytest CherryAI/dev/test_input_import_fixes.py CherryAI/dev/test_table
 The active-project load reset and canonical tag import changes are covered by another focused set:
 
 - `dev/test_app_startup.py` verifies that clearing `last_manifest` removes the INI key, session-key storage uses `[session]`, and activating a loaded project flushes tab runtime state before entering the new manifest.
-- `dev/test_input_import_fixes.py` verifies canonical line ordering, `tags` merge semantics, and dedup-safe import behavior that blocks translation-stage text on `__DEDUP__` rows.
+- `dev/test_input_import_fixes.py` verifies canonical line ordering, `tags` merge semantics, `tl`-only dedup import blocking, and that dedup rows retain imported or generated later-stage fields during manifest normalization.
 - `dev/test_lightvn_fixes.py` verifies that parser tags still flow through `LoadedFile.tags` but are stored via the canonical `tags` helper instead of legacy `tag` writes.
 
 Verified command:
@@ -1116,7 +1116,7 @@ Settings helper methods for processing function integration (Task 21.3).
 | `test_returns_dict` | Returns dictionary type |
 | `test_contains_placeholder_preservation` | PlaceholderPreservation (bool) |
 | `test_contains_anchor_preservation` | AnchorPreservation key |
-| `test_contains_japanese_detection` | JapaneseCharacterDetection key |
+| `test_contains_source_language_detection` | SourceLanguageDetection key |
 | `test_contains_speaker_format` | SpeakerFormat key |
 | `test_contains_quote_balance` | QuoteBalance key |
 | `test_contains_empty_translation` | EmptyTranslation key |
@@ -1128,7 +1128,7 @@ Settings helper methods for processing function integration (Task 21.3).
 |------|---------|
 | `test_returns_dict` | Returns dictionary type |
 | `test_contains_rerun_policy` | RerunPolicy key present |
-| `test_contains_max_japanese_chars` | MaxJapaneseChars (int) |
+| `test_contains_max_source_language_chars` | MaxSourceLanguageChars (int) |
 | `test_contains_max_line_length` | MaxLineLength (int) |
 
 #### TestGetPostprocessingOptions (10 tests)
@@ -3946,7 +3946,7 @@ per-line tag storage, and top-N group limiting.
 
 ---
 
-### dev/test_dedup_pipeline.py (33 tests)
+### dev/test_dedup_pipeline.py (37 tests)
 
 GUI dedup pipeline tests validating apply_dedup_batch, apply_aggressive_dedup_batch, preprocessing integration, postprocessing _best_text resolution, and dedup restoration end-to-end.
 
@@ -3978,7 +3978,7 @@ GUI dedup pipeline tests validating apply_dedup_batch, apply_aggressive_dedup_ba
 | `test_mask_captures_numbers` | Numbers captured during masking |
 | `test_restore_puts_numbers_back` | Numbers restored from list |
 
-#### TestApplyPreprocessingDedup (9 tests)
+#### TestApplyPreprocessingDedup (10 tests)
 
 | Test | Purpose |
 |------|---------|  
@@ -3991,6 +3991,7 @@ GUI dedup pipeline tests validating apply_dedup_batch, apply_aggressive_dedup_ba
 | `test_combined_standard_and_aggressive` | Both dedup types in one pass |
 | `test_progress_callback` | progress_cb called with float values |
 | `test_dedup_map_string_keys_for_json` | Map keys are strings for JSON |
+| `test_standard_dedup_can_resolve_aggressive_source_chain` | Standard dedup rows resolve through aggressive dedup sources during postprocess restoration |
 
 #### TestBestText (7 tests)
 
@@ -9932,14 +9933,14 @@ QA step manifest integration for Phase 26 Task 26.1.
 | `test_load_rerun_policy` | Loads RerunPolicy |
 | `test_rerun_policy_default_failed_only` | Default is FailedOnly |
 
-#### TestQAOptionsMaxJapaneseChars (4 tests) - TASK 26.1
+#### TestQAOptionsMaxSourceLanguageChars (4 tests) - TASK 26.1
 
 | Test | Purpose |
 |------|---------|
-| `test_save_max_japanese_chars` | Saves to manifest |
-| `test_load_max_japanese_chars` | Loads from manifest |
-| `test_max_japanese_chars_default_4` | Default is 4 |
-| `test_max_japanese_chars_clamped` | Values clamped to min 0 |
+| `test_save_max_source_language_chars` | Saves to manifest |
+| `test_load_max_source_language_chars` | Loads from manifest |
+| `test_max_source_language_chars_default_4` | Default is 4 |
+| `test_max_source_language_chars_clamped` | Values clamped to min 0 |
 
 #### TestQAOptionsMaxLineLength (4 tests) - TASK 26.1
 

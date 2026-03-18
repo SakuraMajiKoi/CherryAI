@@ -37,6 +37,7 @@ from CherryAI.functions.manifest_fields import (
     save_nested_text_field,
     load_nested_text_field,
 )
+from CherryAI.functions.validation import normalize_qa_rerun_policy, validate_qa_line
 
 if TYPE_CHECKING:
     from CherryAI.gui.state.store import SessionState
@@ -66,6 +67,7 @@ class IssueType(Enum):
     PLACEHOLDER_MANGLED = "placeholder_mangled"
     ANCHOR_MISSING = "anchor_missing"
     ANCHOR_EXTRA = "anchor_extra"
+    SOURCE_LANGUAGE_REMAINING = "japanese_remaining"
     JAPANESE_REMAINING = "japanese_remaining"
     SPEAKER_FORMAT_LOST = "speaker_format_lost"
     QUOTE_IMBALANCE = "quote_imbalance"
@@ -110,11 +112,19 @@ class QALine:
 
     idx: int
     original: str
+    translated: str = ""
     qa_text: str = ""
     overwrite_text: str = ""
     issues: List[QAIssue] = field(default_factory=list)
     accepted: bool = False
     rejected: bool = False
+
+    def __post_init__(self) -> None:
+        """Keep the legacy translated alias synchronized with qa_text."""
+        if self.qa_text and not self.translated:
+            self.translated = self.qa_text
+        elif self.translated and not self.qa_text:
+            self.qa_text = self.translated
 
     @property
     def has_issues(self) -> bool:
@@ -133,6 +143,11 @@ class QALine:
     def issue_count(self) -> int:
         """Count of unfixed issues."""
         return sum(1 for issue in self.issues if not issue.fixed)
+
+    @property
+    def effective_qa_text(self) -> str:
+        """Return the actual text under QA review for this line."""
+        return self.qa_text if self.qa_text.strip() else self.original
 
 
 @dataclass
@@ -156,9 +171,16 @@ class QAOptions:
     check_speaker_format: bool = True
     check_quote_balance: bool = True
     check_empty: bool = True
+    max_source_language_chars: int = 4
     max_japanese_chars: int = 4
     max_line_length: int = 0  # 0 = no limit
-    rerun_policy: str = "failed_only"  # failed_only, all, none
+    rerun_policy: str = "failed_only"
+
+    def __post_init__(self) -> None:
+        """Keep the legacy max_japanese_chars alias synchronized."""
+        if self.max_source_language_chars == 4 and self.max_japanese_chars != 4:
+            self.max_source_language_chars = self.max_japanese_chars
+        self.max_japanese_chars = self.max_source_language_chars
 
 
 class QAStep(BaseStep):
@@ -197,11 +219,11 @@ class QAStep(BaseStep):
             description="Check that < > [ ] { } characters are preserved",
         ),
         ValidationRule(
-            name="Japanese Character Detection",
+            name="Source Language Detection",
             enabled=True,
-            issue_type=IssueType.JAPANESE_REMAINING,
+            issue_type=IssueType.SOURCE_LANGUAGE_REMAINING,
             severity=IssueSeverity.WARNING,
-            description="Flag lines with remaining Japanese characters",
+            description="Flag lines with remaining source-language characters or markers",
         ),
         ValidationRule(
             name="Speaker Format",
@@ -478,7 +500,7 @@ class QAStep(BaseStep):
         rule_to_manifest_key = {
             "Placeholder Preservation": "PlaceholderPreservation",
             "Anchor Preservation": "AnchorPreservation",
-            "Japanese Character Detection": "JapaneseCharacterDetection",
+            "Source Language Detection": "SourceLanguageDetection",
             "Speaker Format": "SpeakerFormat",
             "Quote Balance": "QuoteBalance",
             "Empty Translation": "EmptyTranslation",
@@ -597,27 +619,27 @@ class QAStep(BaseStep):
         frame = ttk.LabelFrame(parent, text="QA Options", padding=10)
         frame.pack(fill="x", padx=5, pady=5)
 
-        # Max Japanese characters
-        jp_frame = ttk.Frame(frame)
-        jp_frame.pack(fill="x", pady=2)
+        # Max source-language characters
+        source_frame = ttk.Frame(frame)
+        source_frame.pack(fill="x", pady=2)
 
-        ttk.Label(jp_frame, text="Max Japanese chars:").pack(side="left")
-        self._max_jp_var = tk.IntVar(value=self._qa_options.max_japanese_chars)
-        max_jp_spinbox = ttk.Spinbox(
-            jp_frame,
+        ttk.Label(source_frame, text="Max source-language chars:").pack(side="left")
+        self._max_source_var = tk.IntVar(value=self._qa_options.max_source_language_chars)
+        max_source_spinbox = ttk.Spinbox(
+            source_frame,
             from_=0,
             to=20,
-            textvariable=self._max_jp_var,
+            textvariable=self._max_source_var,
             width=5,
         )
-        max_jp_spinbox.pack(side="right")
+        max_source_spinbox.pack(side="right")
         
-        # TASK 26.1: Bind max Japanese chars to manifest
+        # TASK 26.1: Bind max source-language chars to manifest
         binding = bind_spinbox_to_field(
-            spinbox=max_jp_spinbox,
-            var=self._max_jp_var,
+            spinbox=max_source_spinbox,
+            var=self._max_source_var,
             manager_getter=lambda: self.manifest_manager,
-            field_key="MaxJapaneseChars",
+            field_key="MaxSourceLanguageChars",
             min_val=0,
             max_val=20,
             default=4,
@@ -658,7 +680,12 @@ class QAStep(BaseStep):
         policy_frame.pack(fill="x", pady=5)
 
         ttk.Label(policy_frame, text="Re-run policy:").pack(anchor="w")
-        self._rerun_var = tk.StringVar(value=self._qa_options.rerun_policy)
+        initial_policy = {
+            "failed_only": "FailedOnly",
+            "all": "All",
+            "none": "None",
+        }.get(normalize_qa_rerun_policy(self._qa_options.rerun_policy), "FailedOnly")
+        self._rerun_var = tk.StringVar(value=initial_policy)
         policies = [
             ("Failed only", "FailedOnly"),
             ("All lines", "All"),
@@ -745,7 +772,7 @@ class QAStep(BaseStep):
                 qa_input = get_all_lines_for_stage(mgr, "qa")
                 for i, ln in enumerate(manifest_lines):
                     stored_qa = str(ln.get("qa", "") or "")
-                    qa_lines.append(stored_qa or (qa_input[i] if i < len(qa_input) else ""))
+                    qa_lines.append(stored_qa)
                     overwrite.append(str(ln.get("qa_overwrite", "") or ""))
 
         # Fallback: session data
@@ -994,13 +1021,14 @@ class QAStep(BaseStep):
             return
 
         # Update options
-        self._qa_options.max_japanese_chars = self._max_jp_var.get()
+        self._qa_options.max_source_language_chars = self._max_source_var.get()
+        self._qa_options.max_japanese_chars = self._qa_options.max_source_language_chars
         self._qa_options.max_line_length = self._max_len_var.get()
         self._qa_options.rerun_policy = self._rerun_var.get()
 
         # Determine which lines to check
         lines_to_check: List[QALine] = []
-        policy = self._qa_options.rerun_policy
+        policy = normalize_qa_rerun_policy(self._qa_options.rerun_policy)
 
         for line in self._lines:
             if policy == "all":
@@ -1035,163 +1063,53 @@ class QAStep(BaseStep):
             lines: Lines to check.
         """
         try:
-            # Import validation functions
-            try:
-                from CherryAI.functions.validation import (
-                    validate_placeholder_preserved,
-                    detect_speaker_dialogue_format,
-                    has_japanese,
-                    count_japanese,
-                    extract_anchors,
-                )
-
-                has_validation = True
-            except ImportError:
-                has_validation = False
-                logger.warning("Validation module not available")
+            source_language, target_language = self._get_project_languages()
+            code_patterns = (
+                self.manifest_manager.get_code_patterns()
+                if self.manifest_manager is not None
+                else []
+            )
+            validation_rules = self._get_validation_rule_map()
+            issue_type_map = {
+                "placeholder_missing": IssueType.PLACEHOLDER_MISSING,
+                "placeholder_extra": IssueType.PLACEHOLDER_EXTRA,
+                "anchor_missing": IssueType.ANCHOR_MISSING,
+                "source_language_remaining": IssueType.SOURCE_LANGUAGE_REMAINING,
+                "speaker_format_lost": IssueType.SPEAKER_FORMAT_LOST,
+                "quote_imbalance": IssueType.QUOTE_IMBALANCE,
+                "line_too_long": IssueType.LINE_TOO_LONG,
+                "empty_translation": IssueType.EMPTY_TRANSLATION,
+            }
+            severity_map = {
+                "error": IssueSeverity.ERROR,
+                "warning": IssueSeverity.WARNING,
+                "info": IssueSeverity.INFO,
+            }
 
             for line in lines:
                 # Clear old issues
                 line.issues = []
-
-                # Skip empty translations check
-                if not line.qa_text.strip():
-                    if self._is_rule_enabled("Empty Translation"):
-                        line.issues.append(
-                            QAIssue(
-                                line_idx=line.idx,
-                                issue_type=IssueType.EMPTY_TRANSLATION,
-                                severity=IssueSeverity.ERROR,
-                                message="Translation is empty",
-                                suggestion="Retranslate this line",
-                                auto_fixable=False,
-                            )
+                findings = validate_qa_line(
+                    original=line.original,
+                    qa_text=line.qa_text,
+                    validation_rules=validation_rules,
+                    max_source_language_chars=self._qa_options.max_source_language_chars,
+                    max_line_length=self._qa_options.max_line_length,
+                    source_language=source_language,
+                    target_language=target_language,
+                    code_patterns=code_patterns,
+                )
+                for finding in findings:
+                    line.issues.append(
+                        QAIssue(
+                            line_idx=line.idx,
+                            issue_type=issue_type_map.get(finding.issue_type, IssueType.CUSTOM),
+                            severity=severity_map.get(finding.severity, IssueSeverity.WARNING),
+                            message=finding.message,
+                            suggestion=finding.suggestion,
+                            auto_fixable=finding.auto_fixable,
                         )
-                    continue
-
-                # Placeholder check
-                if self._is_rule_enabled("Placeholder Preservation") and has_validation:
-                    result = validate_placeholder_preserved(line.original, line.qa_text)
-                    if not result.is_valid:
-                        for ph in result.missing_placeholders:
-                            line.issues.append(
-                                QAIssue(
-                                    line_idx=line.idx,
-                                    issue_type=IssueType.PLACEHOLDER_MISSING,
-                                    severity=IssueSeverity.ERROR,
-                                    message=f"Missing placeholder: {ph}",
-                                    suggestion=f"Add {ph} to translation",
-                                    auto_fixable=False,
-                                )
-                            )
-                        for ph in result.extra_placeholders:
-                            line.issues.append(
-                                QAIssue(
-                                    line_idx=line.idx,
-                                    issue_type=IssueType.PLACEHOLDER_EXTRA,
-                                    severity=IssueSeverity.WARNING,
-                                    message=f"Extra placeholder: {ph}",
-                                    suggestion=f"Remove {ph} from translation",
-                                    auto_fixable=False,
-                                )
-                            )
-
-                # Japanese character check
-                if self._is_rule_enabled("Japanese Character Detection") and has_validation:
-                    jp_count = count_japanese(line.qa_text)
-                    if jp_count > self._qa_options.max_japanese_chars:
-                        line.issues.append(
-                            QAIssue(
-                                line_idx=line.idx,
-                                issue_type=IssueType.JAPANESE_REMAINING,
-                                severity=IssueSeverity.WARNING,
-                                message=f"{jp_count} Japanese characters remaining",
-                                suggestion="Review and translate remaining text",
-                                auto_fixable=False,
-                            )
-                        )
-
-                # Speaker format check
-                if self._is_rule_enabled("Speaker Format") and has_validation:
-                    orig_info = detect_speaker_dialogue_format(line.original)
-                    if orig_info.has_speaker_format:
-                        trans_info = detect_speaker_dialogue_format(line.qa_text)
-                        if not trans_info.has_speaker_format:
-                            line.issues.append(
-                                QAIssue(
-                                    line_idx=line.idx,
-                                    issue_type=IssueType.SPEAKER_FORMAT_LOST,
-                                    severity=IssueSeverity.ERROR,
-                                    message="Speaker: \"Dialogue\" format lost",
-                                    suggestion=(
-                                        f'Restore format: {orig_info.speaker_name}: "..."'
-                                    ),
-                                    auto_fixable=False,
-                                )
-                            )
-                        elif orig_info.is_balanced and not trans_info.is_balanced:
-                            line.issues.append(
-                                QAIssue(
-                                    line_idx=line.idx,
-                                    issue_type=IssueType.QUOTE_IMBALANCE,
-                                    severity=IssueSeverity.WARNING,
-                                    message="Quote imbalance in translation",
-                                    suggestion="Add missing closing quote",
-                                    auto_fixable=False,
-                                )
-                            )
-
-                # Quote balance check (generic)
-                if self._is_rule_enabled("Quote Balance"):
-                    quote_pairs = [('"', '"'), ("'", "'"), ("「", "」"), ("『", "』")]
-                    for open_q, close_q in quote_pairs:
-                        if line.qa_text.count(open_q) != line.qa_text.count(close_q):
-                            line.issues.append(
-                                QAIssue(
-                                    line_idx=line.idx,
-                                    issue_type=IssueType.QUOTE_IMBALANCE,
-                                    severity=IssueSeverity.WARNING,
-                                    message=f"Unbalanced quotes: {open_q}{close_q}",
-                                    suggestion=f"Check {open_q}{close_q} balance",
-                                    auto_fixable=False,
-                                )
-                            )
-                            break
-
-                # Anchor check
-                if self._is_rule_enabled("Anchor Preservation") and has_validation:
-                    orig_anchors = extract_anchors(line.original)
-                    trans_anchors = extract_anchors(line.qa_text)
-                    missing = orig_anchors - trans_anchors
-                    if missing:
-                        for anchor in missing:
-                            line.issues.append(
-                                QAIssue(
-                                    line_idx=line.idx,
-                                    issue_type=IssueType.ANCHOR_MISSING,
-                                    severity=IssueSeverity.WARNING,
-                                    message=f"Missing anchor character: {anchor}",
-                                    suggestion=f"Add {anchor} to translation",
-                                    auto_fixable=False,
-                                )
-                            )
-
-                # Line length check
-                if self._qa_options.max_line_length > 0:
-                    if len(line.qa_text) > self._qa_options.max_line_length:
-                        line.issues.append(
-                            QAIssue(
-                                line_idx=line.idx,
-                                issue_type=IssueType.LINE_TOO_LONG,
-                                severity=IssueSeverity.WARNING,
-                                message=(
-                                    f"Line too long: {len(line.qa_text)} chars "
-                                    f"(max {self._qa_options.max_line_length})"
-                                ),
-                                suggestion="Split or shorten the line",
-                                auto_fixable=False,
-                            )
-                        )
+                    )
 
             # Complete
             self._qa_status = QAStatus.COMPLETED
@@ -1464,15 +1382,19 @@ class QAStep(BaseStep):
         rule_to_manifest_key = {
             "Placeholder Preservation": "PlaceholderPreservation",
             "Anchor Preservation": "AnchorPreservation",
-            "Japanese Character Detection": "JapaneseCharacterDetection",
+            "Source Language Detection": "SourceLanguageDetection",
             "Speaker Format": "SpeakerFormat",
             "Quote Balance": "QuoteBalance",
             "Empty Translation": "EmptyTranslation",
         }
-        
+        stored_rules = self.manifest_manager.get_validation_rules()
+
         for rule in self._rules:
-            if rule.name in self._rule_vars:
-                rule.enabled = self._rule_vars[rule.name].get()
+            manifest_key = rule_to_manifest_key.get(rule.name)
+            if rule.name in self._rule_vars and manifest_key:
+                enabled = bool(stored_rules.get(manifest_key, rule.enabled))
+                self._rule_vars[rule.name].set(enabled)
+                rule.enabled = enabled
         
         logger.debug("Loaded %d validation rule states from manifest", len(self._manifest_bindings))
     
@@ -1487,11 +1409,12 @@ class QAStep(BaseStep):
         if not self._full_ui_built:
             return
         
-        # Load rerun policy (string field)
-        rerun_policy = load_nested_text_field(
-            self.manifest_manager, "QAOptions", "RerunPolicy", "FailedOnly"
-        )
-        self._rerun_var.set(rerun_policy)
+        qa_options = self.manifest_manager.get_qa_options()
+        self._rerun_var.set(str(qa_options.get("RerunPolicy", "FailedOnly") or "FailedOnly"))
+        self._max_source_var.set(int(qa_options.get("MaxSourceLanguageChars", 4) or 4))
+        self._qa_options.max_source_language_chars = self._max_source_var.get()
+        self._qa_options.max_japanese_chars = self._qa_options.max_source_language_chars
+        self._max_len_var.set(int(qa_options.get("MaxLineLength", 0) or 0))
         
         logger.debug("Loaded QA options from manifest")
 
@@ -1526,12 +1449,39 @@ class QAStep(BaseStep):
         # Store QA state (only when full UI is active and widgets exist)
         step_data = self.session.get_step(self.step_id).data
         step_data["qa_options"] = {
-            "max_japanese_chars": self._max_jp_var.get(),
+            "max_source_language_chars": self._max_source_var.get(),
             "max_line_length": self._max_len_var.get(),
             "rerun_policy": self._rerun_var.get(),
         }
         step_data["qa_lines"] = [line.qa_text for line in self._lines]
         step_data["qa_overwrite_lines"] = [line.overwrite_text for line in self._lines]
+
+    def _get_validation_rule_map(self) -> Dict[str, bool]:
+        """Return the active validation rule state keyed by manifest field."""
+        return {
+            "PlaceholderPreservation": self._is_rule_enabled("Placeholder Preservation"),
+            "AnchorPreservation": self._is_rule_enabled("Anchor Preservation"),
+            "SourceLanguageDetection": self._is_rule_enabled("Source Language Detection"),
+            "SpeakerFormat": self._is_rule_enabled("Speaker Format"),
+            "QuoteBalance": self._is_rule_enabled("Quote Balance"),
+            "EmptyTranslation": self._is_rule_enabled("Empty Translation"),
+        }
+
+    def _get_project_languages(self) -> Tuple[str, str]:
+        """Load source and target languages from manifest metadata."""
+        if self.manifest_manager is None:
+            return "Japanese", "English"
+
+        manifest_data = getattr(self.manifest_manager, "_manifest_data", {})
+        metadata = (
+            manifest_data.get("step_state", {})
+            .get("Information", {})
+            .get("data", {})
+            .get("metadata", {})
+        )
+        source_language = str(metadata.get("source_language", "Japanese") or "Japanese")
+        target_language = str(metadata.get("target_language", "English") or "English")
+        return source_language, target_language
 
     def _copy_selected_to_overwrite(self) -> None:
         """Copy the selected QA values into QA overwrite."""

@@ -22,10 +22,14 @@ from .modehelper import ANCHOR_EQUIVS, get_equivs
 # Unicode ranges for Japanese character detection
 HIRAGANA_RANGE = (0x3040, 0x309F)
 KATAKANA_RANGE = (0x30A0, 0x30FF)
+KATAKANA_PHONETIC_EXT_RANGE = (0x31F0, 0x31FF)
+HALFWIDTH_KATAKANA_RANGE = (0xFF66, 0xFF9F)
 KANJI_RANGE_MAIN = (0x4E00, 0x9FFF)
 KANJI_RANGE_EXT_A = (0x3400, 0x4DBF)
 HANGUL_RANGE_MAIN = (0xAC00, 0xD7AF)
 HANGUL_RANGE_JAMO = (0x1100, 0x11FF)
+CYRILLIC_RANGE_MAIN = (0x0400, 0x04FF)
+CYRILLIC_RANGE_SUPPLEMENT = (0x0500, 0x052F)
 
 _CJK_SOURCE_LANGUAGES = {
     "japanese",
@@ -46,12 +50,172 @@ _SOURCE_LANGUAGE_SCRIPT_MAP: Dict[str, str] = {
     "spanish": "latin",
     "portuguese": "latin",
     "italian": "latin",
-    "russian": "latin",
+    "russian": "cyrillic",
     "polish": "latin",
     "dutch": "latin",
     "turkish": "latin",
     "vietnamese": "latin",
 }
+
+_HAN_SHARED_LANGUAGES = {
+    "japanese",
+    "chinese",
+    "chinese (simplified)",
+    "chinese (traditional)",
+}
+_LATIN_LANGUAGE_MARKER_PATTERNS: Dict[str, re.Pattern[str]] = {
+    "german": re.compile(r"[ÄÖÜäöüß]"),
+    "french": re.compile(r"[ÀÂÆÇÈÉÊËÎÏÔŒÙÛÜŸàâæçèéêëîïôœùûüÿ]"),
+    "spanish": re.compile(r"[ÁÉÍÑÓÚÜáéíñóúü¡¿]"),
+    "portuguese": re.compile(r"[ÃÕÁÀÂÃÇÉÊÍÓÔÕÚÜãõáàâãçéêíóôõúü]"),
+    "turkish": re.compile(r"[ÇĞİIÖŞÜçğıöşü]"),
+    "polish": re.compile(r"[ĄĆĘŁŃÓŚŹŻąćęłńóśźż]"),
+    "vietnamese": re.compile(
+        r"[ĂÂĐÊÔƠƯăâđêôơưÁÀẢÃẠẤẦẨẪẬẮẰẲẴẶÉÈẺẼẸẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌỐỒỔỖỘỚỜỞỠỢÚÙỦŨỤỨỪỬỮỰÝỲỶỸỴáàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]"
+    ),
+}
+
+
+def _normalize_language_name(language: str) -> str:
+    """Normalize a language name for internal comparisons."""
+    return (language or "").strip().lower()
+
+
+def _language_script_group(language: str) -> Optional[str]:
+    """Return the dominant script group for a language when known."""
+    return _SOURCE_LANGUAGE_SCRIPT_MAP.get(_normalize_language_name(language))
+
+
+def _count_characters_in_ranges(text: str, ranges: List[Tuple[int, int]]) -> int:
+    """Count characters in any of the provided Unicode ranges."""
+    count = 0
+    for ch in text:
+        code = ord(ch)
+        if any(start <= code <= end for start, end in ranges):
+            count += 1
+    return count
+
+
+def _count_kana(text: str) -> int:
+    """Count kana characters used for Japanese-only detection."""
+    return _count_characters_in_ranges(
+        text,
+        [
+            HIRAGANA_RANGE,
+            KATAKANA_RANGE,
+            KATAKANA_PHONETIC_EXT_RANGE,
+            HALFWIDTH_KATAKANA_RANGE,
+        ],
+    )
+
+
+def _count_han(text: str) -> int:
+    """Count unified Han ideographs."""
+    return _count_characters_in_ranges(text, [KANJI_RANGE_MAIN, KANJI_RANGE_EXT_A])
+
+
+def _count_hangul(text: str) -> int:
+    """Count Hangul characters."""
+    return _count_characters_in_ranges(text, [HANGUL_RANGE_MAIN, HANGUL_RANGE_JAMO])
+
+
+def _count_cyrillic(text: str) -> int:
+    """Count Cyrillic characters."""
+    return _count_characters_in_ranges(
+        text,
+        [CYRILLIC_RANGE_MAIN, CYRILLIC_RANGE_SUPPLEMENT],
+    )
+
+
+def _merge_spans(spans: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+    """Merge overlapping spans."""
+    if not spans:
+        return []
+
+    merged: List[Tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if not merged or start > merged[-1][1]:
+            merged.append((start, end))
+            continue
+        merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+    return merged
+
+
+def _strip_preserve_code_patterns(
+    text: str,
+    code_patterns: Optional[List[Dict[str, Any]]],
+) -> str:
+    """Remove preserve-action code pattern spans before source detection."""
+    if not text or not code_patterns:
+        return text
+
+    from CherryAI.functions.glossaries.code_glossary_functions import (
+        _extract_all_balanced_code,
+        generate_regex_pattern,
+    )
+
+    spans: List[Tuple[int, int]] = []
+    segments = _extract_all_balanced_code(text)
+
+    for cp in code_patterns:
+        if not isinstance(cp, dict):
+            continue
+        if cp.get("action", "preserve") != "preserve":
+            continue
+
+        pattern = cp.get("pattern", "")
+        raw_type = cp.get("raw_type", "UNKNOWN")
+        if not pattern:
+            continue
+
+        regex = generate_regex_pattern(pattern, raw_type)
+        try:
+            matches = list(re.finditer(regex, text))
+        except re.error:
+            continue
+
+        for match in matches:
+            start, end = match.span()
+            nested = any(
+                seg_start <= start and end <= seg_end
+                and (seg_start, seg_end) != (start, end)
+                for seg_start, seg_end, _seg_text in segments
+            )
+            if not nested:
+                spans.append((start, end))
+
+    if not spans:
+        return text
+
+    result: List[str] = []
+    last_end = 0
+    for start, end in _merge_spans(spans):
+        result.append(text[last_end:start])
+        result.append(" " * (end - start))
+        last_end = end
+    result.append(text[last_end:])
+    return "".join(result)
+
+
+@dataclass
+class SourceLanguageDetectionResult:
+    """Result of source-language residue detection in translated text."""
+
+    count: int
+    supported: bool
+    mode: str
+    cleaned_text: str = ""
+
+
+@dataclass
+class QAFinding:
+    """A shared QA finding produced outside the GUI layer."""
+
+    issue_type: str
+    severity: str
+    message: str
+    suggestion: str = ""
+    auto_fixable: bool = False
 
 
 class SkipReason(Enum):
@@ -803,6 +967,8 @@ def has_japanese(text: str) -> bool:
         code = ord(ch)
         if (HIRAGANA_RANGE[0] <= code <= HIRAGANA_RANGE[1] or
             KATAKANA_RANGE[0] <= code <= KATAKANA_RANGE[1] or
+            KATAKANA_PHONETIC_EXT_RANGE[0] <= code <= KATAKANA_PHONETIC_EXT_RANGE[1] or
+            HALFWIDTH_KATAKANA_RANGE[0] <= code <= HALFWIDTH_KATAKANA_RANGE[1] or
             KANJI_RANGE_MAIN[0] <= code <= KANJI_RANGE_MAIN[1] or
             KANJI_RANGE_EXT_A[0] <= code <= KANJI_RANGE_EXT_A[1]):
             return True
@@ -816,10 +982,263 @@ def count_japanese(text: str) -> int:
         code = ord(ch)
         if (HIRAGANA_RANGE[0] <= code <= HIRAGANA_RANGE[1] or
             KATAKANA_RANGE[0] <= code <= KATAKANA_RANGE[1] or
+            KATAKANA_PHONETIC_EXT_RANGE[0] <= code <= KATAKANA_PHONETIC_EXT_RANGE[1] or
+            HALFWIDTH_KATAKANA_RANGE[0] <= code <= HALFWIDTH_KATAKANA_RANGE[1] or
             KANJI_RANGE_MAIN[0] <= code <= KANJI_RANGE_MAIN[1] or
             KANJI_RANGE_EXT_A[0] <= code <= KANJI_RANGE_EXT_A[1]):
             count += 1
     return count
+
+
+def detect_source_language_content(
+    text: str,
+    source_language: str = "Japanese",
+    target_language: str = "English",
+    code_patterns: Optional[List[Dict[str, Any]]] = None,
+) -> SourceLanguageDetectionResult:
+    """Detect residual source-language content in translated text.
+
+    Detection rules vary by language pair:
+    - Japanese -> Chinese uses kana-only detection because Han characters are shared.
+    - Japanese -> non-Han targets can use full Japanese detection.
+    - Chinese -> Han-script targets are treated as unsupported.
+    - Korean -> non-Korean targets use Hangul detection.
+    - Latin-script languages use distinctive language markers when available.
+    - English and other indistinguishable same-script pairs are treated as unsupported.
+    """
+    cleaned_text = _strip_preserve_code_patterns(text, code_patterns)
+    source = _normalize_language_name(source_language or "Japanese")
+    target = _normalize_language_name(target_language or "English")
+
+    if source == "japanese":
+        if target in {"chinese", "chinese (simplified)", "chinese (traditional)"}:
+            return SourceLanguageDetectionResult(
+                count=_count_kana(cleaned_text),
+                supported=True,
+                mode="japanese_kana_only",
+                cleaned_text=cleaned_text,
+            )
+        return SourceLanguageDetectionResult(
+            count=count_japanese(cleaned_text),
+            supported=True,
+            mode="japanese_full",
+            cleaned_text=cleaned_text,
+        )
+
+    if source in {"chinese", "chinese (simplified)", "chinese (traditional)"}:
+        if target in _HAN_SHARED_LANGUAGES:
+            return SourceLanguageDetectionResult(
+                count=0,
+                supported=False,
+                mode="shared_han_unsupported",
+                cleaned_text=cleaned_text,
+            )
+        return SourceLanguageDetectionResult(
+            count=_count_han(cleaned_text),
+            supported=True,
+            mode="chinese_han",
+            cleaned_text=cleaned_text,
+        )
+
+    if source == "korean":
+        if target == "korean":
+            return SourceLanguageDetectionResult(
+                count=0,
+                supported=False,
+                mode="same_script_unsupported",
+                cleaned_text=cleaned_text,
+            )
+        return SourceLanguageDetectionResult(
+            count=_count_hangul(cleaned_text),
+            supported=True,
+            mode="korean_hangul",
+            cleaned_text=cleaned_text,
+        )
+
+    if source == "russian":
+        if _language_script_group(target_language) == "cyrillic":
+            return SourceLanguageDetectionResult(
+                count=0,
+                supported=False,
+                mode="same_script_unsupported",
+                cleaned_text=cleaned_text,
+            )
+        return SourceLanguageDetectionResult(
+            count=_count_cyrillic(cleaned_text),
+            supported=True,
+            mode="cyrillic",
+            cleaned_text=cleaned_text,
+        )
+
+    marker_pattern = _LATIN_LANGUAGE_MARKER_PATTERNS.get(source)
+    if marker_pattern is not None:
+        return SourceLanguageDetectionResult(
+            count=len(marker_pattern.findall(cleaned_text)),
+            supported=True,
+            mode="latin_markers",
+            cleaned_text=cleaned_text,
+        )
+
+    return SourceLanguageDetectionResult(
+        count=0,
+        supported=False,
+        mode="unsupported",
+        cleaned_text=cleaned_text,
+    )
+
+
+def normalize_qa_rerun_policy(policy: str) -> str:
+    """Normalize persisted QA rerun policy values to internal names."""
+    normalized = (policy or "").strip().lower().replace("_", "").replace(" ", "")
+    if normalized == "all":
+        return "all"
+    if normalized in {"failedonly", "failed"}:
+        return "failed_only"
+    if normalized in {"none", "skipchecked"}:
+        return "none"
+    return "failed_only"
+
+
+def validate_qa_line(
+    original: str,
+    qa_text: str,
+    validation_rules: Dict[str, bool],
+    max_source_language_chars: int = 4,
+    max_line_length: int = 0,
+    source_language: str = "Japanese",
+    target_language: str = "English",
+    code_patterns: Optional[List[Dict[str, Any]]] = None,
+) -> List[QAFinding]:
+    """Run shared QA checks for a single line.
+
+    The GUI passes the sparse ``qa`` field separately from the QA input chain.
+    When ``qa_text`` is empty, the stage-bounded ``original`` text is still the
+    effective content under QA review.
+    """
+    findings: List[QAFinding] = []
+    effective_text = qa_text if qa_text.strip() else original
+    source_detection_enabled = validation_rules.get(
+        "SourceLanguageDetection",
+        validation_rules.get("JapaneseCharacterDetection", True),
+    )
+
+    if not effective_text.strip():
+        if validation_rules.get("EmptyTranslation", True):
+            findings.append(
+                QAFinding(
+                    issue_type="empty_translation",
+                    severity="error",
+                    message="Translation is empty",
+                    suggestion="Retranslate this line",
+                )
+            )
+        return findings
+
+    if validation_rules.get("PlaceholderPreservation", True):
+        placeholder_result = validate_placeholder_preserved(original, effective_text)
+        if not placeholder_result.is_valid:
+            for placeholder in placeholder_result.missing_placeholders:
+                findings.append(
+                    QAFinding(
+                        issue_type="placeholder_missing",
+                        severity="error",
+                        message=f"Missing placeholder: {placeholder}",
+                        suggestion=f"Add {placeholder} to translation",
+                    )
+                )
+            for placeholder in placeholder_result.extra_placeholders:
+                findings.append(
+                    QAFinding(
+                        issue_type="placeholder_extra",
+                        severity="warning",
+                        message=f"Extra placeholder: {placeholder}",
+                        suggestion=f"Remove {placeholder} from translation",
+                    )
+                )
+
+    if source_detection_enabled:
+        source_result = detect_source_language_content(
+            effective_text,
+            source_language=source_language,
+            target_language=target_language,
+            code_patterns=code_patterns,
+        )
+        if source_result.supported and source_result.count > max_source_language_chars:
+            findings.append(
+                QAFinding(
+                    issue_type="source_language_remaining",
+                    severity="warning",
+                    message=(
+                        f"{source_result.count} source-language character(s) or marker(s) remain"
+                    ),
+                    suggestion="Review and translate remaining source-language text",
+                )
+            )
+
+    if validation_rules.get("SpeakerFormat", True):
+        orig_info = detect_speaker_dialogue_format(original)
+        if orig_info.has_speaker_format:
+            trans_info = detect_speaker_dialogue_format(effective_text)
+            if not trans_info.has_speaker_format:
+                findings.append(
+                    QAFinding(
+                        issue_type="speaker_format_lost",
+                        severity="error",
+                        message='Speaker: "Dialogue" format lost',
+                        suggestion=f'Restore format: {orig_info.speaker_name}: "..."',
+                    )
+                )
+            elif orig_info.is_balanced and not trans_info.is_balanced:
+                findings.append(
+                    QAFinding(
+                        issue_type="quote_imbalance",
+                        severity="warning",
+                        message="Quote imbalance in translation",
+                        suggestion="Add missing closing quote",
+                    )
+                )
+
+    if validation_rules.get("QuoteBalance", True):
+        quote_pairs = [("\"", "\""), ("'", "'"), ("「", "」"), ("『", "』")]
+        for open_quote, close_quote in quote_pairs:
+            if effective_text.count(open_quote) != effective_text.count(close_quote):
+                findings.append(
+                    QAFinding(
+                        issue_type="quote_imbalance",
+                        severity="warning",
+                        message=f"Unbalanced quotes: {open_quote}{close_quote}",
+                        suggestion=f"Check {open_quote}{close_quote} balance",
+                    )
+                )
+                break
+
+    if validation_rules.get("AnchorPreservation", True):
+        original_anchors = extract_anchors(original)
+        translated_anchors = extract_anchors(effective_text)
+        missing_anchors = original_anchors - translated_anchors
+        for anchor in missing_anchors:
+            findings.append(
+                QAFinding(
+                    issue_type="anchor_missing",
+                    severity="warning",
+                    message=f"Missing anchor character: {anchor}",
+                    suggestion=f"Add {anchor} to translation",
+                )
+            )
+
+    if max_line_length > 0 and len(effective_text) > max_line_length:
+        findings.append(
+            QAFinding(
+                issue_type="line_too_long",
+                severity="warning",
+                message=(
+                    f"Line too long: {len(effective_text)} chars (max {max_line_length})"
+                ),
+                suggestion="Split or shorten the line",
+            )
+        )
+
+    return findings
 
 
 def has_cjk_or_hangul(text: str) -> bool:
@@ -1116,6 +1535,8 @@ def validate_line_post(
     max_japanese_chars: int = 4,
     check_anchors: bool = True,
     check_speaker_format: bool = True,
+    source_language: str = "Japanese",
+    target_language: str = "English",
     code_patterns: Optional[List[Dict[str, Any]]] = None,
 ) -> ValidationResult:
     """Validate a translated line.
@@ -1140,15 +1561,24 @@ def validate_line_post(
     errors: List[str] = []
     warnings: List[str] = []
     
-    # 1. Check Japanese character count in translation
-    jp_count = count_japanese(translated)
-    if jp_count > max_japanese_chars:
-        errors.append(
-            f"Translation contains {jp_count} Japanese characters "
-            f"(max allowed: {max_japanese_chars})"
-        )
-    elif jp_count > 0:
-        warnings.append(f"Translation contains {jp_count} Japanese character(s)")
+    # 1. Check source-language residue in translation
+    source_result = detect_source_language_content(
+        translated,
+        source_language=source_language,
+        target_language=target_language,
+        code_patterns=code_patterns,
+    )
+    if source_result.supported:
+        if source_result.count > max_japanese_chars:
+            errors.append(
+                f"Translation contains {source_result.count} source-language "
+                f"character(s) or marker(s) (max allowed: {max_japanese_chars})"
+            )
+        elif source_result.count > 0:
+            warnings.append(
+                f"Translation contains {source_result.count} source-language "
+                f"character(s) or marker(s)"
+            )
     
     # 2. Check anchor preservation
     if check_anchors:
@@ -1512,7 +1942,8 @@ class RetryReason(Enum):
     EMPTY_TRANSLATION = "empty_translation"
     PLACEHOLDER_MISSING = "placeholder_missing"
     SPEAKER_FORMAT_LOST = "speaker_format_lost"
-    TOO_MANY_JAPANESE = "too_many_japanese"
+    TOO_MANY_SOURCE_LANGUAGE = "too_many_source_language"
+    TOO_MANY_JAPANESE = "too_many_source_language"
     LINE_COUNT_MISMATCH = "line_count_mismatch"
     REPETITION_DETECTED = "repetition_detected"
     CODE_PATTERN_TRANSLATED = "code_pattern_translated"
@@ -1559,6 +1990,8 @@ def validate_translation_comprehensive(
     check_speaker_format: bool = True,
     check_anchors: bool = True,
     check_repetition: bool = True,
+    source_language: str = "Japanese",
+    target_language: str = "English",
     code_patterns: Optional[List[Dict[str, Any]]] = None,
 ) -> TranslationValidationResult:
     """Perform comprehensive validation on a translated line.
@@ -1617,16 +2050,25 @@ def validate_translation_comprehensive(
             errors.append("Speaker dialogue format lost in translation")
             retry_reasons.append(RetryReason.SPEAKER_FORMAT_LOST)
     
-    # 4. Japanese character limit
-    jp_count = count_japanese(translated)
-    if jp_count > max_japanese_chars:
-        errors.append(
-            f"Translation contains {jp_count} Japanese characters "
-            f"(max allowed: {max_japanese_chars})"
-        )
-        retry_reasons.append(RetryReason.TOO_MANY_JAPANESE)
-    elif jp_count > 0:
-        warnings.append(f"Translation contains {jp_count} Japanese character(s)")
+    # 4. Source-language residue limit
+    source_result = detect_source_language_content(
+        translated,
+        source_language=source_language,
+        target_language=target_language,
+        code_patterns=code_patterns,
+    )
+    if source_result.supported:
+        if source_result.count > max_japanese_chars:
+            errors.append(
+                f"Translation contains {source_result.count} source-language "
+                f"character(s) or marker(s) (max allowed: {max_japanese_chars})"
+            )
+            retry_reasons.append(RetryReason.TOO_MANY_SOURCE_LANGUAGE)
+        elif source_result.count > 0:
+            warnings.append(
+                f"Translation contains {source_result.count} source-language "
+                f"character(s) or marker(s)"
+            )
     
     # 5. Anchor preservation
     if check_anchors:
@@ -1681,6 +2123,8 @@ def validate_batch_comprehensive(
     check_speaker_format: bool = True,
     check_anchors: bool = True,
     check_repetition: bool = True,
+    source_language: str = "Japanese",
+    target_language: str = "English",
     code_patterns: Optional[List[Dict[str, Any]]] = None,
 ) -> BatchTranslationValidationResult:
     """Validate a batch of translations comprehensively.
@@ -1726,6 +2170,8 @@ def validate_batch_comprehensive(
             check_speaker_format=check_speaker_format,
             check_anchors=check_anchors,
             check_repetition=check_repetition,
+            source_language=source_language,
+            target_language=target_language,
             code_patterns=code_patterns,
         )
         line_results.append(result)

@@ -41,15 +41,6 @@ logger = logging.getLogger(__name__)
 
 DEDUP_PLACEHOLDER = "__DEDUP__"
 CONTENT_TAGS = frozenset({"file_end", "dialogue", "menu", "choice", "variable"})
-_DEDUP_BLOCKED_LINE_FIELDS = frozenset({
-    "tl",
-    "preedit",
-    "postpro",
-    "qa",
-    "qa_overwrite",
-    "wordwr",
-    "overwrite",
-})
 
 
 def parse_line_tags(raw_tags: Any) -> List[str]:
@@ -143,7 +134,6 @@ def canonicalize_line_dict(line_data: Dict[str, Any]) -> Dict[str, Any]:
         source.get("tag"),
         source.get("context_marker"),
     )
-    is_dedup_placeholder = str(source.get("prepro", "")).strip() == DEDUP_PLACEHOLDER
 
     result: Dict[str, Any] = {"idx": source.get("idx", 0)}
     if merged_tags:
@@ -151,8 +141,6 @@ def canonicalize_line_dict(line_data: Dict[str, Any]) -> Dict[str, Any]:
     result["orig"] = source.get("orig", "")
 
     for field in ("prepro", "tl", "postpro", "qa", "qa_overwrite", "wordwr"):
-        if is_dedup_placeholder and field in _DEDUP_BLOCKED_LINE_FIELDS:
-            continue
         if field in source and _should_keep_line_value(source[field]):
             result[field] = source[field]
 
@@ -166,8 +154,6 @@ def canonicalize_line_dict(line_data: Dict[str, Any]) -> Dict[str, Any]:
         "updated",
     ]
     for field in trailing_fields:
-        if is_dedup_placeholder and field in _DEDUP_BLOCKED_LINE_FIELDS:
-            continue
         if field in source and _should_keep_line_value(source[field]):
             result[field] = source[field]
 
@@ -180,8 +166,6 @@ def canonicalize_line_dict(line_data: Dict[str, Any]) -> Dict[str, Any]:
         )
     )
     for key in dynamic_keys:
-        if is_dedup_placeholder:
-            continue
         if _should_keep_line_value(source[key]):
             result[key] = source[key]
 
@@ -208,8 +192,6 @@ def canonicalize_line_dict(line_data: Dict[str, Any]) -> Dict[str, Any]:
     }
     for key, value in source.items():
         if key in handled_keys:
-            continue
-        if is_dedup_placeholder and key in _DEDUP_BLOCKED_LINE_FIELDS:
             continue
         if _should_keep_line_value(value):
             result[key] = value
@@ -764,7 +746,7 @@ class ManifestManager:
             "ValidationRules": {
                 "PlaceholderPreservation": defaults.get("validation_placeholder_preservation", True),
                 "AnchorPreservation": defaults.get("validation_anchor_preservation", True),
-                "JapaneseCharacterDetection": defaults.get("validation_japanese_character_detection", True),
+                "SourceLanguageDetection": defaults.get("validation_source_language_detection", defaults.get("validation_japanese_character_detection", True)),
                 "SpeakerFormat": defaults.get("validation_speaker_format", True),
                 "QuoteBalance": defaults.get("validation_quote_balance", True),
                 "EmptyTranslation": defaults.get("validation_empty_translation", True),
@@ -787,7 +769,7 @@ class ManifestManager:
             # === v3.0 QA Options ===
             "QAOptions": {
                 "RerunPolicy": defaults.get("qa_rerun_policy", "FailedOnly"),
-                "MaxJapaneseChars": defaults.get("qa_max_japanese_chars", 4),
+                "MaxSourceLanguageChars": defaults.get("qa_max_source_language_chars", defaults.get("qa_max_japanese_chars", 4)),
                 "MaxLineLength": defaults.get("qa_max_line_length", 0),
             },
             
@@ -2683,22 +2665,35 @@ class ManifestManager:
         Returns settings for translation validation:
         - PlaceholderPreservation: Check placeholder preservation
         - AnchorPreservation: Check anchor preservation
-        - JapaneseCharacterDetection: Detect remaining Japanese
+        - SourceLanguageDetection: Detect remaining source-language content
         - SpeakerFormat: Validate speaker format
         - QuoteBalance: Check quote balance
         - EmptyTranslation: Flag empty translations
         """
-        return deepcopy(self._manifest_data.get("ValidationRules", {
+        rules = deepcopy(self._manifest_data.get("ValidationRules", {
             "PlaceholderPreservation": True,
             "AnchorPreservation": True,
-            "JapaneseCharacterDetection": True,
+            "SourceLanguageDetection": True,
             "SpeakerFormat": True,
             "QuoteBalance": True,
             "EmptyTranslation": True,
         }))
+        if (
+            "SourceLanguageDetection" not in rules
+            and "JapaneseCharacterDetection" in rules
+        ):
+            rules["SourceLanguageDetection"] = rules["JapaneseCharacterDetection"]
+            self._manifest_data.setdefault("ValidationRules", {})["SourceLanguageDetection"] = rules["SourceLanguageDetection"]
+            self._manifest_data["ValidationRules"].pop("JapaneseCharacterDetection", None)
+            self._mark_dirty()
+        return rules
     
     def set_validation_rules(self, rules: Dict[str, Any]) -> None:
         """Set validation rules."""
+        rules = deepcopy(rules)
+        if "SourceLanguageDetection" not in rules and "JapaneseCharacterDetection" in rules:
+            rules["SourceLanguageDetection"] = rules["JapaneseCharacterDetection"]
+        rules.pop("JapaneseCharacterDetection", None)
         self._manifest_data["ValidationRules"] = rules
         self._mark_dirty()
     
@@ -2884,17 +2879,27 @@ class ManifestManager:
         
         Returns QA configuration:
         - RerunPolicy: Which lines to rerun
-        - MaxJapaneseChars: Max allowed Japanese characters
+        - MaxSourceLanguageChars: Max allowed source-language characters or markers
         - MaxLineLength: Max line length (0 = unlimited)
         """
-        return deepcopy(self._manifest_data.get("QAOptions", {
+        options = deepcopy(self._manifest_data.get("QAOptions", {
             "RerunPolicy": "FailedOnly",
-            "MaxJapaneseChars": 4,
+            "MaxSourceLanguageChars": 4,
             "MaxLineLength": 0,
         }))
+        if "MaxSourceLanguageChars" not in options and "MaxJapaneseChars" in options:
+            options["MaxSourceLanguageChars"] = options["MaxJapaneseChars"]
+            self._manifest_data.setdefault("QAOptions", {})["MaxSourceLanguageChars"] = options["MaxSourceLanguageChars"]
+            self._manifest_data["QAOptions"].pop("MaxJapaneseChars", None)
+            self._mark_dirty()
+        return options
     
     def set_qa_options(self, options: Dict[str, Any]) -> None:
         """Set QA options."""
+        options = deepcopy(options)
+        if "MaxSourceLanguageChars" not in options and "MaxJapaneseChars" in options:
+            options["MaxSourceLanguageChars"] = options["MaxJapaneseChars"]
+        options.pop("MaxJapaneseChars", None)
         self._manifest_data["QAOptions"] = options
         self._mark_dirty()
     

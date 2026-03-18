@@ -55,22 +55,35 @@ MODULE COUNTS (Verified January 2026)
 =============================================================================
 [Archived: Sessions 43–24 + Phase 62 → see doc/archived.md]
 
+### BUG FIX: QA Rerun Policy + Multilingual SourceLanguageDetection
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Fix the inert QA tab, keep the Quality Assurance column sparse, and replace Japanese-only QA residue checks with multilingual `SourceLanguageDetection` driven by manifest language metadata.
+
+**Changes:**
+1. **`gui/steps/qa.py`** — Fixed rerun policy handling for persisted values (`FailedOnly` / `All` / `None`), stopped the Quality Assurance column from falling back to stage input text, and moved per-line QA checking to shared validation helpers.
+2. **`functions/validation.py`** — Added shared QA validation, multilingual source-language residue detection, preserve-action code-pattern stripping, and language-pair-specific behavior such as kana-only Japanese→Chinese detection and marker-only German detection.
+3. **`functions/manifest_manager.py`** — Migrates legacy `JapaneseCharacterDetection` → `SourceLanguageDetection` and `MaxJapaneseChars` → `MaxSourceLanguageChars` when older manifests are loaded.
+4. **Tests** — Added focused regressions for sparse QA column loading, legacy manifest migration, preserve-pattern exclusion, and multilingual detection paths.
+
+**Tests:** Focused pytest run passed: `dev/test_validation.py`, `dev/test_qa_manifest.py`, `dev/test_api_validation.py`, `dev/test_settings_flow.py`, `dev/test_estimate_manifest.py`, `dev/test_manifest_fields.py`, and targeted QA classes in `dev/test_gui_v2.py` — 490 passed.
+
 ### BUG FIX: Safe Open Project Reset + Canonical Tags Import
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
 
-Goal: Make `File → Open Project...` safe when another project is already active, stop stale `last_manifest` entries from being recreated, and normalize manifest/import tagging so CherryAI writes canonical `tags` instead of leaking legacy `tag` or translation-stage text onto dedup placeholder rows.
+Goal: Make `File → Open Project...` safe when another project is already active, stop stale `last_manifest` entries from being recreated, and normalize manifest/import tagging so CherryAI writes canonical `tags` without leaking legacy `tag` fields or over-broad dedup import restrictions.
 
 **Root Causes:**
 1. `gui/app.py::_load_manifest_from_path()` reused the active runtime state instead of replaying the same cache-flush path as New Project, so step tabs could carry old loaded-file and preview state into the newly opened manifest.
 2. `functions/ini_manager.py` cleared `last_manifest` by writing an empty string, while INI startup seeding recreated the placeholder key on later loads.
 3. `gui/steps/input_extract.py` still wrote parser content tags into legacy `tag`, imported `tag` directly from other manifests, and replaced tags instead of merging them.
-4. Dedup placeholder rows (`prepro == "__DEDUP__"`) could acquire imported `tl`/postprocess/QA/wordwrap stage data, polluting the manifest with invalid downstream text.
+4. Dedup placeholder rows (`prepro == "__DEDUP__"`) needed a narrow Import Translations guard for `tl` only; the previous broader restriction interfered with valid later-stage imports and persistence.
 
 **Changes:**
 1. **`gui/app.py`** — Open Project now loads into a fresh `ManifestManager`, swaps it in only after successful load, resets `SessionState`, calls `on_new_project()` on all tabs, and then enters the saved step.
 2. **`functions/ini_manager.py`** — `set_last_manifest(None)` now removes `[session].last_manifest`, and startup seeding no longer recreates the key.
-3. **`functions/manifest_manager.py`** — Added canonical line normalization on load/save/set: merges legacy `tag` into `tags`, clears translation-stage text from dedup placeholder rows, and writes line keys in canonical order `idx`, `tags`, `orig`, `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, then auxiliary fields.
-4. **`gui/steps/input_extract.py`** — Parser tag propagation and manual tag edits now write canonical `tags`; translation import merges tags, removes duplicates, migrates legacy `tag` without writing it back, and blocks translation-stage imports for dedup placeholder rows.
+3. **`functions/manifest_manager.py`** — Added canonical line normalization on load/save/set: merges legacy `tag` into `tags` and writes line keys in canonical order `idx`, `tags`, `orig`, `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, then auxiliary fields without stripping valid later-stage fields from dedup placeholder rows.
+4. **`gui/steps/input_extract.py`** — Parser tag propagation and manual tag edits now write canonical `tags`; translation import merges tags, removes duplicates, migrates legacy `tag` without writing it back, and blocks only `tl` imports for dedup placeholder rows.
 5. **Tests** — Added focused regressions in `dev/test_app_startup.py`, `dev/test_input_import_fixes.py`, and `dev/test_lightvn_fixes.py`.
 
 **Tests:** Focused pytest run passed: `dev/test_app_startup.py`, `dev/test_input_import_fixes.py`, `dev/test_lightvn_fixes.py` — 85 tests passing.
@@ -562,16 +575,18 @@ Goal: Fix reduplication so that deduplicated lines (`__DEDUP__`) are correctly r
 1. `_restore_dedup_lines()` and the main postprocessing loop read preprocessing step data from `self.session.get_step(3).data` (SessionState), but `_update_step_data()` in the preprocessing step saves data via `self.set_step_data()` which writes to ManifestManager when loaded — NOT to the session. The two stores are not synchronized, so `dedup_map` was never seen by the postprocessing step.
 2. `_best_text()` resolution chain was `postprocessed → translated → original`, missing `preprocessed`. The intended priority per spec §5.9 is `postpro → tl → prepro → orig`.
 3. `PostprocessLine` dataclass lacked a `preprocessed` field, making it impossible to resolve from prepro when tl is empty (e.g., when running postprocessing before translation).
+4. Standard dedup restoration handled only direct sources, so chains such as `1636 -> 626 -> 619` failed when a standard dedup source was itself an aggressive dedup duplicate.
 
 **Changes:**
 1. **Data source fix** — Both `_restore_dedup_lines()` and the main postprocessing loop now read step 3 data from ManifestManager first (`mgr.get_step_data(3)`), falling back to session only when ManifestManager is unavailable.
 2. **`PostprocessLine.preprocessed` field** — Added `preprocessed: str = ""` field to the dataclass. `_refresh_lines()` now batch-reads `prepro` values from the manifest and populates this field.
 3. **`_best_text()` updated** — Resolution chain is now `postprocessed → translated → preprocessed → original`, matching the spec priority and skipping `__DEDUP__` sentinels at each level.
+4. **Chained dedup resolution** — `_restore_dedup_lines()` now resolves dedup text recursively across `dedup_map` and `aggr_dedup_map`, so a standard duplicate can inherit text from an aggressive dedup source after number restoration.
 
 **Files Modified:**
-- `gui/steps/postprocess.py` — `PostprocessLine` (preprocessed field), `_refresh_lines()` (prepro map), `_best_text()` (4-field priority), `_restore_dedup_lines()` (ManifestManager data source), main loop (ManifestManager data source)
+- `gui/steps/postprocess.py` — `PostprocessLine` (preprocessed field), `_refresh_lines()` (prepro map), `_best_text()` (4-field priority), `_restore_dedup_lines()` (ManifestManager data source + recursive chain resolution), main loop (ManifestManager data source)
 
-**Tests:** `dev/test_dedup_pipeline.py` — 33 tests (was 26; +3 TestBestText, +4 TestDedupRestoration)
+**Tests:** `dev/test_dedup_pipeline.py` — 37 tests with chained dedup/aggressive-dedup restoration coverage
 
 ---
 
@@ -2035,12 +2050,12 @@ Instead, use the bridge methods to sync processing results into ManifestManager.
 | Output Tokens | `OutputTokens` | int | 0 | estimation |
 | Placeholder Preservation | `ValidationRules.PlaceholderPreservation` | boolean | true | validation |
 | Anchor Preservation | `ValidationRules.AnchorPreservation` | boolean | true | validation |
-| Japanese Char Detection | `ValidationRules.JapaneseCharacterDetection` | boolean | true | validation |
+| Source Language Detection | `ValidationRules.SourceLanguageDetection` | boolean | true | validation |
 | Speaker Format | `ValidationRules.SpeakerFormat` | boolean | true | validation |
 | Quote Balance | `ValidationRules.QuoteBalance` | boolean | true | validation |
 | Empty Translation | `ValidationRules.EmptyTranslation` | boolean | true | validation |
 | Re-run Policy | `QAOptions.RerunPolicy` | enum | "FailedOnly" | qa |
-| Max Japanese Chars | `QAOptions.MaxJapaneseChars` | int | 4 | qa |
+| Max Source-Language Chars | `QAOptions.MaxSourceLanguageChars` | int | 4 | qa |
 | Max Line Length | `QAOptions.MaxLineLength` | int | 0 | qa |
 | Model | `RequestOptions.Model` | text | "" | api_client |
 | Temperature | `RequestOptions.Temperature` | float | 0.2 | api_client |

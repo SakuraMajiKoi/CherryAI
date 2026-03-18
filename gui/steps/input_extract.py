@@ -2013,14 +2013,12 @@ class InputExtractionStep(BaseStep):
                 line.pop("context_marker", None)
 
             for field in fields_to_copy:
-                if is_dedup_line and field in {
-                    "tl", "preedit", "postpro", "wordwr", "qa", "qa_overwrite",
-                }:
+                if is_dedup_line and field == "tl":
                     continue
                 if field in match and match[field]:
                     line[field] = match[field]
 
-            if selections.get("import_qa", False) and not is_dedup_line:
+            if selections.get("import_qa", False):
                 if not line.get("qa"):
                     if match.get("qa"):
                         line["qa"] = match["qa"]
