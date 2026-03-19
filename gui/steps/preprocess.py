@@ -1281,12 +1281,6 @@ class PreprocessingStep(BaseStep):
         # Persist each preprocessed line to the manifest
         mgr = self.manifest_manager
         if mgr is not None:
-            lines = mgr.get_lines()
-            # Build idx→line dict for O(1) lookups instead of O(N) iteration
-            idx_map: Dict[int, Dict] = {
-                ln.get("idx"): ln for ln in lines if ln.get("idx") is not None
-            }
-            dirty = False
             for idx, entry in enumerate(self._preview_lines):
                 if len(entry) == 4:
                     _orig, processed, _changes, line_tags = entry
@@ -1294,31 +1288,25 @@ class PreprocessingStep(BaseStep):
                     _orig, processed, _changes = entry[:3]
                     line_tags = []
 
-                manifest_line = idx_map.get(idx)
+                if mgr.is_line_locked(idx):
+                    continue
+
+                manifest_line = mgr.get_line(idx)
                 if manifest_line is None:
                     continue
 
                 orig = manifest_line.get("orig", "")
 
-                # Write tags
                 tags_str = ",".join(line_tags)
-                old_tags = manifest_line.get("tags", "")
-                if tags_str != old_tags:
-                    manifest_line["tags"] = tags_str
-                    dirty = True
-
-                # Skip writing prepro when it equals orig
-                if processed == orig:
-                    if "prepro" in manifest_line:
-                        del manifest_line["prepro"]
-                        dirty = True
+                if tags_str:
+                    mgr.set_line_field(idx, "tags", tags_str)
                 else:
-                    if manifest_line.get("prepro") != processed:
-                        manifest_line["prepro"] = processed
-                        dirty = True
+                    mgr.clear_line_field(idx, "tags")
 
-            if dirty:
-                mgr._mark_dirty()
+                if processed == orig:
+                    mgr.clear_line_field(idx, "prepro")
+                else:
+                    mgr.set_line_field(idx, "prepro", processed)
 
     def _reset_rules(self) -> None:
         """Reset rules to defaults."""

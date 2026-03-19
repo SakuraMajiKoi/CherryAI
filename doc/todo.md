@@ -55,6 +55,104 @@ MODULE COUNTS (Verified January 2026)
 =============================================================================
 [Archived: Sessions 43–24 + Phase 62 → see doc/archived.md]
 
+### IMPROVEMENT: Incremental Locked-Line Skip Optimization
+**Priority:** MEDIUM | **Status:** TODO | **Effort:** 3-5 hours
+
+Goal: Improve runtime performance for projects with many locked rows by skipping more expensive per-line work earlier in Preprocess, Translation, Postprocess, QA, and Wordwrap while keeping cross-line correctness intact.
+
+Constraints:
+1. Locked rows still need to participate in cross-line features such as deduplication, grouping, and any workflow that depends on neighboring/source-stage context.
+2. The current implementation intentionally keeps the shared manifest write guard as the correctness layer and only adds selective per-step skips where behavior is already safe.
+3. Any broader optimization needs a per-step plan so rows are not excluded from reads that remain necessary for status summaries, context formation, or recovery logic.
+
+Potential follow-up:
+1. Define a per-step read-versus-write matrix for locked rows.
+2. Add early filter paths only where stage logic is line-local and does not feed later batch calculations.
+3. Expand focused regression coverage once the skip plan is implemented.
+
+### BUG FIX: Wordwrap Invisible Width + Textbox Status Split + Responsive Apply
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Make Step 8 use Analysis-backed speaker detection during wrapping, recognize translated speaker aliases and parser fallback detection when manifest speaker data is missing, preserve leading indentation, rebalance PrettyWrap orphan tails more intelligently, count generic code normally unless the Code Database marked it invisible, split overflow results into `Exceeding` versus `New Textbox`, restore LightVN's required final injected `\w`, stop storing duplicate wrapped-line session data, and keep Apply responsive while wrapping and saving.
+
+**Root Causes:**
+1. Step 8 still relied on incomplete speaker allowlists instead of the full Analysis/parser data path, so translated prefixes such as `Young Horse Keeper:` could still count toward width and manifests with empty `characters[]` could lose speaker-ignore behavior entirely.
+2. Shared wrapping stripped intended leading indentation from lines that fit or were reflowed.
+3. PrettyWrap still used a weak greedy orphan heuristic, so balanced two-line splits such as `...,\nand ...` could degrade into one-word tail lines.
+4. Step 8 treated every overflow case as a generic exceed condition and kept a redundant `Overwrite Differs` filter, even when overflow had already been realized safely as explicit textbox separators.
+5. LightVN conditional dialogue injection still had a static-method `self` reference and could fail at export time with `name 'self' is not defined`.
+6. Step 8 still wrote a duplicate `wrapped_lines` session cache even though `lines[].wordwr` is the real persisted wrap output.
+7. Sparse manifest writes still ran on the Tk main thread after wrapping finished, so the UI progress bar appeared frozen during Apply.
+
+**Changes:**
+1. **`gui/steps/wordwrap_overwrite.py`** — `_get_ignore_codes()` now uses only manifest `code_patterns[]` entries marked `IsInvisible`; `_get_detected_speakers()` now accepts both original and translated aliases from manifest `characters[]` and falls back to parser `detect_speakers()` for the loaded preview rows when manifest speaker data is missing; `WrapLine` distinguishes `Exceeding` from `New Textbox`; `wrapped_lines` is no longer written into step session data; and Apply reports determinate progress while both wrapping and sparse `wordwr` persistence stay off the UI thread.
+2. **`functions/wordwrap.py`** — shared wrapping now preserves leading indentation, `IGNORE` speaker mode is restricted to detected speaker names passed in through config, PrettyWrap rebalances one-word orphan tails by searching better breakpoints within the same line count, `apply_new_textbox_injection()` inserts textbox separators only between overflow chunks, never after the final chunk, and ignore-pattern compilation accepts raw regex strings from the manifest.
+3. **`formats/LightVN.py`** — Explicit `wordwr` textbox separators are preserved between textboxes, parser injection restores exactly one final terminal `\w` when materializing dialogue output, and conditional-dialogue export no longer crashes on a stray `self` reference inside a static helper.
+4. **Tests** — Added focused regressions for translated speaker aliases, parser speaker-detection fallback, balanced PrettyWrap orphan handling, visible generic code counting, indentation preservation, non-persisted unsplittable overflow, `wrapped_lines` removal, `New Textbox` status behavior, and terminal-marker LightVN injection.
+5. **Docs** — Updated feature, technical, spec, test, and roadmap notes to match the verified Step 8 behavior.
+
+**Tests:** Expanded focused pytest run passed: `dev/test_wordwrap.py`, `dev/test_wordwrap_phase46.py`, `dev/test_lightvn_parser.py`, `dev/test_tag_wordwrap.py`, `dev/test_wordwrap_manifest.py`, `dev/test_output_injection.py` — 310 passed.
+
+### BUG FIX: Wordwrap Speaker Preservation + Explicit LightVN Textbox Separators
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Stop Wordwrap from deleting speaker prefixes when speaker width is ignored, preserve literal non-RPG break commands and escaped backslashes during wrapping, and make LightVN's full textbox separator (`\w` + newline + `"`) visible in parser defaults and stored `wordwr` output.
+
+**Root Causes:**
+1. Shared speaker mode `IGNORE` removed the speaker prefix entirely instead of excluding it from width calculations only.
+2. Shared wrap preprocessing treated literal backslash commands such as `\n` as RPG-style control codes even for non-RPG formats, which collapsed explicit wrap boundaries and could strip unrelated escaped backslashes.
+3. LightVN exposed only `\w` as `NewTextboxInjection`, while the real engine boundary is `\w` followed by newline and the next opening quote.
+4. LightVN injection preserved multiline wrapped dialogue, but it did not recognize a preformatted textbox separator string already embedded in `wordwr`.
+
+**Changes:**
+1. **`functions/wordwrap.py`** — `IGNORE` speaker mode now keeps the speaker prefix in output while excluding it from width counting; non-RPG literal `\n` / `\r\n` commands are converted into explicit wrap boundaries; `apply_new_textbox_injection()` now writes parser separator strings directly into wrapped output when a tag supports new-textbox overflow.
+2. **`gui/steps/wordwrap_overwrite.py`** — Step 8 now uses the shared textbox-injection helper after wrapping and documents speaker-ignore behavior as width-only.
+3. **`formats/LightVN.py`** — Dialogue defaults now expose `NewTextboxInjection = "\\w\n\""`; injection preserves that explicit separator string when it already exists in `wordwr`.
+4. **Tests** — Added focused regressions for speaker preservation, literal linebreak preservation, non-RPG backslash preservation, explicit separator emission, and LightVN preformatted separator injection.
+5. **Docs** — Updated feature, technical, spec, test, and roadmap notes to match the verified behavior.
+
+**Tests:** Focused pytest run passed: `dev/test_wordwrap_phase46.py`, `dev/test_lightvn_parser.py`, `dev/test_tag_wordwrap.py`, `dev/test_wordwrap_manifest.py` — 186 passed.
+
+### BUG FIX: Manifest-Driven Wordwrap Formats + PrettyWrap Simplification
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Make the Wordwrap tab consume manifest formats directly so LightVN and future parser formats appear in Preview, keep wrapping scoped to each file format for safety, simplify wrap toggles to one PrettyWrap control, and document Wordwrap consistently as the ninth user-facing tab while keeping internal `step_id = 8`.
+
+**Root Causes:**
+1. The Preview `Format:` dropdown was still effectively static, so manifest formats such as `lightvn` did not reliably populate the selector.
+2. Wordwrap settings were still centered on one global tag-config list, which was unsafe once a project contained more than one parser format.
+3. Per-tag wrap behavior still exposed separate orphan/punctuation concepts instead of the intended single PrettyWrap toggle.
+4. Documentation and a subset of regressions still used the older "Wordwrap & Overwrite" naming or the pre-QA ordering.
+
+**Changes:**
+1. **`gui/steps/wordwrap_overwrite.py`** — Added manifest-driven per-format `FormatConfig` handling, per-line source format/path metadata, preview filtering by selected format, per-format enabled/disabled state, and per-tag enabled/default behavior. Apply now processes enabled formats sequentially but only wraps rows that belong to each row's own `filedir[].format`.
+2. **`functions/manifest_manager.py`** — Added `WordwrapSettings.PrettyWrap` and `WordwrapSettings.FormatConfigs` support plus format-config accessor helpers.
+3. **`functions/wordwrap.py`** — Added a single `pretty_wrap` config flag with compatibility fallback for legacy orphan/punctuation settings.
+4. **LightVN defaults** — Menu remains prefilled in Wordwrap but disabled by default because the parser exposes no-wrap width for that tag.
+5. **Tests** — Updated focused Wordwrap, manifest, and GUI regressions for per-format configs, PrettyWrap, and the QA-before-Wordwrap workflow order.
+6. **Docs** — Updated feature, technical, spec, test, and roadmap notes to match the verified behavior and naming.
+
+**Tests:** Focused pytest run passed: `dev/test_wordwrap_phase46.py`, `dev/test_tag_wordwrap.py`, `dev/test_wordwrap_manifest.py`, plus targeted `dev/test_gui_v2.py` assertions for step order and Wordwrap dataclasses — 154 passed.
+
+### BUG FIX: Wordwrap Apply Source + LightVN Textbox Realization
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Fix the live Step 8 failure where Apply/Refresh appeared to run but produced no visible Wordwrap result, keep Wordwrap aligned with canonical tag resolution, and let LightVN realize explicit multiline wrapped dialogue as multiple textboxes instead of losing overflow.
+
+**Root Causes:**
+1. `gui/steps/wordwrap_overwrite.py::_process_wrap()` wrapped `step_data["lines"]` instead of the already loaded preview rows in `self._lines`, so the background run could finish against an empty cache while the visible table stayed unchanged.
+2. Step 8 still resolved tags from legacy `tag` in some paths, which drifted from the manifest's canonical `tags` field.
+3. Step 8 treated `max_lines` as destructive truncation, which is incompatible with formats such as LightVN where overflow must become additional textboxes during injection.
+4. `formats/LightVN.py` did not preserve explicit multiline `wordwr` content as authoritative logical lines before textbox emission.
+
+**Changes:**
+1. **`gui/steps/wordwrap_overwrite.py`** — `_process_wrap()` now wraps the loaded preview rows, preserves the table's current Overwrite edits during recalculation, uses canonical tag resolution, and treats `max_lines` as an exceed check rather than truncation.
+2. **`formats/LightVN.py`** — Explicit multiline wrapped dialogue is now preserved and chunked into successive 3-line LightVN textboxes with the correct `...\w` + newline + next opening quote ordering during injection.
+3. **Tests** — Added focused regressions in `dev/test_wordwrap_phase46.py` and `dev/test_lightvn_parser.py`, plus updated the Wordwrap GUI subset in `dev/test_gui_v2.py`.
+4. **Docs** — Updated the Wordwrap rework note plus the feature/spec/technical/test documentation to match the verified runtime behavior.
+
+**Tests:** Focused pytest runs passed: `dev/test_wordwrap_phase46.py`, `dev/test_lightvn_parser.py`, `dev/test_lightvn_fixes.py` — 122 passed. GUI subset `dev/test_gui_v2.py -k wordwrap` — 9 passed.
+
 ### BUG FIX: QA Rerun Policy + Multilingual SourceLanguageDetection
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
 
@@ -1822,7 +1920,8 @@ FUTURE IDEAS (No Phase Commitment)
 ### Wordwrap Step Future Enhancements
 - ~~**Per-Tag Wordwrap Settings**: Tag-based wordwrap configuration with per-tag Width/BreakChar/MaxLines. TagWrapConfig dataclass, tag resolution (line tag → filedir type → "dialogue" fallback), manifest persistence via TagConfigs.~~ ✅ IMPLEMENTED
 - ~~**Parser-Driven Wrap Options**: Parsers auto-populate wordwrap settings (width, break char, max lines) based on the game engine format. `_apply_parser_wordwrap_defaults()` reads `wordwrap_for_tag()` and pre-populates per-tag configs. All settings remain editable.~~ ✅ IMPLEMENTED
-- ~~**Per-Tag Speaker Handling / Orphan / Punct Breaks**: SpeakerHandling, PreventOrphans, PreferPunctuationBreaks moved from global to per-tag configurable in TagWrapConfig. WordwrapConfig in functions/wordwrap.py extended with `prevent_orphan` and `prefer_punct_breaks` fields. `apply_wordwrap` uses `pretty_wrap` when either is enabled.~~ ✅ IMPLEMENTED
+- ~~**Manifest-Driven Format Scoping**: Preview format list comes from `filedir[].format`; wrapping is filtered and applied per format, with enable/disable control per format.~~ ✅ IMPLEMENTED
+- ~~**Per-Tag Enabled + PrettyWrap**: TagWrapConfig exposes Enabled and a single PrettyWrap toggle instead of separate orphan/punctuation controls.~~ ✅ IMPLEMENTED
 - ~~**New Textbox Handling**: Per-tag `new_textbox` and `new_textbox_injection` fields in TagWrapConfig. LightVN uses `\\w` as new textbox injection. UI shows checkbox + injection string entry per tag.~~ ✅ IMPLEMENTED
 - ~~**Parser display_name / tooltip**: ParserScript ABC extended with `display_name` and `tooltip` properties. LightVN implements both.~~ ✅ IMPLEMENTED
 - ~~**Output Format Restriction**: Output step detects parser format from filedir and defaults to INJECTION mode when a parser format is detected.~~ ✅ IMPLEMENTED
@@ -2079,12 +2178,12 @@ Instead, use the bridge methods to sync processing results into ManifestManager.
 | Width | `WordwrapSettings.Width` | int | 48 | wordwrap |
 | Break Char | `WordwrapSettings.BreakChar` | text | "" | wordwrap |
 | Max Lines | `WordwrapSettings.MaxLines` | int | 4 | wordwrap |
-| Prevent Orphans | `WordwrapSettings.PreventOrphans` | boolean | true | wordwrap |
-| Prefer Punctuation | `WordwrapSettings.PreferPunctuationBreaks` | boolean | true | wordwrap |
-| Speaker Handling | `WordwrapSettings.SpeakerHandling` | enum | "Sameline" | wordwrap |
+| Pretty Wrap | `WordwrapSettings.PrettyWrap` | boolean | true | wordwrap |
+| Speaker Handling | `WordwrapSettings.SpeakerHandling` | enum | "Count" | wordwrap |
 | Ignore Patterns | `WordwrapSettings.IgnorePatterns` | list | ["Angle","Square","Curly","En"] | wordwrap |
 | Typography | `WordwrapSettings.Typography` | text | "Western" | wordwrap |
 | Tag Configs | `WordwrapSettings.TagConfigs` | list | [] | wordwrap (per-tag) |
+| Format Configs | `WordwrapSettings.FormatConfigs` | list | [] | wordwrap (per-format) |
 | Preserve Folders | `OutputFormat.PreserveFolderStructure` | boolean | true | output |
 | Format | `OutputFormat.Format` | text | "" | output |
 | Pair Mode | `OutputFormat.PairMode` | text | "translated_only" | output |
@@ -2287,9 +2386,9 @@ before using them. Missing optionals never raise errors.
 | O2 | **Encryption** | `encrypt(path) → path` | Re-encrypt output file after injection. Situated *after* `inject()`. Must mirror the original encryption. | — (transparent to manifest) |
 | O3 | **Encoding** | `detect_encoding(path) → str` **or** `encoding: str` | Calculate or declare the file encoding. When absent the pipeline uses its own heuristic (`chardet` → UTF-8 fallback from `formats/__init__.py`). | `Options.Encoding` |
 | O4 | **Speaker Detection** | `detect_speakers(lines) → list[SpeakerInfo]` | Parse `Speaker: Dialogue` or format-specific speaker notation. Returns list of `SpeakerInfo(name, line_idx)`. When provided: auto-writes speakers to Analysis findings, disables the generic regex-based speaker detector in `functions/analysis.py` for this project. | `Analysis.speakers`, `characters[]` |
-| O5 | **Wordwrap Config** | `wordwrap_config: WordwrapConfig` | Engine-specific wrapping settings (`max_line_length`, `max_line_number`, `wordwrap_command`, `new_textbox_injection`). Written to manifest in Wordwrap step (Step 7) and loaded by it. | `Options.Wordwrap.*` |
-| O6 | **Wordwrap Function** | `wordwrap(line, config) → list[str]` | Custom wrapping logic that **replaces** the built-in `pretty_wrap`. When present, Step 7 calls this instead of `functions/wordwrap.py`. The return value is the wrapped lines list. | `lines[].wordwr` |
-| O9 | **Pretty Wrap Hook** | `pretty_wrap(text, width, break_char, max_lines) → Optional[str]` | Lighter core-wrap replacement. Replaces built-in `pretty_wrap` while keeping speaker handling and pipeline logic intact. Used for user-managed tags or as fallback when O6 is absent. | `lines[].wordwr` |
+| O5 | **Wordwrap Config** | `wordwrap_config: WordwrapConfig` | Engine-specific wrapping settings (`max_line_length`, `max_line_number`, `wordwrap_command`, `new_textbox_injection`). Step 8 loads these as editable defaults and the parser may later realize overflow using engine syntax during output. | `Options.Wordwrap.*` |
+| O6 | **Wordwrap Function** | `wordwrap(line, config) → list[str]` | Reserved parser-side custom wrapping hook. CherryAI currently keeps Step 8 on the shared `functions/wordwrap.py` path and uses parser wordwrap data mainly as defaults plus output-format metadata. | `lines[].wordwr` |
+| O9 | **Pretty Wrap Hook** | `pretty_wrap(text, width, break_char, max_lines) → Optional[str]` | Optional parser wrap helper. Current Step 8 behavior does not swap the shared wrapper out globally; formats such as LightVN use parser-side textbox realization during injection. | `lines[].wordwr` |
 | O7 | **Forbidden/Allowed Chars** | `forbidden_chars: ForbiddenChars` | Characters the engine cannot render. Added to logit bias during Translation (Step 5) and to the Blacklist/Whitelist during Postprocessing (Step 6). | `Options.ForbiddenChars`, `Options.LogitBias` |
 | O8 | **Tags** | `tag_rules: TagRules` | Regex patterns for scene, dialogue, menu, and choice boundaries. Injected during Input to tag lines. | `lines[].tag` |
 
@@ -2361,10 +2460,10 @@ The handshake standardises which keys are targeted:
 | Encoding | `Options.Encoding` | Step 0 Input load |
 | Speaker list | `Analysis.speakers`, `characters[]` | Step 0 via O4 or Step 1 Analysis |
 | Speaker-detect disable | `Options.ParserHandlesSpeakers` | Step 0 via O4 |
-| Wordwrap config | `Options.Wordwrap.*` | Step 0 load; Step 7 reads |
-| Wordwrap function flag | `Options.ParserHandlesWordwrap` | Step 0 load; Step 7 checks |
+| Wordwrap config | `Options.Wordwrap.*` | Step 0 load; Step 8 reads |
+| Wordwrap function flag | `Options.ParserHandlesWordwrap` | Step 0 load; metadata available to Step 8/output wiring |
 | Forbidden chars | `Options.ForbiddenChars` | Step 0 load; Step 5 logit bias |
-| Context markers | `lines[].tag` | Step 0 via O8 or Step 1 Analysis |
+| Context markers | `lines[].tags` | Step 0 via O8 or Step 1 Analysis |
 | Decryption/Encryption | (transparent) | Step 0 before extract / Step 9 after inject |
 
 ---
@@ -2436,11 +2535,13 @@ Wired each optional component to its consuming pipeline step:
 - **O5 Wordwrap Config**: `_apply_parser_wordwrap_defaults()` auto-populates
   wordwrap fields from `wordwrap_config` on tab entry (already done pre-P3).
 - **O6 Wordwrap Function**: `_wire_parser_optionals()` sets
-  `Options.ParserHandlesWordwrap`. Step 7 `_process_wrap` delegates to
-  `parser.wordwrap()` instead of built-in `apply_wordwrap`.
+  `Options.ParserHandlesWordwrap`. Current runtime uses this as parser wordwrap metadata
+  for Step 8 defaults and output-path behavior rather than replacing the shared
+  `apply_wordwrap()` pass.
 - **O9 Pretty Wrap Hook**: `parser.pretty_wrap(text, width, break_char, max_lines)`
-  replaces built-in core wrapping while keeping speaker handling and pipeline logic.
-  Lighter than O6; used for user-managed tags or as fallback when O6 is absent.
+  remains the lighter parser wrap helper. Current runtime does not globally replace
+  the shared Step 8 wrapper with it; LightVN instead preserves explicit wrapped lines
+  and realizes textbox overflow during parser injection.
   Detected via `type(parser).pretty_wrap is not ParserScript.pretty_wrap`.
 - **O7 Forbidden Chars**: `_wire_parser_optionals()` serialises
   `forbidden_chars.to_dict()` to `Options.ParserForbiddenChars`. Translation

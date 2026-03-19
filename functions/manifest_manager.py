@@ -40,7 +40,19 @@ logger = logging.getLogger(__name__)
 
 
 DEDUP_PLACEHOLDER = "__DEDUP__"
+LOCKED_LINE_TAG = "locked"
 CONTENT_TAGS = frozenset({"file_end", "dialogue", "menu", "choice", "variable"})
+LOCKED_LINE_FIELDS = frozenset({
+    "tags",
+    "prepro",
+    "edited_prepro",
+    "preedit",
+    "tl",
+    "postpro",
+    "qa",
+    "qa_overwrite",
+    "wordwr",
+})
 
 
 def parse_line_tags(raw_tags: Any) -> List[str]:
@@ -77,6 +89,33 @@ def merge_line_tags(*raw_values: Any) -> str:
             seen.add(tag)
             merged.append(tag)
     return ",".join(merged)
+
+
+def has_line_tag(line_data: Dict[str, Any], tag: str) -> bool:
+    """Return whether a line contains the given canonical tag."""
+    clean_tag = str(tag).strip()
+    if not clean_tag:
+        return False
+    return clean_tag in parse_line_tags(line_data.get("tags"))
+
+
+def is_line_locked(line_data: Dict[str, Any]) -> bool:
+    """Return whether a line is protected from pipeline writes."""
+    return has_line_tag(line_data, LOCKED_LINE_TAG)
+
+
+def set_line_lock_tag(line_data: Dict[str, Any], locked: bool) -> None:
+    """Add or remove the canonical lock tag on a raw line dict."""
+    tags = [tag for tag in parse_line_tags(line_data.get("tags")) if tag != LOCKED_LINE_TAG]
+    if locked:
+        tags.append(LOCKED_LINE_TAG)
+    merged_tags = merge_line_tags(tags)
+    if merged_tags:
+        line_data["tags"] = merged_tags
+    else:
+        line_data.pop("tags", None)
+    line_data.pop("tag", None)
+    line_data.pop("context_marker", None)
 
 
 def get_primary_line_tag(line_data: Dict[str, Any]) -> str:
@@ -805,6 +844,7 @@ class ManifestManager:
                 "Width": defaults.get("wordwrap_width", 48),
                 "BreakChar": defaults.get("wordwrap_break_char", ""),
                 "MaxLines": defaults.get("wordwrap_max_lines", 4),
+                "PrettyWrap": defaults.get("wordwrap_pretty_wrap", True),
                 "PreventOrphans": defaults.get("wordwrap_prevent_orphans", True),
                 "PreferPunctuationBreaks": defaults.get("wordwrap_prefer_punctuation_breaks", True),
                 "SpeakerHandling": defaults.get("wordwrap_speaker_handling", "Sameline"),
@@ -813,6 +853,7 @@ class ManifestManager:
                 ),
                 "Typography": defaults.get("wordwrap_typography", "Western"),
                 "TagConfigs": [],
+                "FormatConfigs": [],
             },
             
             # === v3.0 Output Format ===
@@ -1932,6 +1973,27 @@ class ManifestManager:
             if line.get("idx") == idx:
                 return line
         return None
+
+    def is_line_locked(self, idx: int) -> bool:
+        """Return whether the specified manifest line is locked."""
+        line = self.get_line(idx)
+        if line is None:
+            return False
+        return is_line_locked(line)
+
+    def _is_locked_line_write_blocked(
+        self,
+        line: Dict[str, Any],
+        field: str,
+        *,
+        allow_locked: bool,
+    ) -> bool:
+        """Return whether a field write is blocked by the line lock tag."""
+        return (
+            not allow_locked
+            and field in LOCKED_LINE_FIELDS
+            and is_line_locked(line)
+        )
     
     def get_all_orig_lines(self) -> List[str]:
         """Return the ``orig`` text for every line in index order.
@@ -1943,7 +2005,14 @@ class ManifestManager:
         """
         return [ln.get("orig", "") for ln in self._manifest_data.get("lines", [])]
 
-    def set_line_field(self, idx: int, field: str, value: Any) -> None:
+    def set_line_field(
+        self,
+        idx: int,
+        field: str,
+        value: Any,
+        *,
+        allow_locked: bool = False,
+    ) -> bool:
         """Set a field on a specific line.
 
         Only marks the manifest dirty when the value actually changes
@@ -1952,16 +2021,29 @@ class ManifestManager:
         lines = self._manifest_data.get("lines", [])
         for line in lines:
             if line.get("idx") == idx:
+                if self._is_locked_line_write_blocked(
+                    line,
+                    field,
+                    allow_locked=allow_locked,
+                ):
+                    return False
                 if field in line and line[field] == value:
-                    return  # No change
+                    return True  # No change
                 line[field] = value
                 self._mark_dirty()
-                return
+                return True
         # Line not found - create it
         lines.append({"idx": idx, field: value})
         self._mark_dirty()
+        return True
 
-    def clear_line_field(self, idx: int, field: str) -> None:
+    def clear_line_field(
+        self,
+        idx: int,
+        field: str,
+        *,
+        allow_locked: bool = False,
+    ) -> bool:
         """Remove a field from a specific line if it exists.
 
         This is used for sparse manifest persistence where unchanged stage
@@ -1971,15 +2053,33 @@ class ManifestManager:
         for line in lines:
             if line.get("idx") != idx:
                 continue
+            if self._is_locked_line_write_blocked(
+                line,
+                field,
+                allow_locked=allow_locked,
+            ):
+                return False
             if field not in line:
-                return
+                return True
             del line[field]
             self._mark_dirty()
-            return
+            return True
+        return True
     
-    def update_translation(self, idx: int, translation: str) -> None:
+    def update_translation(
+        self,
+        idx: int,
+        translation: str,
+        *,
+        allow_locked: bool = False,
+    ) -> bool:
         """Update translation for a line (called during translation)."""
-        self.set_line_field(idx, "tl", translation)
+        return self.set_line_field(
+            idx,
+            "tl",
+            translation,
+            allow_locked=allow_locked,
+        )
     
     # ========================== Operations ========================== #
     
@@ -2953,11 +3053,14 @@ class ManifestManager:
             "Width": 48,
             "BreakChar": "",
             "MaxLines": 4,
+            "PrettyWrap": True,
             "PreventOrphans": True,
             "PreferPunctuationBreaks": True,
             "SpeakerHandling": "Sameline",
             "IgnorePatterns": [],
             "Typography": "Western",
+            "TagConfigs": [],
+            "FormatConfigs": [],
         }))
     
     def set_wordwrap_options(self, options: Dict[str, Any]) -> None:
@@ -2985,6 +3088,17 @@ class ManifestManager:
         """
         ws = self._manifest_data.setdefault("WordwrapSettings", {})
         ws["TagConfigs"] = list(configs)
+        self._mark_dirty()
+
+    def get_wordwrap_format_configs(self) -> List[Dict[str, Any]]:
+        """Get per-format wordwrap configuration list."""
+        ws = self._manifest_data.get("WordwrapSettings", {})
+        return list(ws.get("FormatConfigs", []))
+
+    def set_wordwrap_format_configs(self, configs: List[Dict[str, Any]]) -> None:
+        """Replace the full per-format wordwrap configuration list."""
+        ws = self._manifest_data.setdefault("WordwrapSettings", {})
+        ws["FormatConfigs"] = list(configs)
         self._mark_dirty()
     
     def get_output_options(self) -> Dict[str, Any]:

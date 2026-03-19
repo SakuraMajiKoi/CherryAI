@@ -92,7 +92,7 @@ The GUI is organized as:
 - **Menu Bar**: File (dropdown), Full Table View (direct command), API Log (direct command), Options (direct command), Help (dropdown)
   - **New Project** (`_on_new_session`): Resets ManifestManager (creates empty manifest), resets SessionState, and calls `on_new_project()` on ALL step tabs to flush cached instance state (loaded files, analysis results, lines, estimation data, etc.). Prevents old project data from leaking into the new session.
   - **Open Project...** (`_on_load_manifest` / `_load_manifest_from_path`): After the unsaved-changes prompt, loads the selected manifest into a fresh ManifestManager, swaps it in only after successful load, resets SessionState, and calls `on_new_project()` on ALL tabs before entering the saved step. This must behave like New Project plus manifest activation, so an already-open project can never leak cached state into the newly opened project.
-- **Full Table View** (`_on_full_table_view`): Opens FullTableViewDialog — spreadsheet-like view and editor for all manifest line entries. Requires a loaded project. Features: named columns (Line #, Original, Preprocessed, Translated, Postprocessed, Quality Assurance, Overwrite, Wordwrap, Overwrite (Legacy), Log, Tags), column filter dropdown with Show All/Show Visible/Show Latest presets, all columns hideable, column selection bar for search/replace scoping, sort indicators (▲/▼) in headers, read-only Original with copy support, two-row search/replace toolbar, Results Only mode, file filter, RegEx search/replace, pagination, save/reset/diff, and a Clear Columns workflow for `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, and `wordwr`. Clearing `tl` must require a second destructive confirmation because it removes the base translation stage. Show Latest follows the active pipeline `orig → prepro → tl → postpro → qa → qa_overwrite → wordwr`.
+- **Full Table View** (`_on_full_table_view`): Opens FullTableViewDialog — spreadsheet-like view and editor for all manifest line entries. Requires a loaded project. Features: named columns (Line #, Original, Preprocessed, Translated, Postprocessed, Quality Assurance, Overwrite, Wordwrap, Overwrite (Legacy), Log, Tags), column filter dropdown with Show All/Show Visible/Show Latest presets, all columns hideable, column selection bar for search/replace scoping, sort indicators (▲/▼) in headers, read-only Original with copy support, two-row search/replace toolbar, Results Only mode, file filter, RegEx search/replace, pagination, save/reset/diff, a Clear Columns workflow for `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, and `wordwr`, plus a `Lock / Unlock` action that toggles the canonical `locked` tag on selected rows. Locked rows render pale green, selected locked rows render green, and Full Table View save is the only UI path allowed to override the locked-row write guard. Clearing `tl` must require a second destructive confirmation because it removes the base translation stage. Show Latest follows the active pipeline `orig → prepro → tl → postpro → qa → qa_overwrite → wordwr`.
 - **API Log** (`_on_api_log`): Opens APILogViewDialog — non-blocking viewer for structured API log entries. Requires a loaded project. Features: search bar, category filter (Main Translation/Term Translation/Gender Inference/Other), view mode switch (Sent/Received/Both), display-limit spinbox (All/1000/2500/5000/Nothing), color-coded entries (green=success, yellow=recovered, red=failed), live updates via subscription, token statistics, per-project JSONL persistence alongside manifest. Sent entries must show actual request metadata from the stored log, including OpenAI `prompt_cache_key` / `prompt_cache_retention` when present. Reopening API Log must reuse the existing window and bring it to the foreground instead of opening duplicates.
 - **Options** (`_on_options`): Opens Global Options dialog directly from menu bar. Reopening Options must reuse the existing dialog and bring it to the foreground instead of opening duplicates.
 - **Step Tabs**: 10 workflow tabs (Steps 0-9) progressing from Input to Output
@@ -123,6 +123,7 @@ All application state is stored in the Manifest (`.CherryAI.json`), not in GUI m
 - Step data merge-not-replace: `on_leave()` and `_update_step_data()` must start from `get_step_data()` and merge updated keys — never create a fresh dict that discards stored results (PHASE 80)
 - Init guard pattern: steps that populate comboboxes during `__init__()` must suppress trace-triggered manifest writes until initialization completes (PHASE 80)
 - Conditional text replacement: `_ensure_*_text()` helpers must only delete existing widget content when replacement text is available (PHASE 80)
+- Locked-line write guard: manifest `lines[].tags` may include canonical tag `locked`; shared manifest writes to `tags`, `prepro`, `edited_prepro`, `preedit`, `tl`, `postpro`, `qa`, `qa_overwrite`, and `wordwr` must be blocked unless the caller explicitly opts into the Full Table View override path (`allow_locked=True`)
 
 ---
 
@@ -803,15 +804,17 @@ Reference handshake-compliant parser for Light VN visual novel scripts. Adapted 
 
 #### Wordwrap Integration
 
-When a Parser Script provides wordwrap settings, these auto-populate the Wordwrap step (Step 7):
+When a Parser Script provides wordwrap settings, these auto-populate the Wordwrap step (Step 8):
 - `MaxLineLength` → Width setting
 - `MaxLineNumber` → Max Lines setting
 - `WordwrapCommand` → Break Character
 - `NewTextboxInjection` → Used when overflow exceeds Max Lines to create a new text box instead of flagging
 
-**Per-Tag Wordwrap**: Step 7 resolves each line's tag (canonical line `tags` primary content tag → filedir `type` → `"dialogue"` fallback) and applies per-tag settings from `WordwrapSettings.TagConfigs`. Tags whose wrapping is dictated by the parser (via `wordwrap_for_tag`) are marked `ParserManaged` and displayed read-only in the UI.
+**Per-Tag Wordwrap**: Step 8 resolves each line's tag (canonical line `tags` primary content tag → filedir `type` → `"dialogue"` fallback) and applies per-tag settings from `WordwrapSettings.TagConfigs` to the already loaded preview rows. Parser defaults from `wordwrap_for_tag(tag)` pre-populate each tag section, but the current UI keeps those values editable.
 
-**O9 pretty_wrap Hook**: A lighter alternative to O6. When a parser implements `pretty_wrap(text, width, break_char, max_lines) → Optional[str]`, Step 7 uses it as the core wrapping algorithm while keeping speaker handling, ignore patterns, and the rest of the pipeline intact. If the parser also provides O6, that takes priority for parser-managed tags; O9 is used for user-managed tags or as a fallback when O6 is not present.
+**Parser Wrap Role**: Parser wordwrap metadata currently seeds Step 8 defaults and output behavior rather than replacing the shared Step 8 wrapping pass. Step 8 also preserves explicit non-RPG break commands such as `\n`, keeps speaker prefixes in wrapped output even when speaker width is ignored, and may write parser-provided textbox separator strings directly into `wordwr`. Engine-specific textbox realization still happens in parser injection, which is where formats such as LightVN turn multiline `wordwr` output into engine syntax.
+
+**Stored vs Injected Textbox Markers**: For LightVN dialogue, Step 8 stores textbox separators only between wrapped chunks in `lines[].wordwr`. Parser injection must restore the final engine-required terminal `\\w` exactly once when materializing dialogue output, including single-box dialogue that stays on one textbox.
 
 #### Forbidden Characters
 
@@ -883,15 +886,30 @@ The following table lists all processes in their execution order. Preprocessing 
 #### Overflow and Runaway
 
 - **Overflow**: Text exceeds the horizontal boundary (characters/pixels per line exceeded). Flagged as "Overflow".
-- **Runaway**: Text exceeds the vertical boundary (more lines than the textbox maximum). Flagged as "Runaway".
-- Both must be prevented; `pretty_wrap` handles overflow, and Max Lines handles runaway.
-- When a parser defines `NewTextboxInjection`, runaway can be automatically resolved by injecting a new textbox command instead of flagging.
+ - **Runaway**: Text exceeds the vertical boundary (more lines than the textbox maximum). Flagged as "Runaway".
+ - Both must be prevented; `pretty_wrap` handles overflow, and Max Lines handles runaway.
+ - When a parser defines `NewTextboxInjection`, runaway can be automatically resolved by injecting a new textbox command instead of flagging.
+ - Step 8 preview labels this distinction as `Exceeding` (cannot be persisted) versus `New Textbox` (overflow resolved through parser textbox injection and persisted to `lines[].wordwr`).
 
 #### Variable Words
 
-- Engine variables rendered in text (e.g., `\V[1]` displaying a character name) have variable visible length
-- Width calculation must use the **maximum** value/token length for each variable
-- Variables marked as `IsInvisible` in the Code Database are excluded from width calculation entirely
+ - Engine variables rendered in text (e.g., `\V[1]` displaying a character name) have variable visible length
+ - Width calculation must use the **maximum** value/token length for each variable
+ - Variables marked as `IsInvisible` in the Code Database are excluded from width calculation entirely
+ - Other code spans remain visible width by default; Step 8 must not silently treat generic braces or brackets as zero-width unless Analysis/Code Database marked that pattern invisible.
+
+#### Speaker Width Source
+
+ - Speaker handling in Step 8 must use the speaker list produced by Analysis / parser detection and stored in manifest `characters[]`.
+ - The allowlist must recognize both `original_name` and translated `translation` aliases stored for each character entry.
+ - When `characters[]` is unavailable or empty, Step 8 may fall back to parser `detect_speakers()` on the loaded preview rows rather than generic colon heuristics.
+ - `SpeakerHandling = Ignore` excludes only those detected speaker prefixes from width counting while preserving them in wrapped output.
+ - Plain `Name:` text that was not detected as a speaker is counted normally and must not be wrapped with the speaker-ignore shortcut.
+
+#### Indentation Preservation
+
+ - Shared Step 8 wrapping must preserve intentional leading whitespace in the stored `wordwr` output.
+ - Indentation is structural text, not disposable formatting, and must survive no-op wraps as well as wrapped output.
 
 #### Fontresize Commands
 
@@ -900,6 +918,9 @@ The following table lists all processes in their execution order. Preprocessing 
 - Parser Scripts can provide `size_up`, `size_down`, `size_increments`, `set_size`, `get_size` commands
 
 #### PrettyWrap Rules
+
+- PrettyWrap should not leave a one-word orphan tail when the same number of lines can be repartitioned into a more balanced layout.
+- Rebalancing should prefer breaks after punctuation when several equally valid layouts exist.
 
 PrettyWrap is the standard wrapping algorithm. Its priority rules:
 
@@ -3796,7 +3817,7 @@ Postprocessing reverses the Preprocessing order. Highest priority runs first (op
 
 ### Step 8: Wordwrap
 
-**Purpose**: Apply wordwrap rules to format text for game engine display requirements. Wordwrap operates in two conceptual modes: **automatic** (parser-detected settings based on the game engine format) or **manual** (user-configured width, break character, and line limits). The core wrapping algorithm is `pretty_wrap` — punctuation-preferred breaks and anti-orphan handling are always active (no user toggle).
+**Purpose**: Apply wordwrap rules to format text for game engine display requirements. Wordwrap is the ninth user-facing workflow tab, but it remains internal Step 8 because Input is Step 0. The core wrapping algorithm is `pretty_wrap`, exposed as one enable/disable toggle per tag or format; punctuation-preferred breaks and anti-orphan handling are no longer separate user toggles.
 
 #### Philosophy
 
@@ -3805,10 +3826,13 @@ Wordwrap is the final text-shaping step before output. It must produce lines tha
 Persistence rule: preview refresh and tab leave do not write `wordwr`. Only explicit Apply persists wrapped output, and unchanged results are removed instead of stored redundantly.
 
 Key principles:
-- **Pretty wrap is standard**: Punctuation-preferred line breaks and orphan prevention are always active — no checkboxes.
+- **Pretty wrap is unified**: Punctuation-preferred line breaks and orphan prevention are represented by a single PrettyWrap toggle.
 - **Parser-driven when possible**: When a parser provides display constraints (width, break character, max lines), settings are auto-populated and displayed (user can override).
 - **Code-aware**: Ignore patterns come from the Code Database (Step 3), not from hardcoded checkboxes.
-- **Overwrite integrated**: The Overwrite column lives in the same table as Wordwrap, eliminating the need for a separate Overwrite Strategy widget. It can be editted.
+- **Format-safe**: The preview Format selector is populated from manifest `filedir[].format`, and wrapping only runs on rows that belong to each enabled format.
+- **Speaker-safe**: `Ignore` excludes the speaker prefix from width calculation, but does not remove it from output.
+- **Escape-safe**: Literal non-RPG break commands such as `\n` remain visible wrap boundaries, and unrelated backslashes are preserved.
+- **Overwrite integrated**: The Overwrite column lives in the same table as Wordwrap, eliminating the need for a separate Overwrite Strategy widget. It can be edited.
 
 #### Widgets
 
@@ -3817,7 +3841,9 @@ Key principles:
 | Apply Wordwrap Button | Button | Execute wrapping on all lines |
 | Refresh Preview Button | Button | Recalculate preview without applying |
 | Reset Button | Button | Clear wordwrap results |
-| Mode Dropdown | Combobox | Wrapping mode (Manual, parser-specific modes) |
+| Mode Dropdown | Combobox | Wrapping mode (Manual) |
+| Format Dropdown | Combobox | Select preview format from manifest `filedir[].format` |
+| Format Enabled Checkbox | Checkbox | Enable/disable wrapping for the selected format |
 | Width Dropdown | Combobox | Line width — Character count or Pixel-based |
 | Tag Sections | Frame per tag | Per-tag Width / BreakChar / MaxLines settings |
 | Add Tag Dropdown | Combobox | Add a new tag section from available tags |
@@ -3826,7 +3852,7 @@ Key principles:
 | Speaker Handling Dropdown | Combobox | How to count speaker prefixes: Ignore / Count |
 | Ignore Patterns Table | Table (read-only) | Patterns from Code Database used during wrap |
 | Lines Table | SharedTable | Source, Wordwrap, Overwrite columns with filters |
-| Filter Radios | RadioGroup | All / Changed / Exceeding / Overwrite Differs |
+| Filter Radios | RadioGroup | All / Changed / Exceeding / New Textbox |
 
 **Removed Widgets** (compared to previous spec):
 - ~~Ignore Patterns Checkboxes~~ → Sourced from Code Database (Step 3), shown as read-only table
@@ -3835,33 +3861,39 @@ Key principles:
 - ~~Overwrite Strategy Dropdown~~ → Overwrite is a table column, not a separate mode
 - ~~Merge Method Dropdown~~ → Removed with Overwrite Strategy
 - ~~Backup Suffix Entry~~ → Removed with Overwrite Strategy
-- ~~Format Dropdown~~ → Replaced by parser-aware Mode Dropdown
-- ~~Orphan prevention / Punct breaks (global)~~ → Now configurable per-tag
+- ~~Orphan prevention / Punct breaks (separate toggles)~~ → Replaced by single PrettyWrap toggle
 
 #### Per-Tag Wordwrap Settings
 
-Wordwrap settings are wrapped in tag sections. Each tag (e.g., `dialogue`, `menu`, `variable`) has its own Width, Break Character, Max Lines, Speaker Handling, Prevent Orphans, Prefer Punctuation Breaks, and New Textbox configuration. Standard tags `dialogue` and `menu` are always present; additional tags are discovered from filedir `type` fields and line `tag` fields.
+Wordwrap settings are grouped by manifest format first, then by tag. Each format (e.g., `lightvn`) has its own enabled flag plus a tag-config list. Each tag (e.g., `dialogue`, `menu`, `variable`) has its own Enabled, Width, Break Character, Max Lines, Speaker Handling, PrettyWrap, and New Textbox configuration. Standard tags `dialogue` and `menu` are always present; additional tags are discovered from filedir `type` fields and canonical line `tags` primary content tags.
+
+**Format behavior**:
+- The preview format dropdown is populated from manifest `filedir[].format` values only.
+- Selecting a format filters the preview to rows belonging to that format.
+- Apply can process multiple enabled formats sequentially, but each row is only wrapped by its own format config.
+- LightVN keeps `menu` prefilled but disabled by default because its parser exposes width `0` for that tag.
 
 **TagWrapConfig** (dataclass):
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `tag` | str | — | Tag name (e.g., "dialogue", "menu") |
+| `enabled` | bool | True | Whether wrapping is active for this tag |
 | `width` | int | 48 | Characters per line (0=no wrap) |
 | `break_char` | str | "\\n" | Line break sequence |
 | `max_lines` | int | 4 (dialogue) / 0 (menu) | Max lines per box (0=unlimited) |
 | `speaker_handling` | str | "count" | "ignore" or "count" — how speaker prefixes affect wrap width |
-| `prevent_orphans` | bool | True | Prevent tiny orphan words on the last line |
-| `prefer_punct_breaks` | bool | True | Prefer breaking after punctuation when possible |
+| `pretty_wrap` | bool | True | Enable the shared pretty-wrap path for this tag |
 | `new_textbox` | bool | False | Create a new textbox when max lines exceeded |
-| `new_textbox_injection` | str | "" | Text injected to signal new textbox (e.g., "\\w" for LightVN) |
+| `new_textbox_injection` | str | "" | Text injected to signal new textbox (e.g., `"\\w\n\""` for LightVN) |
 
 **Behavior**:
 - **Parser-provided defaults**: When the active parser provides `wordwrap_for_tag(tag)` returning a non-None config, the tag section is pre-populated with the parser's values (width, break char, max lines, new textbox injection). All values remain **editable** — the parser only provides sensible defaults.
 - **Width=0**: Zero width means no wrapping for that tag.
-- **Tag resolution** (per line): Line `tag` field → filedir entry `type` field → `"dialogue"` fallback.
+- **Tag resolution** (per line): Canonical line `tags` primary content tag → filedir entry `type` field → `"dialogue"` fallback.
+- **Invisible width rules**: Built-in invisible span families and Code Database patterns marked `IsInvisible` are excluded from width calculation.
 - **Add Tag**: Dropdown shows tags not yet configured. Adding creates a new section with parser-provided defaults (when available).
 - **Remove Tag**: Non-standard tags (not dialogue/menu) have a "Remove tag" button.
-- **Manifest persistence**: `WordwrapSettings.TagConfigs` stores the list of `TagWrapConfig.to_dict()` entries.
+- **Manifest persistence**: `WordwrapSettings.FormatConfigs` stores the per-format config list. `WordwrapSettings.TagConfigs` is still backfilled for compatibility with older manifests and tests.
 
 #### Widget Specifications
 
@@ -3876,7 +3908,7 @@ Wordwrap settings are wrapped in tag sections. Each tag (e.g., `dialogue`, `menu
 
 **Behavior**:
 - **Manual**: User configures all settings (width, break char, max lines) directly.
-- Parser-specific modes will be added as parsers are implemented (e.g., when RPG Maker becomes its own parser, it will appear as a mode option that auto-populates width from project analysis).
+- Parser-specific defaults are loaded from the selected format's parser tag configs; the UI still exposes them through the shared Manual mode controls instead of switching to a separate parser-exclusive mode.
 - RPG Maker is **not** a wordwrap mode — it becomes its own parser (see Future Improvements).
 - "Disabled" option is removed — if no wrapping is desired, simply don't click Apply.
 
@@ -3921,9 +3953,11 @@ Wordwrap settings are wrapped in tag sections. Each tag (e.g., `dialogue`, `menu
 | Manifest Key | `WordwrapSettings.MaxLines` |
 
 **Behavior**:
-- When wrapping produces more lines than the maximum:
-  - **Flag the line**: Mark in the Lines Table as "Exceeding" for manual review.
-  - **New box** (future): Split overflow into a new text box entry (requires parser support for text box boundaries — see Future Improvements).
+When wrapping produces more lines than the maximum:
+- **Flag the line**: Mark in the Lines Table as `Exceeding` for manual review when no textbox overflow support exists.
+- **Preserve the full wrapped text**: Step 8 does not truncate the `wordwr` result to `max_lines`; parser injection may realize overflow as multiple textboxes when the format supports it.
+- **Preserve explicit separators**: When `new_textbox_injection` is configured, Step 8 may emit that separator directly into `wordwr` so the textbox boundary is visible before Output. Such rows are classified as `New Textbox` instead of `Exceeding` and are persisted.
+- **Do not persist unsplittable overflow**: Rows that still exceed `max_lines` and have no textbox separator support are not written into `lines[].wordwr`.
 - 0 means unlimited (no max line constraint).
 
 ##### Speaker Handling Dropdown
@@ -3938,7 +3972,7 @@ Wordwrap settings are wrapped in tag sections. Each tag (e.g., `dialogue`, `menu
 Speaker format is always `Speaker: Dialogue` or `Speaker: "Dialogue"`.
 
 **Options**:
-- **Ignore**: Don't count the speaker prefix toward line width — only measure the dialogue portion. Use when the speaker name is injected into a separate name field during output. The trailing space after `:` belongs to the speaker and is stripped during injection.
+- **Ignore**: Don't count the speaker prefix toward line width — only measure the dialogue portion for wrapping. The speaker prefix is still preserved in the wrapped output.
 - **Count** (renamed from "Sameline"): Speaker prefix (name + `:` + spaces) is counted toward line width. Use when the speaker is part of the displayed line and takes up horizontal space.
 
 **Removed Options**:
@@ -3965,54 +3999,53 @@ Ignore patterns are **no longer configured in Wordwrap settings**. Instead, they
 | Column | Source | Description |
 |--------|--------|-------------|
 | # | Index | Line number |
-| Original | `qa_overwrite[] → qa[] → postpro[] → tl[] → prepro[] → orig[]` | Input text for wrapping (stage-bounded) |
+| Input | `qa_overwrite[] → qa[] → postpro[] → tl[] → prepro[] → orig[]` | Input text for wrapping (stage-bounded) |
 | Wordwrap | `wordwr[]` | Wrapped result |
-| Overwrite | `overwrite[]` | Final injected text (populated during wrap) |
-| Status | Computed | OK / Exceeding / Differs |
+| Overwrite | Table-only draft field | Final injected text preview/edit value kept in the Step 8 table session |
+| Status | Computed | OK / Exceeding / New Textbox |
 
 **Overwrite Column Behavior**:
-- Loaded only from stored `wordwr[]` values; it is not prefilled from the current input chain.
-- The Overwrite value represents the text as it will appear in the output file after injection.
-- **Standard behavior**: Output (Step 9) prioritizes `overwrite[]` over `wordwr[]`. 
-- When Overwrite differs from Wordwrap, the line is flagged as "Differs" and can be filtered for (like to undo edits).
-- Can be editted.
+- Loaded from the current Step 8 table rows, preserving any in-session edits while wrapping is recalculated.
+- The Overwrite value is a Step 8 working column, not a separate manifest stage field.
+- It is editable, but it is not a separate filter/status class.
 
 **Filters**:
 - **All**: Show all lines.
 - **Changed**: Lines where Wordwrap differs from the input.
-- **Exceeding**: Lines where wrapping produced more lines than Max Lines allows.
-- **Overwrite Differs**: Lines where Overwrite ≠ Wordwrap.
+- **Exceeding**: Lines where wrapping produced more lines than Max Lines allows and no textbox overflow path was available.
+- **New Textbox**: Lines where overflow was realized by inserting explicit textbox separators into `wordwr`.
 
 #### Data Flow
 
 **Inputs**:
-- From Step 7: stage-bounded text resolved as `qa_overwrite[] → qa[] → postpro[] → tl[] → prepro[] → orig[]`
+- From Step 7: QA-reviewed stage output resolved as `qa_overwrite[] → qa[] → postpro[] → tl[] → prepro[] → orig[]`
 - From Step 3: Code Database patterns (for ignore pattern list)
 - From Manifest: `WordwrapSettings.*` (saved settings)
 
 **Processing** (via `functions/wordwrap.py`):
-1. Load ignore patterns from Code Database (Preserve + Remove action patterns).
-2. Build tag maps: `line_tag_map` (line index → tag from `lines[].tag`) and `filedir_type_map` (file directory → type from `file_dir[].type`).
+1. Load invisible-width patterns from built-in span families plus Code Database entries marked `IsInvisible`.
+2. Build line-format and tag maps: `line_format_map` (line index → `filedir[].format`), `line_tag_map` (line index → primary content tag from canonical `lines[].tags`), and `filedir_type_map` (line index → type from `filedir[].type`).
 3. For each line:
-   a. Resolve tag: line `tag` → filedir `type` → `"dialogue"` fallback.
-   b. Look up `TagWrapConfig` for resolved tag. Width=0 → skip (no wrap).
-   c. Detect speaker prefix per Speaker Handling mode.
-   d. Calculate visible width (excluding ignored code patterns).
-   e. **Parser-managed tag**: Try O6 `parser.wordwrap()` → O9 `parser.pretty_wrap()` → passthrough.
-   f. **User-managed tag**: Try O9 `parser.pretty_wrap()` → built-in `pretty_wrap()` with per-tag config.
-   g. Insert break characters at calculated positions.
-   h. Respect max lines constraint (flag if exceeding).
-   i. Populate Overwrite column with injection-ready text.
-4. Calculate wrap statistics (lines changed, lines exceeding, total breaks inserted).
+  a. Resolve format from manifest `filedir[].format`; skip wrapping if that format is disabled.
+  b. Resolve tag: canonical line `tags` primary content tag → filedir `type` → `"dialogue"` fallback.
+  c. Look up the selected format's `TagWrapConfig` for the resolved tag. Disabled tag or Width=0 → skip (no wrap).
+  d. Detect speaker prefix per Speaker Handling mode.
+  e. Calculate visible width (excluding ignored code patterns).
+  f. Apply shared `apply_wordwrap()` with the resolved per-tag config and PrettyWrap toggle.
+  g. Insert break characters at calculated positions.
+  h. Respect max lines constraint as an exceed flag, not truncation; if textbox overflow support exists, emit the configured separator into `wordwr` instead.
+  i. Preserve the current Overwrite column edit for the row while updating the wrapped result.
+4. Calculate wrap statistics (lines changed, lines exceeding, total breaks inserted) and report progress while the worker thread wraps lines and persists sparse `wordwr` updates.
 
 **Outputs**:
-- `wordwr: List[str]` — Wrapped lines
+- `wordwr: List[str]` — Wrapped lines persisted directly on `lines[].wordwr`
 - `overwrite: List[str]` — Injection-ready output lines
 - `wrap_stats: WrapStats` — Lines wrapped, exceeding count, break count
 
 **Stored In**:
-- Manifest: `lines[].wordwr`, `lines[].overwrite`
-- Manifest step data: `WordwrapSettings.Mode`, `WordwrapSettings.Width`, `WordwrapSettings.WidthMode`, `WordwrapSettings.BreakChar`, `WordwrapSettings.MaxLines`, `WordwrapSettings.SpeakerMode`, `WordwrapSettings.TagConfigs`
+- Manifest: `lines[].wordwr`
+- Manifest step data: `WordwrapSettings.Mode`, `WordwrapSettings.Width`, `WordwrapSettings.WidthMode`, `WordwrapSettings.BreakChar`, `WordwrapSettings.MaxLines`, `WordwrapSettings.PrettyWrap`, `WordwrapSettings.SpeakerMode`, `WordwrapSettings.TagConfigs`, `WordwrapSettings.FormatConfigs`
+- Not stored: a duplicate `wrapped_lines` session cache; `wordwr` is the single persisted wrapped source of truth
 
 #### Standard Wrapping Rules (Always Active)
 
@@ -4030,8 +4063,8 @@ These behaviors are built into `pretty_wrap()` and are NOT user-configurable:
 - Unit tests for all wrapping modes and edge cases
 - Speaker Ignore vs Count with various prefix formats
 - Code pattern exclusion from width calculation
-- Max lines flagging behavior
-- Overwrite column population and diff detection
+- Max lines flagging vs. textbox-splitting behavior
+- Overwrite column population without a separate Differs filter class
 - Break character auto-detection accuracy
 - Width calculation in character and pixel modes
 - Empty lines, code-only lines, very long words (hard-break fallback)
@@ -4091,7 +4124,7 @@ Before exporting, Output checks dirty flags to warn the user if upstream steps h
 | Flag | Set When | Cleared When | Warning Message |
 |------|----------|--------------|-----------------|
 | Process Flag | Any preprocessing is applied (Step 3) | Postprocessing reaches 100% completion (Step 6) | "Preprocessing was applied but Postprocessing is not complete. Output may contain unrecovered codes." |
-| Wordwrap Flag | Files are loaded or translation changes | Wordwrap is applied (Step 7) | "Wordwrap has not been applied. Output will use unwrapped text." |
+| Wordwrap Flag | Files are loaded or translation changes | Wordwrap is applied (Step 8) | "Wordwrap has not been applied. Output will use unwrapped text." |
 
 **Behavior**:
 - Dirty flags are stored in manifest step data: `DirtyFlags.process`, `DirtyFlags.wordwrap`
@@ -4394,9 +4427,8 @@ Each step writes its output field via `ManifestManager.set_line_field(idx, field
 - Step 3 `_update_step_data()` writes `prepro`
 - Step 5 `update_translation()` writes `tl` (and `edited_prepro`)
 - Step 6 `_on_postprocess_complete()` / `_mark_line_as_fixed()` writes `postpro`
-- Step 7 `_save_to_session()` writes `wordwr`
 - Step 7 `on_leave()` writes `qa` and `qa_overwrite`
-- Step 8 `_save_to_session()` writes `wordwr`
+- Step 8 explicit Apply persists `wordwr` only for changed wrapped results; preview refresh and tab leave do not auto-write it
 
 **All steps now read from manifest** using `manifest_fields.py` shared resolution functions
 instead of session step_data. The priority chain is:

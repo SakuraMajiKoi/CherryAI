@@ -24,9 +24,13 @@ from CherryAI.functions.analysis import classify_file_type
 from CherryAI.functions.ini_manager import get_default
 from CherryAI.functions.manifest_manager import (
     DEDUP_PLACEHOLDER,
+    LOCKED_LINE_TAG,
     get_primary_line_tag,
+    has_line_tag,
+    is_line_locked,
     merge_line_tags,
     set_primary_line_tag,
+    set_line_lock_tag,
 )
 from CherryAI.gui.steps.base import BaseStep
 from CherryAI.gui.theme.colors import THEME
@@ -1963,9 +1967,6 @@ class InputExtractionStep(BaseStep):
         merge_tags = selections.get("import_tags", False)
         skip_new = selections.get("skip_new_lines", False)
 
-        if not fields_to_copy and not merge_tags:
-            return {"matched": 0, "total": 0}
-
         # Build lookup: orig → source line entry
         source_lookup: Dict[str, Dict[str, Any]] = {}
         for sl in source_lines:
@@ -1991,6 +1992,15 @@ class InputExtractionStep(BaseStep):
                 continue
 
             matched += 1
+            source_locked = has_line_tag(match, LOCKED_LINE_TAG)
+            target_locked = is_line_locked(line)
+
+            if source_locked:
+                set_line_lock_tag(line, True)
+
+            if target_locked:
+                continue
+
             is_dedup_line = (
                 str(line.get("prepro", "")).strip() == DEDUP_PLACEHOLDER
                 or str(match.get("prepro", "")).strip() == DEDUP_PLACEHOLDER

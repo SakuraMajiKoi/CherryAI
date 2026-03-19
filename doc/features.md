@@ -64,7 +64,7 @@ TABLE OF CONTENTS
    - Step 6: Translation
    - Step 7: Postprocessing
   - Step 8: Quality Assurance
-  - Step 9: Wordwrap & Overwrite
+  - Step 9: Wordwrap
    - Step 10: Output & Injection
    - Global Options Dialog
    - Theme & Icons System
@@ -250,6 +250,9 @@ FULL TABLE VIEW
 - **Menu Bar Access**: Direct access via "Full Table View" entry in the menu bar (not a dropdown)
 - **Menu Bar Layout**: File (dropdown), Full Table View (direct), API Log (direct), Options (direct), Help (dropdown)
 - **Spreadsheet View**: Displays all manifest line entries with named columns (Line #, Original, Preprocessed, Translated, Postprocessed, Quality Assurance, Overwrite, Wordwrap, Overwrite (Legacy), Log, Tags)
+- **Row Locking**: Toolbar button `Lock / Unlock` toggles a per-line `locked` tag directly in the manifest `tags` field; locked rows render pale green and selected locked rows render green
+- **Protected Pipeline Rows**: Locked rows are protected from preprocessing, translation, postprocessing, QA overwrite actions, and wordwrap overwrite writes; Full Table View is the explicit manual override surface for those rows
+- **Import Translation Lock Carryover**: Import Translations always carries the `locked` tag from the source manifest even when Tags import is not selected, and already locked target rows refuse imported stage-field overwrites
 - **Column Display Names**: All columns use human-readable display names (e.g., idx→Line #, orig→Original, tl→Translated)
 - **Column Auto-Hide**: Empty columns hidden by default
 - **Column Filter Dropdown**: Slim tk.Menu dropdown with presets — Show All, Show Visible, Show Latest (furthest non-empty column in the active pipeline: Original → Preprocessed → Translated → Postprocessed → Quality Assurance → Overwrite → Wordwrap) plus individual column toggles
@@ -996,7 +999,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - Phase 7: Translation Tab ✅ Complete
   - Phase 8: Quality Assurance Tab ✅ Complete
   - Phase 9: Postprocessing Tab ✅ Complete
-  - Phase 10: Wordwrap & Overwrite Tab ✅ Complete
+  - Phase 10: Wordwrap Tab ✅ Complete
   - Phase 11: Output & Injection Tab ✅ Complete
   - Phase 12: Information Tab ✅ Complete
   - Phase 13: Global Options Dialog ✅ Complete
@@ -1333,67 +1336,50 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - All options persist to manifest and load on step enter
     - `postpro` is only stored when the recovered output differs from `tl → prepro → orig`; unchanged rows are cleared from the manifest
     - 35 tests in dev/test_postprocess_manifest.py
-- **Wordwrap & Overwrite Tab (Phase 10):**
-  - WordwrapOverwriteStep class (step_id=8, ~950 lines)
+- **Wordwrap Tab (Phase 10):**
+  - WordwrapOverwriteStep class (internal `step_id=8`, ninth user-facing tab, after Quality Assurance and before Output)
   - Preview table with line length indicators:
     - Input is stage-bounded: `qa_overwrite → qa → postpro → tl → prepro → orig`
     - Existing `wordwr` values are restored into the Wordwrap column only; the column is no longer prefilled from input text
+    - Apply / Refresh process the loaded stage input lines directly; they no longer depend on a separate `step_data["lines"]` cache that can be empty
     - Preview refresh and tab leave do not persist wrapped text; only explicit Apply writes `wordwr`
     - `wordwr` is stored sparsely and cleared when the wrapped result matches the current input
+    - Rows carry manifest `filedir` source format/path metadata so preview and wrapping stay scoped to the correct parser format
     - Columns: #, Status, Chars, Lines, Input, Wrapped Preview
-    - Status icons: ✓ Wrapped, ⚠ Exceeds, — No change
+    - Status icons: ✓ Wrapped, ⚠ Exceeding, ↳ New Textbox, — No change
     - Filter and checkbox selection support
   - **Format Selector:**
-    - RPG Maker MV (48 chars, \n break, 4 max lines)
-    - RPG Maker MZ (55 chars, \n break, 4 max lines)
-    - Ren'Py (60 chars, \n break, unlimited lines)
-    - TyranoScript (45 chars, [r] break, unlimited)
-    - Custom (user-defined settings)
+    - Populated from manifest `filedir[].format`, not from a static list
+    - Preview rows are filtered to the selected format and only that format's tag settings are edited in the right-hand panel
+    - Each format has its own enabled/disabled state and runs only on rows belonging to that format
+    - Multiple enabled formats can be processed sequentially in one Apply pass while still remaining format-safe
   - **Wordwrap Settings Panel:**
     - Mode selection (WrapMode enum):
-      - Manual: Simple character-based wrapping
-      - RPGMaker: Pretty wrap with punctuation preference
-      - Disabled: No wrapping applied
-    - Width spinbox (20-200 characters)
+      - Manual: Shared `apply_wordwrap()` pipeline
+    - Width mode dropdown (Character / Pixel) with per-tag width values
     - Break character combo (\\n, \n, <br>, [r], \\r\\n)
     - Max lines spinbox (0=unlimited, 1-20)
-    - Prevent orphans checkbox
-    - Prefer punctuation breaks checkbox
+    - Exceeding Max Lines is tracked in preview; wrapping is no longer truncated at Apply time before parser injection can split textboxes
+    - Overflow lines without textbox support stay flagged as `Exceeding` and are not written into `wordwr`; overflow lines with textbox support are stored as `New Textbox`
   - **Per-Tag Wordwrap Settings (TagWrapConfig):**
     - Per-tag sections for dialogue, menu, and custom tags
-    - Each tag section has Width / Break Char / Max Lines / Speaker Handling / Prevent Orphans / Prefer Punctuation Breaks / New Textbox controls
-    - Parser provides defaults via `wordwrap_for_tag()` — all values remain editable
+    - Each tag section has Enabled / Width / Break Char / Max Lines / Speaker Handling / Pretty Wrap / New Textbox controls
+    - Parser provides defaults via `wordwrap_for_tag()` — all values remain editable per format
     - "Add Tag" dropdown to add sections for additional tags from filedir/line tags
     - "Remove tag" button on non-standard tags (dialogue/menu always present)
-    - Tag resolution: line tag → filedir type → "dialogue" fallback
+    - Tag resolution: canonical line `tags` primary content tag → filedir type → "dialogue" fallback
     - Default configs: dialogue (width=48, max_lines=4), menu (width=48, max_lines=0)
-    - Persisted via `WordwrapSettings.TagConfigs` in manifest
+    - LightVN keeps `menu` prefilled but disabled by default because parser width is `0`
+    - Persisted via `WordwrapSettings.FormatConfigs` in manifest, with legacy `TagConfigs` still backfilled for compatibility
   - **Speaker Handling Panel (SpeakerMode enum):**
-    - IGNORE: Remove speaker prefix before wrapping
-    - SAMELINE: Keep prefix on first line only
-    - SAMELINEINDENT: Prefix on first line, indent continuation
-    - NEWLINE: Speaker prefix on its own line
+    - IGNORE: Do not count the speaker prefix toward wrap width, but keep it in the wrapped output
+    - IGNORE uses the Analysis/parser-discovered speaker list stored in manifest `characters[]` as an allowlist, accepts both original and translated speaker aliases from that list, and falls back to parser `detect_speakers()` for the loaded preview rows when manifest speaker data is missing
+    - Plain `Name:` text that was not detected as a speaker is counted normally
+    - COUNT: Count the speaker prefix as part of the visible width
     - Descriptions shown for each mode
   - **Ignore Patterns Panel (IgnorePattern enum):**
-    - ANGLE: Ignore <tags> (HTML/XML)
-    - SQUARE: Ignore [codes] (RPG Maker)
-    - CURLY: Ignore {vars} (template)
-    - EN: Ignore en() escapes
-    - Checkbox toggles with descriptions
-  - **Typography Panel:**
-    - Style selection (TypographyStyle enum):
-      - Western, Japanese, Chinese, Korean, Mixed
-    - Use fullwidth punctuation checkbox
-    - Use ideographic spaces checkbox
-    - Convert quotation marks checkbox
-  - **Overwrite Strategy Panel (OverwriteStrategy enum):**
-    - OVERWRITE: Replace existing files
-    - BACKUP: Create backup before overwrite (default)
-    - MERGE: Merge with existing content
-    - SKIP: Skip if file exists
-    - Merge method selector (MergeMethod enum):
-      - Replace All, Replace Changed, Append, Interleave
-    - Backup suffix entry (.bak default)
+    - Read-only view of invisible patterns sourced from the Code Database
+    - Only manifest `code_patterns[]` entries marked `IsInvisible` are zero-width in Step 8; generic `{...}` / `[...]` / `<...>` spans are counted normally unless the Code Database says otherwise
   - **Line Length Ruler:**
     - Visual canvas showing line length vs limit
     - Color-coded bar (green under limit, red over)
@@ -1412,21 +1398,28 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - apply_wordwrap() for batch processing
     - get_wordwrap_modes() for UI metadata
     - smart_wrap() and pretty_wrap() core functions
+    - Shared wrapper now uses a single `pretty_wrap` toggle; legacy orphan/punctuation flags are compatibility fallbacks only
+    - PrettyWrap now rebalances short orphan tails by searching better breakpoints within the same line count instead of relying only on a greedy final-line heuristic
+    - `normalize_break_char()` keeps preview line counts aligned with wrapped output
+    - Leading indentation is preserved in wrapped output instead of being stripped by the shared wrapper
+    - Literal non-RPG break commands such as `\n` are preserved as explicit wrap boundaries instead of being stripped as RPG escape codes
+    - Only Code Database patterns marked `IsInvisible` do not count toward visible width; all other code stays visible unless Step 3 flagged it invisible
+    - New-textbox-capable tags can emit the parser's explicit separator string directly into `wordwr` (for LightVN, `\w` + newline + `"`)
+    - LightVN injection restores the final engine-required terminal `\w` during output generation, including conditional dialogue and single-textbox dialogue
+    - Apply runs wrapping and sparse manifest writes off the UI thread and reports progress back into the Step 8 progress bar during both phases
   - **Data Classes:**
-    - WrapLine: idx, original, wrapped, char_count, line_count, exceeds_limit
-    - FormatConfig: format_name, wrap_width, break_char, max_lines, enabled
-    - WrapOptions: mode, speaker_mode, ignore_patterns, width, break_char
-    - OverwriteOptions: strategy, merge_method, backup_suffix
-    - TypographyOptions: style, fullwidth/ideographic/quote settings
+    - WrapLine: idx, original, source_format, source_path, wrapped, char_count, line_count, exceeds_limit, new_textbox_applied, persist_wrapped
+    - FormatConfig: format_id, format_name, wrap_width, break_char, max_lines, enabled, tag_configs
+    - WrapOptions: mode, speaker_mode, width, break_char, max_lines, pretty_wrap, format_configs
     - WrapStats: total_lines, lines_wrapped, lines_exceeding, avg_line_length
   - **Manifest Integration (Phase 28):**
     - WordwrapSettings nested structure with all wrap settings:
-      - Mode, Width, BreakChar, MaxLines
-      - PreventOrphans, PreferPunctuationBreaks
-      - SpeakerHandling, Typography
-      - TagConfigs (list of per-tag config dicts)
+      - Mode, Width, BreakChar, MaxLines, PrettyWrap
+      - SpeakerHandling
+      - TagConfigs (legacy compatibility)
+      - FormatConfigs (manifest-driven per-format config dicts)
     - All options persist to manifest and load on step enter
-    - 40 tests in dev/test_wordwrap_manifest.py
+    - Focused regressions cover manifest persistence, format scoping, and PrettyWrap behavior
 - **Output & Injection Tab (Phase 11):**
   - OutputInjectStep class (step_id=9, ~1324 lines)
   - Preview table showing source→destination mapping:
@@ -2013,7 +2006,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - gui/steps/translate.py - Translation tab
   - gui/steps/qa.py - Quality Assurance tab
   - gui/steps/postprocess.py - Postprocessing tab
-  - gui/steps/wordwrap_overwrite.py - Wordwrap & Overwrite tab
+  - gui/steps/wordwrap_overwrite.py - Wordwrap tab
   - gui/steps/output_inject.py - Output & Injection tab
   - gui/components/table.py - Shared table component (pagination, ~950 lines)
   - gui/components/ - Reusable UI components
@@ -2370,7 +2363,7 @@ PARSER SCRIPTS (Implemented)
 - **RPG Maker MV/MZ** (`formats/parser_rpgmaker.py`): Full implementations with wordwrap defaults, forbidden chars, context markers
 - **Parser Registry** (`formats/__init__.py`): `ParserRegistry` with register, get, detect, list_parsers
 - Auto-detection via `can_handle()` probes file structure (e.g. www/data/*.json, null-first arrays)
-- **Wordwrap Integration** (`gui/steps/wordwrap_overwrite.py`): Parser wordwrap configs auto-populate format dropdown
+- **Wordwrap Integration** (`gui/steps/wordwrap_overwrite.py`): Parser wordwrap configs pre-populate editable per-tag settings; the step resolves canonical line `tags` first, then filedir `type`, then falls back to `dialogue`
 - **Forbidden Characters:** Merged into logit bias via `merge_parser_forbidden_chars()`; auto-replaced or flagged via `replace_forbidden_chars()`
 - **API Integration** (`functions/api_client.py`): `apply_parser_forbidden_chars()` method on ApiClient
 
@@ -2395,7 +2388,7 @@ PARSER HANDSHAKE — UNIFIED I/O PARSER INTERFACE (Implemented)
 PIPELINE WIRING OF OPTIONAL COMPONENTS (Implemented — P3)
 - **`_wire_parser_optionals(format_id)`** in `gui/steps/input_extract.py`: Runs after extraction/manifest creation, writes all parser optional data to manifest fields
 - **O4 Speaker Detection:** Calls `parser.detect_speakers()`, writes `SpeakerInfo` list to manifest `characters[]`, sets `Options.ParserHandlesSpeakers = True`; analysis step always runs speaker detection but uses parser-detected names as an allowlist to filter false positives from regex-based detection
-- **O6 Custom Wordwrap:** Sets `Options.ParserHandlesWordwrap = True`; wordwrap step delegates to `parser.wordwrap(line)` per line instead of built-in `apply_wordwrap`
+- **O6 Custom Wordwrap:** Sets `Options.ParserHandlesWordwrap = True`; currently used as parser capability metadata for downstream integration and future delegation paths
 - **O9 Pretty Wrap Hook:** `parser.pretty_wrap(text, width, break_char, max_lines)` replaces built-in `pretty_wrap` core algorithm while keeping speaker handling and pipeline logic intact; lighter alternative to O6, used for user-managed tags or as fallback
 - **O7 Forbidden Chars:** Serialises `forbidden_chars.to_dict()` to `Options.ParserForbiddenChars`; translation step calls `api_client.apply_parser_forbidden_chars()` to merge into logit bias
 - **O8 Tags:** Compiles `tag_rules`, applies regex patterns to extracted lines, writes `tag` tags; `detect_tags()` accepts optional `parser_rules` parameter to override built-in heuristics
@@ -2415,6 +2408,9 @@ LIGHT VN PARSER (Implemented)
 - **Surgical injection:** `inject_to(source, output, lines, *, orig_lines=None) → List[int]` reads original, re-extracts keys, maps translations, and writes complete script with only translatable text replaced — overrides the standard speaker-aware handshake because extracted text is cleaned (\w markers stripped, " prefixes removed, multi-line joined) and does not appear verbatim in raw files; `orig_lines` parameter accepted for API compatibility but ignored internally
 - **Angle bracket safety:** Converts non-code `<>` to fullwidth `＜＞` during injection
 - **Custom wordwrap:** Balanced line wrapping with orphan avoidance, textbox splitting (O6)
+- **Explicit wrapped-line preservation:** When Step 8 stores dialogue with literal line breaks, LightVN injection preserves those logical lines and splits them into multiple textboxes at the 3-line boundary instead of re-flattening or truncating them
+- **Explicit textbox separator support:** LightVN's parser defaults now expose the full textbox separator string `\w` + newline + `"`, and Step 8 can store that separator visibly inside `wordwr` instead of leaving it implicit until injection
+- **Textbox marker contract:** Step 8 stores `\w` only between textboxes inside `wordwr`, while LightVN injection re-adds the final dialogue `\w` marker exactly once when writing the script back out
 - **Pretty wrap hook:** O9 `pretty_wrap()` — lighter core-wrap replacement used by Step 7 for user-managed tags
 - **Tag-specific wrapping:** Dialogue=wrap (60 chars, 3 lines), menu/variable/items=no wrap
 - **Encoding detection:** Priority chain: utf-8, utf-8-sig, shift_jis, cp932, euc-jp, utf-16
@@ -2422,7 +2418,7 @@ LIGHT VN PARSER (Implemented)
 - **Bookmark speaker reset:** `~栞 ...` bookmarks clear any previously active `~【Speaker】` state before later dialogue is parsed, so map/interactable text is not accidentally prefixed with the last real speaker name.
 - **Placeholder filtering:** Editor placeholder dialogue such as `ここにテキストを入力` / `Enter your text here.` is treated as template scaffolding and skipped during extraction instead of being sent for translation.
 - **Input override behavior:** When Input format is left on `auto`, LightVN can provide both parser format and parser encoding. When the user explicitly selects `lightvn` while leaving Encoding on `auto`, the Input step now resolves encoding through `LightVNParser.detect_encoding()` before extraction so the parser's encoding still wins.
-- **Tag propagation:** Parser extraction tags (`dialogue`, `menu`, `variable`, `items`) from `extract_tagged()` are stored in `LoadedFile.tags` and written to the manifest `tag` field during loading. The O8 regex pass skips lines already tagged by the parser.
+- **Tag propagation:** Parser extraction tags (`dialogue`, `menu`, `variable`, `items`) from `extract_tagged()` are stored in `LoadedFile.tags` and written to the manifest canonical `tags` field during loading. The O8 regex pass skips lines already tagged by the parser.
 - **Corpus verified:** 55604 total lines, 50212 unique across 1056 .txt files, 843 speakers
 
 WIDTH CONVERSION (Implemented)

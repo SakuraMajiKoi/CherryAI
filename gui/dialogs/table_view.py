@@ -25,7 +25,14 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from CherryAI.functions.manifest_manager import ManifestManager, FileDirEntry
+from CherryAI.functions.manifest_manager import (
+    FileDirEntry,
+    LOCKED_LINE_TAG,
+    ManifestManager,
+    is_line_locked,
+    parse_line_tags,
+    set_line_lock_tag,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +108,8 @@ COLOR_CHANGED = "#FFF3CD"
 COLOR_HIGHLIGHT = "#D4EDFF"
 COLOR_DIFF_ADD = "#D4F5D4"
 COLOR_DIFF_DEL = "#F5D4D4"
+COLOR_LOCKED = "#E2F3E6"
+COLOR_LOCKED_SELECTED = "#B8DEB8"
 
 
 class FullTableViewDialog(tk.Toplevel):
@@ -285,6 +294,10 @@ class FullTableViewDialog(tk.Toplevel):
         btn_frame.pack(side="right", padx=(8, 0))
 
         ttk.Button(
+            btn_frame, text="Lock / Unlock", command=self._on_toggle_lock,
+        ).pack(side="left", padx=(0, 8))
+
+        ttk.Button(
             btn_frame, text="Clear Columns", command=self._show_clear_columns_dialog,
         ).pack(side="left", padx=(0, 8))
 
@@ -385,6 +398,8 @@ class FullTableViewDialog(tk.Toplevel):
         self._tree.tag_configure("diff_del", background=COLOR_DIFF_DEL)
         self._tree.tag_configure("even", background=COLOR_INPUT)
         self._tree.tag_configure("odd", background=COLOR_PANEL)
+        self._tree.tag_configure("locked", background=COLOR_LOCKED)
+        self._tree.tag_configure("locked_selected", background=COLOR_LOCKED_SELECTED)
 
     def _build_status_bar(self) -> None:
         """Build the bottom status bar with pagination controls."""
@@ -499,7 +514,12 @@ class FullTableViewDialog(tk.Toplevel):
 
             # Determine row tags
             tags: List[str] = []
-            if idx in self._selected_rows:
+            locked = is_line_locked(line)
+            if locked and idx in self._selected_rows:
+                tags.append("locked_selected")
+            elif locked:
+                tags.append("locked")
+            elif idx in self._selected_rows:
                 tags.append("selected_row")
             if idx in self._changes or idx in self._deleted_fields:
                 tags.append("changed")
@@ -1188,13 +1208,56 @@ class FullTableViewDialog(tk.Toplevel):
         if idx not in self._changes:
             self._changes[idx] = {}
         self._changes[idx][field] = value
+        deleted = self._deleted_fields.get(idx)
+        if deleted and field in deleted:
+            deleted.discard(field)
+            if not deleted:
+                del self._deleted_fields[idx]
 
     def _record_delete(self, idx: int, field: str) -> None:
         """Record a field deletion."""
         if idx not in self._deleted_fields:
             self._deleted_fields[idx] = set()
         self._deleted_fields[idx].add(field)
-        self._record_change(idx, field, "")
+        if idx not in self._changes:
+            self._changes[idx] = {}
+        self._changes[idx][field] = ""
+
+    def _get_target_row_indices(self) -> List[int]:
+        """Return the row indices affected by bulk actions."""
+        if self._selected_rows:
+            return sorted(self._selected_rows)
+        selection = self._tree.selection() if hasattr(self, "_tree") else ()
+        return sorted(int(item) for item in selection)
+
+    def _on_toggle_lock(self) -> None:
+        """Toggle the lock tag on the currently selected rows."""
+        target_indices = self._get_target_row_indices()
+        if not target_indices:
+            messagebox.showinfo("Lock / Unlock", "Select one or more rows first.")
+            return
+
+        target_lines = [line for line in self._all_lines if line.get("idx") in target_indices]
+        should_unlock = all(is_line_locked(line) for line in target_lines)
+
+        changed = 0
+        for line in target_lines:
+            idx = int(line.get("idx", -1))
+            old_tags = line.get("tags", "")
+            set_line_lock_tag(line, not should_unlock)
+            new_tags = line.get("tags", "")
+            if old_tags == new_tags:
+                continue
+            if new_tags:
+                self._record_change(idx, "tags", new_tags)
+            else:
+                self._record_delete(idx, "tags")
+            changed += 1
+
+        if changed == 0:
+            return
+
+        self._refresh_table()
 
     def _has_changes(self) -> bool:
         """Check if there are any unsaved changes."""
@@ -1227,14 +1290,14 @@ class FullTableViewDialog(tk.Toplevel):
             for field, value in fields.items():
                 if field in self._deleted_fields.get(idx, set()):
                     continue
-                self._mgr.set_line_field(idx, field, value)
+                self._mgr.set_line_field(idx, field, value, allow_locked=True)
                 count += 1
 
         for idx, deleted_fields in self._deleted_fields.items():
             if save_indices is not None and idx not in save_indices:
                 continue
             for field in deleted_fields:
-                self._mgr.clear_line_field(idx, field)
+                self._mgr.clear_line_field(idx, field, allow_locked=True)
                 count += 1
 
         # Clear saved changes from tracking

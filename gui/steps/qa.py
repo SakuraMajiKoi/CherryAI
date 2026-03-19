@@ -59,6 +59,15 @@ def _persist_sparse_qa_overwrite(
     manager.clear_line_field(idx, "qa_overwrite")
 
 
+def _line_is_locked(manager: Any, idx: int) -> bool:
+    """Return True only when the manager explicitly reports a locked line."""
+    check_locked = getattr(manager, "is_line_locked", None)
+    if not callable(check_locked):
+        return False
+    locked = check_locked(idx)
+    return locked if isinstance(locked, bool) else False
+
+
 class IssueType(Enum):
     """Type of QA issue detected."""
 
@@ -959,6 +968,11 @@ class QAStep(BaseStep):
         if column_key != "overwrite":
             return
         if 0 <= row_id < len(self._lines):
+            if self.manifest_manager is not None and _line_is_locked(
+                self.manifest_manager,
+                self._lines[row_id].idx,
+            ):
+                return
             self._lines[row_id].overwrite_text = str(new_value)
             if self.manifest_manager is not None:
                 _persist_sparse_qa_overwrite(
@@ -1031,6 +1045,11 @@ class QAStep(BaseStep):
         policy = normalize_qa_rerun_policy(self._qa_options.rerun_policy)
 
         for line in self._lines:
+            if self.manifest_manager is not None and _line_is_locked(
+                self.manifest_manager,
+                line.idx,
+            ):
+                continue
             if policy == "all":
                 lines_to_check.append(line)
             elif policy == "failed_only":
@@ -1492,6 +1511,11 @@ class QAStep(BaseStep):
 
         for line_idx in selected:
             if 0 <= line_idx < len(self._lines):
+                if self.manifest_manager is not None and _line_is_locked(
+                    self.manifest_manager,
+                    self._lines[line_idx].idx,
+                ):
+                    continue
                 self._lines[line_idx].overwrite_text = self._lines[line_idx].qa_text
                 if self.manifest_manager is not None:
                     _persist_sparse_qa_overwrite(

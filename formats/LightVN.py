@@ -362,7 +362,7 @@ class LightVNParser(ParserScript):
             max_line_length=self._line_width,
             max_line_number=self._max_lines,
             wordwrap_command="\\n",
-            new_textbox_injection="\\w",
+            new_textbox_injection="\\w\n\"",
         )
 
     def wordwrap_for_tag(self, tag: str) -> Optional[WordwrapConfig]:
@@ -555,9 +555,22 @@ class LightVNParser(ParserScript):
             max_width = self._line_width
         if max_lines is None:
             max_lines = self._max_lines
-        all_lines = self._pretty_wrap(text, max_width)
+
+        explicit_lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+        if len(explicit_lines) > 1:
+            all_lines = explicit_lines
+        else:
+            all_lines = self._pretty_wrap(text, max_width)
+
         if len(all_lines) <= max_lines:
             return [all_lines]
+
+        if len(explicit_lines) > 1:
+            boxes: List[List[str]] = []
+            for idx in range(0, len(all_lines), max_lines):
+                boxes.append(all_lines[idx:idx + max_lines])
+            return boxes
+
         total = len(all_lines)
         num_boxes = (total + max_lines - 1) // max_lines
         base = total // num_boxes
@@ -585,10 +598,40 @@ class LightVNParser(ParserScript):
         textboxes: List[List[str]], prefix: str,
     ) -> List[str]:
         result: List[str] = []
-        for box in textboxes:
+        for idx, box in enumerate(textboxes):
             box_text = "\n".join(box)
-            result.append(f"{prefix}{box_text}\\w")
-        return result
+            suffix = "\\w" if idx < len(textboxes) - 1 else ""
+            result.append(f"{prefix}{box_text}{suffix}")
+        return LightVNParser._ensure_dialogue_terminal_marker(result)
+
+    @staticmethod
+    def _ensure_dialogue_terminal_marker(lines: List[str]) -> List[str]:
+        """Ensure the last dialogue output line ends with a single ``\\w`` marker."""
+        if not lines:
+            return lines
+        last = lines[-1].rstrip()
+        if not last.endswith("\\w"):
+            lines[-1] = last + "\\w"
+        return lines
+
+    @staticmethod
+    def _has_explicit_textbox_separator(text: str) -> bool:
+        """Return True when *text* already contains a textbox break marker."""
+        return "\\w\n\"" in text or text.startswith('"')
+
+    @staticmethod
+    def _format_prewrapped_dialogue(dialogue: str, prefix: str) -> List[str]:
+        """Preserve explicit textbox separators embedded in the wrapped string."""
+        result: List[str] = []
+        for idx, raw_line in enumerate(dialogue.replace("\r\n", "\n").split("\n")):
+            line = raw_line.strip()
+            if not line:
+                continue
+            if idx == 0 and not line.startswith(prefix):
+                result.append(f"{prefix}{line}")
+                continue
+            result.append(line)
+        return LightVNParser._ensure_dialogue_terminal_marker(result)
 
     # -- Menu text detection -----------------------------------------------
 
@@ -1253,6 +1296,7 @@ class LightVNParser(ParserScript):
 
         if translation:
             new_sp, translated = self._parse_translation(translation)
+            translated = translated.replace("\r\n", "\n")
             translated, rc, nrc, det = self._recover_code_in_translation(
                 dt, translated, f"Dialogue: {dt[:50]}",
             )
@@ -1265,6 +1309,8 @@ class LightVNParser(ParserScript):
                 fmt = self._format_conditional_dialogue(
                     translated, d_prefix, cond_prefix,
                 )
+            elif self._has_explicit_textbox_separator(translated):
+                fmt = self._format_prewrapped_dialogue(translated, d_prefix)
             else:
                 boxes = self._wrap_for_textbox(translated)
                 fmt = self._format_textboxes(boxes, d_prefix)
@@ -1309,9 +1355,11 @@ class LightVNParser(ParserScript):
                 result.append(f'{cond_prefix}"{ln}')
             else:
                 result.append(f'{cond_prefix}-"{ln}')
-        if result and not result[-1].rstrip().endswith("\\w"):
-            result[-1] = result[-1].rstrip() + "\\w"
-        return result
+        if len(result) >= 2:
+            for idx in range(len(result) - 1):
+                if not result[idx].rstrip().endswith("\\w"):
+                    result[idx] = result[idx].rstrip() + "\\w"
+        return LightVNParser._ensure_dialogue_terminal_marker(result)
 
     # -- Menu injection ----------------------------------------------------
 

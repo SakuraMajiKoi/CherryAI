@@ -113,7 +113,7 @@ TABLE OF CONTENTS
        * validate_code_patterns_preserved() filters nested balanced-code substring matches so doubled-delimiter patterns do not also trigger single-delimiter warnings on the same text
        * validate_line_pre() is the shared skip-classification path for Costs, Preview Requests, and Start Translation; it now handles preserve-pattern CODE_ONLY detection plus source-language-aware CJK/Hangul filtering
         * validate_line_post() treats code pattern failures as errors (not warnings)
-   3.32 wordwrap.py ✅🔗 - Word wrapping (Step 7, moved from Step 8)
+  3.32 wordwrap.py ✅🔗 - Word wrapping (Step 8)
    3.33 ini_manager.py ✅ - INI path resolution, typed access, preset management, defaults (TASK 21.1 + 2026)
         * INI location: user/CherryAI.ini (automigrared from root on first run)
         * optionxform = str: case-preserving keys (required for preset names like "Natural")
@@ -124,8 +124,9 @@ TABLE OF CONTENTS
         * restore_preset_defaults — clears user overrides from a section
         * set_last_manifest / get_last_manifest — persist last opened manifest
         * add_to_recent_manifests / get_recent_manifests — manifest history
-   3.34 manifest_manager.py ✅🔗 - Unified manifest state management (TASK 19)
-        * Sparse line-field helpers include `clear_line_field()` for removing redundant per-line stage output when a result matches its stage input
+     3.34 manifest_manager.py ✅🔗 - Unified manifest state management (TASK 19)
+       * Sparse line-field helpers include `clear_line_field()` for removing redundant per-line stage output when a result matches its stage input
+       * Locked-line guard: canonical `tags` may include `locked`; shared helpers block writes to `tags`, `prepro`, `edited_prepro`, `preedit`, `tl`, `postpro`, `qa`, `qa_overwrite`, and `wordwr` unless the caller explicitly passes `allow_locked=True`
   3.35 manifest_fields.py ✅ - Manifest field type helpers (TASK 22.1) + special format helpers (TASK 22.2) + shared priority resolution API: resolve_line_field(), resolve_line_field_from(), resolve_line_field_for_stage(), get_latest_line_text(), get_line_text_for_stage(), get_all_lines_resolved(), get_all_lines_for_stage(); PIPELINE_FIELDS chain: wordwr → qa_overwrite → qa → postpro → tl → prepro → orig for final display/output, while stage helpers enforce ceilings (Postprocessing: tl → prepro → orig; QA: postpro → tl → prepro → orig; Wordwrap: qa_overwrite → qa → postpro → tl → prepro → orig); save_code_glossary/load_code_glossary support count as int or `[total, inst1_ct, ...]` list with instance_counts deserialization; save_character_notes/load_character_notes with count field
    3.36 preset_manager.py ✅ - Preset save/load/delete operations (TASK 30.1)
    3.37 mock_translator.py ✅ - Mock translation engine with flaw injection (Phase 56)
@@ -247,15 +248,15 @@ TABLE OF CONTENTS
    6.4 gui/steps/ (10 files - 10 workflow tabs)
        - __init__.py - Step exports
        - base.py - BaseStep abstract class (TASK 43.14: tab caching infra; on_new_project() lifecycle method for state flush)
-       - input_extract.py - Step 0: Input/Extraction 🔗formats/ (Phase 60: clickable column header sort with ▲/▼ indicators, file list filter entry, type column refresh fix, cross-file preview search with idx column and auto file-switching; non-destructive file addition with source root validation; Import Translation selection dialog with line fields and settings sections; preview columns: Project/File 1-based)
+      - input_extract.py - Step 0: Input/Extraction 🔗formats/ (Phase 60: clickable column header sort with ▲/▼ indicators, file list filter entry, type column refresh fix, cross-file preview search with idx column and auto file-switching; non-destructive file addition with source root validation; Import Translation selection dialog with line fields and settings sections; preview columns: Project/File 1-based; Import Translations always propagates source `locked` tags and skips ordinary stage-field imports for already locked target rows)
        - analysis.py - Step 1: Analysis ❌NO shared imports
        - costs.py - Step 4: Costs (renamed from estimate.py in Phase 40; _estimate_via_formation() returns FormationResult with per-request line lists; _compute_per_request_prompt_overhead() uses gather_prompt_data()+build_request_prompt() per chunk for selective filtering; _get_prompt_tokens() and _get_static_prompt_tokens() also unified via gather_prompt_data()+build_request_prompt(); per-model API.ini settings take priority over Global Options — _do_estimation() reads chunk_size/tokens_limit from _chunk_var/_tokens_var (set by _load_model_settings()), only request_slicing read from GlobalOptions; respects request_slicing mode; Per-model settings saved/loaded via api_config; "📤 Apply Settings to Model" button is a one-way write to API.ini — model changes do NOT reload settings, loaded once on first tab entry via _settings_loaded_once flag; Translation Options row with Thinking, Translated Context, Rolling Context spinboxes; Request Mode 2×2 grid (Normal/Batch/Flex/Priority) with "(Available)"/"(Unavailable)" suffix labels and Selected (blue) states driving mode-specific pricing; _recalculate_costs_for_mode() instantly updates costs from existing token counts without re-estimation; _reprice_for_model() fast-reprices all cost and time labels when model changes using stored EstimationResult token counts — no re-estimation required; EstimationResult.num_requests stores per-side request count to enable fast reprice; EstimationProgressDialog is a non-blocking Toplevel that shows 7 step indicators (○/●/✓) and a ttk.Progressbar — opened by _run_estimation(), updated via _report_progress() from background thread using after(), closed by _estimation_complete(); Model combo disabled during estimation (_run_estimation sets state="disabled", _estimation_complete restores state="readonly"); CACHE_HIT_RATE=0.80 applied to static prompt prefix via _get_static_prompt_tokens() for cache savings calculation; Token Counts panel shows Input/Prompt/Cached/Total/Output rows — Prompt Tokens displays the non-cached portion (prompt_tokens − cached_tokens) so that Input + Prompt + Cached = Total Input; EstimationResult dataclass includes content_tokens, prompt_tokens, cached_tokens, num_requests; input_cost stores content-only cost, prompt_cost stores non-cached prompt cost, cached_input_cost stores cached portion cost; Cost Estimate panel is purely additive: Input (content) + Prompt (non-cached) + Cached + Output = Total; all four cost rows are primary un-indented rows; module-level _ceil_to_cents() and _fmt_cost() helpers format every displayed dollar amount rounded up to the next cent; Full estimation persisted to manifest via _save_estimation_to_manifest(); Estimate button renamed to "↻ Update Counts" after first run)
        - information.py - Step 2: Information 🔗manifest_fields (Bug Fix: on_leave() and _save_metadata() now merge *_enabled toggle BooleanVar values into metadata dict after ProjectMetadata.to_dict() — fixes toggle state erasure on tab change; Save button removed from header — auto-save on tab change is sufficient; Bug Fix: on_enter() reordered to load _load_metadata() BEFORE _load_characters_from_manifest()/_load_code_patterns_from_manifest() so authoritative top-level manifest data overrides stale step_state; on_leave() now calls _save_characters_to_manifest() and _save_code_patterns_to_manifest() to sync dual storage; _import_analysis_speakers() persists to top-level immediately)
-       - preprocess.py - Step 3: Preprocessing 🔗manifest_fields
-       - translate.py - Step 5: Translation 🔗api_client, mock_translator, prompt_adapter, manifest_fields (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching; Preview Requests: PreviewRequest dataclass with _format_input_lines() for numbered line display and io_examples field, FILTER_PARTS constant (13 entries: meta, language, system_instructions, io_examples, style, tone, summary, genre, pov, conditional_prompts, glossary, rolling_context, input_lines), RequestPreviewDialog class with Pure/Formatted/Plain views and Jump/Search/Filter toolbar, _plain_text() preserves curly braces for game text, _build_preview_requests() mirrors real translation request building and gates each labeled section by *_enabled metadata flags, generates io_examples block with fill mode support, syncs _translation_options from current UI before _build_chunks(); _build_system_prompt_from_manifest() reads from `step_state.Information.data.metadata`; _load_model_settings() loads per-model API.ini settings (chunk_size, temperature, rolling_context, thinking) with Global Options fallback on tab entry; _build_chunks() reads rolling_context_between/after and chunk_max_tokens from per-model API.ini via get_model_settings() with Global Options fallback; Request Options: Key, Model, Request Mode combobox (Normal/Batch/Flex/Priority with "(Unavailable)" suffixes via _refresh_request_mode_options()), Model Settings/Translation Options Change… buttons, Character Whitelist/Blacklist (manifest-bound), Ban Tokens; TranslationOptions.request_mode field passed to APIConfig.request_mode in _do_translation(); _apply_char_filters() post-processes translations; _sync_from_global_options() syncs all hidden vars from GlobalOptions including TranslationSettings; _get_request_slicing_mode() reads slicing from GlobalOptions.translation)
-      - postprocess.py - Step 6: Postprocess 🔗postprocess, manifest_fields; _FAILURE_POLICY_MAP for legacy enum mapping; translated input uses stage ceiling `tl → prepro → orig`; dedup-tagged rows skip batch placeholder fallback and `recover_line()` so duplicate rows are restored only from source-line postprocessing and do not accumulate false placeholder/code-pattern flags; Processed Lines adds a dynamic flagged-case combobox and stores recovery-detail text in row metadata for searchable filtering
-      - qa.py - Step 7: QA 🔗validation, manifest_fields; table columns are Original / Quality Assurance / Overwrite; review input uses stage ceiling `postpro → tl → prepro → orig`; `qa` is review/display text only, while `qa_overwrite` is only persisted for explicit user edits that differ from QA input; includes inline overwrite editing and Copy to Overwrite action
-      - wordwrap_overwrite.py - Step 8: Wordwrap 🔗wordwrap, manifest_fields; preview column "Input"; input uses stage ceiling `qa_overwrite → qa → postpro → tl → prepro → orig`; stored `wordwr` is restored into the Wordwrap column without input fallback, and only explicit Apply persists sparse `wordwr` output
+      - preprocess.py - Step 3: Preprocessing 🔗manifest_fields; per-line persistence now routes through `ManifestManager.set_line_field()` / `clear_line_field()` and skips locked rows
+      - translate.py - Step 5: Translation 🔗api_client, mock_translator, prompt_adapter, manifest_fields (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching; Preview Requests: PreviewRequest dataclass with _format_input_lines() for numbered line display and io_examples field, FILTER_PARTS constant (13 entries: meta, language, system_instructions, io_examples, style, tone, summary, genre, pov, conditional_prompts, glossary, rolling_context, input_lines), RequestPreviewDialog class with Pure/Formatted/Plain views and Jump/Search/Filter toolbar, _plain_text() preserves curly braces for game text, _build_preview_requests() mirrors real translation request building and gates each labeled section by *_enabled metadata flags, generates io_examples block with fill mode support, syncs _translation_options from current UI before _build_chunks(); _build_system_prompt_from_manifest() reads from `step_state.Information.data.metadata`; _load_model_settings() loads per-model API.ini settings (chunk_size, temperature, rolling_context, thinking) with Global Options fallback on tab entry; _build_chunks() reads rolling_context_between/after and chunk_max_tokens from per-model API.ini via get_model_settings() with Global Options fallback; Request Options: Key, Model, Request Mode combobox (Normal/Batch/Flex/Priority with "(Unavailable)" suffixes via _refresh_request_mode_options()), Model Settings/Translation Options Change… buttons, Character Whitelist/Blacklist (manifest-bound), Ban Tokens; TranslationOptions.request_mode field passed to APIConfig.request_mode in _do_translation(); _apply_char_filters() post-processes translations; _sync_from_global_options() syncs all hidden vars from GlobalOptions including TranslationSettings; _get_request_slicing_mode() reads slicing from GlobalOptions.translation; locked rows are excluded from translation work and `edited_prepro` persistence)
+      - postprocess.py - Step 6: Postprocess 🔗postprocess, manifest_fields; _FAILURE_POLICY_MAP for legacy enum mapping; translated input uses stage ceiling `tl → prepro → orig`; dedup-tagged rows skip batch placeholder fallback and `recover_line()` so duplicate rows are restored only from source-line postprocessing and do not accumulate false placeholder/code-pattern flags; Processed Lines adds a dynamic flagged-case combobox and stores recovery-detail text in row metadata for searchable filtering; locked rows are skipped for both batch processing and manual fix actions
+      - qa.py - Step 7: QA 🔗validation, manifest_fields; table columns are Original / Quality Assurance / Overwrite; review input uses stage ceiling `postpro → tl → prepro → orig`; `qa` is review/display text only, while `qa_overwrite` is only persisted for explicit user edits that differ from QA input; includes inline overwrite editing and Copy to Overwrite action; locked rows are excluded from QA reruns and reject overwrite edits/copy actions
+      - wordwrap_overwrite.py - Step 8: Wordwrap 🔗wordwrap, manifest_fields; internal step id 8 but ninth user-facing tab after QA; preview column "Input"; input uses stage ceiling `qa_overwrite → qa → postpro → tl → prepro → orig`; manifest `filedir[].format` drives the preview format selector and per-format configs; stored `wordwr` is restored into the Wordwrap column without input fallback, and only explicit Apply persists sparse `wordwr` output; speaker-ignore width uses manifest `characters[]` as its allowlist, includes translated speaker aliases, falls back to parser `detect_speakers()` for the loaded preview rows when manifest speaker data is absent, and zero-width code comes only from manifest `code_patterns[]` entries marked `IsInvisible`; locked rows keep their existing Wordwrap state and are skipped during rewrap/apply
        - output_inject.py - Step 9: Output/Inject 🔗manifest_fields; _NAMING_STRATEGY_MAP for legacy enum mapping; OutputFormat.INJECTION enum; _get_fresh_lines_for_file() for stale-data fix; _write_injection() 4-step parser handshake; _get_same_as_source_dir() returns parent of Original/
    
    6.5 gui/components/ (2 files)
@@ -551,8 +552,8 @@ TABLE OF CONTENTS
          - PostProcessing.FailureHandling (text enum: "skip", "flag", "retry")
        - **Phase 28 Integration:** WordwrapOverwriteStep manifest bindings:
          - WordwrapSettings nested: Mode (text), Width (int), BreakChar (text),
-           MaxLines (int), PreventOrphans (bool), PreferPunctuationBreaks (bool),
-           SpeakerHandling (text), Typography (text), TagConfigs (list of dicts)
+           MaxLines (int), PrettyWrap (bool), SpeakerHandling (text),
+           TagConfigs (legacy list of dicts), FormatConfigs (per-format list of dicts)
        - **Phase 28 Integration:** OutputInjectStep manifest bindings:
          - OutputFormat nested: Destination (text), PreserveFolderStructure (bool), Format (text),
            PairMode (text), Encoding (text), FileNaming (text: suffix/prefix/subfolder),
@@ -1039,8 +1040,8 @@ CherryAI/
 │   │   ├── estimate.py     Backward-compat redirect
 │   │   ├── translate.py    TranslationStep (step 5)
 │   │   ├── postprocess.py  PostprocessingStep (step 6, moved from Step 7)
-│   │   ├── wordwrap_overwrite.py WordwrapOverwriteStep (step 7, moved from Step 8)
-│   │   ├── qa.py           QAStep (step 8, moved from Step 6)
+│   │   ├── wordwrap_overwrite.py WordwrapOverwriteStep (step 8)
+│   │   ├── qa.py           QAStep (step 7, moved from Step 6)
 │   │   └── output_inject.py OutputInjectStep (step 9)
 │   └── theme/              UI theming
 │       ├── __init__.py     Theme exports (colors, icons)
@@ -1376,6 +1377,12 @@ class ManifestManager:
     
     def set_wordwrap_tag_configs(self, configs: List[Dict]) -> None:
         """Replace TagConfigs list in WordwrapSettings, marks dirty."""
+
+    def get_wordwrap_format_configs(self) -> List[Dict]:
+      """Get per-format wordwrap configs from WordwrapSettings.FormatConfigs."""
+
+    def set_wordwrap_format_configs(self, configs: List[Dict]) -> None:
+      """Replace FormatConfigs list in WordwrapSettings, marks dirty."""
     
     def get_output_options(self) -> Dict[str, Any]:
         """Get output format options (Format, Encoding, FileNaming, etc.)."""
@@ -2415,12 +2422,24 @@ Pipeline Wiring of Optional Components (P3):
   speaker detection via `analyze_lines(include_speakers=True)`, then uses parser-detected speaker
   names from `characters[]` as an allowlist to filter false positives from regex-based detection
 - `gui/steps/wordwrap_overwrite.py` `_process_wrap()`: Reads per-tag `TagWrapConfig` settings
-  (width, break_char, max_lines, speaker_handling, prevent_orphans, prefer_punct_breaks) and
-  delegates to `apply_wordwrap()` with per-tag configuration. Parser provides defaults via
-  `_apply_parser_wordwrap_defaults()` but all settings remain editable.
-  Per-tag processing via `_build_tag_maps()`: resolves line tag → filedir type → "dialogue" fallback,
-  applies per-tag `TagWrapConfig` settings via `apply_wordwrap()` with `prevent_orphan` and
-  `prefer_punct_breaks` forwarded from per-tag config.
+  (enabled, width, break_char, max_lines, speaker_handling, pretty_wrap) inside the selected
+  manifest-driven `FormatConfig`, then delegates to `apply_wordwrap()` over the already loaded
+  preview rows (`self._lines`), so Apply/Refresh operate on the same stage-bounded input shown in
+  the table. `_build_line_format_map()` resolves each line to its `filedir[].format` and rel_path,
+  preview filtering stays scoped to the selected format, and Apply skips disabled formats or tags.
+  Parser defaults still seed configs via `_apply_parser_wordwrap_defaults()`, but settings remain
+  editable. Per-tag processing via `_build_tag_maps()`: resolves canonical line `tags` primary
+  content tag → filedir type → "dialogue" fallback. `max_lines` is treated as an exceed/overflow
+  check in Step 8 rather than destructive truncation so parser-side textbox splitting can still
+  realize the full wrapped result during output. Speaker mode `ignore` preserves the speaker prefix
+  in `wordwr` while excluding it from width calculations. Literal non-RPG break commands such as
+  `\n` are converted into explicit wrap boundaries, and new-textbox-capable tags can write their
+  separator string directly into `wordwr` via `apply_new_textbox_injection()`. Overflow without
+  textbox support is previewed as `Exceeding` but cleared from manifest `wordwr`; overflow with
+  textbox support is previewed as `New Textbox` and persisted. `_get_ignore_codes()` now combines
+  the legacy built-in invisible span families with manifest `code_patterns[]` entries marked
+  `IsInvisible`, and Apply reports determinate progress through a worker-thread queue while both
+  wrapping and sparse manifest writes stay off the UI thread.
 - `gui/steps/output_inject.py` `_write_file()`: Detects parser format from `filedir[].format`; when a
   parser is found via `get_parser_registry().get(format)`, slices per-file lines using
   `all_lines[entry.first_idx:entry.last_idx + 1]` and calls `parser.inject_to(source, output, lines)`
@@ -2439,12 +2458,13 @@ Light VN Parser (formats/LightVN.py):
 - **M1 Extract**: `extract(path)` → flat list; `extract_tagged(path)` → `List[ExtractedLine]`
 - **M2 Inject**: `inject(path, lines)` — writes to `{stem}_translated.txt` (delegates to `inject_to`); `inject_to(source, output, lines)` — surgical injection reading from source, writing to output
 - **M3 Identity**: `can_handle()` scans the entire file for `_DETECT_PATTERNS` (`~【`, `~栞`, `~文字`, `~ボタン`, `~絵`, `~効果音`, `~選択`, `~スクリプト`, `~保存変数`, `~臨時全域変数`) plus `_DETECT_LINE_PREFIXES` (`栞 `, `スクリプト `, `保存変数 `, `臨時全域変数 `) so script/config-style LightVN files do not fall back to plain txt
-- **Tag propagation**: `LoadedFile.tags` stores per-line tags from `extract_tagged()`; `_sync_lines_to_manifest()` writes them to `tag`; O8 regex pass skips pre-tagged lines
+- **Tag propagation**: `LoadedFile.tags` stores per-line tags from `extract_tagged()`; `_sync_lines_to_manifest()` merges them into the manifest's canonical `tags` field; O8 regex pass skips pre-tagged lines
 - **O3 Encoding**: Priority chain: utf-8, utf-8-sig, shift_jis, cp932, euc-jp, utf-16; this path is now used both for auto-detected LightVN files and for explicit `lightvn` input selection when Encoding remains `auto`
 - **O4 Speakers**: `detect_speakers()` parses `Speaker: text` format from extracted lines
-- **O5 Wordwrap**: 60 chars, 3 lines per textbox, `\w` textbox injection
-- **O6 Custom Wrap**: Balanced wrapping with orphan avoidance (`_pretty_wrap`)
-- **O9 Pretty Wrap Hook**: `pretty_wrap()` delegates to `_pretty_wrap`, joins with break_char, truncates to max_lines
+- **O5 Wordwrap**: 60 chars, 3 lines per textbox, explicit separator `\w` + newline + `"`
+- **O6 Custom Wrap**: LightVN exposes parser wordwrap defaults for dialogue (60 chars, 3 lines, explicit separator `\w` + newline + `"`) while CherryAI currently keeps Step 8 on the shared `apply_wordwrap()` path
+- **Textbox realization**: Explicit multiline wrapped dialogue is preserved during injection; when wrapped dialogue exceeds one textbox, `_wrap_for_textbox()` chunks the logical lines into successive 3-line boxes and `_inject_dialogue_block()` emits them with exact LightVN ordering (`...\w` + newline + next opening `"`). If Step 8 already stored that separator string inside `wordwr`, `_format_prewrapped_dialogue()` preserves it while parser injection restores exactly one final terminal `\w`, including conditional-dialogue output.
+- **O9 Pretty Wrap Hook**: `pretty_wrap()` delegates to `_pretty_wrap()` as LightVN's balanced wrap helper; explicit wrapped lines supplied by Step 8 are preserved rather than rebalanced away during injection
 - **O7 Forbidden**: Tab and carriage return characters
 - **O8 Context**: Patterns for dialogue (`^"`), menu (`~?文字`), choice (`~選択`)
 - **Tags**: `dialogue` (with speaker), `menu`, `variable`, `items`

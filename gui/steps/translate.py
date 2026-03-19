@@ -186,6 +186,7 @@ class TranslatableLine:
 
 class _TranslationStatusReason:
     ALREADY_TRANSLATED = "already translated"
+    LOCKED = "locked"
     NON_SOURCE = "non-source"
     EMPTY = "empty"
     PLACEHOLDERS = "placeholders"
@@ -2078,7 +2079,7 @@ class TranslationStep(BaseStep):
     def _collect_translatable_lines(
         self,
         lines: Optional[List[TranslatableLine]] = None,
-    ) -> Tuple[List[TranslatableLine], Dict[SkipReason, int], Dict[int, ValidationResult]]:
+    ) -> Tuple[List[TranslatableLine], Dict[Any, int], Dict[int, ValidationResult]]:
         """Classify lines using the shared validation rules.
 
         Returns lines that should be translated under the current Global
@@ -2099,11 +2100,18 @@ class TranslationStep(BaseStep):
         preserve_patterns = TranslationStep._get_preserve_patterns(self)
 
         translatable: List[TranslatableLine] = []
-        skip_counts: Dict[SkipReason, int] = {}
+        skip_counts: Dict[Any, int] = {}
         validations: Dict[int, ValidationResult] = {}
+        mgr = self.manifest_manager
 
         for line in selected_lines:
             if line.status == LineStatus.TRANSLATING:
+                continue
+
+            if mgr is not None and mgr.is_loaded and mgr.is_line_locked(line.idx):
+                skip_counts[_TranslationStatusReason.LOCKED] = (
+                    skip_counts.get(_TranslationStatusReason.LOCKED, 0) + 1
+                )
                 continue
 
             existing_translation = None
@@ -2139,13 +2147,15 @@ class TranslationStep(BaseStep):
 
     def _group_skip_reason_counts(
         self,
-        skip_counts: Dict[SkipReason, int],
+        skip_counts: Dict[Any, int],
     ) -> Dict[str, int]:
         """Collapse raw skip reasons into user-facing status groups."""
         grouped: Dict[str, int] = {}
 
         for reason, count in skip_counts.items():
-            if reason == SkipReason.ALREADY_TRANSLATED:
+            if reason == _TranslationStatusReason.LOCKED:
+                label = _TranslationStatusReason.LOCKED
+            elif reason == SkipReason.ALREADY_TRANSLATED:
                 label = _TranslationStatusReason.ALREADY_TRANSLATED
             elif reason == SkipReason.EMPTY:
                 label = _TranslationStatusReason.EMPTY
@@ -2182,6 +2192,7 @@ class TranslationStep(BaseStep):
         grouped = TranslationStep._group_skip_reason_counts(self, skip_counts)
         reason_order = [
             _TranslationStatusReason.ALREADY_TRANSLATED,
+            _TranslationStatusReason.LOCKED,
             _TranslationStatusReason.NON_SOURCE,
             _TranslationStatusReason.EMPTY,
             _TranslationStatusReason.PLACEHOLDERS,
@@ -2595,21 +2606,20 @@ class TranslationStep(BaseStep):
         
         # Apply edited data to lines and manifest
         for idx, edited_text in dialog.edited_data.items():
-            # Update TranslatableLine
+            if not self._save_edited_prepro_to_manifest(idx, edited_text):
+                continue
+
             for line in self._lines:
                 if line.idx == idx:
                     line.edited_prepro = edited_text if edited_text else ""
                     break
-            
-            # Update manifest
-            self._save_edited_prepro_to_manifest(idx, edited_text)
         
         # Update table to show edited indicator
         self._update_lines_table()
         
         return True
 
-    def _save_edited_prepro_to_manifest(self, idx: int, edited_text: str) -> None:
+    def _save_edited_prepro_to_manifest(self, idx: int, edited_text: str) -> bool:
         """Save edited_prepro to manifest (Task 33.1).
         
         Args:
@@ -2618,14 +2628,12 @@ class TranslationStep(BaseStep):
         """
         mgr = self.manifest_manager
         if mgr is not None and mgr.is_loaded:
+            if mgr.is_line_locked(idx):
+                return False
             if edited_text:
-                mgr.set_line_field(idx, "edited_prepro", edited_text)
-            else:
-                # Clear the field by setting to None
-                line = mgr.get_line(idx)
-                if line and "edited_prepro" in line:
-                    del line["edited_prepro"]
-                    mgr._mark_dirty()
+                return mgr.set_line_field(idx, "edited_prepro", edited_text)
+            return mgr.clear_line_field(idx, "edited_prepro")
+        return True
 
     def _save_manifest_before_translation(self) -> None:
         """Save manifest before starting translation (TASK 29.2).

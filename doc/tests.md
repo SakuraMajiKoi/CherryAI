@@ -192,6 +192,44 @@ Verified command:
 python -m pytest CherryAI/dev/test_app_startup.py CherryAI/dev/test_input_import_fixes.py CherryAI/dev/test_lightvn_fixes.py -q --timeout=10
 ```
 
+### Focused Locked-Line Protection Regression
+
+The locked-line workflow is covered by two focused regression sets:
+
+- `dev/test_input_import_fixes.py` verifies that manifest line imports always carry the source `locked` tag, that already locked target rows reject imported stage-field overwrites, and that shared manifest helpers block guarded writes unless `allow_locked=True` is supplied.
+- `dev/test_table_view.py` verifies Full Table View lock toggling, deletion tracking, locked-row save bypass with `allow_locked=True`, and locked-row display tagging.
+- `dev/test_edit_before_translate.py`, `dev/test_postprocess_manifest.py`, `dev/test_qa_manifest.py`, and `dev/test_wordwrap_manifest.py` provide adjacent regression coverage for the workflow steps touched by the shared lock guard.
+
+Verified commands:
+
+```bash
+python -m pytest CherryAI/dev/test_table_view.py CherryAI/dev/test_input_import_fixes.py -q --timeout=10
+python -m pytest CherryAI/dev/test_edit_before_translate.py CherryAI/dev/test_postprocess_manifest.py CherryAI/dev/test_qa_manifest.py CherryAI/dev/test_wordwrap_manifest.py -q --timeout=10
+```
+
+Latest verified results: 167 passed, then 133 passed with 2 skipped.
+
+### Focused Wordwrap + LightVN Runtime Regression
+
+The manifest-driven Step 8 Wordwrap path and LightVN textbox realization path are covered by a focused runtime set:
+
+- `dev/test_wordwrap_phase46.py` verifies that Apply/Refresh wrap the loaded preview rows even when cached step-data lines are empty, that canonical `tags` drive tag resolution, that speaker mode `ignore` excludes only detected speaker prefixes from width counting, that translated speaker aliases from manifest `characters[]` are also honored, that parser `detect_speakers()` can seed the allowlist when manifest speaker data is absent, that manifest `code_patterns[]` entries marked `IsInvisible` contribute zero width while other code still counts normally, that leading indentation survives wrapping, that literal `\n` commands and non-RPG backslashes survive wrapping, that overflow without textbox support is not persisted to `wordwr`, and that new-textbox-capable tags are classified separately from unsplittable `Exceeding` rows.
+- `dev/test_lightvn_parser.py` verifies that explicit multiline wrapped dialogue is preserved during injection and split into successive LightVN textboxes with the exact `\w` + newline + `"` ordering between boxes, that LightVN injection restores a single terminal `\w` even when Step 8 stored only inter-textbox separators in `wordwr`, and that conditional dialogue injection follows the same terminal-marker rule without crashing.
+- `dev/test_wordwrap.py` verifies the stronger PrettyWrap balancing behavior, including rebalancing a one-word orphan tail into a better punctuation-aligned two-line split.
+- `dev/test_lightvn_fixes.py` remains in the set to cover LightVN parser-path and canonical tag propagation behavior used by the same workflow.
+- Focused `dev/test_gui_v2.py` assertions verify the current QA-before-Wordwrap ordering plus the updated Wordwrap config dataclasses.
+
+Verified commands:
+
+```bash
+python -m pytest CherryAI/dev/test_wordwrap_phase46.py CherryAI/dev/test_lightvn_parser.py CherryAI/dev/test_lightvn_fixes.py -q --timeout=10
+python -m pytest CherryAI/dev/test_wordwrap_phase46.py CherryAI/dev/test_tag_wordwrap.py CherryAI/dev/test_wordwrap_manifest.py CherryAI/dev/test_gui_v2.py::TestSessionState::test_step_definitions_names CherryAI/dev/test_gui_v2.py::TestQAStepClass::test_qa_step_id CherryAI/dev/test_gui_v2.py::TestQAStepIntegration::test_qa_step_in_steps_init CherryAI/dev/test_gui_v2.py::TestWrapOptionsDataclass::test_wrap_options_defaults CherryAI/dev/test_gui_v2.py::TestFormatConfigDataclass::test_format_config_defaults CherryAI/dev/test_gui_v2.py::TestFormatConfigDataclass::test_format_config_custom_values CherryAI/dev/test_gui_v2.py::TestWordwrapOverwriteStepIntegration::test_wordwrap_step_attributes CherryAI/dev/test_gui_v2.py::TestStepNamingConsistency::test_step_ids_are_sequential -q --timeout=10
+python -m pytest CherryAI/dev/test_wordwrap_phase46.py CherryAI/dev/test_lightvn_parser.py CherryAI/dev/test_tag_wordwrap.py CherryAI/dev/test_wordwrap_manifest.py -q --timeout=10
+```
+
+Latest verified result: 192 passed.
+Latest verified expanded regression result: 310 passed.
+
 Plugin installation:
 
 ```bash
@@ -1155,8 +1193,8 @@ Settings helper methods for processing function integration (Task 21.3).
 | `test_contains_width` | Width (int) present |
 | `test_contains_break_char` | BreakChar key present |
 | `test_contains_max_lines` | MaxLines (int) present |
-| `test_contains_prevent_orphans` | PreventOrphans (bool) |
-| `test_contains_punctuation_breaks` | PreferPunctuationBreaks key |
+| `test_contains_pretty_wrap` | PrettyWrap (bool) |
+| `test_contains_format_configs` | FormatConfigs key |
 | `test_contains_speaker_handling` | SpeakerHandling key |
 | `test_contains_ignore_patterns` | IgnorePatterns (list) |
 | `test_contains_typography` | Typography key present |
@@ -7932,8 +7970,8 @@ Extended in January 2025 with file restoration and auto-numbered save tests.
 | `test_preprocessing_step_data_persistence` | Step 4: Preprocessing data persists |
 | `test_translation_step_data_persistence` | Step 5: Translation data persists |
 | `test_postprocessing_step_data_persistence` | Step 6: Postprocessing data persists |
-| `test_wordwrap_step_data_persistence` | Step 7: Wordwrap data persists |
-| `test_qa_step_data_persistence` | Step 8: QA data persists |
+| `test_wordwrap_step_data_persistence` | Step 8: Wordwrap data persists |
+| `test_qa_step_data_persistence` | Step 7: QA data persists |
 | `test_output_step_data_persistence` | Step 9: Output data persists |
 
 #### TestManifestAssociation (2 tests)
@@ -10198,10 +10236,10 @@ fields (8 boolean toggles + 1 failure handling enum) are properly bound.
 
 ---
 
-### dev/test_wordwrap_manifest.py (40 tests)
+### dev/test_wordwrap_manifest.py
 
-Wordwrap step manifest integration tests. Verifies all 8 WordwrapSettings
-fields are properly bound for session persistence.
+Wordwrap step manifest integration tests. Verifies current WordwrapSettings
+fields, including PrettyWrap and per-format FormatConfigs, are properly bound for session persistence.
 
 **Files Tested:** `gui/steps/wordwrap_overwrite.py`
 
@@ -10240,22 +10278,21 @@ fields are properly bound for session persistence.
 | `test_max_lines_save_unlimited` | Saves MaxLines=0 |
 | `test_max_lines_load_from_manifest` | Loads MaxLines |
 
-#### TestWordwrapSettingsPreventOrphans (4 tests) - TASK 28.1
+#### TestWordwrapSettingsPrettyWrap - TASK 28.1
 
 | Test | Purpose |
 |------|---------|
-| `test_prevent_orphans_save_true` | Saves PreventOrphans=True |
-| `test_prevent_orphans_save_false` | Saves PreventOrphans=False |
-| `test_prevent_orphans_load_from_manifest` | Loads PreventOrphans |
-| `test_prevent_orphans_default_true` | Default is True |
+| `test_pretty_wrap_save_true` | Saves PrettyWrap=True |
+| `test_pretty_wrap_save_false` | Saves PrettyWrap=False |
+| `test_pretty_wrap_load_from_manifest` | Loads PrettyWrap |
+| `test_pretty_wrap_default_true` | Default is True |
 
-#### TestWordwrapSettingsPreferPunctuationBreaks (3 tests) - TASK 28.1
+#### TestWordwrapSettingsFormatConfigs - TASK 28.1
 
 | Test | Purpose |
 |------|---------|
-| `test_punct_breaks_save_true` | Saves PreferPunctuationBreaks=True |
-| `test_punct_breaks_save_false` | Saves PreferPunctuationBreaks=False |
-| `test_punct_breaks_default_true` | Default is True |
+| `test_format_configs_save_and_load` | Saves and loads FormatConfigs |
+| `test_format_configs_default_empty` | Default list is empty |
 
 #### TestWordwrapSettingsSpeakerHandling (3 tests) - TASK 28.1
 
@@ -10277,8 +10314,8 @@ fields are properly bound for session persistence.
 
 | Test | Purpose |
 |------|---------|
-| `test_all_fields_roundtrip` | All 8 fields save/load |
-| `test_wordwrap_settings_field_count` | Verifies 8 fields stored |
+| `test_all_fields_roundtrip` | Current Wordwrap settings save/load together |
+| `test_wordwrap_settings_field_count` | Verifies current field set stored |
 
 #### TestTask281Integration (5 tests) - TASK 28.1
 
@@ -10302,9 +10339,9 @@ fields are properly bound for session persistence.
 
 ---
 
-### dev/test_tag_wordwrap.py (52 tests)
+### dev/test_tag_wordwrap.py
 
-Per-tag wordwrap settings, parser pretty_wrap hook, manifest TagConfigs, and tag resolution tests.
+Per-tag wordwrap settings, parser pretty_wrap hook, manifest TagConfigs/FormatConfigs, and tag resolution tests.
 
 **Files Tested:** `gui/steps/wordwrap_overwrite.py`, `functions/manifest_manager.py`, `formats/parser_base.py`, `formats/LightVN.py`
 
@@ -10317,7 +10354,7 @@ Per-tag wordwrap settings, parser pretty_wrap hook, manifest TagConfigs, and tag
 | `test_cross_contamination` | Same-name files in different subdirs don't collide |
 | `test_ambiguity` | Ambiguous filename-only match uses unambiguous fallback |
 
-#### TestTagConfigsManifest (5 tests)
+#### TestTagConfigsManifest
 
 | Test | Purpose |
 |------|---------|
@@ -10325,7 +10362,8 @@ Per-tag wordwrap settings, parser pretty_wrap hook, manifest TagConfigs, and tag
 | `test_set_get_roundtrip` | set/get_wordwrap_tag_configs roundtrip |
 | `test_dirty_flag` | Setting tag configs marks manifest dirty |
 | `test_tag_configs_key` | TagConfigs key exists in WordwrapSettings |
-| `test_new_fields_persist` | SpeakerHandling, PreventOrphans, NewTextbox fields persist |
+| `test_pretty_wrap_flag_roundtrip` | PrettyWrap persists in tag configs |
+| `test_format_configs_roundtrip` | FormatConfigs persist in WordwrapSettings |
 
 #### TestPrettyWrapHook (12 tests)
 
