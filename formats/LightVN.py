@@ -43,6 +43,15 @@ __all__ = ["LightVNParser"]
 logger = logging.getLogger("cherryai.formats.lightvn")
 
 
+@dataclass
+class _VariableUsage:
+    """Project-scoped usage summary for a quoted text variable."""
+
+    display_text: bool = False
+    non_display_interpolation: bool = False
+    control_reference: bool = False
+
+
 # ---------------------------------------------------------------------------
 # Tag constants (encouraged, not restricted)
 # ---------------------------------------------------------------------------
@@ -82,6 +91,8 @@ class LightVNParser(ParserScript):
         r"(\S+)\s*=\s*"
         r'"([^"]*)"'
     )
+    TEXT_INTERPOLATION_PATTERN = re.compile(r"\{\{([^{}]+)\}\}")
+    TEXT_DISPLAY_COMMAND_PATTERN = re.compile(r"^(?:~?文字(?:窓|\d*)|ダイアログ)\s")
 
     TRANSLATABLE_VARS: Set[str] = {
         "スキル名",
@@ -124,6 +135,18 @@ class LightVNParser(ParserScript):
         "Enter your text here.",
     }
 
+    NON_TRANSLATABLE_TEXT_VALUES: Set[str] = {
+        "",
+        "-",
+        "ON",
+        "OFF",
+        "なし",
+        "発動",
+        "未発動",
+        "立ち",
+        "しゃがみ",
+    }
+
     # -- Defaults ----------------------------------------------------------
 
     DEFAULT_LINE_WIDTH = 60
@@ -151,6 +174,9 @@ class LightVNParser(ParserScript):
         self._code_recovered = 0
         self._code_not_recovered = 0
         self._unrecovered_details: List[str] = []
+        self._active_variable_usage: Optional[Dict[str, _VariableUsage]] = None
+        self._cached_variable_usage_root: Optional[Path] = None
+        self._cached_variable_usage: Dict[str, _VariableUsage] = {}
 
     def _reset_state(self) -> None:
         """Reset mutable state before an extraction/injection pass."""
@@ -158,6 +184,7 @@ class LightVNParser(ParserScript):
         self._code_recovered = 0
         self._code_not_recovered = 0
         self._unrecovered_details = []
+        self._active_variable_usage = None
 
     # ======================================================================
     # M3 — Identity
@@ -228,6 +255,7 @@ class LightVNParser(ParserScript):
     def extract_tagged(self, file_path: Path) -> List[ExtractedLine]:
         """Extract translatable lines with per-line tag and speaker info."""
         self._reset_state()
+        self._active_variable_usage = self._get_project_variable_usage(file_path)
         enc = self._detect_encoding_raw(file_path)
         try:
             with open(file_path, "r", encoding=enc) as fh:
@@ -281,6 +309,7 @@ class LightVNParser(ParserScript):
             List of indices that failed to match (empty on full success).
         """
         self._reset_state()
+        self._active_variable_usage = self._get_project_variable_usage(source_path)
         enc = self._detect_encoding_raw(source_path)
         try:
             with open(source_path, "r", encoding=enc) as fh:
@@ -685,26 +714,39 @@ class LightVNParser(ParserScript):
             return TAG_ITEMS
         if any(var_name.startswith(tv) for tv in self.TRANSLATABLE_VARS):
             return TAG_VARIABLE
+        usage = self._active_variable_usage or {}
+        info = usage.get(var_name)
+        if info and info.display_text and not info.non_display_interpolation and not info.control_reference:
+            return TAG_VARIABLE
         return None
 
-    def _extract_variable_text(
+    def _parse_variable_assignment_text(
         self, line: str,
-    ) -> Optional[Tuple[str, str, str, str]]:
+    ) -> Optional[Tuple[str, str, str]]:
         stripped = self._strip_conditional_prefix(line.strip())
         m = self.VARIABLE_PATTERN.match(stripped)
         if not m:
             return None
         var_type, var_name, text = m.group(1), m.group(2), m.group(3)
-        tag = self._classify_variable_tag(var_name)
-        if tag is None:
-            return None
         if not text or not text.strip():
             return None
         if re.match(r"^{{[^}]+}}$", text):
             return None
         if text.strip().isdigit():
             return None
-        if text.strip() in ("-", ""):
+        if text.strip() in self.NON_TRANSLATABLE_TEXT_VALUES:
+            return None
+        return var_type, var_name, text
+
+    def _extract_variable_text(
+        self, line: str,
+    ) -> Optional[Tuple[str, str, str, str]]:
+        parsed = self._parse_variable_assignment_text(line)
+        if not parsed:
+            return None
+        var_type, var_name, text = parsed
+        tag = self._classify_variable_tag(var_name)
+        if tag is None:
             return None
         return tag, var_type, var_name, text
 
@@ -965,6 +1007,122 @@ class LightVNParser(ParserScript):
             return False
         return cls._find_matching_paren(rest, 0) != -1
 
+    @staticmethod
+    def _split_command_segments(line: str) -> List[str]:
+        return [segment for segment in re.split(r"\s\|\s", line) if segment.strip()]
+
+    def _is_display_text_segment(self, segment: str) -> bool:
+        stripped = self._strip_conditional_prefix(segment.strip())
+        if not stripped:
+            return False
+        if stripped.startswith('"') or stripped.startswith('-"'):
+            return True
+        if self.TEXT_DISPLAY_COMMAND_PATTERN.match(stripped):
+            return True
+        return self._is_menu_text_line(stripped)
+
+    @classmethod
+    def _extract_condition_text(cls, segment: str) -> str:
+        stripped = segment.strip()
+        while stripped.startswith("~"):
+            stripped = stripped[1:].lstrip()
+        if not stripped.startswith("もし"):
+            return ""
+        rest = stripped[2:].lstrip()
+        if not rest.startswith("("):
+            return ""
+        end = cls._find_matching_paren(rest, 0)
+        if end == -1:
+            return ""
+        return rest[1:end]
+
+    @staticmethod
+    def _contains_variable_name(text: str, name: str) -> bool:
+        start = 0
+        while True:
+            idx = text.find(name, start)
+            if idx == -1:
+                return False
+            prev_ok = idx == 0 or not (text[idx - 1].isalnum() or text[idx - 1] in {"_", "{"})
+            next_idx = idx + len(name)
+            next_ok = next_idx >= len(text) or not (text[next_idx].isalnum() or text[next_idx] in {"_", "}"})
+            if prev_ok and next_ok:
+                return True
+            start = idx + len(name)
+
+    def _build_variable_usage_index_from_contents(
+        self, contents: List[str],
+    ) -> Dict[str, _VariableUsage]:
+        candidate_names: Set[str] = set()
+        for content in contents:
+            for raw_line in content.split("\n"):
+                if raw_line.strip().startswith("//"):
+                    continue
+                for segment in self._split_command_segments(raw_line):
+                    parsed = self._parse_variable_assignment_text(segment)
+                    if parsed:
+                        _var_type, var_name, _text = parsed
+                        candidate_names.add(var_name)
+
+        usage: Dict[str, _VariableUsage] = {
+            name: _VariableUsage() for name in candidate_names
+        }
+        if not usage:
+            return usage
+
+        for content in contents:
+            for raw_line in content.split("\n"):
+                stripped_line = raw_line.strip()
+                if not stripped_line or stripped_line.startswith("//"):
+                    continue
+                for segment in self._split_command_segments(raw_line):
+                    stripped_segment = segment.strip()
+                    if not stripped_segment or stripped_segment.startswith("//"):
+                        continue
+                    display_segment = self._is_display_text_segment(stripped_segment)
+                    for match in self.TEXT_INTERPOLATION_PATTERN.finditer(stripped_segment):
+                        var_name = match.group(1).strip()
+                        info = usage.get(var_name)
+                        if info is None:
+                            continue
+                        if display_segment:
+                            info.display_text = True
+                        else:
+                            info.non_display_interpolation = True
+
+                    condition = self._extract_condition_text(stripped_segment)
+                    if not condition:
+                        continue
+                    for var_name, info in usage.items():
+                        if self._contains_variable_name(condition, var_name):
+                            info.control_reference = True
+
+        return usage
+
+    def _get_variable_scan_root(self, file_path: Path) -> Path:
+        for parent in (file_path.parent, *file_path.parents):
+            if parent.name.lower() == "original":
+                return parent
+        return file_path
+
+    def _get_project_variable_usage(self, file_path: Path) -> Dict[str, _VariableUsage]:
+        root = self._get_variable_scan_root(file_path)
+        if self._cached_variable_usage_root == root:
+            return self._cached_variable_usage
+
+        contents: List[str] = []
+        text_files = [root] if root.is_file() else list(root.rglob("*.txt"))
+        for text_file in text_files:
+            try:
+                contents.append(text_file.read_text(encoding="utf-8", errors="ignore"))
+            except OSError:
+                continue
+
+        usage = self._build_variable_usage_index_from_contents(contents)
+        self._cached_variable_usage_root = root
+        self._cached_variable_usage = usage
+        return usage
+
     # ======================================================================
     # Core extraction (document-order, interleaved)
     # ======================================================================
@@ -976,6 +1134,10 @@ class LightVNParser(ParserScript):
         manifest stores per-line entries so deduplication must NOT happen
         here — it is handled later by the Preprocessing step if enabled.
         """
+        previous_usage = self._active_variable_usage
+        if previous_usage is None:
+            self._active_variable_usage = self._build_variable_usage_index_from_contents([content])
+
         result: List[ExtractedLine] = []
         lines = content.split("\n")
         in_dialogue = False
@@ -1117,6 +1279,7 @@ class LightVNParser(ParserScript):
         # Flush remaining
         _flush_dialogue()
 
+        self._active_variable_usage = previous_usage
         return result
 
     def _extract_all_keys(self, content: str) -> List[str]:
@@ -1397,6 +1560,10 @@ class LightVNParser(ParserScript):
     def _inject_variable_text(
         self, content: str, translations: Dict[str, str],
     ) -> str:
+        previous_usage = self._active_variable_usage
+        if previous_usage is None:
+            self._active_variable_usage = self._build_variable_usage_index_from_contents([content])
+
         lines = content.split("\n")
         out: List[str] = []
         for line in lines:
@@ -1420,4 +1587,5 @@ class LightVNParser(ParserScript):
                 out.append(line.replace(f'"{orig}"', f'"{t}"', 1))
             else:
                 out.append(line)
+        self._active_variable_usage = previous_usage
         return "\n".join(out)

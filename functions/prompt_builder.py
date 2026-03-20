@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from functools import lru_cache
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -181,6 +182,35 @@ _PLACEHOLDER_TOKEN_RE = re.compile(
 # These are non-translatable ellipsis or separator lines that should be
 # preserved as-is (e.g. "...", "..................", ". . . . .").
 _DOTS_ONLY_RE = re.compile(r"^[\s.…．·•・]+$")
+_NON_TRANSLATABLE_CONNECTOR_RE = re.compile(r"[\s+\-=:;,./\\|!?*#@&^~()\[\]{}<>]+")
+
+
+@lru_cache(maxsize=64)
+def _compile_preserve_only_pattern(
+    preserve_patterns: Tuple[str, ...],
+) -> Optional[re.Pattern[str]]:
+    """Compile a cached alternation regex for preserve-only detection.
+
+    Each pattern is escaped literally except ``<NUM>``, which expands to
+    ``\\d+`` so numeric variants are still recognized.
+    """
+    normalized: List[str] = []
+    seen: Set[str] = set()
+    for pattern in preserve_patterns:
+        clean = pattern.strip()
+        if not clean or clean in seen:
+            continue
+        seen.add(clean)
+        escaped = re.escape(clean).replace(re.escape("<NUM>"), r"\d+")
+        normalized.append(escaped)
+
+    if not normalized:
+        return None
+
+    # Prefer longer alternatives first so nested literals consume the most
+    # specific match available when multiple patterns overlap.
+    normalized.sort(key=len, reverse=True)
+    return re.compile("(?:" + "|".join(normalized) + ")")
 
 
 def is_placeholder_only(text: str) -> bool:
@@ -263,22 +293,15 @@ def is_code_pattern_only(
         return False
 
     remaining = stripped
-    for pat in preserve_patterns:
-        if not pat:
-            continue
-        escaped = re.escape(pat)
-        # <NUM> → \d+ wildcard for numeric variants
-        escaped = escaped.replace(re.escape("<NUM>"), r"\d+")
-        try:
-            remaining = re.sub(escaped, "", remaining)
-        except re.error:
-            continue
+    compiled_patterns = _compile_preserve_only_pattern(tuple(preserve_patterns))
+    if compiled_patterns is not None:
+        remaining = compiled_patterns.sub("", remaining)
 
     # Also strip placeholders and non-translatable punctuation/whitespace
     remaining = _PLACEHOLDER_TOKEN_RE.sub("", remaining)
     # Remove common non-translatable connectors: whitespace, +, -, =,
-    # punctuation that wouldn't need translation on its own
-    remaining = re.sub(r"[\s+\-=:;,./\\|!?*#@&^~()\[\]{}<>]+", "", remaining)
+    # punctuation that wouldn't need translation on its own.
+    remaining = _NON_TRANSLATABLE_CONNECTOR_RE.sub("", remaining)
     return not remaining
 
 

@@ -70,6 +70,27 @@ Potential follow-up:
 2. Add early filter paths only where stage logic is line-local and does not feed later batch calculations.
 3. Expand focused regression coverage once the skip plan is implemented.
 
+### BUG FIX: Locked-Line Lookup Tab Freeze
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 1 hour
+
+Goal: Stop large projects from freezing Preprocessing, Translation, Wordwrap, and other lock-aware tab loads after the lock system introduced repeated per-line manifest lookups.
+
+**Root Causes:**
+1. `functions/manifest_manager.py::get_line()` linearly scanned `lines[]` for every lookup.
+2. `ManifestManager.is_line_locked()` called `get_line()`, so any tab that checked lock state inside a line loop inherited an `O(n^2)` path.
+3. The affected scan pattern appeared in shared lock-aware workflows such as Preprocessing persistence, Translation line classification, and Wordwrap apply/reload paths, which made large projects look hung while tabs were loading or refreshing.
+4. `gui/steps/preprocess.py::_load_preview_from_manifest()` rebuilt preview rows from manifest state and then immediately routed through `_update_step_data()`, causing a passive tab entry to re-run tens of thousands of lock-aware `prepro` / `tags` manifest writes even when nothing had changed.
+5. After those two shared fixes, `gui/steps/translate.py::on_enter()` still spent about 23 seconds rebuilding the passive status summary for UC16 because shared preserve-pattern CODE_ONLY detection performed one regex substitution per preserve pattern per line.
+
+**Changes:**
+1. **`functions/manifest_manager.py`** — Added an internal `idx -> line` cache rebuilt on manifest load, bulk line replacement, appended line creation, and file-removal reindexing; `get_line()` and `is_line_locked()` now use that cache.
+2. **`gui/steps/preprocess.py`** — Passive preview restore is now read-only: `_load_preview_from_manifest()` refreshes the table without immediately re-persisting every line, while real preprocessing runs still persist `prepro` / `tags` and tab leave only writes manifest lines when preview changes are pending.
+3. **`functions/prompt_builder.py`** — `is_code_pattern_only()` now uses a cached combined regex for preserve-action patterns, preserving `<NUM>` wildcard behavior while removing the per-pattern-per-line regex loop that made Translation passive status rebuilds scale poorly on large manifests.
+4. **Tests** — Added focused regressions for cache freshness after append, file removal/reindex, manifest load, passive Preprocessing preview restore, and preserve-pattern CODE_ONLY detection; reran the documented locked-line regression suites plus adjacent Translation coverage.
+5. **Docs** — Updated feature, technical, spec, and test documentation to record the indexed lookup requirement, the read-only preview-restore requirement, and the cached preserve-pattern matcher requirement for lock-aware large-manifest scans.
+
+**Tests:** Focused pytest runs passed: `dev/test_manifest_state.py::TestManifestManager::test_set_line_field_updates_line_lookup_cache`, `dev/test_manifest_state.py::TestManifestManager::test_remove_file_rebuilds_locked_line_lookup`, `dev/test_manifest_state.py::TestManifestManager::test_load_rebuilds_line_lookup_cache`, `dev/test_table_view.py`, `dev/test_input_import_fixes.py`, `dev/test_request_preview.py`, `dev/test_estimation_skip.py`, `dev/test_edit_before_translate.py`, `dev/test_postprocess_manifest.py`, `dev/test_qa_manifest.py`, `dev/test_wordwrap_manifest.py`, `dev/test_preprocess_manifest.py::TestPreprocessingPassivePreviewRestore::test_load_preview_from_manifest_does_not_rewrite_lines`, `dev/test_prompt_builder_shared.py` — plus direct UC16 timing checks showing app init `1.3490s`, manifest open `0.4658s`, Translation tab entry reduced from `23.1229s` to `1.0055s`, and Postprocessing / QA / Wordwrap tab entry at `0.4904s` / `0.5020s` / `0.3883s`.
+
 ### BUG FIX: Wordwrap Invisible Width + Textbox Status Split + Responsive Apply
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
 
@@ -235,6 +256,21 @@ Goal: Preserve the active project name during translation-settings import, add a
 
 **Tests:** Focused pytest run passed: `dev/test_input_import_fixes.py`, `dev/test_table_view.py`, `dev/test_postprocess_phase45.py`, `dev/test_qa_manifest.py`, `dev/test_wordwrap_phase46.py`, `dev/test_manifest_metadata.py` — 292 passed, 5 deselected (unrelated pre-existing symbol-conversion regressions).
 
+### BUG FIX: Translation Preview Lock Guard Regression
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 30 minutes
+
+Goal: Restore Translation header counts and Preview Requests after a regression in the shared skip-classification path started treating loose manifest-manager doubles as locked lines.
+
+**Root Cause:**
+1. `gui/steps/translate.py::_collect_translatable_lines()` called `manifest_manager.is_line_locked()` in a plain truthiness check.
+2. In tests and dialog-driven lightweight doubles, that method could return a truthy non-bool object (for example an unstubbed `MagicMock`), causing every line to be classified as locked.
+3. Once every line was considered locked, the Translation header showed only locked skips and Preview Requests returned zero requests, which masked the intended overwrite/already-translated parity behavior.
+
+**Changes:**
+1. **`gui/steps/translate.py`** — Added `_is_line_locked()` and updated shared skip classification plus edited-preprocessed saves to treat a line as locked only when `is_line_locked()` returns the boolean `True`.
+2. **Docs** — Updated feature, technical, spec, and test inventory notes to record the explicit-boolean lock guard in the shared Translation planning path.
+3. **Tests** — Re-ran `dev/test_request_preview.py` and `dev/test_estimation_skip.py`; both passed after the guard fix (91 passed, 0 failed).
+
 ### BUG FIX: Translation Skip Policy Parity + Status Summary
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
 
@@ -296,6 +332,32 @@ Goal: Extend the LightVN parser so item-like variable assignments are handled th
 - `dev/test_wordwrap_overhaul.py` — items no-wrap regression
 
 **Tests:** Focused pytest run passed: `dev/test_lightvn_parser.py`, `dev/test_wordwrap_overhaul.py` — 59 tests passing.
+
+### BUG FIX: LightVN Project-Scoped Variable Safety
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Expand LightVN variable extraction beyond the old fixed allowlist without breaking engine control flow, asset lookup, or script routing. Quoted `保存変数` / `臨時全域変数` assignments should be translated only when the same variable is used purely as display text across the active project.
+
+**Root Causes:**
+1. `formats/LightVN.py` only trusted a small hardcoded prefix list, so display-only variables such as `bt_勝利条件` / `bt_敗北条件` / `bt_エロ条件` were skipped even though they are rendered through `文字窓`.
+2. A naive broadening of quoted-variable extraction would have broken mixed-use variables such as `胎児`, whose text value is also interpolated into asset paths like `子宮/子宮_妊娠_{{胎児}}.png`.
+3. Control variables such as `付与対象` and pattern variables such as `bat_ボイスパターン` participate in `もし (...)` logic or non-display command construction, so translating their assignments alone would desynchronize runtime comparisons and file lookups.
+
+**Changes:**
+1. **`formats/LightVN.py`** — Added project-scoped quoted-variable usage analysis. For files under an `Original/` tree, the parser now scans sibling LightVN scripts, records whether each quoted text variable is used only in display contexts or also in non-display interpolations / `もし (...)` conditions, and only extracts the display-only set.
+2. **`formats/LightVN.py`** — Kept standalone-file parsing fast by limiting the broader scan to `Original/` project roots; non-project files continue to use single-file analysis.
+3. **`dev/test_lightvn_parser.py`** — Added focused regressions covering display-only extraction/injection (`bt_勝利条件`), mixed asset/display exclusion (`胎児`), and control-flow exclusion (`付与対象`).
+4. **Docs** — Updated LightVN feature, technical, spec, and test references to describe the new safety rule and its verified examples.
+
+**Files Modified:**
+- `formats/LightVN.py` — project-scoped variable usage index, safe quoted-variable classification
+- `dev/test_lightvn_parser.py` — display-only vs. mixed-use variable regressions
+- `doc/features.md` — user-facing LightVN variable behavior
+- `doc/technical.md` — implementation notes for project-scoped safety analysis
+- `doc/specs.md` — LightVN parser specification
+- `doc/tests.md` — focused regression coverage and command
+
+**Tests:** Focused pytest runs passed: `dev/test_lightvn_parser.py`, `dev/test_lightvn_fixes.py` — 77 passed. Expanded injection regression passed: `dev/test_output_injection.py`, `dev/test_lightvn_parser.py`, `dev/test_lightvn_fixes.py` — 116 passed.
 
 ### BUG FIX: Line-Agnostic Custom Placeholder Restore + Nested Double-Curly Filtering
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours

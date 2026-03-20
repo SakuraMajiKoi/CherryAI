@@ -124,6 +124,8 @@ All application state is stored in the Manifest (`.CherryAI.json`), not in GUI m
 - Init guard pattern: steps that populate comboboxes during `__init__()` must suppress trace-triggered manifest writes until initialization completes (PHASE 80)
 - Conditional text replacement: `_ensure_*_text()` helpers must only delete existing widget content when replacement text is available (PHASE 80)
 - Locked-line write guard: manifest `lines[].tags` may include canonical tag `locked`; shared manifest writes to `tags`, `prepro`, `edited_prepro`, `preedit`, `tl`, `postpro`, `qa`, `qa_overwrite`, and `wordwr` must be blocked unless the caller explicitly opts into the Full Table View override path (`allow_locked=True`)
+- Manifest line lookup for `get_line()` / `is_line_locked()` must be indexed by `idx` rather than repeatedly scanning `lines[]`, because Preprocessing, Translation, and Wordwrap all perform per-line lock checks during tab load/refresh and large projects must not degrade into quadratic stalls
+- Passive tab-entry preview restore must stay read-only: restoring stored Preprocessing preview rows from manifest data must not immediately route back through per-line `set_line_field()` / `clear_line_field()` calls, because large lock-aware projects must load from existing manifest state rather than re-persist it
 
 ---
 
@@ -586,7 +588,9 @@ This ensures cost estimates are never out of sync with translation behaviour.
 - Preview Requests and Start Translation must classify from the full loaded line set, not only lines still marked pending, so changing overwrite/skip-translated immediately changes the actual request set
 - The Translation tab header shows both the translatable count and a grouped policy-skip breakdown (already translated, non-source, empty, placeholders, code-only, symbols-only, context markers)
 - Lines that are skipped are marked accordingly in the Translation step status column (e.g., "Skipped (already translated)", "Skipped (wrong language)")
-- All three callers — Request Preview, Estimate, and Start Translation — apply the same filtering rules via shared functions: ``validate_line_pre()`` handles already-translated, placeholder, code-only, symbol-only, and source-language checks; callers only decide whether the optional non-source reasons are enforced, and Translation tab entry must re-sync Global Options before any cache short-circuit so the active overwrite setting immediately affects both Preview Requests and Start Translation
+- All three callers — Request Preview, Estimate, and Start Translation — apply the same filtering rules via shared functions: ``validate_line_pre()`` handles already-translated, placeholder, code-only, symbol-only, and source-language checks; callers only decide whether the optional non-source reasons are enforced, manifest lock checks only count as locked when ``is_line_locked()`` returns the boolean ``True``, and Translation tab entry must re-sync Global Options before any cache short-circuit so the active overwrite setting immediately affects both Preview Requests and Start Translation
+- Preserve-action code-pattern-only detection must stay on a cached shared matcher: large manifests can contain hundreds of preserve patterns, so passive Translation status-summary rebuilds must not perform one regex substitution per preserve pattern per line during tab entry or refresh
+- Large locked manifests must load Translation, Postprocessing, QA, and Wordwrap from existing manifest state without freeze-level recomputation; the validated UC16 baseline is approximately Translation `1.0s` and the other three tabs each under `0.6s` on entry after the shared lock/performance fixes
 
 ---
 
@@ -790,7 +794,7 @@ Reference handshake-compliant parser for Light VN visual novel scripts. Adapted 
 | `variable` | `臨時全域変数` and `保存変数` assignments | No wrap |
 | `items` | Item-like variable assignments such as `剥ぎ取り素材1` and `獲得食材` | No wrap |
 
-**Variable Classification**: LightVN classifies translatable assignment lines by variable name. Existing story/system assignments such as `スキル名` continue to use the `variable` tag, while loot/material style fields such as `臨時全域変数 剥ぎ取り素材1 = "角兎の素材×1"` and conditional forms such as `もし (獲得ボーナス >= 2) 臨時全域変数 獲得食材 = "食用の肉×3"` are extracted and injected with the `items` tag.
+**Variable Classification**: LightVN still treats explicit allowlists such as `スキル名` / `スキル効果` as normal `variable` content and loot/material style fields such as `臨時全域変数 剥ぎ取り素材1 = "角兎の素材×1"` or `もし (獲得ボーナス >= 2) 臨時全域変数 獲得食材 = "食用の肉×3"` as `items`. In addition, quoted `保存変数` / `臨時全域変数` assignments are now classified project-safely: the parser scans the active `Original/` tree, records whether each quoted-text variable is used only in display text (`文字*`, `文字窓`, `~文字`, dialogue) or also in non-display interpolations / `もし (...)` conditions, and only extracts the display-only set. This allows text-only variables such as `bt_勝利条件` to translate while excluding mixed-use variables such as `胎児` that also feed asset paths and control variables such as `付与対象` that gate battle logic.
 
 **Detection**: Scans the entire file for any of the `_DETECT_PATTERNS` set (`~【`, `~栞`, `~文字`, `~ボタン`, `~絵`, `~効果音`, `~選択`, `~スクリプト`, `~保存変数`, `~臨時全域変数`) or `_DETECT_LINE_PREFIXES` (`栞 `, `スクリプト `, `保存変数 `, `臨時全域変数 `). This keeps script/config-style LightVN files such as map stubs and variable-only setup files on the parser path instead of falling back to raw `txt` extraction.
 

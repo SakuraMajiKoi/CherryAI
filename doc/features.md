@@ -252,6 +252,8 @@ FULL TABLE VIEW
 - **Spreadsheet View**: Displays all manifest line entries with named columns (Line #, Original, Preprocessed, Translated, Postprocessed, Quality Assurance, Overwrite, Wordwrap, Overwrite (Legacy), Log, Tags)
 - **Row Locking**: Toolbar button `Lock / Unlock` toggles a per-line `locked` tag directly in the manifest `tags` field; locked rows render pale green and selected locked rows render green
 - **Protected Pipeline Rows**: Locked rows are protected from preprocessing, translation, postprocessing, QA overwrite actions, and wordwrap overwrite writes; Full Table View is the explicit manual override surface for those rows
+- **Large-Project Lock Performance**: Locked-row checks now use indexed manifest line lookup under the hood, the Preprocessing tab no longer re-saves every previewed line while merely restoring manifest data, and the Translation tab no longer spends passive status-summary rebuild time re-running one regex substitution per preserve pattern per line; large projects therefore load lock-aware tabs quickly while preserving the same lock semantics
+- **Validated Large-Manifest Tab Entry**: Direct UC16 timing checks show Input `0.0867s`, Preprocessing `0.1429s`, Translation `1.0055s`, Postprocessing `0.4904s`, QA `0.5020s`, and Wordwrap `0.3883s` on tab entry after the shared lock/performance fixes
 - **Import Translation Lock Carryover**: Import Translations always carries the `locked` tag from the source manifest even when Tags import is not selected, and already locked target rows refuse imported stage-field overwrites
 - **Column Display Names**: All columns use human-readable display names (e.g., idx→Line #, orig→Original, tl→Translated)
 - **Column Auto-Hide**: Empty columns hidden by default
@@ -1012,6 +1014,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - Protect Code Patterns section with regex patterns
   - Common patterns reference (HTML, RPG Maker, variables, etc.)
   - Preview table showing original vs processed with diff column
+  - Manifest preview restore is read-only: reopening the tab rebuilds preview rows from stored `orig` / `prepro` / `tags` without re-writing every line back into the manifest
   - Apply Rules button with threaded background processing
   - Auto-Suggest button leveraging analysis results
   - Tooltips explaining each rule's behavior
@@ -1723,7 +1726,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Retry Refinement: UI shows only Batch + Contextual (`RETRY_STRATEGIES`); `ALL_RETRY_STRATEGIES` kept for CLI with all 4; max retries minimum changed from 1 to 0
     - Prompt Editor Redesign: removed Style Preset and Game Summary textarea; "Preview Requests" button opens `RequestPreviewDialog` showing actual API requests built with the same functions as translation; three view modes (Pure JSON / Formatted with section headers / Plain readable text); toolbar with Jump To (request number), Search with previous/next and match count, and Filter dropdown with checkboxes for 13 prompt parts (Meta, Language, System Instructions, I/O Examples, Style, Tone, Summary, Genre, POV, Conditional Prompts, Glossary, Rolling Context, Input Lines); when OpenAI prompt caching applies, Preview Requests also shows the effective `prompt_cache_key` / `prompt_cache_retention` in the Meta section and Pure JSON view; Ban Tokens LabelFrame with preset dropdown (None/Clean English/Strict)
     - Chunk Sync: LinesPerChunk synced between Costs step and manifest; `_on_chunk_changed()` write-back
-    - Shared Skip Classification: Translation refresh, Preview Requests, Start Translation, and Costs estimation now all reuse `functions.validation.validate_line_pre()` so already translated, empty, placeholder-only, code-only, symbol-only, context-marker, and non-source skips stay aligned
+    - Shared Skip Classification: Translation refresh, Preview Requests, Start Translation, and Costs estimation now all reuse `functions.validation.validate_line_pre()` so already translated, empty, placeholder-only, code-only, symbol-only, context-marker, and non-source skips stay aligned; manifest lock checks in this shared path now require an explicit boolean `True` so loose dialog/test doubles cannot falsely mark every line as locked and zero out Preview Requests or the header count
     - Translation Status Summary: the Translation header now reports both translatable lines and grouped policy-skipped counts such as already translated, non-source, empty, placeholders, code-only, and symbols-only
     - Language Skip: source-language filtering strips placeholders before detection and treats CJK-family projects consistently, keeping CJK/Hangul source text while skipping Latin-only remainder
     - Tab Caching: `BaseStep` infrastructure (`_compute_cache_hash`, `_is_cache_valid`, `_update_cache`, `_invalidate_cache`, `_force_refresh`); TranslationStep reloads prompt/request/global-option state on every tab entry before honoring a cache hit so Preview Requests and Start Translation cannot keep stale overwrite or non-source skip settings
@@ -2401,6 +2404,7 @@ LIGHT VN PARSER (Implemented)
 - **No deduplication:** Every occurrence is returned including duplicates; deduplication is handled downstream by the Preprocessing step if enabled
 - **Extraction tags:** `dialogue` (with speaker info), `menu`, `variable`, `items`
 - **Item variable coverage:** Item-like assignments such as `臨時全域変数 剥ぎ取り素材1 = "角兎の素材×1"` and conditional lines such as `もし (獲得ボーナス >= 2) 臨時全域変数 獲得食材 = "食用の肉×3"` are extracted and injected with the `items` tag
+- **Project-scoped variable safety:** Beyond the built-in LightVN variable allowlists, quoted `保存変数` / `臨時全域変数` assignments are extracted only when the same variable is used exclusively as display text inside the current project root. Display-only examples such as `bt_勝利条件` / `bt_敗北条件` / `bt_エロ条件` are translated safely, while mixed-use variables such as `胎児` stay unextracted because they also feed image paths like `子宮/子宮_妊娠_{{胎児}}.png`, and control variables such as `付与対象` stay unextracted because they participate in `もし (...)` comparisons.
 - **Speaker format:** `Speaker: text` — speaker tags detected from `~【SpeakerName】` notation
 - **Conditional dialogue:** `~もし (condition)` prefix stripped from keys, preserved during injection
 - **Code handling:** Balanced bracket matching for `[] {} <> ［］ ｛｝ ＜＞ ⟨⟩ ⟪⟫ 〈〉 《》`

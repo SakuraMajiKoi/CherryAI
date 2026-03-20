@@ -194,20 +194,30 @@ python -m pytest CherryAI/dev/test_app_startup.py CherryAI/dev/test_input_import
 
 ### Focused Locked-Line Protection Regression
 
-The locked-line workflow is covered by two focused regression sets:
+The locked-line workflow is covered by focused regression sets plus direct large-manifest timing checks:
 
 - `dev/test_input_import_fixes.py` verifies that manifest line imports always carry the source `locked` tag, that already locked target rows reject imported stage-field overwrites, and that shared manifest helpers block guarded writes unless `allow_locked=True` is supplied.
 - `dev/test_table_view.py` verifies Full Table View lock toggling, deletion tracking, locked-row save bypass with `allow_locked=True`, and locked-row display tagging.
+- `dev/test_preprocess_manifest.py::TestPreprocessingPassivePreviewRestore::test_load_preview_from_manifest_does_not_rewrite_lines` verifies that passive Preprocessing preview restore stays read-only and does not trigger redundant per-line `prepro` / `tags` writes while a large manifest is loading.
 - `dev/test_edit_before_translate.py`, `dev/test_postprocess_manifest.py`, `dev/test_qa_manifest.py`, and `dev/test_wordwrap_manifest.py` provide adjacent regression coverage for the workflow steps touched by the shared lock guard.
+- `dev/test_manifest_state.py::TestManifestManager::{test_set_line_field_updates_line_lookup_cache,test_remove_file_rebuilds_locked_line_lookup,test_load_rebuilds_line_lookup_cache}` verifies that the manifest-manager `idx -> line` cache stays fresh after load, append, and file reindexing so lock checks remain O(1) during large tab scans.
+- `dev/test_prompt_builder_shared.py::TestCodePatternOnlyDetection::{test_literal_preserve_patterns_only,test_num_wildcard_pattern_matches_numeric_variant,test_preserve_patterns_with_real_text_not_code_only}` verifies the shared preserve-pattern CODE_ONLY matcher used by Translation status summaries, including `<NUM>` wildcard handling and real-text rejection.
+- `dev/test_request_preview.py` and `dev/test_estimation_skip.py` provide adjacent regression coverage so the optimized shared CODE_ONLY path stays aligned across Preview Requests, Translation planning, and Estimation.
 
 Verified commands:
 
 ```bash
 python -m pytest CherryAI/dev/test_table_view.py CherryAI/dev/test_input_import_fixes.py -q --timeout=10
+python -m pytest CherryAI/dev/test_preprocess_manifest.py::TestPreprocessingPassivePreviewRestore::test_load_preview_from_manifest_does_not_rewrite_lines -q --timeout=10
 python -m pytest CherryAI/dev/test_edit_before_translate.py CherryAI/dev/test_postprocess_manifest.py CherryAI/dev/test_qa_manifest.py CherryAI/dev/test_wordwrap_manifest.py -q --timeout=10
+python -m pytest CherryAI/dev/test_manifest_state.py::TestManifestManager::test_set_line_field_updates_line_lookup_cache CherryAI/dev/test_manifest_state.py::TestManifestManager::test_remove_file_rebuilds_locked_line_lookup CherryAI/dev/test_manifest_state.py::TestManifestManager::test_load_rebuilds_line_lookup_cache -q --timeout=10
+python -m pytest CherryAI/dev/test_prompt_builder_shared.py -q
+python -m pytest CherryAI/dev/test_request_preview.py CherryAI/dev/test_estimation_skip.py -q
 ```
 
-Latest verified results: 167 passed, then 133 passed with 2 skipped.
+Latest verified results: 167 passed, then 133 passed with 2 skipped, plus 3 targeted manifest-cache regressions passed, plus the passive Preprocessing restore regression passed in isolation, plus `dev/test_prompt_builder_shared.py` `23 passed`, plus `dev/test_request_preview.py CherryAI/dev/test_estimation_skip.py` `90 passed, 1 skipped`.
+
+Latest UC16 timing checks after the shared fixes: Input `0.0867s`, Preprocessing `0.1429s`, Translation `1.0055s`, Postprocessing `0.4904s`, QA `0.5020s`, Wordwrap `0.3883s`.
 
 ### Focused Wordwrap + LightVN Runtime Regression
 
@@ -2619,9 +2629,11 @@ Phase 23 tests for InformationStep manifest integration. Tests all fields bound 
 
 ---
 
-### dev/test_preprocess_manifest.py (49 tests)
+### dev/test_preprocess_manifest.py (50 tests)
 
 Phase 24 tests for PreprocessingStep manifest integration. Tests all preprocessing options bound to manifest.
+
+- Includes a passive-preview regression ensuring `_load_preview_from_manifest()` does not rewrite every line back into the manifest during tab entry.
 
 #### TestDeduplicationField (4 tests)
 
@@ -3358,7 +3370,7 @@ Thank you.
 | test_output_phase47.py | 52 | Output + Pipeline Completeness + Import Phase 47 |
 | test_pipeline_logging.py | 52 | Pipeline Logging System Phase 48 |
 | test_request_formation.py | 50 | Request Formation 4-Step Process Phase 49 |
-| test_request_preview.py | 48 | Preview Requests dialog: PreviewRequest dataclass with _format_input_lines and request_params, FILTER_PARTS, RequestPreviewDialog (Pure/Formatted/Plain views preserving {}, Jump/Search/Filter), `_build_preview_requests()` integration including prompt cache metadata visibility, skip-already-translated parity, Global Options re-sync on Preview, CJK-aware non-source filtering, cached tab-entry coverage, and Translation-tab status summary |
+| test_request_preview.py | 50 | Preview Requests dialog: PreviewRequest dataclass with _format_input_lines and request_params, FILTER_PARTS, RequestPreviewDialog (Pure/Formatted/Plain views preserving {}, Jump/Search/Filter), `_build_preview_requests()` integration including prompt cache metadata visibility, skip-already-translated parity, Global Options re-sync on Preview, explicit-boolean lock guarding, CJK-aware non-source filtering, cached tab-entry coverage, and Translation-tab status summary |
 | test_context_markers.py | 70 | Context Markers Full Implementation Phase 50 |
 | test_speaker_dedup.py | 47 | Speaker Duplicate Removal Phase 51 |
 | test_glossary_selective.py | 28 | Selective Glossary Per Chunk Phase 52 |
@@ -12053,6 +12065,7 @@ python -m pytest CherryAI/dev/test_parser_injection.py -v --timeout=60
 | **TestDuplicateMenu** | **3** | **Duplicate menu count, いいえ count, all menu tagged** |
 | **TestDuplicateVariable** | **3** | **Duplicate variable count, text content, all variable tagged** |
 | **TestItemVariables** | **2** | **Item-like variable assignments extract with the `items` tag and inject back through both direct and conditional assignment lines** |
+| **TestProjectScopedVariableClassification** | **4** | **Display-only quoted project variables extract and inject, while mixed display-plus-asset variables (`胎児`) and control-flow variables (`付与対象`) stay out of translation** |
 | **TestMixedDuplicates** | **5** | **Mixed total count, dialogue dupes, menu dupes, variable dupes, document order preserved** |
 | **TestNoDuplicates** | **2** | **Unique-only scripts still extract correctly (regression)** |
 | **TestExtractAgreement** | **2** | **extract() and extract_tagged() return same count/content** |
@@ -12065,6 +12078,9 @@ python -m pytest CherryAI/dev/test_parser_injection.py -v --timeout=60
 ```bash
 # Run Parser Handshake & LightVN tests
 python -m pytest CherryAI/dev/test_lightvn_parser.py -v --timeout=300
+
+# Focused project-scoped variable safety + injection regression
+python -m pytest CherryAI/dev/test_output_injection.py CherryAI/dev/test_lightvn_parser.py CherryAI/dev/test_lightvn_fixes.py -q --timeout=10
 ```
 
 ### Parser Input Routing & P2 Validation (32 tests)

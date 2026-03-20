@@ -2062,6 +2062,26 @@ class TranslationStep(BaseStep):
             and p.get("pattern")
         ]
 
+    def _is_line_locked(self, idx: int) -> bool:
+        """Return whether a manifest line is explicitly locked.
+
+        Require a real boolean ``True`` from ``is_line_locked()`` so loose
+        mocks do not classify every line as locked during request preview and
+        status-summary tests.
+        """
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            return False
+
+        checker = getattr(mgr, "is_line_locked", None)
+        if not callable(checker):
+            return False
+
+        try:
+            return checker(idx) is True
+        except Exception:
+            return False
+
     def _get_bool_var_value(self, attr_name: str, default: bool) -> bool:
         """Read a Tk variable-like attribute without trusting loose mocks."""
         var = getattr(self, attr_name, None)
@@ -2108,7 +2128,7 @@ class TranslationStep(BaseStep):
             if line.status == LineStatus.TRANSLATING:
                 continue
 
-            if mgr is not None and mgr.is_loaded and mgr.is_line_locked(line.idx):
+            if TranslationStep._is_line_locked(self, line.idx):
                 skip_counts[_TranslationStatusReason.LOCKED] = (
                     skip_counts.get(_TranslationStatusReason.LOCKED, 0) + 1
                 )
@@ -2628,7 +2648,7 @@ class TranslationStep(BaseStep):
         """
         mgr = self.manifest_manager
         if mgr is not None and mgr.is_loaded:
-            if mgr.is_line_locked(idx):
+            if TranslationStep._is_line_locked(self, idx):
                 return False
             if edited_text:
                 return mgr.set_line_field(idx, "edited_prepro", edited_text)

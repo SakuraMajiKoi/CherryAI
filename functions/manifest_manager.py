@@ -519,6 +519,7 @@ class ManifestManager:
         """Initialize manager with no loaded manifest."""
         self._manifest_path: Optional[Path] = None
         self._manifest_data: Dict[str, Any] = self._create_empty_manifest()
+        self._line_index: Dict[int, Dict[str, Any]] = {}
         self._dirty: bool = False
         self._change_listeners: List[Callable[[], None]] = []
         self._current_step: int = 0
@@ -533,9 +534,24 @@ class ManifestManager:
         
         # Load autosave settings from INI
         self._load_autosave_settings()
+        self._rebuild_line_index()
         
         # Ensure manifests directory exists
         MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _rebuild_line_index(self) -> None:
+        """Rebuild the manifest line lookup cache keyed by ``idx``."""
+        index: Dict[int, Dict[str, Any]] = {}
+        for line in self._manifest_data.get("lines", []):
+            if not isinstance(line, dict):
+                continue
+            try:
+                idx = int(line.get("idx", -1))
+            except (TypeError, ValueError):
+                continue
+            if idx >= 0:
+                index[idx] = line
+        self._line_index = index
     
     def _load_autosave_settings(self) -> None:
         """Load autosave settings from ``[session]`` INI section.
@@ -1222,6 +1238,7 @@ class ManifestManager:
         
         # Initialize manifest data
         self._manifest_data = self._create_empty_manifest()
+        self._rebuild_line_index()
         
         # Store project_name in Information metadata (single source of truth)
         self.set_info_metadata_field("project_name", project_name)
@@ -1315,6 +1332,7 @@ class ManifestManager:
         
         self._manifest_data["lines"] = lines
         self._manifest_data["filedir"] = filedir
+        self._rebuild_line_index()
     
     def load(self, manifest_path: Path) -> bool:
         """Load an existing manifest.
@@ -1337,6 +1355,7 @@ class ManifestManager:
             
             self._manifest_path = manifest_path
             self._manifest_data = data
+            self._rebuild_line_index()
             
             self._current_step = data.get("current_step", 0)
             self._dirty = False
@@ -1965,14 +1984,12 @@ class ManifestManager:
     def set_lines(self, lines: List[Dict[str, Any]]) -> None:
         """Set all lines."""
         self._manifest_data["lines"] = canonicalize_lines(lines)
+        self._rebuild_line_index()
         self._mark_dirty()
     
     def get_line(self, idx: int) -> Optional[Dict[str, Any]]:
         """Get a line by index."""
-        for line in self._manifest_data.get("lines", []):
-            if line.get("idx") == idx:
-                return line
-        return None
+        return self._line_index.get(idx)
 
     def is_line_locked(self, idx: int) -> bool:
         """Return whether the specified manifest line is locked."""
@@ -2033,7 +2050,9 @@ class ManifestManager:
                 self._mark_dirty()
                 return True
         # Line not found - create it
-        lines.append({"idx": idx, field: value})
+        line = {"idx": idx, field: value}
+        lines.append(line)
+        self._line_index[idx] = line
         self._mark_dirty()
         return True
 
@@ -2175,6 +2194,7 @@ class ManifestManager:
                 line["idx"] = idx - line_count
             new_lines.append(line)
         self._manifest_data["lines"] = new_lines
+        self._rebuild_line_index()
         
         # 2. Update subsequent filedir entries
         new_entries = []
@@ -2598,6 +2618,7 @@ class ManifestManager:
 
         # Commit to manifest
         self._manifest_data["lines"] = final_lines
+        self._rebuild_line_index()
         self.set_filedir(final_filedir)
         self._mark_dirty()
 
@@ -2630,6 +2651,7 @@ class ManifestManager:
         if manifest.lines:
             lines_data = [line.to_dict() for line in manifest.lines]
             self._manifest_data["lines"] = lines_data
+            self._rebuild_line_index()
         
         # Import operations
         if manifest.operations:
