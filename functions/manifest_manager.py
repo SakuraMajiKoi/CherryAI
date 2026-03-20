@@ -40,19 +40,7 @@ logger = logging.getLogger(__name__)
 
 
 DEDUP_PLACEHOLDER = "__DEDUP__"
-LOCKED_LINE_TAG = "locked"
 CONTENT_TAGS = frozenset({"file_end", "dialogue", "menu", "choice", "variable"})
-LOCKED_LINE_FIELDS = frozenset({
-    "tags",
-    "prepro",
-    "edited_prepro",
-    "preedit",
-    "tl",
-    "postpro",
-    "qa",
-    "qa_overwrite",
-    "wordwr",
-})
 
 
 def parse_line_tags(raw_tags: Any) -> List[str]:
@@ -97,25 +85,6 @@ def has_line_tag(line_data: Dict[str, Any], tag: str) -> bool:
     if not clean_tag:
         return False
     return clean_tag in parse_line_tags(line_data.get("tags"))
-
-
-def is_line_locked(line_data: Dict[str, Any]) -> bool:
-    """Return whether a line is protected from pipeline writes."""
-    return has_line_tag(line_data, LOCKED_LINE_TAG)
-
-
-def set_line_lock_tag(line_data: Dict[str, Any], locked: bool) -> None:
-    """Add or remove the canonical lock tag on a raw line dict."""
-    tags = [tag for tag in parse_line_tags(line_data.get("tags")) if tag != LOCKED_LINE_TAG]
-    if locked:
-        tags.append(LOCKED_LINE_TAG)
-    merged_tags = merge_line_tags(tags)
-    if merged_tags:
-        line_data["tags"] = merged_tags
-    else:
-        line_data.pop("tags", None)
-    line_data.pop("tag", None)
-    line_data.pop("context_marker", None)
 
 
 def get_primary_line_tag(line_data: Dict[str, Any]) -> str:
@@ -519,7 +488,6 @@ class ManifestManager:
         """Initialize manager with no loaded manifest."""
         self._manifest_path: Optional[Path] = None
         self._manifest_data: Dict[str, Any] = self._create_empty_manifest()
-        self._line_index: Dict[int, Dict[str, Any]] = {}
         self._dirty: bool = False
         self._change_listeners: List[Callable[[], None]] = []
         self._current_step: int = 0
@@ -534,24 +502,9 @@ class ManifestManager:
         
         # Load autosave settings from INI
         self._load_autosave_settings()
-        self._rebuild_line_index()
         
         # Ensure manifests directory exists
         MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
-
-    def _rebuild_line_index(self) -> None:
-        """Rebuild the manifest line lookup cache keyed by ``idx``."""
-        index: Dict[int, Dict[str, Any]] = {}
-        for line in self._manifest_data.get("lines", []):
-            if not isinstance(line, dict):
-                continue
-            try:
-                idx = int(line.get("idx", -1))
-            except (TypeError, ValueError):
-                continue
-            if idx >= 0:
-                index[idx] = line
-        self._line_index = index
     
     def _load_autosave_settings(self) -> None:
         """Load autosave settings from ``[session]`` INI section.
@@ -1238,7 +1191,6 @@ class ManifestManager:
         
         # Initialize manifest data
         self._manifest_data = self._create_empty_manifest()
-        self._rebuild_line_index()
         
         # Store project_name in Information metadata (single source of truth)
         self.set_info_metadata_field("project_name", project_name)
@@ -1332,7 +1284,6 @@ class ManifestManager:
         
         self._manifest_data["lines"] = lines
         self._manifest_data["filedir"] = filedir
-        self._rebuild_line_index()
     
     def load(self, manifest_path: Path) -> bool:
         """Load an existing manifest.
@@ -1355,7 +1306,6 @@ class ManifestManager:
             
             self._manifest_path = manifest_path
             self._manifest_data = data
-            self._rebuild_line_index()
             
             self._current_step = data.get("current_step", 0)
             self._dirty = False
@@ -1984,33 +1934,14 @@ class ManifestManager:
     def set_lines(self, lines: List[Dict[str, Any]]) -> None:
         """Set all lines."""
         self._manifest_data["lines"] = canonicalize_lines(lines)
-        self._rebuild_line_index()
         self._mark_dirty()
     
     def get_line(self, idx: int) -> Optional[Dict[str, Any]]:
         """Get a line by index."""
-        return self._line_index.get(idx)
-
-    def is_line_locked(self, idx: int) -> bool:
-        """Return whether the specified manifest line is locked."""
-        line = self.get_line(idx)
-        if line is None:
-            return False
-        return is_line_locked(line)
-
-    def _is_locked_line_write_blocked(
-        self,
-        line: Dict[str, Any],
-        field: str,
-        *,
-        allow_locked: bool,
-    ) -> bool:
-        """Return whether a field write is blocked by the line lock tag."""
-        return (
-            not allow_locked
-            and field in LOCKED_LINE_FIELDS
-            and is_line_locked(line)
-        )
+        for line in self._manifest_data.get("lines", []):
+            if line.get("idx") == idx:
+                return line
+        return None
     
     def get_all_orig_lines(self) -> List[str]:
         """Return the ``orig`` text for every line in index order.
@@ -2027,8 +1958,6 @@ class ManifestManager:
         idx: int,
         field: str,
         value: Any,
-        *,
-        allow_locked: bool = False,
     ) -> bool:
         """Set a field on a specific line.
 
@@ -2038,12 +1967,6 @@ class ManifestManager:
         lines = self._manifest_data.get("lines", [])
         for line in lines:
             if line.get("idx") == idx:
-                if self._is_locked_line_write_blocked(
-                    line,
-                    field,
-                    allow_locked=allow_locked,
-                ):
-                    return False
                 if field in line and line[field] == value:
                     return True  # No change
                 line[field] = value
@@ -2052,7 +1975,6 @@ class ManifestManager:
         # Line not found - create it
         line = {"idx": idx, field: value}
         lines.append(line)
-        self._line_index[idx] = line
         self._mark_dirty()
         return True
 
@@ -2060,8 +1982,6 @@ class ManifestManager:
         self,
         idx: int,
         field: str,
-        *,
-        allow_locked: bool = False,
     ) -> bool:
         """Remove a field from a specific line if it exists.
 
@@ -2072,12 +1992,6 @@ class ManifestManager:
         for line in lines:
             if line.get("idx") != idx:
                 continue
-            if self._is_locked_line_write_blocked(
-                line,
-                field,
-                allow_locked=allow_locked,
-            ):
-                return False
             if field not in line:
                 return True
             del line[field]
@@ -2089,16 +2003,9 @@ class ManifestManager:
         self,
         idx: int,
         translation: str,
-        *,
-        allow_locked: bool = False,
     ) -> bool:
         """Update translation for a line (called during translation)."""
-        return self.set_line_field(
-            idx,
-            "tl",
-            translation,
-            allow_locked=allow_locked,
-        )
+        return self.set_line_field(idx, "tl", translation)
     
     # ========================== Operations ========================== #
     
@@ -2194,7 +2101,6 @@ class ManifestManager:
                 line["idx"] = idx - line_count
             new_lines.append(line)
         self._manifest_data["lines"] = new_lines
-        self._rebuild_line_index()
         
         # 2. Update subsequent filedir entries
         new_entries = []
@@ -2618,7 +2524,6 @@ class ManifestManager:
 
         # Commit to manifest
         self._manifest_data["lines"] = final_lines
-        self._rebuild_line_index()
         self.set_filedir(final_filedir)
         self._mark_dirty()
 
@@ -2651,7 +2556,6 @@ class ManifestManager:
         if manifest.lines:
             lines_data = [line.to_dict() for line in manifest.lines]
             self._manifest_data["lines"] = lines_data
-            self._rebuild_line_index()
         
         # Import operations
         if manifest.operations:

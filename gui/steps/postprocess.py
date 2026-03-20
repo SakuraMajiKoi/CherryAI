@@ -20,7 +20,6 @@ from tkinter import ttk, messagebox, scrolledtext
 from CherryAI.gui.components.table import ColumnDef, SharedTable, TableRow
 from CherryAI.gui.steps.base import BaseStep
 from CherryAI.gui.theme.colors import THEME
-from CherryAI.functions.manifest_manager import LOCKED_LINE_TAG
 from CherryAI.gui.helpers.manifest_binding import (
     BindingInfo,
     bind_checkbox_to_field,
@@ -1480,8 +1479,6 @@ class PostprocessingStep(BaseStep):
             return
 
         line = self._lines[self._selected_line_idx]
-        if LOCKED_LINE_TAG in line.tags:
-            return
         new_text = self._edit_text.get("1.0", "end-1c")
 
         # Update line
@@ -1698,13 +1695,6 @@ class PostprocessingStep(BaseStep):
                 # running recovery on them can create false retry flags.
                 if line.translated == "__DEDUP__" or self._is_dedup_line(line):
                     line.postprocessed = line.translated
-                    line.issues = []
-                    line.needs_retry = False
-                    line.flagged = False
-                    line.written = False
-                    continue
-
-                if LOCKED_LINE_TAG in line.tags:
                     line.issues = []
                     line.needs_retry = False
                     line.flagged = False

@@ -1138,8 +1138,7 @@ class PreprocessingStep(BaseStep):
 
         Args:
             persist_manifest: Persist the current preview back to manifest line
-                fields. Passive tab-entry and filter refreshes keep this false
-                so large manifests do not trigger redundant per-line writes.
+                fields.
         """
         rows = []
         changed_count = 0
@@ -1297,9 +1296,6 @@ class PreprocessingStep(BaseStep):
                 else:
                     _orig, processed, _changes = entry[:3]
                     line_tags = []
-
-                if mgr.is_line_locked(idx):
-                    continue
 
                 manifest_line = mgr.get_line(idx)
                 if manifest_line is None:
@@ -1782,7 +1778,7 @@ class PreprocessingStep(BaseStep):
         if preview:
             self._preview_lines = preview
             self._preview_persist_pending = False
-            self._update_preview()
+            self._update_preview(persist_manifest=True)
 
     def _load_from_manifest_bindings(self) -> None:
         """Load values from manifest into bound widgets.

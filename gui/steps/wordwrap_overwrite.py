@@ -1446,25 +1446,6 @@ class WordwrapOverwriteStep(BaseStep):
             idx = source_line.idx
             orig = source_line.original
             source_format = line_format_map.get(idx, source_line.source_format)
-            if self.manifest_manager is not None and self.manifest_manager.is_line_locked(idx):
-                wrapped_lines.append(WrapLine(
-                    idx=idx,
-                    original=orig,
-                    source_format=source_format,
-                    source_path=source_line.source_path,
-                    wrapped=source_line.wrapped,
-                    overwrite=source_line.overwrite,
-                    char_count=len(source_line.wrapped or orig),
-                    line_count=source_line.line_count or 1,
-                    exceeds_limit=source_line.exceeds_limit,
-                    new_textbox_applied=source_line.new_textbox_applied,
-                    persist_wrapped=source_line.persist_wrapped,
-                ))
-                self._queue_progress_update(
-                    (line_pos / max(total_lines, 1)) * 80.0,
-                    f"Wrapping... {line_pos}/{total_lines}",
-                )
-                continue
 
             format_cfg = format_configs.get(source_format)
             if format_cfg is None:

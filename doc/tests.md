@@ -192,32 +192,24 @@ Verified command:
 python -m pytest CherryAI/dev/test_app_startup.py CherryAI/dev/test_input_import_fixes.py CherryAI/dev/test_lightvn_fixes.py -q --timeout=10
 ```
 
-### Focused Locked-Line Protection Regression
+### Focused Workflow Regression
 
-The locked-line workflow is covered by focused regression sets plus direct large-manifest timing checks:
+The affected workflow surfaces are covered by focused regression sets around the remaining import, table-editing, translation-planning, and Wordwrap behavior:
 
-- `dev/test_input_import_fixes.py` verifies that manifest line imports always carry the source `locked` tag, that already locked target rows reject imported stage-field overwrites, and that shared manifest helpers block guarded writes unless `allow_locked=True` is supplied.
-- `dev/test_table_view.py` verifies Full Table View lock toggling, deletion tracking, locked-row save bypass with `allow_locked=True`, and locked-row display tagging.
-- `dev/test_preprocess_manifest.py::TestPreprocessingPassivePreviewRestore::test_load_preview_from_manifest_does_not_rewrite_lines` verifies that passive Preprocessing preview restore stays read-only and does not trigger redundant per-line `prepro` / `tags` writes while a large manifest is loading.
-- `dev/test_edit_before_translate.py`, `dev/test_postprocess_manifest.py`, `dev/test_qa_manifest.py`, and `dev/test_wordwrap_manifest.py` provide adjacent regression coverage for the workflow steps touched by the shared lock guard.
-- `dev/test_manifest_state.py::TestManifestManager::{test_set_line_field_updates_line_lookup_cache,test_remove_file_rebuilds_locked_line_lookup,test_load_rebuilds_line_lookup_cache}` verifies that the manifest-manager `idx -> line` cache stays fresh after load, append, and file reindexing so lock checks remain O(1) during large tab scans.
-- `dev/test_prompt_builder_shared.py::TestCodePatternOnlyDetection::{test_literal_preserve_patterns_only,test_num_wildcard_pattern_matches_numeric_variant,test_preserve_patterns_with_real_text_not_code_only}` verifies the shared preserve-pattern CODE_ONLY matcher used by Translation status summaries, including `<NUM>` wildcard handling and real-text rejection.
-- `dev/test_request_preview.py` and `dev/test_estimation_skip.py` provide adjacent regression coverage so the optimized shared CODE_ONLY path stays aligned across Preview Requests, Translation planning, and Estimation.
+- `dev/test_input_import_fixes.py` verifies import selection handling, canonical tag merging, and dedup placeholder behavior.
+- `dev/test_table_view.py` verifies Full Table View deletion tracking plus save/reset semantics after edits.
+- `dev/test_edit_before_translate.py`, `dev/test_postprocess_manifest.py`, `dev/test_qa_manifest.py`, and `dev/test_wordwrap_manifest.py` provide adjacent regression coverage for the workflow steps touched during this rollback.
+- `dev/test_request_preview.py` and `dev/test_estimation_skip.py` provide adjacent regression coverage so shared skip planning stays aligned across Preview Requests, Translation planning, and Estimation.
 
 Verified commands:
 
 ```bash
 python -m pytest CherryAI/dev/test_table_view.py CherryAI/dev/test_input_import_fixes.py -q --timeout=10
-python -m pytest CherryAI/dev/test_preprocess_manifest.py::TestPreprocessingPassivePreviewRestore::test_load_preview_from_manifest_does_not_rewrite_lines -q --timeout=10
 python -m pytest CherryAI/dev/test_edit_before_translate.py CherryAI/dev/test_postprocess_manifest.py CherryAI/dev/test_qa_manifest.py CherryAI/dev/test_wordwrap_manifest.py -q --timeout=10
-python -m pytest CherryAI/dev/test_manifest_state.py::TestManifestManager::test_set_line_field_updates_line_lookup_cache CherryAI/dev/test_manifest_state.py::TestManifestManager::test_remove_file_rebuilds_locked_line_lookup CherryAI/dev/test_manifest_state.py::TestManifestManager::test_load_rebuilds_line_lookup_cache -q --timeout=10
-python -m pytest CherryAI/dev/test_prompt_builder_shared.py -q
 python -m pytest CherryAI/dev/test_request_preview.py CherryAI/dev/test_estimation_skip.py -q
 ```
 
-Latest verified results: 167 passed, then 133 passed with 2 skipped, plus 3 targeted manifest-cache regressions passed, plus the passive Preprocessing restore regression passed in isolation, plus `dev/test_prompt_builder_shared.py` `23 passed`, plus `dev/test_request_preview.py CherryAI/dev/test_estimation_skip.py` `90 passed, 1 skipped`.
-
-Latest UC16 timing checks after the shared fixes: Input `0.0867s`, Preprocessing `0.1429s`, Translation `1.0055s`, Postprocessing `0.4904s`, QA `0.5020s`, Wordwrap `0.3883s`.
+Latest verified results should be updated from the current focused pytest runs whenever these suites are revalidated.
 
 ### Focused Wordwrap + LightVN Runtime Regression
 
