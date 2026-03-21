@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 # should use the stage-specific helpers below so they do not read their own or
 # later fields.
 PIPELINE_FIELDS: List[str] = [
+    "final",         # Final manual output  (Full Table View only)
     "wordwr",        # Wordwrapped text     (Step 8)
-    "qa_overwrite",  # QA manual overwrite  (Step 7)
     "qa",            # QA reviewed text     (Step 7)
     "postpro",       # Postprocessed text   (Step 6)
     "tl",            # Translation          (Step 5)
@@ -37,12 +37,28 @@ PIPELINE_FIELDS: List[str] = [
     "orig",          # Original text        (Step 0)
 ]
 
+FINAL_SOURCE_FIELDS: List[str] = [field for field in PIPELINE_FIELDS if field != "final"]
+
 STAGE_INPUT_FIELDS: Dict[str, Sequence[str]] = {
     "postprocessing": ("tl", "prepro", "orig"),
     "qa": ("postpro", "tl", "prepro", "orig"),
-    "wordwrap": ("qa_overwrite", "qa", "postpro", "tl", "prepro", "orig"),
+    "wordwrap": ("qa", "postpro", "tl", "prepro", "orig"),
     "latest": tuple(PIPELINE_FIELDS),
 }
+
+
+def resolve_line_field_with_source(
+    line: Dict[str, Any],
+    priority: Optional[Sequence[str]] = None,
+) -> tuple[str, str]:
+    """Return the highest-priority non-empty field value and its source name."""
+    if priority is None:
+        priority = PIPELINE_FIELDS
+    for field_name in priority:
+        value = line.get(field_name) or ""
+        if isinstance(value, str) and value:
+            return value, field_name
+    return "", ""
 
 
 def resolve_line_field(
@@ -64,13 +80,8 @@ def resolve_line_field(
         The first non-empty string found, or ``""`` if the line is
         completely empty.
     """
-    if priority is None:
-        priority = PIPELINE_FIELDS
-    for field_name in priority:
-        value = line.get(field_name) or ""
-        if isinstance(value, str) and value:
-            return value
-    return ""
+    value, _field_name = resolve_line_field_with_source(line, priority)
+    return value
 
 
 def resolve_line_field_from(
@@ -122,6 +133,11 @@ def resolve_line_field_for_stage(
         logger.warning("Unknown stage %r, falling back to latest chain", stage)
         return resolve_line_field(line)
     return resolve_line_field(line, priority)
+
+
+def get_final_field_source(line: Dict[str, Any]) -> tuple[str, str]:
+    """Return the first non-empty source field and text beneath ``final``."""
+    return resolve_line_field_with_source(line, FINAL_SOURCE_FIELDS)
 
 
 def get_latest_line_text(manager: "ManifestManager", idx: int) -> str:

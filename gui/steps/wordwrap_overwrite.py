@@ -16,6 +16,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 from CherryAI.gui.components.table import ColumnDef, SharedTable, TableRow
+from CherryAI.gui.dialogs.table_view import _FileFilterDropdown
 from CherryAI.gui.steps.base import BaseStep
 from CherryAI.gui.theme.colors import THEME
 from CherryAI.gui.helpers.manifest_binding import (
@@ -86,13 +87,17 @@ def _persist_sparse_wordwrap(
 class WrapMode(Enum):
     """Wordwrap mode selection."""
 
-    MANUAL = "manual"
+    CUSTOM = "custom"
+    SIMPLE = "simple"
 
     @classmethod
     def from_display(cls, value: str) -> "WrapMode":
         """Parse from display string (title-case) or raw value."""
+        normalized = value.strip().lower()
+        if normalized == "manual":
+            return cls.CUSTOM
         for member in cls:
-            if member.value == value or member.value == value.lower():
+            if member.value == value or member.value == normalized:
                 return member
         raise ValueError(f"{value!r} is not a valid WrapMode")
 
@@ -203,7 +208,7 @@ class FormatConfig:
 class WrapOptions:
     """Options for wordwrap operations."""
 
-    mode: WrapMode = WrapMode.MANUAL
+    mode: WrapMode = WrapMode.CUSTOM
     speaker_mode: SpeakerMode = SpeakerMode.COUNT
     width: int = 48
     break_char: str = "\\n"
@@ -247,6 +252,8 @@ class TagWrapConfig:
     max_lines: int = 4
     speaker_handling: str = "count"  # "ignore" | "count"
     pretty_wrap: bool = True
+    prevent_orphans: bool = True
+    prefer_punct_breaks: bool = True
     new_textbox: bool = False
     new_textbox_injection: str = ""
 
@@ -260,6 +267,8 @@ class TagWrapConfig:
             "MaxLines": self.max_lines,
             "SpeakerHandling": self.speaker_handling,
             "PrettyWrap": self.pretty_wrap,
+            "PreventOrphans": self.prevent_orphans,
+            "PreferPunctuationBreaks": self.prefer_punct_breaks,
             "NewTextbox": self.new_textbox,
             "NewTextboxInjection": self.new_textbox_injection,
         }
@@ -279,6 +288,8 @@ class TagWrapConfig:
                 d.get("PreventOrphans", True)
                 or d.get("PreferPunctuationBreaks", True),
             ),
+            prevent_orphans=d.get("PreventOrphans", True),
+            prefer_punct_breaks=d.get("PreferPunctuationBreaks", True),
             new_textbox=d.get("NewTextbox", False),
             new_textbox_injection=d.get("NewTextboxInjection", ""),
         )
@@ -351,7 +362,11 @@ class WordwrapOverwriteStep(BaseStep):
         self._persist_done_in_worker: bool = False
         self._selected_line_idx: int = -1
         self._persist_after_wrap: bool = False
+        self._last_processed_indices: Optional[set[int]] = None
         self._updating_format_widgets = False
+        self._file_filter: Optional[str] = None
+        self._filtered_indices: Optional[set[int]] = None
+        self._file_tree: Dict[str, Any] = {}
         self._format_configs: Dict[str, FormatConfig] = {
             key: FormatConfig(
                 format_id=value.format_id,
@@ -489,6 +504,19 @@ class WordwrapOverwriteStep(BaseStep):
                 command=self._refresh_table,
             ).pack(side="left", padx=4)
 
+        file_picker_frame = ttk.Frame(filter_frame)
+        file_picker_frame.pack(side="right")
+
+        ttk.Label(file_picker_frame, text="Select File:").pack(side="left", padx=(8, 4))
+        self._file_filter_var = tk.StringVar(value="All")
+        self._file_filter_btn = ttk.Button(
+            file_picker_frame,
+            textvariable=self._file_filter_var,
+            command=self._show_file_filter_dropdown,
+            width=18,
+        )
+        self._file_filter_btn.pack(side="left")
+
         # Define columns.
         columns = [
             ColumnDef(key="idx", title="#", width=50, anchor="center"),
@@ -528,6 +556,12 @@ class WordwrapOverwriteStep(BaseStep):
         # Batch actions
         batch_frame = ttk.Frame(frame)
         batch_frame.pack(fill="x", padx=5, pady=5)
+
+        ttk.Button(
+            batch_frame,
+            text="↗ View in File",
+            command=self._view_in_file,
+        ).pack(side="left", padx=2)
 
         ttk.Button(
             batch_frame,
@@ -596,7 +630,7 @@ class WordwrapOverwriteStep(BaseStep):
 
         ttk.Label(mode_frame, text="Mode:").pack(side="left")
 
-        self._mode_var = tk.StringVar(value=WrapMode.MANUAL.value)
+        self._mode_var = tk.StringVar(value=WrapMode.CUSTOM.value)
         self._mode_var.trace_add("write", self._save_wordwrap_mode_to_manifest)
 
         self._mode_combo = ttk.Combobox(
@@ -611,7 +645,12 @@ class WordwrapOverwriteStep(BaseStep):
             "<<ComboboxSelected>>", lambda e: self._on_mode_changed()
         )
 
-        selected_format_frame = ttk.Frame(frame)
+        self._simple_mode_frame = ttk.Frame(frame)
+        self._build_simple_mode_panel(self._simple_mode_frame)
+
+        self._custom_mode_frame = ttk.Frame(frame)
+
+        selected_format_frame = ttk.Frame(self._custom_mode_frame)
         selected_format_frame.pack(fill="x", padx=5, pady=3)
         ttk.Label(selected_format_frame, text="Selected format:").pack(side="left")
         self._selected_format_label = ttk.Label(
@@ -632,7 +671,7 @@ class WordwrapOverwriteStep(BaseStep):
         ).pack(side="right")
 
         # Width mode (global — character/pixel toggle)
-        width_mode_frame = ttk.Frame(frame)
+        width_mode_frame = ttk.Frame(self._custom_mode_frame)
         width_mode_frame.pack(fill="x", padx=5, pady=3)
 
         ttk.Label(width_mode_frame, text="Width mode:").pack(side="left")
@@ -650,7 +689,7 @@ class WordwrapOverwriteStep(BaseStep):
         )
 
         # Pixel width entry (global, initially hidden)
-        self._pixel_width_frame = ttk.Frame(frame)
+        self._pixel_width_frame = ttk.Frame(self._custom_mode_frame)
         ttk.Label(self._pixel_width_frame, text="Width:").pack(side="left")
         self._pixel_width_var = tk.IntVar(value=400)
         ttk.Spinbox(
@@ -668,17 +707,17 @@ class WordwrapOverwriteStep(BaseStep):
         ).pack(side="left", padx=5)
 
         # Separator
-        ttk.Separator(frame, orient="horizontal").pack(fill="x", padx=5, pady=3)
+        ttk.Separator(self._custom_mode_frame, orient="horizontal").pack(fill="x", padx=5, pady=3)
 
         # Container for dynamic per-tag sections
-        self._tag_sections_frame = ttk.Frame(frame)
+        self._tag_sections_frame = ttk.Frame(self._custom_mode_frame)
         self._tag_sections_frame.pack(fill="x", padx=0, pady=0)
 
         # Build initial tag sections
         self._rebuild_tag_sections()
 
         # "Add Tag" dropdown at the bottom
-        add_frame = ttk.Frame(frame)
+        add_frame = ttk.Frame(self._custom_mode_frame)
         add_frame.pack(fill="x", padx=5, pady=5)
 
         self._add_tag_var = tk.StringVar(value="Add tag…")
@@ -700,6 +739,73 @@ class WordwrapOverwriteStep(BaseStep):
         self._max_lines_var = tk.IntVar(value=4)
         # _char_width_frame kept for _on_width_mode_changed
         self._char_width_frame = self._tag_sections_frame
+        self._refresh_mode_ui()
+
+    def _build_simple_mode_panel(self, parent: ttk.Frame) -> None:
+        """Build the simplified file-scoped wrapping controls."""
+        simple_group = ttk.LabelFrame(parent, text="Simple File Wrap")
+        simple_group.pack(fill="x", padx=5, pady=5)
+
+        self._simple_width_var = tk.IntVar(value=48)
+        self._simple_width_var.trace_add("write", self._save_simple_settings_to_manifest)
+        width_frame = ttk.Frame(simple_group)
+        width_frame.pack(fill="x", padx=5, pady=3)
+        ttk.Label(width_frame, text="Character Limit:").pack(side="left")
+        ttk.Spinbox(
+            width_frame,
+            from_=1,
+            to=999,
+            textvariable=self._simple_width_var,
+            width=8,
+        ).pack(side="left", padx=5)
+
+        self._simple_max_lines_var = tk.IntVar(value=4)
+        self._simple_max_lines_var.trace_add("write", self._save_simple_settings_to_manifest)
+        max_lines_frame = ttk.Frame(simple_group)
+        max_lines_frame.pack(fill="x", padx=5, pady=3)
+        ttk.Label(max_lines_frame, text="Line Limit:").pack(side="left")
+        ttk.Spinbox(
+            max_lines_frame,
+            from_=0,
+            to=20,
+            textvariable=self._simple_max_lines_var,
+            width=8,
+        ).pack(side="left", padx=5)
+        ttk.Label(max_lines_frame, text="(0 = unlimited)").pack(side="left")
+
+        self._simple_break_var = tk.StringVar(value="\\n")
+        self._simple_break_var.trace_add("write", self._save_simple_settings_to_manifest)
+        break_frame = ttk.Frame(simple_group)
+        break_frame.pack(fill="x", padx=5, pady=3)
+        ttk.Label(break_frame, text="Break Char:").pack(side="left")
+        ttk.Combobox(
+            break_frame,
+            textvariable=self._simple_break_var,
+            values=["\\n", "\n", "<br>", "[r]", "\\r\\n"],
+            width=10,
+        ).pack(side="left", padx=5)
+
+        self._simple_pretty_var = tk.BooleanVar(value=True)
+        self._simple_pretty_var.trace_add("write", self._save_simple_settings_to_manifest)
+        pretty_frame = ttk.Frame(simple_group)
+        pretty_frame.pack(fill="x", padx=5, pady=3)
+        ttk.Checkbutton(
+            pretty_frame,
+            text="Pretty Wrap",
+            variable=self._simple_pretty_var,
+        ).pack(side="left")
+
+        ttk.Label(
+            simple_group,
+            text=(
+                "Applies one uniform wrap configuration to the currently selected file "
+                "filter, or to all files when no file is selected."
+            ),
+            foreground=THEME.text_secondary,
+            font=("TkDefaultFont", 8),
+            wraplength=260,
+            justify="left",
+        ).pack(fill="x", padx=5, pady=(0, 5), anchor="w")
 
     def _build_speaker_panel(self, parent: ttk.Frame) -> None:
         """Build the speaker handling options panel (Task 46.3: Ignore + Count)."""
@@ -1301,7 +1407,22 @@ class WordwrapOverwriteStep(BaseStep):
         """Handle wrap mode change."""
         mode = WrapMode.from_display(self._mode_var.get())
         self._wrap_options.mode = mode
+        self._refresh_mode_ui()
         self._refresh_preview()
+
+    def _refresh_mode_ui(self) -> None:
+        """Show the settings group for the active wrap mode."""
+        mode = WrapMode.from_display(self._mode_var.get())
+        if mode == WrapMode.SIMPLE:
+            self._custom_mode_frame.pack_forget()
+            self._simple_mode_frame.pack(fill="x", padx=0, pady=0)
+            self._width_label.configure(
+                text=f"Simple mode: {self._simple_width_var.get()} chars"
+            )
+            return
+        self._simple_mode_frame.pack_forget()
+        self._custom_mode_frame.pack(fill="x", padx=0, pady=0)
+        self._sync_selected_format_state()
 
     def _on_width_changed(self) -> None:
         """Handle width change."""
@@ -1432,7 +1553,10 @@ class WordwrapOverwriteStep(BaseStep):
         # Global settings shared across all tags
         global_ignore = self._get_ignore_codes()
         speaker_names = self._get_detected_speakers()
-        global_mode = self._mode_var.get()
+        wrap_mode = WrapMode.from_display(self._mode_var.get())
+        global_mode = wrap_mode.value
+        process_indices = self._get_process_indices(wrap_mode)
+        self._last_processed_indices = process_indices
 
         source_lines = [line.original for line in self._lines]
         if not source_lines:
@@ -1459,6 +1583,70 @@ class WordwrapOverwriteStep(BaseStep):
                 or filedir_type_map.get(idx)
                 or "dialogue"
             )
+
+            if process_indices is not None and idx not in process_indices:
+                preserved_wrapped = source_line.wrapped or orig
+                preserved_break = normalize_break_char(self._simple_break_var.get())
+                preserved_line_count = (
+                    preserved_wrapped.count(preserved_break) + 1
+                    if preserved_wrapped and preserved_break
+                    else 1
+                )
+                wrapped_lines.append(WrapLine(
+                    idx=idx,
+                    original=orig,
+                    source_format=source_format,
+                    source_path=source_line.source_path,
+                    wrapped=preserved_wrapped,
+                    overwrite=source_line.overwrite,
+                    char_count=len(preserved_wrapped),
+                    line_count=preserved_line_count,
+                    exceeds_limit=source_line.exceeds_limit,
+                    new_textbox_applied=source_line.new_textbox_applied,
+                    persist_wrapped=source_line.persist_wrapped,
+                ))
+                self._queue_progress_update(
+                    (line_pos / max(total_lines, 1)) * 80.0,
+                    f"Wrapping... {line_pos}/{total_lines}",
+                )
+                continue
+
+            if wrap_mode == WrapMode.SIMPLE:
+                simple_break_char = normalize_break_char(self._simple_break_var.get())
+                simple_max_lines = self._simple_max_lines_var.get()
+                config = WordwrapConfig(
+                    mode=WrapMode.SIMPLE.value,
+                    in1=self._simple_width_var.get(),
+                    in2=self._simple_break_var.get(),
+                    in3=None,
+                    ignore_codes=global_ignore,
+                    pretty_wrap=bool(self._simple_pretty_var.get()),
+                )
+                result_list = apply_wordwrap([orig], config)
+                wrapped = result_list[0] if result_list else orig
+                logical_line_count = (
+                    wrapped.count(simple_break_char) + 1
+                    if simple_break_char else 1
+                )
+                has_overflow = bool(simple_max_lines and logical_line_count > simple_max_lines)
+                wrapped_lines.append(WrapLine(
+                    idx=idx,
+                    original=orig,
+                    source_format=source_format,
+                    source_path=source_line.source_path,
+                    wrapped=wrapped,
+                    overwrite=source_line.overwrite,
+                    char_count=len(wrapped),
+                    line_count=logical_line_count,
+                    exceeds_limit=has_overflow,
+                    new_textbox_applied=False,
+                    persist_wrapped=not has_overflow,
+                ))
+                self._queue_progress_update(
+                    (line_pos / max(total_lines, 1)) * 80.0,
+                    f"Wrapping... {line_pos}/{total_lines}",
+                )
+                continue
 
             # 2. Look up per-tag config
             tc = None
@@ -1534,6 +1722,14 @@ class WordwrapOverwriteStep(BaseStep):
 
         self._lines = wrapped_lines
         self._update_stats()
+
+    def _get_process_indices(self, wrap_mode: WrapMode) -> Optional[set[int]]:
+        """Return the subset of line indices affected by the current wrap run."""
+        if wrap_mode != WrapMode.SIMPLE:
+            return None
+        if self._filtered_indices is None:
+            return {line.idx for line in self._lines}
+        return set(self._filtered_indices)
 
     def _build_tag_maps(
         self,
@@ -1709,6 +1905,8 @@ class WordwrapOverwriteStep(BaseStep):
         selected_format = self._format_var.get().strip().lower()
 
         for line in self._lines:
+            if self._filtered_indices is not None and line.idx not in self._filtered_indices:
+                continue
             if selected_format and line.source_format != selected_format:
                 continue
             # Apply filter (Task 46.9)
@@ -1736,6 +1934,10 @@ class WordwrapOverwriteStep(BaseStep):
                     "wrapped": wrap,
                     "overwrite": ow,
                 },
+                meta={
+                    "source_path": line.source_path,
+                    "source_format": line.source_format,
+                },
             )
             rows.append(row)
 
@@ -1749,7 +1951,7 @@ class WordwrapOverwriteStep(BaseStep):
         if line is None:
             return
 
-        width = self._width_var.get()
+        width = self._get_active_width_limit()
         canvas_width = self._ruler_canvas.winfo_width() or 400
 
         # Calculate scale
@@ -1924,6 +2126,26 @@ class WordwrapOverwriteStep(BaseStep):
         )
         logger.debug("Wordwrap mode saved to manifest: %s", value)
 
+    def _save_simple_settings_to_manifest(self, *args: Any) -> None:
+        """Persist simple mode settings into the manifest."""
+        if self.manifest_manager is None:
+            return
+        save_nested_int_field(
+            self.manifest_manager, "WordwrapSettings", "Width", self._simple_width_var.get()
+        )
+        save_nested_text_field(
+            self.manifest_manager, "WordwrapSettings", "BreakChar", self._simple_break_var.get()
+        )
+        save_nested_int_field(
+            self.manifest_manager, "WordwrapSettings", "MaxLines", self._simple_max_lines_var.get()
+        )
+        save_nested_bool_field(
+            self.manifest_manager,
+            "WordwrapSettings",
+            "PrettyWrap",
+            bool(self._simple_pretty_var.get()),
+        )
+
     def _save_speaker_handling_to_manifest(self, *args: Any) -> None:
         """Save speaker handling mode to manifest when changed (TASK 28.1).
         
@@ -1954,9 +2176,22 @@ class WordwrapOverwriteStep(BaseStep):
         
         # Load mode
         mode_value = load_nested_text_field(
-            self.manifest_manager, "WordwrapSettings", "Mode", WrapMode.MANUAL.value
+            self.manifest_manager, "WordwrapSettings", "Mode", WrapMode.CUSTOM.value
         )
-        self._mode_var.set(mode_value)
+        self._mode_var.set(WrapMode.from_display(mode_value).value)
+
+        self._simple_width_var.set(load_nested_int_field(
+            self.manifest_manager, "WordwrapSettings", "Width", 48
+        ))
+        self._simple_break_var.set(load_nested_text_field(
+            self.manifest_manager, "WordwrapSettings", "BreakChar", "\\n"
+        ))
+        self._simple_max_lines_var.set(load_nested_int_field(
+            self.manifest_manager, "WordwrapSettings", "MaxLines", 4
+        ))
+        self._simple_pretty_var.set(load_nested_bool_field(
+            self.manifest_manager, "WordwrapSettings", "PrettyWrap", True
+        ))
         
         # Load speaker handling
         speaker_value = load_nested_text_field(
@@ -1990,6 +2225,7 @@ class WordwrapOverwriteStep(BaseStep):
                 ]
 
         self._refresh_format_selector()
+        self._refresh_mode_ui()
         
         logger.debug("Wordwrap settings loaded from manifest")
 
@@ -2045,6 +2281,9 @@ class WordwrapOverwriteStep(BaseStep):
         self._format_configs = {}
         self._line_format_map = {}
         self._line_path_map = {}
+        self._file_tree = {}
+        self._file_filter = None
+        self._filtered_indices = None
         self._tag_widgets.clear()
         logger.debug("Wordwrap step reset for new project")
 
@@ -2074,6 +2313,7 @@ class WordwrapOverwriteStep(BaseStep):
         if mgr is not None and mgr.is_loaded:
             latest = get_all_lines_for_stage(mgr, "wordwrap")
             self._build_line_format_map()
+            self._refresh_file_filter_options()
             for ln in mgr.get_lines():
                 idx = ln.get("idx")
                 wr = ln.get("wordwr", "")
@@ -2107,10 +2347,11 @@ class WordwrapOverwriteStep(BaseStep):
         format_configs = getattr(self, "_format_configs", {})
         step_data["wrap_options"] = {
             "mode": self._mode_var.get(),
-            "width": self._width_var.get(),
-            "break_char": self._break_var.get(),
-            "max_lines": self._max_lines_var.get(),
+            "width": self._get_active_width_limit(),
+            "break_char": self._get_active_break_char(),
+            "max_lines": self._get_active_max_lines(),
             "speaker_mode": self._speaker_var.get(),
+            "file_filter": getattr(self, "_file_filter", None),
         }
         step_data["tag_configs"] = [tc.to_dict() for tc in self._tag_configs]
         step_data["format_configs"] = [
@@ -2129,7 +2370,10 @@ class WordwrapOverwriteStep(BaseStep):
         if mgr is None:
             return
         total_lines = len(self._lines)
+        processed_indices = getattr(self, "_last_processed_indices", None)
         for line_pos, line in enumerate(self._lines, start=1):
+            if processed_indices is not None and line.idx not in processed_indices:
+                continue
             if not line.persist_wrapped:
                 mgr.clear_line_field(line.idx, "wordwr")
                 self._queue_progress_update(
@@ -2202,11 +2446,116 @@ class WordwrapOverwriteStep(BaseStep):
         return WrapOptions(
             mode=WrapMode.from_display(self._mode_var.get()),
             speaker_mode=SpeakerMode(self._speaker_var.get().lower()),
-            width=self._width_var.get(),
-            break_char=self._break_var.get(),
-            max_lines=self._max_lines_var.get(),
-            pretty_wrap=True,
+            width=self._get_active_width_limit(),
+            break_char=self._get_active_break_char(),
+            max_lines=self._get_active_max_lines(),
+            pretty_wrap=self._get_active_pretty_wrap(),
         )
+
+    def _get_active_width_limit(self) -> int:
+        """Return the active width limit for the current wrap mode."""
+        if WrapMode.from_display(self._mode_var.get()) == WrapMode.SIMPLE:
+            return self._simple_width_var.get()
+        return self._width_var.get()
+
+    def _get_active_break_char(self) -> str:
+        """Return the active break character for the current wrap mode."""
+        if WrapMode.from_display(self._mode_var.get()) == WrapMode.SIMPLE:
+            return self._simple_break_var.get()
+        return self._break_var.get()
+
+    def _get_active_max_lines(self) -> int:
+        """Return the active max-lines value for the current wrap mode."""
+        if WrapMode.from_display(self._mode_var.get()) == WrapMode.SIMPLE:
+            return self._simple_max_lines_var.get()
+        return self._max_lines_var.get()
+
+    def _get_active_pretty_wrap(self) -> bool:
+        """Return the active pretty-wrap toggle for the current wrap mode."""
+        if WrapMode.from_display(self._mode_var.get()) == WrapMode.SIMPLE:
+            return bool(self._simple_pretty_var.get())
+        dialogue_cfg = self.get_tag_config_for("dialogue")
+        return dialogue_cfg.pretty_wrap if dialogue_cfg is not None else True
+
+    def _refresh_file_filter_options(self) -> None:
+        """Build the file-selection tree from manifest filedir entries."""
+        self._file_tree = {}
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            if hasattr(self, "_file_filter_var"):
+                self._file_filter_var.set("All")
+            return
+
+        for entry in mgr.get_filedir():
+            parts = entry.rel_path.replace("\\", "/").split("/")
+            node = self._file_tree
+            for part in parts[:-1]:
+                node = node.setdefault(part, {})
+            node[parts[-1]] = entry
+
+        if hasattr(self, "_file_filter_var") and self._file_filter is None:
+            self._file_filter_var.set("All")
+
+    def _show_file_filter_dropdown(self) -> None:
+        """Show the reusable hierarchical file selector used by Full Table View."""
+        if not self._file_tree or self.manifest_manager is None:
+            return
+        dropdown = _FileFilterDropdown(
+            self,
+            self._file_tree,
+            self.manifest_manager.get_filedir(),
+            current_filter=self._file_filter,
+            on_select=self._apply_file_filter,
+        )
+        x = self._file_filter_btn.winfo_rootx()
+        y = self._file_filter_btn.winfo_rooty() + self._file_filter_btn.winfo_height()
+        dropdown.geometry(f"+{x}+{y}")
+
+    def _apply_file_filter(self, filter_path: Optional[str]) -> None:
+        """Restrict the preview to one file or folder path."""
+        self._file_filter = filter_path
+        if filter_path is None:
+            self._filtered_indices = None
+            self._file_filter_var.set("All")
+            self._refresh_table()
+            return
+
+        filtered: set[int] = set()
+        mgr = self.manifest_manager
+        if mgr is not None:
+            filter_norm = filter_path.replace("\\", "/")
+            for entry in mgr.get_filedir():
+                rel = entry.rel_path.replace("\\", "/")
+                if rel == filter_norm or rel.startswith(filter_norm + "/"):
+                    for idx in range(entry.first_idx, entry.last_idx + 1):
+                        filtered.add(idx)
+
+        self._filtered_indices = filtered
+        display = filter_path.replace("\\", "/")
+        if len(display) > 28:
+            display = "…" + display[-27:]
+        self._file_filter_var.set(display)
+
+        selected_line = next(
+            (line for line in self._lines if line.idx in filtered),
+            None,
+        )
+        if selected_line is not None and selected_line.source_format:
+            self._format_var.set(selected_line.source_format)
+            self._sync_selected_format_state()
+        self._refresh_table()
+
+    def _view_in_file(self) -> None:
+        """Filter the preview down to the file that owns the selected row."""
+        if self._selected_line_idx < 0:
+            messagebox.showinfo("Info", "Select a line first.")
+            return
+        line = next((item for item in self._lines if item.idx == self._selected_line_idx), None)
+        if line is None or not line.source_path:
+            messagebox.showinfo("Info", "The selected line is not linked to a file.")
+            return
+        self._apply_file_filter(line.source_path)
+        self._preview_table.scroll_to_row(line.idx)
 
     def get_lines(self) -> List[WrapLine]:
         """Get all wrap lines.

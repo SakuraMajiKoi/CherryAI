@@ -1,3 +1,4 @@
+| 12 | Aggressive Deduplication | Last (P90) | First (P5) | Variant-aware dedup with generic substitutions; numbers use `<NUM>` for single-slot rows and indexed `<NUM1>`, `<NUM2>`, ... for multi-slot rows; GUI: `apply_aggressive_dedup_batch()` in mode_adapter; tags AD{idx}; chained standard dedup rows may resolve through aggressive sources during postprocessing |
 # CherryAI Specification Document
 
 Version 3.0 | February 2026
@@ -92,7 +93,7 @@ The GUI is organized as:
 - **Menu Bar**: File (dropdown), Full Table View (direct command), API Log (direct command), Options (direct command), Help (dropdown)
   - **New Project** (`_on_new_session`): Resets ManifestManager (creates empty manifest), resets SessionState, and calls `on_new_project()` on ALL step tabs to flush cached instance state (loaded files, analysis results, lines, estimation data, etc.). Prevents old project data from leaking into the new session.
   - **Open Project...** (`_on_load_manifest` / `_load_manifest_from_path`): After the unsaved-changes prompt, loads the selected manifest into a fresh ManifestManager, swaps it in only after successful load, resets SessionState, and calls `on_new_project()` on ALL tabs before entering the saved step. This must behave like New Project plus manifest activation, so an already-open project can never leak cached state into the newly opened project.
-- **Full Table View** (`_on_full_table_view`): Opens FullTableViewDialog — spreadsheet-like view and editor for all manifest line entries. Requires a loaded project. Features: named columns (Line #, Original, Preprocessed, Translated, Postprocessed, Quality Assurance, Overwrite, Wordwrap, Overwrite (Legacy), Log, Tags), column filter dropdown with Show All/Show Visible/Show Latest presets, all columns hideable, column selection bar for search/replace scoping, sort indicators (▲/▼) in headers, read-only Original with copy support, two-row search/replace toolbar, Results Only mode, file filter, RegEx search/replace, pagination, save/reset/diff, and a Clear Columns workflow for `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, and `wordwr`. Clearing `tl` must require a second destructive confirmation because it removes the base translation stage. Show Latest follows the active pipeline `orig → prepro → tl → postpro → qa → qa_overwrite → wordwr`.
+- **Full Table View** (`_on_full_table_view`): Opens FullTableViewDialog — spreadsheet-like view and editor for all manifest line entries. Requires a loaded project. Features: named columns (Line #, Original, Preprocessed, Translated, Postprocessed, Quality Assurance, Overwrite, Wordwrap, Final, Overwrite (Legacy), Log, Tags), column filter dropdown with Show All/Show Visible/Show Latest presets, all columns hideable, column selection bar for search/replace scoping, sort indicators (▲/▼) in headers, read-only Original with copy support, two-row search/replace toolbar, Results Only mode, file filter, RegEx search/replace, pagination, save/reset/diff, and a Clear Columns workflow for `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, and `final`. Clearing `tl` must require a second destructive confirmation because it removes the base translation stage. `final` is Full Table View only for now: empty cells remain sparse until edited, double-click editing seeds the editor from the first non-empty lower stage, and if the edited text matches that source value again the table clears `final` back to empty. Show Latest follows the active pipeline `orig → prepro → tl → postpro → qa → wordwr → final`.
 - **API Log** (`_on_api_log`): Opens APILogViewDialog — non-blocking viewer for structured API log entries. Requires a loaded project. Features: search bar, category filter (Main Translation/Term Translation/Gender Inference/Other), view mode switch (Sent/Received/Both), display-limit spinbox (All/1000/2500/5000/Nothing), color-coded entries (green=success, yellow=recovered, red=failed), live updates via subscription, token statistics, per-project JSONL persistence alongside manifest. Sent entries must show actual request metadata from the stored log, including OpenAI `prompt_cache_key` / `prompt_cache_retention` when present. Reopening API Log must reuse the existing window and bring it to the foreground instead of opening duplicates.
 - **Options** (`_on_options`): Opens Global Options dialog directly from menu bar. Reopening Options must reuse the existing dialog and bring it to the foreground instead of opening duplicates.
 - **Step Tabs**: 10 workflow tabs (Steps 0-9) progressing from Input to Output
@@ -118,7 +119,8 @@ All application state is stored in the Manifest (`.CherryAI.json`), not in GUI m
 - Skip-unchanged guard: `set_line_field()` returns early when new value equals existing (TASK 72)
 - Per-step data storage with automatic serialization
 - Line-by-line translation state tracking with per-line `tags` field (TASK 72)
-- Manifest line canonicalization on load/save/set: legacy `tag` is merged into `tags`, line keys are written in canonical order `idx`, `tags`, `orig`, `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, then auxiliary fields, and dedup placeholder rows may retain valid later-stage outputs produced or imported elsewhere in the workflow
+- Manifest line canonicalization on load/save/set: legacy `tag` is merged into `tags`, line keys are written in canonical order `idx`, `tags`, `orig`, `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, `final`, then auxiliary fields, and dedup placeholder rows may retain valid later-stage outputs produced or imported elsewhere in the workflow
+- Shared manifest-to-manifest import helpers for Import Translations and Create Patch, plus batch `filedir`/`lines[]` pruning that rewrites remaining line indices contiguously and can remove copied `Original/` files in the same pass
 - Project recovery and session restoration
 - Step data merge-not-replace: `on_leave()` and `_update_step_data()` must start from `get_step_data()` and merge updated keys — never create a fresh dict that discards stored results (PHASE 80)
 - Init guard pattern: steps that populate comboboxes during `__init__()` must suppress trace-triggered manifest writes until initialization completes (PHASE 80)
@@ -709,6 +711,8 @@ Code Spacing Rules (processed in both Pre and Post steps) apply these extended p
 
 **Input Routing Rule**: Step 0 resolves the effective parser format before auto-encoding. When the user keeps Encoding on `auto` but explicitly selects a parser format such as `lightvn`, that parser's `detect_encoding()` result is used before generic BOM or fallback detection. The first successfully loaded file also seeds missing Output defaults for Destination, Format, and Encoding.
 
+**Parser Staging Rule**: When a parser's extraction can depend on project-local context in `Original/` (for example LightVN's project-scoped quoted-variable safety), Step 0 must copy those files into the project `Original/` tree before the final manifest sync and then re-extract from the staged copies. The authoritative `lines[]` / `filedir[]` data must come from that staged pass so Output injection sees the same extraction order later.
+
 #### Handshake Protocol
 
 The Parser Handshake (`formats/handshake.py`) formalizes what every parser must and may provide:
@@ -791,6 +795,8 @@ Reference handshake-compliant parser for Light VN visual novel scripts. Adapted 
 
 **Variable Classification**: LightVN still treats explicit allowlists such as `スキル名` / `スキル効果` as normal `variable` content and loot/material style fields such as `臨時全域変数 剥ぎ取り素材1 = "角兎の素材×1"` or `もし (獲得ボーナス >= 2) 臨時全域変数 獲得食材 = "食用の肉×3"` as `items`. In addition, quoted `保存変数` / `臨時全域変数` assignments are now classified project-safely: the parser scans the active `Original/` tree, records whether each quoted-text variable is used only in display text (`文字*`, `文字窓`, `~文字`, dialogue) or also in non-display interpolations / `もし (...)` conditions, and only extracts the display-only set. This allows text-only variables such as `bt_勝利条件` to translate while excluding mixed-use variables such as `胎児` that also feed asset paths and control variables such as `付与対象` that gate battle logic.
 
+**Load/Inject Consistency Requirement**: Because that classification depends on the staged project tree, manifest line slices for LightVN files must be built from the staged `Original/` copy rather than the pre-copy source path. Otherwise the same untouched project can emit Output-step verification warnings such as `orig mismatch` or downstream `index out of range` cascades even before translation begins.
+
 **Detection**: Scans the entire file for any of the `_DETECT_PATTERNS` set (`~【`, `~栞`, `~文字`, `~ボタン`, `~絵`, `~効果音`, `~選択`, `~スクリプト`, `~保存変数`, `~臨時全域変数`) or `_DETECT_LINE_PREFIXES` (`栞 `, `スクリプト `, `保存変数 `, `臨時全域変数 `). This keeps script/config-style LightVN files such as map stubs and variable-only setup files on the parser path instead of falling back to raw `txt` extraction.
 
 **Bookmark Semantics**: `~栞 ...` is treated as a bookmark/interaction anchor rather than a displayed speaker tag. Encountering a bookmark clears any previously active `~【Speaker】` state so later quoted dialogue is not accidentally prefixed with the wrong speaker.
@@ -869,10 +875,10 @@ The following table lists all processes in their execution order. Preprocessing 
 #### Aggressive Deduplication
 
 - Similar to standard Deduplication except that variations of lines are deduplicated
-- Uses generic substitutions: one `{CODE}` for all code, `X` for all numbers
+ Uses generic substitutions: one `{CODE}` for all code; numbers use one shared `<NUM>` token only when there is a single slot, and indexed `<NUM1>`, `<NUM2>`, ... when multiple numeric slots must survive reordering in translation
 - Runs last in preprocessing (after all other transformations have normalized the text)
 - Restored first in postprocessing (before any other restoration)
-- Lines deduplicated aggressively use the postprocessed result of their unique original (`X` turns back into the respective number &c)
+ Lines deduplicated aggressively use the postprocessed result of their unique original and then restore their own numeric slots from per-line `aggr_numbers` data; stored lookups may be legacy lists or indexed token maps for backward compatibility
 
 ---
 
@@ -1066,6 +1072,7 @@ Each step is a tab in the main notebook. Steps can be navigated freely but follo
 | **Toolbar** | | |
 | Input Button | Button | Unified file/folder selector — opens a single window supporting both file and folder selection |
 | Import Translations Button | Button | Import translations from another manifest via selection dialog (choose line fields and settings sections to import) |
+| Create Patch Button | Button | Import all supported line/settings data from another manifest, then prune unchanged files so only patch-relevant files remain |
 | **Options Panel** | LabelFrame | Contains Encoding, Format, and Auto-Pipeline settings |
 | Encoding Dropdown | Combobox | Select file encoding (auto, utf-8, shift_jis, etc.). Default: auto |
 | Format Dropdown | Combobox | Override format detection (auto, txt, csv, json, rpgmaker, image, etc.). Default: auto |
@@ -1167,7 +1174,8 @@ select which data to import from a source manifest.
 | Translated | ✅ | ``tl``, ``preedit`` |
 | Postprocessed | ✅ | ``postpro`` |
 | Wordwrap | ✅ | ``wordwr`` |
-| QA (reviewed text, overwrite, TLC, edits) | ✅ | ``qa``, ``qa_overwrite``, ``edit*``, ``tlc*`` |
+| Final | ✅ | ``final`` |
+| QA | ✅ | ``qa`` |
 
 **Dedup Guard**: If either the current line or the imported source line has ``prepro == "__DEDUP__"``, the dialog must not import `tl` for that row. Postprocess, QA, wordwrap, and related later-stage fields may still import and persist normally.
 | Do not overwrite lines that already have translations | ❌ | Skips lines with existing ``tl`` |
@@ -1185,6 +1193,20 @@ select which data to import from a source manifest.
 | Wordwrap Settings | ❌ | ``WordwrapSettings`` |
 | QA / Validation Rules | ❌ | ``ValidationRules``, ``QAOptions``, ``CharacterWhitelist``, etc. |
 | File / Output Settings | ❌ | ``OutputFormat`` |
+
+#### Create Patch Workflow
+
+**Purpose**: Button next to Import Translations used for update/patch preparation. It imports all supported line fields and settings from a selected source manifest, then removes files from the current manifest when they are already complete.
+
+**Behavior**:
+1. User selects one source manifest; no checkbox dialog is shown.
+2. CherryAI compares the current project's `Original/` tree against the source project's `Original/` tree using shared `filedir[].rel_path` plus SHA-256 hash.
+3. Files with the same relative path and identical copied original bytes are removed immediately from the current manifest.
+4. CherryAI imports all supported line fields (`prepro`, `tags`, `tl`, `preedit`, `postpro`, `wordwr`, `final`, `qa`, `qa_overwrite`, numbered `edit*` / `tlc*`) and all supported settings sections from the source manifest.
+5. CherryAI then scans the remaining current files; if every line in a file has an `orig` value that exists somewhere in the source manifest, that file is treated as complete and removed even if those rows never had translation text.
+6. Each removed file also has its copied `Original/` file deleted, its `filedir` entry removed, its `lines[]` removed, and all remaining filedir ranges / line `idx` values rewritten contiguously.
+
+**Goal**: Leave behind only the files that are still patch-relevant because they contain changed or newly added text.
 
 ---
 
@@ -2649,12 +2671,13 @@ The Preprocessing tab is organized into three sections:
 **Purpose**: Deduplicate variations of lines that differ only in code or numbers, beyond what standard Deduplication handles.
 
 **Behavior**:
-- Replaces all code patterns with a generic `{CODE}` and all numbers with `X`
+ Replaces all code patterns with a generic `{CODE}` and normalizes numbers into aggressive placeholder slots
+ Single-number lines keep `<NUM>`; multi-number lines use indexed tokens such as `<NUM1>`, `<NUM2>`, ... so postprocessing can restore by explicit slot when translation changes numeric order
 - Lines that are identical after these substitutions are treated as duplicates
 - Runs last in preprocessing because it operates on the fully preprocessed form of each line
 - Uses the postprocessed result of the unique original to restore all variant-deduplicated lines
 
-**Postprocessing**: Restored first (Priority 5 in Post), before any other restoration, to ensure the deduplicated variants receive the correct restored translation
+**Postprocessing**: Restored first (Priority 5 in Post), before any other restoration, to ensure the deduplicated variants receive the correct restored translation. Number restoration must use the shared aggressive restore helper and the saved `aggr_numbers` lookup rather than blind left-to-right `<NUM>` substitution.
 
 **Manifest Key**: `AggressiveDeduplication`
 
@@ -2870,6 +2893,7 @@ The Preprocessing tab is organized into three sections:
 **Stored In**:
 - Manifest: `lines[].prepro`, `lines[].prepro_ops`
 - Manifest step data: All toggle states and pattern lists
+- Preprocessing manifest persistence updates the already loaded `lines[]` entries in one pass inside `_update_step_data()`; tab restore and Apply Rules must not route every row through repeated `ManifestManager.get_line()` plus `set_line_field()` / `clear_line_field()` calls because that regressed large-project GUI responsiveness
 
 ---
 
@@ -3826,9 +3850,11 @@ Persistence rule: preview refresh and tab leave do not write `wordwr`. Only expl
 
 Key principles:
 - **Pretty wrap is unified**: Punctuation-preferred line breaks and orphan prevention are represented by a single PrettyWrap toggle.
+- **Two user modes**: `Custom` keeps the existing per-format and per-tag workflow; `Simple` exposes only Character Limit, Line Limit, Break Char, and Pretty Wrap. Legacy `Manual` settings map to `Custom`.
 - **Parser-driven when possible**: When a parser provides display constraints (width, break character, max lines), settings are auto-populated and displayed (user can override).
 - **Code-aware**: Ignore patterns come from the Code Database (Step 3), not from hardcoded checkboxes.
 - **Format-safe**: The preview Format selector is populated from manifest `filedir[].format`, and wrapping only runs on rows that belong to each enabled format.
+- **File-scoped simple wrapping**: Step 8 includes a compact `Select File:` picker using the Full Table View file-filter dropdown. In `Simple` mode, Apply only processes the currently selected file scope.
 - **Speaker-safe**: `Ignore` excludes the speaker prefix from width calculation, but does not remove it from output.
 - **Escape-safe**: Literal non-RPG break commands such as `\n` remain visible wrap boundaries, and unrelated backslashes are preserved.
 - **Overwrite integrated**: The Overwrite column lives in the same table as Wordwrap, eliminating the need for a separate Overwrite Strategy widget. It can be edited.
@@ -3840,8 +3866,9 @@ Key principles:
 | Apply Wordwrap Button | Button | Execute wrapping on all lines |
 | Refresh Preview Button | Button | Recalculate preview without applying |
 | Reset Button | Button | Clear wordwrap results |
-| Mode Dropdown | Combobox | Wrapping mode (Manual) |
+| Mode Dropdown | Combobox | Wrapping mode (`Custom` or `Simple`) |
 | Format Dropdown | Combobox | Select preview format from manifest `filedir[].format` |
+| Select File Button | Button + hierarchical dropdown | Scope preview rows to one source file using the Full Table View file-filter structure |
 | Format Enabled Checkbox | Checkbox | Enable/disable wrapping for the selected format |
 | Width Dropdown | Combobox | Line width — Character count or Pixel-based |
 | Tag Sections | Frame per tag | Per-tag Width / BreakChar / MaxLines settings |
@@ -3851,6 +3878,7 @@ Key principles:
 | Speaker Handling Dropdown | Combobox | How to count speaker prefixes: Ignore / Count |
 | Ignore Patterns Table | Table (read-only) | Patterns from Code Database used during wrap |
 | Lines Table | SharedTable | Source, Wordwrap, Overwrite columns with filters |
+| View in File Button | Button | Filter the preview to the selected line's source file and focus that line |
 | Filter Radios | RadioGroup | All / Changed / Exceeding / New Textbox |
 
 **Removed Widgets** (compared to previous spec):
@@ -3901,15 +3929,30 @@ Wordwrap settings are grouped by manifest format first, then by tag. Each format
 | Property | Value |
 |----------|-------|
 | Type | Combobox (dropdown, not radio buttons) |
-| Default | "Manual" |
-| Options | Manual (+ future parser-specific modes) |
+| Default | "Custom" |
+| Options | Custom, Simple |
 | Manifest Key | `WordwrapSettings.Mode` |
 
 **Behavior**:
-- **Manual**: User configures all settings (width, break char, max lines) directly.
+- **Custom**: User configures per-format and per-tag settings (width, break char, max lines, speaker handling, PrettyWrap, textbox injection) directly.
+- **Simple**: User configures one shared Character Limit, Line Limit, Break Char, and Pretty Wrap set. Apply is limited to the selected file scope when a file filter is active.
 - Parser-specific defaults are loaded from the selected format's parser tag configs; the UI still exposes them through the shared Manual mode controls instead of switching to a separate parser-exclusive mode.
+- Legacy `Manual` / `manual` manifest values are loaded as `Custom` for backward compatibility.
 - RPG Maker is **not** a wordwrap mode — it becomes its own parser (see Future Improvements).
 - "Disabled" option is removed — if no wrapping is desired, simply don't click Apply.
+
+##### Simple Mode Controls
+
+When `Mode = Simple`, the right-hand settings panel collapses to just four controls:
+
+| Control | Type | Description |
+|---------|------|-------------|
+| Character Limit | Spinbox | Shared wrap width used by all selected lines |
+| Line Limit | Spinbox | Shared max lines value (`0` = unlimited) |
+| Break Char | Combobox | Shared break sequence inserted by wrapping |
+| Pretty Wrap | Checkbox | Enable punctuation-aware and anti-orphan balancing |
+
+Simple mode is intended for quick file-by-file wrapping. It does not expose per-tag settings in the active panel, but it still preserves untouched rows outside the selected file scope.
 
 ##### Width Dropdown
 
@@ -4431,7 +4474,7 @@ Each step writes its output field via `ManifestManager.set_line_field(idx, field
 
 **All steps now read from manifest** using `manifest_fields.py` shared resolution functions
 instead of session step_data. The priority chain is:
-`wordwr → qa_overwrite → qa → postpro → tl → prepro → orig`
+`final → wordwr → qa → postpro → tl → prepro → orig`
 
 Resolution methods:
 - `resolve_line_field(line_entry, *fields)`: Returns first non-empty field from ordered priority chain
@@ -4441,7 +4484,7 @@ Resolution methods:
 - `get_input_for_translation()`: edited_prepro → prepro → orig
 - `get_input_for_tlc(N)`: edit{N-1} → tlc{N-1} → ... → tl
 - `get_input_for_postprocessing()`: tl → prepro → orig
-- `get_final_output()`: wordwr → qa_overwrite → qa → overwrite → postpro
+- `get_final_output()`: final → wordwr → qa → postpro → tl → prepro → orig
 
 ### 8.4 Options Structure (Phase 58/59 Additions)
 

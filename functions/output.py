@@ -1,11 +1,10 @@
 """CherryAI Output Resolution — Injection Priority Chain.
 
-Resolves the final text for each line using a 9-level priority chain:
-overwrite → wordwr → postpro → edit{N} (highest) → tlc{N} (highest) →
-tl → preedit → prepro → orig.
+Resolves the final text for each line using the shared manifest pipeline first:
+final → wordwr → qa → postpro → tl → prepro → orig.
 
-This module is used by the Output step (Step 9) to determine which text
-to inject into output files.
+Legacy fields (``overwrite``, ``edit{N}``, ``tlc{N}``, ``preedit``) are only
+consulted as fallbacks when the canonical manifest pipeline has no text.
 """
 
 from __future__ import annotations
@@ -14,12 +13,16 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from .manifest_fields import resolve_line_field_with_source
+
 logger = logging.getLogger(__name__)
 
 # Ordered priority chain (highest → lowest)
 PRIORITY_CHAIN: List[str] = [
+    "final",
     "overwrite",
     "wordwr",
+    "qa",
     "postpro",
     # edit{N} and tlc{N} are handled dynamically (highest N first)
     "tl",
@@ -69,19 +72,18 @@ def _find_highest_numbered_field(
 def get_final_output(line_entry: Dict[str, Any]) -> Tuple[str, str]:
     """Resolve the final output text for a single line.
 
-    Walks the 9-level priority chain and returns the first non-empty
+    Walks the final-output priority chain and returns the first non-empty
     value found, along with the field name that provided it.
 
     Priority (highest → lowest):
-        1. ``overwrite`` — manually overwritten / injection-ready text
+        1. ``final``     — final manual output
         2. ``wordwr``    — wordwrapped text
-        3. ``postpro``   — postprocessed text
-        4. ``edit{N}``   — highest-numbered edit round
-        5. ``tlc{N}``    — highest-numbered TLC round
-        6. ``tl``        — base translation
-        7. ``preedit``   — pre-edited text
-        8. ``prepro``    — preprocessed text
-        9. ``orig``      — original source text
+        3. ``qa``        — QA-reviewed text
+        4. ``postpro``   — postprocessed text
+        5. ``tl``        — base translation
+        6. ``prepro``    — preprocessed text
+        7. ``orig``      — original source text
+        8. legacy ``overwrite`` / ``edit{N}`` / ``tlc{N}`` / ``preedit`` fallbacks
 
     Args:
         line_entry: A single manifest line dictionary.
@@ -90,8 +92,12 @@ def get_final_output(line_entry: Dict[str, Any]) -> Tuple[str, str]:
         Tuple of (resolved_text, source_field_name).
         If no field has content, returns (``""``, ``"none"``).
     """
-    # Check fixed-priority fields first (overwrite, wordwr, postpro)
-    for field in ("overwrite", "wordwr", "postpro"):
+    resolved_text, resolved_field = resolve_line_field_with_source(line_entry)
+    if resolved_text:
+        return (resolved_text, resolved_field)
+
+    # Check fixed-priority legacy fields only when canonical pipeline is empty.
+    for field in ("overwrite", "postpro"):
         val = line_entry.get(field)
         if val and str(val).strip():
             return (str(val), field)
@@ -106,8 +112,8 @@ def get_final_output(line_entry: Dict[str, Any]) -> Tuple[str, str]:
     if tlc_result is not None:
         return (tlc_result[1], tlc_result[0])
 
-    # Check remaining fixed-priority fields (tl, preedit, prepro, orig)
-    for field in ("tl", "preedit", "prepro", "orig"):
+    # Check remaining fixed-priority legacy fields.
+    for field in ("preedit",):
         val = line_entry.get(field)
         if val and str(val).strip():
             return (str(val), field)

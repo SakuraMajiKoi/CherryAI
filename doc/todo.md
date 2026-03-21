@@ -55,6 +55,114 @@ MODULE COUNTS (Verified January 2026)
 =============================================================================
 [Archived: Sessions 43–24 + Phase 62 → see doc/archived.md]
 
+### BUG FIX: Wordwrap Simple Mode + File Navigation Rework
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Replace the redundant single-mode Step 8 selector with `Custom` and `Simple`, add a compact file selector in Wordwrap using the Full Table View file-filter structure, and add `View in File` next to `Accept Selected` so users can jump from a wrapped line to its source-file scope.
+
+**Root Causes:**
+1. Step 8 exposed only the legacy advanced wrapping workflow even though the mode selector implied multiple options.
+2. There was no quick way to scope preview rows to one source file or to jump from a selected row back to its containing file.
+3. Existing Wordwrap code and tests still depended on legacy `manual` naming in shared logic and older manifests.
+
+**Changes:**
+1. **`gui/steps/wordwrap_overwrite.py`** — Added `Custom` and `Simple` GUI modes, a compact `Select File:` control reusing `gui/dialogs/table_view.py::_FileFilterDropdown`, a `↗ View in File` action, and Simple-mode file-scoped processing that preserves untouched rows outside the selected file.
+2. **`functions/wordwrap.py`** — Kept shared wrap compatibility for `manual`, `custom`, and `simple` mode values and restored the legacy `manual` alias/default expected by older tests.
+3. **`functions/manifest_manager.py`** — Updated Wordwrap defaults/persistence to store current mode wording while remaining backward-compatible with loaded manifests.
+4. **Tests** — Expanded `dev/test_wordwrap_phase46.py`, `dev/test_gui_v2.py`, and the broader Wordwrap compatibility batch to cover legacy mode mapping, Simple-mode file scoping, and `View in File` behavior.
+5. **Documentation** — Updated `doc/features.md`, `doc/technical.md`, `doc/specs.md`, and `doc/tests.md` to describe the new Step 8 behavior and verification coverage.
+
+**Tests:** Focused and broader pytest runs passed:
+- `python -m pytest CherryAI/dev/test_wordwrap_phase46.py -q --timeout=10`
+- `python -m pytest CherryAI/dev/test_wordwrap.py CherryAI/dev/test_wordwrap_manifest.py CherryAI/dev/test_tag_wordwrap.py CherryAI/dev/test_wordwrap_overhaul.py CherryAI/dev/test_gui_v2.py -k "wordwrap or WrapMode or WrapOptionsDataclass or WordwrapStepIntegration" -q --timeout=20` — 204 passed, 2 skipped
+
+### BUG FIX: Indexed Aggressive Dedup Number Restore + Uni16 Salvage
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Stop aggressive dedup from restoring multiple numeric placeholders in the wrong order after translation reorders them, and salvage the existing `Projects/Uni16.CherryAI.json` data so rerunning Postprocessing and Wordwrap is sufficient.
+
+**Root Causes:**
+1. Shared aggressive dedup masking collapsed every numeric slot to the same `<NUM>` token, so translations such as `Deals <NUM>% damage to <NUM> enemy targets.` could only be restored left-to-right.
+2. Step 6 postprocessing had its own `_reverse_aggr_numbers()` implementation that also performed blind left-to-right `<NUM>` substitution instead of using the shared dedup restore semantics.
+3. Existing Uni16 step-3 `aggr_numbers` data was stored as positional lists, so saved manifests could not express reordered placeholder intent for multi-number lines.
+
+**Changes:**
+1. **`functions/dedup.py`** — Added indexed aggressive placeholders for multi-number rows (`<NUM1>`, `<NUM2>`, ...), kept legacy `<NUM>` behavior for single-number rows, and made restoration/token detection backward-compatible with both list and dict lookup forms.
+2. **`gui/helpers/mode_adapter.py`** — Updated aggressive dedup fallbacks and batch return typing so GUI preprocessing stores indexed token maps for multi-number rows.
+3. **`gui/steps/postprocess.py`** — Switched aggressive number restoration to the shared `aggressive_restore_line()` helper and taught step-data loading to accept both legacy lists and indexed token maps.
+4. **`functions/analysis.py`** — Aligned the aggressive dedup projection fallback normalizer with the indexed placeholder behavior.
+5. **`Projects/Uni16.CherryAI.json`** — Converted all saved multi-number aggressive lookups in `step_state.Preprocessing.data.aggr_numbers` to indexed token maps, updated affected `prepro`/`tl` source templates to indexed placeholders, and manually fixed the reordered English patterns such as `Deals <NUM2>% damage to <NUM1> enemy targets.`.
+6. **Tests** — Added focused regressions for indexed masking/restoration in `dev/test_dedup.py` and the live postprocess restore path in `dev/test_postprocess_phase45.py`.
+
+**Tests:** Relevant focused pytest runs passed:
+- `python -m pytest CherryAI/dev/test_dedup.py -q --timeout=10 -k "aggressive or dedup"`
+- `python -m pytest CherryAI/dev/test_postprocess_phase45.py -q --timeout=10 -k "AggressiveDedupIndexedRestore"`
+
+**Note:** The broader `dev/test_postprocess_phase45.py` file still contains unrelated pre-existing symbol-conversion failures outside this fix.
+
+### BUG FIX: LightVN Staged Input Sync Prevents Injection Drift
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Stop freshly loaded LightVN projects from producing Output-step verification warnings like `orig mismatch` and cascading `index out of range` failures before any translation work was done.
+
+**Root Causes:**
+1. Step 0 built manifest `lines[]` and `filedir[]` from the pre-copy source paths and only copied files into `Projects/{project}/Original/` afterward.
+2. LightVN's project-scoped quoted-variable safety intentionally changes extraction based on the active `Original/` tree, so the same file could yield fewer keys during initial load than during later Output injection.
+3. The non-destructive add-files path had the same staging-order problem for newly added parser-backed files.
+
+**Changes:**
+1. **`gui/steps/input_extract.py`** — Step 0 now stages parser-backed files into `Original/` before the final manifest sync and re-extracts them from that staged tree so `LoadedFile.lines`, parser tags, `lines[]`, and `filedir[]` all reflect the same parser view later used by Output injection.
+2. **`functions/manifest_manager.py`** — `copy_originals_to_project()` now accepts explicit rel-path mappings even before `filedir` is rebuilt, which lets newly added parser-backed files use the same staged refresh path.
+3. **`dev/test_lightvn_fixes.py`** — Added focused regressions covering staged LightVN re-extraction during `_sync_lines_to_manifest()` and explicit rel-path staging outside the current `filedir` set.
+4. **Documentation** — Updated `doc/features.md`, `doc/technical.md`, `doc/specs.md`, and `doc/tests.md` to describe the staged extraction contract and the new regression coverage.
+
+**Tests:** Focused pytest run passed: `dev/test_lightvn_fixes.py`, `dev/test_lightvn_parser.py`, `dev/test_output_injection.py` — 119 passed.
+
+### BUG FIX: Create Patch Workflow For Input Manifest Updates
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Add a Step 0 `Create Patch` button next to Import Translations so update projects can import prior manifest data, remove unchanged files, and keep only patch-relevant files in the current manifest.
+
+**Changes:**
+1. **`functions/manifest_manager.py`** — Added shared manifest-to-manifest import helpers, SHA-256 identical-`Original/` comparison, full-`orig` fallback pruning, and batch `remove_files()` reindexing that removes `filedir` entries, rewrites surviving line indices contiguously, and deletes copied `Original/` files for removed entries.
+2. **`gui/steps/input_extract.py`** — Added the `Create Patch` toolbar button and kept the GUI layer to manifest selection, summary dialogs, and tree refresh while delegating all processing to `ManifestManager` per the Step 0 architecture rule.
+3. **`dev/test_input_import_fixes.py`** — Added focused regressions for both fast-path identical-file pruning and fail-safe line-match pruning when source `Original/` files are missing.
+4. **Documentation** — Updated `doc/features.md`, `doc/technical.md`, `doc/specs.md`, and `doc/tests.md` to describe the new workflow, shared implementation, and validation coverage.
+
+**Tests:** Focused pytest run passed: `python -m pytest CherryAI/dev/test_input_import_fixes.py -q --timeout=20` — 31 passed.
+
+### BUG FIX: Final Output Layer + Full Table View Final Column
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Add a sparse per-line `final` field that sits after `wordwr`, make Output prefer it, expose it only through Full Table View for now, support Import Translation for it, and remove the reported `functions/wordwrap.py` invalid-escape warning.
+
+**Changes:**
+1. **`functions/manifest_fields.py`** — Added `final` to the shared latest/output pipeline (`final → wordwr → qa → postpro → tl → prepro → orig`), added source-aware helpers for Full Table View prefill, and removed `qa_overwrite` from Wordwrap input resolution.
+2. **`functions/manifest_manager.py`** — Added canonical sparse manifest support for `final` immediately after `wordwr`.
+3. **`gui/dialogs/table_view.py`** — Added the `Final` column to the spreadsheet, Show/Hide Columns, Show Latest, and Clear Columns. Empty `Final` cells now prefill from the latest non-final stage on double-click, stay table-local until Save, and auto-clear back to sparse-empty when edited back to their source value.
+4. **`gui/steps/input_extract.py`** — Import Translation selection dialog now supports `final`.
+5. **`functions/output.py` / `gui/steps/output_inject.py`** — Output resolution now prefers the shared canonical `final` stage over lower pipeline stages.
+6. **`functions/wordwrap.py`** — Converted the RPG-code docstring to a raw string so `\V[#]` and related examples no longer trigger Python 3.12+ `SyntaxWarning` invalid-escape diagnostics.
+7. **Tests** — Added focused regressions for shared pipeline order, Full Table View `Final` behavior, Import Translation `final` support, and output preference for `final`.
+
+**Tests:** Focused pytest run passed: `dev/test_manifest_fields.py`, `dev/test_table_view.py`, `dev/test_input_import_fixes.py`, `dev/test_output_injection.py` — 399 passed. Additional verification passed: `python -W error::SyntaxWarning -c "import functions.wordwrap"`.
+
+### BUG FIX: Preprocessing Tab Freeze Regression
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 45 minutes
+
+Goal: Restore the responsive Preprocessing behavior that was still present in commit `9721cba` by reverting only the later persistence-path changes that froze tab load and could also stall Apply Rules on large manifests.
+
+**Root Causes:**
+1. `gui/steps/preprocess.py::_update_step_data()` stopped using its single-pass manifest update path and started calling `ManifestManager.get_line()` plus `set_line_field()` / `clear_line_field()` for every row.
+2. The same helper-based path was triggered both after Apply Rules and during `_load_preview_from_manifest()`, so large projects paid the per-row manifest-helper cost on tab entry as well as on explicit preprocessing runs.
+
+**Changes:**
+1. **`gui/steps/preprocess.py`** — Reverted the helper-based persistence path and restored the `9721cba` bulk manifest update flow: build one `idx -> line` map from loaded manifest lines, mutate `tags` / `prepro` in place, and call `_mark_dirty()` once only when something changed.
+2. **`gui/steps/preprocess.py`** — Removed the `persist_manifest` / `_preview_persist_pending` flow that had been added around preview refresh and tab leave as part of the regressed persistence path.
+3. **Docs** — Updated feature, technical, spec, and test notes to describe the restored bulk persistence behavior and the focused rollback validation.
+
+**Tests:** Focused pytest run passed: `dev/test_line_saving.py::TestSetLineField`, `dev/test_line_saving.py::TestRoundTrip`, `dev/test_line_saving.py::TestPreprocessIntegration`, `dev/test_manifest_overwrite.py` — 29 passed.
+
 ### BUG FIX: Wordwrap Invisible Width + Textbox Status Split + Responsive Apply
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
 

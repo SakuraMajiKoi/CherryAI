@@ -1637,10 +1637,16 @@ class PostprocessingStep(BaseStep):
         ph_rules = (prepro_data.get("config") or {}).get("placeholder_rules", [])
 
         # Aggressive dedup numbers for ALL lines (source + dup)
-        aggr_nums = {
-            int(k): list(v)
-            for k, v in (prepro_data.get("aggr_numbers") or {}).items()
-        }
+        aggr_nums: Dict[int, List[str] | Dict[str, str]] = {}
+        for k, v in (prepro_data.get("aggr_numbers") or {}).items():
+            try:
+                idx = int(k)
+            except Exception:
+                continue
+            if isinstance(v, dict):
+                aggr_nums[idx] = {str(token): str(value) for token, value in v.items()}
+            elif isinstance(v, list):
+                aggr_nums[idx] = [str(item) for item in v]
 
         # Load code patterns for preserve-action recovery
         code_patterns = []
@@ -1918,9 +1924,16 @@ class PostprocessingStep(BaseStep):
         aggr_map: Dict[int, int] = {
             int(k): int(v) for k, v in aggr_map_raw.items()
         }
-        aggr_nums: Dict[int, List[str]] = {
-            int(k): list(v) for k, v in aggr_nums_raw.items()
-        }
+        aggr_nums: Dict[int, List[str] | Dict[str, str]] = {}
+        for k, v in aggr_nums_raw.items():
+            try:
+                idx = int(k)
+            except Exception:
+                continue
+            if isinstance(v, dict):
+                aggr_nums[idx] = {str(token): str(value) for token, value in v.items()}
+            elif isinstance(v, list):
+                aggr_nums[idx] = [str(item) for item in v]
 
         if not dedup_map and not aggr_map:
             return
@@ -1988,7 +2001,7 @@ class PostprocessingStep(BaseStep):
         by_idx: Dict[int, PostprocessLine],
         dedup_map: Dict[int, int],
         aggr_map: Dict[int, int],
-        aggr_nums: Dict[int, List[str]],
+        aggr_nums: Dict[int, List[str] | Dict[str, str]],
         cache: Dict[int, str],
         visiting: Optional[set[int]] = None,
         *,
@@ -2260,13 +2273,13 @@ class PostprocessingStep(BaseStep):
     def _reverse_aggr_numbers(
         text: str,
         idx: int,
-        aggr_nums: Dict[int, List[str]],
+        aggr_nums: Dict[int, List[str] | Dict[str, str]],
     ) -> str:
-        """Restore ``<NUM>`` tokens with original numbers.
+        """Restore aggressive NUM placeholders with original numbers.
 
-        Applies to both aggressive-dedup SOURCE lines and their
-        duplicates.  Each ``<NUM>`` occurrence is replaced left-to-right
-        with the corresponding original number from the stored list.
+        Applies to both aggressive-dedup source lines and their duplicates.
+        Supports legacy left-to-right ``<NUM>`` restoration and indexed
+        placeholders such as ``<NUM1>`` / ``<NUM2>``.
 
         Args:
             text: Line text potentially containing ``<NUM>``.
@@ -2274,18 +2287,17 @@ class PostprocessingStep(BaseStep):
             aggr_nums: Per-line original number lists from preprocessing.
 
         Returns:
-            Text with ``<NUM>`` tokens replaced by original numbers.
+            Text with aggressive number tokens replaced by original numbers.
         """
         numbers = aggr_nums.get(idx)
         if not numbers:
             return text
-        result = text
-        for num in numbers:
-            pos = result.find("<NUM>")
-            if pos < 0:
-                break
-            result = result[:pos] + num + result[pos + 5:]
-        return result
+        try:
+            from CherryAI.gui.helpers.mode_adapter import aggressive_restore_line
+
+            return aggressive_restore_line(text, numbers)
+        except ImportError:
+            return text
 
     def _apply_symbol_conversion(self, text: str) -> str:
         """Apply symbol conversion to text (TASK 45.5: bidirectional).

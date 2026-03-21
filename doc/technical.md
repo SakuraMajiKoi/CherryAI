@@ -1,3 +1,6 @@
+  - postprocess.py - Step 6: Postprocess 🔗postprocess, manifest_fields; _FAILURE_POLICY_MAP for legacy enum mapping; translated input uses stage ceiling `tl → prepro → orig`; dedup-tagged rows skip batch placeholder fallback and `recover_line()` so duplicate rows are restored only from source-line postprocessing and do not accumulate false placeholder/code-pattern flags; aggressive number restoration now routes through shared `aggressive_restore_line()` and accepts both legacy number lists and indexed token maps (`<NUM1>`, `<NUM2>`, ...); Processed Lines adds a dynamic flagged-case combobox and stores recovery-detail text in row metadata for searchable filtering
+6. Aggressive Number Restoration — replace aggressive dedup numeric placeholders from `aggr_numbers`; single-slot rows use `<NUM>`, while multi-slot rows use indexed tokens such as `<NUM1>`, `<NUM2>`, ... so reordered translations restore by explicit slot instead of left-to-right position
+9. Aggressive Dedup Restoration (P5) — restore numbers from per-line data, including sources reached through chained dedup resolution; step data accepts legacy lists and indexed token maps for backward-compatible manifest recovery
 CHERRYAI - TECHNICAL DOCUMENTATION
 
 For Developers
@@ -130,7 +133,7 @@ TABLE OF CONTENTS
         * add_to_recent_manifests / get_recent_manifests — manifest history
      3.34 manifest_manager.py ✅🔗 - Unified manifest state management (TASK 19)
        * Sparse line-field helpers include `clear_line_field()` for removing redundant per-line stage output when a result matches its stage input
-  3.35 manifest_fields.py ✅ - Manifest field type helpers (TASK 22.1) + special format helpers (TASK 22.2) + shared priority resolution API: resolve_line_field(), resolve_line_field_from(), resolve_line_field_for_stage(), get_latest_line_text(), get_line_text_for_stage(), get_all_lines_resolved(), get_all_lines_for_stage(); PIPELINE_FIELDS chain: wordwr → qa_overwrite → qa → postpro → tl → prepro → orig for final display/output, while stage helpers enforce ceilings (Postprocessing: tl → prepro → orig; QA: postpro → tl → prepro → orig; Wordwrap: qa_overwrite → qa → postpro → tl → prepro → orig); save_code_glossary/load_code_glossary support count as int or `[total, inst1_ct, ...]` list with instance_counts deserialization; save_character_notes/load_character_notes with count field
+  3.35 manifest_fields.py ✅ - Manifest field type helpers (TASK 22.1) + special format helpers (TASK 22.2) + shared priority resolution API: resolve_line_field(), resolve_line_field_with_source(), resolve_line_field_from(), resolve_line_field_for_stage(), get_final_field_source(), get_latest_line_text(), get_line_text_for_stage(), get_all_lines_resolved(), get_all_lines_for_stage(); PIPELINE_FIELDS chain: final → wordwr → qa → postpro → tl → prepro → orig for final display/output, while stage helpers enforce ceilings (Postprocessing: tl → prepro → orig; QA: postpro → tl → prepro → orig; Wordwrap: qa → postpro → tl → prepro → orig); save_code_glossary/load_code_glossary support count as int or `[total, inst1_ct, ...]` list with instance_counts deserialization; save_character_notes/load_character_notes with count field
    3.36 preset_manager.py ✅ - Preset save/load/delete operations (TASK 30.1)
    3.37 mock_translator.py ✅ - Mock translation engine with flaw injection (Phase 56)
    3.38 consistency.py ✅ - Consistency system for term translation tracking (Phase 55)
@@ -251,15 +254,15 @@ TABLE OF CONTENTS
    6.4 gui/steps/ (10 files - 10 workflow tabs)
        - __init__.py - Step exports
        - base.py - BaseStep abstract class (TASK 43.14: tab caching infra; on_new_project() lifecycle method for state flush)
-      - input_extract.py - Step 0: Input/Extraction 🔗formats/ (Phase 60: clickable column header sort with ▲/▼ indicators, file list filter entry, type column refresh fix, cross-file preview search with idx column and auto file-switching; non-destructive file addition with source root validation; Import Translation selection dialog with line fields and settings sections; preview columns: Project/File 1-based)
+      - input_extract.py - Step 0: Input/Extraction 🔗formats/ (Phase 60: clickable column header sort with ▲/▼ indicators, file list filter entry, type column refresh fix, cross-file preview search with idx column and auto file-switching; non-destructive file addition with source root validation; Import Translation selection dialog with line fields and settings sections; preview columns: Project/File 1-based; parser-backed files are staged to `Original/` before final manifest sync and then re-extracted from that staged tree so LightVN project-scoped extraction stays aligned with Output injection)
        - analysis.py - Step 1: Analysis ❌NO shared imports
        - costs.py - Step 4: Costs (renamed from estimate.py in Phase 40; _estimate_via_formation() returns FormationResult with per-request line lists; _compute_per_request_prompt_overhead() uses gather_prompt_data()+build_request_prompt() per chunk for selective filtering; _get_prompt_tokens() and _get_static_prompt_tokens() also unified via gather_prompt_data()+build_request_prompt(); per-model API.ini settings take priority over Global Options — _do_estimation() reads chunk_size/tokens_limit from _chunk_var/_tokens_var (set by _load_model_settings()), only request_slicing read from GlobalOptions; respects request_slicing mode; Per-model settings saved/loaded via api_config; "📤 Apply Settings to Model" button is a one-way write to API.ini — model changes do NOT reload settings, loaded once on first tab entry via _settings_loaded_once flag; Translation Options row with Thinking, Translated Context, Rolling Context spinboxes; Request Mode 2×2 grid (Normal/Batch/Flex/Priority) with "(Available)"/"(Unavailable)" suffix labels and Selected (blue) states driving mode-specific pricing; _recalculate_costs_for_mode() instantly updates costs from existing token counts without re-estimation; _reprice_for_model() fast-reprices all cost and time labels when model changes using stored EstimationResult token counts — no re-estimation required; EstimationResult.num_requests stores per-side request count to enable fast reprice; EstimationProgressDialog is a non-blocking Toplevel that shows 7 step indicators (○/●/✓) and a ttk.Progressbar — opened by _run_estimation(), updated via _report_progress() from background thread using after(), closed by _estimation_complete(); Model combo disabled during estimation (_run_estimation sets state="disabled", _estimation_complete restores state="readonly"); CACHE_HIT_RATE=0.80 applied to static prompt prefix via _get_static_prompt_tokens() for cache savings calculation; Token Counts panel shows Input/Prompt/Cached/Total/Output rows — Prompt Tokens displays the non-cached portion (prompt_tokens − cached_tokens) so that Input + Prompt + Cached = Total Input; EstimationResult dataclass includes content_tokens, prompt_tokens, cached_tokens, num_requests; input_cost stores content-only cost, prompt_cost stores non-cached prompt cost, cached_input_cost stores cached portion cost; Cost Estimate panel is purely additive: Input (content) + Prompt (non-cached) + Cached + Output = Total; all four cost rows are primary un-indented rows; module-level _ceil_to_cents() and _fmt_cost() helpers format every displayed dollar amount rounded up to the next cent; Full estimation persisted to manifest via _save_estimation_to_manifest(); Estimate button renamed to "↻ Update Counts" after first run)
        - information.py - Step 2: Information 🔗manifest_fields (Bug Fix: on_leave() and _save_metadata() now merge *_enabled toggle BooleanVar values into metadata dict after ProjectMetadata.to_dict() — fixes toggle state erasure on tab change; Save button removed from header — auto-save on tab change is sufficient; Bug Fix: on_enter() reordered to load _load_metadata() BEFORE _load_characters_from_manifest()/_load_code_patterns_from_manifest() so authoritative top-level manifest data overrides stale step_state; on_leave() now calls _save_characters_to_manifest() and _save_code_patterns_to_manifest() to sync dual storage; _import_analysis_speakers() persists to top-level immediately)
-      - preprocess.py - Step 3: Preprocessing 🔗manifest_fields; per-line persistence routes through `ManifestManager.set_line_field()` / `clear_line_field()`
+      - preprocess.py - Step 3: Preprocessing 🔗manifest_fields; `_update_step_data()` persists `prepro` / `tags` by mutating loaded manifest line dicts in one indexed pass and then calling `_mark_dirty()` once, matching the `9721cba` behavior restored to avoid large-project tab-entry and Apply Rules freezes
       - translate.py - Step 5: Translation 🔗api_client, mock_translator, prompt_adapter, manifest_fields (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching; Preview Requests: PreviewRequest dataclass with _format_input_lines() for numbered line display and io_examples field, FILTER_PARTS constant (13 entries: meta, language, system_instructions, io_examples, style, tone, summary, genre, pov, conditional_prompts, glossary, rolling_context, input_lines), RequestPreviewDialog class with Pure/Formatted/Plain views and Jump/Search/Filter toolbar, _plain_text() preserves curly braces for game text, _build_preview_requests() mirrors real translation request building and gates each labeled section by *_enabled metadata flags, generates io_examples block with fill mode support, syncs _translation_options from current UI before _build_chunks(); _build_system_prompt_from_manifest() reads from `step_state.Information.data.metadata`; _load_model_settings() loads per-model API.ini settings (chunk_size, temperature, rolling_context, thinking) with Global Options fallback on tab entry; _build_chunks() reads rolling_context_between/after and chunk_max_tokens from per-model API.ini via get_model_settings() with Global Options fallback; Request Options: Key, Model, Request Mode combobox (Normal/Batch/Flex/Priority with "(Unavailable)" suffixes via _refresh_request_mode_options()), Model Settings/Translation Options Change… buttons, Character Whitelist/Blacklist (manifest-bound), Ban Tokens; TranslationOptions.request_mode field passed to APIConfig.request_mode in _do_translation(); _apply_char_filters() post-processes translations; _sync_from_global_options() syncs all hidden vars from GlobalOptions including TranslationSettings; _get_request_slicing_mode() reads slicing from GlobalOptions.translation)
       - postprocess.py - Step 6: Postprocess 🔗postprocess, manifest_fields; _FAILURE_POLICY_MAP for legacy enum mapping; translated input uses stage ceiling `tl → prepro → orig`; dedup-tagged rows skip batch placeholder fallback and `recover_line()` so duplicate rows are restored only from source-line postprocessing and do not accumulate false placeholder/code-pattern flags; Processed Lines adds a dynamic flagged-case combobox and stores recovery-detail text in row metadata for searchable filtering
       - qa.py - Step 7: QA 🔗validation, manifest_fields; table columns are Original / Quality Assurance / Overwrite; review input uses stage ceiling `postpro → tl → prepro → orig`; `qa` is review/display text only, while `qa_overwrite` is only persisted for explicit user edits that differ from QA input; includes inline overwrite editing and Copy to Overwrite action
-      - wordwrap_overwrite.py - Step 8: Wordwrap 🔗wordwrap, manifest_fields; internal step id 8 but ninth user-facing tab after QA; preview column "Input"; input uses stage ceiling `qa_overwrite → qa → postpro → tl → prepro → orig`; manifest `filedir[].format` drives the preview format selector and per-format configs; stored `wordwr` is restored into the Wordwrap column without input fallback, and only explicit Apply persists sparse `wordwr` output; speaker-ignore width uses manifest `characters[]` as its allowlist, includes translated speaker aliases, falls back to parser `detect_speakers()` for the loaded preview rows when manifest speaker data is absent, and zero-width code comes only from manifest `code_patterns[]` entries marked `IsInvisible`
+      - wordwrap_overwrite.py - Step 8: Wordwrap 🔗wordwrap, manifest_fields; internal step id 8 but ninth user-facing tab after QA; preview column "Input"; input uses stage ceiling `qa → postpro → tl → prepro → orig`; manifest `filedir[].format` drives the preview format selector and per-format configs; stored `wordwr` is restored into the Wordwrap column without input fallback, and only explicit Apply persists sparse `wordwr` output; WrapMode now exposes `CUSTOM` and `SIMPLE` while still mapping legacy `manual` manifests to `CUSTOM`; Simple mode applies one shared wrap rule set to the selected file scope; preview includes a compact Full-Table-View-derived file selector plus `View in File`; speaker-ignore width uses manifest `characters[]` as its allowlist, includes translated speaker aliases, falls back to parser `detect_speakers()` for the loaded preview rows when manifest speaker data is absent, and zero-width code comes only from manifest `code_patterns[]` entries marked `IsInvisible`
        - output_inject.py - Step 9: Output/Inject 🔗manifest_fields; _NAMING_STRATEGY_MAP for legacy enum mapping; OutputFormat.INJECTION enum; _get_fresh_lines_for_file() for stale-data fix; _write_injection() 4-step parser handshake; _get_same_as_source_dir() returns parent of Original/
    
    6.5 gui/components/ (2 files)
@@ -354,12 +357,13 @@ TABLE OF CONTENTS
          - All dialogs delegate to functions/api_config.py for hashing and encryption
        - table_view.py - Full Table View dialog (2026):
          - FullTableViewDialog: Spreadsheet-like view of all manifest line entries
-         - Constants: LINE_FIELDS (11 fields), COLUMN_DISPLAY_NAMES (human-readable names), DISPLAY_NAME_TO_FIELD (reverse lookup), DEFAULT_HIDDEN (empty set), NON_EDITABLE_FIELDS (idx, orig), METADATA_FIELDS (log, tags, prepro_ops)
-         - Column display names: idx→Line #, orig→Original, prepro→Preprocessed, tl→Translated, postpro→Postprocessed, qa→Quality Assurance, qa_overwrite→Overwrite, wordwr→Wordwrap, overwrite→Overwrite (Legacy), tags→Tags
+         - Constants: LINE_FIELDS (12 fields), COLUMN_DISPLAY_NAMES (human-readable names), DISPLAY_NAME_TO_FIELD (reverse lookup), DEFAULT_HIDDEN (empty set), NON_EDITABLE_FIELDS (idx, orig), METADATA_FIELDS (log, tags, prepro_ops)
+         - Column display names: idx→Line #, orig→Original, prepro→Preprocessed, tl→Translated, postpro→Postprocessed, qa→Quality Assurance, qa_overwrite→Overwrite, wordwr→Wordwrap, final→Final, overwrite→Overwrite (Legacy), tags→Tags
          - Column visibility: auto-hides empty columns; slim tk.Menu dropdown with Show All/Show Visible/Show Latest presets; all columns including Line # are hideable
          - Column selection bar: "Select / Selected" labels above each column, synced widths via Canvas, for search/replace scoping
          - Sort indicators: ▲/▼ arrows in column headers; _sort_column and _sort_reverse state tracking
-          - Cell editing (double-click), deletion (Del key), multi-select, and a Clear Columns dialog for `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, and `wordwr`; clearing `tl` requires double confirmation
+          - Cell editing (double-click), deletion (Del key), multi-select, and a Clear Columns dialog for `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, and `final`; clearing `tl` requires double confirmation
+          - `final` editing is table-local until Save: empty cells prefill from the first non-empty lower stage when editing starts, and edits that collapse back to that source text are cleared back to sparse-empty in the working copy
          - Read-only Original: double-click shows copyable text widget (_show_readonly_cell)
          - File filter dropdown: hierarchical folder navigation with Back/All navigation; font size 11
          - Two-row toolbar: search row (top) with file filter, search entry, column selector, Results Only toggle, Prev/Next arrows; replace row (bottom) with replace entry, Replace All, action buttons
@@ -435,6 +439,7 @@ TABLE OF CONTENTS
        - TASK 32.1: Absolute path storage:
          - create_new() computes folder name for source_root, copies files to Original/
          - source_files is no longer stored; file resolution uses Original/ directory
+       - Shared import + patch helpers now live here so Input step stays GUI-only: manifest-to-manifest import, batch file pruning, identical-Original comparison, and Create Patch orchestration all execute in `functions/manifest_manager.py`
 
    6.10 functions/ini_manager.py - INI Configuration (v3.0 + Phase 62)
        - Central INI path resolution relative to main module
@@ -642,7 +647,7 @@ TABLE OF CONTENTS
          - New file: functions/process_order.py (get_pre_order, get_post_order)
          - Modified: gui/steps/preprocess.py, gui/state/store.py, functions/dedup.py, functions/mainhelper.py
          - Modified: functions/manifest_fields.py, functions/postprocess.py, modi/standard_mode.py
-         - Bug Fix (Task 3): _update_step_data() now calls set_line_field(idx, "prepro", processed) to persist preprocessed lines to manifest. Previously only stored in step_state.
+         - Bug Fix (Task 3): _update_step_data() persists preprocessed lines to manifest `lines[].prepro`; the current implementation uses one bulk pass over loaded manifest lines instead of per-row `get_line()` + `set_line_field()` / `clear_line_field()` calls because that helper path regressed Preprocessing responsiveness on large projects
        - **Phase 43 Integration:** Translation Tab Overhaul:
          - Merged Column: "To be Translated" replaces Original+Preprocessed (resolution: edited_prepro → preprocessed → original)
          - Newline Rendering: ↵ symbol in table cells, 200-char truncation
@@ -683,18 +688,20 @@ TABLE OF CONTENTS
          - Bug Fix (Task 3): _mark_line_as_fixed() called nonexistent update_line_field(); fixed to set_line_field(). _on_postprocess_complete() now calls set_line_field(line.idx, "postpro", line.postprocessed) to persist results to manifest.
 
        - **Phase 46 Integration:**
-         - WrapMode enum reduced to MANUAL only (removed RPGMAKER, DISABLED)
+         - WrapMode enum now exposes CUSTOM and SIMPLE in the GUI; legacy Manual/manual manifest values are mapped to CUSTOM for compatibility
          - SpeakerMode enum reduced to IGNORE and COUNT (removed SAMELINE, SAMELINEINDENT, NEWLINE)
          - Removed enums: IgnorePattern, OverwriteStrategy, MergeMethod, TypographyStyle
          - Removed dataclasses: OverwriteOptions, TypographyOptions
          - WrapLine dataclass: added overwrite field and overwrite_differs property
          - WrapOptions dataclass: removed ignore_patterns field; hardcoded prevent_orphan/prefer_punct_breaks
-         - Mode: ttk.Combobox replacing radio buttons
+         - Mode: ttk.Combobox replacing radio buttons; Custom shows the per-format/per-tag panel while Simple shows the lightweight character-limit panel
          - Speaker: ttk.Combobox with dynamic _speaker_desc_label
          - Ignore patterns: read-only ttk.Treeview from manifest CodeDatabase
          - Width: _width_mode_combo (Character/Pixel) with _char_width_frame and _pixel_width_frame
          - _on_width_mode_changed() toggles between character (20-200) and pixel (100-2000px + font 8-72) frames
          - Overwrite column in table with "↔ Differs" status
+         - Preview toolbar: compact `Select File:` dropdown reuses `gui/dialogs/table_view.py::_FileFilterDropdown`; `View in File` filters the preview to the selected row's source file
+         - Simple mode scope: `_get_process_indices()` restricts Apply to the selected file filter while preserving untouched rows outside that file
          - Filter radios: All/Changed/Exceeding/Overwrite Differs
          - _simple_wrap() sets exceeds_limit from max_lines
          - Modified: gui/steps/wordwrap_overwrite.py (~1200 lines)
@@ -717,11 +724,15 @@ TABLE OF CONTENTS
          - output_inject._update_dirty_flags(): reads flags and updates indicator labels
          - input_extract._on_import_translations(): selection dialog + per-field and per-section import logic
          - _ImportTranslationDialog: Toplevel with Line Fields and Settings Sections checkbox groups
-         - input_extract._import_line_fields(): per-field import with skip_new_lines option, canonical `tags` merge, legacy `tag` migration, and a dedup placeholder guard that rejects only `tl` import when either side has `prepro == __DEDUP__`
-         - input_extract._import_settings_sections(): per-section import of manifest top-level and step_state keys
+         - input_extract._import_line_fields() / _import_settings_sections(): thin wrappers that delegate manifest import processing to ManifestManager so Step 0 remains UI-only
+         - input_extract._on_create_patch(): UI-only source-manifest picker + summary dialog; refreshes the file tree from manifest state after pruning
          - input_extract._load_selected_paths(): non-destructive file addition with source root validation
          - input_extract._add_files_to_existing_manifest(): builds file_infos/lines, calls mgr.add_files(), copies new originals
          - ManifestManager.add_files(): merges new files into sorted filedir, recomputes contiguous idx, preserves existing line data
+         - ManifestManager.import_line_fields_from_manifest_data() / import_settings_sections_from_manifest_data(): shared import logic used by both Import Translations and Create Patch
+         - ManifestManager.remove_files(): batch-prunes filedir entries and rewrites remaining `idx` ranges in one pass; optionally deletes copied `Original/` files
+         - ManifestManager.find_identical_original_files(): compares shared `Original/rel_path` files by size + SHA-256 hash
+         - ManifestManager.create_patch_from_manifest_path(): imports all supported fields/settings from another manifest, prunes identical files first, then prunes fully matched files as a missing-Original fail-safe
          - ManifestManager canonicalizes `lines[]` on load/save/set_lines: merges legacy `tag` into `tags` and writes canonical key order `idx`, `tags`, `orig`, `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, then auxiliary fields without stripping later-stage fields from dedup placeholder rows
          - output_inject._safe_output_format(): prevents ValueError on empty/invalid OutputFormat string
          - Preview tree headings: "Idx" → "Project", "#" → "File"; display uses 1-based global idx
@@ -1626,7 +1637,7 @@ class LineEntry:
     def get_input_for_wordwrap(self) -> str:
         """Input for Wordwrap operation.
         
-      Resolution: qa_overwrite → qa → postpro → tl → prepro → orig.
+      Resolution: qa → postpro → tl → prepro → orig.
         """
         return self.postpro if self.postpro is not None else self.get_input_for_postprocessing()
     
@@ -1635,7 +1646,7 @@ class LineEntry:
         
         This is the ONLY case where "rightmost available" logic applies.
         
-        Returns: wordwr → qa_overwrite → qa → overwrite → postpro (first available)
+        Returns: final → wordwr → qa → postpro → tl → prepro → orig (first available)
         Raises: ValueError if no output available
         """
         if self.wordwr is not None:
@@ -2473,6 +2484,7 @@ Light VN Parser (formats/LightVN.py):
 - **Tags**: `dialogue` (with speaker), `menu`, `variable`, `items`
 - **Variable classification**: Shared variable-name classification distinguishes normal translatable assignments from item-like assignments; names such as `剥ぎ取り素材1` and `獲得食材` are tagged as `items`, including when preceded by conditional `もし (...)` prefixes
 - **Project-scoped variable safety**: For quoted `保存変数` / `臨時全域変数` assignments outside the built-in allowlists, LightVN now builds a project-level usage index from the active `Original/` tree and only treats a variable as translatable when its interpolations are display-only. Interpolations inside `文字*`, `文字窓`, `~文字`, or dialogue segments mark the variable as display text; interpolations in non-display commands (image/audio/script paths, etc.) or bare references inside `もし (...)` mark it unsafe. This keeps display-only variables such as `bt_勝利条件` translatable while excluding mixed-use values such as `胎児` and control variables such as `付与対象`.
+- **Staged-sync contract**: Because that variable classification depends on the active `Original/` tree, Step 0 now stages parser-backed files first and re-extracts them from `Original/` before committing `lines[]` / `filedir`. Without this, the same LightVN file can produce different extracted key counts at load time versus inject time and trigger cascading Output verification mismatches.
 - **Bookmark semantics**: `~栞 ...` lines are treated as bookmarks/interaction anchors, not speaker tags; they clear the carried `~【Speaker】` state before later dialogue extraction so prior speakers cannot leak into unrelated map text
 - **Placeholder filtering**: Editor scaffolding lines such as `ここにテキストを入力` / `Enter your text here.` are skipped during extraction and therefore never enter the translation pipeline
 - **Code recovery**: Balanced bracket matching for 10 bracket types, angle bracket safety

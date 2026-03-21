@@ -30,6 +30,7 @@ from CherryAI.functions.manifest_manager import (
     ManifestManager,
     parse_line_tags,
 )
+from CherryAI.functions.manifest_fields import PIPELINE_FIELDS, get_final_field_source
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ logger = logging.getLogger(__name__)
 # All possible line entry fields in display order
 LINE_FIELDS: List[str] = [
     "idx", "orig", "prepro", "tl",
-    "postpro", "qa", "qa_overwrite", "wordwr", "overwrite",
+    "postpro", "qa", "qa_overwrite", "wordwr", "final", "overwrite",
     "log", "tags",
 ]
 
@@ -55,6 +56,7 @@ COLUMN_DISPLAY_NAMES: Dict[str, str] = {
     "qa": "Quality Assurance",
     "qa_overwrite": "Overwrite",
     "wordwr": "Wordwrap",
+    "final": "Final",
     "overwrite": "Overwrite (Legacy)",
     "log": "Log",
     "tags": "Tags",
@@ -88,6 +90,7 @@ CLEARABLE_COLUMNS: List[str] = [
     "qa",
     "qa_overwrite",
     "wordwr",
+    "final",
 ]
 
 # Colors matching CherryAI theme
@@ -709,15 +712,12 @@ class FullTableViewDialog(tk.Toplevel):
         """Compute 'Show Latest' — idx + Tags + furthest non-empty right column per line.
 
         For each line, finds the rightmost populated field in the current
-        display pipeline (orig → prepro → tl → postpro → qa → qa_overwrite → wordwr)
+        display pipeline as defined by the shared manifest field helpers.
         and includes that column. Always includes idx.
         """
-        pipeline_cols = [
-            "orig", "prepro", "tl", "postpro", "qa", "qa_overwrite", "wordwr",
-        ]
         visible: Set[str] = {"idx"}
         for line in self._all_lines:
-            for col in reversed(pipeline_cols):
+            for col in PIPELINE_FIELDS:
                 val = line.get(col)
                 if val is not None and val != "":
                     visible.add(col)
@@ -874,9 +874,13 @@ class FullTableViewDialog(tk.Toplevel):
                 if val and isinstance(val, str) and self._search_pattern.search(val):
                     new_val = self._search_pattern.sub(replace_text, val)
                     if new_val != val:
-                        line[col] = new_val
-                        self._record_change(idx, col, new_val)
-                        count += 1
+                        if col == "final":
+                            if self._apply_final_edit_value(idx, new_val):
+                                count += 1
+                        else:
+                            line[col] = new_val
+                            self._record_change(idx, col, new_val)
+                            count += 1
 
         if count > 0:
             self._on_search_changed()  # Refresh search matches
@@ -921,7 +925,20 @@ class FullTableViewDialog(tk.Toplevel):
             return
 
         # Create inline edit widget
-        self._start_inline_edit(item, column, col_name, idx, str(current_val))
+        initial_val = self._get_inline_edit_seed(line, col_name, str(current_val))
+        self._start_inline_edit(item, column, col_name, idx, initial_val)
+
+    def _get_inline_edit_seed(
+        self,
+        line: Dict[str, Any],
+        col_name: str,
+        current_val: str,
+    ) -> str:
+        """Return the text shown when inline editing starts."""
+        if col_name == "final" and not current_val:
+            source_text, _source_field = get_final_field_source(line)
+            return source_text
+        return current_val
 
     def _start_inline_edit(
         self, item: str, column: str, col_name: str, idx: int, current_val: str,
@@ -948,18 +965,62 @@ class FullTableViewDialog(tk.Toplevel):
         def finish_edit(save: bool = True) -> None:
             if save:
                 new_val = edit_widget.get("1.0", "end-1c")
-                if new_val != current_val:
-                    line = self._find_line(idx)
-                    if line is not None:
-                        line[col_name] = new_val
-                        self._record_change(idx, col_name, new_val)
-                        self._refresh_table()
+                if self._apply_inline_edit_value(idx, col_name, new_val, current_val):
+                    self._refresh_table()
             edit_widget.destroy()
 
         edit_widget.bind("<Return>", lambda e: (finish_edit(True), "break")[1])
         edit_widget.bind("<Shift-Return>", lambda e: None)  # Allow shift+enter for newline
         edit_widget.bind("<Escape>", lambda e: finish_edit(False))
         edit_widget.bind("<FocusOut>", lambda e: finish_edit(True))
+
+    def _apply_inline_edit_value(
+        self,
+        idx: int,
+        col_name: str,
+        new_val: str,
+        current_val: str,
+    ) -> bool:
+        """Apply an edited cell value to the working copy and change tracker."""
+        line = self._find_line(idx)
+        if line is None:
+            return False
+
+        if col_name == "final":
+            return self._apply_final_edit_value(idx, new_val)
+
+        if new_val == current_val:
+            return False
+
+        line[col_name] = new_val
+        self._record_change(idx, col_name, new_val)
+        return True
+
+    def _apply_final_edit_value(self, idx: int, new_val: str) -> bool:
+        """Apply sparse Full Table View edit semantics for the ``final`` field."""
+        line = self._find_line(idx)
+        if line is None:
+            return False
+
+        source_text, _source_field = get_final_field_source(line)
+        should_clear = not new_val or (source_text and new_val == source_text)
+
+        if should_clear:
+            if "final" not in line:
+                return False
+            line.pop("final", None)
+            if self._original_has_field(idx, "final"):
+                self._record_delete(idx, "final")
+            else:
+                self._discard_pending_field_change(idx, "final")
+            return True
+
+        if line.get("final", "") == new_val:
+            return False
+
+        line["final"] = new_val
+        self._record_change(idx, "final", new_val)
+        return True
 
     def _show_readonly_cell(self, item: str, column: str, value: str) -> None:
         """Show a read-only text widget for copying cell content (e.g., Original)."""
@@ -1224,6 +1285,35 @@ class FullTableViewDialog(tk.Toplevel):
             if line.get("idx") == idx:
                 return line
         return None
+
+    def _find_original_line(self, idx: int) -> Optional[Dict[str, Any]]:
+        """Find a line by its idx in the original manifest snapshot."""
+        for line in self._original_lines:
+            if line.get("idx") == idx:
+                return line
+        return None
+
+    def _original_has_field(self, idx: int, field: str) -> bool:
+        """Return whether the original snapshot had a non-empty field value."""
+        line = self._find_original_line(idx)
+        if line is None:
+            return False
+        value = line.get(field)
+        return value is not None and value != ""
+
+    def _discard_pending_field_change(self, idx: int, field: str) -> None:
+        """Drop unsaved tracking for a field that returned to baseline."""
+        changed = self._changes.get(idx)
+        if changed and field in changed:
+            del changed[field]
+            if not changed:
+                del self._changes[idx]
+
+        deleted = self._deleted_fields.get(idx)
+        if deleted and field in deleted:
+            deleted.discard(field)
+            if not deleted:
+                del self._deleted_fields[idx]
 
     # ================================================================== #
     #                       SAVE / RESET / DIFF                           #

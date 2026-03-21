@@ -147,12 +147,12 @@ python -m pytest CherryAI/dev/ -v --timeout=10
 
 ### Focused Workflow Regression
 
-The QA-before-Wordwrap reorder is covered by a focused regression set:
+The QA-before-Wordwrap reorder plus the Full Table View `final` layer are covered by a focused regression set:
 
-- `dev/test_manifest_fields.py` verifies the shared priority chain `wordwr → qa_overwrite → qa → postpro → tl → prepro → orig` and the stage ceilings for QA and Wordwrap.
+- `dev/test_manifest_fields.py` verifies the shared priority chain `final → wordwr → qa → postpro → tl → prepro → orig`, the `final` source helper used by Full Table View prefill, and the stage ceilings for QA and Wordwrap.
 - `dev/test_qa_manifest.py` verifies that QA loads its Original column from `postpro → tl → prepro → orig`, loads the Quality Assurance column from `qa`, and loads Overwrite from `qa_overwrite` only.
-- `dev/test_wordwrap_phase46.py` verifies that Wordwrap uses `qa_overwrite → qa → postpro → tl → prepro → orig` as input and that the Wordwrap column only restores stored `wordwr` values.
-- `dev/test_table_view.py` verifies the Full Table View column names/order for `qa`, `qa_overwrite`, and `wordwr` plus the unified `tags` field.
+- `dev/test_wordwrap_phase46.py` verifies that Wordwrap uses `qa → postpro → tl → prepro → orig` as input and that the Wordwrap column only restores stored `wordwr` values.
+- `dev/test_table_view.py` verifies the Full Table View `Final` column, Show Latest behavior, and the sparse prefill/auto-clear edit semantics for `final`.
 
 Verified command:
 
@@ -162,10 +162,11 @@ python -m pytest CherryAI/dev/test_manifest_fields.py CherryAI/dev/test_qa_manif
 
 ### Focused Manifest Persistence Regression
 
-The sparse-manifest and import-preservation changes are covered by an additional focused set:
+The sparse-manifest, `final`, and import-preservation changes are covered by an additional focused set:
 
-- `dev/test_input_import_fixes.py` verifies that importing Information settings does not overwrite the current `project_name`.
-- `dev/test_table_view.py` verifies the Clear Columns workflow for `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, and `wordwr`, including the second confirmation required for `tl`.
+- `dev/test_input_import_fixes.py` verifies that importing Information settings does not overwrite the current `project_name`, that Import Translation can copy `final`, and that manifest canonicalization serializes `final` after `wordwr`.
+- `dev/test_input_import_fixes.py` also verifies that Create Patch prunes unchanged files by identical `Original/` hash, falls back to full `orig`-match pruning when source originals are missing, deletes copied originals for removed files, and rewrites surviving `filedir` / `lines[]` indices contiguously.
+- `dev/test_table_view.py` verifies the Clear Columns workflow for `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, and `final`, including the second confirmation required for `tl`.
 - `dev/test_postprocess_phase45.py` verifies that unchanged postprocessing output clears `postpro` instead of persisting a redundant copy.
 - `dev/test_postprocess_phase45.py` also verifies flagged-case dropdown population, dedup-restoration flag clearing for duplicate rows, and Processed Lines search matching Recovery Details metadata.
 - `dev/test_qa_manifest.py` verifies that QA does not auto-persist `qa` and only stores explicit `qa_overwrite` edits.
@@ -184,7 +185,7 @@ The active-project load reset and canonical tag import changes are covered by an
 
 - `dev/test_app_startup.py` verifies that clearing `last_manifest` removes the INI key, session-key storage uses `[session]`, and activating a loaded project flushes tab runtime state before entering the new manifest.
 - `dev/test_input_import_fixes.py` verifies canonical line ordering, `tags` merge semantics, `tl`-only dedup import blocking, and that dedup rows retain imported or generated later-stage fields during manifest normalization.
-- `dev/test_lightvn_fixes.py` verifies that parser tags still flow through `LoadedFile.tags` but are stored via the canonical `tags` helper instead of legacy `tag` writes.
+- `dev/test_lightvn_fixes.py` verifies that parser tags still flow through `LoadedFile.tags` but are stored via the canonical `tags` helper instead of legacy `tag` writes, that Step 0 re-extracts LightVN parser-backed files from the staged `Original/` tree before syncing `lines[]`, and that explicit rel-path staging works even before `filedir` is rebuilt.
 
 Verified command:
 
@@ -211,11 +212,17 @@ python -m pytest CherryAI/dev/test_request_preview.py CherryAI/dev/test_estimati
 
 Latest verified results should be updated from the current focused pytest runs whenever these suites are revalidated.
 
+Latest verified focused command for the `final` change:
+
+```bash
+python -m pytest CherryAI/dev/test_manifest_fields.py CherryAI/dev/test_table_view.py CherryAI/dev/test_input_import_fixes.py CherryAI/dev/test_output_injection.py -v --timeout=20
+```
+
 ### Focused Wordwrap + LightVN Runtime Regression
 
 The manifest-driven Step 8 Wordwrap path and LightVN textbox realization path are covered by a focused runtime set:
 
-- `dev/test_wordwrap_phase46.py` verifies that Apply/Refresh wrap the loaded preview rows even when cached step-data lines are empty, that canonical `tags` drive tag resolution, that speaker mode `ignore` excludes only detected speaker prefixes from width counting, that translated speaker aliases from manifest `characters[]` are also honored, that parser `detect_speakers()` can seed the allowlist when manifest speaker data is absent, that manifest `code_patterns[]` entries marked `IsInvisible` contribute zero width while other code still counts normally, that leading indentation survives wrapping, that literal `\n` commands and non-RPG backslashes survive wrapping, that overflow without textbox support is not persisted to `wordwr`, and that new-textbox-capable tags are classified separately from unsplittable `Exceeding` rows.
+- `dev/test_wordwrap_phase46.py` verifies that Apply/Refresh wrap the loaded preview rows even when cached step-data lines are empty, that canonical `tags` drive tag resolution, that speaker mode `ignore` excludes only detected speaker prefixes from width counting, that translated speaker aliases from manifest `characters[]` are also honored, that parser `detect_speakers()` can seed the allowlist when manifest speaker data is absent, that manifest `code_patterns[]` entries marked `IsInvisible` contribute zero width while other code still counts normally, that leading indentation survives wrapping, that literal `\n` commands and non-RPG backslashes survive wrapping, that overflow without textbox support is not persisted to `wordwr`, that `Custom` and `Simple` mode mapping remains backward-compatible with legacy `Manual`, that Simple mode can restrict Apply to a selected file scope, and that `View in File` filters the preview to the selected source file.
 - `dev/test_lightvn_parser.py` verifies that explicit multiline wrapped dialogue is preserved during injection and split into successive LightVN textboxes with the exact `\w` + newline + `"` ordering between boxes, that LightVN injection restores a single terminal `\w` even when Step 8 stored only inter-textbox separators in `wordwr`, and that conditional dialogue injection follows the same terminal-marker rule without crashing.
 - `dev/test_wordwrap.py` verifies the stronger PrettyWrap balancing behavior, including rebalancing a one-word orphan tail into a better punctuation-aligned two-line split.
 - `dev/test_lightvn_fixes.py` remains in the set to cover LightVN parser-path and canonical tag propagation behavior used by the same workflow.
@@ -227,10 +234,12 @@ Verified commands:
 python -m pytest CherryAI/dev/test_wordwrap_phase46.py CherryAI/dev/test_lightvn_parser.py CherryAI/dev/test_lightvn_fixes.py -q --timeout=10
 python -m pytest CherryAI/dev/test_wordwrap_phase46.py CherryAI/dev/test_tag_wordwrap.py CherryAI/dev/test_wordwrap_manifest.py CherryAI/dev/test_gui_v2.py::TestSessionState::test_step_definitions_names CherryAI/dev/test_gui_v2.py::TestQAStepClass::test_qa_step_id CherryAI/dev/test_gui_v2.py::TestQAStepIntegration::test_qa_step_in_steps_init CherryAI/dev/test_gui_v2.py::TestWrapOptionsDataclass::test_wrap_options_defaults CherryAI/dev/test_gui_v2.py::TestFormatConfigDataclass::test_format_config_defaults CherryAI/dev/test_gui_v2.py::TestFormatConfigDataclass::test_format_config_custom_values CherryAI/dev/test_gui_v2.py::TestWordwrapOverwriteStepIntegration::test_wordwrap_step_attributes CherryAI/dev/test_gui_v2.py::TestStepNamingConsistency::test_step_ids_are_sequential -q --timeout=10
 python -m pytest CherryAI/dev/test_wordwrap_phase46.py CherryAI/dev/test_lightvn_parser.py CherryAI/dev/test_tag_wordwrap.py CherryAI/dev/test_wordwrap_manifest.py -q --timeout=10
+python -m pytest CherryAI/dev/test_wordwrap.py CherryAI/dev/test_wordwrap_manifest.py CherryAI/dev/test_tag_wordwrap.py CherryAI/dev/test_wordwrap_overhaul.py CherryAI/dev/test_gui_v2.py -k "wordwrap or WrapMode or WrapOptionsDataclass or WordwrapStepIntegration" -q --timeout=20
 ```
 
 Latest verified result: 192 passed.
 Latest verified expanded regression result: 310 passed.
+Latest verified compatibility regression result: 204 passed, 2 skipped.
 
 Plugin installation:
 
@@ -792,7 +801,8 @@ migration work correctly.
 
 Task 3: line field saving across all steps. Tests that preprocessing,
 postprocessing, and wordwrap steps persist per-line results to manifest
-`lines[]` via `set_line_field`. Validates round-trip persistence, field
+`lines[]`. Postprocessing and wordwrap use `set_line_field`, while preprocessing
+persists `prepro` during its bulk `_update_step_data()` manifest pass. Validates round-trip persistence, field
 progression, edge cases, and that the `update_line_field` bug is fixed.
 
 #### TestSetLineField (8 tests)
@@ -1832,16 +1842,16 @@ Manifest field type helpers for Task 22.1 and 22.2. Reusable save/load operation
 
 **Session 26 additions:** `manifest_fields.py` now also exports shared priority resolution functions used by all GUI steps: `resolve_line_field()`, `resolve_line_field_from()`, `get_latest_line_text()`, `get_all_lines_resolved()`.
 
-**Stage-ceiling additions:** `resolve_line_field_for_stage()`, `get_line_text_for_stage()`, and `get_all_lines_for_stage()` enforce workflow-specific input ceilings while `PIPELINE_FIELDS` remains the full final-display chain: `wordwr → qa_overwrite → qa → postpro → tl → prepro → orig`.
+**Stage-ceiling additions:** `resolve_line_field_for_stage()`, `get_line_text_for_stage()`, and `get_all_lines_for_stage()` enforce workflow-specific input ceilings while `PIPELINE_FIELDS` remains the full final-display chain: `final → wordwr → qa → postpro → tl → prepro → orig`.
 
 #### TestLinePriorityResolution (6 tests)
 
 | Test | Purpose |
 |------|---------|
-| `test_pipeline_fields_latest_chain` | Full-chain order remains wordwr → qa_overwrite → qa → postpro → tl → prepro → orig |
-| `test_resolve_line_field_prefers_latest_display` | Final-display helper prefers wordwr, then QA overwrite, then QA |
+| `test_pipeline_fields_latest_chain` | Full-chain order remains final → wordwr → qa → postpro → tl → prepro → orig |
+| `test_resolve_line_field_prefers_latest_display` | Final-display helper prefers final, then wordwrap, then QA |
 | `test_resolve_line_field_for_stage_postprocessing_uses_tl_chain` | Postprocessing ceiling is tl → prepro → orig |
-| `test_resolve_line_field_for_stage_wordwrap_uses_postpro_chain` | Wordwrap ceiling is qa_overwrite → qa → postpro → tl → prepro → orig |
+| `test_resolve_line_field_for_stage_wordwrap_uses_postpro_chain` | Wordwrap ceiling is qa → postpro → tl → prepro → orig |
 | `test_resolve_line_field_for_stage_qa_ignores_qa_overwrite` | QA ceiling ignores qa_overwrite and wordwr and starts at postpro |
 | `test_get_stage_helpers_resolve_all_lines` | Manager-level stage helpers resolve by idx and in bulk |
 
@@ -2625,7 +2635,22 @@ Phase 23 tests for InformationStep manifest integration. Tests all fields bound 
 
 Phase 24 tests for PreprocessingStep manifest integration. Tests all preprocessing options bound to manifest.
 
-- Includes a passive-preview regression ensuring `_load_preview_from_manifest()` does not rewrite every line back into the manifest during tab entry.
+- Includes widget/manifest binding coverage for PreprocessingStep. The helper-based passive-preview regression was reverted back to the `9721cba` bulk persistence path, so the focused rollback validation now lives in the persistence tests below.
+
+Focused rollback validation:
+
+- `dev/test_line_saving.py::TestSetLineField`
+- `dev/test_line_saving.py::TestRoundTrip`
+- `dev/test_line_saving.py::TestPreprocessIntegration`
+- `dev/test_manifest_overwrite.py`
+
+Verified command:
+
+```bash
+python -m pytest CherryAI/dev/test_line_saving.py::TestSetLineField CherryAI/dev/test_line_saving.py::TestRoundTrip CherryAI/dev/test_line_saving.py::TestPreprocessIntegration CherryAI/dev/test_manifest_overwrite.py -q --timeout=10
+```
+
+Latest verified result: 29 passed.
 
 #### TestDeduplicationField (4 tests)
 
@@ -4020,6 +4045,8 @@ GUI dedup pipeline tests validating apply_dedup_batch, apply_aggressive_dedup_ba
 | `test_mask_captures_numbers` | Numbers captured during masking |
 | `test_restore_puts_numbers_back` | Numbers restored from list |
 
+Indexed aggressive placeholder regressions now also verify that multi-number lines emit `<NUM1>`, `<NUM2>`, ... instead of repeated generic `<NUM>` tokens and that reordered translations restore by explicit slot rather than left-to-right position.
+
 #### TestApplyPreprocessingDedup (10 tests)
 
 | Test | Purpose |
@@ -4055,6 +4082,18 @@ GUI dedup pipeline tests validating apply_dedup_batch, apply_aggressive_dedup_ba
 | `test_standard_dedup_falls_back_to_translated` | Falls back to tl when no postpro |
 | `test_standard_dedup_falls_back_to_preprocessed` | Falls back to prepro when no tl |
 | `test_aggressive_dedup_with_number_restoration` | Numbers restored from aggr_numbers |
+
+Focused regression additions:
+- `dev/test_dedup.py::TestAggressiveMasking::test_mask_multiple_numbers`
+- `dev/test_dedup.py::TestAggressiveRestore::test_restore_indexed_numbers_by_explicit_slot`
+- `dev/test_postprocess_phase45.py::TestAggressiveDedupIndexedRestore::test_reverse_aggr_numbers_restores_reordered_indexed_tokens`
+
+Verified command:
+
+```bash
+python -m pytest CherryAI/dev/test_dedup.py -q --timeout=10 -k "aggressive or dedup"
+python -m pytest CherryAI/dev/test_postprocess_phase45.py -q --timeout=10 -k "AggressiveDedupIndexedRestore"
+```
 
 ---
 
@@ -11825,7 +11864,7 @@ Test file: `dev/test_wordwrap_phase46.py`
 | TestTask469TableFilters | 5 | Filter values All/Changed/Exceeding/Overwrite Differs, _refresh_table filter logic |
 | TestTask4610MaxLinesFlag | 4 | _simple_wrap exceeds_limit detection, WrapLine exceeds_limit field |
 | TestRemainingEnumsDataclasses | 6 | WrapStatus intact, FormatConfig intact, WrapStats intact |
-| TestStageInputResolution | 2 | Input column uses qa_overwrite → qa → postpro → tl → prepro → orig while restoring existing wordwr separately |
+| TestStageInputResolution | 2 | Input column uses qa → postpro → tl → prepro → orig while restoring existing wordwr separately |
 
 ```bash
 # Run Phase 46 tests
@@ -13201,9 +13240,9 @@ python -m pytest dev/test_input_import_fixes.py -v --timeout=10
 
 ---
 
-### dev/test_lightvn_fixes.py (34 tests) — LightVN Detection, Tags & Input Fixes
+### dev/test_lightvn_fixes.py (36 tests) — LightVN Detection, Tags & Input Fixes
 
-Tests for LightVN parser detection expansion, ~文字 menu parsing, tag propagation
+Tests for LightVN parser detection expansion, ~文字 menu parsing, tag propagation, staged `Original/` re-extraction during Input sync, and explicit rel-path original staging before filedir rebuild.
 to manifest tag, messagebox import shadowing fix, and source file copy
 rel_path matching.
 

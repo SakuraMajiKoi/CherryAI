@@ -22,6 +22,7 @@ No manual save buttons required.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -148,7 +149,7 @@ def canonicalize_line_dict(line_data: Dict[str, Any]) -> Dict[str, Any]:
         result["tags"] = merged_tags
     result["orig"] = source.get("orig", "")
 
-    for field in ("prepro", "tl", "postpro", "qa", "qa_overwrite", "wordwr"):
+    for field in ("prepro", "tl", "postpro", "qa", "qa_overwrite", "wordwr", "final"):
         if field in source and _should_keep_line_value(source[field]):
             result[field] = source[field]
 
@@ -189,6 +190,7 @@ def canonicalize_line_dict(line_data: Dict[str, Any]) -> Dict[str, Any]:
         "qa",
         "qa_overwrite",
         "wordwr",
+        "final",
         "prepro_ops",
         "edited_prepro",
         "preedit",
@@ -236,6 +238,38 @@ class _SafeManifestEncoder(json.JSONEncoder):
 MANIFEST_DIR = Path("Projects")
 MANIFEST_EXT = ".CherryAI.json"
 MANIFEST_VERSION = "3.2"  # TASK 38: Optimized format - removed redundant per-line fields
+
+CREATE_PATCH_SELECTIONS: Dict[str, bool] = {
+    "import_prepro": True,
+    "import_tags": True,
+    "import_translated": True,
+    "import_postpro": True,
+    "import_wordwrap": True,
+    "import_final": True,
+    "import_qa": True,
+    "skip_new_lines": False,
+    "import_analysis": True,
+    "import_information": True,
+    "import_preprocessing": True,
+    "import_costs": True,
+    "import_translation": True,
+    "import_postprocessing": True,
+    "import_wordwrap_settings": True,
+    "import_qa_settings": True,
+    "import_file_settings": True,
+}
+
+
+def _file_sha256(path: Path) -> str:
+    """Return a stable SHA-256 digest for *path*."""
+    with path.open("rb") as handle:
+        try:
+            return hashlib.file_digest(handle, "sha256").hexdigest()
+        except AttributeError:
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+            return digest.hexdigest()
 
 # Step definitions matching GUI step order
 STEP_NAMES = [
@@ -809,7 +843,7 @@ class ManifestManager:
             
             # === v3.0 Wordwrap Settings ===
             "WordwrapSettings": {
-                "Mode": defaults.get("wordwrap_mode", "Manual"),
+                "Mode": defaults.get("wordwrap_mode", "Custom"),
                 "Width": defaults.get("wordwrap_width", 48),
                 "BreakChar": defaults.get("wordwrap_break_char", ""),
                 "MaxLines": defaults.get("wordwrap_max_lines", 4),
@@ -905,7 +939,7 @@ class ManifestManager:
             "post_enable_symbol_conversion": True,
             "post_fullwidth_to_halfwidth": True,
             "post_failure_handling": "flag",
-            "wordwrap_mode": "Manual",
+            "wordwrap_mode": "Custom",
             "wordwrap_width": 48,
             "wordwrap_break_char": "",
             "wordwrap_max_lines": 4,
@@ -2124,6 +2158,426 @@ class ManifestManager:
         # Save immediately to prevent desync
         self.save()
         return True
+
+    def remove_files(
+        self,
+        rel_paths: List[str],
+        *,
+        delete_originals: bool = False,
+    ) -> Dict[str, int]:
+        """Remove multiple files from the manifest in one reindex pass.
+
+        Args:
+            rel_paths: Relative file paths to remove.
+            delete_originals: When True, also remove matching files from
+                the project ``Original/`` directory.
+
+        Returns:
+            Summary dict with removed file and line counts.
+        """
+        remove_set = {str(rel_path) for rel_path in rel_paths if str(rel_path).strip()}
+        if not remove_set:
+            return {"files_removed": 0, "lines_removed": 0}
+
+        entries = self.get_filedir()
+        lines = self.get_lines()
+        lines_by_idx = {line.get("idx", -1): line for line in lines}
+
+        kept_entries: List[FileDirEntry] = []
+        kept_lines: List[Dict[str, Any]] = []
+        removed_entries: List[FileDirEntry] = []
+        next_idx = 0
+
+        for entry in entries:
+            if entry.rel_path in remove_set:
+                removed_entries.append(entry)
+                continue
+
+            first_idx = next_idx
+            for old_idx in range(entry.first_idx, entry.last_idx + 1):
+                line_data = lines_by_idx.get(old_idx)
+                if line_data is None:
+                    continue
+                line_copy = dict(line_data)
+                line_copy["idx"] = next_idx
+                kept_lines.append(line_copy)
+                next_idx += 1
+
+            if next_idx == first_idx:
+                continue
+
+            kept_entries.append(
+                FileDirEntry(
+                    first_idx=first_idx,
+                    last_idx=next_idx - 1,
+                    format=entry.format,
+                    rel_path=entry.rel_path,
+                    encoding=entry.encoding,
+                    type=entry.type,
+                )
+            )
+
+        self._manifest_data["lines"] = canonicalize_lines(kept_lines)
+        self._manifest_data["filedir"] = [entry.to_dict() for entry in kept_entries]
+
+        if delete_originals:
+            self._delete_original_copies([entry.rel_path for entry in removed_entries])
+
+        self._mark_dirty()
+
+        lines_removed = sum(entry.line_count for entry in removed_entries)
+        logger.info(
+            "Removed %d file(s) and %d line(s) from manifest",
+            len(removed_entries),
+            lines_removed,
+        )
+        return {
+            "files_removed": len(removed_entries),
+            "lines_removed": lines_removed,
+        }
+
+    def _delete_original_copies(self, rel_paths: List[str]) -> None:
+        """Delete copied originals for the given manifest-relative paths."""
+        original_dir = self.get_original_dir()
+        if not original_dir.exists():
+            return
+
+        for rel_path in rel_paths:
+            original_path = original_dir / rel_path
+            try:
+                original_path.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("Failed to delete original copy %s: %s", original_path, exc)
+                continue
+
+            parent = original_path.parent
+            while parent != original_dir and parent.exists():
+                try:
+                    parent.rmdir()
+                except OSError:
+                    break
+                parent = parent.parent
+
+    def import_line_fields_from_manifest_data(
+        self,
+        source_data: Dict[str, Any],
+        selections: Dict[str, bool],
+    ) -> Dict[str, int]:
+        """Import selected per-line fields from another manifest payload."""
+        source_lines = source_data.get("lines", [])
+        if not source_lines:
+            return {"matched": 0, "total": 0}
+
+        field_map: Dict[str, List[str]] = {
+            "import_prepro": ["prepro"],
+            "import_translated": ["tl", "preedit"],
+            "import_postpro": ["postpro"],
+            "import_wordwrap": ["wordwr"],
+            "import_final": ["final"],
+            "import_qa": ["qa", "qa_overwrite"],
+        }
+
+        fields_to_copy: List[str] = []
+        for key, fields in field_map.items():
+            if selections.get(key, False):
+                fields_to_copy.extend(fields)
+
+        merge_tags = selections.get("import_tags", False)
+        skip_new = selections.get("skip_new_lines", False)
+
+        source_lookup: Dict[str, Dict[str, Any]] = {}
+        for source_line in source_lines:
+            orig = source_line.get("orig", "")
+            if orig not in source_lookup:
+                source_lookup[orig] = source_line
+
+        current_lines = self.get_lines()
+        matched = 0
+        total = len(current_lines)
+
+        for line in current_lines:
+            orig = line.get("orig", "")
+            match = source_lookup.get(orig)
+            if match is None:
+                continue
+
+            if skip_new and line.get("tl", ""):
+                continue
+
+            matched += 1
+            is_dedup_line = (
+                str(line.get("prepro", "")).strip() == DEDUP_PLACEHOLDER
+                or str(match.get("prepro", "")).strip() == DEDUP_PLACEHOLDER
+            )
+
+            if merge_tags:
+                merged_tags = merge_line_tags(
+                    line.get("tags"),
+                    line.get("tag"),
+                    line.get("context_marker"),
+                    match.get("tags"),
+                    match.get("tag"),
+                    match.get("context_marker"),
+                )
+                if merged_tags:
+                    line["tags"] = merged_tags
+                else:
+                    line.pop("tags", None)
+                line.pop("tag", None)
+                line.pop("context_marker", None)
+
+            for field in fields_to_copy:
+                if is_dedup_line and field == "tl":
+                    continue
+                if field in match and match[field]:
+                    line[field] = match[field]
+
+            if selections.get("import_qa", False):
+                if not line.get("qa"):
+                    if match.get("qa"):
+                        line["qa"] = match["qa"]
+                    elif match.get("wordwr"):
+                        line["qa"] = match["wordwr"]
+                    elif match.get("postpro"):
+                        line["qa"] = match["postpro"]
+
+                for key, value in match.items():
+                    if (key.startswith("edit") or key.startswith("tlc")) and value:
+                        line[key] = value
+
+                qa_overwrite = match.get("qa_overwrite") or match.get("overwrite")
+                if qa_overwrite:
+                    line["qa_overwrite"] = qa_overwrite
+
+        self.set_lines(current_lines)
+        return {"matched": matched, "total": total}
+
+    def import_settings_sections_from_manifest_data(
+        self,
+        source_data: Dict[str, Any],
+        selections: Dict[str, bool],
+    ) -> int:
+        """Import selected manifest-level settings from another manifest payload."""
+        count = 0
+
+        if selections.get("import_analysis", False):
+            source_step_state = source_data.get("step_state", {}).get("Analysis")
+            if source_step_state:
+                self._manifest_data.setdefault("step_state", {})["Analysis"] = source_step_state
+                self._mark_dirty()
+                count += 1
+
+        if selections.get("import_information", False):
+            source_step_state = source_data.get("step_state", {}).get("Information")
+            source_metadata = (
+                source_step_state.get("data", {}).get("metadata", {})
+                if source_step_state else {}
+            )
+            if source_metadata:
+                merged_metadata = dict(self.get_info_metadata())
+                for key, value in source_metadata.items():
+                    if key == "project_name":
+                        continue
+                    merged_metadata[key] = value
+                self.set_info_metadata(merged_metadata)
+                count += 1
+
+            for key in ("glossary", "code_patterns", "characters"):
+                source_value = source_data.get(key)
+                if source_value:
+                    self._manifest_data[key] = source_value
+                    self._mark_dirty()
+
+        if selections.get("import_preprocessing", False):
+            preprocessing_keys = [
+                "Deduplication",
+                "DeduplicationThreshold",
+                "EllipsisCompression",
+                "SymbolConversion",
+                "SpeakerNameReplacement",
+                "CodeSpacingRules",
+                "ProtectCodePatterns",
+                "CustomPlaceholders",
+                "AnchorRemoval",
+            ]
+            for key in preprocessing_keys:
+                if key in source_data:
+                    self._manifest_data[key] = source_data[key]
+            self._mark_dirty()
+            count += 1
+
+        if selections.get("import_costs", False):
+            source_request_options = source_data.get("RequestOptions")
+            if source_request_options:
+                self._manifest_data["RequestOptions"] = source_request_options
+                self._mark_dirty()
+                count += 1
+
+        if selections.get("import_translation", False):
+            source_step_state = source_data.get("step_state", {}).get("Translation")
+            if source_step_state:
+                self._manifest_data.setdefault("step_state", {})["Translation"] = source_step_state
+                self._mark_dirty()
+                count += 1
+
+        if selections.get("import_postprocessing", False):
+            source_postprocessing = source_data.get("PostProcessing")
+            if source_postprocessing:
+                self._manifest_data["PostProcessing"] = source_postprocessing
+                self._mark_dirty()
+                count += 1
+
+        if selections.get("import_wordwrap_settings", False):
+            source_wordwrap = source_data.get("WordwrapSettings")
+            if source_wordwrap:
+                self._manifest_data["WordwrapSettings"] = source_wordwrap
+                self._mark_dirty()
+                count += 1
+
+        if selections.get("import_qa_settings", False):
+            source_validation_rules = source_data.get("ValidationRules")
+            if source_validation_rules:
+                self._manifest_data["ValidationRules"] = source_validation_rules
+            source_qa_options = source_data.get("QAOptions")
+            if source_qa_options:
+                self._manifest_data["QAOptions"] = source_qa_options
+            for key in (
+                "CharacterWhitelist",
+                "CharacterBlacklist",
+                "WordBlacklist",
+                "AutofixMap",
+            ):
+                if key in source_data:
+                    self._manifest_data[key] = source_data[key]
+            self._mark_dirty()
+            count += 1
+
+        if selections.get("import_file_settings", False):
+            source_output_format = source_data.get("OutputFormat")
+            if source_output_format:
+                self._manifest_data["OutputFormat"] = source_output_format
+                self._mark_dirty()
+                count += 1
+
+        return count
+
+    def import_from_manifest_data(
+        self,
+        source_data: Dict[str, Any],
+        selections: Dict[str, bool],
+    ) -> Dict[str, int]:
+        """Import line and settings data from another manifest payload."""
+        line_stats = self.import_line_fields_from_manifest_data(source_data, selections)
+        section_count = self.import_settings_sections_from_manifest_data(
+            source_data,
+            selections,
+        )
+        return {
+            "matched": line_stats["matched"],
+            "total": line_stats["total"],
+            "sections_imported": section_count,
+        }
+
+    def find_files_with_full_orig_match(
+        self,
+        source_data: Dict[str, Any],
+    ) -> List[str]:
+        """Return filedir paths whose every ``orig`` line exists in *source_data*."""
+        source_orig_values = {
+            line.get("orig", "")
+            for line in source_data.get("lines", [])
+            if isinstance(line, dict) and "orig" in line
+        }
+        if not source_orig_values and not source_data.get("lines"):
+            return []
+
+        lines = self.get_lines()
+        removable: List[str] = []
+        for entry in self.get_filedir():
+            matched_count = 0
+            total_count = 0
+            for idx in range(entry.first_idx, entry.last_idx + 1):
+                if idx >= len(lines):
+                    continue
+                line = lines[idx]
+                total_count += 1
+                if line.get("orig", "") in source_orig_values:
+                    matched_count += 1
+            if total_count > 0 and matched_count == total_count:
+                removable.append(entry.rel_path)
+        return removable
+
+    def find_identical_original_files(self, other: "ManifestManager") -> List[str]:
+        """Return shared ``rel_path`` values whose copied Originals are byte-identical."""
+        other_lookup = {entry.rel_path: entry for entry in other.get_filedir()}
+        shared_paths = [
+            entry.rel_path
+            for entry in self.get_filedir()
+            if entry.rel_path in other_lookup
+        ]
+        if not shared_paths:
+            return []
+
+        identical: List[str] = []
+        self_original_dir = self.get_original_dir()
+        other_original_dir = other.get_original_dir()
+        for rel_path in shared_paths:
+            current_path = self_original_dir / rel_path
+            source_path = other_original_dir / rel_path
+            if not current_path.is_file() or not source_path.is_file():
+                continue
+            try:
+                if current_path.stat().st_size != source_path.stat().st_size:
+                    continue
+                if _file_sha256(current_path) == _file_sha256(source_path):
+                    identical.append(rel_path)
+            except OSError as exc:
+                logger.debug("Skipping identical-original compare for %s: %s", rel_path, exc)
+        return identical
+
+    def create_patch_from_manifest_path(self, source_manifest_path: Path) -> Dict[str, Any]:
+        """Import data from *source_manifest_path* and prune unchanged files.
+
+        The current manifest becomes the patch manifest: first identical files are
+        removed via ``Original/`` hash comparison, then the source manifest is fully
+        imported, and finally any remaining file whose every ``orig`` line exists in
+        the source manifest is removed as complete.
+        """
+        if not self.is_loaded:
+            raise ValueError("No current manifest is loaded")
+
+        source_manager = ManifestManager()
+        if not source_manager.load(source_manifest_path):
+            raise ValueError(f"Failed to load source manifest: {source_manifest_path}")
+
+        try:
+            source_data = deepcopy(source_manager.get_raw_data())
+            identical_files = self.find_identical_original_files(source_manager)
+            identical_summary = self.remove_files(identical_files, delete_originals=True)
+
+            import_summary = self.import_from_manifest_data(
+                source_data,
+                dict(CREATE_PATCH_SELECTIONS),
+            )
+
+            matched_files = self.find_files_with_full_orig_match(source_data)
+            matched_summary = self.remove_files(matched_files, delete_originals=True)
+
+            self.save()
+
+            return {
+                "matched": import_summary["matched"],
+                "total": import_summary["total"],
+                "sections_imported": import_summary["sections_imported"],
+                "identical_files_removed": identical_summary["files_removed"],
+                "identical_lines_removed": identical_summary["lines_removed"],
+                "matched_files_removed": matched_summary["files_removed"],
+                "matched_lines_removed": matched_summary["lines_removed"],
+                "remaining_files": len(self.get_filedir()),
+                "remaining_lines": len(self.get_lines()),
+            }
+        finally:
+            source_manager.close()
     
     def get_filedir_entry_for_idx(self, idx: int) -> Optional[FileDirEntry]:
         """Get the FileDirEntry that contains the given line index.
@@ -2202,26 +2656,38 @@ class ManifestManager:
         import shutil
 
         filedir = self.get_filedir()
-        if not filedir:
-            logger.warning("No filedir entries to copy")
-            return {}
 
-        # Build source_paths from step_state.Input if not provided
+        # Build source_paths from step_state.Input if not provided.
         if source_paths is None:
             source_paths = self._build_source_paths_from_input()
+
+        if not source_paths:
+            logger.warning("No source paths available to copy")
+            return {}
+
+        if filedir:
+            rel_paths = [entry.rel_path for entry in filedir if entry.rel_path in source_paths]
+        else:
+            rel_paths = []
+
+        # Allow callers to stage explicit rel_path mappings before filedir is
+        # updated, which is required when parser-backed extraction depends on the
+        # staged Original/ project context.
+        if not rel_paths:
+            rel_paths = list(source_paths.keys())
 
         original_dir = self.get_original_dir()
         original_dir.mkdir(parents=True, exist_ok=True)
 
         copied_files: Dict[str, str] = {}
 
-        for entry in filedir:
-            abs_source = source_paths.get(entry.rel_path)
+        for rel_path in rel_paths:
+            abs_source = source_paths.get(rel_path)
             if abs_source is None or not abs_source.exists():
-                logger.warning("Source file not found for rel_path=%s", entry.rel_path)
+                logger.warning("Source file not found for rel_path=%s", rel_path)
                 continue
 
-            dest_path = original_dir / entry.rel_path
+            dest_path = original_dir / rel_path
             dest_path.parent.mkdir(parents=True, exist_ok=True)
 
             if dest_path.exists() and not force:
@@ -2964,7 +3430,7 @@ class ManifestManager:
         """Get wordwrap settings for wordwrap step.
         
         Returns wordwrap configuration:
-        - Mode: Wrap mode (Manual, Auto, Off)
+        - Mode: Wrap mode (Custom or Simple)
         - Width: Line width in characters
         - BreakChar: Character to use for line breaks
         - MaxLines: Maximum lines per text block
@@ -2975,7 +3441,7 @@ class ManifestManager:
         - Typography: Typography style (Western, Japanese)
         """
         return deepcopy(self._manifest_data.get("WordwrapSettings", {
-            "Mode": "Manual",
+            "Mode": "Custom",
             "Width": 48,
             "BreakChar": "",
             "MaxLines": 4,

@@ -8,10 +8,15 @@ This module provides:
 - apply_wordwrap: batch apply based on a config object
 - get_wordwrap_modes: metadata for UI to lock/unlock inputs per mode
 
-Inputs mapping for 'manual' mode:
+Inputs mapping for character-based modes:
 - in1: width (int, required)
 - in2: break char (str, e.g., "\\n" or "newline"; optional, defaults to "\\n")
 - in3: max_lines (int, optional; when exceeded, warns and truncates output to max_lines with overflow logged)
+
+Mode aliases:
+- ``manual``: legacy alias for the current GUI-managed custom mode
+- ``custom``: GUI-managed per-tag/per-format wrapping using the shared character-based core
+- ``simple``: file-scoped, uniform character-based wrapping using the shared core
 """
 
 from dataclasses import dataclass, field
@@ -27,10 +32,10 @@ class WordwrapConfig:
     """Configuration for applying wordwrap to a list of lines.
 
     Attributes:
-        mode: Name of the wordwrap mode (e.g., "manual").
-        in1: Primary input (for manual: width in characters).
-        in2: Secondary input (for manual: break char, e.g., "\\n" or "newline").
-        in3: Tertiary input (for manual: max lines count; warn if exceeded).
+        mode: Name of the wordwrap mode (e.g., "custom" or "simple").
+        in1: Primary input (for character modes: width in characters).
+        in2: Secondary input (for character modes: break char, e.g., "\\n" or "newline").
+        in3: Tertiary input (for character modes: max lines count; warn if exceeded).
         pretty_wrap: Enable CherryAI's balanced pretty-wrap behavior.
         prevent_orphan: Legacy compatibility alias for pretty-wrap orphan handling.
         prefer_punct_breaks: Legacy compatibility alias for pretty-wrap punctuation handling.
@@ -220,7 +225,7 @@ def apply_wordwrap(lines: List[str], config: Union[WordwrapConfig, Dict[str, Any
     modi = (cfg.modi or "").upper() or None
     _validate_modi(modi)  # currently no behavioral difference; placeholder for future logic
 
-    if mode == "manual":
+    if mode in {"manual", "custom", "simple"}:
         try:
             width = int(cfg.in1) if cfg.in1 is not None else 0
         except Exception:
@@ -310,6 +315,28 @@ def get_wordwrap_modes() -> Dict[str, Dict[str, Any]]:
                                    "choices": ["IGNORE", "SAMELINE", "SAMELINEINDENT", "NEWLINE"]},
                 "modi": {"label": "Mode/Format", "required": False, "type": "choice",
                           "choices": ["TXT", "JSON", "TSV", "CSV", "XLSX", "RPGMAKERMV", "RPGMAKERMZ"]},
+            },
+        },
+        "custom": {
+            "label": "Custom by characters",
+            "inputs": {
+                "in1": {"label": "Characters per line", "required": True, "type": "int"},
+                "in2": {"label": "Break", "required": False, "type": "choice", "choices": ["\\n", "newline"]},
+                "in3": {"label": "Max lines", "required": False, "type": "int"},
+                "ignore_codes": {"label": "Ignore codes", "required": False, "type": "multi-choice",
+                                   "choices": ["angle", "square", "curly", "en"]},
+                "speaker_mode": {"label": "Speaker Mode", "required": False, "type": "choice",
+                                   "choices": ["IGNORE", "SAMELINE", "SAMELINEINDENT", "NEWLINE"]},
+                "modi": {"label": "Mode/Format", "required": False, "type": "choice",
+                          "choices": ["TXT", "JSON", "TSV", "CSV", "XLSX", "RPGMAKERMV", "RPGMAKERMZ"]},
+            },
+        },
+        "simple": {
+            "label": "Simple by characters",
+            "inputs": {
+                "in1": {"label": "Characters per line", "required": True, "type": "int"},
+                "in2": {"label": "Break", "required": False, "type": "choice", "choices": ["\\n", "newline"]},
+                "in3": {"label": "Max lines", "required": False, "type": "int"},
             },
         },
         "rpgmaker": {

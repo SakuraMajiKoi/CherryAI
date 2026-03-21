@@ -171,7 +171,6 @@ class PreprocessingStep(BaseStep):
         """
         self._config: Dict[str, Any] = dict(DEFAULT_PREPROCESS_CONFIG)
         self._preview_lines: List[Tuple[str, str, str, List[str]]] = []  # (original, processed, diff, tags)
-        self._preview_persist_pending = False
         self._is_processing = False
         
         # TASK 24.1: Manifest bindings for standard rules
@@ -1063,12 +1062,11 @@ class PreprocessingStep(BaseStep):
                 processed_lines.append((original, new_line, display, line_tags))
 
             self._preview_lines = processed_lines
-            self._preview_persist_pending = True
             self._last_stats = stats  # Preserve dedup maps for step data
 
             # Hide progress and update UI on main thread
             self.after(0, self._hide_progress)
-            self.after(0, lambda: self._update_preview(persist_manifest=True))
+            self.after(0, self._update_preview)
 
         except Exception as e:
             logger.exception("Error processing lines: %s", e)
@@ -1131,14 +1129,10 @@ class PreprocessingStep(BaseStep):
         result, _ = apply_symbol_conversion(line, src_lang, tgt_lang)
         return result
 
-    def _update_preview(self, *, persist_manifest: bool = False) -> None:
+    def _update_preview(self) -> None:
         """Update the preview table with processed lines.
 
         Filters entirely by reading the per-line tags list (read-only).
-
-        Args:
-            persist_manifest: Persist the current preview back to manifest line
-                fields.
         """
         rows = []
         changed_count = 0
@@ -1199,10 +1193,10 @@ class PreprocessingStep(BaseStep):
             text=f"Processed {total} lines. {changed_count} lines changed."
         )
 
-        if persist_manifest:
-            self._update_step_data(persist_manifest=True)
+        # Store in step data
+        self._update_step_data()
 
-    def _update_step_data(self, *, persist_manifest: bool = False) -> None:
+    def _update_step_data(self) -> None:
         """Update step data with current configuration and results.
 
         Persists preprocessed text to manifest lines[].prepro via
@@ -1284,12 +1278,14 @@ class PreprocessingStep(BaseStep):
 
         self.set_step_data(data)
 
-        if not persist_manifest:
-            return
-
         # Persist each preprocessed line to the manifest
         mgr = self.manifest_manager
         if mgr is not None:
+            lines = mgr.get_lines()
+            idx_map: Dict[int, Dict[str, Any]] = {
+                ln.get("idx"): ln for ln in lines if ln.get("idx") is not None
+            }
+            dirty = False
             for idx, entry in enumerate(self._preview_lines):
                 if len(entry) == 4:
                     _orig, processed, _changes, line_tags = entry
@@ -1297,23 +1293,32 @@ class PreprocessingStep(BaseStep):
                     _orig, processed, _changes = entry[:3]
                     line_tags = []
 
-                manifest_line = mgr.get_line(idx)
+                manifest_line = idx_map.get(idx)
                 if manifest_line is None:
                     continue
 
                 orig = manifest_line.get("orig", "")
 
                 tags_str = ",".join(line_tags)
-                if tags_str:
-                    mgr.set_line_field(idx, "tags", tags_str)
-                else:
-                    mgr.clear_line_field(idx, "tags")
+                old_tags = manifest_line.get("tags", "")
+                if tags_str != old_tags:
+                    if tags_str:
+                        manifest_line["tags"] = tags_str
+                    elif "tags" in manifest_line:
+                        del manifest_line["tags"]
+                    dirty = True
 
                 if processed == orig:
-                    mgr.clear_line_field(idx, "prepro")
+                    if "prepro" in manifest_line:
+                        del manifest_line["prepro"]
+                        dirty = True
                 else:
-                    mgr.set_line_field(idx, "prepro", processed)
-        self._preview_persist_pending = False
+                    if manifest_line.get("prepro") != processed:
+                        manifest_line["prepro"] = processed
+                        dirty = True
+
+            if dirty:
+                mgr._mark_dirty()
 
     def _reset_rules(self) -> None:
         """Reset rules to defaults."""
@@ -1672,7 +1677,6 @@ class PreprocessingStep(BaseStep):
         """Reset cached state for a fresh project."""
         super().on_new_project()
         self._preview_lines.clear()
-        self._preview_persist_pending = False
         self._is_processing = False
         self._manifest_bindings.clear()
         logger.debug("Preprocessing step reset for new project")
@@ -1777,8 +1781,7 @@ class PreprocessingStep(BaseStep):
 
         if preview:
             self._preview_lines = preview
-            self._preview_persist_pending = False
-            self._update_preview(persist_manifest=True)
+            self._update_preview()
 
     def _load_from_manifest_bindings(self) -> None:
         """Load values from manifest into bound widgets.
@@ -1979,9 +1982,7 @@ class PreprocessingStep(BaseStep):
 
     def on_leave(self) -> None:
         """Called when leaving this step."""
-        self._update_step_data(
-            persist_manifest=self._preview_persist_pending,
-        )
+        self._update_step_data()
 
 
 class _RuleDialog(tk.Toplevel):

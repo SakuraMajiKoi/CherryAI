@@ -311,10 +311,10 @@ def _restore_aggressive_numbers(
                         idx = int(k)
                     except Exception:
                         continue
-                    if 0 <= idx < len(lines) and (AGGR_NUM_TOKEN in lines[idx]):
+                    if 0 <= idx < len(lines) and _contains_aggressive_tokens(lines[idx]):
                         after = aggressive_restore_line(
                             lines[idx],
-                            nums if isinstance(nums, list) else [],
+                            nums if isinstance(nums, (list, dict)) else [],
                         )
                         if after != lines[idx]:
                             lines[idx] = after
@@ -322,7 +322,7 @@ def _restore_aggressive_numbers(
             return changes
 
         token_lines = {
-            i for i, ln in enumerate(lines) if (AGGR_NUM_TOKEN in ln)
+            i for i, ln in enumerate(lines) if _contains_aggressive_tokens(ln)
         }
         if not token_lines:
             return changes
@@ -377,22 +377,22 @@ def _restore_aggressive_numbers(
                 if idx in token_lines and 0 <= idx < len(lines):
                     after = aggressive_restore_line(
                         lines[idx],
-                        nums if isinstance(nums, list) else [],
+                        nums if isinstance(nums, (list, dict)) else [],
                     )
                     if after != lines[idx]:
                         lines[idx] = after
                         changes += 1
 
-        remaining = {i for i in token_lines if (AGGR_NUM_TOKEN in lines[i])}
+        remaining = {i for i in token_lines if _contains_aggressive_tokens(lines[i])}
         if remaining:
             for i in sorted(remaining):
-                token_count = lines[i].count(AGGR_NUM_TOKEN)
-                best: Optional[Tuple[str, List[str]]] = None
+                token_count = len(_AGGR_ANY_TOKEN_RE.findall(lines[i]))
+                best: Optional[Tuple[str, List[str] | Dict[str, str]]] = None
                 for did, mmap in aggr_by_doc.items():
                     if not isinstance(mmap, dict) or did == chosen_nums_doc:
                         continue
                     nums = mmap.get(str(i))
-                    if not isinstance(nums, list):
+                    if not isinstance(nums, (list, dict)):
                         continue
                     if len(nums) == token_count:
                         best = (did, nums)
@@ -458,7 +458,7 @@ def select_active_doc_id(processor: Any, lines: List[str]) -> Optional[str]:
                             idx = int(k)
                         except Exception:
                             continue
-                        if 0 <= idx < len(lines) and (AGGR_NUM_TOKEN in lines[idx]):
+                        if 0 <= idx < len(lines) and _contains_aggressive_tokens(lines[idx]):
                             s += 1
                 if s > best_score:
                     best_score = s
@@ -502,7 +502,7 @@ def select_active_doc_id(processor: Any, lines: List[str]) -> Optional[str]:
         except Exception:
             aggr_by_doc = {}
         if isinstance(aggr_by_doc, dict) and aggr_by_doc:
-            tokens_in_lines = {i for i, ln in enumerate(lines) if (AGGR_NUM_TOKEN in ln)}
+            tokens_in_lines = {i for i, ln in enumerate(lines) if _contains_aggressive_tokens(ln)}
             best_doc2 = None
             best_key = (-1, -10)
             for did, amap in aggr_by_doc.items():
@@ -588,8 +588,28 @@ def normalize_dedup_entries(manifest: Any) -> List[Dict[str, Any]]:
 
 # ---------------------- Aggressive dedup (estimation helpers) ---------------------- #
 
-# Canonical token used when masking numbers during aggressive normalization
+# Canonical token used when masking a single number during aggressive
+# normalization. Lines with multiple number slots use indexed tokens
+# (<NUM1>, <NUM2>, ...) so postprocessing can restore them safely even if
+# translation changes the token order.
 AGGR_NUM_TOKEN = "<NUM>"
+_AGGR_ANY_TOKEN_RE = _re.compile(r"<NUM(\d*)>")
+_AGGR_INDEXED_TOKEN_RE = _re.compile(r"<NUM(\d+)>")
+_AGGR_NUMBER_RE = _re.compile(
+    r"[（\(]\s*[0-9０-９]+\s*[）\)]|[0-9０-９]+"
+)
+
+
+def _aggressive_token_for_index(index: int, total: int) -> str:
+    """Return the placeholder token for the indexed aggressive number slot."""
+    if total <= 1:
+        return AGGR_NUM_TOKEN
+    return f"<NUM{index + 1}>"
+
+
+def _contains_aggressive_tokens(text: str) -> bool:
+    """Return True when *text* still contains generic or indexed NUM tokens."""
+    return AGGR_NUM_TOKEN in text or _AGGR_INDEXED_TOKEN_RE.search(text) is not None
 
 
 def aggressive_normalize_line(line: str) -> str:
@@ -606,60 +626,93 @@ def aggressive_normalize_line(line: str) -> str:
     s = str(line)
     # Remove HTML tags
     s = _re.sub(r"<[^>]+?>", "", s)
-    # Replace numbers in ASCII or fullwidth parentheses
-    s = _re.sub(r"[（\(]\s*[0-9０-９]+\s*[）\)]", f" {AGGR_NUM_TOKEN} ", s)
-    # Replace remaining digits (ASCII + fullwidth)
-    s = _re.sub(r"[0-9０-９]+", f" {AGGR_NUM_TOKEN} ", s)
+    matches = list(_AGGR_NUMBER_RE.finditer(s))
+    if matches:
+        parts: List[str] = []
+        last = 0
+        total = len(matches)
+        for index, match in enumerate(matches):
+            parts.append(s[last:match.start()])
+            parts.append(f" {_aggressive_token_for_index(index, total)} ")
+            last = match.end()
+        parts.append(s[last:])
+        s = "".join(parts)
     # Collapse whitespace
     s = _re.sub(r"\s+", " ", s).strip()
     return s
 
 
-def aggressive_mask_line(line: str) -> Tuple[str, List[str]]:
-    """Mask numbers in a line with AGGR_NUM_TOKEN and return (masked, numbers).
+def aggressive_mask_line(line: str) -> Tuple[str, List[str] | Dict[str, str]]:
+    """Mask numbers in a line with generic or indexed NUM tokens.
 
-    Only digits and parenthesized digits are masked. The returned list preserves
-    left-to-right order and can be used with aggressive_restore_line to reconstruct
-    the original text by replacing successive AGGR_NUM_TOKEN occurrences.
+    Only digits and parenthesized digits are masked. When a line contains more
+    than one number slot, the returned text uses <NUM1>, <NUM2>, ... and the
+    lookup becomes {"<NUM1>": "...", "<NUM2>": "..."}. Lines with a single
+    number keep the legacy <NUM> token and list lookup.
     """
     if not line:
         return "", []
     s = str(line)
-    nums: List[str] = []
+    matches = list(_AGGR_NUMBER_RE.finditer(s))
+    if not matches:
+        return s, []
 
-    def _paren_repl(m: Any) -> str:
-        nums.append(m.group(0))
-        return AGGR_NUM_TOKEN
+    total = len(matches)
+    parts: List[str] = []
+    last = 0
+    if total == 1:
+        numbers: List[str] | Dict[str, str] = [matches[0].group(0)]
+    else:
+        numbers = {}
 
-    def _num_repl(m: Any) -> str:
-        nums.append(m.group(0))
-        return AGGR_NUM_TOKEN
+    for index, match in enumerate(matches):
+        token = _aggressive_token_for_index(index, total)
+        parts.append(s[last:match.start()])
+        parts.append(token)
+        if isinstance(numbers, dict):
+            numbers[token] = match.group(0)
+        last = match.end()
 
-    # First capture parenthesized numbers, then standalone numbers
-    s = _re.sub(r"[（\(]\s*[0-9０-９]+\s*[）\)]", _paren_repl, s)
-    s = _re.sub(r"[0-9０-９]+", _num_repl, s)
-    return s, nums
+    parts.append(s[last:])
+    return "".join(parts), numbers
 
 
-def aggressive_restore_line(masked: str, numbers: List[str]) -> str:
-    """Restore a masked line by replacing each AGGR_NUM_TOKEN with next number.
+def aggressive_restore_line(
+    masked: str,
+    numbers: List[str] | Dict[str, str],
+) -> str:
+    """Restore a masked line using generic or indexed aggressive NUM tokens.
 
-    Excess tokens or numbers are ignored; missing numbers leave the token in place.
+    Legacy list lookups still restore left-to-right <NUM> tokens. Indexed
+    placeholders such as <NUM2> are restored by their explicit slot number.
+    Excess tokens or missing lookup entries are left unchanged.
     """
-    if not masked:
+    if not masked or not numbers:
         return masked
-    out = []
-    i = 0
-    parts = masked.split(AGGR_NUM_TOKEN)
-    for idx, part in enumerate(parts):
-        out.append(part)
-        if idx < len(parts) - 1:
-            if i < len(numbers):
-                out.append(numbers[i])
-                i += 1
-            else:
-                out.append(AGGR_NUM_TOKEN)
-    return "".join(out)
+
+    if isinstance(numbers, dict):
+        restored = masked
+        for token in sorted(numbers, key=len, reverse=True):
+            restored = restored.replace(token, numbers[token])
+        return restored
+
+    next_generic = 0
+
+    def _restore_match(match: Any) -> str:
+        nonlocal next_generic
+        suffix = match.group(1)
+        if suffix:
+            pos = int(suffix) - 1
+            if 0 <= pos < len(numbers):
+                return numbers[pos]
+            return match.group(0)
+        if next_generic < len(numbers):
+            value = numbers[next_generic]
+            next_generic += 1
+            return value
+        return match.group(0)
+
+    return _AGGR_ANY_TOKEN_RE.sub(_restore_match, masked)
 
 
 # ---------------------- Config reader for aggressive dedup ---------------------- #

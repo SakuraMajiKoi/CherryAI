@@ -23,9 +23,7 @@ from CherryAI.gui.dialogs.input_dialog import UnifiedInputDialog
 from CherryAI.functions.analysis import classify_file_type
 from CherryAI.functions.ini_manager import get_default
 from CherryAI.functions.manifest_manager import (
-    DEDUP_PLACEHOLDER,
     get_primary_line_tag,
-    merge_line_tags,
     set_primary_line_tag,
 )
 from CherryAI.gui.steps.base import BaseStep
@@ -187,6 +185,7 @@ class _ImportTranslationDialog(tk.Toplevel):
         self._add_check(lf, "import_translated", "Translated", True, **pad)
         self._add_check(lf, "import_postpro", "Postprocessed", True, **pad)
         self._add_check(lf, "import_wordwrap", "Wordwrap", True, **pad)
+        self._add_check(lf, "import_final", "Final", True, **pad)
         self._add_check(lf, "import_qa", "QA (reviewed text, overwrite, TLC, edits)", True, **pad)
         ttk.Separator(lf, orient="horizontal").pack(fill="x", padx=8, pady=4)
         self._add_check(
@@ -346,6 +345,13 @@ class InputExtractionStep(BaseStep):
             command=self._on_import_translations,
         )
         self._import_btn.pack(side="left", padx=2)
+
+        self._create_patch_btn = ttk.Button(
+            toolbar,
+            text="Create Patch",
+            command=self._on_create_patch,
+        )
+        self._create_patch_btn.pack(side="left", padx=2)
 
         # TASK 39.2: "Load Manifest" and "Clear All" buttons removed from toolbar.
         # Use File → Open Project... and File → New Project menus instead.
@@ -1533,6 +1539,26 @@ class InputExtractionStep(BaseStep):
         else:
             base = new_paths[0].parent
 
+        source_paths: Dict[str, Path] = {}
+        for loaded_file in new_loaded:
+            try:
+                rel_path = str(loaded_file.path.relative_to(base))
+            except ValueError:
+                rel_path = loaded_file.path.name
+            source_paths[rel_path] = loaded_file.path
+
+        # Copy to the staged Original/ tree before syncing lines so parser-backed
+        # extraction sees the same project context during load and inject.
+        try:
+            if source_paths:
+                mgr.copy_originals_to_project(source_paths=source_paths)
+                self._refresh_loaded_files_from_project_originals(
+                    new_loaded,
+                    base_path=base,
+                )
+        except Exception as e:
+            logger.warning("Failed to stage new originals before sync: %s", e)
+
         for loaded_file in new_loaded:
             file_type = ""
             if typing_enabled:
@@ -1578,34 +1604,6 @@ class InputExtractionStep(BaseStep):
                         set_primary_line_tag(lines_data[m_idx], tag_val)
             mgr.set_lines(lines_data)
 
-        # Copy only the new originals to the project
-        try:
-            filedir = mgr.get_filedir()
-            source_paths: Dict[str, Path] = {}
-            new_rel_set = set(new_lines_by_rel.keys())
-            for entry in filedir:
-                if entry.rel_path in new_rel_set:
-                    # Find the matching LoadedFile
-                    for lf in new_loaded:
-                        try:
-                            rp = str(lf.path.relative_to(base))
-                        except ValueError:
-                            rp = lf.path.name
-                        if rp == entry.rel_path:
-                            source_paths[entry.rel_path] = lf.path
-                            break
-
-            if source_paths:
-                copied = mgr.copy_originals_to_project(
-                    source_paths=source_paths,
-                )
-                if copied:
-                    logger.info(
-                        "Copied %d new original(s) to project", len(copied),
-                    )
-        except Exception as e:
-            logger.warning("Failed to copy new originals: %s", e)
-
     def _sync_lines_to_manifest(self) -> None:
         """Sync loaded file lines to the manifest (TASK 19 Phase 5).
         
@@ -1623,6 +1621,12 @@ class InputExtractionStep(BaseStep):
         # Block typing when only one file loaded
         if len(self._loaded_files) <= 1:
             typing_enabled = False
+
+        # Copy files into the staged Original/ tree before syncing parser-backed
+        # lines so extraction sees the same project-local context used later by
+        # output injection.
+        self._copy_originals_to_project()
+        self._refresh_loaded_files_from_project_originals()
         
         # Collect all lines (compact: idx + orig only)
         lines: List[Dict[str, Any]] = []
@@ -1667,9 +1671,85 @@ class InputExtractionStep(BaseStep):
         mgr.source_root = mgr.compute_source_root(source_paths)
 
         self._sync_output_defaults_to_manifest()
-        
-        # TASK 35.2: Copy original files to project folder
-        self._copy_originals_to_project()
+
+    def _refresh_loaded_files_from_project_originals(
+        self,
+        loaded_files: Optional[List[LoadedFile]] = None,
+        base_path: Optional[Path] = None,
+    ) -> bool:
+        """Refresh parser-backed loaded files from the staged ``Original/`` tree.
+
+        LightVN and similar parsers can depend on project-local context during
+        extraction. Step 0 therefore stages originals first, then re-extracts
+        parser-backed files from ``Original/`` so the manifest matches the same
+        parser view later used by Output injection.
+        """
+        mgr = self.manifest_manager
+        files = loaded_files if loaded_files is not None else self._loaded_files
+        if mgr is None or not mgr.is_loaded or not files:
+            return False
+
+        if base_path is None:
+            paths = [loaded_file.path for loaded_file in files]
+            if len(paths) > 1:
+                base_path = mgr._find_common_base(paths)
+            else:
+                base_path = paths[0].parent
+
+        try:
+            from CherryAI.formats import get_parser_registry
+            registry = get_parser_registry()
+        except Exception as exc:
+            logger.warning("Failed to access parser registry for staged refresh: %s", exc)
+            return False
+
+        original_dir = mgr.get_original_dir()
+        refreshed = False
+
+        for loaded_file in files:
+            parser = registry.get(loaded_file.format_id)
+            if parser is None:
+                continue
+
+            try:
+                rel_path = str(loaded_file.path.relative_to(base_path))
+            except ValueError:
+                rel_path = loaded_file.path.name
+
+            staged_path = original_dir / rel_path
+            if not staged_path.exists():
+                continue
+
+            try:
+                tagged = parser.extract_tagged(staged_path)
+                if tagged is not None:
+                    new_lines = [item.text for item in tagged]
+                    new_tags = [item.tag for item in tagged]
+                else:
+                    new_lines = parser.extract(staged_path)
+                    new_tags = None
+            except Exception as exc:
+                logger.warning(
+                    "Failed staged parser refresh for %s: %s",
+                    rel_path,
+                    exc,
+                )
+                continue
+
+            if loaded_file.lines == new_lines and loaded_file.tags == new_tags:
+                continue
+
+            logger.info(
+                "Refreshed staged parser extraction for %s (%d -> %d lines)",
+                rel_path,
+                len(loaded_file.lines),
+                len(new_lines),
+            )
+            loaded_file.lines = new_lines
+            loaded_file.tags = new_tags
+            refreshed = True
+
+        return refreshed
 
     def _sync_output_defaults_to_manifest(self) -> None:
         """Ensure manifest output defaults stay valid and input-driven."""
@@ -1885,46 +1965,100 @@ class InputExtractionStep(BaseStep):
 
         selections = dialog.result
         mgr = self._manifest_manager
+        if mgr is None:
+            messagebox.showwarning("Warning", "No project loaded.")
+            return
 
-        # ---- Import line fields ----
-        line_stats = self._import_line_fields(
-            source_data, selections, mgr,
-        )
-
-        # ---- Import settings sections ----
-        section_count = self._import_settings_sections(
-            source_data, selections, mgr,
-        )
+        import_stats = mgr.import_from_manifest_data(source_data, selections)
 
         # Log import metadata
         mgr.update_step_data(0, "last_import", {
             "source_manifest": str(source_path),
-            "lines_matched": line_stats["matched"],
-            "lines_total": line_stats["total"],
-            "sections_imported": section_count,
+            "lines_matched": import_stats["matched"],
+            "lines_total": import_stats["total"],
+            "sections_imported": import_stats["sections_imported"],
             "timestamp": datetime.now().isoformat(),
         })
 
         # Build summary message
         parts: List[str] = []
-        if line_stats["matched"] > 0:
+        if import_stats["matched"] > 0:
             parts.append(
-                f"Lines: {line_stats['matched']}/{line_stats['total']} matched"
+                f"Lines: {import_stats['matched']}/{import_stats['total']} matched"
             )
-        if section_count > 0:
-            parts.append(f"Settings sections: {section_count}")
+        if import_stats["sections_imported"] > 0:
+            parts.append(f"Settings sections: {import_stats['sections_imported']}")
         if not parts:
             parts.append("No data imported (nothing selected).")
 
         messagebox.showinfo("Import Complete", "\n".join(parts))
         logger.info(
             "Import from %s — lines: %d/%d, sections: %d",
-            source_path, line_stats["matched"],
-            line_stats["total"], section_count,
+            source_path, import_stats["matched"],
+            import_stats["total"], import_stats["sections_imported"],
         )
 
         # Refresh preview
         self._update_preview()
+
+    def _on_create_patch(self) -> None:
+        """Create a patch manifest by importing from another manifest and pruning unchanged files."""
+        mgr = self._manifest_manager
+        if mgr is None:
+            messagebox.showwarning("Warning", "No project loaded.")
+            return
+
+        source_path = filedialog.askopenfilename(
+            title="Select Source Manifest",
+            filetypes=[
+                ("CherryAI Manifest", "*.CherryAI.json"),
+                ("All Files", "*.*"),
+            ],
+        )
+        if not source_path:
+            return
+
+        try:
+            patch_summary = mgr.create_patch_from_manifest_path(Path(source_path))
+        except Exception as exc:
+            messagebox.showerror("Create Patch Failed", str(exc))
+            logger.exception("Create Patch failed")
+            return
+
+        mgr.update_step_data(0, "last_patch", {
+            "source_manifest": str(source_path),
+            **patch_summary,
+            "timestamp": datetime.now().isoformat(),
+        })
+
+        self._populate_from_manifest(mgr.get_raw_data())
+        self._update_file_list()
+        self._update_preview()
+        self._update_summary()
+
+        if self._loaded_files:
+            self._select_first_file_in_tree()
+            self.set_status("in-progress")
+        else:
+            self.set_status("completed")
+
+        messagebox.showinfo(
+            "Patch Created",
+            "\n".join([
+                f"Imported lines: {patch_summary['matched']}/{patch_summary['total']}",
+                f"Settings sections: {patch_summary['sections_imported']}",
+                f"Identical files removed: {patch_summary['identical_files_removed']}",
+                f"Matched files removed: {patch_summary['matched_files_removed']}",
+                f"Remaining files: {patch_summary['remaining_files']}",
+            ]),
+        )
+        logger.info(
+            "Create Patch from %s — identical removed: %d, matched removed: %d, remaining files: %d",
+            source_path,
+            patch_summary["identical_files_removed"],
+            patch_summary["matched_files_removed"],
+            patch_summary["remaining_files"],
+        )
 
     def _import_line_fields(
         self,
@@ -1942,98 +2076,7 @@ class InputExtractionStep(BaseStep):
         Returns:
             Dict with ``matched`` and ``total`` counts.
         """
-        source_lines = source_data.get("lines", [])
-        if not source_lines:
-            return {"matched": 0, "total": 0}
-
-        # Determine which field groups are selected
-        field_map: Dict[str, List[str]] = {
-            "import_prepro": ["prepro"],
-            "import_translated": ["tl", "preedit"],
-            "import_postpro": ["postpro"],
-            "import_wordwrap": ["wordwr"],
-            "import_qa": ["qa", "qa_overwrite"],
-        }
-
-        fields_to_copy: List[str] = []
-        for key, fields in field_map.items():
-            if selections.get(key, False):
-                fields_to_copy.extend(fields)
-
-        merge_tags = selections.get("import_tags", False)
-        skip_new = selections.get("skip_new_lines", False)
-
-        # Build lookup: orig → source line entry
-        source_lookup: Dict[str, Dict[str, Any]] = {}
-        for sl in source_lines:
-            orig = sl.get("orig", "")
-            if orig and orig not in source_lookup:
-                source_lookup[orig] = sl
-
-        current_lines = mgr.get_lines()
-        matched = 0
-        total = len(current_lines)
-
-        for line in current_lines:
-            orig = line.get("orig", "")
-            if not orig:
-                continue
-
-            match = source_lookup.get(orig)
-            if match is None:
-                continue
-
-            # Skip if line already has data and skip_new is on
-            if skip_new and line.get("tl", ""):
-                continue
-
-            matched += 1
-            is_dedup_line = (
-                str(line.get("prepro", "")).strip() == DEDUP_PLACEHOLDER
-                or str(match.get("prepro", "")).strip() == DEDUP_PLACEHOLDER
-            )
-
-            if merge_tags:
-                merged_tags = merge_line_tags(
-                    line.get("tags"),
-                    line.get("tag"),
-                    line.get("context_marker"),
-                    match.get("tags"),
-                    match.get("tag"),
-                    match.get("context_marker"),
-                )
-                if merged_tags:
-                    line["tags"] = merged_tags
-                else:
-                    line.pop("tags", None)
-                line.pop("tag", None)
-                line.pop("context_marker", None)
-
-            for field in fields_to_copy:
-                if is_dedup_line and field == "tl":
-                    continue
-                if field in match and match[field]:
-                    line[field] = match[field]
-
-            if selections.get("import_qa", False):
-                if not line.get("qa"):
-                    if match.get("qa"):
-                        line["qa"] = match["qa"]
-                    elif match.get("wordwr"):
-                        line["qa"] = match["wordwr"]
-                    elif match.get("postpro"):
-                        line["qa"] = match["postpro"]
-
-                for key, val in match.items():
-                    if (key.startswith("edit") or key.startswith("tlc")) and val:
-                        line[key] = val
-
-                qa_overwrite = match.get("qa_overwrite") or match.get("overwrite")
-                if qa_overwrite:
-                    line["qa_overwrite"] = qa_overwrite
-
-        mgr.set_lines(current_lines)
-        return {"matched": matched, "total": total}
+        return mgr.import_line_fields_from_manifest_data(source_data, selections)
 
     def _import_settings_sections(
         self,
@@ -2051,121 +2094,7 @@ class InputExtractionStep(BaseStep):
         Returns:
             Number of sections imported.
         """
-        count = 0
-
-        # Analysis step state
-        if selections.get("import_analysis", False):
-            src_ss = source_data.get("step_state", {}).get("Analysis")
-            if src_ss:
-                mgr._manifest_data.setdefault("step_state", {})["Analysis"] = src_ss
-                mgr._mark_dirty()
-                count += 1
-
-        # Information metadata
-        if selections.get("import_information", False):
-            src_ss = source_data.get("step_state", {}).get("Information")
-            src_meta = (
-                src_ss.get("data", {}).get("metadata", {}) if src_ss else {}
-            )
-            if src_meta:
-                merged_meta = dict(mgr.get_info_metadata())
-                for key, value in src_meta.items():
-                    if key == "project_name":
-                        continue
-                    merged_meta[key] = value
-                mgr.set_info_metadata(merged_meta)
-                count += 1
-
-            # Glossary
-            src_glossary = source_data.get("glossary")
-            if src_glossary:
-                mgr._manifest_data["glossary"] = src_glossary
-                mgr._mark_dirty()
-
-            # Code patterns (Code Database)
-            src_cp = source_data.get("code_patterns")
-            if src_cp:
-                mgr._manifest_data["code_patterns"] = src_cp
-                mgr._mark_dirty()
-
-            # Characters
-            src_chars = source_data.get("characters")
-            if src_chars:
-                mgr._manifest_data["characters"] = src_chars
-                mgr._mark_dirty()
-
-        # Preprocessing settings (top-level keys)
-        if selections.get("import_preprocessing", False):
-            _PREPRO_KEYS = [
-                "Deduplication", "DeduplicationThreshold",
-                "EllipsisCompression", "SymbolConversion",
-                "SpeakerNameReplacement", "CodeSpacingRules",
-                "ProtectCodePatterns", "CustomPlaceholders",
-                "AnchorRemoval",
-            ]
-            for key in _PREPRO_KEYS:
-                if key in source_data:
-                    mgr._manifest_data[key] = source_data[key]
-            mgr._mark_dirty()
-            count += 1
-
-        # Costs / Translation settings (RequestOptions)
-        if selections.get("import_costs", False):
-            src_ro = source_data.get("RequestOptions")
-            if src_ro:
-                mgr._manifest_data["RequestOptions"] = src_ro
-                mgr._mark_dirty()
-                count += 1
-
-        if selections.get("import_translation", False):
-            # Translation step state
-            src_ss = source_data.get("step_state", {}).get("Translation")
-            if src_ss:
-                mgr._manifest_data.setdefault("step_state", {})["Translation"] = src_ss
-                mgr._mark_dirty()
-                count += 1
-
-        # Postprocessing
-        if selections.get("import_postprocessing", False):
-            src_pp = source_data.get("PostProcessing")
-            if src_pp:
-                mgr._manifest_data["PostProcessing"] = src_pp
-                mgr._mark_dirty()
-                count += 1
-
-        # Wordwrap
-        if selections.get("import_wordwrap_settings", False):
-            src_ww = source_data.get("WordwrapSettings")
-            if src_ww:
-                mgr._manifest_data["WordwrapSettings"] = src_ww
-                mgr._mark_dirty()
-                count += 1
-
-        # QA (ValidationRules + QAOptions)
-        if selections.get("import_qa_settings", False):
-            src_vr = source_data.get("ValidationRules")
-            if src_vr:
-                mgr._manifest_data["ValidationRules"] = src_vr
-            src_qa = source_data.get("QAOptions")
-            if src_qa:
-                mgr._manifest_data["QAOptions"] = src_qa
-            # Character validation
-            for k in ("CharacterWhitelist", "CharacterBlacklist",
-                      "WordBlacklist", "AutofixMap"):
-                if k in source_data:
-                    mgr._manifest_data[k] = source_data[k]
-            mgr._mark_dirty()
-            count += 1
-
-        # Output / File settings
-        if selections.get("import_file_settings", False):
-            src_of = source_data.get("OutputFormat")
-            if src_of:
-                mgr._manifest_data["OutputFormat"] = src_of
-                mgr._mark_dirty()
-                count += 1
-
-        return count
+        return mgr.import_settings_sections_from_manifest_data(source_data, selections)
 
     def _on_file_listbox_right_click(self, event: tk.Event) -> None:
         """Handle right-click on file tree to show context menu.

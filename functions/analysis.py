@@ -765,8 +765,18 @@ def _normalize_for_dedup(line: str) -> str:
         return ""
     s = str(line)
     s = re.sub(r"<[^>]+?>", "", s)
-    s = re.sub(r"[（\(]\s*[0-9０-９]+\s*[）\)]", " <NUM> ", s)
-    s = re.sub(r"[0-9０-９]+", " <NUM> ", s)
+    matches = list(re.finditer(r"[（\(]\s*[0-9０-９]+\s*[）\)]|[0-9０-９]+", s))
+    if matches:
+        parts: List[str] = []
+        last = 0
+        total = len(matches)
+        for index, match in enumerate(matches):
+            token = "<NUM>" if total == 1 else f"<NUM{index + 1}>"
+            parts.append(s[last:match.start()])
+            parts.append(f" {token} ")
+            last = match.end()
+        parts.append(s[last:])
+        s = "".join(parts)
     s = re.sub(r"\s+", " ", s).strip()
     return s
 

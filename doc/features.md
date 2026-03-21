@@ -249,17 +249,17 @@ KEY FEATURES
 FULL TABLE VIEW
 - **Menu Bar Access**: Direct access via "Full Table View" entry in the menu bar (not a dropdown)
 - **Menu Bar Layout**: File (dropdown), Full Table View (direct), API Log (direct), Options (direct), Help (dropdown)
-- **Spreadsheet View**: Displays all manifest line entries with named columns (Line #, Original, Preprocessed, Translated, Postprocessed, Quality Assurance, Overwrite, Wordwrap, Overwrite (Legacy), Log, Tags)
+- **Spreadsheet View**: Displays all manifest line entries with named columns (Line #, Original, Preprocessed, Translated, Postprocessed, Quality Assurance, Overwrite, Wordwrap, Final, Overwrite (Legacy), Log, Tags)
 - **Column Display Names**: All columns use human-readable display names (e.g., idx→Line #, orig→Original, tl→Translated)
 - **Column Auto-Hide**: Empty columns hidden by default
-- **Column Filter Dropdown**: Slim tk.Menu dropdown with presets — Show All, Show Visible, Show Latest (furthest non-empty column in the active pipeline: Original → Preprocessed → Translated → Postprocessed → Quality Assurance → Overwrite → Wordwrap) plus individual column toggles
+- **Column Filter Dropdown**: Slim tk.Menu dropdown with presets — Show All, Show Visible, Show Latest (furthest non-empty column in the active pipeline: Original → Preprocessed → Translated → Postprocessed → Quality Assurance → Wordwrap → Final) plus individual column toggles
 - **All Columns Hideable**: Every column including Line # can be hidden via the column filter
 - **Column Selection Bar**: Each column has a "Select / Selected" bar above the header for search/replace scoping; same visual style as column headers
 - **Sort Indicators**: Column headers display ▲/▼ arrows showing current sort direction; click toggles ascending/descending
-- **Cell Editing**: Double-click to edit any cell (except Line # and Original); multiline support via Shift+Enter
+- **Cell Editing**: Double-click to edit any cell (except Line # and Original); multiline support via Shift+Enter. Empty `Final` cells prefill from the latest non-final stage on first edit only, remain sparse otherwise, and auto-clear back to empty when changed back to that source value.
 - **Read-Only Original**: Double-click Original opens a read-only text widget for copying content
 - **Non-Editable Fields**: Line # and Original cannot be edited or replaced
-- **Deletion**: Del key clears selected cells; a Clear Columns dialog can bulk-delete `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, and `wordwr`
+- **Deletion**: Del key clears selected cells; a Clear Columns dialog can bulk-delete `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, and `final`
 - Clearing `tl` requires a second destructive confirmation because it removes the base translation stage for downstream steps
 - **File Filter**: Hierarchical dropdown with folder navigation (click folders, Back button, scrollable); larger font for readability
 - **RegEx Search & Replace**: Two-row toolbar layout — search row on top, replace row below; search across visible or selected columns; toggle RegEx mode; Results Only mode with Prev (◀) / Next (▶) navigation
@@ -767,7 +767,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - "#" column renamed to "File" (1-based per-file line number)
   - **Import Translation Selection Dialog:**
     - Import Translations button now opens a selection dialog before importing
-    - Line Fields group: Preprocessed, Tags, Translated, Postprocessed, Wordwrap, QA
+    - Line Fields group: Preprocessed, Tags, Translated, Postprocessed, Wordwrap, Final, QA
     - Tags import merges into existing `lines[].tags`, removes duplicates, and never writes legacy `tag`
     - Dedup placeholder rows (`prepro == __DEDUP__`) block only `tl` import during Import Translations; postprocess/QA/wordwrap and related later-stage fields can still import and persist normally
     - QA import maps reviewed text into `qa`, overwrite text into `qa_overwrite`, and keeps backward compatibility with older manifests that only stored `overwrite`
@@ -775,6 +775,12 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Settings Sections group: Analysis, Information, Preprocessing, Costs, Translation,
       Postprocessing, Wordwrap, QA/Validation, File/Output Settings
     - "Do not overwrite lines that already have translations" option
+  - **Create Patch Button:**
+    - New `Create Patch` toolbar button next to Import Translations
+    - Loads one source manifest and imports all supported line fields plus settings sections without showing the selection dialog
+    - Fast-path prune: compares both projects' `Original/` trees by shared `filedir[].rel_path` and SHA-256 hash, then removes byte-identical files from the current manifest before import
+    - Fail-safe prune: after import, any remaining file whose every `lines[].orig` value exists in the source manifest is removed even if those lines never had `tl`
+    - Pruning deletes the matching `Original/` copies, removes the file's `filedir` entry and `lines[]`, and rewrites remaining filedir ranges / line `idx` values contiguously
   - **OutputFormat Safe Parsing:**
     - ``_safe_output_format()`` prevents ValueError crash when Output tab is opened
       with empty or invalid format string (defaults to TXT)
@@ -1009,7 +1015,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - Protect Code Patterns section with regex patterns
   - Common patterns reference (HTML, RPG Maker, variables, etc.)
   - Preview table showing original vs processed with diff column
-  - Manifest preview restore is read-only: reopening the tab rebuilds preview rows from stored `orig` / `prepro` / `tags` without re-writing every line back into the manifest
+  - Manifest preview restore rebuilds preview rows from stored `orig` / `prepro` / `tags`; large projects keep the pre-`d2fa46a` bulk manifest sync path during tab restore and Apply Rules instead of issuing per-line manifest helper calls for every row
   - Apply Rules button with threaded background processing
   - Auto-Suggest button leveraging analysis results
   - Tooltips explaining each rule's behavior
@@ -1337,12 +1343,14 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
 - **Wordwrap Tab (Phase 10):**
   - WordwrapOverwriteStep class (internal `step_id=8`, ninth user-facing tab, after Quality Assurance and before Output)
   - Preview table with line length indicators:
-    - Input is stage-bounded: `qa_overwrite → qa → postpro → tl → prepro → orig`
+    - Input is stage-bounded: `qa → postpro → tl → prepro → orig`
     - Existing `wordwr` values are restored into the Wordwrap column only; the column is no longer prefilled from input text
     - Apply / Refresh process the loaded stage input lines directly; they no longer depend on a separate `step_data["lines"]` cache that can be empty
     - Preview refresh and tab leave do not persist wrapped text; only explicit Apply writes `wordwr`
     - `wordwr` is stored sparsely and cleared when the wrapped result matches the current input
     - Rows carry manifest `filedir` source format/path metadata so preview and wrapping stay scoped to the correct parser format
+    - Compact `Select File:` control reuses the Full Table View hierarchical file-filter dropdown so users can scope the preview to one source file without leaving Step 8
+    - `↗ View in File` sits next to `✓ Accept Selected` and filters the preview to the selected row's source file while scrolling to that line
     - Columns: #, Status, Chars, Lines, Input, Wrapped Preview
     - Status icons: ✓ Wrapped, ⚠ Exceeding, ↳ New Textbox, — No change
     - Filter and checkbox selection support
@@ -1353,10 +1361,13 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Multiple enabled formats can be processed sequentially in one Apply pass while still remaining format-safe
   - **Wordwrap Settings Panel:**
     - Mode selection (WrapMode enum):
-      - Manual: Shared `apply_wordwrap()` pipeline
+      - Custom: Existing per-format and per-tag wrapping workflow with parser-aware defaults
+      - Simple: One shared rule set asking only for Character Limit, Line Limit, Break Char, and Pretty Wrap
+      - Legacy `Manual` manifests still load as `Custom`
     - Width mode dropdown (Character / Pixel) with per-tag width values
     - Break character combo (\\n, \n, <br>, [r], \\r\\n)
     - Max lines spinbox (0=unlimited, 1-20)
+    - Simple mode settings are project-wide UI controls, but Apply only processes the currently selected file scope when a file is chosen
     - Exceeding Max Lines is tracked in preview; wrapping is no longer truncated at Apply time before parser injection can split textboxes
     - Overflow lines without textbox support stay flagged as `Exceeding` and are not written into `wordwr`; overflow lines with textbox support are stored as `New Textbox`
   - **Per-Tag Wordwrap Settings (TagWrapConfig):**
@@ -1384,6 +1395,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Limit marker line with dashed style
     - Character count display (current/limit)
   - **Batch Operations:**
+    - View in File: Filter preview rows to the selected line's source file and focus that line
     - Accept Selected: Mark wrapped lines as final
     - Revert Selected: Restore to original text
   - **Summary Panel:**
@@ -1742,7 +1754,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Overwrite Warning: messagebox.askokcancel before re-running when results already exist
     - UI Cleanup: renamed "Postprocessed Lines" → "Processed Lines"; removed Refresh and Revert All buttons
 - **Wordwrap Tab Overhaul (Phase 46):**
-    - Mode Dropdown: replaced WrapMode radio buttons with ttk.Combobox; removed RPGMAKER and DISABLED options (MANUAL only)
+  - Mode Dropdown: replaced WrapMode radio buttons with ttk.Combobox; current UI exposes `Custom` and `Simple`, with legacy `Manual` values mapped to `Custom`
     - Orphan/Punct Always On: removed checkboxes; hardcoded prevent_orphan=True and prefer_punct_breaks=True; "always on" label
     - Speaker Handling: reduced SpeakerMode to IGNORE and COUNT; replaced radio buttons with ttk.Combobox with dynamic description label
     - Ignore Patterns from Code Database: removed IgnorePattern enum and checkboxes; read-only Treeview table sourced from manifest CodeDatabase entries (pattern/action/example columns)
@@ -1750,14 +1762,16 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Overwrite Strategy Widget Removed: removed OverwriteStrategy/MergeMethod enums, OverwriteOptions dataclass, and entire _build_overwrite_panel()
     - Width Dropdown with Pixel: replaced Spinbox with Character/Pixel mode Combobox; Character mode (20-200 chars), Pixel mode (100-2000px + font size 8-72)
     - Overwrite Column in Table: added overwrite field and overwrite_differs property to WrapLine; "↔ Differs" status; Overwrite column in table
-    - Table Filter Radios: All/Changed/Exceeding/Overwrite Differs filter radio buttons above Lines Table
+  - File Navigation: compact `Select File:` dropdown reuses Full Table View's hierarchical file selector; `↗ View in File` focuses the selected source file from the preview table
+  - Table Filter Radios: All/Changed/Exceeding/Overwrite Differs filter radio buttons above Lines Table
     - Max Lines Flag: _simple_wrap() detects exceeds_limit based on max_lines; "⚠ Exceeds" status indicator
 - **Output + Pipeline Completeness + Import (Phase 47):**
-    - Injection Priority Chain: functions/output.py with get_final_output() 9-level priority (overwrite → wordwr → postpro → edit{N} → tlc{N} → tl → preedit → prepro → orig); resolve_all_lines() batch; get_source_breakdown() stats
+    - Injection Priority Chain: shared manifest resolution now prioritizes `final → wordwr → qa → postpro → tl → prepro → orig` for output and Full Table View "Show Latest"; legacy output helpers only fall back to older fields when the canonical pipeline is empty
     - Dirty Flags: ManifestManager.get_dirty_flags()/set_dirty_flag() storing {process, wordwrap} booleans; pre-export warning dialog listing dirty stages
     - Non-Destructive Default: NamingOptions.strategy default changed from SUFFIX to SUBFOLDER; "translated" subfolder name
     - Failure Logging: ExportStats.failure_log list of {file, error, timestamp} dicts; appended on write failure in _process_export()
     - Import Translations: "📥 Import Translations" button in Input step toolbar; loads .CherryAI.json manifest; matches by orig field; imports selected stage fields, merges canonical `tags`, migrates legacy `tag` only into `tags`, blocks only `tl` for dedup placeholder rows, and leaves later-stage imports/persistence to normal manifest handling; summary dialog
+  - Create Patch: `Create Patch` button in Input step toolbar; delegates to shared manifest logic, imports all supported stage/settings data from a selected source manifest, prunes byte-identical files by `Original/` hash and same `rel_path`, then removes any still-complete files whose current `orig` lines all exist in the source manifest; `Original/`, `filedir`, and `lines[]` are rewritten in one pass so only changed patch files remain
     - Skip Already Translated: `overwrite_translation` in Global Options inversely drives Translation-step skip-translated behavior; Preview Requests and Start Translation now both reclassify all loaded lines so already translated text is skipped only when overwrite is off
     - Output Summary Panel: dirty flag indicators (⚠/✓ labels for process and wordwrap); _update_dirty_flags() refreshes on _update_summary()
 - **Pipeline Logging System (Phase 48):**
@@ -1783,7 +1797,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
 - **Context Markers Full Implementation (Phase 50):**
   - Data Model: runtime helpers still expose a primary content tag, but manifests serialize canonical per-line `tags` instead of legacy `tag`
     - Helper methods: is_tag(), get_tag(), VALID_TAGS constant
-  - Serialization: manifest line order is canonicalized as `idx`, `tags`, `orig`, `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, then auxiliary fields
+  - Serialization: manifest line order is canonicalized as `idx`, `tags`, `orig`, `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, `final`, then auxiliary fields
     - Detection: _is_choice_item() (numbered/bulleted patterns), _is_menu_item() (short non-speaker items), _is_dialogue_line() (speaker:dialogue pattern)
     - detect_tags() scans contiguous runs of similar-pattern lines with min_run threshold
     - get_active_context_type() scans backwards from any position to find active marker
@@ -2400,6 +2414,7 @@ LIGHT VN PARSER (Implemented)
 - **Extraction tags:** `dialogue` (with speaker info), `menu`, `variable`, `items`
 - **Item variable coverage:** Item-like assignments such as `臨時全域変数 剥ぎ取り素材1 = "角兎の素材×1"` and conditional lines such as `もし (獲得ボーナス >= 2) 臨時全域変数 獲得食材 = "食用の肉×3"` are extracted and injected with the `items` tag
 - **Project-scoped variable safety:** Beyond the built-in LightVN variable allowlists, quoted `保存変数` / `臨時全域変数` assignments are extracted only when the same variable is used exclusively as display text inside the current project root. Display-only examples such as `bt_勝利条件` / `bt_敗北条件` / `bt_エロ条件` are translated safely, while mixed-use variables such as `胎児` stay unextracted because they also feed image paths like `子宮/子宮_妊娠_{{胎児}}.png`, and control variables such as `付与対象` stay unextracted because they participate in `もし (...)` comparisons.
+- **Staged extraction stability:** Step 0 now copies parser-backed files into `Projects/{project_name}/Original/` before the final manifest sync and then re-extracts them from that staged tree. This keeps LightVN's project-scoped variable classification identical between initial load and later Output injection, preventing `orig mismatch` / `index out of range` verification cascades on untouched manifests.
 - **Speaker format:** `Speaker: text` — speaker tags detected from `~【SpeakerName】` notation
 - **Conditional dialogue:** `~もし (condition)` prefix stripped from keys, preserved during injection
 - **Code handling:** Balanced bracket matching for `[] {} <> ［］ ｛｝ ＜＞ ⟨⟩ ⟪⟫ 〈〉 《》`
@@ -2430,10 +2445,11 @@ WIDTH CONVERSION (Implemented)
 
 AGGRESSIVE DEDUPLICATION (Implemented)
 - Goes beyond standard deduplication by detecting line variants
-- Replaces all code with generic `{CODE}` and all numbers with `X`
+ Replaces all code with generic `{CODE}` and normalizes numbers to shared placeholder slots
+ Single-number lines keep the legacy `<NUM>` token; multi-number lines use indexed placeholders such as `<NUM1>`, `<NUM2>`, ... so postprocessing can restore them safely even when the translation reorders the slots
 - Lines identical after substitution are treated as duplicates
 - Runs last in preprocessing (after all normalization is complete)
-- Variant-deduplicated lines receive the postprocessed result of their unique original
+ Variant-deduplicated lines receive the postprocessed result of their unique original, then restore their own numeric values from per-line aggressive lookup data
 - Implemented in `functions/dedup.py`
 - **Per-line tags replace dedup_map:** Dedup state is now stored directly on `LineEntry.tags` as comma-separated strings (`"dedup,D{source_idx}"`) instead of a separate `dedup_by_doc` mapping dict. Only the top `MAX_DEDUP_GROUPS` (10) duplicate groups are processed — the rest are left as-is to bound manifest size. Tag-based restoration in `deduplicate_post()` with legacy `dedup_by_doc` fallback for backward compatibility.
 - **Instance tracking:** `detect_individual_codes_batch()` tracks concrete raw code instances per normalized pattern (e.g. `\V[1]`, `\V[2]` under `\V[<NUM>]`) with per-instance occurrence counts. Patterns store `instances: List[str]` and serialized count `[total, inst1_count, inst2_count, ...]` in manifest.
@@ -2443,9 +2459,10 @@ AGGRESSIVE DEDUPLICATION (Implemented)
   - Per-line tags: display tags ("dedup", "aggressive_dedup") + lookup tags ("D{src_idx}",
     "AD{src_idx}") stored in `lines[].tags` for postprocessing restoration
   - `DEDUP_PLACEHOLDER = "__DEDUP__"` sentinel replaces duplicate content
-  - Preprocessing step persists `dedup_map`, `aggr_dedup_map`, `aggr_numbers` in step data
-  - Postprocessing (`_restore_dedup_lines`) reads maps from step 3 data, recursively resolves chained standard/aggressive dedup sources against in-RAM lines (postprocessed → translated → preprocessed → original), and restores aggressive dedup lines with number substitution via `aggressive_restore_line()`
+  - Preprocessing step persists `dedup_map`, `aggr_dedup_map`, `aggr_numbers` in step data; multi-number aggressive rows now store token maps such as `{"<NUM1>": "1", "<NUM2>": "120"}` while single-number rows remain the legacy list form
+  - Postprocessing (`_restore_dedup_lines`) reads maps from step 3 data, recursively resolves chained standard/aggressive dedup sources against in-RAM lines (postprocessed → translated → preprocessed → original), and restores aggressive dedup lines through the shared `aggressive_restore_line()` helper so reordered indexed slots restore correctly
   - Test suite: `dev/test_dedup_pipeline.py` (37 tests)
+  - **Postprocessing Reversal:** Phase 1 (preprocessing reversal): PROT decompression → Protect Code restoration → Custom Placeholder restoration → Ellipsis expansion → Anchoring restoration → aggressive number restoration from step-3 `aggr_numbers`. Single-slot rows still use `<NUM>`; multi-slot rows now use indexed tokens (`<NUM1>`, `<NUM2>`, ...) and restore through the shared `aggressive_restore_line()` helper so translated slot reordering is preserved. Custom Placeholder restoration now runs in two passes: per-line replacement first, then a batch-wide exact-token fallback so named replacements that drifted to another line are still restored. Dedup-tagged duplicate rows are excluded from that batch fallback and from per-line post-exclusive recovery so they do not consume another line's placeholder record or produce false preserve/code-pattern flags before source-copy restoration. Phase 2 (post-exclusive LLM recovery): `recover_line()` fixes LLM artifacts (bracket/quote balance, whitespace normalization) on the already-restored text, with `enable_placeholder_recovery=False`. Bracket recovery treats `【】` as equivalent to `[]`, removes truly extra unmatched brackets such as an LLM-added third `}` after `{{...}}`, and only runs when the source bracket structure is balanced. Code pattern recovery matches doubled delimiters such as `{{...}}` as whole tokens and ignores nested inner matches like `{...}` inside a doubled token, so preserve-action restores do not leave trailing braces behind or double-flag the same source code. After all lines: Dedup restoration → Aggressive Dedup restoration.
 
 SHARED PROMPT BUILDER (Implemented)
 - Single source of truth for system prompt assembly: `build_full_system_prompt()` in

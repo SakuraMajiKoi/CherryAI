@@ -486,35 +486,82 @@ try:
 except ImportError:
     _HAS_DEDUP = False
     AGGR_NUM_TOKEN = "<NUM>"
+    _AGGR_ANY_TOKEN_RE = re.compile(r"<NUM(\d*)>")
+    _AGGR_NUMBER_RE = re.compile(r"[（\(]\s*[0-9０-９]+\s*[）\)]|[0-9０-９]+")
+
+    def _aggressive_token_for_index(index: int, total: int) -> str:
+        if total <= 1:
+            return AGGR_NUM_TOKEN
+        return f"<NUM{index + 1}>"
 
     def aggressive_normalize_line(line: str) -> str:  # type: ignore[misc]
-        """Fallback normalizer: replace digits with <NUM>."""
+        """Fallback normalizer with indexed placeholders for multi-number lines."""
         if not line:
             return ""
-        s = re.sub(r"[0-9０-９]+", f" {AGGR_NUM_TOKEN} ", str(line))
+        s = str(line)
+        matches = list(_AGGR_NUMBER_RE.finditer(s))
+        if matches:
+            parts: List[str] = []
+            last = 0
+            total = len(matches)
+            for index, match in enumerate(matches):
+                parts.append(s[last:match.start()])
+                parts.append(f" {_aggressive_token_for_index(index, total)} ")
+                last = match.end()
+            parts.append(s[last:])
+            s = "".join(parts)
         return re.sub(r"\s+", " ", s).strip()
 
-    def aggressive_mask_line(line: str) -> Tuple[str, List[str]]:  # type: ignore[misc]
-        """Fallback masker."""
-        nums: List[str] = []
-        def _repl(m: re.Match) -> str:
-            nums.append(m.group(0))
-            return AGGR_NUM_TOKEN
-        s = re.sub(r"[0-9０-９]+", _repl, str(line))
-        return s, nums
+    def aggressive_mask_line(line: str) -> Tuple[str, List[str] | Dict[str, str]]:  # type: ignore[misc]
+        """Fallback masker with indexed placeholders for multi-number lines."""
+        matches = list(_AGGR_NUMBER_RE.finditer(str(line)))
+        if not matches:
+            return str(line), []
+        parts: List[str] = []
+        last = 0
+        total = len(matches)
+        if total == 1:
+            nums: List[str] | Dict[str, str] = [matches[0].group(0)]
+        else:
+            nums = {}
+        text = str(line)
+        for index, match in enumerate(matches):
+            token = _aggressive_token_for_index(index, total)
+            parts.append(text[last:match.start()])
+            parts.append(token)
+            if isinstance(nums, dict):
+                nums[token] = match.group(0)
+            last = match.end()
+        parts.append(text[last:])
+        return "".join(parts), nums
 
-    def aggressive_restore_line(masked: str, numbers: List[str]) -> str:  # type: ignore[misc]
-        """Fallback restorer."""
-        parts = masked.split(AGGR_NUM_TOKEN)
-        out: List[str] = []
-        for idx_p, part in enumerate(parts):
-            out.append(part)
-            if idx_p < len(parts) - 1:
-                if idx_p < len(numbers):
-                    out.append(numbers[idx_p])
-                else:
-                    out.append(AGGR_NUM_TOKEN)
-        return "".join(out)
+    def aggressive_restore_line(masked: str, numbers: List[str] | Dict[str, str]) -> str:  # type: ignore[misc]
+        """Fallback restorer supporting generic and indexed placeholders."""
+        if not masked or not numbers:
+            return masked
+        if isinstance(numbers, dict):
+            restored = masked
+            for token in sorted(numbers, key=len, reverse=True):
+                restored = restored.replace(token, numbers[token])
+            return restored
+
+        next_generic = 0
+
+        def _repl(match: re.Match[str]) -> str:
+            nonlocal next_generic
+            suffix = match.group(1)
+            if suffix:
+                pos = int(suffix) - 1
+                if 0 <= pos < len(numbers):
+                    return numbers[pos]
+                return match.group(0)
+            if next_generic < len(numbers):
+                value = numbers[next_generic]
+                next_generic += 1
+                return value
+            return match.group(0)
+
+        return _AGGR_ANY_TOKEN_RE.sub(_repl, masked)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -825,11 +872,18 @@ def apply_dedup_batch(
 
 def apply_aggressive_dedup_batch(
     lines: List[str],
-) -> Tuple[List[str], int, List[int], Dict[int, int], Dict[int, List[str]]]:
+) -> Tuple[
+    List[str],
+    int,
+    List[int],
+    Dict[int, int],
+    Dict[int, List[str] | Dict[str, str]],
+]:
     """Apply aggressive deduplication (number-normalized) to lines.
 
     Lines that differ only in digit sequences are treated as duplicates.
-    The first occurrence is kept (with numbers masked to ``<NUM>``);
+    The first occurrence is kept (with numbers masked to ``<NUM>`` or indexed
+    ``<NUM1>``, ``<NUM2>``, ...);
     later occurrences become ``__DEDUP__``.
 
     Args:
@@ -838,12 +892,13 @@ def apply_aggressive_dedup_batch(
     Returns:
         Tuple of (processed_lines, change_count, changed_indices,
         aggr_dedup_map ``{dup_idx: source_idx}``,
-        aggr_numbers ``{line_idx: [original_numbers]}``).
+        aggr_numbers ``{line_idx: [original_numbers]}`` for single-number lines
+        or ``{line_idx: {"<NUM1>": "...", ...}}`` for multi-number lines).
     """
     result = list(lines)
     first_by_norm: Dict[str, int] = {}
     aggr_map: Dict[int, int] = {}
-    aggr_numbers: Dict[int, List[str]] = {}
+    aggr_numbers: Dict[int, List[str] | Dict[str, str]] = {}
     changed_indices: List[int] = []
     changes = 0
 
