@@ -223,9 +223,11 @@ python -m pytest CherryAI/dev/test_manifest_fields.py CherryAI/dev/test_table_vi
 The manifest-driven Step 8 Wordwrap path and LightVN textbox realization path are covered by a focused runtime set:
 
 - `dev/test_wordwrap_phase46.py` verifies that Apply/Refresh wrap the loaded preview rows even when cached step-data lines are empty, that canonical `tags` drive tag resolution, that speaker mode `ignore` excludes only detected speaker prefixes from width counting, that translated speaker aliases from manifest `characters[]` are also honored, that parser `detect_speakers()` can seed the allowlist when manifest speaker data is absent, that manifest `code_patterns[]` entries marked `IsInvisible` contribute zero width while other code still counts normally, that leading indentation survives wrapping, that literal `\n` commands and non-RPG backslashes survive wrapping, that overflow without textbox support is not persisted to `wordwr`, that `Custom` and `Simple` mode mapping remains backward-compatible with legacy `Manual`, that Simple mode can restrict Apply to a selected file scope, and that `View in File` filters the preview to the selected source file.
-- `dev/test_lightvn_parser.py` verifies that explicit multiline wrapped dialogue is preserved during injection and split into successive LightVN textboxes with the exact `\w` + newline + `"` ordering between boxes, that LightVN injection restores a single terminal `\w` even when Step 8 stored only inter-textbox separators in `wordwr`, and that conditional dialogue injection follows the same terminal-marker rule without crashing.
+- `dev/test_wordwrap_phase46.py` also verifies the `Target:` selector strategies (`Tags first`, `Tags only`, `File first`, `File only`), the removal of the obsolete Step 8 Overwrite preview column, preservation of untyped rows when no target resolves, and that switching into Simple mode does not auto-refresh the preview.
+- `dev/test_lightvn_parser.py` verifies that explicit multiline wrapped dialogue is preserved during injection and split into successive LightVN textboxes with the exact `\w` + newline + `"` ordering between boxes, that LightVN injection restores a single terminal `\w` even when Step 8 stored only inter-textbox separators in `wordwr`, that whitelist-driven exact-variable extraction/injection covers assignment and `==` / `!=` comparison literals on the real Uni16 originals, and that the generic project-scoped helper skips those same whitelist variables.
 - `dev/test_wordwrap.py` verifies the stronger PrettyWrap balancing behavior, including rebalancing a one-word orphan tail into a better punctuation-aligned two-line split.
-- `dev/test_lightvn_fixes.py` remains in the set to cover LightVN parser-path and canonical tag propagation behavior used by the same workflow.
+- `dev/test_lightvn_fixes.py` remains in the set to cover LightVN parser-path and canonical tag propagation behavior used by the same workflow, including quoted ASCII-parentheses preservation for menu labels such as `回復薬(粗悪品)`, the exact-variable `ev_メイン内容` tagging regression, the optional parser rewrite hook in `ParserScript.inject_to()`, and the PYUpgrade `e_armor.txt` hardcoded-equipment rewrite path.
+- `dev/test_table_view.py` verifies the Full Table View `Wrap Selection` action, reuse of the Step 8 `wordwrap` stage input chain, and stale `wordwr` clearing when overflow rows should not persist.
 - Focused `dev/test_gui_v2.py` assertions verify the current QA-before-Wordwrap ordering plus the updated Wordwrap config dataclasses.
 
 Verified commands:
@@ -237,9 +239,10 @@ python -m pytest CherryAI/dev/test_wordwrap_phase46.py CherryAI/dev/test_lightvn
 python -m pytest CherryAI/dev/test_wordwrap.py CherryAI/dev/test_wordwrap_manifest.py CherryAI/dev/test_tag_wordwrap.py CherryAI/dev/test_wordwrap_overhaul.py CherryAI/dev/test_gui_v2.py -k "wordwrap or WrapMode or WrapOptionsDataclass or WordwrapStepIntegration" -q --timeout=20
 ```
 
-Latest verified result: 192 passed.
+Latest verified result for the focused Step 8 + LightVN + Full Table View wrap-selection set: 250 passed.
 Latest verified expanded regression result: 310 passed.
 Latest verified compatibility regression result: 204 passed, 2 skipped.
+Latest verified LightVN parser regression result: `dev/test_lightvn_fixes.py`, `dev/test_lightvn_parser.py`, `dev/test_output_injection.py` — 128 passed.
 
 Plugin installation:
 
@@ -11860,11 +11863,11 @@ Test file: `dev/test_wordwrap_phase46.py`
 | TestTask465RemoveTypography | 2 | No TypographyStyle/TypographyOptions, no get_typography_options |
 | TestTask466RemoveOverwriteStrategy | 3 | No OverwriteStrategy/MergeMethod/OverwriteOptions, no get_overwrite_options |
 | TestTask467WidthDropdown | 4 | _on_width_mode_changed, char/pixel frames toggle, pixel has font_size |
-| TestTask468OverwriteColumn | 7 | WrapLine.overwrite field, overwrite_differs property, table columns |
-| TestTask469TableFilters | 5 | Filter values All/Changed/Exceeding/Overwrite Differs, _refresh_table filter logic |
+| TestTask468TargetStrategy | 7 | WrapTarget values, no Step 8 overwrite field/column, tags-only/file-first resolution, preserve untyped rows |
+| TestTask469TableFilters | 5 | Filter values All/Changed/Exceeding/New Textbox, _refresh_table filter logic |
 | TestTask4610MaxLinesFlag | 4 | _simple_wrap exceeds_limit detection, WrapLine exceeds_limit field |
 | TestRemainingEnumsDataclasses | 6 | WrapStatus intact, FormatConfig intact, WrapStats intact |
-| TestStageInputResolution | 2 | Input column uses qa → postpro → tl → prepro → orig while restoring existing wordwr separately |
+| TestStageInputResolution | 3 | Input column uses qa → postpro → tl → prepro → orig while restoring existing wordwr separately; Simple mode does not auto-refresh on mode switch |
 
 ```bash
 # Run Phase 46 tests
@@ -12058,8 +12061,8 @@ Tests for parser-based surgical injection in the Output step. Verifies that `inj
 | Test Class | Count | Coverage |
 |-----------|-------|----------|
 | TestLightVNInjectTo | 8 | Non-empty output, preserves structure, replaces translated text, doesn't modify source, creates parent dirs, output line count matches, inject delegates to inject_to, empty translations still produce full script |
-| TestBaseInjectToDefault | 1 | Base ParserScript.inject_to moves _translated file to output_path |
-| TestWriteFileParserRouting | 3 | Parser format triggers inject_to, standard format skips parser, per-file line slicing via first_idx/last_idx |
+| TestBaseInjectToDefault | 1 | Base ParserScript.inject_to still supports the adjacent `_translated` fallback when a non-tagged parser cannot map any extracted key back onto raw source text |
+| TestWriteFileParserRouting | 3 | Parser format IDs route directly to `parser.inject_to`, standard formats skip parser routing, and per-file line slicing uses `first_idx/last_idx` |
 | TestEndToEndLightVNInjection | 3 | Full script surgical injection, output is not empty (regression), non-translatable lines preserved |
 | TestParserFormatExtension | 1 | lightvn format preserves .txt extension |
 
@@ -12097,6 +12100,8 @@ python -m pytest CherryAI/dev/test_parser_injection.py -v --timeout=60
 | **TestDuplicateVariable** | **3** | **Duplicate variable count, text content, all variable tagged** |
 | **TestItemVariables** | **2** | **Item-like variable assignments extract with the `items` tag and inject back through both direct and conditional assignment lines** |
 | **TestProjectScopedVariableClassification** | **4** | **Display-only quoted project variables extract and inject, while mixed display-plus-asset variables (`胎児`) and control-flow variables (`付与対象`) stay out of translation** |
+| **TestTargetedVariableExtraction** | **7** | **Exact-name LightVN variable whitelist extracts assignment and `==` / `!=` comparison literals, skips file-like values, excludes prefixed names such as `ti_主人公`, applies `items` tags for targeted loot/material names, keeps parity with padded placeholder assignments, injects those literals back surgically, and stays out of the generic assignment helper** |
+| **TestTargetedVariableOriginalCoverage** | **5** | **Real-Uni16 verification that every whitelisted exact variable is extracted by the new helper, injectable back through the same helper, covers every targeted assignment the broad helper would have returned, and leaves both targeted and broad generic assignment scans empty on the staged originals** |
 | **TestMixedDuplicates** | **5** | **Mixed total count, dialogue dupes, menu dupes, variable dupes, document order preserved** |
 | **TestNoDuplicates** | **2** | **Unique-only scripts still extract correctly (regression)** |
 | **TestExtractAgreement** | **2** | **extract() and extract_tagged() return same count/content** |
@@ -12106,12 +12111,18 @@ python -m pytest CherryAI/dev/test_parser_injection.py -v --timeout=60
 | **TestSpeakerDetection (new)** | **2** | **Speakers from dialogue, single speaker** |
 | **TestSpeakerAllowlistFiltering** | **6** | **analyze_lines always detects, include_false skips, allowlist keeps valid, removes false positives, empty allowlist filters all, batch counts** |
 
+Latest verified focused LightVN result: `dev/test_lightvn_fixes.py`, `dev/test_lightvn_parser.py`, `dev/test_output_injection.py` — 132 passed.
+Latest verified combined LightVN + parser-routing result: `dev/test_lightvn_fixes.py`, `dev/test_lightvn_parser.py`, `dev/test_output_injection.py`, `dev/test_parser_injection.py` — 148 passed.
+
 ```bash
 # Run Parser Handshake & LightVN tests
 python -m pytest CherryAI/dev/test_lightvn_parser.py -v --timeout=300
 
 # Focused project-scoped variable safety + injection regression
 python -m pytest CherryAI/dev/test_output_injection.py CherryAI/dev/test_lightvn_parser.py CherryAI/dev/test_lightvn_fixes.py -q --timeout=10
+
+# Verified targeted-variable + menu-parentheses LightVN regression
+python -m pytest CherryAI/dev/test_lightvn_fixes.py CherryAI/dev/test_lightvn_parser.py CherryAI/dev/test_output_injection.py -q --timeout=20
 ```
 
 ### Parser Input Routing & P2 Validation (32 tests)
@@ -13240,7 +13251,7 @@ python -m pytest dev/test_input_import_fixes.py -v --timeout=10
 
 ---
 
-### dev/test_lightvn_fixes.py (36 tests) — LightVN Detection, Tags & Input Fixes
+### dev/test_lightvn_fixes.py (37 tests) — LightVN Detection, Tags & Input Fixes
 
 Tests for LightVN parser detection expansion, ~文字 menu parsing, tag propagation, staged `Original/` re-extraction during Input sync, and explicit rel-path original staging before filedir rebuild.
 to manifest tag, messagebox import shadowing fix, and source file copy
@@ -13251,7 +13262,7 @@ rel_path matching.
 | Test Class | Count | Coverage |
 |-----------|-------|----------|
 | TestCanHandleExpanded | 14 | Speaker tag, ~文字, ~絵, ~ボタン, ~効果音, ~選択, 栞 prefix, `~栞` prefix, `~スクリプト`, bare script/variable-only files, plain text reject, non-txt reject, chara_make pattern, bookmark without tilde |
-| TestMojiMenuParsing | 6 | Basic ~文字, fullwidth parens, multiple lines, full context, ~文字窓 variant, no quoted text |
+| TestMojiMenuParsing | 7 | Basic ~文字, fullwidth parens, ASCII parens inside quoted text, multiple lines, full context, ~文字窓 variant, no quoted text |
 | TestTagPropagation | 4 | LoadedFile stores tags, default None, sync sets tag, tag assignment |
 | TestMessageboxFix | 2 | No local messagebox import in _load_selected_paths (AST), module-level import exists |
 | TestCopyOriginalsRelPathMatching | 3 | No filename-only matching (AST), uses _find_common_base, matches entry rel_path |

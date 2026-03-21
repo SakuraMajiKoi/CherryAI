@@ -1372,6 +1372,8 @@ class OutputInjectStep(BaseStep):
         Always reads fresh data from the manifest manager to avoid stale
         lines (e.g. after edits in Full Table View).
         """
+        from CherryAI.formats import get_parser_registry
+
         output_path = Path(output_file.output_path)
 
         # Create backup if needed
@@ -1384,15 +1386,25 @@ class OutputInjectStep(BaseStep):
         # Ensure parent directory exists
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        format_val = _safe_output_format(self._format_var.get())
+        raw_format = self._format_var.get().strip()
         mgr = self.manifest_manager
+        parser = get_parser_registry().get(raw_format) if raw_format else None
 
-        # --- Injection mode (parser-based standardized handshake) ---
-        if format_val == OutputFormat.INJECTION:
+        # --- Injection mode (standardized manifest-orchestrated handshake) ---
+        if raw_format.lower() == OutputFormat.INJECTION.value:
             if mgr is not None and mgr.is_loaded:
-                self._write_injection(output_file, output_path, mgr)
+                OutputInjectStep._write_injection(self, output_file, output_path, mgr)
                 return
             raise ValueError("Injection format requires a loaded manifest with filedir.")
+
+        # --- Direct parser mode (legacy per-file parser routing) ---
+        if parser is not None:
+            if mgr is None or not mgr.is_loaded:
+                raise ValueError("Parser output requires a loaded manifest with filedir.")
+            OutputInjectStep._write_parser_file(self, output_file, output_path, mgr, parser)
+            return
+
+        format_val = _safe_output_format(raw_format)
 
         # --- Generic format writing (TXT/CSV/TSV/JSON/XLSX) ---
         # Always read fresh lines from manifest to avoid stale data
@@ -1531,6 +1543,35 @@ class OutputInjectStep(BaseStep):
                     "Injection write failure [%s] at position %d",
                     entry.rel_path, idx,
                 )
+
+    def _write_parser_file(
+        self,
+        output_file: OutputFile,
+        output_path: Path,
+        mgr: "ManifestManager",
+        parser: Any,
+    ) -> None:
+        """Route parser-format outputs directly to the parser's inject_to()."""
+        filedir = mgr.get_filedir()
+        if output_file.idx >= len(filedir):
+            raise ValueError(
+                f"File index {output_file.idx} out of range "
+                f"(filedir has {len(filedir)} entries)"
+            )
+
+        entry = filedir[output_file.idx]
+        source_path = mgr.resolve_file_path(entry.rel_path)
+        if not source_path.exists():
+            raise FileNotFoundError(f"Source file not found: {source_path}")
+
+        step_data = self.get_step_data()
+        all_lines = step_data.get("lines", [])
+        translated_lines = all_lines[entry.first_idx:entry.last_idx + 1]
+
+        parser.inject_to(source_path, output_path, translated_lines)
+
+        output_file.line_count = len(translated_lines)
+        self._stats.total_lines += len(translated_lines)
 
     def _write_txt(self, path: Path, lines: List[str], encoding: str) -> None:
         """Write lines as plain text."""

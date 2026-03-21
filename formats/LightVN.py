@@ -52,6 +52,15 @@ class _VariableUsage:
     control_reference: bool = False
 
 
+@dataclass(frozen=True)
+class _HardcodedMachineRewriteRule:
+    """Rewrite metadata for machine-key-backed display text."""
+
+    variable_name: str
+    display_variable_name: str
+    value_order: Tuple[str, ...]
+
+
 # ---------------------------------------------------------------------------
 # Tag constants (encouraged, not restricted)
 # ---------------------------------------------------------------------------
@@ -95,13 +104,80 @@ class LightVNParser(ParserScript):
     TEXT_DISPLAY_COMMAND_PATTERN = re.compile(r"^(?:~?文字(?:窓|\d*)|ダイアログ)\s")
 
     TRANSLATABLE_VARS: Set[str] = {
-        "スキル名",
-        "スキル効果",
         "スキル追加",
         "道具名",
         "道具効果",
         "調合素材",
     }
+
+    TARGETED_VARIABLE_NAMES: Set[str] = {
+        "主人公", # Protagonist name
+        "ev_メイン", # Event Name
+        "ev_メイン内容", # Event Description
+        "子宮状態", # Uterus State
+        "開発_初めての相手", # First Partner
+        "防具_選択中部位", # Equipped Armor Part
+        "設定_出産設定説明文", # Birth Setting Description
+        "スキル効果", # Skill Effect
+        "敵次スキル名", # Next Enemy Skill Name
+        "敵発動スキル", # Enemy Active Skill
+        "処理_予測ダメージ", # Skill Damage
+        "bat_ヒロイン次スキル名", # Next Heroine Skill Name
+        "スキル追加", # Skill Additions (e.g. from items)
+        "獲得食材", # Acquired Ingredients (e.g. from carving)
+        "調合素材", # Crafting Materials
+        "道具効果", # Item Effect
+        "道具名", # Item Name
+        "衣装タイプ", # Currently Equipped Outfit (always shown)
+        "設定_移動設定説明文", # Movement Setting Description
+    }
+    TARGETED_VARIABLE_REGEXES: Tuple[str, ...] = (
+        r"スキル名\d*+", # Skill names 
+        r"武器\d*+_特性\d*+", # Weapon Trait names
+        r"剥ぎ取り素材\d*+", # Carve Materials
+        r"武器\d*+_名前", # Weapon names 
+    )
+    _TARGETED_VARIABLE_ALTERNATION = "|".join(
+        sorted(
+            [*(re.escape(name) for name in TARGETED_VARIABLE_NAMES), *TARGETED_VARIABLE_REGEXES],
+            key=len,
+            reverse=True,
+        )
+    )
+    TARGETED_VARIABLE_NAME_PATTERNS: Tuple[re.Pattern[str], ...] = tuple(
+        re.compile(rf"^(?:{pattern})$") for pattern in TARGETED_VARIABLE_REGEXES
+    )
+    TARGETED_ASSIGNMENT_PATTERN = re.compile(
+        rf'(?P<head>(?:臨時全域変数|保存変数|変数)\s+(?P<name>{_TARGETED_VARIABLE_ALTERNATION})'
+        rf'(?![\w}}])\s*=\s*")(?P<text>[^"]*)(?P<tail>")'
+    )
+    TARGETED_CONDITION_PATTERN = re.compile(
+        rf'(?P<head>(?<![\w{{])(?P<name>{_TARGETED_VARIABLE_ALTERNATION})'
+        rf'(?![\w}}])\s*(?P<op>==|!=)\s*")(?P<text>[^"]*)(?P<tail>")'
+    )
+    TARGETED_REVERSE_CONDITION_PATTERN = re.compile(
+        rf'(?P<head>")(?P<text>[^"]*)(?P<tail>"\s*(?P<op>==|!=)\s*'
+        rf'(?<![\w{{])(?P<name>{_TARGETED_VARIABLE_ALTERNATION})(?![\w}}]))'
+    )
+
+    FILE_LIKE_SUFFIXES: Tuple[str, ...] = (
+        ".txt",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".bmp",
+        ".ogg",
+        ".wav",
+        ".mp3",
+        ".ttf",
+        ".ttc",
+        ".otf",
+        ".json",
+        ".csv",
+        ".tsv",
+    )
 
     ITEM_VARS: Set[str] = {
         "剥ぎ取り素材",
@@ -145,6 +221,27 @@ class LightVNParser(ParserScript):
         "未発動",
         "立ち",
         "しゃがみ",
+    }
+
+    HARD_CODED_MACHINE_VALUES: Dict[str, Set[str]] = {
+        "防具_選択中部位": {
+            "頭",
+            "胴",
+            "腕",
+            "顔",
+            "胸",
+            "腹",
+            "乳首",
+            "へそ",
+            "クリ",
+        },
+    }
+    HARD_CODED_MACHINE_REWRITE_RULES: Dict[str, _HardcodedMachineRewriteRule] = {
+        "防具_選択中部位": _HardcodedMachineRewriteRule(
+            variable_name="防具_選択中部位",
+            display_variable_name="防具_選択中部位表示",
+            value_order=("頭", "胴", "腕", "顔", "胸", "腹", "乳首", "へそ", "クリ"),
+        ),
     }
 
     # -- Defaults ----------------------------------------------------------
@@ -323,13 +420,25 @@ class LightVNParser(ParserScript):
 
         # Build translation dict from the flat list.
         # Extraction order matches: we re-extract to get the keys, then zip.
-        keys = self._extract_all_keys(original_content)
+        tagged_lines = self._extract_all_tagged(original_content)
+        keys = [line.text for line in tagged_lines]
         translations: Dict[str, str] = {}
         failures: List[int] = []
         for i, (key, translated) in enumerate(zip(keys, lines)):
             translations[key] = translated
 
         modified, _removals = self._inject_all(original_content, translations)
+        rewritten = self.rewrite_injected_content(
+            source_path,
+            original_content,
+            modified,
+            search_keys=keys,
+            translated_lines=lines,
+            orig_lines=orig_lines,
+            tagged_lines=tagged_lines,
+        )
+        if rewritten is not None:
+            modified = rewritten
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -675,12 +784,19 @@ class LightVNParser(ParserScript):
     def _remove_parenthetical_content(text: str) -> str:
         result: List[str] = []
         depth = 0
+        in_quotes = False
         for ch in text:
-            if ch == "(":
+            if ch == '"' and depth == 0:
+                in_quotes = not in_quotes
+                result.append(ch)
+                continue
+            if not in_quotes and ch == "(":
                 depth += 1
-            elif ch == ")":
+                continue
+            if not in_quotes and ch == ")":
                 depth = max(0, depth - 1)
-            elif depth == 0:
+                continue
+            if depth == 0:
                 result.append(ch)
         return "".join(result)
 
@@ -710,6 +826,8 @@ class LightVNParser(ParserScript):
         return self._classify_variable_tag(var_name) is not None
 
     def _classify_variable_tag(self, var_name: str) -> Optional[str]:
+        if self._is_targeted_variable_name(var_name):
+            return None
         if any(var_name.startswith(item_var) for item_var in self.ITEM_VARS):
             return TAG_ITEMS
         if any(var_name.startswith(tv) for tv in self.TRANSLATABLE_VARS):
@@ -750,15 +868,134 @@ class LightVNParser(ParserScript):
             return None
         return tag, var_type, var_name, text
 
+    @classmethod
+    def _is_targeted_variable_name(cls, var_name: str) -> bool:
+        if var_name in cls.TARGETED_VARIABLE_NAMES:
+            return True
+        return any(pattern.fullmatch(var_name) for pattern in cls.TARGETED_VARIABLE_NAME_PATTERNS)
+
+    @classmethod
+    def _is_file_like_literal(cls, text: str) -> bool:
+        normalized = text.strip().lower()
+        if not normalized:
+            return False
+        return any(normalized.endswith(suffix) for suffix in cls.FILE_LIKE_SUFFIXES)
+
+    @classmethod
+    def _is_hardcoded_machine_value(cls, var_name: str, text: str) -> bool:
+        machine_values = cls.HARD_CODED_MACHINE_VALUES.get(var_name)
+        if not machine_values:
+            return False
+        return text.strip() in machine_values
+
+    @classmethod
+    def _is_any_hardcoded_machine_value(cls, text: str) -> bool:
+        stripped = text.strip()
+        if not stripped:
+            return False
+        return any(stripped in values for values in cls.HARD_CODED_MACHINE_VALUES.values())
+
+    @classmethod
+    def _should_extract_targeted_literal(cls, var_name: str, text: str) -> bool:
+        stripped = text.strip()
+        if not stripped:
+            return False
+        if re.match(r"^{{[^}]+}}$", text):
+            return False
+        if stripped.isdigit():
+            return False
+        if stripped in cls.NON_TRANSLATABLE_TEXT_VALUES:
+            return False
+        if cls._is_file_like_literal(stripped):
+            return False
+        return True
+
+    @classmethod
+    def _classify_targeted_variable_tag(cls, var_name: str) -> str:
+        if any(var_name.startswith(item_var) for item_var in cls.ITEM_VARS):
+            return TAG_ITEMS
+        return TAG_VARIABLE
+
+    @classmethod
+    def _extract_targeted_variable_texts(
+        cls, line: str,
+    ) -> List[Tuple[str, str, str]]:
+        extracted: List[Tuple[str, str, str]] = []
+
+        condition_text = cls._extract_condition_text(line)
+        if condition_text:
+            condition_matches: List[Tuple[int, str, str, str]] = []
+            for pattern in (
+                cls.TARGETED_CONDITION_PATTERN,
+                cls.TARGETED_REVERSE_CONDITION_PATTERN,
+            ):
+                for match in pattern.finditer(condition_text):
+                    var_name = match.group("name")
+                    text = match.group("text")
+                    if not cls._should_extract_targeted_literal(var_name, text):
+                        continue
+                    condition_matches.append((
+                        match.start(),
+                        cls._classify_targeted_variable_tag(var_name),
+                        var_name,
+                        text,
+                    ))
+            condition_matches.sort(key=lambda item: item[0])
+            extracted.extend(
+                (tag, var_name, text)
+                for _, tag, var_name, text in condition_matches
+            )
+
+        stripped = cls._strip_conditional_prefix(line.strip())
+        for match in cls.TARGETED_ASSIGNMENT_PATTERN.finditer(stripped):
+            var_name = match.group("name")
+            text = match.group("text")
+            if not cls._should_extract_targeted_literal(var_name, text):
+                continue
+            extracted.append((
+                cls._classify_targeted_variable_tag(var_name),
+                var_name,
+                text,
+            ))
+
+        return extracted
+
+    @classmethod
+    def _extract_hardcoded_machine_texts(cls, line: str) -> List[str]:
+        stripped = cls._strip_conditional_prefix(line.strip())
+        if stripped.startswith("//"):
+            return []
+        extracted: List[str] = []
+        for match in re.finditer(r'"([^"]+)"', stripped):
+            text = match.group(1)
+            if cls._is_any_hardcoded_machine_value(text):
+                extracted.append(text)
+        return extracted
+
     # -- Code detection ----------------------------------------------------
 
     def _is_code_only_text(self, text: str) -> bool:
         if not text or not text.strip():
             return True
-        s = text.strip()
-        starts = any(s.startswith(b) for b in self.CODE_OPEN_BRACKETS)
-        ends = any(s.endswith(b) for b in self.CODE_CLOSE_BRACKETS)
-        return starts and ends
+        visible_parts: List[str] = []
+        stripped = text.strip()
+        i = 0
+        while i < len(stripped):
+            ch = stripped[i]
+            if ch in self.BRACKET_PAIRS:
+                close = self.BRACKET_PAIRS[ch]
+                depth = 1
+                i += 1
+                while i < len(stripped) and depth > 0:
+                    if stripped[i] == ch:
+                        depth += 1
+                    elif stripped[i] == close:
+                        depth -= 1
+                    i += 1
+                continue
+            visible_parts.append(ch)
+            i += 1
+        return "".join(visible_parts).strip() == ""
 
     def _is_script_command(self, line: str) -> bool:
         stripped = line.strip()
@@ -1062,6 +1299,8 @@ class LightVNParser(ParserScript):
                     parsed = self._parse_variable_assignment_text(segment)
                     if parsed:
                         _var_type, var_name, _text = parsed
+                        if self._is_targeted_variable_name(var_name):
+                            continue
                         candidate_names.add(var_name)
 
         usage: Dict[str, _VariableUsage] = {
@@ -1123,6 +1362,19 @@ class LightVNParser(ParserScript):
         self._cached_variable_usage = usage
         return usage
 
+    @staticmethod
+    def _append_tagged_line(
+        result: List[ExtractedLine],
+        text: str,
+        tag: str,
+        *,
+        speaker: str = "",
+    ) -> None:
+        """Append a parser result only when both text and tag are present."""
+        if not text or not tag:
+            return
+        result.append(ExtractedLine(text=text, tag=tag, speaker=speaker))
+
     # ======================================================================
     # Core extraction (document-order, interleaved)
     # ======================================================================
@@ -1151,11 +1403,12 @@ class LightVNParser(ParserScript):
                 dt = self._process_dialogue_text("\n".join(current_dialogue))
                 if dt and not self._is_placeholder_dialogue_text(dt):
                     key = self._make_dialogue_key(dt, dialogue_speaker)
-                    result.append(ExtractedLine(
-                        text=key,
-                        tag=TAG_DIALOGUE,
+                    self._append_tagged_line(
+                        result,
+                        key,
+                        TAG_DIALOGUE,
                         speaker=dialogue_speaker,
-                    ))
+                    )
                 current_dialogue = []
                 in_dialogue = False
 
@@ -1191,15 +1444,30 @@ class LightVNParser(ParserScript):
                 continue
 
             # --- Variable assignment ---
+            targeted_variable_texts = self._extract_targeted_variable_texts(stripped)
+            hardcoded_machine_texts = self._extract_hardcoded_machine_texts(stripped)
+            if targeted_variable_texts:
+                _flush_dialogue()
+                for tag, _var_name, text in targeted_variable_texts:
+                    self._append_tagged_line(result, text, tag)
+                if not hardcoded_machine_texts and not self._is_menu_text_line(stripped):
+                    i += 1
+                    continue
+
+            if hardcoded_machine_texts:
+                _flush_dialogue()
+                for text in hardcoded_machine_texts:
+                    self._append_tagged_line(result, text, TAG_MENU)
+                if not self._is_menu_text_line(stripped):
+                    i += 1
+                    continue
+
             if self._is_variable_assignment_line(stripped):
                 _flush_dialogue()
                 vr = self._extract_variable_text(stripped)
                 if vr:
                     tag, _vt, _vn, text = vr
-                    if not (self._exclude_code_only and self._is_code_only_text(text)):
-                        result.append(ExtractedLine(
-                            text=text, tag=tag,
-                        ))
+                    self._append_tagged_line(result, text, tag)
                 i += 1
                 continue
 
@@ -1207,9 +1475,7 @@ class LightVNParser(ParserScript):
             if self._is_menu_text_line(stripped):
                 _flush_dialogue()
                 for mt in self._extract_menu_texts_from_line(stripped):
-                    if self._exclude_code_only and self._is_code_only_text(mt):
-                        continue
-                    result.append(ExtractedLine(text=mt, tag=TAG_MENU))
+                    self._append_tagged_line(result, mt, TAG_MENU)
                 i += 1
                 continue
 
@@ -1296,6 +1562,7 @@ class LightVNParser(ParserScript):
         """Inject dialogue, menu, and variable translations."""
         modified, removals = self._inject_dialogue(original_content, translations)
         modified = self._inject_menu_text(modified, translations)
+        modified = self._inject_targeted_variable_text(modified, translations)
         modified = self._inject_variable_text(modified, translations)
         return modified, removals
 
@@ -1542,6 +1809,8 @@ class LightVNParser(ParserScript):
                     continue
                 if orig.strip().isdigit() or not orig.strip():
                     continue
+                if self._is_any_hardcoded_machine_value(orig):
+                    continue
                 t = translations.get(orig, "")
                 if t:
                     t, rc, nrc, det = self._recover_code_in_translation(
@@ -1589,3 +1858,167 @@ class LightVNParser(ParserScript):
                 out.append(line)
         self._active_variable_usage = previous_usage
         return "\n".join(out)
+
+    def _replace_targeted_variable_match(
+        self,
+        match: re.Match[str],
+        translations: Dict[str, str],
+        context: str,
+    ) -> str:
+        var_name = match.group("name")
+        original = match.group("text")
+        if self._is_hardcoded_machine_value(var_name, original):
+            return match.group(0)
+        translated = translations.get(original, "")
+        if not translated:
+            return match.group(0)
+
+        translated, recovered, not_recovered, details = self._recover_code_in_translation(
+            original,
+            translated,
+            context,
+        )
+        self._code_recovered += recovered
+        self._code_not_recovered += not_recovered
+        self._unrecovered_details.extend(details)
+        translated = self._make_angle_brackets_safe(original, translated)
+        return f'{match.group("head")}{translated}{match.group("tail")}'
+
+    def _inject_targeted_variable_text(
+        self, content: str, translations: Dict[str, str],
+    ) -> str:
+        lines = content.split("\n")
+        out: List[str] = []
+        for line in lines:
+            modified = self.TARGETED_CONDITION_PATTERN.sub(
+                lambda match: self._replace_targeted_variable_match(
+                    match,
+                    translations,
+                    f'Targeted variable {match.group("name")} condition',
+                ),
+                line,
+            )
+            modified = self.TARGETED_REVERSE_CONDITION_PATTERN.sub(
+                lambda match: self._replace_targeted_variable_match(
+                    match,
+                    translations,
+                    f'Targeted variable {match.group("name")} condition',
+                ),
+                modified,
+            )
+            modified = self.TARGETED_ASSIGNMENT_PATTERN.sub(
+                lambda match: self._replace_targeted_variable_match(
+                    match,
+                    translations,
+                    f'Targeted variable {match.group("name")}',
+                ),
+                modified,
+            )
+            out.append(modified)
+        return "\n".join(out)
+
+    @staticmethod
+    def _build_translation_lookup(
+        search_keys: List[str],
+        translated_lines: List[str],
+    ) -> Dict[str, str]:
+        mapping: Dict[str, str] = {}
+        for key, translated in zip(search_keys, translated_lines):
+            if not key or not translated or translated == key:
+                continue
+            mapping.setdefault(key, translated)
+        return mapping
+
+    def _build_machine_display_block(
+        self,
+        rule: _HardcodedMachineRewriteRule,
+        translations: Dict[str, str],
+    ) -> List[str]:
+        display_var = rule.display_variable_name
+        block = [f'臨時全域変数 {display_var} = "{{{{{rule.variable_name}}}}}"']
+        for value in rule.value_order:
+            translated = translations.get(value, value).replace('"', r'\"')
+            block.append(
+                f'もし ({rule.variable_name} == "{value}") '
+                f'臨時全域変数 {display_var} = "{translated}"'
+            )
+        return block
+
+    def _rewrite_machine_display_menu_text(
+        self,
+        line: str,
+        rule: _HardcodedMachineRewriteRule,
+        translations: Dict[str, str],
+    ) -> str:
+        if not self._is_menu_text_line(line):
+            return line
+        placeholder = f"{{{{{rule.variable_name}}}}}"
+        if placeholder not in line:
+            return line
+        display_placeholder = f"{{{{{rule.display_variable_name}}}}}"
+        modified = line
+        for match in re.finditer(r'"([^"]+)"', line):
+            original = match.group(1)
+            if placeholder not in original:
+                continue
+            replacement = translations.get(original, original)
+            replacement = replacement.replace(placeholder, display_placeholder)
+            modified = modified.replace(f'"{original}"', f'"{replacement}"', 1)
+        return modified
+
+    def _rewrite_hardcoded_machine_displays(
+        self,
+        content: str,
+        translations: Dict[str, str],
+    ) -> Optional[str]:
+        rewritten = content
+        changed = False
+
+        for rule in self.HARD_CODED_MACHINE_REWRITE_RULES.values():
+            value_changed = any(
+                translations.get(value, value) != value
+                for value in rule.value_order
+            )
+            placeholder = f"{{{{{rule.variable_name}}}}}"
+            display_placeholder = f"{{{{{rule.display_variable_name}}}}}"
+            menu_changed = any(
+                key != translations.get(key, key) and placeholder in key
+                for key in translations
+            )
+            if not value_changed and not menu_changed:
+                continue
+
+            lines = rewritten.split("\n")
+            out: List[str] = []
+            for line in lines:
+                out.append(self._rewrite_machine_display_menu_text(line, rule, translations))
+                stripped = self._strip_conditional_prefix(line.strip())
+                for match in self.TARGETED_ASSIGNMENT_PATTERN.finditer(stripped):
+                    if match.group("name") != rule.variable_name:
+                        continue
+                    out.extend(self._build_machine_display_block(rule, translations))
+                    changed = True
+                    break
+            candidate = "\n".join(out)
+            if candidate != rewritten:
+                changed = True
+                rewritten = candidate
+            elif display_placeholder in candidate and placeholder not in candidate:
+                changed = True
+
+        return rewritten if changed else None
+
+    def rewrite_injected_content(
+        self,
+        source_path: Path,
+        original_content: str,
+        injected_content: str,
+        *,
+        search_keys: List[str],
+        translated_lines: List[str],
+        orig_lines: Optional[List[str]] = None,
+        tagged_lines: Optional[List[ExtractedLine]] = None,
+    ) -> Optional[str]:
+        del source_path, original_content, orig_lines, tagged_lines
+        translations = self._build_translation_lookup(search_keys, translated_lines)
+        return self._rewrite_hardcoded_machine_displays(injected_content, translations)

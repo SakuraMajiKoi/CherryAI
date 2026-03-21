@@ -102,6 +102,29 @@ class WrapMode(Enum):
         raise ValueError(f"{value!r} is not a valid WrapMode")
 
 
+class WrapTarget(Enum):
+    """Tag-resolution strategy for wordwrap target selection."""
+
+    TAGS_FIRST = "tags_first"
+    TAGS_ONLY = "tags_only"
+    FILE_FIRST = "file_first"
+    FILE_ONLY = "file_only"
+
+    @property
+    def display(self) -> str:
+        """Return the user-facing label for the strategy."""
+        return self.value.replace("_", " ").title()
+
+    @classmethod
+    def from_display(cls, value: str) -> "WrapTarget":
+        """Parse from raw manifest value or user-facing display label."""
+        normalized = value.strip().lower().replace(" ", "_")
+        for member in cls:
+            if member.value == normalized:
+                return member
+        raise ValueError(f"{value!r} is not a valid WrapTarget")
+
+
 class SpeakerMode(Enum):
     """Speaker handling mode."""
 
@@ -132,7 +155,6 @@ class WrapLine:
     source_format: str = ""
     source_path: str = ""
     wrapped: str = ""
-    overwrite: str = ""
     char_count: int = 0
     line_count: int = 1
     exceeds_limit: bool = False
@@ -144,11 +166,6 @@ class WrapLine:
     def has_changes(self) -> bool:
         """Check if wrapping changed the text."""
         return self.original != self.wrapped
-
-    @property
-    def overwrite_differs(self) -> bool:
-        """Check if overwrite differs from wrapped."""
-        return self.overwrite != "" and self.overwrite != self.wrapped
 
     @property
     def status(self) -> str:
@@ -209,6 +226,7 @@ class WrapOptions:
     """Options for wordwrap operations."""
 
     mode: WrapMode = WrapMode.CUSTOM
+    target: WrapTarget = WrapTarget.TAGS_FIRST
     speaker_mode: SpeakerMode = SpeakerMode.COUNT
     width: int = 48
     break_char: str = "\\n"
@@ -525,7 +543,6 @@ class WordwrapOverwriteStep(BaseStep):
             ColumnDef(key="lines", title="Lines", width=50, anchor="center"),
             ColumnDef(key="original", title="Input", width=180),
             ColumnDef(key="wrapped", title="Wordwrap", width=180),
-            ColumnDef(key="overwrite", title="Overwrite", width=180),
         ]
 
         self._preview_table = SharedTable(
@@ -643,6 +660,22 @@ class WordwrapOverwriteStep(BaseStep):
         self._mode_combo.pack(side="left", padx=5)
         self._mode_combo.bind(
             "<<ComboboxSelected>>", lambda e: self._on_mode_changed()
+        )
+
+        ttk.Label(mode_frame, text="Target:").pack(side="left", padx=(12, 0))
+
+        self._target_var = tk.StringVar(value=WrapTarget.TAGS_FIRST.display)
+        self._target_var.trace_add("write", self._save_wordwrap_target_to_manifest)
+        self._target_combo = ttk.Combobox(
+            mode_frame,
+            textvariable=self._target_var,
+            values=[target.display for target in WrapTarget],
+            state="readonly",
+            width=12,
+        )
+        self._target_combo.pack(side="left", padx=5)
+        self._target_combo.bind(
+            "<<ComboboxSelected>>", lambda e: self._on_target_changed()
         )
 
         self._simple_mode_frame = ttk.Frame(frame)
@@ -1408,7 +1441,14 @@ class WordwrapOverwriteStep(BaseStep):
         mode = WrapMode.from_display(self._mode_var.get())
         self._wrap_options.mode = mode
         self._refresh_mode_ui()
-        self._refresh_preview()
+        if mode != WrapMode.SIMPLE:
+            self._refresh_preview()
+
+    def _on_target_changed(self) -> None:
+        """Handle target selection changes."""
+        self._wrap_options.target = WrapTarget.from_display(self._target_var.get())
+        if WrapMode.from_display(self._mode_var.get()) != WrapMode.SIMPLE:
+            self._refresh_preview()
 
     def _refresh_mode_ui(self) -> None:
         """Show the settings group for the active wrap mode."""
@@ -1577,12 +1617,8 @@ class WordwrapOverwriteStep(BaseStep):
                 selected_format = format_var.get().strip().lower() if format_var else ""
                 format_cfg = format_configs.get(selected_format)
 
-            # 1. Resolve tag (line tag overrules filedir file tag)
-            tag = (
-                line_tag_map.get(idx)
-                or filedir_type_map.get(idx)
-                or "dialogue"
-            )
+            # 1. Resolve tag according to the selected target strategy.
+            tag = self._resolve_wrap_tag(idx, line_tag_map, filedir_type_map)
 
             if process_indices is not None and idx not in process_indices:
                 preserved_wrapped = source_line.wrapped or orig
@@ -1598,12 +1634,30 @@ class WordwrapOverwriteStep(BaseStep):
                     source_format=source_format,
                     source_path=source_line.source_path,
                     wrapped=preserved_wrapped,
-                    overwrite=source_line.overwrite,
                     char_count=len(preserved_wrapped),
                     line_count=preserved_line_count,
                     exceeds_limit=source_line.exceeds_limit,
                     new_textbox_applied=source_line.new_textbox_applied,
                     persist_wrapped=source_line.persist_wrapped,
+                ))
+                self._queue_progress_update(
+                    (line_pos / max(total_lines, 1)) * 80.0,
+                    f"Wrapping... {line_pos}/{total_lines}",
+                )
+                continue
+
+            if not tag:
+                wrapped_lines.append(WrapLine(
+                    idx=idx,
+                    original=orig,
+                    source_format=source_format,
+                    source_path=source_line.source_path,
+                    wrapped=orig,
+                    char_count=len(orig),
+                    line_count=1,
+                    exceeds_limit=False,
+                    new_textbox_applied=False,
+                    persist_wrapped=True,
                 ))
                 self._queue_progress_update(
                     (line_pos / max(total_lines, 1)) * 80.0,
@@ -1635,7 +1689,6 @@ class WordwrapOverwriteStep(BaseStep):
                     source_format=source_format,
                     source_path=source_line.source_path,
                     wrapped=wrapped,
-                    overwrite=source_line.overwrite,
                     char_count=len(wrapped),
                     line_count=logical_line_count,
                     exceeds_limit=has_overflow,
@@ -1708,7 +1761,6 @@ class WordwrapOverwriteStep(BaseStep):
                 source_format=source_format,
                 source_path=source_line.source_path,
                 wrapped=wrapped,
-                overwrite=source_line.overwrite,
                 char_count=len(wrapped),
                 line_count=lc,
                 exceeds_limit=exceeds,
@@ -1755,6 +1807,34 @@ class WordwrapOverwriteStep(BaseStep):
                 for idx in range(entry.first_idx, entry.last_idx + 1):
                     filedir_type_map[idx] = entry.type
         return line_tag_map, filedir_type_map
+
+    def _resolve_wrap_tag(
+        self,
+        idx: int,
+        line_tag_map: Dict[int, str],
+        filedir_type_map: Dict[int, str],
+    ) -> str:
+        """Resolve the wrap tag for a line according to the selected target policy."""
+        target = self._get_selected_wrap_target()
+
+        line_tag = line_tag_map.get(idx, "")
+        file_tag = filedir_type_map.get(idx, "")
+
+        if target == WrapTarget.TAGS_ONLY:
+            return line_tag
+        if target == WrapTarget.FILE_FIRST:
+            return file_tag or line_tag
+        if target == WrapTarget.FILE_ONLY:
+            return file_tag
+        return line_tag or file_tag
+
+    def _get_selected_wrap_target(self) -> WrapTarget:
+        """Return the currently selected wrap target strategy with a safe default."""
+        try:
+            target_var = getattr(self, "_target_var")
+            return WrapTarget.from_display(target_var.get())
+        except Exception:
+            return WrapTarget.TAGS_FIRST
 
     def _build_line_format_map(self) -> Dict[int, str]:
         """Build idx → file format map from manifest filedir."""
@@ -1921,8 +2001,6 @@ class WordwrapOverwriteStep(BaseStep):
                     if len(line.original) > trunc else line.original)
             wrap = (line.wrapped[:trunc] + "..."
                     if len(line.wrapped) > trunc else line.wrapped)
-            ow = (line.overwrite[:trunc] + "..."
-                  if len(line.overwrite) > trunc else line.overwrite)
             row = TableRow(
                 id=line.idx,
                 values={
@@ -1932,7 +2010,6 @@ class WordwrapOverwriteStep(BaseStep):
                     "lines": str(line.line_count),
                     "original": orig,
                     "wrapped": wrap,
-                    "overwrite": ow,
                 },
                 meta={
                     "source_path": line.source_path,
@@ -1968,7 +2045,6 @@ class WordwrapOverwriteStep(BaseStep):
         )
 
         # Draw length bar
-        bar_len = len(line.wrapped) * scale
         color = THEME.accent_success if len(line.wrapped) <= width else THEME.accent_error
         self._ruler_canvas.create_rectangle(
             10, 5, 10 + bar_len, 15,
@@ -2126,6 +2202,16 @@ class WordwrapOverwriteStep(BaseStep):
         )
         logger.debug("Wordwrap mode saved to manifest: %s", value)
 
+    def _save_wordwrap_target_to_manifest(self, *args: Any) -> None:
+        """Save wordwrap target strategy to manifest when changed."""
+        if self.manifest_manager is None:
+            return
+        value = self._get_selected_wrap_target().value
+        save_nested_text_field(
+            self.manifest_manager, "WordwrapSettings", "Target", value
+        )
+        logger.debug("Wordwrap target saved to manifest: %s", value)
+
     def _save_simple_settings_to_manifest(self, *args: Any) -> None:
         """Persist simple mode settings into the manifest."""
         if self.manifest_manager is None:
@@ -2179,6 +2265,14 @@ class WordwrapOverwriteStep(BaseStep):
             self.manifest_manager, "WordwrapSettings", "Mode", WrapMode.CUSTOM.value
         )
         self._mode_var.set(WrapMode.from_display(mode_value).value)
+
+        target_value = load_nested_text_field(
+            self.manifest_manager,
+            "WordwrapSettings",
+            "Target",
+            WrapTarget.TAGS_FIRST.value,
+        )
+        self._target_var.set(WrapTarget.from_display(target_value).display)
 
         self._simple_width_var.set(load_nested_int_field(
             self.manifest_manager, "WordwrapSettings", "Width", 48
@@ -2347,6 +2441,7 @@ class WordwrapOverwriteStep(BaseStep):
         format_configs = getattr(self, "_format_configs", {})
         step_data["wrap_options"] = {
             "mode": self._mode_var.get(),
+            "target": self._get_selected_wrap_target().value,
             "width": self._get_active_width_limit(),
             "break_char": self._get_active_break_char(),
             "max_lines": self._get_active_max_lines(),
@@ -2445,6 +2540,7 @@ class WordwrapOverwriteStep(BaseStep):
         """
         return WrapOptions(
             mode=WrapMode.from_display(self._mode_var.get()),
+            target=self._get_selected_wrap_target(),
             speaker_mode=SpeakerMode(self._speaker_var.get().lower()),
             width=self._get_active_width_limit(),
             break_char=self._get_active_break_char(),

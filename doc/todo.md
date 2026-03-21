@@ -55,6 +55,26 @@ MODULE COUNTS (Verified January 2026)
 =============================================================================
 [Archived: Sessions 43–24 + Phase 62 → see doc/archived.md]
 
+### BUG FIX: LightVN Hardcoded Equipment Display Rewrite Hook
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Let LightVN extract hardcoded armor-part terms as normal translation rows while keeping the actual machine keys intact during injection, and extend the parser handshake with an optional post-injection rewrite hook for this class of parser-safe code edits.
+
+**Root Causes:**
+1. The equipment UI in `e_armor.txt` reused `防具_選択中部位` both as visible text and as a machine key for jumps, dynamic variable names, and asset paths.
+2. Normal menu and targeted-variable injection would translate quoted part literals in-place, which corrupted control flow and asset lookup.
+3. The parser handshake had no optional post-injection hook for parsers that need structural rewrites after normal text replacement.
+
+**Changes:**
+1. **`formats/parser_base.py` / `formats/handshake.py`** — Added an optional `rewrite_injected_content(...)` hook and surfaced parser capability metadata for that rewrite path.
+2. **`formats/LightVN.py`** — LightVN now extracts hardcoded equipment-part literals as normal rows, skips direct in-place replacement of those machine keys, and uses the rewrite hook to insert a translated display surrogate variable (`防具_選択中部位表示`) plus visible-text placeholder rewrites.
+3. **`dev/test_lightvn_fixes.py`** — Added regressions for the base rewrite hook wiring and real-file `dev/scripts/PYUpgrade/scripts/e_armor.txt` extraction/injection behavior.
+4. **Documentation** — Updated `doc/features.md`, `doc/technical.md`, `doc/specs.md`, and `doc/tests.md` to describe the new handshake capability and the LightVN hardcoded-equipment strategy.
+
+**Tests:** Focused pytest runs passed:
+- `python -m pytest CherryAI/dev/test_lightvn_fixes.py -q --timeout=20` — 45 passed
+- `python -m pytest CherryAI/dev/test_lightvn_fixes.py CherryAI/dev/test_wordwrap_phase46.py CherryAI/dev/test_table_view.py -q --timeout=20` — 250 passed
+
 ### BUG FIX: Wordwrap Simple Mode + File Navigation Rework
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
 
@@ -75,6 +95,27 @@ Goal: Replace the redundant single-mode Step 8 selector with `Custom` and `Simpl
 **Tests:** Focused and broader pytest runs passed:
 - `python -m pytest CherryAI/dev/test_wordwrap_phase46.py -q --timeout=10`
 - `python -m pytest CherryAI/dev/test_wordwrap.py CherryAI/dev/test_wordwrap_manifest.py CherryAI/dev/test_tag_wordwrap.py CherryAI/dev/test_wordwrap_overhaul.py CherryAI/dev/test_gui_v2.py -k "wordwrap or WrapMode or WrapOptionsDataclass or WordwrapStepIntegration" -q --timeout=20` — 204 passed, 2 skipped
+
+### BUG FIX: LightVN Tagged Variable Wrapping + Table Selection Wrap
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 4 hours
+
+Goal: Fix the LightVN `ev_メイン内容`-style missing-tag regression that let Step 8 treat variable text as dialogue, add explicit wrap-target selection in Step 8, remove the obsolete Step 8 Overwrite preview column, stop Simple mode from auto-wrapping on mode change, and add `Wrap Selection` to Full Table View.
+
+**Root Causes:**
+1. Some LightVN targeted variable rows could reach later parser branches without preserving the intended explicit `variable` tag.
+2. Step 8 resolved wrap targets as `tags -> filedir type -> dialogue`, so an untagged line could still be wrapped as dialogue.
+3. The Step 8 preview still documented and exposed an obsolete Overwrite-centric workflow.
+4. Full Table View had no direct way to run the shared Step 8 wrapper on selected rows.
+
+**Changes:**
+1. **`formats/LightVN.py`** — Added tag-safe append handling for parser output and short-circuited targeted exact-variable extraction so rows such as `ev_メイン内容` keep their explicit `variable` tag.
+2. **`gui/steps/wordwrap_overwrite.py`** — Added `Target:` strategies (`Tags first`, `Tags only`, `File first`, `File only`), removed the obsolete Step 8 Overwrite preview column, preserved unresolved rows unchanged instead of forcing a dialogue fallback, and kept Simple mode from auto-refreshing when selected.
+3. **`gui/dialogs/table_view.py`** — Added `Wrap Selection` with a Step 8-style dialog (`Max Char`, `Max Line`, `Break Char`, `Pretty Wrap`), persisted those values into `WordwrapSettings`, and reused the shared `wordwrap` stage source chain for selected rows.
+4. **Tests** — Expanded `dev/test_lightvn_fixes.py`, `dev/test_wordwrap_phase46.py`, and `dev/test_table_view.py` to cover the missing-tag regression, target-strategy behavior, Step 8 UI removal, and table-view wrap-selection persistence.
+5. **Documentation** — Updated `doc/features.md`, `doc/technical.md`, `doc/specs.md`, and `doc/tests.md` to describe the new Wordwrap target policy, LightVN tag contract, and Full Table View wrap-selection flow.
+
+**Tests:** Focused pytest run passed:
+- `python -m pytest CherryAI/dev/test_lightvn_fixes.py CherryAI/dev/test_wordwrap_phase46.py CherryAI/dev/test_table_view.py -q --timeout=10` — 244 passed
 
 ### BUG FIX: Indexed Aggressive Dedup Number Restore + Uni16 Salvage
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
@@ -172,7 +213,7 @@ Goal: Make Step 8 use Analysis-backed speaker detection during wrapping, recogni
 1. Step 8 still relied on incomplete speaker allowlists instead of the full Analysis/parser data path, so translated prefixes such as `Young Horse Keeper:` could still count toward width and manifests with empty `characters[]` could lose speaker-ignore behavior entirely.
 2. Shared wrapping stripped intended leading indentation from lines that fit or were reflowed.
 3. PrettyWrap still used a weak greedy orphan heuristic, so balanced two-line splits such as `...,\nand ...` could degrade into one-word tail lines.
-4. Step 8 treated every overflow case as a generic exceed condition and kept a redundant `Overwrite Differs` filter, even when overflow had already been realized safely as explicit textbox separators.
+4. Step 8 treated every overflow case as a generic exceed condition and kept a redundant Step 8 overwrite-centric filter, even when overflow had already been realized safely as explicit textbox separators.
 5. LightVN conditional dialogue injection still had a static-method `self` reference and could fail at export time with `name 'self' is not defined`.
 6. Step 8 still wrote a duplicate `wrapped_lines` session cache even though `lines[].wordwr` is the real persisted wrap output.
 7. Sparse manifest writes still ran on the Tk main thread after wrapping finished, so the UI progress bar appeared frozen during Apply.
@@ -415,6 +456,46 @@ Goal: Expand LightVN variable extraction beyond the old fixed allowlist without 
 - `doc/tests.md` — focused regression coverage and command
 
 **Tests:** Focused pytest runs passed: `dev/test_lightvn_parser.py`, `dev/test_lightvn_fixes.py` — 77 passed. Expanded injection regression passed: `dev/test_output_injection.py`, `dev/test_lightvn_parser.py`, `dev/test_lightvn_fixes.py` — 116 passed.
+
+### BUG FIX: LightVN Exact Variable Comparisons + Menu Parentheses Preservation
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Extend the LightVN parser so specific displayed variables translate not only on assignment but also when compared with `==` / `!=`, while preserving visible ASCII-parenthesized menu labels such as `回復薬(粗悪品)` that were still falling through untranslated.
+
+**Root Causes:**
+1. LightVN only extracted quoted text from `保存変数` / `臨時全域変数` assignments or the broader project-scoped display-only path, so exact UI/gameplay variables such as `主人公`, `スキル名`, `敵次スキル名`, `敵発動スキル`, and `設定_出産設定説明文` could miss their visible `==` / `!=` comparison literals or bare `変数` assignments.
+2. Some of those exact-name variables also overlapped with the broader project-scoped classifier, which risked duplicate extraction unless the whitelist and generic path were separated.
+3. `_remove_parenthetical_content()` stripped ASCII parentheses everywhere on a menu line, including inside the quoted text itself, so `回復薬(粗悪品)` extracted as `回復薬` and then could not be injected back into the original quoted string.
+
+**Changes:**
+1. **`formats/LightVN.py`** — Added a dedicated exact-name whitelist for visible LightVN variables including `主人公`, `ev_メイン`, `ev_メイン内容`, `子宮状態`, `開発_初めての相手`, `防具_選択中部位`, `武器1_名前`-`武器3_名前`, `武器1_特性1`-`武器3_特性3`, `設定_出産設定説明文`, `スキル名`, `スキル効果`, `敵次スキル名`, `敵発動スキル`, and `bat_ヒロイン次スキル名`.
+2. **`formats/LightVN.py`** — Added one targeted extraction/injection path for those exact names that handles quoted literals from exact `変数` / `保存変数` / `臨時全域変数` assignments plus exact `==` / `!=` comparisons, applies the final `variable` versus `items` tag directly from the targeted helper, keeps parity with the older broad assignment parser on padded placeholder literals such as `"{{道具_馬名前}}  "`, skips file-like literals such as `.txt`, and keeps the same names out of the generic project-scoped classifier to avoid duplicate extraction.
+3. **`formats/LightVN.py`** — Updated menu preprocessing so ASCII parentheses are preserved while inside quoted text, which fixes labels such as `回復薬(粗悪品)`.
+4. **`dev/test_lightvn_fixes.py`** — Added a focused regression for quoted ASCII-parentheses preservation and updated the LightVN full-file integration expectation to include the now-intended `主人公 = "名前入力"` extraction.
+5. **`dev/test_lightvn_parser.py`** — Added focused exact-variable extraction/injection regressions plus real-Uni16 verification that every whitelisted variable is extracted by the new helper, injectable by the same helper, that every targeted assignment the broad helper would have returned is still covered, and that both the targeted-name overlap scan and the remaining broad-helper scan are empty on `Projects/Uni16/Original`.
+6. **`formats/LightVN.py`** — Removed dead whitelist entries `剥ぎ取り素材4` and `剥ぎ取り素材5` after the real-Uni16 scan confirmed they do not occur in the current staged originals.
+7. **Docs** — Updated LightVN feature, technical, spec, and test references to describe the exact-variable path, the file-literal guard, and the menu-parentheses fix.
+
+**Files Modified:**
+- `formats/LightVN.py` — exact-name whitelist, targeted extraction/injection path, quoted-parenthesis preservation
+- `dev/test_lightvn_fixes.py` — menu-parentheses regression, updated integration expectation
+- `dev/test_lightvn_parser.py` — exact-variable regressions and real-Uni16 verification
+- `doc/features.md` — user-facing LightVN behavior
+- `doc/technical.md` — implementation notes for targeted exact-variable handling
+- `doc/specs.md` — LightVN parser specification
+- `doc/tests.md` — focused regression coverage and verified command
+
+**Remaining generic project-scoped variables to review later for whitelist/blacklist placement:**
+- `スキル追加`
+- `剥ぎ取り素材1`
+- `剥ぎ取り素材2`
+- `剥ぎ取り素材3`
+- `獲得食材`
+- `調合素材`
+- `道具効果`
+- `道具名`
+
+**Tests:** Verified focused pytest run passed: `dev/test_lightvn_fixes.py`, `dev/test_lightvn_parser.py`, `dev/test_output_injection.py` — 128 passed.
 
 ### BUG FIX: Line-Agnostic Custom Placeholder Restore + Nested Double-Curly Filtering
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours

@@ -321,6 +321,8 @@ Global Options are application-wide settings accessed via Tools → Options. The
 **Code-Only Skip Condition:**
 Lines consisting entirely of preserved code patterns (code_patterns with `action="preserve"`) are automatically skipped during both Estimation and Translation. The `<NUM>` wildcard in patterns matches concrete numbers (e.g. `<文字色 <NUM> <NUM> <NUM>>` matches `<文字色 255 50 50>`). This avoids sending non-translatable code-only lines to the LLM.
 
+This skip condition is a downstream validation/request-building rule, not a parser rule. Parser extraction must still return every valid quoted payload verbatim; parsers must not strip, split, normalize, or drop quoted code/text on the assumption that later stages will not need it.
+
 #### Caching Settings
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
@@ -713,6 +715,8 @@ Code Spacing Rules (processed in both Pre and Post steps) apply these extended p
 
 **Parser Staging Rule**: When a parser's extraction can depend on project-local context in `Original/` (for example LightVN's project-scoped quoted-variable safety), Step 0 must copy those files into the project `Original/` tree before the final manifest sync and then re-extract from the staged copies. The authoritative `lines[]` / `filedir[]` data must come from that staged pass so Output injection sees the same extraction order later.
 
+**Quoted Payload Preservation Rule**: Parser extraction is positional discovery only. For every valid quoted payload a parser decides to extract, it must return that payload as-is and as its own line entry. Parsers must not strip code, split a valid quoted payload into smaller pieces, normalize markup away, or silently drop a quoted payload because it looks like code-only text. Deduplication, placeholder/code protection, and code recovery belong to downstream preprocessing/postprocessing stages.
+
 #### Handshake Protocol
 
 The Parser Handshake (`formats/handshake.py`) formalizes what every parser must and may provide:
@@ -724,7 +728,7 @@ The Parser Handshake (`formats/handshake.py`) formalizes what every parser must 
 | M2: Inject | `inject(file_path, lines)` — write translations into adjacent copy; `inject_to(source_path, output_path, lines)` — surgical injection reading source, writing to output path |
 | M3: Identity | Either `format_id + extensions` (FormatHandler) or `can_handle(file_path)` (ParserScript) |
 
-**Optional Components** (O1–O8):
+**Optional Components** (O1–O10):
 | Component | Method / Attribute | Description |
 |-----------|--------------------|-------------|
 | O1 | `decrypt(file_path)` | Decrypt before extraction |
@@ -733,13 +737,16 @@ The Parser Handshake (`formats/handshake.py`) formalizes what every parser must 
 | O4 | `detect_speakers(lines)` | Return `List[SpeakerInfo]` from extracted text |
 | O5 | `wordwrap_config` / `wordwrap_for_tag(tag)` | Wrapping config (global or per-tag) |
 | O6 | `wordwrap(line, config)` | Custom wrapping function |
-| O9 | `pretty_wrap(text, width, break_char, max_lines)` | Custom core-wrap replacement (lighter than O6) |
 | O7 | `forbidden_chars` | Characters that must not appear in output |
 | O8 | `tag_rules` | Engine-specific context marker definitions |
+| O9 | `rewrite_injected_content(...)` | Optional parser-side structural rewrite pass after normal injection |
+| O10 | `pretty_wrap(text, width, break_char, max_lines)` | Custom core-wrap replacement (lighter than O6) |
 
-**Surgical Injection** (extends M2): `inject_to(source_path, output_path, lines, *, orig_lines=None) → List[int]` reads the original script from *source_path*, surgically replaces only translatable text with entries from *lines*, and writes the complete script to *output_path*. The default implementation follows a standardized 4-step Speaker:Dialogue-aware handshake: (0) Load `\Original` into memory, (1) Extract keys via `extract_tagged()` (preferred) or `extract()` to get real line positions and speaker metadata, (2) Sequential search-and-replace with speaker awareness — lines with a non-empty speaker are split into a **speaker part** and a **dialogue part** via `_split_speaker_dialogue()` (recognises half-width `: ` and fullwidth `：`); the speaker name is replaced only on its first occurrence for consecutive same-speaker lines, the dialogue part is replaced separately; lines without a speaker use plain find-and-replace, (3) Save the result to *output_path*. Returns a list of failed indices (empty on full success). When *orig_lines* is provided they are used as search strings; when ``None`` the extracted keys are used directly (legacy compatibility). Parsers override this for engine-specific surgical injection (e.g. LightVN uses its own key extraction since extracted text is cleaned and does not appear verbatim in raw files). The Output step (Step 9) calls `inject_to` via the INJECTION format or when `filedir[].format` matches a registered parser.
+**Surgical Injection** (extends M2): `inject_to(source_path, output_path, lines, *, orig_lines=None) → List[int]` reads the original script from *source_path*, surgically replaces only translatable text with entries from *lines*, and writes the complete script to *output_path*. The default implementation follows a standardized 4-step Speaker:Dialogue-aware handshake: (0) Load `\Original` into memory, (1) Extract keys via `extract_tagged()` (preferred) or `extract()` to get real line positions and speaker metadata, (2) Sequential search-and-replace with speaker awareness — lines with a non-empty speaker are split into a **speaker part** and a **dialogue part** via `_split_speaker_dialogue()` (recognises half-width `: ` and fullwidth `：`); the speaker name is replaced only on its first occurrence for consecutive same-speaker lines, the dialogue part is replaced separately; lines without a speaker use plain find-and-replace, (3) Save the result to *output_path*. Returns a list of failed indices (empty on full success). When *orig_lines* is provided they are used as search strings; when ``None`` the extracted keys are used directly (legacy compatibility). If a parser does not provide tagged speaker metadata and the handshake cannot match any extracted key at all, the base implementation may fall back to the older adjacent `_translated` file contract for compatibility. Parsers override this for engine-specific surgical injection (e.g. LightVN uses its own key extraction since extracted text is cleaned and does not appear verbatim in raw files). The Output step (Step 9) calls `inject_to` either through the explicit INJECTION format or through the legacy direct parser-ID route described in Step 9.
 
-**Tagged Extraction** (extends M1): `extract_tagged(file_path) → List[ExtractedLine]` returns lines with tag, speaker, and context metadata. When provided, `extract()` delegates to it for backward compatibility.
+**Post-Injection Rewrite Hook** (extends O9): `rewrite_injected_content(source_path, original_content, injected_content, *, search_keys, translated_lines, orig_lines=None, tagged_lines=None) → Optional[str]` runs after the parser's normal injection pass when a format needs safe structural rewrites instead of direct literal replacement. This is intended for cases where translated display text must be separated from machine keys or where translated output requires companion code inserted alongside the replaced text.
+
+**Tagged Extraction** (extends M1): `extract_tagged(file_path) → List[ExtractedLine]` returns lines with tag, speaker, and context metadata. Each `ExtractedLine.text` value must preserve the extracted quoted payload verbatim. When provided, `extract()` delegates to it for backward compatibility.
 
 **Validation**: `validate_parser(parser) → List[str]` checks M1–M3 compliance and returns a list of error strings (empty = valid).
 
@@ -783,17 +790,19 @@ Reference handshake-compliant parser for Light VN visual novel scripts. Adapted 
 
 **No Deduplication**: Every occurrence of a translatable line is returned, including duplicates. CherryAI's manifest stores per-line entries so deduplication must NOT happen at the parser level — it is handled downstream by the Preprocessing step (Deduplication mode) if enabled.
 
-**Capabilities**: M1 ✓, M2 ✓, M3 ✓ (via `can_handle`), O3 ✓, O4 ✓, O5 ✓ (per-tag), O6 ✓, O7 ✓, O8 ✓, O9 ✓
+**No Parser-Side Stripping**: Valid quoted payloads must be extracted intact, even when they contain only markup, placeholders, or other code-like content. LightVN may classify or tag extracted text, but it must not strip code, split valid quoted payloads, or drop them for being code-only-looking; downstream stages own code protection, stripping, and recovery.
+
+**Capabilities**: M1 ✓, M2 ✓, M3 ✓ (via `can_handle`), O3 ✓, O4 ✓, O5 ✓ (per-tag), O6 ✓, O7 ✓, O8 ✓, O9 ✓, O10 ✓
 
 **Tags**:
 | Tag | Content | Wordwrap |
 |-----|---------|----------|
 | `dialogue` | Quoted dialogue, continuations, conditional dialogue | 60 chars / 3 lines |
 | `menu` | `~文字` and `~ボタン文字` menu strings | No wrap |
-| `variable` | `臨時全域変数` and `保存変数` assignments | No wrap |
+| `variable` | `変数` / `臨時全域変数` / `保存変数` assignments plus targeted `==` / `!=` comparison literals | No wrap |
 | `items` | Item-like variable assignments such as `剥ぎ取り素材1` and `獲得食材` | No wrap |
 
-**Variable Classification**: LightVN still treats explicit allowlists such as `スキル名` / `スキル効果` as normal `variable` content and loot/material style fields such as `臨時全域変数 剥ぎ取り素材1 = "角兎の素材×1"` or `もし (獲得ボーナス >= 2) 臨時全域変数 獲得食材 = "食用の肉×3"` as `items`. In addition, quoted `保存変数` / `臨時全域変数` assignments are now classified project-safely: the parser scans the active `Original/` tree, records whether each quoted-text variable is used only in display text (`文字*`, `文字窓`, `~文字`, dialogue) or also in non-display interpolations / `もし (...)` conditions, and only extracts the display-only set. This allows text-only variables such as `bt_勝利条件` to translate while excluding mixed-use variables such as `胎児` that also feed asset paths and control variables such as `付与対象` that gate battle logic.
+**Variable Classification**: LightVN still treats loot/material style fields such as `臨時全域変数 剥ぎ取り素材1 = "角兎の素材×1"` or `もし (獲得ボーナス >= 2) 臨時全域変数 獲得食材 = "食用の肉×3"` as `items`. In addition, an exact-name whitelist now handles visible gameplay/UI variables such as `主人公`, `ev_メイン`, `ev_メイン内容`, `子宮状態`, `開発_初めての相手`, `防具_選択中部位`, the `武器*` name/effect fields, `設定_出産設定説明文`, `スキル名`, `スキル効果`, `敵次スキル名`, `敵発動スキル`, `bat_ヒロイン次スキル名`, plus targeted loot/material names such as `剥ぎ取り素材1`-`剥ぎ取り素材3`, `獲得食材`, `調合素材`, `道具効果`, and `道具名`. For that whitelist the parser extracts quoted literals from exact `変数` / `保存変数` / `臨時全域変数` assignments plus exact `==` / `!=` comparisons, returns the final `variable` versus `items` tag directly from the targeted helper, preserves broad-helper parity for padded placeholder literals such as `"{{道具_馬名前}}  "`, skips file-like literals such as `.txt`, and excludes the same names from the broader project-scoped classifier to avoid duplicate extraction. On the verified Uni16 staged originals this exact-name path now covers every extracted quoted variable/item assignment, so the broad project-scoped helper contributes no entries there; however, the broader helper remains part of the spec for other projects that need to build their own whitelist. Beyond that whitelist, quoted `保存変数` / `臨時全域変数` assignments are still classified project-safely: the parser scans the active `Original/` tree, records whether each quoted-text variable is used only in display text (`文字*`, `文字窓`, `~文字`, dialogue) or also in non-display interpolations / `もし (...)` conditions, and only extracts the display-only set. This allows text-only variables such as `bt_勝利条件` to translate while excluding mixed-use variables such as `胎児` that also feed asset paths and control variables such as `付与対象` that gate battle logic. Menu-text preprocessing must preserve ASCII parentheses that appear inside the quoted display string, so values such as `回復薬(粗悪品)` remain intact through extraction and injection.
 
 **Load/Inject Consistency Requirement**: Because that classification depends on the staged project tree, manifest line slices for LightVN files must be built from the staged `Original/` copy rather than the pre-copy source path. Otherwise the same untouched project can emit Output-step verification warnings such as `orig mismatch` or downstream `index out of range` cascades even before translation begins.
 
@@ -804,6 +813,8 @@ Reference handshake-compliant parser for Light VN visual novel scripts. Adapted 
 **Placeholder Dialogue Filtering**: Template scaffolding such as `ここにテキストを入力` / `Enter your text here.` is rendered dialogue text in the script, but it is not real game content. The parser excludes these placeholder lines from extraction so they are not translated and do not pollute speaker analysis.
 
 **Surgical Injection**: `inject_to(source, output, lines)` reads the original script, re-extracts translatable keys, maps them 1:1 with the provided translations, and calls `_inject_all()` for surgical replacement of dialogue, menu, variable, and item-assignment text while preserving all non-translatable commands and structure. `inject()` delegates to `inject_to()` for backward compatibility.
+
+**Hardcoded Machine-Key Rewrite**: LightVN now uses the optional post-injection rewrite hook for `防具_選択中部位`, the hardcoded armor-part control variable used by the equipment UI. The parser extracts those part literals as normal rows, but normal menu/targeted replacement intentionally skips in-place mutation of the machine-key occurrences. During injection, LightVN inserts a translated display surrogate variable (`防具_選択中部位表示`) after each selected-part assignment and rewrites visible menu strings such as `"{{防具_選択中部位}}アクセサリー"` to display `{{防具_選択中部位表示}}` instead. This preserves jumps, dynamic variable names, and asset paths while still allowing translated part names on screen.
 
 **Tag Propagation**: When `extract_tagged()` is used during loading, per-line tags (`dialogue`, `menu`, `variable`, `items`) are stored in `LoadedFile.tags` and merged into the manifest's canonical `tags` field during `_sync_lines_to_manifest()`. The O8 `tag_rules` regex pass in `_wire_parser_optionals` skips lines that already have a primary content tag.
 
@@ -3855,9 +3866,10 @@ Key principles:
 - **Code-aware**: Ignore patterns come from the Code Database (Step 3), not from hardcoded checkboxes.
 - **Format-safe**: The preview Format selector is populated from manifest `filedir[].format`, and wrapping only runs on rows that belong to each enabled format.
 - **File-scoped simple wrapping**: Step 8 includes a compact `Select File:` picker using the Full Table View file-filter dropdown. In `Simple` mode, Apply only processes the currently selected file scope.
+- **Selectable target resolution**: Step 8 exposes `Target:` strategies (`Tags first`, `Tags only`, `File first`, `File only`) instead of assuming every untyped row is dialogue.
 - **Speaker-safe**: `Ignore` excludes the speaker prefix from width calculation, but does not remove it from output.
 - **Escape-safe**: Literal non-RPG break commands such as `\n` remain visible wrap boundaries, and unrelated backslashes are preserved.
-- **Overwrite integrated**: The Overwrite column lives in the same table as Wordwrap, eliminating the need for a separate Overwrite Strategy widget. It can be edited.
+- **Sparse and non-destructive**: Rows whose target cannot be resolved under the selected strategy are preserved unchanged and are not forced through a fallback wrap profile.
 
 #### Widgets
 
@@ -3867,6 +3879,7 @@ Key principles:
 | Refresh Preview Button | Button | Recalculate preview without applying |
 | Reset Button | Button | Clear wordwrap results |
 | Mode Dropdown | Combobox | Wrapping mode (`Custom` or `Simple`) |
+| Target Dropdown | Combobox | Wrap target strategy (`Tags first`, `Tags only`, `File first`, `File only`) |
 | Format Dropdown | Combobox | Select preview format from manifest `filedir[].format` |
 | Select File Button | Button + hierarchical dropdown | Scope preview rows to one source file using the Full Table View file-filter structure |
 | Format Enabled Checkbox | Checkbox | Enable/disable wrapping for the selected format |
@@ -3877,7 +3890,7 @@ Key principles:
 | Max Lines Spinbox | Spinbox | Maximum lines per box (0=unlimited) |
 | Speaker Handling Dropdown | Combobox | How to count speaker prefixes: Ignore / Count |
 | Ignore Patterns Table | Table (read-only) | Patterns from Code Database used during wrap |
-| Lines Table | SharedTable | Source, Wordwrap, Overwrite columns with filters |
+| Lines Table | SharedTable | Source and Wordwrap columns with filters |
 | View in File Button | Button | Filter the preview to the selected line's source file and focus that line |
 | Filter Radios | RadioGroup | All / Changed / Exceeding / New Textbox |
 
@@ -3916,7 +3929,7 @@ Wordwrap settings are grouped by manifest format first, then by tag. Each format
 **Behavior**:
 - **Parser-provided defaults**: When the active parser provides `wordwrap_for_tag(tag)` returning a non-None config, the tag section is pre-populated with the parser's values (width, break char, max lines, new textbox injection). All values remain **editable** — the parser only provides sensible defaults.
 - **Width=0**: Zero width means no wrapping for that tag.
-- **Tag resolution** (per line): Canonical line `tags` primary content tag → filedir entry `type` field → `"dialogue"` fallback.
+- **Tag resolution** (per line): Controlled by the selected `Target:` strategy. If no tag resolves under that strategy, the row is left unchanged instead of falling back to `dialogue`.
 - **Invisible width rules**: Built-in invisible span families and Code Database patterns marked `IsInvisible` are excluded from width calculation.
 - **Add Tag**: Dropdown shows tags not yet configured. Adding creates a new section with parser-provided defaults (when available).
 - **Remove Tag**: Non-standard tags (not dialogue/menu) have a "Remove tag" button.
@@ -3935,7 +3948,7 @@ Wordwrap settings are grouped by manifest format first, then by tag. Each format
 
 **Behavior**:
 - **Custom**: User configures per-format and per-tag settings (width, break char, max lines, speaker handling, PrettyWrap, textbox injection) directly.
-- **Simple**: User configures one shared Character Limit, Line Limit, Break Char, and Pretty Wrap set. Apply is limited to the selected file scope when a file filter is active.
+- **Simple**: User configures one shared Character Limit, Line Limit, Break Char, and Pretty Wrap set. Apply is limited to the selected file scope when a file filter is active, and switching into Simple mode does not auto-run wrapping.
 - Parser-specific defaults are loaded from the selected format's parser tag configs; the UI still exposes them through the shared Manual mode controls instead of switching to a separate parser-exclusive mode.
 - Legacy `Manual` / `manual` manifest values are loaded as `Custom` for backward compatibility.
 - RPG Maker is **not** a wordwrap mode — it becomes its own parser (see Future Improvements).
@@ -4041,15 +4054,9 @@ Ignore patterns are **no longer configured in Wordwrap settings**. Instead, they
 | Column | Source | Description |
 |--------|--------|-------------|
 | # | Index | Line number |
-| Input | `qa_overwrite[] → qa[] → postpro[] → tl[] → prepro[] → orig[]` | Input text for wrapping (stage-bounded) |
+| Input | `qa[] → postpro[] → tl[] → prepro[] → orig[]` | Input text for wrapping (stage-bounded) |
 | Wordwrap | `wordwr[]` | Wrapped result |
-| Overwrite | Table-only draft field | Final injected text preview/edit value kept in the Step 8 table session |
 | Status | Computed | OK / Exceeding / New Textbox |
-
-**Overwrite Column Behavior**:
-- Loaded from the current Step 8 table rows, preserving any in-session edits while wrapping is recalculated.
-- The Overwrite value is a Step 8 working column, not a separate manifest stage field.
-- It is editable, but it is not a separate filter/status class.
 
 **Filters**:
 - **All**: Show all lines.
@@ -4060,7 +4067,7 @@ Ignore patterns are **no longer configured in Wordwrap settings**. Instead, they
 #### Data Flow
 
 **Inputs**:
-- From Step 7: QA-reviewed stage output resolved as `qa_overwrite[] → qa[] → postpro[] → tl[] → prepro[] → orig[]`
+- From Step 7: QA-reviewed stage output resolved as `qa[] → postpro[] → tl[] → prepro[] → orig[]`
 - From Step 3: Code Database patterns (for ignore pattern list)
 - From Manifest: `WordwrapSettings.*` (saved settings)
 
@@ -4069,19 +4076,17 @@ Ignore patterns are **no longer configured in Wordwrap settings**. Instead, they
 2. Build line-format and tag maps: `line_format_map` (line index → `filedir[].format`), `line_tag_map` (line index → primary content tag from canonical `lines[].tags`), and `filedir_type_map` (line index → type from `filedir[].type`).
 3. For each line:
   a. Resolve format from manifest `filedir[].format`; skip wrapping if that format is disabled.
-  b. Resolve tag: canonical line `tags` primary content tag → filedir `type` → `"dialogue"` fallback.
+  b. Resolve tag through the selected `Target:` strategy; if no target resolves, preserve the row unchanged.
   c. Look up the selected format's `TagWrapConfig` for the resolved tag. Disabled tag or Width=0 → skip (no wrap).
   d. Detect speaker prefix per Speaker Handling mode.
   e. Calculate visible width (excluding ignored code patterns).
   f. Apply shared `apply_wordwrap()` with the resolved per-tag config and PrettyWrap toggle.
   g. Insert break characters at calculated positions.
   h. Respect max lines constraint as an exceed flag, not truncation; if textbox overflow support exists, emit the configured separator into `wordwr` instead.
-  i. Preserve the current Overwrite column edit for the row while updating the wrapped result.
 4. Calculate wrap statistics (lines changed, lines exceeding, total breaks inserted) and report progress while the worker thread wraps lines and persists sparse `wordwr` updates.
 
 **Outputs**:
 - `wordwr: List[str]` — Wrapped lines persisted directly on `lines[].wordwr`
-- `overwrite: List[str]` — Injection-ready output lines
 - `wrap_stats: WrapStats` — Lines wrapped, exceeding count, break count
 
 **Stored In**:
@@ -4280,8 +4285,8 @@ Output inherits these settings from Input to ensure format consistency:
 4. For each source file:
    a. Determine output path based on naming strategy.
    b. **Fresh line reads** — `_get_fresh_lines_for_file()` reads directly from the manifest manager every time (not from cached `step_data["lines"]`), using `resolve_line_field()` per line. This ensures Full Table View edits are immediately reflected without restart.
-   c. **INJECTION format** (standardized parser handshake): When format is `injection`, `_write_injection()` executes the 4-step handshake: (0) Load `\Original` via `mgr.resolve_file_path()`, (1) Extract keys via `parser.extract()`, (2) Sequential match — verify each extracted key matches manifest `orig` field; resolve best text via `resolve_line_field()`; mark mismatches as failures preserving original text, (3) Call `parser.inject_to(source, output, translated_lines, orig_lines=orig_lines)`. Reports failures via logger.
-   d. **Parser-based surgical injection** (legacy path): Check `filedir[].format` against `ParserRegistry`. When a parser is found, slice per-file lines using `first_idx:last_idx+1` and call `parser.inject_to(source_path, output_path, file_lines)`. Falls back to generic writer on failure.
+  c. **INJECTION format** (standardized parser handshake): When format is `injection`, `_write_injection()` executes the 4-step handshake: (0) Load `\Original` via `mgr.resolve_file_path()`, (1) Extract keys via `parser.extract()`, (2) Sequential match — verify each extracted key matches manifest `orig` field; resolve best text via `resolve_line_field()`; mark mismatches as failures preserving original text, (3) Call `parser.inject_to(source, output, translated_lines, orig_lines=orig_lines)`. Reports failures via logger.
+  d. **Parser-based surgical injection** (legacy direct path): When the selected output format itself is a registered parser ID such as `lightvn`, Step 9 slices per-file lines using `first_idx:last_idx+1` from the current output stage and calls `parser.inject_to(source_path, output_path, file_lines)` directly without the extra manifest `orig` verification layer.
    e. **Generic format writer (fallback)**: When no parser matches the filedir format, write using format-specific writer (TXT, CSV, TSV, JSON, XLSX) with freshly resolved lines.
    f. Create backup of existing output file if it exists and backup is enabled.
    g. Log success or failure with details.
@@ -4968,7 +4973,7 @@ All log files are plain UTF-8 text. They follow a common structure: **Header →
   Status: {PASS | RECOVERED: {type} | (PARTIAL) FAILURE {type}}
   Wrapped Lines: {count}
   Exceeding: {yes | no}
-  Overwrite Differs: {yes | no}
+  New Textbox: {yes | no}
   Break Positions: [{pos1}, {pos2}, ...]
   Time: {ms}ms
 ```
@@ -4980,7 +4985,7 @@ All log files are plain UTF-8 text. They follow a common structure: **Header →
  Completed: {ISO 8601 timestamp}
  Duration: {total_time}
  Total Lines: {total} | Changed: {count} | Unchanged: {count} | Exceeding: {count}
- Overwrite Differs: {count}
+ New Textbox: {count}
  Total Breaks Inserted: {count}
 ============================================================
 ```
@@ -5700,7 +5705,7 @@ symbol-only dialogue, skip generic placeholders.
 | 3.1 | 2026-03-02 | Task 74 — Request Preview Overhaul: Informative section headers (SECTION_DESCRIPTIONS dict, 12 keys), renamed custom_notes → system_instructions across 6 files, formation-based chunking (4-step build_requests pipeline integrated into _build_chunks), rolling context in translation loop (receives_context/provides_context flags, rolling_ctx_buffer), per-chunk selective glossary/conditional/character filtering (chunk_lines parameter), cross-request search (global match index navigation across all requests), request logging toggle (log_requests in LoggingSettings, JSON to logs/requests/). Fixed step index bugs (3→2) in metadata lookup. 110 tests passing (20 prompt_builder_shared + 42 request_preview + 50 request_formation). |
 | 3.0 | 2026-02-10 | Phase 17 Infrastructure: Added Batch API support (batch_tracker.py — JSONL builder, job persistence, submit/poll/cancel), Multi-Key Management (key_manager.py — key pools with sequential/even/priority rotation), Named API Profiles (project_config.py — display_name, system_prompt_tweak, rename/duplicate), Additional File Formats (markdown.py, json_lenient.py, translator_plus.py), Usage Analytics (usage_tracker.py — SQLite-backed token/cost tracking with CSV export), Agent-Assisted Modes (agent_modes.py — mode registry, sandboxed writes, audit logging), Estimation Engine (estimation.py — itemized billing, model comparison, persistence), i18n & Tooltips (i18n.py — JSON language files with fallback, tooltip.py — configurable Tk tooltips). Session persistence (app.py saves/restores last step). Bug fixes: estimate_rate_limit_time() missing params; SharedTable batch insertion duplicate item IDs (added _batch_insert_version counter). Added 339 new tests (5619 total). |
 | 2.8 | 2026-02-08 | Comprehensive rewrite of Step 9 (Output): Defined injection priority chain (9-level: overwrite → wordwrap → postprocessed → edit{N} → tlc{N} → translation → preedit → preprocessed → original). Added Dirty Flags system (Process flag set by preprocessing/cleared by postprocessing 100%, Wordwrap flag cleared when applied) with pre-export validation dialog. Non-destructive default (subfolder naming, no overwrite). Failure logging with per-file error tracking. Complete widget specifications with destination, format, naming, safety, and export extras sections. Settings received from Input (source_root, file_dir, encoding, format). Step 0 (Input): Added Import Translations button — imports translations from another manifest via exact `orig` line matching (sequential search, file/line-number agnostic, copies all processing fields). Step 5 (Translation): Added Skip Already Translated checkbox — skips lines with existing `tl` field for incremental translation workflows. Bug fixes: QA mousewheel TclError (try/except wrapper for race condition), output_inject `get_section` → `get_output_options()`, preprocess warning demoted to debug. |
-| 2.7 | 2026-02-08 | Comprehensive rewrite of Step 8 (Wordwrap): Redefined purpose (auto from parser or manual settings). Pretty wrap is now standard — removed Prevent Orphans and Prefer Punctuation Breaks checkboxes (always active). Mode changed from radio buttons to dropdown, removed RPG Maker (→ its own parser) and Disabled options. Width changed from Spinbox to Dropdown with Character/Pixel modes. Break Character linked to Preprocessing and Translation Prompt with cost-optimization note. Speaker Handling reduced to Ignore + Count (renamed from Sameline), removed Samelineindent and Newline. Ignore Patterns replaced with read-only Code Database table (no checkboxes). Removed Typography widget entirely. Removed Overwrite Strategy widget — Overwrite becomes a column in the Lines Table with diff filtering. Added table filters (All/Changed/Exceeding/Overwrite Differs). Added Standard Wrapping Rules table documenting always-active `pretty_wrap()` behavior. Added comprehensive Future Improvements for parser-driven wrap, font commands, pixel-accurate width, New Textboxes, and break char removal before translation. |
+| 2.7 | 2026-02-08 | Comprehensive rewrite of Step 8 (Wordwrap): Redefined purpose (auto from parser or manual settings). Pretty wrap is now standard — removed Prevent Orphans and Prefer Punctuation Breaks checkboxes (always active). Mode changed from radio buttons to dropdown, removed RPG Maker (→ its own parser) and Disabled options. Width changed from Spinbox to Dropdown with Character/Pixel modes. Break Character linked to Preprocessing and Translation Prompt with cost-optimization note. Speaker Handling reduced to Ignore + Count (renamed from Sameline), removed Samelineindent and Newline. Ignore Patterns replaced with read-only Code Database table (no checkboxes). Removed Typography widget entirely. Removed Overwrite Strategy widget, then later removed the obsolete Step 8 Overwrite preview column as well. Added selectable wrap-target strategies (`Tags first`, `Tags only`, `File first`, `File only`) and current table filters (All/Changed/Exceeding/New Textbox). Added Standard Wrapping Rules table documenting always-active `pretty_wrap()` behavior. Added comprehensive Future Improvements for parser-driven wrap, font commands, pixel-accurate width, New Textboxes, and break char removal before translation. |
 | 2.6 | 2026-02-08 | Comprehensive rewrite of Step 7 (Postprocessing): Complete mirror-symmetry spec with Step 4 Preprocessing — reverse priority ordering, automatic restorations (Placeholder/Code/BR always-on, no GUI toggle), post-exclusive recovery processes (Bracket Balance, Quote Balance, Whitespace Normalization with toggles). Renamed "Postprocessed Lines" to "Processed Lines" with new filters (Changed/Written/Flagged/By Process). Removed Refresh and Revert All buttons (overwrite semantics with confirmation dialog). Added Postprocess Options widget (bidirectional Symbol Conversion: Fullwidth↔Halfwidth). Redesigned Failure Handling (Write=default, Flag for Review=no-write, Queue for Retry=hidden/future). Added Diff View manual editing with Mark-as-Fixed. Added Postprocessing Summary with live updates and 100% completion popup. Fixed MouseWheel `bind_all` bug across all step files (qa.py, postprocess.py, translate.py, wordwrap_overwrite.py, output_inject.py). |
 | 2.5 | 2026-02-07 | Step 5 (Translation): Added Translation/Edit/TLC Mode Toggle to Hidden (Future Improvement) — three-way toggle with line-matching strategy design challenge. Step 6 (Quality Assurance): Complete rewrite — defined purpose as safety net for issues automatic recovery couldn't fix, added philosophy section, specified placeholder toggle mode (current state), preserved full widget spec and validation rules as future reference, added Edit/TLC filtering note. |
 | 2.4 | 2026-02-07 | Comprehensive update to Step 5 (Translation): Complete widget specifications for Translatable Lines (merged Original/Preprocessed into "To be Translated"), Request Options (Model from Global Options providers, Mock Translation default, Lines/Chunk sync with Estimation, Retry Strategy details for Batch/Contextual, Skip Non-Source Language), Preview Requests (RequestPreviewDialog with Pure/Formatted/Plain views, Jump/Search/Filter toolbar, Ban Tokens separated), API Usage (live metrics). Added performance requirements (< 1s load for 100K lines, virtual scrolling, tab caching). Moved Request Caching, Extended Thinking, and Rolling Context to Global Options. Hidden Edit Before Translation and Line-by-Line Mode as Future Improvements. Added Mock Translation specification. |

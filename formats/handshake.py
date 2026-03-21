@@ -5,11 +5,18 @@ Contains mandatory/optional component validation, shared dataclasses,
 and error types for parser compliance.
 
 Mandatory components (M1-M3):
-    - M1: extract(path, encoding) → list[str]
+        - M1: extract(path, encoding) → list[str]
     - M2: inject(path, lines, encoding)
     - M3: format_id + extensions  OR  can_handle(path) → bool
 
-Optional components (O1-O8):
+Extraction contract:
+        - Parsers must preserve every valid quoted payload as its own extracted line.
+        - Parsers must not strip, split, normalize, or drop code/text inside a
+            valid quoted payload during extraction.
+        - Deduplication, code stripping, placeholder protection, and code recovery
+            belong to downstream preprocessing/postprocessing stages, not the parser.
+
+Optional components (O1-O9):
     - O1: decrypt(path) → path
     - O2: encrypt(path) → path
     - O3: detect_encoding(path) → str  OR  encoding: str
@@ -18,6 +25,7 @@ Optional components (O1-O8):
     - O6: wordwrap(line, config) → list[str]
     - O7: forbidden_chars: ForbiddenChars
     - O8: tag_rules: TagRules
+    - O9: rewrite_injected_content(...) → str | None
 """
 
 from __future__ import annotations
@@ -58,8 +66,13 @@ class ExtractedLine:
     Returned by ``extract_tagged()`` to provide per-line tag and speaker
     information alongside the translatable text.
 
+    The ``text`` field represents the parser's extracted payload exactly as the
+    parser handed it off for downstream processing. Valid quoted payloads must
+    be preserved verbatim at extraction time; parser-side stripping, splitting,
+    deduplication, or code recovery belongs elsewhere in the pipeline.
+
     Attributes:
-        text: The translatable text content.
+        text: The extracted payload content, preserved verbatim.
         tag: Parser-specific tag (e.g. ``"dialogue"``, ``"menu"``,
             ``"variable"``).  Empty string when untagged.
         speaker: Speaker name for dialogue lines.  Empty for non-dialogue.

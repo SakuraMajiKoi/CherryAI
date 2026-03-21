@@ -30,7 +30,18 @@ from CherryAI.functions.manifest_manager import (
     ManifestManager,
     parse_line_tags,
 )
-from CherryAI.functions.manifest_fields import PIPELINE_FIELDS, get_final_field_source
+from CherryAI.functions.manifest_fields import (
+    PIPELINE_FIELDS,
+    get_final_field_source,
+    load_nested_bool_field,
+    load_nested_int_field,
+    load_nested_text_field,
+    resolve_line_field_for_stage,
+    save_nested_bool_field,
+    save_nested_int_field,
+    save_nested_text_field,
+)
+from CherryAI.functions.wordwrap import WordwrapConfig, apply_wordwrap, normalize_break_char
 
 logger = logging.getLogger(__name__)
 
@@ -293,6 +304,10 @@ class FullTableViewDialog(tk.Toplevel):
 
         ttk.Button(
             btn_frame, text="Clear Columns", command=self._show_clear_columns_dialog,
+        ).pack(side="left", padx=(0, 8))
+
+        ttk.Button(
+            btn_frame, text="Wrap Selection", command=self._show_wrap_selection_dialog,
         ).pack(side="left", padx=(0, 8))
 
         ttk.Button(
@@ -1122,6 +1137,36 @@ class FullTableViewDialog(tk.Toplevel):
             return
         self._clear_columns_completely(dialog.result)
 
+    def _show_wrap_selection_dialog(self) -> None:
+        """Open a Simple-mode-style dialog and apply wrapping to the selected rows."""
+        row_indices = self._get_target_row_indices()
+        if not row_indices:
+            messagebox.showinfo("Wrap Selection", "Select one or more rows first.")
+            return
+
+        dialog = _WrapSelectionDialog(self, self._mgr)
+        self.wait_window(dialog)
+        if not dialog.result:
+            return
+
+        settings = dialog.result
+        self._save_wrap_selection_settings(settings)
+        wrapped_count, cleared_count, overflow_count = self._apply_wrap_selection(
+            row_indices,
+            width=int(settings["width"]),
+            max_lines=int(settings["max_lines"]),
+            break_char=str(settings["break_char"]),
+            pretty_wrap=bool(settings["pretty_wrap"]),
+        )
+        self._refresh_table()
+
+        parts = [f"Wrapped {wrapped_count} row(s)"]
+        if cleared_count:
+            parts.append(f"cleared {cleared_count} unchanged row(s)")
+        if overflow_count:
+            parts.append(f"left {overflow_count} row(s) unchanged because they exceed Line Limit")
+        messagebox.showinfo("Wrap Selection", "; ".join(parts) + ".")
+
     def _clear_columns_completely(self, columns: List[str]) -> None:
         """Clear selected columns completely from the affected lines."""
         if not columns:
@@ -1274,6 +1319,105 @@ class FullTableViewDialog(tk.Toplevel):
             return sorted(self._selected_rows)
         selection = self._tree.selection() if hasattr(self, "_tree") else ()
         return sorted(int(item) for item in selection)
+
+    def _get_wrap_selection_defaults(self) -> Dict[str, Any]:
+        """Return the persisted Simple-mode wrap settings used by Wrap Selection."""
+        return {
+            "width": load_nested_int_field(self._mgr, "WordwrapSettings", "Width", 48),
+            "max_lines": load_nested_int_field(self._mgr, "WordwrapSettings", "MaxLines", 4),
+            "break_char": load_nested_text_field(self._mgr, "WordwrapSettings", "BreakChar", "\\n"),
+            "pretty_wrap": load_nested_bool_field(
+                self._mgr,
+                "WordwrapSettings",
+                "PrettyWrap",
+                True,
+            ),
+        }
+
+    def _save_wrap_selection_settings(self, settings: Dict[str, Any]) -> None:
+        """Persist the last-used Wrap Selection values for convenience."""
+        save_nested_int_field(self._mgr, "WordwrapSettings", "Width", int(settings["width"]))
+        save_nested_int_field(
+            self._mgr,
+            "WordwrapSettings",
+            "MaxLines",
+            int(settings["max_lines"]),
+        )
+        save_nested_text_field(
+            self._mgr,
+            "WordwrapSettings",
+            "BreakChar",
+            str(settings["break_char"]),
+        )
+        save_nested_bool_field(
+            self._mgr,
+            "WordwrapSettings",
+            "PrettyWrap",
+            bool(settings["pretty_wrap"]),
+        )
+
+    def _apply_wrap_selection(
+        self,
+        row_indices: List[int],
+        *,
+        width: int,
+        max_lines: int,
+        break_char: str,
+        pretty_wrap: bool,
+    ) -> Tuple[int, int, int]:
+        """Apply shared Simple-mode wrapping to the selected manifest rows."""
+        if width <= 0:
+            return 0, 0, 0
+
+        config = WordwrapConfig(
+            mode="simple",
+            in1=width,
+            in2=break_char,
+            pretty_wrap=pretty_wrap,
+        )
+        normalized_break = normalize_break_char(break_char)
+        wrapped_count = 0
+        cleared_count = 0
+        overflow_count = 0
+
+        for idx in row_indices:
+            line = self._find_line(idx)
+            if line is None:
+                continue
+
+            source_text = resolve_line_field_for_stage(line, "wordwrap")
+            if not source_text:
+                continue
+
+            wrapped_list = apply_wordwrap([source_text], config)
+            wrapped_text = wrapped_list[0] if wrapped_list else source_text
+            line_count = wrapped_text.count(normalized_break) + 1 if normalized_break else 1
+
+            if max_lines > 0 and line_count > max_lines:
+                overflow_count += 1
+                if "wordwr" in line:
+                    line.pop("wordwr", None)
+                    if self._original_has_field(idx, "wordwr"):
+                        self._record_delete(idx, "wordwr")
+                    else:
+                        self._discard_pending_field_change(idx, "wordwr")
+                continue
+
+            if wrapped_text != source_text:
+                line["wordwr"] = wrapped_text
+                self._record_change(idx, "wordwr", wrapped_text)
+                wrapped_count += 1
+                continue
+
+            if "wordwr" in line:
+                line.pop("wordwr", None)
+                if self._original_has_field(idx, "wordwr"):
+                    self._record_delete(idx, "wordwr")
+                else:
+                    self._discard_pending_field_change(idx, "wordwr")
+                cleared_count += 1
+
+        return wrapped_count, cleared_count, overflow_count
 
     def _has_changes(self) -> bool:
         """Check if there are any unsaved changes."""
@@ -1581,6 +1725,109 @@ class _FileFilterDropdown(tk.Toplevel):
                 self.destroy()
         except tk.TclError:
             pass
+
+
+class _WrapSelectionDialog(tk.Toplevel):
+    """Simple-mode-style dialog for applying wordwrap to selected rows."""
+
+    def __init__(self, parent: tk.Widget, manager: ManifestManager) -> None:
+        super().__init__(parent)
+        self.title("Wrap Selection")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.grab_set()
+
+        self.result: Optional[Dict[str, Any]] = None
+        defaults = {
+            "width": load_nested_int_field(manager, "WordwrapSettings", "Width", 48),
+            "max_lines": load_nested_int_field(manager, "WordwrapSettings", "MaxLines", 4),
+            "break_char": load_nested_text_field(manager, "WordwrapSettings", "BreakChar", "\\n"),
+            "pretty_wrap": load_nested_bool_field(manager, "WordwrapSettings", "PrettyWrap", True),
+        }
+
+        self._width_var = tk.IntVar(value=defaults["width"])
+        self._max_lines_var = tk.IntVar(value=defaults["max_lines"])
+        self._break_var = tk.StringVar(value=defaults["break_char"])
+        self._pretty_var = tk.BooleanVar(value=defaults["pretty_wrap"])
+
+        body = ttk.Frame(self, padding=10)
+        body.pack(fill="both", expand=True)
+
+        ttk.Label(
+            body,
+            text="Apply Simple-mode wordwrap to the selected rows.",
+        ).pack(anchor="w", pady=(0, 8))
+
+        width_row = ttk.Frame(body)
+        width_row.pack(fill="x", pady=2)
+        ttk.Label(width_row, text="Max Char:").pack(side="left")
+        ttk.Spinbox(
+            width_row,
+            from_=1,
+            to=999,
+            textvariable=self._width_var,
+            width=8,
+        ).pack(side="left", padx=6)
+
+        lines_row = ttk.Frame(body)
+        lines_row.pack(fill="x", pady=2)
+        ttk.Label(lines_row, text="Max Line:").pack(side="left")
+        ttk.Spinbox(
+            lines_row,
+            from_=0,
+            to=20,
+            textvariable=self._max_lines_var,
+            width=8,
+        ).pack(side="left", padx=6)
+        ttk.Label(lines_row, text="0 = unlimited").pack(side="left")
+
+        break_row = ttk.Frame(body)
+        break_row.pack(fill="x", pady=2)
+        ttk.Label(break_row, text="Break Char:").pack(side="left")
+        ttk.Entry(
+            break_row,
+            textvariable=self._break_var,
+            width=12,
+        ).pack(side="left", padx=6)
+
+        pretty_row = ttk.Frame(body)
+        pretty_row.pack(fill="x", pady=(4, 2))
+        ttk.Checkbutton(
+            pretty_row,
+            text="Pretty Wrap",
+            variable=self._pretty_var,
+        ).pack(side="left")
+
+        ttk.Label(
+            body,
+            text=(
+                "Note: an actual newline inserts a literal line break. "
+                "Typing \\\\n keeps the slash command text some engines use."
+            ),
+            foreground=COLOR_TEXT_SEC,
+            wraplength=340,
+            justify="left",
+        ).pack(anchor="w", pady=(8, 0))
+
+        buttons = ttk.Frame(body)
+        buttons.pack(fill="x", pady=(10, 0))
+        ttk.Button(buttons, text="Wrap", command=self._on_ok).pack(side="right")
+        ttk.Button(buttons, text="Cancel", command=self._on_cancel).pack(side="right", padx=(0, 6))
+
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+    def _on_ok(self) -> None:
+        self.result = {
+            "width": self._width_var.get(),
+            "max_lines": self._max_lines_var.get(),
+            "break_char": self._break_var.get(),
+            "pretty_wrap": self._pretty_var.get(),
+        }
+        self.destroy()
+
+    def _on_cancel(self) -> None:
+        self.result = None
+        self.destroy()
 
 
 class _ClearColumnsDialog(tk.Toplevel):

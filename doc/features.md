@@ -1364,10 +1364,16 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
       - Custom: Existing per-format and per-tag wrapping workflow with parser-aware defaults
       - Simple: One shared rule set asking only for Character Limit, Line Limit, Break Char, and Pretty Wrap
       - Legacy `Manual` manifests still load as `Custom`
+    - Target selection (WrapTarget enum):
+      - Tags first: canonical line `tags` primary content tag, then filedir `type`
+      - Tags only: canonical line `tags` primary content tag only
+      - File first: filedir `type`, then canonical line `tags`
+      - File only: filedir `type` only
     - Width mode dropdown (Character / Pixel) with per-tag width values
     - Break character combo (\\n, \n, <br>, [r], \\r\\n)
     - Max lines spinbox (0=unlimited, 1-20)
     - Simple mode settings are project-wide UI controls, but Apply only processes the currently selected file scope when a file is chosen
+    - Switching into Simple mode does not auto-wrap or auto-refresh preview; only Refresh or Apply runs wrapping
     - Exceeding Max Lines is tracked in preview; wrapping is no longer truncated at Apply time before parser injection can split textboxes
     - Overflow lines without textbox support stay flagged as `Exceeding` and are not written into `wordwr`; overflow lines with textbox support are stored as `New Textbox`
   - **Per-Tag Wordwrap Settings (TagWrapConfig):**
@@ -1376,7 +1382,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Parser provides defaults via `wordwrap_for_tag()` — all values remain editable per format
     - "Add Tag" dropdown to add sections for additional tags from filedir/line tags
     - "Remove tag" button on non-standard tags (dialogue/menu always present)
-    - Tag resolution: canonical line `tags` primary content tag → filedir type → "dialogue" fallback
+    - Tag resolution follows the selected Target strategy; unresolved rows are left unchanged instead of defaulting to `dialogue`
     - Default configs: dialogue (width=48, max_lines=4), menu (width=48, max_lines=0)
     - LightVN keeps `menu` prefilled but disabled by default because parser width is `0`
     - Persisted via `WordwrapSettings.FormatConfigs` in manifest, with legacy `TagConfigs` still backfilled for compatibility
@@ -1398,6 +1404,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - View in File: Filter preview rows to the selected line's source file and focus that line
     - Accept Selected: Mark wrapped lines as final
     - Revert Selected: Restore to original text
+    - Full Table View `Wrap Selection`: apply the same shared Step 8 wrapper to selected manifest rows using saved Max Char / Max Line / Break Char / Pretty Wrap defaults
   - **Summary Panel:**
     - Total lines count
     - Wrapped lines count
@@ -1441,7 +1448,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - TSV: Tab-separated values
     - JSON: JSON array of lines
     - XLSX: Excel spreadsheet
-    - INJECTION: Parser injection (original format preserved) — uses standardized 4-step handshake via registered parser's `inject_to()`
+    - INJECTION: Parser injection (original format preserved) — uses the manifest-verified standardized handshake via the registered parser's `inject_to()`
     - Format descriptions and file extension mapping (INJECTION uses empty extension — preserves original)
   - **Naming Strategy Panel (NamingStrategy enum):**
     - SUFFIX: file_translated.txt
@@ -1761,9 +1768,9 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Typography Widget Removed: removed TypographyStyle enum, TypographyOptions dataclass, and entire _build_typography_panel()
     - Overwrite Strategy Widget Removed: removed OverwriteStrategy/MergeMethod enums, OverwriteOptions dataclass, and entire _build_overwrite_panel()
     - Width Dropdown with Pixel: replaced Spinbox with Character/Pixel mode Combobox; Character mode (20-200 chars), Pixel mode (100-2000px + font size 8-72)
-    - Overwrite Column in Table: added overwrite field and overwrite_differs property to WrapLine; "↔ Differs" status; Overwrite column in table
+    - Target Dropdown: added `Target:` Combobox with `Tags first`, `Tags only`, `File first`, and `File only` strategies for per-row wrap target resolution
   - File Navigation: compact `Select File:` dropdown reuses Full Table View's hierarchical file selector; `↗ View in File` focuses the selected source file from the preview table
-  - Table Filter Radios: All/Changed/Exceeding/Overwrite Differs filter radio buttons above Lines Table
+  - Table Filter Radios: All/Changed/Exceeding/New Textbox filter radio buttons above Lines Table
     - Max Lines Flag: _simple_wrap() detects exceeds_limit based on max_lines; "⚠ Exceeds" status indicator
 - **Output + Pipeline Completeness + Import (Phase 47):**
     - Injection Priority Chain: shared manifest resolution now prioritizes `final → wordwr → qa → postpro → tl → prepro → orig` for output and Full Table View "Show Latest"; legacy output helpers only fall back to older fields when the canonical pipeline is empty
@@ -1838,10 +1845,11 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Previously context_type parameter was accepted but never supplied — prompts were always empty
 - **Output Injection Standardization (Phase 79):**
     - INJECTION OutputFormat: New `OutputFormat.INJECTION` enum member for explicit parser-based injection; empty file extension (preserves original); FORMAT_DESCRIPTIONS entry "Parser injection (original format preserved)"
-    - Standardized inject_to Handshake: `parser_base.py` `inject_to(source, output, lines, *, orig_lines=None) → List[int]` default impl with Speaker:Dialogue awareness: (0) load source into memory, (1) extract keys via `extract_tagged()` (preferred) or `extract()` with speaker metadata, (2) split speaker/dialogue via `_split_speaker_dialogue()` and replace independently — speaker name only on first occurrence for consecutive same-speaker lines, dialogue replaced separately; plain find-replace for non-speaker lines, (3) save to output; returns failed indices
+  - Standardized inject_to Handshake: `parser_base.py` `inject_to(source, output, lines, *, orig_lines=None) → List[int]` default impl with Speaker:Dialogue awareness: (0) load source into memory, (1) extract keys via `extract_tagged()` (preferred) or `extract()` with speaker metadata, (2) split speaker/dialogue via `_split_speaker_dialogue()` and replace independently — speaker name only on first occurrence for consecutive same-speaker lines, dialogue replaced separately; plain find-replace for non-speaker lines, (3) save to output; returns failed indices. If a non-tagged parser cannot match any extracted key at all, the base implementation falls back to the older adjacent `_translated` file contract for compatibility.
     - Fresh Line Reads: `_get_fresh_lines_for_file()` reads directly from manifest manager using `resolve_line_field()` per line; ensures Full Table View edits are immediately reflected without restart (fixes stale `step_data["lines"]` cache)
     - Same as Source Fix: `_get_same_as_source_dir()` now returns `mgr.get_original_dir().parent` so output subfolders (e.g. `translated/`) sit next to `Original/` rather than inside it
     - Write Injection Handshake: `_write_injection()` implements the 4-step handshake: load `\Original`, extract keys, sequential match against manifest (verify orig == key, resolve via `resolve_line_field()`), call `parser.inject_to()` with `orig_lines`; mismatches preserve original text and log warnings
+  - Direct Parser Routing: When the selected output format is a parser ID such as `lightvn`, Step 9 keeps the older direct parser path: it slices the current file's resolved lines by `first_idx:last_idx+1` and calls `parser.inject_to(source, output, file_lines)` without the extra orig-verification layer.
     - LightVN Signature Update: `inject_to()` updated to accept `*, orig_lines=None` kwarg (ignored — LightVN uses own key extraction) and return `List[int]`; internal logic unchanged
     - Build File List: `_build_file_list_from_filedir()` updated — INJECTION format preserves original file extension
 - **Speaker Duplicate Removal (Phase 51):**
@@ -2375,15 +2383,15 @@ PARSER SCRIPTS (Implemented)
 - **RPG Maker MV/MZ** (`formats/parser_rpgmaker.py`): Full implementations with wordwrap defaults, forbidden chars, context markers
 - **Parser Registry** (`formats/__init__.py`): `ParserRegistry` with register, get, detect, list_parsers
 - Auto-detection via `can_handle()` probes file structure (e.g. www/data/*.json, null-first arrays)
-- **Wordwrap Integration** (`gui/steps/wordwrap_overwrite.py`): Parser wordwrap configs pre-populate editable per-tag settings; the step resolves canonical line `tags` first, then filedir `type`, then falls back to `dialogue`
+- **Wordwrap Integration** (`gui/steps/wordwrap_overwrite.py`): Parser wordwrap configs pre-populate editable per-tag settings; the step resolves wrap targets through the user-selected `Target:` strategy and preserves rows unchanged when no target resolves
 - **Forbidden Characters:** Merged into logit bias via `merge_parser_forbidden_chars()`; auto-replaced or flagged via `replace_forbidden_chars()`
 - **API Integration** (`functions/api_client.py`): `apply_parser_forbidden_chars()` method on ApiClient
 
 PARSER HANDSHAKE — UNIFIED I/O PARSER INTERFACE (Implemented)
-- Formal contract that every parser must satisfy: Mandatory (M1-M3) and Optional (O1-O8) components
+- Formal contract that every parser must satisfy: Mandatory (M1-M3) and Optional (O1-O10) components
 - **Handshake module** (`formats/handshake.py`): `SpeakerInfo`, `ExtractedLine`, `ParserError`, `validate_parser()`
 - **Mandatory contract:** M1=Extract, M2=Inject, M3=Identity (format_id+extensions or can_handle)
-- **Optional components:** O1=Decrypt, O2=Encrypt, O3=Encoding, O4=Speaker Detection, O5=Wordwrap Config, O6=Custom Wordwrap, O7=Forbidden Chars, O8=Context Markers, O9=Pretty Wrap Hook
+- **Optional components:** O1=Decrypt, O2=Encrypt, O3=Encoding, O4=Speaker Detection, O5=Wordwrap Config, O6=Custom Wordwrap, O7=Forbidden Chars, O8=Context Markers, O9=Injection Rewrite Hook, O10=Pretty Wrap Hook
 - **Handler retrofit (P4):** All registered FormatHandlers and ParserScripts verified against M1-M3 via `validate_parser()`. RPG Maker handler stubs raise `ParserError` with metadata instead of silent no-ops.
 - **Tagged extraction** (`parser_base.py`): `extract_tagged()` returns `List[ExtractedLine]` with per-line tag, speaker, context
 - **Tag-specific wordwrap** (`parser_base.py`): `wordwrap_for_tag(tag)` returns different `WordwrapConfig` per extraction tag
@@ -2404,7 +2412,7 @@ PIPELINE WIRING OF OPTIONAL COMPONENTS (Implemented — P3)
 - **O9 Pretty Wrap Hook:** `parser.pretty_wrap(text, width, break_char, max_lines)` replaces built-in `pretty_wrap` core algorithm while keeping speaker handling and pipeline logic intact; lighter alternative to O6, used for user-managed tags or as fallback
 - **O7 Forbidden Chars:** Serialises `forbidden_chars.to_dict()` to `Options.ParserForbiddenChars`; translation step calls `api_client.apply_parser_forbidden_chars()` to merge into logit bias
 - **O8 Tags:** Compiles `tag_rules`, applies regex patterns to extracted lines, writes `tag` tags; `detect_tags()` accepts optional `parser_rules` parameter to override built-in heuristics
-- **Output Injection:** Output step detects parser format from `filedir[].format`, looks up the parser via `ParserRegistry`, slices per-file lines using `first_idx:last_idx+1`, and calls `parser.inject_to(source, output, lines)` for surgical injection that preserves script structure. Falls back to standard format writers when no parser matches.
+- **Output Injection:** Output step supports both parser paths: explicit `injection` format uses the manifest-verified `_write_injection()` handshake, while direct parser IDs from the format dropdown/filedir keep the per-file sliced `parser.inject_to(source, output, lines)` path for surgical injection that preserves script structure.
 - **Manifest Options written:** `ParserName`, `ParserHandlesSpeakers`, `ParserHandlesWordwrap`, `ParserForbiddenChars` (dict), `ParserHandlesContextMarkers`
 
 LIGHT VN PARSER (Implemented)
@@ -2414,12 +2422,15 @@ LIGHT VN PARSER (Implemented)
 - **Extraction tags:** `dialogue` (with speaker info), `menu`, `variable`, `items`
 - **Item variable coverage:** Item-like assignments such as `臨時全域変数 剥ぎ取り素材1 = "角兎の素材×1"` and conditional lines such as `もし (獲得ボーナス >= 2) 臨時全域変数 獲得食材 = "食用の肉×3"` are extracted and injected with the `items` tag
 - **Project-scoped variable safety:** Beyond the built-in LightVN variable allowlists, quoted `保存変数` / `臨時全域変数` assignments are extracted only when the same variable is used exclusively as display text inside the current project root. Display-only examples such as `bt_勝利条件` / `bt_敗北条件` / `bt_エロ条件` are translated safely, while mixed-use variables such as `胎児` stay unextracted because they also feed image paths like `子宮/子宮_妊娠_{{胎児}}.png`, and control variables such as `付与対象` stay unextracted because they participate in `もし (...)` comparisons.
+- **Targeted exact-variable extraction:** A dedicated LightVN whitelist now handles exact variable names such as `主人公`, `ev_メイン`, `ev_メイン内容`, `子宮状態`, `防具_選択中部位`, `武器1_名前`-`武器3_名前`, `武器1_特性1`-`武器3_特性3`, `設定_出産設定説明文`, `スキル名`, `スキル効果`, `敵次スキル名`, `敵発動スキル`, `bat_ヒロイン次スキル名`, plus targeted loot/material names such as `剥ぎ取り素材1`-`剥ぎ取り素材3`, `獲得食材`, `調合素材`, `道具効果`, and `道具名`. The parser extracts visible quoted text for exact `変数` / `保存変数` / `臨時全域変数` assignments plus exact `==` / `!=` comparisons, applies the correct `variable` versus `items` tag from the targeted helper itself, skips file-like literals such as `.txt`, and excludes the same names from the generic project-scoped path to avoid duplicate extraction.
+- **Quoted ASCII parentheses preserved:** Menu extraction no longer strips ASCII parentheses that are inside the quoted display text itself, so labels such as `回復薬(粗悪品)` now extract and inject correctly instead of falling through untranslated.
 - **Staged extraction stability:** Step 0 now copies parser-backed files into `Projects/{project_name}/Original/` before the final manifest sync and then re-extracts them from that staged tree. This keeps LightVN's project-scoped variable classification identical between initial load and later Output injection, preventing `orig mismatch` / `index out of range` verification cascades on untouched manifests.
 - **Speaker format:** `Speaker: text` — speaker tags detected from `~【SpeakerName】` notation
 - **Conditional dialogue:** `~もし (condition)` prefix stripped from keys, preserved during injection
 - **Code handling:** Balanced bracket matching for `[] {} <> ［］ ｛｝ ＜＞ ⟨⟩ ⟪⟫ 〈〉 《》`
 - **Code recovery:** Restores accidentally translated code during injection
 - **Surgical injection:** `inject_to(source, output, lines, *, orig_lines=None) → List[int]` reads original, re-extracts keys, maps translations, and writes complete script with only translatable text replaced — overrides the standard speaker-aware handshake because extracted text is cleaned (\w markers stripped, " prefixes removed, multi-line joined) and does not appear verbatim in raw files; `orig_lines` parameter accepted for API compatibility but ignored internally
+- **Safe hardcoded-equipment display translation:** LightVN now exposes armor-part machine keys such as `頭`, `胴`, `腕`, `顔`, `胸`, and `腹` as normal extracted rows but uses the parser rewrite hook during injection to keep those literals intact in control flow, jumps, and asset paths. Visible UI strings instead read from a translated display surrogate variable (`防具_選択中部位表示`), so equipment labels can be translated without breaking the hardcoded equipment system.
 - **Angle bracket safety:** Converts non-code `<>` to fullwidth `＜＞` during injection
 - **Custom wordwrap:** Balanced line wrapping with orphan avoidance, textbox splitting (O6)
 - **Explicit wrapped-line preservation:** When Step 8 stores dialogue with literal line breaks, LightVN injection preserves those logical lines and splits them into multiple textboxes at the 3-line boundary instead of re-flattening or truncating them
@@ -2433,6 +2444,7 @@ LIGHT VN PARSER (Implemented)
 - **Placeholder filtering:** Editor placeholder dialogue such as `ここにテキストを入力` / `Enter your text here.` is treated as template scaffolding and skipped during extraction instead of being sent for translation.
 - **Input override behavior:** When Input format is left on `auto`, LightVN can provide both parser format and parser encoding. When the user explicitly selects `lightvn` while leaving Encoding on `auto`, the Input step now resolves encoding through `LightVNParser.detect_encoding()` before extraction so the parser's encoding still wins.
 - **Tag propagation:** Parser extraction tags (`dialogue`, `menu`, `variable`, `items`) from `extract_tagged()` are stored in `LoadedFile.tags` and written to the manifest canonical `tags` field during loading. The O8 regex pass skips lines already tagged by the parser.
+- **Tagged extraction contract:** LightVN now routes all emitted parser-backed rows through a tag-safe append helper, and targeted exact-variable matches such as `ev_メイン内容` stop after their tagged extraction path so no extracted line is emitted without an explicit tag.
 - **Corpus verified:** 55604 total lines, 50212 unique across 1056 .txt files, 843 speakers
 
 WIDTH CONVERSION (Implemented)

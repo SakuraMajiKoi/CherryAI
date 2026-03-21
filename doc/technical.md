@@ -14,6 +14,12 @@ CRITICAL ARCHITECTURE PRINCIPLE:
 The GUI must NOT contain processing logic. All processing functions belong 
 in shared modules (functions/, modi/, formats/) that both CLI and GUI use.
 
+PARSER CONTRACT PRINCIPLE:
+Parsers in formats/ may identify and tag translatable payloads, but they must
+NOT strip, split, normalize away, or silently drop valid quoted payloads.
+Code stripping/protection and code recovery belong in downstream modi/functions
+stages that intentionally transform text, not in extraction.
+
 GUI CODE RULES:
 - gui/ modules handle ONLY display, user interaction, and state management
 - NO text manipulation, parsing, or translation logic in GUI code
@@ -239,7 +245,7 @@ TABLE OF CONTENTS
    5.3 document.py ✅ - PDF, EPUB handlers (placeholder)
    5.4 html.py ✅ - HTML parsing (under development)
    5.5 rpgmaker.py ✅ - RPG Maker MV/MZ (placeholder)
-   5.6 parser_base.py ✅ - ParserScript ABC, WordwrapConfig, ForbiddenChars, TagRules, ExtractedLine, SpeakerInfo; _split_speaker_dialogue() helper; inject_to() standardized 4-step Speaker:Dialogue-aware handshake (load→extract_tagged with speaker metadata→split speaker/dialogue and replace independently→save) returning List[int] failures
+  5.6 parser_base.py ✅ - ParserScript ABC, WordwrapConfig, ForbiddenChars, TagRules, ExtractedLine, SpeakerInfo; _split_speaker_dialogue() helper; inject_to() standardized 4-step Speaker:Dialogue-aware handshake (load→extract_tagged with speaker metadata→split speaker/dialogue and replace independently→save) returning List[int] failures, with a legacy adjacent `_translated` fallback only when a non-tagged parser cannot match any extracted key at all
    5.7 parser_rpgmaker.py ✅ - RpgMakerMVParser, RpgMakerMZParser implementations
    5.8 json_lenient.py ✅ - Lenient JSON parsing with error recovery
    5.9 handshake.py ✅ - ParserHandshake protocol: SpeakerInfo, ExtractedLine, ParserError, validate_parser()
@@ -262,7 +268,7 @@ TABLE OF CONTENTS
       - translate.py - Step 5: Translation 🔗api_client, mock_translator, prompt_adapter, manifest_fields (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching; Preview Requests: PreviewRequest dataclass with _format_input_lines() for numbered line display and io_examples field, FILTER_PARTS constant (13 entries: meta, language, system_instructions, io_examples, style, tone, summary, genre, pov, conditional_prompts, glossary, rolling_context, input_lines), RequestPreviewDialog class with Pure/Formatted/Plain views and Jump/Search/Filter toolbar, _plain_text() preserves curly braces for game text, _build_preview_requests() mirrors real translation request building and gates each labeled section by *_enabled metadata flags, generates io_examples block with fill mode support, syncs _translation_options from current UI before _build_chunks(); _build_system_prompt_from_manifest() reads from `step_state.Information.data.metadata`; _load_model_settings() loads per-model API.ini settings (chunk_size, temperature, rolling_context, thinking) with Global Options fallback on tab entry; _build_chunks() reads rolling_context_between/after and chunk_max_tokens from per-model API.ini via get_model_settings() with Global Options fallback; Request Options: Key, Model, Request Mode combobox (Normal/Batch/Flex/Priority with "(Unavailable)" suffixes via _refresh_request_mode_options()), Model Settings/Translation Options Change… buttons, Character Whitelist/Blacklist (manifest-bound), Ban Tokens; TranslationOptions.request_mode field passed to APIConfig.request_mode in _do_translation(); _apply_char_filters() post-processes translations; _sync_from_global_options() syncs all hidden vars from GlobalOptions including TranslationSettings; _get_request_slicing_mode() reads slicing from GlobalOptions.translation)
       - postprocess.py - Step 6: Postprocess 🔗postprocess, manifest_fields; _FAILURE_POLICY_MAP for legacy enum mapping; translated input uses stage ceiling `tl → prepro → orig`; dedup-tagged rows skip batch placeholder fallback and `recover_line()` so duplicate rows are restored only from source-line postprocessing and do not accumulate false placeholder/code-pattern flags; Processed Lines adds a dynamic flagged-case combobox and stores recovery-detail text in row metadata for searchable filtering
       - qa.py - Step 7: QA 🔗validation, manifest_fields; table columns are Original / Quality Assurance / Overwrite; review input uses stage ceiling `postpro → tl → prepro → orig`; `qa` is review/display text only, while `qa_overwrite` is only persisted for explicit user edits that differ from QA input; includes inline overwrite editing and Copy to Overwrite action
-      - wordwrap_overwrite.py - Step 8: Wordwrap 🔗wordwrap, manifest_fields; internal step id 8 but ninth user-facing tab after QA; preview column "Input"; input uses stage ceiling `qa → postpro → tl → prepro → orig`; manifest `filedir[].format` drives the preview format selector and per-format configs; stored `wordwr` is restored into the Wordwrap column without input fallback, and only explicit Apply persists sparse `wordwr` output; WrapMode now exposes `CUSTOM` and `SIMPLE` while still mapping legacy `manual` manifests to `CUSTOM`; Simple mode applies one shared wrap rule set to the selected file scope; preview includes a compact Full-Table-View-derived file selector plus `View in File`; speaker-ignore width uses manifest `characters[]` as its allowlist, includes translated speaker aliases, falls back to parser `detect_speakers()` for the loaded preview rows when manifest speaker data is absent, and zero-width code comes only from manifest `code_patterns[]` entries marked `IsInvisible`
+      - wordwrap_overwrite.py - Step 8: Wordwrap 🔗wordwrap, manifest_fields; internal step id 8 but ninth user-facing tab after QA; preview column "Input"; input uses stage ceiling `qa → postpro → tl → prepro → orig`; manifest `filedir[].format` drives the preview format selector and per-format configs; stored `wordwr` is restored into the Wordwrap column without input fallback, and only explicit Apply persists sparse `wordwr` output; WrapMode now exposes `CUSTOM` and `SIMPLE` while still mapping legacy `manual` manifests to `CUSTOM`; WrapTarget adds `TAGS_FIRST`, `TAGS_ONLY`, `FILE_FIRST`, and `FILE_ONLY` strategies persisted in `WordwrapSettings.Target`; unresolved targets are preserved unchanged instead of defaulting to dialogue; Simple mode applies one shared wrap rule set to the selected file scope and does not auto-run when the mode changes; preview includes a compact Full-Table-View-derived file selector plus `View in File`; speaker-ignore width uses manifest `characters[]` as its allowlist, includes translated speaker aliases, falls back to parser `detect_speakers()` for the loaded preview rows when manifest speaker data is absent, and zero-width code comes only from manifest `code_patterns[]` entries marked `IsInvisible`
        - output_inject.py - Step 9: Output/Inject 🔗manifest_fields; _NAMING_STRATEGY_MAP for legacy enum mapping; OutputFormat.INJECTION enum; _get_fresh_lines_for_file() for stale-data fix; _write_injection() 4-step parser handshake; _get_same_as_source_dir() returns parent of Original/
    
    6.5 gui/components/ (2 files)
@@ -363,6 +369,7 @@ TABLE OF CONTENTS
          - Column selection bar: "Select / Selected" labels above each column, synced widths via Canvas, for search/replace scoping
          - Sort indicators: ▲/▼ arrows in column headers; _sort_column and _sort_reverse state tracking
           - Cell editing (double-click), deletion (Del key), multi-select, and a Clear Columns dialog for `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, and `final`; clearing `tl` requires double confirmation
+           - `Wrap Selection` toolbar action opens a modal dialog mirroring Step 8 Simple mode (`Max Char`, `Max Line`, `Break Char`, `Pretty Wrap`), displays the literal newline note for `\n` versus `\\n`, persists those values into `WordwrapSettings`, and applies the shared wrapper to selected rows via `resolve_line_field_for_stage(..., "wordwrap")`
           - `final` editing is table-local until Save: empty cells prefill from the first non-empty lower stage when editing starts, and edits that collapse back to that source text are cleared back to sparse-empty in the working copy
          - Read-only Original: double-click shows copyable text widget (_show_readonly_cell)
          - File filter dropdown: hierarchical folder navigation with Back/All navigation; font size 11
@@ -689,23 +696,24 @@ TABLE OF CONTENTS
 
        - **Phase 46 Integration:**
          - WrapMode enum now exposes CUSTOM and SIMPLE in the GUI; legacy Manual/manual manifest values are mapped to CUSTOM for compatibility
+         - WrapTarget enum adds TAGS_FIRST / TAGS_ONLY / FILE_FIRST / FILE_ONLY and persists the selected strategy in `WordwrapSettings.Target`
          - SpeakerMode enum reduced to IGNORE and COUNT (removed SAMELINE, SAMELINEINDENT, NEWLINE)
          - Removed enums: IgnorePattern, OverwriteStrategy, MergeMethod, TypographyStyle
          - Removed dataclasses: OverwriteOptions, TypographyOptions
-         - WrapLine dataclass: added overwrite field and overwrite_differs property
+         - WrapLine dataclass no longer carries the obsolete Step 8 overwrite preview field; unresolved targets stay unchanged instead of falling back to dialogue
          - WrapOptions dataclass: removed ignore_patterns field; hardcoded prevent_orphan/prefer_punct_breaks
          - Mode: ttk.Combobox replacing radio buttons; Custom shows the per-format/per-tag panel while Simple shows the lightweight character-limit panel
          - Speaker: ttk.Combobox with dynamic _speaker_desc_label
          - Ignore patterns: read-only ttk.Treeview from manifest CodeDatabase
          - Width: _width_mode_combo (Character/Pixel) with _char_width_frame and _pixel_width_frame
          - _on_width_mode_changed() toggles between character (20-200) and pixel (100-2000px + font 8-72) frames
-         - Overwrite column in table with "↔ Differs" status
+         - Target dropdown selects whether wrapping resolves from canonical tags, filedir type, or both in priority order
          - Preview toolbar: compact `Select File:` dropdown reuses `gui/dialogs/table_view.py::_FileFilterDropdown`; `View in File` filters the preview to the selected row's source file
-         - Simple mode scope: `_get_process_indices()` restricts Apply to the selected file filter while preserving untouched rows outside that file
-         - Filter radios: All/Changed/Exceeding/Overwrite Differs
+         - Simple mode scope: `_get_process_indices()` restricts Apply to the selected file filter while preserving untouched rows outside that file, and mode changes into Simple do not auto-refresh the preview
+         - Filter radios: All/Changed/Exceeding/New Textbox
          - _simple_wrap() sets exceeds_limit from max_lines
          - Modified: gui/steps/wordwrap_overwrite.py (~1200 lines)
-         - Test file: dev/test_wordwrap_phase46.py (45 tests)
+         - Test file: dev/test_wordwrap_phase46.py (updated for target strategies and removed overwrite preview)
          - Bug Fix (Task 3): _save_to_session() now calls set_line_field(line.idx, "wordwr", line.wrapped) to persist wrapped lines to manifest. Previously only stored in step_state.
 
        - **Phase 47 Integration:**
@@ -2399,12 +2407,13 @@ Planned Formats (placeholder implementations):
    - EPUB: Chapter-based extraction via ebooklib, beautifulsoup4
 
 Parser Handshake (formats/handshake.py):
-- Formal contract definition for all parsers (mandatory M1-M3, optional O1-O9)
+- Formal contract definition for all parsers (mandatory M1-M3, optional O1-O10)
 - `SpeakerInfo(name, line_idx)`: Speaker detected by parser
 - `ExtractedLine(text, tag, speaker, context)`: Tagged extraction result
 - `ParserError(message, parser_name, component)`: Mandatory component failure
 - `validate_parser(parser) → list[str]`: Check parser satisfies M1-M3
-- **O9 Pretty Wrap Hook:** `pretty_wrap(text, width, break_char, max_lines) → Optional[str]` — lighter
+- **O9 Injection Rewrite Hook:** `rewrite_injected_content(source_path, original_content, injected_content, *, search_keys, translated_lines, orig_lines=None, tagged_lines=None) → Optional[str]` — optional post-injection structural rewrite pass for parser-specific code edits that must happen after normal replacement
+- **O10 Pretty Wrap Hook:** `pretty_wrap(text, width, break_char, max_lines) → Optional[str]` — lighter
   core-wrap replacement; replaces built-in `pretty_wrap` while keeping speaker handling intact
 - **Handler Retrofit (P4):** All registered FormatHandlers verified via `validate_parser()`.
   RPG Maker stubs (`formats/rpgmaker.py`) raise `ParserError` with `parser_name` and `component`
@@ -2429,7 +2438,8 @@ Pipeline Wiring of Optional Components (P3):
   - `ParserName` — stores active parser identifier
   - `ParserHandlesSpeakers` (bool) — O4: calls `parser.detect_speakers()`, writes to `characters[]`
   - `ParserHandlesWordwrap` (bool) — O6: detected via `type(parser).wordwrap is not ParserScript.wordwrap`
-  - `has_custom_pretty_wrap` (bool) — O9: detected via `type(parser).pretty_wrap is not ParserScript.pretty_wrap`
+  - `has_custom_pretty_wrap` (bool) — O10: detected via `type(parser).pretty_wrap is not ParserScript.pretty_wrap`
+  - `has_injection_rewrite` (bool) — O9: detected via `type(parser).rewrite_injected_content is not ParserScript.rewrite_injected_content`
   - `ParserForbiddenChars` (dict) — O7: `forbidden_chars.to_dict()` serialised to manifest
   - `ParserHandlesContextMarkers` (bool) — O8: compiled rules applied to lines, tags written
 - `gui/steps/analysis.py` `_perform_analysis()`: Reads `ParserHandlesSpeakers` flag; always runs
@@ -2478,13 +2488,19 @@ Light VN Parser (formats/LightVN.py):
 - **O5 Wordwrap**: 60 chars, 3 lines per textbox, explicit separator `\w` + newline + `"`
 - **O6 Custom Wrap**: LightVN exposes parser wordwrap defaults for dialogue (60 chars, 3 lines, explicit separator `\w` + newline + `"`) while CherryAI currently keeps Step 8 on the shared `apply_wordwrap()` path
 - **Textbox realization**: Explicit multiline wrapped dialogue is preserved during injection; when wrapped dialogue exceeds one textbox, `_wrap_for_textbox()` chunks the logical lines into successive 3-line boxes and `_inject_dialogue_block()` emits them with exact LightVN ordering (`...\w` + newline + next opening `"`). If Step 8 already stored that separator string inside `wordwr`, `_format_prewrapped_dialogue()` preserves it while parser injection restores exactly one final terminal `\w`, including conditional-dialogue output.
-- **O9 Pretty Wrap Hook**: `pretty_wrap()` delegates to `_pretty_wrap()` as LightVN's balanced wrap helper; explicit wrapped lines supplied by Step 8 are preserved rather than rebalanced away during injection
+- **O9 Injection Rewrite Hook**: LightVN now overrides `rewrite_injected_content()` to safely separate display text from hardcoded machine keys in the equipment UI. The hook inserts a translated surrogate variable (`防具_選択中部位表示`) after `防具_選択中部位` assignments and rewrites visible menu strings to use that surrogate while leaving jumps, asset paths, and dynamic variable names on the original machine keys.
+- **O10 Pretty Wrap Hook**: `pretty_wrap()` delegates to `_pretty_wrap()` as LightVN's balanced wrap helper; explicit wrapped lines supplied by Step 8 are preserved rather than rebalanced away during injection
 - **O7 Forbidden**: Tab and carriage return characters
 - **O8 Context**: Patterns for dialogue (`^"`), menu (`~?文字`), choice (`~選択`)
 - **Tags**: `dialogue` (with speaker), `menu`, `variable`, `items`
 - **Variable classification**: Shared variable-name classification distinguishes normal translatable assignments from item-like assignments; names such as `剥ぎ取り素材1` and `獲得食材` are tagged as `items`, including when preceded by conditional `もし (...)` prefixes
 - **Project-scoped variable safety**: For quoted `保存変数` / `臨時全域変数` assignments outside the built-in allowlists, LightVN now builds a project-level usage index from the active `Original/` tree and only treats a variable as translatable when its interpolations are display-only. Interpolations inside `文字*`, `文字窓`, `~文字`, or dialogue segments mark the variable as display text; interpolations in non-display commands (image/audio/script paths, etc.) or bare references inside `もし (...)` mark it unsafe. This keeps display-only variables such as `bt_勝利条件` translatable while excluding mixed-use values such as `胎児` and control variables such as `付与対象`.
+- **Targeted exact-variable path**: A dedicated exact-name whitelist now handles visible string literals tied to specific gameplay/UI variables such as `主人公`, `ev_メイン`, `ev_メイン内容`, `子宮状態`, `開発_初めての相手`, `防具_選択中部位`, the `武器*` name/effect fields, `設定_出産設定説明文`, `スキル名`, `スキル効果`, `敵次スキル名`, `敵発動スキル`, `bat_ヒロイン次スキル名`, plus targeted loot/material names such as `剥ぎ取り素材1`-`剥ぎ取り素材3`, `獲得食材`, `調合素材`, `道具効果`, and `道具名`. The helper now returns the final tag itself, so targeted item-style assignments still surface as `items` while the rest stay `variable`. The targeted filter also keeps parity with the broader assignment parser on padded placeholder literals such as `"{{道具_馬名前}}  "` for `開発_初めての相手`, skips file-like literals such as `.txt`, and keeps those same names out of the generic project-scoped classifier so they are not extracted twice.
+- **Hardcoded equipment display safety**: For `dev/scripts/PYUpgrade/scripts/e_armor.txt`, hardcoded equipment part keys such as `頭`, `胴`, `腕`, `顔`, `胸`, and `腹` are now extracted as normal rows, but direct menu/targeted injection leaves their machine-key occurrences untouched. The rewrite hook consumes those translations to build a display-only surrogate variable for visible UI strings, preventing the earlier breakage where translated part names corrupted control flow and asset lookup.
+- **Uni16 overlap result**: On the verified `Projects/Uni16/Original` corpus, the broad project-scoped helper no longer extracts any quoted variable assignments after the whitelist expansion, but the generic path is still retained for other projects because it remains the only safe route for display-only variables outside the exact-name list.
+- **Quoted-parenthesis preservation**: `_remove_parenthetical_content()` now ignores ASCII parentheses while inside quoted menu strings, which fixes labels such as `回復薬(粗悪品)` that previously extracted as `回復薬` and then failed to inject.
 - **Staged-sync contract**: Because that variable classification depends on the active `Original/` tree, Step 0 now stages parser-backed files first and re-extracts them from `Original/` before committing `lines[]` / `filedir`. Without this, the same LightVN file can produce different extracted key counts at load time versus inject time and trigger cascading Output verification mismatches.
+- **Output routing split**: Step 9 now has two parser injection paths again: explicit `OutputFormat.INJECTION` uses `_write_injection()` with manifest `orig` verification and `orig_lines`, while direct parser format IDs such as `lightvn` keep the older `first_idx:last_idx+1` slicing route and call `parser.inject_to(source, output, file_lines)` directly.
 - **Bookmark semantics**: `~栞 ...` lines are treated as bookmarks/interaction anchors, not speaker tags; they clear the carried `~【Speaker】` state before later dialogue extraction so prior speakers cannot leak into unrelated map text
 - **Placeholder filtering**: Editor scaffolding lines such as `ここにテキストを入力` / `Enter your text here.` are skipped during extraction and therefore never enter the translation pipeline
 - **Code recovery**: Balanced bracket matching for 10 bracket types, angle bracket safety
