@@ -970,20 +970,26 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Preview Request: `_build_preview_requests()` gates each labeled section by its enabled flag
     - No manual Save button — toggles and metadata auto-save on tab change via `on_leave()`
 - **Theme System (Phase 14):**
-  - **Pastel Blue Theme (default):**
+  - **Pale Blue Theme (default):**
     - Light/pastel blue base color (#B8D4E8)
     - Modern, clean, non-white/grey monotony
     - No yellow/red colors (accessibility)
+  - **Dark GUI Designs:**
+    - Slate Graphite, Midnight Teal, Carbon Amber, and High Contrast
+    - All dark designs invert primary text to white or near-white
+    - Table rows use alternating dark grey tones for readability
+    - Buttons, panels, dialogs, API Log, and Full Table View share the active palette
   - **High-Contrast Theme (accessibility):**
     - Dark navy background (#1A1A2E)
     - Pure white text (#FFFFFF)
     - WCAG AAA compliant contrast ratios
     - Bright accent colors (Spring Green, Deep Sky Blue)
   - **Theme Switching:**
-    - ThemeMode enum: PASTEL_BLUE, HIGH_CONTRAST
+    - ThemeMode enum: PALE_BLUE, PASTEL_BLUE (legacy alias), SLATE_GRAPHITE, MIDNIGHT_TEAL, CARBON_AMBER, HIGH_CONTRAST
     - set_theme(mode) to switch at runtime
     - get_theme() / get_theme_mode() accessors
     - apply_theme(root, theme) for custom themes
+    - apply_window_preferences(window, ...) restores theme plus saved geometry/maximized state
 - **Icons System (Phase 14):**
   - Icons dataclass with Unicode symbols
   - Cross-platform compatibility (Windows, macOS, Linux)
@@ -1878,7 +1884,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - Centralized options accessible from Tools → Options menu
   - Modal dialog with navigation tree on left, content panels on right
   - **Enums:**
-    - OptionSection: API, REQUEST, TRANSLATION, CACHING, LOGGING, SESSION, LIMIT, FILE_IO, PROMPTS, SECURITY (10 sections)
+    - OptionSection: API, REQUEST, TRANSLATION, CACHING, LOGGING, SESSION, GUI, LIMIT, FILE_IO, PROMPTS, SECURITY, UTILITY (12 sections)
     - OptionCategory: CONNECTION, PROCESSING, APPLICATION (3 categories)
     - LogLevel: DEBUG, INFO, WARNING, ERROR, CRITICAL
     - ThemeMode: LIGHT, DARK, SYSTEM
@@ -1900,6 +1906,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - CachingSettings: enabled, dir, age (days; 0=unlimited), size (MB; 0=unlimited), mode (strict/line/any/model_only/disabled)
     - LoggingSettings: level, location, debug, api_log
     - SessionSettings: autosave, interval, theme, load_last
+    - GUISettings: design, save_window_dimensions, launch_maximized
     - LimitSettings: banned (comma-sep chars), output (tokens), warnings, safe; SafetySettings = alias
     - FileIOSettings: encoding, lines, preservebom, backup
     - PromptsSettings: edit, tlc, glossary, summary, code, input, tlc_include_* booleans,
@@ -1956,11 +1963,17 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Open log file button
   - **Session Section:**
     - Autosave toggle and interval
-    - Theme dropdown (light, dark, system)
     - Restore on launch toggle
     - Confirm on exit toggle
     - Confirmation Dialogs: "Reset All Confirmation Dialogs" button (Phase 60)
     - Translation Presets: "Reset Style & Tone Presets" button (Phase 60)
+  - **GUI Section:**
+    - New Application → GUI navigation page
+    - GUI Design dropdown stores the selected design in `user/CherryAI.ini [ui].design`
+    - Current default design is `Pale Blue`
+    - Save Window Dimensions toggle persists per-window geometry/state for the app and dialogs
+    - Launch Every Window Maximized toggle forces top-level windows to open maximized
+    - Window preferences are applied to the main window, Global Options, project dialogs, password dialogs, loading dialog, API Log, and Full Table View
   - **Safety Section:**
     - Ban tokens entry (comma-separated)
     - Common tokens quick-add buttons

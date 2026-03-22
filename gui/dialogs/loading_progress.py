@@ -14,6 +14,8 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Optional
 
+from CherryAI.gui.theme.colors import apply_window_preferences
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,13 +42,13 @@ class LoadingProgressDialog:
         self._dialog.transient(parent)
         self._dialog.grab_set()
         self._dialog.resizable(False, False)
-
-        # Center on parent
-        self._dialog.geometry("400x130")
-        self._dialog.update_idletasks()
-        px = parent.winfo_rootx() + (parent.winfo_width() - 400) // 2
-        py = parent.winfo_rooty() + (parent.winfo_height() - 130) // 2
-        self._dialog.geometry(f"+{max(px, 0)}+{max(py, 0)}")
+        apply_window_preferences(
+            self._dialog,
+            parent=parent,
+            window_key="LoadingProgressDialog",
+            default_geometry="400x130",
+            center_on_parent=True,
+        )
 
         # Prevent closing via window manager
         self._dialog.protocol("WM_DELETE_WINDOW", self._on_cancel)

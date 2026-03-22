@@ -193,6 +193,23 @@ Verified command:
 python -m pytest CherryAI/dev/test_app_startup.py CherryAI/dev/test_input_import_fixes.py CherryAI/dev/test_lightvn_fixes.py -q --timeout=10
 ```
 
+### Focused GUI Design + Window Persistence Regression
+
+The dark-mode GUI design rollout plus the new Application → GUI options page are covered by a focused regression set:
+
+- `dev/test_gui_dialogs.py` verifies the Global Options dataclasses still import and serialize cleanly after the new GUI settings model was added.
+- `dev/test_gui_v2.py` verifies the expanded GUI/theme constants, section ordering, dialog exports, and theme compatibility helpers.
+- `dev/test_ini_persistence.py` and `dev/test_ini_sections.py` provide adjacent coverage for INI writes and required section seeding while the new `[ui]` design/window keys coexist with the rest of CherryAI.ini.
+- `dev/test_app_startup.py` provides adjacent coverage for startup-time option loading, which now includes reloading the persisted GUI design.
+
+Verified command:
+
+```bash
+python -m pytest CherryAI/dev/test_gui_dialogs.py CherryAI/dev/test_ini_persistence.py CherryAI/dev/test_ini_sections.py CherryAI/dev/test_app_startup.py CherryAI/dev/test_gui_v2.py -k "Theme or SessionSettingsDataclass or GlobalOptionsDataclass or SectionDescriptions or CategoryOrder or GlobalOptionsDialogIntegration" -q --timeout=20
+```
+
+Latest verified result: 64 passed, 663 deselected.
+
 ### Focused Workflow Regression
 
 The affected workflow surfaces are covered by focused regression sets around the remaining import, table-editing, translation-planning, and Wordwrap behavior:

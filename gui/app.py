@@ -28,7 +28,7 @@ from CherryAI.gui.dialogs.project_dialog import (
 )
 from CherryAI.gui.dialogs.table_view import FullTableViewDialog
 from CherryAI.gui.dialogs.api_log_view import APILogViewDialog
-from CherryAI.gui.theme.colors import THEME, apply_theme
+from CherryAI.gui.theme.colors import THEME, apply_theme, apply_window_preferences, load_theme_from_ini
 from CherryAI.gui.state.store import (
     SessionState,
     STEP_DEFINITIONS,
@@ -92,10 +92,16 @@ class App(tk.Tk):
         """Initialize the application."""
         super().__init__()
 
+        load_theme_from_ini()
+
         # Window setup
         self.title(APP_NAME)
-        self.geometry(f"{DEFAULT_WIDTH}x{DEFAULT_HEIGHT}")
         self.minsize(MIN_WIDTH, MIN_HEIGHT)
+        apply_window_preferences(
+            self,
+            window_key="App",
+            default_geometry=f"{DEFAULT_WIDTH}x{DEFAULT_HEIGHT}",
+        )
 
         # Initialize manifest manager (TASK 19 - primary state storage)
         self._manifest_manager: ManifestManager = get_manifest_manager()
@@ -151,9 +157,6 @@ class App(tk.Tk):
         # Step tab references
         self._step_tabs: List[BaseStep] = []
         self._current_tab_index = 0
-
-        # Apply theme
-        apply_theme(self)
 
         # Build UI
         self._build_menu()
@@ -658,8 +661,22 @@ class App(tk.Tk):
     def _on_global_options_saved(self, options: GlobalOptions) -> None:
         """Persist Global Options in session state after a save."""
         self.session.global_options = options
+        load_theme_from_ini()
+        self._refresh_open_windows_theme()
         self._set_status("Options saved")
         logger.info("Global options updated")
+
+    def _refresh_open_windows_theme(self) -> None:
+        """Reapply the current GUI design to the app and open dialogs."""
+        apply_theme(self)
+        refresh_targets = [self]
+        refresh_targets.extend(child for child in self.winfo_children() if isinstance(child, tk.Toplevel))
+        for target in refresh_targets:
+            refresh = getattr(target, "refresh_theme", None)
+            if callable(refresh):
+                refresh()
+            else:
+                apply_theme(target)
 
     def open_global_options_dialog(
         self,

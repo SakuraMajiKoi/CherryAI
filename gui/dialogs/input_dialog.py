@@ -14,7 +14,7 @@ from pathlib import Path
 from tkinter import filedialog, ttk
 from typing import TYPE_CHECKING, Callable, List, Optional, Set, Tuple
 
-from CherryAI.gui.theme.colors import THEME, apply_theme
+from CherryAI.gui.theme.colors import THEME, apply_window_preferences
 
 if TYPE_CHECKING:
     pass
@@ -95,19 +95,15 @@ class UnifiedInputDialog(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         self.resizable(True, True)
-
-        # Size and position - larger window
-        self.geometry("900x600")
         self.minsize(700, 450)
-        self.update_idletasks()
         parent_window = parent.winfo_toplevel()
-        x = parent_window.winfo_x() + (parent_window.winfo_width() // 2) - 450
-        y = parent_window.winfo_y() + (parent_window.winfo_height() // 2) - 300
-        self.geometry(f"+{max(0, x)}+{max(0, y)}")
-
-        # Apply theme
-        apply_theme(self)
-        self.configure(bg=THEME.bg_main)
+        apply_window_preferences(
+            self,
+            parent=parent_window,
+            window_key="UnifiedInputDialog",
+            default_geometry="900x600",
+            center_on_parent=True,
+        )
 
         self._build_ui()
 

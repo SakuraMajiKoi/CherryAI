@@ -13,7 +13,7 @@ from tkinter import ttk
 from typing import Callable, Optional, Literal
 from pathlib import Path
 
-from CherryAI.gui.theme.colors import THEME, apply_theme
+from CherryAI.gui.theme.colors import THEME, apply_window_preferences
 
 logger = logging.getLogger(__name__)
 
@@ -58,17 +58,13 @@ class WelcomeDialog(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         self.resizable(False, False)
-
-        # Size and position
-        self.geometry("500x360")  # Increased height for checkbox
-        self.update_idletasks()
-        x = parent.winfo_x() + (parent.winfo_width() // 2) - 250
-        y = parent.winfo_y() + (parent.winfo_height() // 2) - 180
-        self.geometry(f"+{x}+{y}")
-
-        # Apply theme
-        apply_theme(self)
-        self.configure(bg=THEME.bg_main)
+        apply_window_preferences(
+            self,
+            parent=parent,
+            window_key="WelcomeDialog",
+            default_geometry="500x360",
+            center_on_parent=True,
+        )
 
         self._build_ui()
 
@@ -252,17 +248,13 @@ class ProjectNameDialog(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         self.resizable(False, False)
-        
-        # Center dialog - PHASE 58.3: Larger window to show all buttons
-        self.geometry("500x280")
-        self.update_idletasks()
-        x = parent.winfo_x() + (parent.winfo_width() // 2) - 250
-        y = parent.winfo_y() + (parent.winfo_height() // 2) - 140
-        self.geometry(f"+{x}+{y}")
-        
-        # Apply theme
-        apply_theme(self)
-        self.configure(bg=THEME.bg_main)
+        apply_window_preferences(
+            self,
+            parent=parent,
+            window_key="ProjectNameDialog",
+            default_geometry="500x280",
+            center_on_parent=True,
+        )
         
         self._build_ui()
         
@@ -407,18 +399,14 @@ class LoadManifestDialog(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
         self.resizable(True, True)
-        
-        # Size and position
-        self.geometry("600x400")
         self.minsize(400, 300)
-        self.update_idletasks()
-        x = parent.winfo_x() + (parent.winfo_width() // 2) - 300
-        y = parent.winfo_y() + (parent.winfo_height() // 2) - 200
-        self.geometry(f"+{x}+{y}")
-        
-        # Apply theme
-        apply_theme(self)
-        self.configure(bg=THEME.bg_main)
+        apply_window_preferences(
+            self,
+            parent=parent,
+            window_key="LoadManifestDialog",
+            default_geometry="600x400",
+            center_on_parent=True,
+        )
         
         self._build_ui()
         self._refresh_manifest_list()

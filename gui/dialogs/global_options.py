@@ -25,6 +25,12 @@ logger = logging.getLogger(__name__)
 
 # Deferred imports (avoid circular at module load time)
 from CherryAI.functions import api_config as _api_config  # noqa: E402
+from CherryAI.gui.theme.colors import (
+    apply_theme,
+    apply_window_preferences,
+    get_theme_display_name,
+    get_theme_display_names,
+)
 
 
 # =============================================================================
@@ -42,6 +48,7 @@ class OptionSection(Enum):
     CACHING = "caching"
     LOGGING = "logging"
     SESSION = "session"
+    GUI = "gui"
     LIMIT = "limit"
     FILE_IO = "file_io"
     PROMPTS = "prompts"
@@ -376,6 +383,32 @@ class SessionSettings:
             interval=int(data.get("interval", 60)),
             theme=str(data.get("theme", "light")),
             load_last=bool(data.get("load_last", True)),
+        )
+
+
+@dataclass
+class GUISettings:
+    """GUI design and window behavior settings."""
+
+    design: str = "pale_blue"
+    save_window_dimensions: bool = True
+    launch_maximized: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "design": self.design,
+            "save_window_dimensions": self.save_window_dimensions,
+            "launch_maximized": self.launch_maximized,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "GUISettings":
+        """Create from dictionary."""
+        return cls(
+            design=str(data.get("design", "pale_blue")),
+            save_window_dimensions=bool(data.get("save_window_dimensions", True)),
+            launch_maximized=bool(data.get("launch_maximized", False)),
         )
 
 
@@ -815,6 +848,7 @@ class GlobalOptions:
     caching: CachingSettings = field(default_factory=CachingSettings)
     logging: LoggingSettings = field(default_factory=LoggingSettings)
     session: SessionSettings = field(default_factory=SessionSettings)
+    gui: GUISettings = field(default_factory=GUISettings)
     limit: LimitSettings = field(default_factory=LimitSettings)
     file_io: FileIOSettings = field(default_factory=FileIOSettings)
     prompts: PromptsSettings = field(default_factory=PromptsSettings)
@@ -840,6 +874,7 @@ class GlobalOptions:
             "caching": self.caching.to_dict(),
             "logging": self.logging.to_dict(),
             "session": self.session.to_dict(),
+            "gui": self.gui.to_dict(),
             "limit": self.limit.to_dict(),
             "file_io": self.file_io.to_dict(),
             "prompts": self.prompts.to_dict(),
@@ -863,6 +898,7 @@ class GlobalOptions:
             caching=CachingSettings.from_dict(data.get("caching", {})),
             logging=LoggingSettings.from_dict(data.get("logging", {})),
             session=SessionSettings.from_dict(data.get("session", {})),
+            gui=GUISettings.from_dict(data.get("gui", {})),
             limit=LimitSettings.from_dict(limit_data),
             file_io=FileIOSettings.from_dict(data.get("file_io", {})),
             prompts=PromptsSettings.from_dict(data.get("prompts", {})),
@@ -967,6 +1003,12 @@ class GlobalOptions:
             load_last=_bool("session", "load_last", True),
         )
 
+        gui = GUISettings(
+            design=_str("ui", "design", "pale_blue"),
+            save_window_dimensions=_bool("ui", "save_window_dimensions", True),
+            launch_maximized=_bool("ui", "launch_maximized", False),
+        )
+
         # -- Limit settings --
         limit = LimitSettings(
             banned=_str("limit", "banned", "\u2014, \u2013"),
@@ -1050,6 +1092,7 @@ class GlobalOptions:
             caching=caching,
             logging=logging_s,
             session=session,
+            gui=gui,
             limit=limit,
             file_io=file_io,
             prompts=prompts,
@@ -1087,7 +1130,8 @@ SECTION_DESCRIPTIONS: Dict[OptionSection, str] = {
     OptionSection.UTILITY: "Configure Term Translation and Gender Inference settings.",
     OptionSection.CACHING: "Configure request caching to reduce API calls.",
     OptionSection.LOGGING: "Set logging level and debug options.",
-    OptionSection.SESSION: "Configure session autosave and UI preferences.",
+    OptionSection.SESSION: "Configure autosave and startup session behavior.",
+    OptionSection.GUI: "Configure GUI design, saved window dimensions, and maximized startup behavior.",
     OptionSection.LIMIT: "Configure output limits, banned characters, and content safeguards.",
     OptionSection.FILE_IO: "Set default file encoding and format options.",
     OptionSection.PROMPTS: "Configure custom prompts for Edit and TLC steps.",
@@ -1098,7 +1142,7 @@ SECTION_DESCRIPTIONS: Dict[OptionSection, str] = {
 CATEGORY_ORDER: List[Tuple[OptionCategory, List[OptionSection]]] = [
     (OptionCategory.CONNECTION, [OptionSection.API, OptionSection.REQUEST, OptionSection.TRANSLATION, OptionSection.UTILITY]),
     (OptionCategory.PROCESSING, [OptionSection.CACHING, OptionSection.LIMIT, OptionSection.PROMPTS]),
-    (OptionCategory.APPLICATION, [OptionSection.SESSION, OptionSection.LOGGING, OptionSection.FILE_IO, OptionSection.SECURITY]),
+    (OptionCategory.APPLICATION, [OptionSection.SESSION, OptionSection.GUI, OptionSection.LOGGING, OptionSection.FILE_IO, OptionSection.SECURITY]),
 ]
 
 
@@ -1116,6 +1160,7 @@ SECTION_NAMES: Dict[OptionSection, str] = {
     OptionSection.CACHING: "Caching",
     OptionSection.LOGGING: "Logging",
     OptionSection.SESSION: "Session",
+    OptionSection.GUI: "GUI",
     OptionSection.LIMIT: "Limits",
     OptionSection.FILE_IO: "File I/O",
     OptionSection.PROMPTS: "Prompts",
@@ -1202,7 +1247,6 @@ class GlobalOptionsDialog(tk.Toplevel):
         super().__init__(parent)
 
         self.title("Global Options")
-        self.geometry("900x750")
         self.resizable(True, True)
         self.minsize(750, 600)
 
@@ -1227,6 +1271,14 @@ class GlobalOptionsDialog(tk.Toplevel):
         # Build UI
         logger.debug("GlobalOptionsDialog: Building UI")
         self._build_ui()
+
+        apply_window_preferences(
+            self,
+            parent=self.parent,
+            window_key="GlobalOptionsDialog",
+            default_geometry="900x750",
+            center_on_parent=True,
+        )
 
         # Handle window close button (X)
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
@@ -1413,9 +1465,19 @@ class GlobalOptionsDialog(tk.Toplevel):
         # Session settings
         self.autosave_enabled_var = tk.BooleanVar(value=self.options.session.autosave)
         self.autosave_interval_var = tk.IntVar(value=self.options.session.interval)
-        self.theme_var = tk.StringVar(value=self.options.session.theme)
         # Read from [session] section which controls actual startup behavior
         self.restore_on_launch_var = tk.BooleanVar(value=ini_manager.get_restore_on_launch())
+
+        # GUI settings
+        self.gui_design_var = tk.StringVar(
+            value=get_theme_display_name(self.options.gui.design),
+        )
+        self.save_window_dimensions_var = tk.BooleanVar(
+            value=self.options.gui.save_window_dimensions,
+        )
+        self.launch_maximized_var = tk.BooleanVar(
+            value=self.options.gui.launch_maximized,
+        )
 
         # Limit settings (replaces Safety)
         self.ban_tokens_var = tk.StringVar(value=self.options.limit.banned)
@@ -1503,6 +1565,7 @@ class GlobalOptionsDialog(tk.Toplevel):
         self._build_caching_section()
         self._build_logging_section()
         self._build_session_section()
+        self._build_gui_section()
         self._build_limit_section()
         self._build_file_io_section()
         self._build_prompts_section()
@@ -2281,23 +2344,6 @@ class GlobalOptionsDialog(tk.Toplevel):
         ttk.Spinbox(interval_row, from_=10, to=600, textvariable=self.autosave_interval_var, width=10).pack(side=tk.LEFT, padx=5)
         ttk.Label(interval_row, text="(10-600, default: 60)", foreground="gray").pack(side=tk.LEFT, padx=5)
 
-        # Theme settings
-        theme_frame = ttk.LabelFrame(panel, text="Appearance", padding=10)
-        theme_frame.pack(fill=tk.X, pady=(0, 10))
-
-        theme_row = ttk.Frame(theme_frame)
-        theme_row.pack(fill=tk.X, pady=5)
-
-        ttk.Label(theme_row, text="Theme:", width=15).pack(side=tk.LEFT)
-        theme_combo = ttk.Combobox(
-            theme_row,
-            textvariable=self.theme_var,
-            values=[t.value for t in ThemeMode],
-            state="readonly",
-            width=15,
-        )
-        theme_combo.pack(side=tk.LEFT, padx=5)
-
         # Behavior settings
         restore_check = ttk.Checkbutton(panel, text="Load last project on launch", variable=self.restore_on_launch_var)
         restore_check.pack(anchor=tk.W, pady=5)
@@ -2341,6 +2387,63 @@ class GlobalOptionsDialog(tk.Toplevel):
             text="Restore Defaults…",
             command=self._on_restore_defaults,
         ).pack(anchor=tk.W)
+
+    def _build_gui_section(self) -> None:
+        """Build the GUI settings section."""
+        panel = ttk.Frame(self._content_frame, padding=15)
+        self._section_panels[OptionSection.GUI] = panel
+
+        header = ttk.Label(panel, text="GUI", font=("TkDefaultFont", 12, "bold"))
+        header.pack(anchor="w", pady=(0, 5))
+
+        desc = ttk.Label(panel, text=SECTION_DESCRIPTIONS[OptionSection.GUI], foreground="gray")
+        desc.pack(anchor="w", pady=(0, 15))
+
+        design_frame = ttk.LabelFrame(panel, text="Design", padding=10)
+        design_frame.pack(fill=tk.X, pady=(0, 10))
+
+        design_row = ttk.Frame(design_frame)
+        design_row.pack(fill=tk.X, pady=5)
+
+        ttk.Label(design_row, text="Design:", width=15).pack(side=tk.LEFT)
+        ttk.Combobox(
+            design_row,
+            textvariable=self.gui_design_var,
+            values=get_theme_display_names(),
+            state="readonly",
+            width=22,
+        ).pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(
+            design_frame,
+            text="Pale Blue keeps the current look. The dark designs switch text to white and use alternating grey table rows.",
+            foreground="gray",
+            wraplength=520,
+            justify="left",
+        ).pack(anchor=tk.W, pady=(2, 0))
+
+        window_frame = ttk.LabelFrame(panel, text="Window Behavior", padding=10)
+        window_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Checkbutton(
+            window_frame,
+            text="Save all window dimensions",
+            variable=self.save_window_dimensions_var,
+        ).pack(anchor=tk.W, pady=3)
+
+        ttk.Checkbutton(
+            window_frame,
+            text="Launch every window maximized",
+            variable=self.launch_maximized_var,
+        ).pack(anchor=tk.W, pady=3)
+
+        ttk.Label(
+            window_frame,
+            text="Saved dimensions restore each window's last normal size. Maximized launch overrides saved sizes until disabled.",
+            foreground="gray",
+            wraplength=520,
+            justify="left",
+        ).pack(anchor=tk.W, pady=(4, 0))
 
     def _build_limit_section(self) -> None:
         """Build the limits settings section (replaces old Safety section)."""
@@ -4737,11 +4840,21 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.autosave_interval_var.set(
             int(ini_manager.get_initial_default("session", "interval", 60, int) or 60)
         )
-        self.theme_var.set(
-            ini_manager.get_initial_default("session", "theme", "light", str) or "light"
-        )
         self.restore_on_launch_var.set(
             bool(ini_manager.get_initial_default("session", "load_last", True, bool))
+        )
+
+        # GUI defaults
+        self.gui_design_var.set(
+            get_theme_display_name(
+                ini_manager.get_initial_default("ui", "design", "pale_blue", str) or "pale_blue"
+            )
+        )
+        self.save_window_dimensions_var.set(
+            bool(ini_manager.get_initial_default("ui", "save_window_dimensions", True, bool))
+        )
+        self.launch_maximized_var.set(
+            bool(ini_manager.get_initial_default("ui", "launch_maximized", False, bool))
         )
 
         # Limit defaults
@@ -4937,8 +5050,15 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.options.session = SessionSettings(
             autosave=self.autosave_enabled_var.get(),
             interval=self.autosave_interval_var.get(),
-            theme=self.theme_var.get(),
+            theme=self.options.session.theme,
             load_last=self.restore_on_launch_var.get(),
+        )
+
+        from CherryAI.gui.theme.colors import get_theme_mode_from_display
+        self.options.gui = GUISettings(
+            design=get_theme_mode_from_display(self.gui_design_var.get()).value,
+            save_window_dimensions=self.save_window_dimensions_var.get(),
+            launch_maximized=self.launch_maximized_var.get(),
         )
 
         self.options.limit = LimitSettings(
@@ -5134,6 +5254,16 @@ class GlobalOptionsDialog(tk.Toplevel):
             }
             ini_manager.save_as_user_defaults("session", session_vals)
             ini_manager.set_restore_on_launch(self.options.session.load_last)
+
+            gui_vals = {
+                "design": self.options.gui.design,
+                "save_window_dimensions": str(self.options.gui.save_window_dimensions).lower(),
+                "launch_maximized": str(self.options.gui.launch_maximized).lower(),
+            }
+            ini_manager.save_as_user_defaults("ui", gui_vals)
+            ini_manager.set_gui_design(self.options.gui.design)
+            ini_manager.set_save_window_dimensions(self.options.gui.save_window_dimensions)
+            ini_manager.set_launch_maximized(self.options.gui.launch_maximized)
 
             # Limits
             limit_vals = {

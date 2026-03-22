@@ -1,24 +1,22 @@
-"""CherryAI GUI v2 Theme - Color Palette.
+"""CherryAI GUI theme colors and window preference helpers."""
 
-Provides pastel blue color scheme following the design ethos:
-- Light/pastel blue base color
-- Avoid dull grey/white monotony
-- No yellow/red colors
-- Modern, clean, professional appearance
-
-Also provides high-contrast theme for accessibility.
-"""
+from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, NamedTuple, Any
+import tkinter as tk
+from typing import Any, Dict, Iterable
 
 
 
 class ThemeMode(Enum):
     """Available theme modes."""
 
+    PALE_BLUE = "pale_blue"
     PASTEL_BLUE = "pastel_blue"
+    SLATE_GRAPHITE = "slate_graphite"
+    MIDNIGHT_TEAL = "midnight_teal"
+    CARBON_AMBER = "carbon_amber"
     HIGH_CONTRAST = "high_contrast"
 
 
@@ -74,9 +72,159 @@ class ColorPalette:
     btn_disabled_bg: str = "#E0E8EE"
     btn_disabled_fg: str = "#8A9AAC"
 
+    # Table and log surfaces
+    table_even_bg: str = "#FFFFFF"
+    table_odd_bg: str = "#D6E8F5"
+    table_changed_bg: str = "#FFF3CD"
+    table_match_bg: str = "#D4EDFF"
+    diff_add_bg: str = "#D4F5D4"
+    diff_del_bg: str = "#F5D4D4"
+    log_sent_bg: str = "#F0F7FF"
+    log_received_bg: str = "#F0FFF4"
+    header_text: str = "#34495E"
+    highlight_bg: str = "#FFEB3B"
+    highlight_fg: str = "#000000"
 
-# Default pastel blue theme
-THEME = ColorPalette()
+
+PALE_BLUE_THEME = ColorPalette()
+
+SLATE_GRAPHITE_THEME = ColorPalette(
+    primary="#23282E",
+    primary_light="#2D333B",
+    primary_dark="#161B22",
+    bg_main="#1B1F24",
+    bg_panel="#252B33",
+    bg_input="#11161C",
+    bg_hover="#353C45",
+    bg_selected="#45515E",
+    bg_disabled="#20262D",
+    text_primary="#F2F5F7",
+    text_secondary="#CBD3D9",
+    text_disabled="#7D8791",
+    text_inverse="#101316",
+    accent_success="#59C98A",
+    accent_info="#6FA9FF",
+    accent_warning="#8DB7FF",
+    accent_error="#C28ACF",
+    status_done="#59C98A",
+    status_partial="#6FA9FF",
+    status_pending="#7D8791",
+    border_light="#36404A",
+    border_normal="#475361",
+    border_focus="#6FA9FF",
+    tab_active="#303741",
+    tab_inactive="#252B33",
+    tab_hover="#39424D",
+    btn_primary_bg="#6FA9FF",
+    btn_primary_fg="#08111C",
+    btn_secondary_bg="#303741",
+    btn_secondary_fg="#F2F5F7",
+    btn_disabled_bg="#20262D",
+    btn_disabled_fg="#7D8791",
+    table_even_bg="#20252B",
+    table_odd_bg="#2A3037",
+    table_changed_bg="#51462A",
+    table_match_bg="#243A4D",
+    diff_add_bg="#1F3A2D",
+    diff_del_bg="#462C32",
+    log_sent_bg="#162536",
+    log_received_bg="#162D25",
+    header_text="#D7E0E7",
+    highlight_bg="#FFD24D",
+    highlight_fg="#11161C",
+)
+
+MIDNIGHT_TEAL_THEME = ColorPalette(
+    primary="#10242A",
+    primary_light="#17323A",
+    primary_dark="#0B171B",
+    bg_main="#0F1B1F",
+    bg_panel="#16272D",
+    bg_input="#0A1316",
+    bg_hover="#1F3941",
+    bg_selected="#29515C",
+    bg_disabled="#132026",
+    text_primary="#F3FAFB",
+    text_secondary="#C6DADD",
+    text_disabled="#6E8A90",
+    text_inverse="#081012",
+    accent_success="#56D0A0",
+    accent_info="#59C3D2",
+    accent_warning="#84D3E0",
+    accent_error="#D093B7",
+    status_done="#56D0A0",
+    status_partial="#59C3D2",
+    status_pending="#6E8A90",
+    border_light="#28434B",
+    border_normal="#37606A",
+    border_focus="#59C3D2",
+    tab_active="#1B3238",
+    tab_inactive="#16272D",
+    tab_hover="#24464F",
+    btn_primary_bg="#59C3D2",
+    btn_primary_fg="#081012",
+    btn_secondary_bg="#1E363D",
+    btn_secondary_fg="#F3FAFB",
+    btn_disabled_bg="#132026",
+    btn_disabled_fg="#6E8A90",
+    table_even_bg="#142227",
+    table_odd_bg="#1B2D33",
+    table_changed_bg="#4A4026",
+    table_match_bg="#1F4250",
+    diff_add_bg="#17372B",
+    diff_del_bg="#3F2430",
+    log_sent_bg="#103543",
+    log_received_bg="#113126",
+    header_text="#D7ECEE",
+    highlight_bg="#FFE07A",
+    highlight_fg="#081012",
+)
+
+CARBON_AMBER_THEME = ColorPalette(
+    primary="#1F1C19",
+    primary_light="#2B2622",
+    primary_dark="#14110F",
+    bg_main="#171412",
+    bg_panel="#211C19",
+    bg_input="#100D0B",
+    bg_hover="#332B26",
+    bg_selected="#4A3C30",
+    bg_disabled="#1B1714",
+    text_primary="#FBF4EC",
+    text_secondary="#DCC8B4",
+    text_disabled="#8C7A69",
+    text_inverse="#120F0D",
+    accent_success="#7ED39A",
+    accent_info="#E5A85A",
+    accent_warning="#F0BF7A",
+    accent_error="#CE8DB4",
+    status_done="#7ED39A",
+    status_partial="#E5A85A",
+    status_pending="#8C7A69",
+    border_light="#3A312B",
+    border_normal="#56473E",
+    border_focus="#E5A85A",
+    tab_active="#2A231F",
+    tab_inactive="#211C19",
+    tab_hover="#3B3028",
+    btn_primary_bg="#E5A85A",
+    btn_primary_fg="#120F0D",
+    btn_secondary_bg="#342B25",
+    btn_secondary_fg="#FBF4EC",
+    btn_disabled_bg="#1B1714",
+    btn_disabled_fg="#8C7A69",
+    table_even_bg="#1B1714",
+    table_odd_bg="#251F1B",
+    table_changed_bg="#534124",
+    table_match_bg="#4A321B",
+    diff_add_bg="#213426",
+    diff_del_bg="#452631",
+    log_sent_bg="#33251A",
+    log_received_bg="#1D2A22",
+    header_text="#F0DED0",
+    highlight_bg="#FFD08A",
+    highlight_fg="#120F0D",
+)
 
 # High-contrast theme for accessibility (WCAG AAA compliant contrast ratios)
 HIGH_CONTRAST_THEME = ColorPalette(
@@ -120,11 +268,103 @@ HIGH_CONTRAST_THEME = ColorPalette(
     btn_secondary_fg="#FFFFFF",
     btn_disabled_bg="#252538",
     btn_disabled_fg="#808080",
+    table_even_bg="#161623",
+    table_odd_bg="#24243A",
+    table_changed_bg="#5A5220",
+    table_match_bg="#1E415E",
+    diff_add_bg="#173824",
+    diff_del_bg="#4A1F2A",
+    log_sent_bg="#13263A",
+    log_received_bg="#143122",
+    header_text="#FFFFFF",
+    highlight_bg="#FFF176",
+    highlight_fg="#000000",
 )
 
+
+_THEME_PRESETS: Dict[ThemeMode, ColorPalette] = {
+    ThemeMode.PALE_BLUE: PALE_BLUE_THEME,
+    ThemeMode.PASTEL_BLUE: PALE_BLUE_THEME,
+    ThemeMode.SLATE_GRAPHITE: SLATE_GRAPHITE_THEME,
+    ThemeMode.MIDNIGHT_TEAL: MIDNIGHT_TEAL_THEME,
+    ThemeMode.CARBON_AMBER: CARBON_AMBER_THEME,
+    ThemeMode.HIGH_CONTRAST: HIGH_CONTRAST_THEME,
+}
+
+_THEME_DISPLAY_NAMES: Dict[ThemeMode, str] = {
+    ThemeMode.PALE_BLUE: "Pale Blue",
+    ThemeMode.PASTEL_BLUE: "Pale Blue",
+    ThemeMode.SLATE_GRAPHITE: "Slate Graphite",
+    ThemeMode.MIDNIGHT_TEAL: "Midnight Teal",
+    ThemeMode.CARBON_AMBER: "Carbon Amber",
+    ThemeMode.HIGH_CONTRAST: "High Contrast",
+}
+
+_DISPLAY_NAME_TO_MODE: Dict[str, ThemeMode] = {
+    name: mode for mode, name in _THEME_DISPLAY_NAMES.items()
+}
+
+
+class _ThemeProxy(ColorPalette):
+    """Proxy object so imported THEME references stay live after theme changes."""
+
+    def __getattribute__(self, name: str) -> Any:
+        if name in ColorPalette.__dataclass_fields__:
+            return getattr(_active_theme, name)
+        return object.__getattribute__(self, name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("THEME is read-only")
+
+    def __eq__(self, other: object) -> bool:
+        return _active_theme == other
+
+    def __repr__(self) -> str:
+        return f"ThemeProxy(mode={_active_theme_mode.value!r})"
+
+
+THEME = _ThemeProxy()
+
 # Current active theme (can be changed at runtime)
-_active_theme: ColorPalette = THEME
-_active_theme_mode: ThemeMode = ThemeMode.PASTEL_BLUE
+_active_theme: ColorPalette = PALE_BLUE_THEME
+_active_theme_mode: ThemeMode = ThemeMode.PALE_BLUE
+
+
+def coerce_theme_mode(value: ThemeMode | str | None) -> ThemeMode:
+    """Convert stored values or labels into a ThemeMode."""
+    if isinstance(value, ThemeMode):
+        return value
+    if not value:
+        return ThemeMode.PALE_BLUE
+
+    normalized = str(value).strip()
+    if normalized in _DISPLAY_NAME_TO_MODE:
+        return _DISPLAY_NAME_TO_MODE[normalized]
+
+    legacy_map = {
+        "pastel_blue": ThemeMode.PALE_BLUE,
+        "light": ThemeMode.PALE_BLUE,
+        "dark": ThemeMode.SLATE_GRAPHITE,
+        "system": ThemeMode.PALE_BLUE,
+    }
+    normalized = normalized.lower()
+    return legacy_map.get(normalized, ThemeMode(normalized) if normalized in ThemeMode._value2member_map_ else ThemeMode.PALE_BLUE)
+
+
+def get_theme_display_name(mode: ThemeMode | str | None = None) -> str:
+    """Return the user-facing name for a theme mode."""
+    current_mode = _active_theme_mode if mode is None else coerce_theme_mode(mode)
+    return _THEME_DISPLAY_NAMES[current_mode]
+
+
+def get_theme_display_names() -> list[str]:
+    """Return all available theme labels for GUI dropdowns."""
+    return list(dict.fromkeys(_THEME_DISPLAY_NAMES.values()))
+
+
+def get_theme_mode_from_display(label: str) -> ThemeMode:
+    """Convert a dropdown label into a ThemeMode."""
+    return coerce_theme_mode(label)
 
 
 def get_theme() -> ColorPalette:
@@ -155,12 +395,16 @@ def set_theme(mode: ThemeMode) -> ColorPalette:
         The newly activated ColorPalette.
     """
     global _active_theme, _active_theme_mode
-    _active_theme_mode = mode
-    if mode == ThemeMode.HIGH_CONTRAST:
-        _active_theme = HIGH_CONTRAST_THEME
-    else:
-        _active_theme = THEME
+    _active_theme_mode = coerce_theme_mode(mode)
+    _active_theme = _THEME_PRESETS[_active_theme_mode]
     return _active_theme
+
+
+def load_theme_from_ini() -> ColorPalette:
+    """Load the persisted GUI design from CherryAI.ini."""
+    from CherryAI.functions import ini_manager
+
+    return set_theme(coerce_theme_mode(ini_manager.get_gui_design()))
 
 
 def get_ttk_style_map(theme: ColorPalette | None = None) -> Dict[str, Dict[str, Any]]:
@@ -285,13 +529,16 @@ def get_ttk_style_map(theme: ColorPalette | None = None) -> Dict[str, Dict[str, 
         },
         "Treeview": {
             "configure": {
-                "background": theme.bg_input,
+                "background": theme.table_even_bg,
                 "foreground": theme.text_primary,
-                "fieldbackground": theme.bg_input,
+                "fieldbackground": theme.table_even_bg,
             },
             "map": {
                 "background": [
                     ("selected", theme.bg_selected),
+                ],
+                "foreground": [
+                    ("selected", theme.text_primary),
                 ],
             },
         },
@@ -431,6 +678,211 @@ def get_ttk_style_map(theme: ColorPalette | None = None) -> Dict[str, Dict[str, 
     }
 
 
+def _safe_configure(widget: tk.Misc, **options: Any) -> None:
+    """Configure a widget while ignoring unsupported Tk options."""
+    for key, value in options.items():
+        try:
+            widget.configure(**{key: value})
+        except tk.TclError:
+            continue
+
+
+def _apply_classic_widget_theme(widget: tk.Misc, theme: ColorPalette) -> None:
+    """Apply colors to classic Tk widgets recursively."""
+    if widget.winfo_class() in {"TFrame", "TLabel", "TButton", "TEntry", "Treeview"}:
+        return
+
+    base_bg = theme.bg_main
+    if isinstance(widget, (tk.LabelFrame, tk.PanedWindow)):
+        _safe_configure(widget, bg=theme.bg_panel, highlightbackground=theme.border_light)
+    elif isinstance(widget, (tk.Frame, tk.Toplevel, tk.Tk)):
+        _safe_configure(widget, bg=theme.bg_main)
+    elif isinstance(widget, (tk.Label, tk.Message)):
+        _safe_configure(widget, bg=base_bg, fg=theme.text_primary)
+    elif isinstance(widget, (tk.Button, tk.Checkbutton, tk.Radiobutton)):
+        _safe_configure(
+            widget,
+            bg=theme.btn_secondary_bg,
+            fg=theme.btn_secondary_fg,
+            activebackground=theme.bg_hover,
+            activeforeground=theme.text_primary,
+            disabledforeground=theme.text_disabled,
+            selectcolor=theme.bg_input,
+            highlightbackground=theme.border_light,
+        )
+    elif isinstance(widget, (tk.Entry, tk.Spinbox, tk.Listbox)):
+        _safe_configure(
+            widget,
+            bg=theme.bg_input,
+            fg=theme.text_primary,
+            insertbackground=theme.text_primary,
+            selectbackground=theme.bg_selected,
+            selectforeground=theme.text_primary,
+            disabledbackground=theme.bg_disabled,
+            disabledforeground=theme.text_disabled,
+            readonlybackground=theme.bg_input,
+            highlightbackground=theme.border_light,
+            highlightcolor=theme.border_focus,
+        )
+    elif isinstance(widget, tk.Text):
+        _safe_configure(
+            widget,
+            bg=theme.bg_input,
+            fg=theme.text_primary,
+            insertbackground=theme.text_primary,
+            selectbackground=theme.bg_selected,
+            selectforeground=theme.text_primary,
+            highlightbackground=theme.border_light,
+            highlightcolor=theme.border_focus,
+        )
+    elif isinstance(widget, tk.Canvas):
+        _safe_configure(widget, bg=theme.bg_main, highlightbackground=theme.border_light)
+    elif isinstance(widget, tk.Scrollbar):
+        _safe_configure(
+            widget,
+            bg=theme.bg_panel,
+            troughcolor=theme.bg_main,
+            activebackground=theme.bg_hover,
+            highlightbackground=theme.border_light,
+        )
+    elif isinstance(widget, tk.Menu):
+        _safe_configure(
+            widget,
+            bg=theme.bg_panel,
+            fg=theme.text_primary,
+            activebackground=theme.bg_hover,
+            activeforeground=theme.text_primary,
+        )
+
+    for child in widget.winfo_children():
+        _apply_classic_widget_theme(child, theme)
+
+
+def _configure_combobox_popdown(root: tk.Misc, theme: ColorPalette) -> None:
+    """Set option database colors used by the Tk combobox popdown list."""
+    try:
+        root.option_add("*TCombobox*Listbox.background", theme.bg_input)
+        root.option_add("*TCombobox*Listbox.foreground", theme.text_primary)
+        root.option_add("*TCombobox*Listbox.selectBackground", theme.bg_selected)
+        root.option_add("*TCombobox*Listbox.selectForeground", theme.text_primary)
+    except tk.TclError:
+        pass
+
+
+def _set_window_maximized(window: tk.Misc) -> None:
+    """Best-effort window maximization across Tk variants."""
+    for setter in (
+        lambda: window.state("zoomed"),
+        lambda: window.attributes("-zoomed", True),
+    ):
+        try:
+            setter()
+            return
+        except tk.TclError:
+            continue
+
+
+def _center_on_parent(window: tk.Misc, parent: tk.Misc | None) -> None:
+    """Center a window on its parent or screen."""
+    try:
+        window.update_idletasks()
+        width = window.winfo_width()
+        height = window.winfo_height()
+        if parent is not None:
+            x = parent.winfo_rootx() + (parent.winfo_width() - width) // 2
+            y = parent.winfo_rooty() + (parent.winfo_height() - height) // 2
+        else:
+            x = (window.winfo_screenwidth() - width) // 2
+            y = (window.winfo_screenheight() - height) // 2
+        window.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+    except tk.TclError:
+        pass
+
+
+def _save_window_geometry(window: tk.Misc, window_key: str) -> None:
+    """Persist the current geometry for a window if normal-sized."""
+    from CherryAI.functions import ini_manager
+
+    try:
+        if not ini_manager.get_save_window_dimensions():
+            return
+        state = window.state()
+        ini_manager.set_window_state(window_key, state)
+        if state == "normal":
+            ini_manager.set_window_geometry(window_key, window.geometry())
+    except tk.TclError:
+        return
+
+
+def register_window_preferences(window: tk.Misc, window_key: str) -> None:
+    """Bind geometry persistence handlers for a themed window."""
+    if getattr(window, "_cherry_window_pref_key", None) == window_key:
+        return
+
+    setattr(window, "_cherry_window_pref_key", window_key)
+    setattr(window, "_cherry_window_pref_job", None)
+
+    def _on_configure(_event: tk.Event) -> None:
+        from CherryAI.functions import ini_manager
+
+        if not ini_manager.get_save_window_dimensions():
+            return
+        current_job = getattr(window, "_cherry_window_pref_job", None)
+        if current_job is not None:
+            try:
+                window.after_cancel(current_job)
+            except tk.TclError:
+                pass
+        try:
+            job = window.after(250, lambda: _save_window_geometry(window, window_key))
+            setattr(window, "_cherry_window_pref_job", job)
+        except tk.TclError:
+            pass
+
+    def _on_destroy(_event: tk.Event) -> None:
+        _save_window_geometry(window, window_key)
+
+    window.bind("<Configure>", _on_configure, add="+")
+    window.bind("<Destroy>", _on_destroy, add="+")
+
+
+def apply_window_preferences(
+    window: tk.Misc,
+    *,
+    parent: tk.Misc | None = None,
+    window_key: str | None = None,
+    default_geometry: str | None = None,
+    center_on_parent: bool = False,
+) -> None:
+    """Apply theme plus persisted geometry/maximize behavior to a window."""
+    from CherryAI.functions import ini_manager
+
+    theme = get_theme()
+    apply_theme(window, theme=theme)
+
+    resolved_key = window_key or window.__class__.__name__
+    if default_geometry:
+        try:
+            window.geometry(default_geometry)
+        except tk.TclError:
+            pass
+
+    if ini_manager.get_launch_maximized():
+        _set_window_maximized(window)
+    else:
+        saved_geometry = ini_manager.get_window_geometry(resolved_key)
+        if saved_geometry and ini_manager.get_save_window_dimensions():
+            try:
+                window.geometry(saved_geometry)
+            except tk.TclError:
+                if center_on_parent:
+                    _center_on_parent(window, parent)
+        elif center_on_parent:
+            _center_on_parent(window, parent)
+
+    register_window_preferences(window, resolved_key)
+
+
 def apply_theme(root, theme: ColorPalette | None = None) -> None:
     """Apply a theme to a Tkinter root window.
 
@@ -458,6 +910,8 @@ def apply_theme(root, theme: ColorPalette | None = None) -> None:
 
     # Set root window background
     root.configure(bg=theme.bg_main)
+    _configure_combobox_popdown(root, theme)
+    _apply_classic_widget_theme(root, theme)
 
 
 # =============================================================================
@@ -524,4 +978,14 @@ def get_themed_colors() -> Dict[str, str]:
         "border_light": theme.border_light,
         "border_normal": theme.border_normal,
         "border_focus": theme.border_focus,
+        "table_even_bg": theme.table_even_bg,
+        "table_odd_bg": theme.table_odd_bg,
+        "table_changed_bg": theme.table_changed_bg,
+        "table_match_bg": theme.table_match_bg,
+        "diff_add_bg": theme.diff_add_bg,
+        "diff_del_bg": theme.diff_del_bg,
+        "log_sent_bg": theme.log_sent_bg,
+        "log_received_bg": theme.log_received_bg,
+        "highlight_bg": theme.highlight_bg,
+        "highlight_fg": theme.highlight_fg,
     }

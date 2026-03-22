@@ -131,6 +131,8 @@ TABLE OF CONTENTS
         * INI location: user/CherryAI.ini (automigrared from root on first run)
         * optionxform = str: case-preserving keys (required for preset names like "Natural")
         * _REQUIRED_SECTIONS: all 10 sections always present; auto-initialised + saved on load
+       * `[ui]` stores GUI-only persistence: `design`, `save_window_dimensions`, `launch_maximized`, `window_geometries`, `window_states`
+       * GUI helpers: get/set GUI design, save-window toggle, maximize toggle, and per-window geometry/state JSON accessors
         * get_all_presets("style"|"tone") — returns built-in + user presets merged
         * set_preset_text / delete_preset — saves to [style] or [tone] section
         * get_default_text / set_default_text — long-text defaults from [defaults] section
@@ -278,10 +280,12 @@ TABLE OF CONTENTS
    6.6 gui/dialogs/ (7 files - 6 dialog modules)
        - __init__.py - Dialog exports
        - global_options.py - GlobalOptionsDialog with section panels:
-         - OptionSection enum: API, REQUEST, TRANSLATION, CACHING, LOGGING, SESSION, LIMIT, FILE_IO, PROMPTS, SECURITY, UTILITY, ADDONS (12 sections)
+         - OptionSection enum: API, REQUEST, TRANSLATION, CACHING, LOGGING, SESSION, GUI, LIMIT, FILE_IO, PROMPTS, SECURITY, UTILITY (12 sections)
          - Settings dataclasses: APISettings, RequestSettings, TranslationSettings, CachingSettings, LoggingSettings,
-           SessionSettings, LimitSettings (SafetySettings=alias), FileIOSettings, PromptsSettings, UtilitySettings
+           SessionSettings, GUISettings, LimitSettings (SafetySettings=alias), FileIOSettings, PromptsSettings, UtilitySettings
          - TranslationSettings (NEW): overwrite_translation, skip_non_source_language, retry_strategy, request_slicing
+         - GUISettings: GUI design dropdown + window-behavior toggles backed by `[ui]` in CherryAI.ini
+         - Session keeps the legacy `theme` field for compatibility, but the live GUI design selector moved to Application → GUI
          - GlobalOptions container: all settings including `translation: TranslationSettings` + providers list; `safety` property is alias for `limit`
          - APIProviderEntry dataclass: name, provider_type, url, api_key, model (Task 43.6)
          - PROVIDER_PRESETS: 5 provider presets (Task 43.6)
@@ -307,8 +311,11 @@ TABLE OF CONTENTS
          - CachingSettings: fields renamed — dir, age (days), size (MB), mode; defaults 0=unlimited
          - _persist_to_ini(): Writes ALL settings sections to CherryAI.ini on every Apply/OK
          - _save_options() calls _persist_to_ini() for guaranteed persistence
+         - Saving options reloads the active GUI design and reapplies it across the app plus open Toplevel windows
          - open_or_focus(): single-instance dialog helper keyed on the root window; reuses existing dialog, switches sections, and deduplicates save listeners
          - Sections organized in CATEGORY_ORDER: Connection (incl. Utility), Processing, Application (incl. Add-ons)
+       - gui/theme/colors.py - Shared palette registry + live `THEME` proxy; `apply_theme()` styles ttk and classic Tk widgets, and `apply_window_preferences()` restores geometry/maximize preferences while applying the active palette
+       - gui/dialogs/api_log_view.py / gui/dialogs/table_view.py - custom `refresh_theme()` hooks recolor rich text tags, Treeview row tags, alternating dark table rows, and selection bars when the GUI design changes at runtime
          - UtilitySettings: 18 fields for Term Translation, Gender Inference, and Misc (speaker_threshold) configuration
            - Term Translation: mode (Romaji/LLM), api_key_provider, api_key_name, model, batch_size
            - Gender Inference: mode (Script only/Script + LLM), api_key_provider, api_key_name, model

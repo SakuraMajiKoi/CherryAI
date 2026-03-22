@@ -138,6 +138,13 @@ theme = light
 load_last = true
 last_manifest = 
 
+[ui]
+design = pale_blue
+save_window_dimensions = true
+launch_maximized = false
+window_geometries = {}
+window_states = {}
+
 [caching]
 enabled = true
 dir = Cache
@@ -483,6 +490,7 @@ def _load_ini() -> configparser.ConfigParser:
 # Sections matching by identical name are included implicitly.
 _DEFAULTS_POPULATE_MAP: Dict[str, str] = {
     "session": "session",
+    "ui": "ui",
     "caching": "caching",
     "log": "log",
     "limit": "limit",
@@ -2241,6 +2249,103 @@ def get_session_setting(key: str, fallback: Any = None) -> Any:
 def set_session_setting(key: str, value: Any) -> bool:
     """Write a value to the [session] section."""
     return set_default("session", key, value)
+
+
+def get_ui_setting(key: str, fallback: Any = None) -> Any:
+    """Read a value from the [ui] section."""
+    if isinstance(fallback, bool):
+        return get_bool("ui", key, fallback)
+    if isinstance(fallback, int):
+        return get_int("ui", key, fallback)
+    return get_str("ui", key, str(fallback) if fallback is not None else "")
+
+
+def set_ui_setting(key: str, value: Any) -> bool:
+    """Write a value to the [ui] section."""
+    return set_default("ui", key, value)
+
+
+def get_gui_design() -> str:
+    """Return the active GUI design key stored in [ui]."""
+    return get_str("ui", "design", "pale_blue") or "pale_blue"
+
+
+def set_gui_design(design: str) -> bool:
+    """Persist the active GUI design key into [ui]."""
+    return set_default("ui", "design", design)
+
+
+def get_save_window_dimensions() -> bool:
+    """Return whether window geometry persistence is enabled."""
+    return get_bool("ui", "save_window_dimensions", True)
+
+
+def set_save_window_dimensions(enabled: bool) -> bool:
+    """Persist whether window geometry persistence is enabled."""
+    return set_default("ui", "save_window_dimensions", enabled)
+
+
+def get_launch_maximized() -> bool:
+    """Return whether windows should open maximized by default."""
+    return get_bool("ui", "launch_maximized", False)
+
+
+def set_launch_maximized(enabled: bool) -> bool:
+    """Persist whether windows should open maximized by default."""
+    return set_default("ui", "launch_maximized", enabled)
+
+
+def _load_ui_json(key: str) -> Dict[str, str]:
+    """Load a dict-valued JSON blob from the [ui] section."""
+    import json as _json
+
+    raw = get_str("ui", key, "{}")
+    try:
+        data = _json.loads(raw)
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    result: Dict[str, str] = {}
+    for item_key, item_value in data.items():
+        if isinstance(item_key, str) and isinstance(item_value, str):
+            result[item_key] = item_value
+    return result
+
+
+def _save_ui_json(key: str, values: Dict[str, str]) -> bool:
+    """Save a dict-valued JSON blob into the [ui] section."""
+    import json as _json
+
+    return set_default("ui", key, _json.dumps(values, ensure_ascii=False))
+
+
+def get_window_geometry(window_key: str) -> Optional[str]:
+    """Return the saved geometry string for a named window."""
+    geometries = _load_ui_json("window_geometries")
+    geometry = geometries.get(window_key, "").strip()
+    return geometry or None
+
+
+def set_window_geometry(window_key: str, geometry: str) -> bool:
+    """Persist the geometry string for a named window."""
+    geometries = _load_ui_json("window_geometries")
+    geometries[window_key] = geometry
+    return _save_ui_json("window_geometries", geometries)
+
+
+def get_window_state(window_key: str) -> Optional[str]:
+    """Return the saved wm state for a named window."""
+    states = _load_ui_json("window_states")
+    state = states.get(window_key, "").strip()
+    return state or None
+
+
+def set_window_state(window_key: str, state: str) -> bool:
+    """Persist the wm state for a named window."""
+    states = _load_ui_json("window_states")
+    states[window_key] = state
+    return _save_ui_json("window_states", states)
 
 
 # ---------------------------------------------------------------------------

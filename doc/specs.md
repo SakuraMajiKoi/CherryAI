@@ -362,15 +362,24 @@ This skip condition is a downstream validation/request-building rule, not a pars
 | Preserve BOM | bool | true | Keep UTF-8 BOM if present |
 | Backup Originals | bool | true | Create backup before overwrite |
 
+#### GUI Settings
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| Design | enum | pale_blue | GUI palette selector shown under Application → GUI |
+| Save Window Dimensions | bool | true | Persist window geometry and state for the app and supported dialogs |
+| Launch Every Window Maximized | bool | false | Open the main window and registered dialogs maximized |
+
 ### 4.2 Data Source
 
 Global options are loaded from and saved to `CherryAI.ini`. The `GlobalOptions` dataclass in `gui/dialogs/global_options.py` provides the in-memory representation.
 
-`GlobalOptions.load_from_ini()` loads **all** settings sections (API, Request, Translation, Caching, Logging, Session, Limit, FileIO, Utility, Prompts) using `get_effective_default()` which resolves user defaults → factory defaults → dataclass fallback. This ensures the GUI always reflects the actual INI values, including user overrides set via `[user_defaults]`.
+`GlobalOptions.load_from_ini()` loads **all** settings sections (API, Request, Translation, Caching, Logging, Session, GUI, Limit, FileIO, Utility, Prompts) using `get_effective_default()` which resolves user defaults → factory defaults → dataclass fallback. This ensures the GUI always reflects the actual INI values, including user overrides set via `[user_defaults]`.
 
-All INI writes use atomic saves (write to `.tmp`, fsync, `os.replace()`) via `ini_manager._save_ini()` to prevent file corruption. The `[ui] state` section is managed by centralized `ini_manager.load_ui_state()` / `save_ui_state()` functions that use the shared in-memory cache, preventing scenarios where a UI state save could wipe other sections.
+All INI writes use atomic saves (write to `.tmp`, fsync, `os.replace()`) via `ini_manager._save_ini()` to prevent file corruption. The `[ui]` section now stores both generic UI state and GUI-design/window persistence keys: `design`, `save_window_dimensions`, `launch_maximized`, `window_geometries`, and `window_states`. Window geometry/state are serialized through centralized `ini_manager` helpers so UI-state writes cannot wipe unrelated sections.
 
 `CherryAI.ini` is auto-seeded from the embedded `_FACTORY_DEFAULTS_INI_TEXT` constant in `ini_manager.py` on first load via `_populate_from_defaults()`. Conditional context-type prompts (dialogue/menu/choice/unknown) are initialised from the `[conditional_prompts]` section of the embedded constant and stored in the `[prompts]` section of `CherryAI.ini`. They are configurable via **Global Options → Prompts** and are used at translation time by `get_context_prompt()` in `prompt_builder.py`.
+
+The GUI design selector lives in **Global Options → Application → GUI**. Changing it updates the active palette at runtime, including the root window, registered dialogs, Full Table View, and API Log. The default user-facing design is `Pale Blue`; dark designs must switch text to light foregrounds and use alternating dark table rows.
 
 ---
 

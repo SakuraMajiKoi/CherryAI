@@ -20,6 +20,7 @@ from tkinter import messagebox, ttk
 from typing import Optional
 
 from CherryAI.functions import api_config
+from CherryAI.gui.theme.colors import apply_window_preferences
 from CherryAI.gui.widgets.password_strength import PasswordStrengthWidget
 
 logger = logging.getLogger(__name__)
@@ -79,9 +80,14 @@ class SetPasswordDialog(tk.Toplevel):
         self.result: bool = False
 
         self._build_ui()
+        apply_window_preferences(
+            self,
+            parent=parent,
+            window_key="SetPasswordDialog",
+            center_on_parent=True,
+        )
         self.transient(parent)
         self.grab_set()
-        _center(self, parent)
         self._pw_widget.focus()
 
     # ------------------------------------------------------------------
@@ -228,9 +234,14 @@ class ChangePasswordDialog(tk.Toplevel):
         self.result: bool = False
 
         self._build_ui()
+        apply_window_preferences(
+            self,
+            parent=parent,
+            window_key="ChangePasswordDialog",
+            center_on_parent=True,
+        )
         self.transient(parent)
         self.grab_set()
-        _center(self, parent)
         self._current_entry.focus()
 
     # ------------------------------------------------------------------
@@ -385,9 +396,14 @@ class VerifyPasswordDialog(tk.Toplevel):
         self.password: Optional[str] = None
 
         self._build_ui(prompt)
+        apply_window_preferences(
+            self,
+            parent=parent,
+            window_key="VerifyPasswordDialog",
+            center_on_parent=True,
+        )
         self.transient(parent)
         self.grab_set()
-        _center(self, parent)
         self._entry.focus()
 
     def _build_ui(self, prompt: str) -> None:

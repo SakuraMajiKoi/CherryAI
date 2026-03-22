@@ -55,6 +55,21 @@ MODULE COUNTS (Verified January 2026)
 =============================================================================
 [Archived: Sessions 43–24 + Phase 62 → see doc/archived.md]
 
+### BUG FIX: Dark GUI Designs + Window Persistence Options
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 4 hours
+
+Goal: Add real dark-mode GUI designs, move GUI design selection into a new Application → GUI section in Global Options, persist the design in `CherryAI.ini`, and add options to save window sizes or launch windows maximized.
+
+**Changes:**
+1. **`functions/ini_manager.py`** — Added `[ui]` defaults and helpers for `design`, `save_window_dimensions`, `launch_maximized`, `window_geometries`, and `window_states`.
+2. **`gui/theme/colors.py`** — Expanded the palette system to `Pale Blue`, `Slate Graphite`, `Midnight Teal`, `Carbon Amber`, and `High Contrast`; added a live `THEME` proxy, recursive Tk/ttk recoloring, alternating dark table rows, and shared `apply_window_preferences()` helpers.
+3. **`gui/dialogs/global_options.py`** — Added `GUISettings`, a new Application → GUI section, the GUI Design dropdown, and the two new window-behavior toggles while keeping legacy session-theme compatibility.
+4. **`gui/app.py`**, **`gui/dialogs/project_dialog.py`**, **`gui/dialogs/input_dialog.py`**, **`gui/dialogs/password_dialog.py`**, **`gui/dialogs/loading_progress.py`**, **`gui/dialogs/api_log_view.py`**, and **`gui/dialogs/table_view.py`** — Applied shared window preference handling and runtime theme refresh, including explicit recoloring for API Log and Full Table View custom surfaces.
+5. **Tests** — Updated focused GUI regressions and verified the targeted pytest slice for theme compatibility, options dataclasses, section ordering, and startup/theme loading.
+
+**Tests:** Focused pytest run passed:
+- `python -m pytest CherryAI/dev/test_gui_dialogs.py CherryAI/dev/test_ini_persistence.py CherryAI/dev/test_ini_sections.py CherryAI/dev/test_app_startup.py CherryAI/dev/test_gui_v2.py -k "Theme or SessionSettingsDataclass or GlobalOptionsDataclass or SectionDescriptions or CategoryOrder or GlobalOptionsDialogIntegration" -q --timeout=20` — 64 passed
+
 ### BUG FIX: LightVN Hardcoded Equipment Display Rewrite Hook
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
 

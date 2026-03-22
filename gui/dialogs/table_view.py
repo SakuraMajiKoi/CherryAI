@@ -42,6 +42,7 @@ from CherryAI.functions.manifest_fields import (
     save_nested_text_field,
 )
 from CherryAI.functions.wordwrap import WordwrapConfig, apply_wordwrap, normalize_break_char
+from CherryAI.gui.theme.colors import apply_window_preferences, apply_theme, get_theme
 
 logger = logging.getLogger(__name__)
 
@@ -176,14 +177,19 @@ class FullTableViewDialog(tk.Toplevel):
 
         # Window setup
         self.title("Full Table View")
-        self.geometry("1400x800")
         self.minsize(900, 500)
-        self.configure(bg=COLOR_BG)
+        apply_window_preferences(
+            self,
+            parent=parent,
+            window_key="FullTableViewDialog",
+            default_geometry="1400x800",
+        )
 
         # Build UI
         self._build_toolbar()
         self._build_table()
         self._build_status_bar()
+        self.refresh_theme()
 
         # Load data
         self._load_data()
@@ -197,6 +203,59 @@ class FullTableViewDialog(tk.Toplevel):
 
         self.focus_set()
         self.grab_set()
+
+    def refresh_theme(self) -> None:
+        """Reapply the active theme to table-specific custom surfaces."""
+        theme = get_theme()
+        apply_theme(self, theme=theme)
+
+        if hasattr(self, "_sel_canvas"):
+            self._sel_canvas.configure(bg=theme.bg_main)
+
+        if hasattr(self, "_tree"):
+            self._tree.tag_configure(
+                "selected_row",
+                background=theme.bg_selected,
+                foreground=theme.text_primary,
+            )
+            self._tree.tag_configure(
+                "changed",
+                background=theme.table_changed_bg,
+                foreground=theme.text_primary,
+            )
+            self._tree.tag_configure(
+                "match",
+                background=theme.table_match_bg,
+                foreground=theme.text_primary,
+            )
+            self._tree.tag_configure(
+                "diff_add",
+                background=theme.diff_add_bg,
+                foreground=theme.text_primary,
+            )
+            self._tree.tag_configure(
+                "diff_del",
+                background=theme.diff_del_bg,
+                foreground=theme.text_primary,
+            )
+            self._tree.tag_configure(
+                "even",
+                background=theme.table_even_bg,
+                foreground=theme.text_primary,
+            )
+            self._tree.tag_configure(
+                "odd",
+                background=theme.table_odd_bg,
+                foreground=theme.text_primary,
+            )
+
+        if hasattr(self, "_sel_labels"):
+            for col, label in self._sel_labels.items():
+                selected = col in self._selected_columns
+                label.configure(
+                    bg=theme.bg_selected if selected else theme.bg_panel,
+                    fg=theme.text_primary,
+                )
 
     # ================================================================== #
     #                         DATA LOADING                                #
@@ -547,6 +606,7 @@ class FullTableViewDialog(tk.Toplevel):
 
     def _rebuild_selection_bar(self) -> None:
         """Rebuild the Select / Selected bar above each column."""
+        theme = get_theme()
         for child in self._sel_inner.winfo_children():
             child.destroy()
         self._sel_labels.clear()
@@ -556,11 +616,11 @@ class FullTableViewDialog(tk.Toplevel):
         for col in self._visible_columns:
             selected = col in self._selected_columns
             text = "Selected" if selected else "Select"
-            bg = COLOR_SELECTED if selected else COLOR_PANEL
+            bg = theme.bg_selected if selected else theme.bg_panel
             w = self._tree.column(col, "width")
             lbl = tk.Label(
                 self._sel_inner, text=text, relief="raised", borderwidth=1,
-                font=("TkDefaultFont", 9), bg=bg, fg=COLOR_TEXT,
+                font=("TkDefaultFont", 9), bg=bg, fg=theme.text_primary,
                 cursor="hand2",
             )
             lbl.place(x=x_offset, y=0, width=w, height=24)
@@ -1039,6 +1099,7 @@ class FullTableViewDialog(tk.Toplevel):
 
     def _show_readonly_cell(self, item: str, column: str, value: str) -> None:
         """Show a read-only text widget for copying cell content (e.g., Original)."""
+        theme = get_theme()
         bbox = self._tree.bbox(item, column)
         if not bbox:
             return
@@ -1047,7 +1108,9 @@ class FullTableViewDialog(tk.Toplevel):
             self._tree, wrap="word",
             font=("TkDefaultFont", 9),
             bd=1, relief="solid",
-            bg="#F0F0F0",
+            bg=theme.bg_input,
+            fg=theme.text_primary,
+            insertbackground=theme.text_primary,
         )
         widget.insert("1.0", value)
         widget.configure(state="disabled")
@@ -1094,6 +1157,7 @@ class FullTableViewDialog(tk.Toplevel):
 
     def _toggle_column_selection(self, col: str) -> None:
         """Toggle a column's selection state for search/replace scoping."""
+        theme = get_theme()
         if col in self._selected_columns:
             self._selected_columns.discard(col)
         else:
@@ -1104,7 +1168,7 @@ class FullTableViewDialog(tk.Toplevel):
             selected = col in self._selected_columns
             lbl.configure(
                 text="Selected" if selected else "Select",
-                bg=COLOR_SELECTED if selected else COLOR_PANEL,
+                bg=theme.bg_selected if selected else theme.bg_panel,
             )
 
     def _clear_column(self, col: str) -> None:
@@ -1587,7 +1651,8 @@ class _FileFilterDropdown(tk.Toplevel):
     ) -> None:
         super().__init__(parent)
         self.overrideredirect(True)
-        self.configure(bg=COLOR_BORDER)
+        theme = get_theme()
+        self.configure(bg=theme.border_light)
 
         self._file_tree = file_tree
         self._filedir = filedir
@@ -1599,8 +1664,9 @@ class _FileFilterDropdown(tk.Toplevel):
         self._frame.pack(fill="both", expand=True)
 
         self._listbox = tk.Listbox(
-            self._frame, bg=COLOR_INPUT, fg=COLOR_TEXT,
-            selectbackground=COLOR_SELECTED,
+            self._frame, bg=theme.bg_input, fg=theme.text_primary,
+            selectbackground=theme.bg_selected,
+            selectforeground=theme.text_primary,
             font=("TkDefaultFont", 11),
             width=40, height=15,
             activestyle="none",
@@ -1804,7 +1870,7 @@ class _WrapSelectionDialog(tk.Toplevel):
                 "Note: an actual newline inserts a literal line break. "
                 "Typing \\\\n keeps the slash command text some engines use."
             ),
-            foreground=COLOR_TEXT_SEC,
+            foreground=get_theme().text_secondary,
             wraplength=340,
             justify="left",
         ).pack(anchor="w", pady=(8, 0))
@@ -1813,6 +1879,13 @@ class _WrapSelectionDialog(tk.Toplevel):
         buttons.pack(fill="x", pady=(10, 0))
         ttk.Button(buttons, text="Wrap", command=self._on_ok).pack(side="right")
         ttk.Button(buttons, text="Cancel", command=self._on_cancel).pack(side="right", padx=(0, 6))
+
+        apply_window_preferences(
+            self,
+            parent=parent.winfo_toplevel(),
+            window_key="WrapSelectionDialog",
+            center_on_parent=True,
+        )
 
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
 
@@ -1863,13 +1936,20 @@ class _ClearColumnsDialog(tk.Toplevel):
         ttk.Label(
             body,
             text="Deleting 'Translated' requires a second confirmation.",
-            foreground=COLOR_TEXT_SEC,
+            foreground=get_theme().text_secondary,
         ).pack(anchor="w", pady=(6, 0))
 
         buttons = ttk.Frame(body)
         buttons.pack(fill="x", pady=(10, 0))
         ttk.Button(buttons, text="Clear", command=self._on_ok).pack(side="right")
         ttk.Button(buttons, text="Cancel", command=self._on_cancel).pack(side="right", padx=(0, 6))
+
+        apply_window_preferences(
+            self,
+            parent=parent.winfo_toplevel(),
+            window_key="ClearColumnsDialog",
+            center_on_parent=True,
+        )
 
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
 

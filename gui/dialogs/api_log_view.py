@@ -27,6 +27,7 @@ from CherryAI.functions.api_log import (
     get_api_log_store,
 )
 from CherryAI.functions.manifest_manager import ManifestManager
+from CherryAI.gui.theme.colors import apply_window_preferences, apply_theme, get_theme
 
 logger = logging.getLogger(__name__)
 
@@ -143,14 +144,19 @@ class APILogViewDialog(tk.Toplevel):
 
         # Window setup — NON-BLOCKING (no grab_set)
         self.title("API Log")
-        self.geometry("960x700")
         self.minsize(640, 400)
-        self.configure(bg=COLOR_BG)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        apply_window_preferences(
+            self,
+            parent=parent,
+            window_key="APILogViewDialog",
+            default_geometry="960x700",
+        )
 
         self._build_toolbar()
         self._build_log_view()
         self._build_status_bar()
+        self.refresh_theme()
         self._render_all()
 
         # Subscribe for live updates
@@ -176,6 +182,51 @@ class APILogViewDialog(tk.Toplevel):
         if getattr(owner, self._ROOT_ATTR, None) is self:
             setattr(owner, self._ROOT_ATTR, None)
         self._instance_owner = None
+
+    def refresh_theme(self) -> None:
+        """Reapply the active theme to the dialog and text tags."""
+        theme = get_theme()
+        apply_theme(self, theme=theme)
+
+        if hasattr(self, "_text"):
+            self._text.tag_configure(
+                "header_success", foreground=theme.accent_success,
+            )
+            self._text.tag_configure(
+                "header_recovered", foreground=theme.accent_warning,
+            )
+            self._text.tag_configure(
+                "header_failed", foreground=theme.accent_error,
+            )
+            self._text.tag_configure(
+                "header_pending", foreground=theme.text_secondary,
+            )
+            self._text.tag_configure(
+                "meta", foreground=theme.text_secondary,
+            )
+            self._text.tag_configure(
+                "label", foreground=theme.header_text,
+            )
+            self._text.tag_configure(
+                "content", foreground=theme.text_primary,
+            )
+            self._text.tag_configure(
+                "separator", foreground=theme.border_light,
+            )
+            self._text.tag_configure(
+                "sent_label", foreground=theme.accent_info,
+            )
+            self._text.tag_configure(
+                "recv_label", foreground=theme.accent_success,
+            )
+            self._text.tag_configure(
+                "error", foreground=theme.accent_error,
+            )
+            self._text.tag_configure(
+                "search_highlight",
+                background=theme.highlight_bg,
+                foreground=theme.highlight_fg,
+            )
 
     # ------------------------------------------------------------------ #
     #  UI Construction                                                     #
