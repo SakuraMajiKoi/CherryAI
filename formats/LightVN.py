@@ -9,6 +9,8 @@ Extraction Tags:
     - ``"menu"``: Menu/button text from ``~文字`` / ``~ボタン文字`` commands.
     - ``"variable"``: Translatable variable assignments (skill names, etc.).
     - ``"items"``: Item-like variable assignments (loot/material names/counts).
+        - ``"hardcoded"``: Extra caution tag layered onto visible machine-value
+            labels that need special handling.
 
 Speaker Format:
     Dialogue keys use ``"Speaker: text"`` when a speaker is active.
@@ -69,6 +71,7 @@ TAG_DIALOGUE = "dialogue"
 TAG_MENU = "menu"
 TAG_VARIABLE = "variable"
 TAG_ITEMS = "items"
+TAG_HARDCODED = "hardcoded"
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +199,9 @@ class LightVNParser(ParserScript):
         "<": ">", "＜": "＞",
         "⟨": "⟩", "⟪": "⟫",
         "〈": "〉", "《": "》",
+    }
+    NON_CODE_BRACKET_PAIRS: Dict[str, str] = {
+        "〈": "〉",
     }
 
     SCRIPT_COMMANDS: Set[str] = {
@@ -619,6 +625,10 @@ class LightVNParser(ParserScript):
         i = 0
         while i < len(text):
             ch = text[i]
+            if ch in self.NON_CODE_BRACKET_PAIRS:
+                visible += 1
+                i += 1
+                continue
             if ch in self.BRACKET_PAIRS:
                 close = self.BRACKET_PAIRS[ch]
                 depth = 1
@@ -934,9 +944,12 @@ class LightVNParser(ParserScript):
                     text = match.group("text")
                     if not cls._should_extract_targeted_literal(var_name, text):
                         continue
+                    tag = cls._classify_targeted_variable_tag(var_name)
+                    if cls._is_hardcoded_machine_value(var_name, text):
+                        tag = cls._compose_tag(tag, TAG_HARDCODED)
                     condition_matches.append((
                         match.start(),
-                        cls._classify_targeted_variable_tag(var_name),
+                        tag,
                         var_name,
                         text,
                     ))
@@ -952,8 +965,11 @@ class LightVNParser(ParserScript):
             text = match.group("text")
             if not cls._should_extract_targeted_literal(var_name, text):
                 continue
+            tag = cls._classify_targeted_variable_tag(var_name)
+            if cls._is_hardcoded_machine_value(var_name, text):
+                tag = cls._compose_tag(tag, TAG_HARDCODED)
             extracted.append((
-                cls._classify_targeted_variable_tag(var_name),
+                tag,
                 var_name,
                 text,
             ))
@@ -982,6 +998,10 @@ class LightVNParser(ParserScript):
         i = 0
         while i < len(stripped):
             ch = stripped[i]
+            if ch in self.NON_CODE_BRACKET_PAIRS:
+                visible_parts.append(ch)
+                i += 1
+                continue
             if ch in self.BRACKET_PAIRS:
                 close = self.BRACKET_PAIRS[ch]
                 depth = 1
@@ -1034,6 +1054,9 @@ class LightVNParser(ParserScript):
         i = 0
         while i < len(text):
             ch = text[i]
+            if ch in self.NON_CODE_BRACKET_PAIRS:
+                i += 1
+                continue
             if ch in self.BRACKET_PAIRS:
                 close = self.BRACKET_PAIRS[ch]
                 depth = 1
@@ -1058,6 +1081,9 @@ class LightVNParser(ParserScript):
         i = 0
         while i < len(text):
             ch = text[i]
+            if ch in self.NON_CODE_BRACKET_PAIRS:
+                i += 1
+                continue
             if ch in self.BRACKET_PAIRS:
                 close = self.BRACKET_PAIRS[ch]
                 depth = 1
@@ -1375,6 +1401,19 @@ class LightVNParser(ParserScript):
             return
         result.append(ExtractedLine(text=text, tag=tag, speaker=speaker))
 
+    @staticmethod
+    def _compose_tag(primary_tag: str, *extra_tags: str) -> str:
+        """Return a canonical comma-joined tag string."""
+        merged: List[str] = []
+        seen: Set[str] = set()
+        for raw_tag in (primary_tag, *extra_tags):
+            tag = str(raw_tag).strip()
+            if not tag or tag in seen:
+                continue
+            merged.append(tag)
+            seen.add(tag)
+        return ",".join(merged)
+
     # ======================================================================
     # Core extraction (document-order, interleaved)
     # ======================================================================
@@ -1457,7 +1496,11 @@ class LightVNParser(ParserScript):
             if hardcoded_machine_texts:
                 _flush_dialogue()
                 for text in hardcoded_machine_texts:
-                    self._append_tagged_line(result, text, TAG_MENU)
+                    self._append_tagged_line(
+                        result,
+                        text,
+                        self._compose_tag(TAG_MENU, TAG_HARDCODED),
+                    )
                 if not self._is_menu_text_line(stripped):
                     i += 1
                     continue

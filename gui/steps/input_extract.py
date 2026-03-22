@@ -2710,14 +2710,17 @@ class InputExtractionStep(BaseStep):
                 
                 # Extract lines for this file from lines_data using index range
                 file_lines = []
+                file_tags: List[str] = []
                 for idx in range(first_idx, last_idx + 1):
                     if idx < len(lines_data):
                         line_entry = lines_data[idx]
                         # Get the original text from the line entry
                         if isinstance(line_entry, dict):
                             file_lines.append(line_entry.get("orig", ""))
+                            file_tags.append(str(line_entry.get("tags", "")))
                         else:
                             file_lines.append(str(line_entry))
+                            file_tags.append("")
                 
                 # Create LoadedFile
                 loaded = LoadedFile(
@@ -2725,6 +2728,7 @@ class InputExtractionStep(BaseStep):
                     format_id=file_format,
                     lines=file_lines,
                     manifest_path=self.session.manifest_path if self.session else None,
+                    tags=file_tags if any(file_tags) else None,
                 )
                 self._loaded_files.append(loaded)
         else:
@@ -3318,12 +3322,16 @@ class InputExtractionStep(BaseStep):
 
                     # Extract orig lines from the manifest line entries
                     file_lines: List[str] = []
+                    file_tags: List[str] = []
                     for idx in range(entry.first_idx, entry.last_idx + 1):
                         if idx < len(manifest_lines):
                             ln = manifest_lines[idx]
-                            file_lines.append(
-                                ln.get("orig", "") if isinstance(ln, dict) else str(ln)
-                            )
+                            if isinstance(ln, dict):
+                                file_lines.append(ln.get("orig", ""))
+                                file_tags.append(str(ln.get("tags", "")))
+                            else:
+                                file_lines.append(str(ln))
+                                file_tags.append("")
 
                     loaded = LoadedFile(
                         path=actual_path if actual_path.exists() else file_path,
@@ -3333,6 +3341,7 @@ class InputExtractionStep(BaseStep):
                             self.session.manifest_path if self.session else None
                         ),
                         encoding=entry.encoding,
+                        tags=file_tags if any(file_tags) else None,
                     )
                     self._loaded_files.append(loaded)
 

@@ -55,6 +55,24 @@ MODULE COUNTS (Verified January 2026)
 =============================================================================
 [Archived: Sessions 43–24 + Phase 62 → see doc/archived.md]
 
+### BUG FIX: LightVN Hardcoded Tag Persistence + Output Newline Guard
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Preserve LightVN parser tags across manifest reloads, mark visible hardcoded machine-value rows for special care, keep `items` as a canonical content tag, and stop trailing manifest newlines from being written or logged during Step 9 output.
+
+**Changes:**
+1. **`formats/LightVN.py`** — Added composite `hardcoded` tagging for visible machine-value rows so targeted literals such as `防具_選択中部位 == "頭"` emit `variable,hardcoded` and UI label duplicates emit `menu,hardcoded` while keeping their primary content type.
+2. **`functions/manifest_manager.py`** — Promoted `items` into the canonical content-tag set so manifest normalization and reload logic continue to treat item rows as first-class content.
+3. **`gui/steps/input_extract.py`** — Restored `LoadedFile.tags` from manifest `lines[].tags` when reopening projects, so parser-provided tags survive Step 0 rehydration.
+4. **`gui/steps/preprocess.py`** — Step 3 now preserves parser/content tags already stored in `lines[].tags` and merges preprocessing-owned markers such as `symbol_conversion`, `dedup`, and `AD{idx}` on top instead of overwriting rows down to preprocessing-only tags.
+5. **`functions/output.py` / `gui/steps/output_inject.py`** — Added shared trailing-newline stripping for manifest-resolved output/orig text before Step 9 verification, logging, generic writes, and parser injection routing.
+6. **`formats/LightVN.py`** — Excluded `〈...〉` from the generic code-recovery bracket path so stylized suffixes such as `〈Limit per battle: 2〉` remain translated while the separate hardcoded-equipment rewrite logic still protects machine-key usages.
+7. **Tests** — Added focused regressions for hardcoded composite tags, canonical `items` handling, manifest tag restoration, preprocessing tag merge, translated `〈...〉` suffix preservation, and the Step 9 trailing-newline guard.
+
+**Tests:** Focused pytest run passed:
+- `python -m pytest CherryAI/dev/test_lightvn_parser.py::TestRichMenuMarkup::test_menu_extraction_reads_button_labels_without_condition_literals CherryAI/dev/test_lightvn_parser.py::TestHardcodedMachineExtraction::test_conditional_button_line_keeps_machine_value_duplicate CherryAI/dev/test_lightvn_parser.py::TestHardcodedMachineExtraction::test_hardcoded_equipment_tags_include_special_care_marker CherryAI/dev/test_lightvn_parser.py::TestTargetedVariableExtraction::test_targeted_helper_marks_hardcoded_machine_literals CherryAI/dev/test_lightvn_parser.py::TestTargetedVariableOriginalCoverage::test_targeted_helper_covers_all_targeted_assignments_the_generic_path_would_get CherryAI/dev/test_lightvn_parser.py::TestMultilineInlineQuotedAssignments::test_limit_suffix_round_trips_for_skill_effect_assignment CherryAI/dev/test_lightvn_fixes.py::TestTagPropagation::test_items_tag_is_primary_content_tag CherryAI/dev/test_lightvn_fixes.py::TestTagPropagation::test_populate_from_manifest_restores_loaded_file_tags CherryAI/dev/test_lightvn_fixes.py::TestHardcodedEquipmentMachineKeys::test_injection_preserves_hardcoded_equipment_machine_values CherryAI/dev/test_output_injection.py::TestFreshLineReads::test_get_fresh_lines_strips_trailing_newlines CherryAI/dev/test_output_injection.py::TestWriteInjection::test_injection_strips_manifest_trailing_newlines_before_match -q --timeout=20` — 11 passed
+- `python -m pytest dev/test_lightvn_fixes.py::TestTagPropagation::test_items_tag_is_primary_content_tag dev/test_lightvn_fixes.py::TestTagPropagation::test_populate_from_manifest_restores_loaded_file_tags dev/test_lightvn_fixes.py::TestTagPropagation::test_preprocessing_merges_tags_without_clobbering_parser_tags dev/test_lightvn_parser.py::TestHardcodedMachineExtraction::test_hardcoded_equipment_tags_include_special_care_marker dev/test_lightvn_parser.py::TestTargetedVariableExtraction::test_targeted_helper_marks_hardcoded_machine_literals dev/test_lightvn_parser.py::TestMultilineInlineQuotedAssignments::test_limit_suffix_round_trips_for_skill_effect_assignment dev/test_output_injection.py::TestFreshLineReads::test_get_fresh_lines_strips_trailing_newlines dev/test_output_injection.py::TestWriteInjection::test_injection_strips_manifest_trailing_newlines_before_match` — 8 passed
+
 ### BUG FIX: Dark GUI Designs + Window Persistence Options
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 4 hours
 

@@ -261,6 +261,30 @@ Latest verified expanded regression result: 310 passed.
 Latest verified compatibility regression result: 204 passed, 2 skipped.
 Latest verified LightVN parser regression result: `dev/test_lightvn_fixes.py`, `dev/test_lightvn_parser.py`, `dev/test_output_injection.py` — 128 passed.
 
+### Focused LightVN Tag + Output Sanitization Regression
+
+The hardcoded-tag persistence and trailing-newline output guard are covered by a targeted regression slice:
+
+- `dev/test_lightvn_parser.py` verifies composite LightVN tags such as `variable,hardcoded` / `menu,hardcoded` and the `スキル効果` limit-suffix injection case.
+- `dev/test_lightvn_fixes.py` verifies that `items` remains a canonical primary content tag, that Step 0 manifest rehydration restores `LoadedFile.tags` from `lines[].tags`, and that Step 3 preprocessing merges its own tags without overwriting parser/content tags.
+- `dev/test_output_injection.py` verifies that Step 9 strips trailing manifest newlines before fresh-line resolution and parser injection matching.
+
+Verified command:
+
+```bash
+python -m pytest CherryAI/dev/test_lightvn_parser.py::TestRichMenuMarkup::test_menu_extraction_reads_button_labels_without_condition_literals CherryAI/dev/test_lightvn_parser.py::TestHardcodedMachineExtraction::test_conditional_button_line_keeps_machine_value_duplicate CherryAI/dev/test_lightvn_parser.py::TestHardcodedMachineExtraction::test_hardcoded_equipment_tags_include_special_care_marker CherryAI/dev/test_lightvn_parser.py::TestTargetedVariableExtraction::test_targeted_helper_marks_hardcoded_machine_literals CherryAI/dev/test_lightvn_parser.py::TestTargetedVariableOriginalCoverage::test_targeted_helper_covers_all_targeted_assignments_the_generic_path_would_get CherryAI/dev/test_lightvn_parser.py::TestMultilineInlineQuotedAssignments::test_limit_suffix_round_trips_for_skill_effect_assignment CherryAI/dev/test_lightvn_fixes.py::TestTagPropagation::test_items_tag_is_primary_content_tag CherryAI/dev/test_lightvn_fixes.py::TestTagPropagation::test_populate_from_manifest_restores_loaded_file_tags CherryAI/dev/test_lightvn_fixes.py::TestHardcodedEquipmentMachineKeys::test_injection_preserves_hardcoded_equipment_machine_values CherryAI/dev/test_output_injection.py::TestFreshLineReads::test_get_fresh_lines_strips_trailing_newlines CherryAI/dev/test_output_injection.py::TestWriteInjection::test_injection_strips_manifest_trailing_newlines_before_match -q --timeout=20
+```
+
+Latest verified result: 11 passed.
+
+Current narrowed verification for the second-round fix:
+
+```bash
+python -m pytest dev/test_lightvn_fixes.py::TestTagPropagation::test_items_tag_is_primary_content_tag dev/test_lightvn_fixes.py::TestTagPropagation::test_populate_from_manifest_restores_loaded_file_tags dev/test_lightvn_fixes.py::TestTagPropagation::test_preprocessing_merges_tags_without_clobbering_parser_tags dev/test_lightvn_parser.py::TestHardcodedMachineExtraction::test_hardcoded_equipment_tags_include_special_care_marker dev/test_lightvn_parser.py::TestTargetedVariableExtraction::test_targeted_helper_marks_hardcoded_machine_literals dev/test_lightvn_parser.py::TestMultilineInlineQuotedAssignments::test_limit_suffix_round_trips_for_skill_effect_assignment dev/test_output_injection.py::TestFreshLineReads::test_get_fresh_lines_strips_trailing_newlines dev/test_output_injection.py::TestWriteInjection::test_injection_strips_manifest_trailing_newlines_before_match
+```
+
+Latest verified result: 8 passed.
+
 Plugin installation:
 
 ```bash

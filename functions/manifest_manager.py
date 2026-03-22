@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 DEDUP_PLACEHOLDER = "__DEDUP__"
-CONTENT_TAGS = frozenset({"file_end", "dialogue", "menu", "choice", "variable"})
+CONTENT_TAGS = frozenset({"file_end", "dialogue", "menu", "choice", "variable", "items"})
 
 
 def parse_line_tags(raw_tags: Any) -> List[str]:

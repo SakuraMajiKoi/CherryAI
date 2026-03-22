@@ -35,6 +35,15 @@ PRIORITY_CHAIN: List[str] = [
 _NUMBERED_FIELD_RE = re.compile(r"^(edit|tlc)(\d+)$")
 
 
+def sanitize_output_text(text: Any) -> str:
+    """Strip only trailing newline markers before writing or logging output."""
+    if text is None:
+        return ""
+    if not isinstance(text, str):
+        text = str(text)
+    return text.rstrip("\r\n")
+
+
 def _find_highest_numbered_field(
     line_entry: Dict[str, Any],
     prefix: str,
@@ -94,29 +103,29 @@ def get_final_output(line_entry: Dict[str, Any]) -> Tuple[str, str]:
     """
     resolved_text, resolved_field = resolve_line_field_with_source(line_entry)
     if resolved_text:
-        return (resolved_text, resolved_field)
+        return (sanitize_output_text(resolved_text), resolved_field)
 
     # Check fixed-priority legacy fields only when canonical pipeline is empty.
     for field in ("overwrite", "postpro"):
         val = line_entry.get(field)
         if val and str(val).strip():
-            return (str(val), field)
+            return (sanitize_output_text(val), field)
 
     # Check edit{N} — highest N wins
     edit_result = _find_highest_numbered_field(line_entry, "edit")
     if edit_result is not None:
-        return (edit_result[1], edit_result[0])
+        return (sanitize_output_text(edit_result[1]), edit_result[0])
 
     # Check tlc{N} — highest N wins
     tlc_result = _find_highest_numbered_field(line_entry, "tlc")
     if tlc_result is not None:
-        return (tlc_result[1], tlc_result[0])
+        return (sanitize_output_text(tlc_result[1]), tlc_result[0])
 
     # Check remaining fixed-priority legacy fields.
     for field in ("preedit",):
         val = line_entry.get(field)
         if val and str(val).strip():
-            return (str(val), field)
+            return (sanitize_output_text(val), field)
 
     return ("", "none")
 

@@ -31,6 +31,7 @@ from CherryAI.functions.manifest_fields import (
     get_all_lines_resolved,
     save_nested_text_field,
 )
+from CherryAI.functions.output import sanitize_output_text
 
 if TYPE_CHECKING:
     from CherryAI.gui.state.store import SessionState
@@ -1441,16 +1442,18 @@ class OutputInjectStep(BaseStep):
                 result = []
                 for idx in range(entry.first_idx, entry.last_idx + 1):
                     if idx < len(manifest_lines):
-                        result.append(resolve_line_field(manifest_lines[idx]))
+                        result.append(
+                            sanitize_output_text(resolve_line_field(manifest_lines[idx]))
+                        )
                     else:
                         result.append("")
                 return result
             # No filedir — fall back to all resolved lines
-            return get_all_lines_resolved(mgr)
+            return [sanitize_output_text(line) for line in get_all_lines_resolved(mgr)]
 
         # Legacy fallback: session data
         step_data = self.get_step_data()
-        return step_data.get("lines", [])
+        return [sanitize_output_text(line) for line in step_data.get("lines", [])]
 
     def _write_injection(
         self,
@@ -1501,28 +1504,29 @@ class OutputInjectStep(BaseStep):
         failures: List[str] = []
 
         for i, key in enumerate(extracted_keys):
+            clean_key = sanitize_output_text(key)
             manifest_idx = entry.first_idx + i
             if manifest_idx > entry.last_idx or manifest_idx >= len(manifest_lines):
                 failures.append(
                     f"Position {i}: index {manifest_idx} out of range"
                 )
-                translated_lines.append(key)
-                orig_lines.append(key)
+                translated_lines.append(clean_key)
+                orig_lines.append(clean_key)
                 continue
 
             ml = manifest_lines[manifest_idx]
-            orig = ml.get("orig", "")
+            orig = sanitize_output_text(ml.get("orig", ""))
             orig_lines.append(orig)
 
-            if orig == key:
-                resolved = resolve_line_field(ml)
+            if orig == clean_key:
+                resolved = sanitize_output_text(resolve_line_field(ml))
                 translated_lines.append(resolved)
             else:
                 failures.append(
                     f"Position {i} (idx {manifest_idx}): "
-                    f"orig mismatch — extracted {key!r}, manifest {orig!r}"
+                    f"orig mismatch — extracted {clean_key!r}, manifest {orig!r}"
                 )
-                translated_lines.append(key)  # Preserve original on mismatch
+                translated_lines.append(clean_key)  # Preserve original on mismatch
 
         # 3. Save via parser injection
         inject_failures = parser.inject_to(
@@ -1566,7 +1570,10 @@ class OutputInjectStep(BaseStep):
 
         step_data = self.get_step_data()
         all_lines = step_data.get("lines", [])
-        translated_lines = all_lines[entry.first_idx:entry.last_idx + 1]
+        translated_lines = [
+            sanitize_output_text(line)
+            for line in all_lines[entry.first_idx:entry.last_idx + 1]
+        ]
 
         parser.inject_to(source_path, output_path, translated_lines)
 

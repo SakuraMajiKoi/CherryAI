@@ -51,6 +51,7 @@ from CherryAI.functions.manifest_fields import (
     load_anchor_removal,
     load_character_notes,
 )
+from CherryAI.functions.manifest_manager import merge_line_tags, parse_line_tags
 
 if TYPE_CHECKING:
     from CherryAI.gui.state.store import SessionState
@@ -137,6 +138,22 @@ RULE_TOOLTIPS = {
         "Preserved exactly and restored after translation."
     ),
 }
+
+PREPROCESS_TAG_PREFIXES: Tuple[str, ...] = ("D", "AD")
+PREPROCESS_TAGS = frozenset(TAG_DISPLAY_NAMES)
+
+
+def _is_preprocess_tag(tag: str) -> bool:
+    """Return whether a manifest tag belongs to preprocessing output."""
+    clean_tag = str(tag).strip()
+    if not clean_tag:
+        return False
+    if clean_tag in PREPROCESS_TAGS:
+        return True
+    return any(
+        clean_tag.startswith(prefix) and clean_tag[len(prefix):].isdigit()
+        for prefix in PREPROCESS_TAG_PREFIXES
+    )
 
 
 class PreprocessingStep(BaseStep):
@@ -1299,7 +1316,12 @@ class PreprocessingStep(BaseStep):
 
                 orig = manifest_line.get("orig", "")
 
-                tags_str = ",".join(line_tags)
+                preserved_tags = [
+                    tag
+                    for tag in parse_line_tags(manifest_line.get("tags", ""))
+                    if not _is_preprocess_tag(tag)
+                ]
+                tags_str = merge_line_tags(preserved_tags, line_tags)
                 old_tags = manifest_line.get("tags", "")
                 if tags_str != old_tags:
                     if tags_str:
