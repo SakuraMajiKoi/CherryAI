@@ -55,6 +55,29 @@ MODULE COUNTS (Verified January 2026)
 =============================================================================
 [Archived: Sessions 43–24 + Phase 62 → see doc/archived.md]
 
+### BUG FIX: LightVN Backlog + Popup Extraction And No Parser Recovery
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Extend the LightVN parser so it can extract/inject backlog choice suffixes and popup-facing `追加項目` text, preserve split dialogue that resumes with bare `-"...` after `~画像` / `~ボイス`, support targeted quoted assignments that span physical lines, and remove parser-side code recovery during injection.
+
+**Root Causes:**
+1. LightVN had no dedicated extraction path for `バックログ続く文章追加 "\n\n選択肢 >..."`, so only the whole raw command remained visible to downstream steps instead of the actual translatable suffix.
+2. Popup-facing `変数 追加項目 = "..."` payloads were outside the existing variable classifiers and never reached translation.
+3. Bare `-"...` lines only worked as continuations of an already-open dialogue block, so command-delimited half-lines after `~画像` / `~ボイス` were skipped.
+4. Targeted quoted assignments that spanned multiple physical lines were processed one line at a time and could not round-trip as one payload.
+5. LightVN still contained parser-side injection recovery for bracket/code-looking text, which violates the parser contract and could rewrite valid translated payloads such as `[3 items 60G]`.
+
+**Changes:**
+1. **`formats/LightVN.py`** — Added dedicated `backlog` and `screenpopup` extraction/injection paths, plus segment-aware menu handling so mixed command lines ignore quoted condition literals but still extract/translate visible `文字*` and `ボタン*` payloads.
+2. **`formats/LightVN.py`** — Expanded the targeted-variable family to cover additional requested UI/item fields such as `道具_馬名前`, `料理名`, `料理効果内容`, `釣り結果`, `消費素材*`, and `必要素材名*` while keeping those names out of the generic project-scoped path on the real Uni16 originals.
+3. **`formats/LightVN.py`** — Added multiline assignment consumption during extraction, whole-content targeted replacement during injection, and fresh dialogue-start handling for bare `-"...` rows after intervening commands.
+4. **`formats/LightVN.py`** — Removed parser-side code/bracket recovery and angle-bracket safety rewrites from injection. The parser now writes translated payloads verbatim and leaves code protection/recovery to preprocessing/postprocessing.
+5. **`dev/test_lightvn_parser.py` / `dev/test_lightvn_fixes.py`** — Added and verified regressions for backlog extraction/injection, popup extraction/injection, command-separated `-"` dialogue halves, multiline targeted assignments, no parser-side bracket recovery, menu-segment filtering, and the hardcoded-equipment rewrite path after direct menu translation.
+6. **Documentation** — Updated `doc/features.md`, `doc/technical.md`, `doc/specs.md`, and `doc/tests.md` to describe the new LightVN parser behavior and the verified test command.
+
+**Tests:** Focused pytest run passed:
+- `python -m pytest dev/test_lightvn_parser.py dev/test_lightvn_fixes.py -q --timeout=20` — 131 passed, 2 skipped
+
 ### BUG FIX: LightVN Hardcoded Tag Persistence + Output Newline Guard
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
 

@@ -253,8 +253,13 @@ TABLE OF CONTENTS
    5.7 parser_rpgmaker.py ✅ - RpgMakerMVParser, RpgMakerMZParser implementations
    5.8 json_lenient.py ✅ - Lenient JSON parsing with error recovery
    5.9 handshake.py ✅ - ParserHandshake protocol: SpeakerInfo, ExtractedLine, ParserError, validate_parser()
-     5.10 LightVN.py ✅ - LightVNParser: Light VN visual novel script parser (dialogue, menu, variable extraction/injection)
+     5.10 LightVN.py ✅ - LightVNParser: Light VN visual novel script parser (dialogue, menu, backlog, popup, variable extraction/injection)
        * Visible hardcoded machine literals now emit composite tags such as `variable,hardcoded` and `menu,hardcoded` so later steps keep the primary content type while flagging parser-safe special cases
+       * Segment-aware menu parsing ignores quoted condition/assignment literals on mixed command lines while still extracting/translating visible `文字*` and `ボタン*` payloads
+       * Dedicated tags now cover backlog choice suffixes (`backlog`) and popup-facing `変数 追加項目 = ...` payloads (`screenpopup`)
+       * Bare `-"...` lines can start a fresh dialogue block for the current speaker after intervening `~画像` / `~ボイス` commands, preventing missed half-lines
+       * Targeted quoted assignments may span physical source lines and still round-trip as one logical payload
+       * Parser-side injection no longer performs code recovery or bracket-safety rewrites; code protection/recovery remain downstream responsibilities
 
 6. GUI V2 ARCHITECTURE (gui/ - 7 packages)
    

@@ -241,7 +241,7 @@ The manifest-driven Step 8 Wordwrap path and LightVN textbox realization path ar
 
 - `dev/test_wordwrap_phase46.py` verifies that Apply/Refresh wrap the loaded preview rows even when cached step-data lines are empty, that canonical `tags` drive tag resolution, that speaker mode `ignore` excludes only detected speaker prefixes from width counting, that translated speaker aliases from manifest `characters[]` are also honored, that parser `detect_speakers()` can seed the allowlist when manifest speaker data is absent, that manifest `code_patterns[]` entries marked `IsInvisible` contribute zero width while other code still counts normally, that leading indentation survives wrapping, that literal `\n` commands and non-RPG backslashes survive wrapping, that overflow without textbox support is not persisted to `wordwr`, that `Custom` and `Simple` mode mapping remains backward-compatible with legacy `Manual`, that Simple mode can restrict Apply to a selected file scope, and that `View in File` filters the preview to the selected source file.
 - `dev/test_wordwrap_phase46.py` also verifies the `Target:` selector strategies (`Tags first`, `Tags only`, `File first`, `File only`), the removal of the obsolete Step 8 Overwrite preview column, preservation of untyped rows when no target resolves, and that switching into Simple mode does not auto-refresh the preview.
-- `dev/test_lightvn_parser.py` verifies that explicit multiline wrapped dialogue is preserved during injection and split into successive LightVN textboxes with the exact `\w` + newline + `"` ordering between boxes, that LightVN injection restores a single terminal `\w` even when Step 8 stored only inter-textbox separators in `wordwr`, that whitelist-driven exact-variable extraction/injection covers assignment and `==` / `!=` comparison literals on the real Uni16 originals, and that the generic project-scoped helper skips those same whitelist variables.
+- `dev/test_lightvn_parser.py` verifies that explicit multiline wrapped dialogue is preserved during injection and split into successive LightVN textboxes with the exact `\w` + newline + `"` ordering between boxes, that LightVN injection restores a single terminal `\w` even when Step 8 stored only inter-textbox separators in `wordwr`, that whitelist-driven exact-variable extraction/injection covers assignment and `==` / `!=` comparison literals on the real Uni16 originals, that backlog choice suffixes and popup `追加項目` payloads round-trip with dedicated tags, that bare `-"...` dialogue lines still extract/inject after intervening `~画像` / `~ボイス` commands, that targeted multiline quoted assignments round-trip as one payload, and that parser injection does not perform bracket/code recovery on translated payloads such as `[3 items 60G]`.
 - `dev/test_wordwrap.py` verifies the stronger PrettyWrap balancing behavior, including rebalancing a one-word orphan tail into a better punctuation-aligned two-line split.
 - `dev/test_lightvn_fixes.py` remains in the set to cover LightVN parser-path and canonical tag propagation behavior used by the same workflow, including quoted ASCII-parentheses preservation for menu labels such as `回復薬(粗悪品)`, the exact-variable `ev_メイン内容` tagging regression, the optional parser rewrite hook in `ParserScript.inject_to()`, and the PYUpgrade `e_armor.txt` hardcoded-equipment rewrite path.
 - `dev/test_table_view.py` verifies the Full Table View `Wrap Selection` action, reuse of the Step 8 `wordwrap` stage input chain, and stale `wordwr` clearing when overflow rows should not persist.
@@ -258,6 +258,14 @@ python -m pytest CherryAI/dev/test_wordwrap.py CherryAI/dev/test_wordwrap_manife
 
 Latest verified result for the focused Step 8 + LightVN + Full Table View wrap-selection set: 250 passed.
 Latest verified expanded regression result: 310 passed.
+
+Latest verified focused LightVN parser/fix command:
+
+```bash
+python -m pytest dev/test_lightvn_parser.py dev/test_lightvn_fixes.py -q --timeout=20
+```
+
+Latest verified result: 131 passed, 2 skipped.
 Latest verified compatibility regression result: 204 passed, 2 skipped.
 Latest verified LightVN parser regression result: `dev/test_lightvn_fixes.py`, `dev/test_lightvn_parser.py`, `dev/test_output_injection.py` — 128 passed.
 

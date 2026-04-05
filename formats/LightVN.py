@@ -1,12 +1,14 @@
 """Light VN Parser Script (Parser Handshake compliant).
 
 Extracts and injects translatable text from Light VN visual novel scripts.
-Handles dialogue, menu text, and variable assignment text with full code
-recovery, speaker detection, and engine-specific wordwrap.
+Handles dialogue, menu text, backlog choice suffixes, popup text, and
+variable assignment text with speaker detection and engine-specific wordwrap.
 
 Extraction Tags:
     - ``"dialogue"``: Story dialogue (with optional speaker).
     - ``"menu"``: Menu/button text from ``~文字`` / ``~ボタン文字`` commands.
+    - ``"backlog"``: Backlog choice suffix text after ``\n\n選択肢 >``.
+    - ``"screenpopup"``: Popup text from display-facing ``変数 追加項目 = ...``.
     - ``"variable"``: Translatable variable assignments (skill names, etc.).
     - ``"items"``: Item-like variable assignments (loot/material names/counts).
         - ``"hardcoded"``: Extra caution tag layered onto visible machine-value
@@ -69,6 +71,8 @@ class _HardcodedMachineRewriteRule:
 
 TAG_DIALOGUE = "dialogue"
 TAG_MENU = "menu"
+TAG_BACKLOG = "backlog"
+TAG_SCREENPOPUP = "screenpopup"
 TAG_VARIABLE = "variable"
 TAG_ITEMS = "items"
 TAG_HARDCODED = "hardcoded"
@@ -97,9 +101,18 @@ class LightVNParser(ParserScript):
 
     SPEAKER_PATTERN = re.compile(r"^~【(.*?)】\s*$")
     BOOKMARK_PATTERN = re.compile(r"^~?栞\s+.+$")
+    BACKLOG_CHOICE_PATTERN = re.compile(
+        r'(?P<head>~?バックログ続く文章追加\s+"\\n\\n選択肢 >)(?P<text>[^\"]*)(?P<tail>")'
+    )
+    SCREENPOPUP_ASSIGNMENT_PATTERN = re.compile(
+        r'^(?P<var_type>変数)\s+(?P<name>追加項目)\s*=\s*"(?P<text>[^\"]*)"'
+    )
+    ASSIGNMENT_START_PATTERN = re.compile(
+        r'^(?:臨時全域変数|保存変数|変数)\s+\S+\s*=\s*"'
+    )
 
     VARIABLE_PATTERN = re.compile(
-        r"^(臨時全域変数|保存変数)\s+"
+        r"^(臨時全域変数|保存変数|変数)\s+"
         r"(\S+)\s*=\s*"
         r'"([^"]*)"'
     )
@@ -133,12 +146,18 @@ class LightVNParser(ParserScript):
         "道具名", # Item Name
         "衣装タイプ", # Currently Equipped Outfit (always shown)
         "設定_移動設定説明文", # Movement Setting Description
+        "道具_馬名前", # Horse/item display name
+        "料理名", # Cooking display name
+        "料理効果内容", # Cooking effect text
+        "釣り結果", # Fishing result text
     }
     TARGETED_VARIABLE_REGEXES: Tuple[str, ...] = (
         r"スキル名\d*+", # Skill names 
         r"武器\d*+_特性\d*+", # Weapon Trait names
         r"剥ぎ取り素材\d*+", # Carve Materials
         r"武器\d*+_名前", # Weapon names 
+        r"消費素材\d*+", # Recipe ingredient slots
+        r"必要素材名\d*+", # Required material labels
     )
     _TARGETED_VARIABLE_ALTERNATION = "|".join(
         sorted(
@@ -185,6 +204,8 @@ class LightVNParser(ParserScript):
     ITEM_VARS: Set[str] = {
         "剥ぎ取り素材",
         "獲得食材",
+        "消費素材",
+        "必要素材名",
     }
 
     CODE_OPEN_BRACKETS: Set[str] = {
@@ -209,6 +230,7 @@ class LightVNParser(ParserScript):
         "アウト", "効果音", "絵", "文字", "文字窓", "文字窓0",
         "文字色", "文字陰", "文字進行", "ジャンプ", "栞", "ループ",
         "画面領域", "もし", "ボタン", "変数", "選択", "スクリプト終了",
+        "バックログ続く文章追加",
     }
 
     PLACEHOLDER_DIALOGUE_TEXTS: Set[str] = {
@@ -223,8 +245,8 @@ class LightVNParser(ParserScript):
         "ON",
         "OFF",
         "なし",
+        "未開放",
         "発動",
-        "未発動",
         "立ち",
         "しゃがみ",
     }
@@ -274,9 +296,6 @@ class LightVNParser(ParserScript):
 
         # Mutable state reset per operation
         self._current_speaker = ""
-        self._code_recovered = 0
-        self._code_not_recovered = 0
-        self._unrecovered_details: List[str] = []
         self._active_variable_usage: Optional[Dict[str, _VariableUsage]] = None
         self._cached_variable_usage_root: Optional[Path] = None
         self._cached_variable_usage: Dict[str, _VariableUsage] = {}
@@ -284,9 +303,6 @@ class LightVNParser(ParserScript):
     def _reset_state(self) -> None:
         """Reset mutable state before an extraction/injection pass."""
         self._current_speaker = ""
-        self._code_recovered = 0
-        self._code_not_recovered = 0
-        self._unrecovered_details = []
         self._active_variable_usage = None
 
     # ======================================================================
@@ -513,7 +529,7 @@ class LightVNParser(ParserScript):
         """Tag-specific wrapping: dialogue wraps, others do not."""
         if tag == TAG_DIALOGUE:
             return self.wordwrap_config
-        # Menu and variable text should not be wrapped
+        # Menu, backlog, popup, and variable text should not be wrapped
         return WordwrapConfig(
             max_line_length=0,
             max_line_number=0,
@@ -787,8 +803,17 @@ class LightVNParser(ParserScript):
         stripped = line.strip()
         if stripped.startswith("//") or stripped.startswith("~//"):
             return False
+        return any(
+            self._is_menu_text_segment(segment)
+            for segment in self._split_command_segments(stripped)
+        )
+
+    def _is_menu_text_segment(self, segment: str) -> bool:
+        stripped = segment.strip()
+        if not stripped or stripped.startswith("//") or stripped.startswith("~//"):
+            return False
         stripped_nc = self._strip_conditional_prefix(stripped)
-        return bool(re.search(r"~?(?:文字窓?0?|ボタン文字)\s+", stripped_nc))
+        return bool(re.search(r"^~?(?:文字(?:窓?\d*)?|ボタン(?:文字)?)\s+", stripped_nc))
 
     @staticmethod
     def _remove_parenthetical_content(text: str) -> str:
@@ -811,16 +836,42 @@ class LightVNParser(ParserScript):
         return "".join(result)
 
     def _extract_menu_texts_from_line(self, line: str) -> List[str]:
-        cleaned = self._remove_parenthetical_content(line)
         texts: List[str] = []
-        for m in re.finditer(r'"([^"]+)"', cleaned):
-            t = m.group(1)
-            if re.match(r"^{{[^}]+}}$", t):
+        for segment in self._split_command_segments(line):
+            if not self._is_menu_text_segment(segment):
                 continue
-            if t.strip().isdigit() or not t.strip():
-                continue
-            texts.append(t)
+            cleaned = self._remove_parenthetical_content(
+                self._strip_conditional_prefix(segment.strip())
+            )
+            for match in re.finditer(r'"([^"]+)"', cleaned):
+                text = match.group(1)
+                if re.match(r"^{{[^}]+}}$", text):
+                    continue
+                if text.strip().isdigit() or not text.strip():
+                    continue
+                texts.append(text)
         return texts
+
+    def _extract_backlog_choice_text(self, line: str) -> Optional[str]:
+        match = self.BACKLOG_CHOICE_PATTERN.search(line.strip())
+        if not match:
+            return None
+        text = match.group("text").strip()
+        return text or None
+
+    def _extract_screenpopup_text(self, line: str) -> Optional[str]:
+        stripped = self._strip_conditional_prefix(line.strip())
+        match = self.SCREENPOPUP_ASSIGNMENT_PATTERN.match(stripped)
+        if not match:
+            return None
+        text = match.group("text")
+        if not text or not text.strip():
+            return None
+        if re.match(r"^{{[^}]+}}$", text):
+            return None
+        if text.strip().isdigit():
+            return None
+        return text
 
     # -- Variable assignment detection -------------------------------------
 
@@ -875,6 +926,9 @@ class LightVNParser(ParserScript):
         var_type, var_name, text = parsed
         tag = self._classify_variable_tag(var_name)
         if tag is None:
+            return None
+        stripped = text.strip()
+        if stripped in self.NON_TRANSLATABLE_TEXT_VALUES:
             return None
         return tag, var_type, var_name, text
 
@@ -988,6 +1042,31 @@ class LightVNParser(ParserScript):
                 extracted.append(text)
         return extracted
 
+    @classmethod
+    def _consume_multiline_assignment(
+        cls,
+        lines: List[str],
+        start_idx: int,
+    ) -> Tuple[str, int]:
+        current = lines[start_idx]
+        stripped_nc = cls._strip_conditional_prefix(current.strip())
+        if not cls.ASSIGNMENT_START_PATTERN.match(stripped_nc):
+            return current, start_idx
+
+        quote_count = stripped_nc.count('"')
+        if quote_count % 2 == 0:
+            return current, start_idx
+
+        parts = [current]
+        end_idx = start_idx
+        while end_idx + 1 < len(lines):
+            end_idx += 1
+            parts.append(lines[end_idx])
+            quote_count += lines[end_idx].count('"')
+            if quote_count % 2 == 0:
+                break
+        return "\n".join(parts), end_idx
+
     # -- Code detection ----------------------------------------------------
 
     def _is_code_only_text(self, text: str) -> bool:
@@ -1046,175 +1125,6 @@ class LightVNParser(ParserScript):
         if not dialogue_lines:
             return False
         return dialogue_lines[-1].strip().endswith("\\w")
-
-    # -- Code segments / recovery ------------------------------------------
-
-    def _extract_code_segments(self, text: str) -> List[str]:
-        segments: List[str] = []
-        i = 0
-        while i < len(text):
-            ch = text[i]
-            if ch in self.NON_CODE_BRACKET_PAIRS:
-                i += 1
-                continue
-            if ch in self.BRACKET_PAIRS:
-                close = self.BRACKET_PAIRS[ch]
-                depth = 1
-                start = i
-                i += 1
-                while i < len(text) and depth > 0:
-                    if text[i] == ch:
-                        depth += 1
-                    elif text[i] == close:
-                        depth -= 1
-                    i += 1
-                if depth == 0:
-                    segments.append(text[start:i])
-                continue
-            i += 1
-        return segments
-
-    def _find_bracket_positions(
-        self, text: str,
-    ) -> List[Tuple[int, int, str]]:
-        positions: List[Tuple[int, int, str]] = []
-        i = 0
-        while i < len(text):
-            ch = text[i]
-            if ch in self.NON_CODE_BRACKET_PAIRS:
-                i += 1
-                continue
-            if ch in self.BRACKET_PAIRS:
-                close = self.BRACKET_PAIRS[ch]
-                depth = 1
-                start = i
-                i += 1
-                while i < len(text) and depth > 0:
-                    if text[i] == ch:
-                        depth += 1
-                    elif text[i] == close:
-                        depth -= 1
-                    i += 1
-                if depth == 0:
-                    positions.append((start, i, ch))
-                continue
-            i += 1
-        return positions
-
-    def _recover_code_in_translation(
-        self, original: str, translation: str, context: str = "",
-    ) -> Tuple[str, int, int, List[str]]:
-        orig_codes = self._extract_code_segments(original)
-        if not orig_codes:
-            return translation, 0, 0, []
-        recovered = 0
-        not_recovered = 0
-        details: List[str] = []
-        result = translation
-        used: Set[int] = set()
-        for oc in orig_codes:
-            if oc in result:
-                continue
-            if not oc:
-                continue
-            ob = oc[0]
-            if ob not in self.BRACKET_PAIRS:
-                continue
-            positions = self._find_bracket_positions(result)
-            replaced = False
-            for s, e, bt in positions:
-                if bt != ob or s in used:
-                    continue
-                seg = result[s:e]
-                if seg in orig_codes:
-                    continue
-                result = result[:s] + oc + result[e:]
-                used.add(s)
-                recovered += 1
-                replaced = True
-                break
-            if not replaced:
-                not_recovered += 1
-                d = f"Code: {oc}"
-                if context:
-                    d += f" | Context: {context[:80]}..."
-                details.append(d)
-        return result, recovered, not_recovered, details
-
-    def _make_angle_brackets_safe(
-        self, original: str, translation: str,
-    ) -> str:
-        to = translation.count("<")
-        tc = translation.count(">")
-        if to == 0 and tc == 0:
-            return translation
-        oo = original.count("<")
-        oc = original.count(">")
-        if oo == 0 and oc == 0:
-            return translation.replace("<", "＜").replace(">", "＞")
-        if to == oo and tc == oc:
-            return translation
-        # Preserve original angle-code positions
-        orig_angle: List[str] = []
-        i = 0
-        while i < len(original):
-            if original[i] == "<":
-                depth = 1
-                start = i
-                i += 1
-                while i < len(original) and depth > 0:
-                    if original[i] == "<":
-                        depth += 1
-                    elif original[i] == ">":
-                        depth -= 1
-                    i += 1
-                if depth == 0:
-                    orig_angle.append(original[start:i])
-                continue
-            i += 1
-        preserved: Set[int] = set()
-        for code in orig_angle:
-            idx = 0
-            while True:
-                pos = translation.find(code, idx)
-                if pos == -1:
-                    break
-                for p in range(pos, pos + len(code)):
-                    preserved.add(p)
-                idx = pos + 1
-        non_angle = {
-            k: v for k, v in self.BRACKET_PAIRS.items() if k not in ("<", "＜")
-        }
-        i = 0
-        while i < len(translation):
-            ch = translation[i]
-            if ch in non_angle:
-                close = non_angle[ch]
-                depth = 1
-                start = i
-                i += 1
-                while i < len(translation) and depth > 0:
-                    if translation[i] == ch:
-                        depth += 1
-                    elif translation[i] == close:
-                        depth -= 1
-                    i += 1
-                if depth == 0:
-                    for p in range(start, i):
-                        preserved.add(p)
-                continue
-            i += 1
-        out: List[str] = []
-        for i, ch in enumerate(translation):
-            if i in preserved:
-                out.append(ch)
-            elif ch == "<":
-                out.append("＜")
-            elif ch == ">":
-                out.append("＞")
-            else:
-                out.append(ch)
-        return "".join(out)
 
     # -- Conditional prefix handling ---------------------------------------
 
@@ -1453,7 +1363,7 @@ class LightVNParser(ParserScript):
 
         i = 0
         while i < len(lines):
-            line = lines[i]
+            line, end_idx = self._consume_multiline_assignment(lines, i)
             stripped = line.strip()
             stripped_nc = self._strip_conditional_prefix(stripped)
 
@@ -1461,7 +1371,7 @@ class LightVNParser(ParserScript):
                 _flush_dialogue()
                 # Bookmarks select map interactions/scenes, not displayed speaker labels.
                 self._current_speaker = ""
-                i += 1
+                i = end_idx + 1
                 continue
 
             # --- Speaker tag ---
@@ -1479,7 +1389,21 @@ class LightVNParser(ParserScript):
             if sm:
                 _flush_dialogue()
                 self._current_speaker = sm.group(1)
-                i += 1
+                i = end_idx + 1
+                continue
+
+            backlog_text = self._extract_backlog_choice_text(stripped)
+            if backlog_text:
+                _flush_dialogue()
+                self._append_tagged_line(result, backlog_text, TAG_BACKLOG)
+                i = end_idx + 1
+                continue
+
+            screenpopup_text = self._extract_screenpopup_text(stripped)
+            if screenpopup_text:
+                _flush_dialogue()
+                self._append_tagged_line(result, screenpopup_text, TAG_SCREENPOPUP)
+                i = end_idx + 1
                 continue
 
             # --- Variable assignment ---
@@ -1490,7 +1414,7 @@ class LightVNParser(ParserScript):
                 for tag, _var_name, text in targeted_variable_texts:
                     self._append_tagged_line(result, text, tag)
                 if not hardcoded_machine_texts and not self._is_menu_text_line(stripped):
-                    i += 1
+                    i = end_idx + 1
                     continue
 
             if hardcoded_machine_texts:
@@ -1502,7 +1426,7 @@ class LightVNParser(ParserScript):
                         self._compose_tag(TAG_MENU, TAG_HARDCODED),
                     )
                 if not self._is_menu_text_line(stripped):
-                    i += 1
+                    i = end_idx + 1
                     continue
 
             if self._is_variable_assignment_line(stripped):
@@ -1511,7 +1435,7 @@ class LightVNParser(ParserScript):
                 if vr:
                     tag, _vt, _vn, text = vr
                     self._append_tagged_line(result, text, tag)
-                i += 1
+                i = end_idx + 1
                 continue
 
             # --- Menu text ---
@@ -1519,7 +1443,7 @@ class LightVNParser(ParserScript):
                 _flush_dialogue()
                 for mt in self._extract_menu_texts_from_line(stripped):
                     self._append_tagged_line(result, mt, TAG_MENU)
-                i += 1
+                i = end_idx + 1
                 continue
 
             # --- ~ command (not speaker, not menu, not variable) ---
@@ -1527,23 +1451,38 @@ class LightVNParser(ParserScript):
                 if self._has_conditional_prefix(stripped):
                     if stripped_nc.startswith('-"') and in_dialogue and current_dialogue:
                         current_dialogue.append(stripped_nc[2:])
-                        i += 1
+                        i = end_idx + 1
+                        continue
+                    if stripped_nc.startswith('-"'):
+                        _flush_dialogue()
+                        in_dialogue = True
+                        dialogue_speaker = self._current_speaker
+                        current_dialogue.append(stripped_nc[2:])
+                        i = end_idx + 1
                         continue
                     if stripped_nc.startswith('"'):
                         _flush_dialogue()
                         in_dialogue = True
                         dialogue_speaker = self._current_speaker
                         current_dialogue.append(stripped_nc[1:])
-                        i += 1
+                        i = end_idx + 1
                         continue
                 _flush_dialogue()
-                i += 1
+                i = end_idx + 1
                 continue
 
             # --- Dialogue continuation -" ---
             if stripped.startswith('-"') and in_dialogue and current_dialogue:
                 current_dialogue.append(stripped[2:])
-                i += 1
+                i = end_idx + 1
+                continue
+
+            if stripped.startswith('-"'):
+                _flush_dialogue()
+                in_dialogue = True
+                dialogue_speaker = self._current_speaker
+                current_dialogue.append(stripped[2:])
+                i = end_idx + 1
                 continue
 
             # --- Dialogue start " ---
@@ -1552,21 +1491,28 @@ class LightVNParser(ParserScript):
                 in_dialogue = True
                 dialogue_speaker = self._current_speaker
                 current_dialogue.append(stripped[1:])
-                i += 1
+                i = end_idx + 1
                 continue
 
             # --- Conditional without ~ prefix ---
             if self._has_conditional_prefix(stripped):
                 if stripped_nc.startswith('-"') and in_dialogue and current_dialogue:
                     current_dialogue.append(stripped_nc[2:])
-                    i += 1
+                    i = end_idx + 1
+                    continue
+                if stripped_nc.startswith('-"'):
+                    _flush_dialogue()
+                    in_dialogue = True
+                    dialogue_speaker = self._current_speaker
+                    current_dialogue.append(stripped_nc[2:])
+                    i = end_idx + 1
                     continue
                 if stripped_nc.startswith('"'):
                     _flush_dialogue()
                     in_dialogue = True
                     dialogue_speaker = self._current_speaker
                     current_dialogue.append(stripped_nc[1:])
-                    i += 1
+                    i = end_idx + 1
                     continue
 
             # --- Dialogue end check ---
@@ -1580,10 +1526,10 @@ class LightVNParser(ParserScript):
             # --- Continue dialogue ---
             if in_dialogue:
                 current_dialogue.append(line)
-                i += 1
+                i = end_idx + 1
                 continue
 
-            i += 1
+            i = end_idx + 1
 
         # Flush remaining
         _flush_dialogue()
@@ -1604,7 +1550,9 @@ class LightVNParser(ParserScript):
     ) -> Tuple[str, List[str]]:
         """Inject dialogue, menu, and variable translations."""
         modified, removals = self._inject_dialogue(original_content, translations)
+        modified = self._inject_backlog_text(modified, translations)
         modified = self._inject_menu_text(modified, translations)
+        modified = self._inject_screenpopup_text(modified, translations)
         modified = self._inject_targeted_variable_text(modified, translations)
         modified = self._inject_variable_text(modified, translations)
         return modified, removals
@@ -1687,6 +1635,13 @@ class LightVNParser(ParserScript):
                     current_dialogue_lines.append(line)
                     i += 1
                     continue
+                if stripped_nc.startswith('-"'):
+                    _process_block()
+                    in_dialogue = True
+                    dialogue_speaker = self._current_speaker
+                    current_dialogue_lines.append(line)
+                    i += 1
+                    continue
                 if stripped_nc.startswith('"'):
                     _process_block()
                     in_dialogue = True
@@ -1706,6 +1661,14 @@ class LightVNParser(ParserScript):
                 continue
 
             if stripped.startswith('-"') and in_dialogue and current_dialogue_lines:
+                current_dialogue_lines.append(line)
+                i += 1
+                continue
+
+            if stripped.startswith('-"'):
+                _process_block()
+                in_dialogue = True
+                dialogue_speaker = self._current_speaker
                 current_dialogue_lines.append(line)
                 i += 1
                 continue
@@ -1770,13 +1733,6 @@ class LightVNParser(ParserScript):
         if translation:
             new_sp, translated = self._parse_translation(translation)
             translated = translated.replace("\r\n", "\n")
-            translated, rc, nrc, det = self._recover_code_in_translation(
-                dt, translated, f"Dialogue: {dt[:50]}",
-            )
-            self._code_recovered += rc
-            self._code_not_recovered += nrc
-            self._unrecovered_details.extend(det)
-            translated = self._make_angle_brackets_safe(dt, translated)
 
             if cond_prefix:
                 fmt = self._format_conditional_dialogue(
@@ -1790,6 +1746,18 @@ class LightVNParser(ParserScript):
             return fmt, new_sp
 
         return dialogue_lines, ""
+
+    def _inject_backlog_text(
+        self, content: str, translations: Dict[str, str],
+    ) -> str:
+        def _replace(match: re.Match[str]) -> str:
+            original = match.group("text")
+            translated = translations.get(original, "")
+            if not translated:
+                return match.group(0)
+            return f'{match.group("head")}{translated}{match.group("tail")}'
+
+        return self.BACKLOG_CHOICE_PATTERN.sub(_replace, content)
 
     def _try_combine_line_translations(
         self, dt: str, speaker: str, translations: Dict[str, str],
@@ -1845,26 +1813,56 @@ class LightVNParser(ParserScript):
             if not self._is_menu_text_line(line):
                 out.append(line)
                 continue
-            modified = line
-            for m in re.finditer(r'"([^"]+)"', line):
-                orig = m.group(1)
-                if re.match(r"^{{[^}]+}}$", orig):
+            rebuilt_segments: List[str] = []
+            for segment in self._split_command_segments(line):
+                if not self._is_menu_text_segment(segment):
+                    rebuilt_segments.append(segment)
                     continue
-                if orig.strip().isdigit() or not orig.strip():
+
+                updated = segment
+                stripped_segment = segment.strip()
+                display_segment = self._strip_conditional_prefix(stripped_segment)
+                display_index = updated.find(display_segment)
+                if display_index == -1:
+                    rebuilt_segments.append(segment)
                     continue
-                if self._is_any_hardcoded_machine_value(orig):
-                    continue
-                t = translations.get(orig, "")
-                if t:
-                    t, rc, nrc, det = self._recover_code_in_translation(
-                        orig, t, f"Menu: {orig[:50]}",
+
+                display_portion = updated[display_index:]
+                for match in re.finditer(r'"([^"]+)"', display_portion):
+                    original = match.group(1)
+                    if re.match(r"^{{[^}]+}}$", original):
+                        continue
+                    if original.strip().isdigit() or not original.strip():
+                        continue
+                    translated = translations.get(original, "")
+                    if not translated:
+                        continue
+                    display_portion = display_portion.replace(
+                        f'"{original}"',
+                        f'"{translated}"',
+                        1,
                     )
-                    self._code_recovered += rc
-                    self._code_not_recovered += nrc
-                    self._unrecovered_details.extend(det)
-                    t = self._make_angle_brackets_safe(orig, t)
-                    modified = modified.replace(f'"{orig}"', f'"{t}"', 1)
-            out.append(modified)
+                updated = updated[:display_index] + display_portion
+                rebuilt_segments.append(updated)
+
+            out.append(" | ".join(rebuilt_segments))
+        return "\n".join(out)
+
+    def _inject_screenpopup_text(
+        self, content: str, translations: Dict[str, str],
+    ) -> str:
+        lines = content.split("\n")
+        out: List[str] = []
+        for line in lines:
+            original = self._extract_screenpopup_text(line)
+            if not original:
+                out.append(line)
+                continue
+            translated = translations.get(original, "")
+            if not translated:
+                out.append(line)
+                continue
+            out.append(line.replace(f'"{original}"', f'"{translated}"', 1))
         return "\n".join(out)
 
     # -- Variable injection ------------------------------------------------
@@ -1889,13 +1887,6 @@ class LightVNParser(ParserScript):
             _tag, _vt, _vn, orig = vr
             t = translations.get(orig, "")
             if t:
-                t, rc, nrc, det = self._recover_code_in_translation(
-                    orig, t, f"Variable {_vn}: {orig[:50]}",
-                )
-                self._code_recovered += rc
-                self._code_not_recovered += nrc
-                self._unrecovered_details.extend(det)
-                t = self._make_angle_brackets_safe(orig, t)
                 out.append(line.replace(f'"{orig}"', f'"{t}"', 1))
             else:
                 out.append(line)
@@ -1915,50 +1906,35 @@ class LightVNParser(ParserScript):
         translated = translations.get(original, "")
         if not translated:
             return match.group(0)
-
-        translated, recovered, not_recovered, details = self._recover_code_in_translation(
-            original,
-            translated,
-            context,
-        )
-        self._code_recovered += recovered
-        self._code_not_recovered += not_recovered
-        self._unrecovered_details.extend(details)
-        translated = self._make_angle_brackets_safe(original, translated)
         return f'{match.group("head")}{translated}{match.group("tail")}'
 
     def _inject_targeted_variable_text(
         self, content: str, translations: Dict[str, str],
     ) -> str:
-        lines = content.split("\n")
-        out: List[str] = []
-        for line in lines:
-            modified = self.TARGETED_CONDITION_PATTERN.sub(
-                lambda match: self._replace_targeted_variable_match(
-                    match,
-                    translations,
-                    f'Targeted variable {match.group("name")} condition',
-                ),
-                line,
-            )
-            modified = self.TARGETED_REVERSE_CONDITION_PATTERN.sub(
-                lambda match: self._replace_targeted_variable_match(
-                    match,
-                    translations,
-                    f'Targeted variable {match.group("name")} condition',
-                ),
-                modified,
-            )
-            modified = self.TARGETED_ASSIGNMENT_PATTERN.sub(
-                lambda match: self._replace_targeted_variable_match(
-                    match,
-                    translations,
-                    f'Targeted variable {match.group("name")}',
-                ),
-                modified,
-            )
-            out.append(modified)
-        return "\n".join(out)
+        modified = self.TARGETED_CONDITION_PATTERN.sub(
+            lambda match: self._replace_targeted_variable_match(
+                match,
+                translations,
+                f'Targeted variable {match.group("name")} condition',
+            ),
+            content,
+        )
+        modified = self.TARGETED_REVERSE_CONDITION_PATTERN.sub(
+            lambda match: self._replace_targeted_variable_match(
+                match,
+                translations,
+                f'Targeted variable {match.group("name")} condition',
+            ),
+            modified,
+        )
+        return self.TARGETED_ASSIGNMENT_PATTERN.sub(
+            lambda match: self._replace_targeted_variable_match(
+                match,
+                translations,
+                f'Targeted variable {match.group("name")}',
+            ),
+            modified,
+        )
 
     @staticmethod
     def _build_translation_lookup(
@@ -2009,6 +1985,44 @@ class LightVNParser(ParserScript):
             modified = modified.replace(f'"{original}"', f'"{replacement}"', 1)
         return modified
 
+    def _restore_hardcoded_machine_menu_values(
+        self,
+        line: str,
+        rule: _HardcodedMachineRewriteRule,
+        translations: Dict[str, str],
+    ) -> str:
+        if not self._is_menu_text_line(line):
+            return line
+
+        rebuilt_segments: List[str] = []
+        translated_values = {
+            translations.get(value, value): value
+            for value in rule.value_order
+            if translations.get(value, value) != value
+        }
+        if not translated_values:
+            return line
+
+        for segment in self._split_command_segments(line):
+            if not self._is_menu_text_segment(segment):
+                rebuilt_segments.append(segment)
+                continue
+
+            stripped_segment = self._strip_conditional_prefix(segment.strip())
+            if "ボタン" not in stripped_segment or "タブ変更" not in stripped_segment:
+                rebuilt_segments.append(segment)
+                continue
+
+            updated = segment
+            for translated_value, original_value in translated_values.items():
+                updated = updated.replace(
+                    f'"{translated_value}"',
+                    f'"{original_value}"',
+                )
+            rebuilt_segments.append(updated)
+
+        return " | ".join(rebuilt_segments)
+
     def _rewrite_hardcoded_machine_displays(
         self,
         content: str,
@@ -2034,6 +2048,7 @@ class LightVNParser(ParserScript):
             lines = rewritten.split("\n")
             out: List[str] = []
             for line in lines:
+                line = self._restore_hardcoded_machine_menu_values(line, rule, translations)
                 out.append(self._rewrite_machine_display_menu_text(line, rule, translations))
                 stripped = self._strip_conditional_prefix(line.strip())
                 for match in self.TARGETED_ASSIGNMENT_PATTERN.finditer(stripped):
