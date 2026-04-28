@@ -20,7 +20,7 @@ VERIFIED MODULE COUNTS (January 2026):
 - formats/: 5 format handlers
 - gui/steps/: 10 workflow tabs
 - gui/helpers/: 6 adapter modules
-- gui/dialogs/: 5 dialog modules (global_options, project_dialog, loading_progress, input_dialog, password_dialog)
+- gui/dialogs/: shared dialog modules for options, project/input flows, Full Table View, Editor, API Log, Ledger, and RegEx Maker
 - gui/widgets/: 1 widget module (password_strength)
 
 For module-level documentation, see: doc/technical.md
@@ -161,6 +161,7 @@ CherryAI is built on **batch processing**: you can load one or multiple files an
    - Auto-encoding detection (BOM → utf-8 → shift_jis → fallback)
    - Format filtering: when format is forced, non-matching files are refused
    - Progress dialog shown when loading >3 files
+  - Step 0 extraction validation now batches token-limit findings into one summary popup and one `.input_extract_validation.log` file instead of one modal per file
    - Shows "N files selected" if you picked multiple files
    - Single file is treated as a batch of 1
 
@@ -248,7 +249,7 @@ KEY FEATURES
 
 FULL TABLE VIEW
 - **Menu Bar Access**: Direct access via "Full Table View" entry in the menu bar (not a dropdown)
-- **Menu Bar Layout**: File (dropdown), Full Table View (direct), API Log (direct), Options (direct), Help (dropdown)
+- **Menu Bar Layout**: File (dropdown), Full Table View (direct), Editor (direct), API Log (direct), Ledger (direct), Options (direct), Help (Documentation, RegEx Maker, About)
 - **Spreadsheet View**: Displays all manifest line entries with named columns (Line #, Original, Preprocessed, Translated, Postprocessed, Quality Assurance, Overwrite, Wordwrap, Final, Overwrite (Legacy), Log, Tags)
 - **Column Display Names**: All columns use human-readable display names (e.g., idx→Line #, orig→Original, tl→Translated)
 - **Column Auto-Hide**: Empty columns hidden by default
@@ -268,7 +269,22 @@ FULL TABLE VIEW
 - **Row Selection**: Click-based selection with Ctrl+click and Shift+click; highlighted rows
 - **Pagination**: Show All / Show X with configurable page size (default 100); "Showing X / Y Lines" status
 - **Save/Reset/Diff**: Save changes to manifest (all or selected); Reset from manifest data; Diff mode shows only changed rows
+- **Shared Lines Only Save Path**: Save now uses a shared manifest-manager pipeline that can prompt for an optional per-save label, rebuild only affected files, overwrite staged `Translated/` files when present, and synthesize translated artifacts in `Patch/Translated/` when no staged translated file exists yet
 - **Close Prompt**: Asks to save or discard unsaved changes on close
+
+EDITOR
+- **Menu Bar Access**: Direct access via "Editor" entry in the menu bar between Full Table View and API Log
+- **Purpose**: Shared Editor host for the merged workbench direction. The current slice keeps `Full Files` inside the Editor window and hands `Lines Only` off to the retained Full Table View surface.
+- **Mode Switch**: Visible `Full Files [Switch] Lines Only` control at the top of the window; reopening Editor reuses the same host window and preserves the current project context.
+- **Full Files Surface**: Left-side file tree, central text editor, in-buffer search plus replace actions, bottom diff and patch-diff tabs, and a line-history tab for staged full-file work. The current slice loads `Translated/` when present, falls back to staged `Patch/Translated/`, and then to staged `Original/`.
+- **Shared Backend**: `Full Files` now resolves staged file scope, unified diff-to-original, diff-to-patch, parser-backed line history, and locator metadata through shared `ManifestManager` helpers instead of rebuilding those views inside GUI code.
+- **Full Files Save**: `Full Files` now exposes an explicit save action plus `Ctrl+S`, prompts for an optional change label, writes the current file into staged `Translated/`, and records rollback material in `Patch/Translated/` before overwrite when a translated file already exists.
+- **Lines Only Handoff**: Switching to `Lines Only` opens or focuses the retained Full Table View window, scopes it to the currently selected file, carries the active `idx` / `ln` / optional `f` locator target when present, and keeps the legacy direct Full Table View menu entry intact during migration.
+- **Locator Highlighting**: `Full Files` now highlights manifest-owned editor lines from shared locator metadata, keeps `idx`, `ln`, and optional `f` visible in the line-history grid, and lets history selection or the current editor caret drive the active locator target.
+- **Step 9 Staging Continuity**: Successful Step 9 writes now mirror output files back into CherryAI's staged `Translated/` tree through the same shared translated staging helper used by the Editor save flows, and parser-backed writes use the same locator-driven manifest rebuild helper consumed by the editor-backed save paths.
+- **Lines Only Targeting**: The retained Full Table View now exposes lightweight `idx` / `ln` / optional `f` locate controls plus locator status text so Editor handoff and manual row jumps can target the intended manifest row quickly.
+- **Search Navigation**: Full Files includes in-editor next/previous search for the active file buffer plus single-replace and replace-all actions.
+- **Current Scope**: The implemented slice now includes the shared host shell, locator-aware mode handoff, manifest-owned Full Files view assembly, locator highlighting in both Editor modes, the shared staged-helper base, the shared locator-first targeted rebuild path across Editor, `Lines Only`, and Step 9, and parity for search/replace, diff-to-original, diff-to-patch, and parser-backed line history in `Full Files`.
 
 API LOG
 - **Menu Bar Access**: Direct access via "API Log" entry in the menu bar (direct button, no dropdown)
@@ -284,13 +300,52 @@ API LOG
 - **Color-Coded Headers**: Green (✔ success), Yellow (⚠ recovered), Red (✘ failed) status indicators
 - **Sent Block**: Displays model, provider, temperature, chunk info, full system prompt, and full user content from the structured log store
 - **Prompt Cache Visibility**: When OpenAI prompt caching is active, the Sent block also shows the effective `prompt_cache_key` and `prompt_cache_retention` taken from the actual request metadata
-- **Received Block**: Displays token statistics (prompt/completion/total/cached/reasoning), duration, finish reason, full error messages, and full response content from the structured log store
+- **Received Block**: Displays token statistics (prompt/completion/total/cached/reasoning), duration, finish reason, full error messages, full response content, and saved validation metadata (validation state/category plus failure kind when applicable) from the structured log store
 - **Exact Request Copy**: API Log only stores copies of the actual sent/received data — it does not build its own requests. Main translation, line-by-line translation, term translation, gender inference, and model tests now hand their full prompt/content text to the structured log when available.
+- **Saved Pricing Snapshot**: Completed structured entries persist a one-time pricing snapshot from `user/API.ini` plus derived input/cached/output/total costs when the response is completed/saved, so Ledger does not recalculate prices every time it opens. Unknown or missing model pricing is stored explicitly instead of being guessed.
+- **Ledger Drill-Down Intake**: The shared API Log window now accepts request-reference targeting from Ledger so selected aggregate rows can reopen the existing request inspector instead of building a second viewer.
 - **Status Bar**: Shows entry count (filtered vs. total) and aggregated token totals
 - **Per-Project Persistence**: Log stored as `.api_log.jsonl` alongside the manifest file; referenced by manifest "log" key
 - **Infinite Scroll**: Text widget with word wrap supports unlimited entries
 - **Clear Log**: Button to clear all entries from memory
 - **Chronological Order**: Entries displayed in order of occurrence; sent/received always coupled together
+
+LEDGER WINDOW (IMPLEMENTED)
+- **Purpose**: Historical cost and token analytics built on shared `functions/usage_tracker.py` aggregation plus per-request detail from `functions/api_log.py`
+- **Role Separation**: Step 4 Costs remains the estimator, API Log remains the per-request inspector, and `Ledger` is the cross-project historical view
+- **Entry Points**: A direct `Ledger` menu command and a Step 4 `Ledger` button both open or focus the same shared non-modal window
+- **Single Window Reuse**: Reopening Ledger reuses the same dialog instead of opening duplicates
+- **Display Surface**: The dialog provides a filter toolbar, grouping selector, summary band, sortable table, and `Show matching requests` drill-down action
+- **Implemented Storage Layer**: `functions/usage_tracker.py` now writes the live aggregate ledger to `user/ledger.tsv` through one canonical `LEDGER_COLUMNS` schema and TSV helpers based on Python's `csv` module in tab-delimited mode
+- **Legacy Compatibility**: `user/usage.db` is now deprecated legacy input only; when present, it is migrated one time into `user/ledger.tsv` through deterministic `legacy-sqlite:{id}` request references so repeated reads stay idempotent
+- **Current Ledger Row Contract**: Timestamp, project, provider, model, task type, status, input/prompt/cached/reasoning/output/total token buckets, input/cached/output/total/estimate cost fields, saved `pricing_status`, stable request reference, and compatibility metadata (`key_id`, `profile`, `success`, `error_msg`)
+- **API Log Bridge**: Structured API log entries now carry ledger-ready metadata such as project name, task type, validation outcome, failure kind, saved pricing snapshot, and Unknown-safe fallbacks where data is missing. `functions/api_log.py` normalizes a request/response pair into the shared ledger row schema without reconstructing prompts or responses, and completed entries are mirrored into the ledger automatically after validation.
+- **Shared Analytics Helpers**: `functions/usage_tracker.py` now exposes shared filtering, grouping, date-preset, and estimate-vs-actual summary helpers so the GUI stays display-only
+
+REGEX MAKER (IMPLEMENTED)
+- **Help Menu Access**: Available under `Help -> RegEx Maker` and reopens the same non-modal helper window instead of creating duplicates
+- **Purpose**: Teachable regex assistance for CherryAI-compatible search and replacement rules without requiring the user to know regex syntax first
+- **Example Editors**: One or more `Line to find` rows plus index-aligned `Replace Target` rows, with paste buttons and per-search-row enable toggles for quick experiments
+- **Selection Guidance**: Users can highlight spans inside example text and right-click to mark constants, variables, captures, optional text, ignored spans, digit or word preferences, and literal punctuation; those highlights persist and show hover explanations
+- **Candidate Surface**: Read-only `RegEx Search` and `RegEx Replace` outputs with copy buttons, a ranked candidate list, and a rationale pane; double-clicking a candidate copies the search regex
+- **Compatibility Contract**: Candidate validation and replacement inference stay aligned with CherryAI's Python `re` behavior, including ignore-case search validation and Python replacement-group syntax such as `\g<1>`
+- **RegEx Options Popup**: Structured options control strictness, whitespace handling, wildcard fallback, and candidate count; explicit defaults are saved to `CherryAI.ini` and restored from buttons inside the popup
+
+EDITOR / TRANSLATION WORKBENCH (INITIAL SLICE + PLANNED REDESIGN)
+- **Purpose**: Replace the future-workbench draft plus the standalone Full Table View and Patch Editor destinations with one non-modal `Editor` window
+- **Current Slice**: The shared `Editor` command and host shell are implemented. `Full Files` lives inside the host, while `Lines Only` currently reuses the retained Full Table View dialog via mode handoff and shared file-context intake.
+- **Mode Switch**: Visible switch `Full Files [Switch] Lines Only`; the switch position shows the active mode
+- **Lines Only Mode**: Renamed successor to Full Table View for line-level edits, stage visibility, bulk search/replace, and lightweight precise row targeting in large files; the existing Full Table View implementation is intentionally kept and switched into rather than replaced by a second line-grid surface
+- **Full Files Mode**: Recycled successor to Patch Editor for staged full-file editing, diffs, parser-backed line history, and search/replace; the patch editor code is the part to be recycled into the shared Editor host
+- **Window Behavior**: Reuses the current non-modal single-window pattern instead of locking the main window
+- **Core Surfaces**: Editor for full-file work, Lines Only for line-level work, API Log for request inspection, Request Preview and agent tools for task execution
+- **History Model**: Uses staged `Original/`, staged `Translated/`, `Patch/Original/`, `Patch/Translated/`, manifest pipeline states, and manifest-backed editor history as CherryAI checkpoints, with one manifest patch-history entry per produced diff patch
+- **Current Full Files Persistence**: `save_editor_patch()` writes the current full-file text into staged `Translated/`, captures rollback material in `Patch/Translated/` before overwrite when needed, and updates `EditorState.files[rel_path]` with diff snapshots, bounded history, translated/patch artifact references, locator metadata, and parser-backed line history.
+- **Implemented Locator Navigation**: `Full Files` now highlights matched editor lines, surfaces `idx`, `ln`, and optional `f` in line history, and hands the active locator target into `Lines Only`; `Lines Only` exposes matching locate fields and locator status text for precise row jumps.
+- **Implemented Staged Helper Base**: shared manifest helpers now ensure `Translated/` parent trees and generate hash-first `Patch/Original/` plus reverse `Patch/Translated/` artifacts consumed by the current save and output flows.
+- **Implemented Lines Only Save Direction**: `Lines Only` saves now update sparse manifest fields, make the saved row state the latest effective entry for each changed `idx`, update existing `Translated/` files when present, and still record translated patch history even before a staged `Translated/` file exists.
+- **Implemented Optional Change Labels**: Editor history can store an optional per-save label so later lookup can find patch entries by label as well as by file and line targeting.
+- **Manifest Awareness**: Parsed-string highlighting, manifest-to-editor mapping, file-level diffing, parser-backed re-extraction, and manifest-owned `ln` plus optional `f` row mapping remain mandatory because CherryAI workflows are manifest-driven rather than plain-text-only. Both `Full Files` and `Lines Only` must surface `idx`, `ln`, and optional `f` so moved rows and shared physical lines can be highlighted, targeted, and saved explicitly. Save/load normalization now persists mandatory `ln`, preserves optional `f`, and upgrades legacy `line` / `field` aliases centrally in shared manifest code rather than requiring every parser to emit original line metadata.
 
 INTEGRATED AI TRANSLATION
 - **1-Click Flow**: Use the "1-Click" button to run the entire pipeline (Load -> Pre -> Translate -> Post) automatically.
@@ -478,12 +533,30 @@ MANIFESTS
 - Data integrity: loading a manifest preserves all stored settings — API keys, models, preprocessing results, style/tone text, and step data are never silently overwritten by GUI initialization
 - Configuration persistence: all INI writes use atomic saves (temp file → fsync → rename) to prevent corruption; Global Options loads all settings sections from INI using the user defaults → factory defaults → fallback chain
 
-PROJECT FILE STAGING (v3.1)
+PROJECT FILE STAGING (v3.1 + PLANNED REDESIGN)
 - Input/output decoupling via `filedir` field maps line index ranges to files
-- Source files are copied to `Projects/{project_name}/Original/` on load
-- Translated files are written to `Projects/{project_name}/Patch/`
-- `source_root` stores only the folder name (privacy-safe, portable)
-- File resolution uses the local `Original/` directory, not original user paths
+- Current staging already depends on the project-local `Original/` tree and manifest-backed editor history
+- Implemented Step 0 tree staging: folder input now stages the complete selected source tree into `Original/`, including non-parseable companions such as `.dll`, `.exe`, audio, and other support files, while `filedir` and `lines[]` still track only parseable extracted content
+- Implemented Input source handling: the unified Input dialog now offers `copy`, `move`, and `external` handling. `copy` and `move` keep project-local staging (`mode: internal`), while `external` keeps the absolute source root outside the project tree (`mode: external`)
+- Implemented parser-aware unified input filtering: parser format selections now defer file/folder matching to `parser.can_handle()` so parser-owned package targets such as KiriKiri2 `.xp3` archives appear in the unified selector instead of being lost behind stale extension-only filters
+- Implemented responsive staging progress: large Original-tree copies now report staged file and byte progress through the loading dialog while copying in chunks so the window stays responsive during long binary copies
+- Implemented Step 0 extraction validation batching: token-limit warnings/errors are collected per load batch, written into one manifest-adjacent `.input_extract_validation.log`, and summarized once after loading finishes
+- Implemented staging layout: `Original/` keeps the first full staged source snapshot and continues to copy the complete loaded folder tree, not only files with parseable content
+- Implemented staging layout: `Translated/` is the latest full translated output tree for `Full Files` saves and mirrored Step 9 output writes
+- Implemented staging layout: `Patch/Original/` stores forward patches relative to `Original/` using hash-first skip/diff/full-copy rules
+- Implemented staging layout: `Patch/Translated/` stores reverse patches, translated diff instructions, and rollback history before `Full Files`, `Lines Only`, or Output overwrites
+- Implemented save-path slice: `Lines Only` saves still create translated patch history when `Translated/` has not been materialized yet by Output
+- Implemented save-path slice: when `Translated/` already exists, `Lines Only` saves update it directly with the new line state for the changed rows
+- Implemented save-path slice: targeted translated updates and reverse-patch capture consume the same `idx` + `ln` + optional `f` mapping used by Editor highlighting so shared-line formats and moved rows are patched on the correct physical line
+- Implemented staged helper base: `ManifestManager` now exposes shared `Translated/` tree creation plus hash-first forward `Patch/Original/` and reverse `Patch/Translated/` artifact helpers that the current save/output flows reuse.
+- Manifest `EditorState.files` continues to store per-file editor diffs, line-history snapshots, save timestamps, optional change labels, and bounded history entries alongside the staged files, with one manifest entry per produced diff patch
+- Implemented manifest base mapping: rows now persist mandatory `ln` and preserve optional `f`, and older manifests are upgraded on load/save through shared normalization helpers
+- Implemented compact manifest writer: each sparse `lines[]` row keeps `idx`, `ln`, optional `f`, and `tags` on the opening line, then writes each sparse stage or auxiliary field on its own following line so pipeline layers stay visually separated; `filedir[]`, glossary `project_entries`, and `code_patterns[]` entries are emitted one object per line with deterministic ordering and no brace-only lines for those compact rows
+- Implemented tag-centered recovery metadata migration: canonical `lines[].tags` now carry dedup lineage via `dedup,D{idx}` and `aggressive_dedup,AD{idx}`, while postprocessing recomputes custom-placeholder captures, ellipsis counts, and aggressive number slots from each line's original text instead of persisting separate row-local lookup maps; legacy dedup step-data maps remain readable only as a compatibility fallback for older manifests
+- Implemented shared-line ownership mapping: Step 0 now captures stable `ln` plus optional `f` from the staged `Original/` source view and extraction order, including non-destructive file addition paths, and Step 9 now consumes that same mapping as its first lookup path for injection verification before falling back to positional matching. Parser or parser-handshake upgrades remain a fallback only where the shared mapping cannot stabilize ownership.
+- Implemented format assessment follow-through: the shared `ln` / optional `f` mapping is now validated against multiline cleaned dialogue and same-line multi-text rows in the active parser surface; Step 9 still injects base-handshake parsers from end to start, but parser-driven reinjection paths such as LightVN keep natural extraction order while continuing to use the same locator-first verification layer. No extra parser-owned source-locator field is currently required.
+- `source_root` stores the folder name for internal projects and the absolute source root for external projects
+- Manifest `mode` selects source resolution: `internal` uses the local `Original/` tree; `external` resolves `rel_path` against the stored absolute source root
 - Projects remain functional even if original source files are moved/deleted
 - Folder structure is preserved for multi-file projects
 - Supports per-file encoding (utf-8, shift_jis, etc.)
@@ -907,7 +980,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Protect Code Patterns: `save_protect_code_patterns()` / `load_protect_code_patterns()`
       - Fields: pattern, replacement, is_regex, description
     - Custom Placeholders: `save_custom_placeholders()` / `load_custom_placeholders()`
-      - Fields: pattern, placeholder, is_regex, restore_after
+      - Fields: pattern, placeholder, is_regex, restore_after, recover_everywhere
     - Anchor Removal: `save_anchor_removal()` / `load_anchor_removal()`
       - Fields: pattern, action (remove/preserve/replace), replacement, is_regex
     - Glossary Entries: `save_glossary_entries()` / `load_glossary_entries()`
@@ -1025,8 +1098,8 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - Apply Rules button with threaded background processing
   - Auto-Suggest button leveraging analysis results
   - Tooltips explaining each rule's behavior
-  - **Pipeline Execution Order:** Dedup (P10) → Protect Code (P15) → Custom Placeholders (P17) → Anchoring (P20) → Symbol Conversion (P30) → Ellipsis (P36) → Speaker (P38) → PROT Compression (P60) → Aggressive Dedup (P90). Protect Code and Custom Placeholders run before Symbol Conversion so fullwidth patterns (e.g. `（圧縮あり）`) still match the original text. Step data stores both flat capture lists and token-aware placeholder records (`protect_code_captured`, `placeholder_captured`, `placeholder_records`, `ellipsis_counts`, `anchor_captured`) for postprocessing reversal.
-  - **Postprocessing Reversal:** Phase 1 (preprocessing reversal): PROT decompression → Protect Code restoration → Custom Placeholder restoration → Ellipsis expansion → Anchoring restoration → `<NUM>` restoration from aggressive dedup numbers. Custom Placeholder restoration now runs in two passes: per-line replacement first, then a batch-wide exact-token fallback so named replacements that drifted to another line are still restored. Dedup-tagged duplicate rows are excluded from that batch fallback and from per-line post-exclusive recovery so they do not consume another line's placeholder record or produce false preserve/code-pattern flags before source-copy restoration. Phase 2 (post-exclusive LLM recovery): `recover_line()` fixes LLM artifacts (bracket/quote balance, whitespace normalization) on the already-restored text, with `enable_placeholder_recovery=False`. Bracket recovery treats `【】` as equivalent to `[]`, removes truly extra unmatched brackets such as an LLM-added third `}` after `{{...}}`, and only runs when the source bracket structure is balanced. Code pattern recovery matches doubled delimiters such as `{{...}}` as whole tokens and ignores nested inner matches like `{...}` inside a doubled token, so preserve-action restores do not leave trailing braces behind or double-flag the same source code. After all lines: Dedup restoration → Aggressive Dedup restoration. Reduplication reads step 3 data from ManifestManager (not session), preserves later-stage fields already stored on duplicate rows, and recursively resolves chained `dedup_map`/`aggr_dedup_map` sources via `postpro → tl → prepro → orig`.
+  - **Pipeline Execution Order:** Dedup (P10) → Protect Code (P15) → Custom Placeholders (P17) → Anchoring (P20) → Symbol Conversion (P30) → Ellipsis (P36) → Speaker (P38) → PROT Compression (P60) → Aggressive Dedup (P90). Protect Code and Custom Placeholders run before Symbol Conversion so fullwidth patterns (e.g. `（圧縮あり）`) still match the original text. Each matched placeholder rule now adds canonical per-line tags such as `generic_placeholder1` / `generic_placeholder2` and `custom_placeholder1` / `custom_placeholder2`, while Step 3 stores one shared `placeholder_lookup` table with the rule pattern, token, regex flag, and custom `recover_everywhere` setting. Anchor captures still persist separately, while dedup lineage lives in canonical tags and placeholder/ellipsis/aggressive number reversal is recomputed from the original line text during postprocessing.
+  - **Postprocessing Reversal:** Phase 1 (preprocessing reversal): PROT decompression → Protect Code restoration → Custom Placeholder restoration → Ellipsis expansion → Anchoring restoration → `<NUM>` restoration from aggressive dedup numbers. Generic `__PROTECTED__` restoration and custom placeholder restoration now rebuild their captures from the line's canonical placeholder tags plus the shared `placeholder_lookup` metadata instead of consuming persisted per-line lookup maps. Custom Placeholder restoration still runs local per-line replacement first, but its batch-wide exact-token fallback now runs only for rules whose lookup entry has `recover_everywhere=true`, so intentional protagonist-name tokens such as `Jane` can be restored safely when the LLM moves them onto another line. Dedup-tagged duplicate rows are excluded from that batch fallback and from per-line post-exclusive recovery so they do not consume another line's placeholder data or produce false preserve/code-pattern flags before source-copy restoration. Phase 2 (post-exclusive LLM recovery): `recover_line()` fixes LLM artifacts (bracket/quote balance, whitespace normalization) on the already-restored text, with `enable_placeholder_recovery=False`. Bracket recovery treats `【】` as equivalent to `[]`, removes truly extra unmatched brackets such as an LLM-added third `}` after `{{...}}`, and only runs when the source bracket structure is balanced. Code pattern recovery matches doubled delimiters such as `{{...}}` as whole tokens and ignores nested inner matches like `{...}` inside a doubled token, so preserve-action restores do not leave trailing braces behind or double-flag the same source code. After all lines: Dedup restoration → Aggressive Dedup restoration. Reduplication now resolves canonical `D{idx}` / `AD{idx}` tags first, preserves later-stage fields already stored on duplicate rows, recursively resolves chained sources via `postpro → tl → prepro → orig`, recomputes aggressive number slots from the duplicate row's original text, and only falls back to legacy step-data dedup maps for older manifests.
   - **Manifest Integration (Phase 24):**
     - All toggles persist to manifest: Deduplication, DeduplicationThreshold, EllipsisCompression,
       SymbolConversion, ProtCompression, SpeakerNameReplacement, CodeSpacingRules
@@ -1925,11 +1998,13 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - **API Section:**
     - Provider dropdown (OpenAI, Gemini, Anthropic, Mistral, Local, Ollama, LM Studio)
     - "Details" button inline with provider dropdown; opens Available Models window from registry cache
-    - Available Models window: filterable model table (Structured/Batch/No-Optional-Thinking/Cached-Input filters), "Update" button for live API fetch, "Set as Default" button for per-key default model, "Save" button to persist filtered model list
+    - "Cost Cap: $" spinbox inline with the provider row; persisted to `CherryAI.ini` `[api].cost_cap`, accepts manual float entry, increments by 1, range 0-999, default 999
+    - Available Models window: filterable model table (Structured/Batch/No-Optional-Thinking/Cached-Input filters plus default-hidden Unknown Price / Above Cost Cap toggles), "Update" button for live API fetch, "Set as Default" button for per-key default model, "Save" button to persist filtered model list
     - Gemini model IDs normalized (strips "models/" prefix) for consistent display
-    - Filter checkbox states saved to API.ini (filter_structured, filter_batch, filter_thinking, filter_cached); Structured Output defaults to checked
+    - Filter checkbox states saved to API.ini (filter_structured, filter_batch, filter_thinking, filter_cached, filter_unknown_price, filter_above_cost_cap); Structured Output defaults to checked while Unknown Price / Above Cost Cap default to hidden
     - "No / Optional Thinking" filter excludes models that require extended thinking (inverted logic)
     - "Cached Input" filter keeps only models with cached input pricing
+    - Model rows now distinguish free pricing (`$0.00`) from unknown pricing and show a dedicated Status column (`OK`, `Free`, `Unknown Price`, `Above Cost Cap`)
     - API key entry with inline Save button and show/hide toggle
     - Base URL entry (auto-filled from provider)
     - Default model per key: `get_default_model()` / `set_default_model()` in api_config.py (stored as `default_model_{provider}_{name}` in [api] section)
@@ -1973,7 +2048,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Current default design is `Pale Blue`
     - Save Window Dimensions toggle persists per-window geometry/state for the app and dialogs
     - Launch Every Window Maximized toggle forces top-level windows to open maximized
-    - Window preferences are applied to the main window, Global Options, project dialogs, password dialogs, loading dialog, API Log, and Full Table View
+    - Window preferences are applied to the main window, Global Options, project dialogs, password dialogs, loading dialog, API Log, Ledger, Full Table View, Editor, and RegEx Maker
   - **Safety Section:**
     - Ban tokens entry (comma-separated)
     - Common tokens quick-add buttons
@@ -2394,16 +2469,12 @@ PARSER SCRIPTS (Implemented)
 - **Base interface** (`formats/parser_base.py`): `ParserScript` ABC with mandatory `name`, `extract`, `inject` methods and default `inject_to(source, output, lines, *, orig_lines=None) → List[int]` implementing standardized 4-step Speaker:Dialogue-aware surgical injection handshake (load original → extract keys via `extract_tagged()` with speaker metadata → split speaker/dialogue via `_split_speaker_dialogue()` and replace independently, speaker only on first occurrence for consecutive same-speaker lines → save; returns failed indices)
 - **Configuration dataclasses:** `WordwrapConfig`, `ForbiddenChars`, `TagRules`
 - **RPG Maker MV/MZ** (`formats/parser_rpgmaker.py`): Full implementations with wordwrap defaults, forbidden chars, context markers
+- **KiriKiri2** (`formats/KiriKiri2.py`): KAG/KiriKiri parser for `.ks` scripts and targeted `.tjs` files with cp932-aware detection, menu-caption handling, a project-level `MainWindow.tjs` post-injection patch hook, and XP3 archive helpers that now detect, persist, and reuse archive metadata such as `custom_magic`, `header_offset`, and `key` through the manifest-backed archive workflow. The current validated slice auto-infers the simple protected-text helper used by `dev/testgame/data.xp3` (`key: xor:1`) for readable members such as `AppConfig.tjs`, but broader protected scenario decode remains unresolved.
 - **Parser Registry** (`formats/__init__.py`): `ParserRegistry` with register, get, detect, list_parsers
 - Auto-detection via `can_handle()` probes file structure (e.g. www/data/*.json, null-first arrays)
 - **Wordwrap Integration** (`gui/steps/wordwrap_overwrite.py`): Parser wordwrap configs pre-populate editable per-tag settings; the step resolves wrap targets through the user-selected `Target:` strategy and preserves rows unchanged when no target resolves
 - **Forbidden Characters:** Merged into logit bias via `merge_parser_forbidden_chars()`; auto-replaced or flagged via `replace_forbidden_chars()`
 - **API Integration** (`functions/api_client.py`): `apply_parser_forbidden_chars()` method on ApiClient
-
-PARSER HANDSHAKE — UNIFIED I/O PARSER INTERFACE (Implemented)
-- Formal contract that every parser must satisfy: Mandatory (M1-M3) and Optional (O1-O10) components
-- **Handshake module** (`formats/handshake.py`): `SpeakerInfo`, `ExtractedLine`, `ParserError`, `validate_parser()`
-- **Mandatory contract:** M1=Extract, M2=Inject, M3=Identity (format_id+extensions or can_handle)
 - **Optional components:** O1=Decrypt, O2=Encrypt, O3=Encoding, O4=Speaker Detection, O5=Wordwrap Config, O6=Custom Wordwrap, O7=Forbidden Chars, O8=Context Markers, O9=Injection Rewrite Hook, O10=Pretty Wrap Hook
 - **Handler retrofit (P4):** All registered FormatHandlers and ParserScripts verified against M1-M3 via `validate_parser()`. RPG Maker handler stubs raise `ParserError` with metadata instead of silent no-ops.
 - **Tagged extraction** (`parser_base.py`): `extract_tagged()` returns `List[ExtractedLine]` with per-line tag, speaker, context
@@ -2426,6 +2497,11 @@ PIPELINE WIRING OF OPTIONAL COMPONENTS (Implemented — P3)
 - **O7 Forbidden Chars:** Serialises `forbidden_chars.to_dict()` to `Options.ParserForbiddenChars`; translation step calls `api_client.apply_parser_forbidden_chars()` to merge into logit bias
 - **O8 Tags:** Compiles `tag_rules`, applies regex patterns to extracted lines, writes `tag` tags; `detect_tags()` accepts optional `parser_rules` parameter to override built-in heuristics
 - **Output Injection:** Output step supports both parser paths: explicit `injection` format uses the manifest-verified `_write_injection()` handshake, while direct parser IDs from the format dropdown/filedir keep the per-file sliced `parser.inject_to(source, output, lines)` path for surgical injection that preserves script structure.
+- **Injection order by parser type:** Base-handshake parsers use reverse source-order writes so earlier replacements cannot steal later search keys, while custom parser `inject_to()` overrides keep natural extraction order and receive aligned tagged metadata when `orig_lines` are reordered.
+- **Project post-injection hooks:** Successful parser-backed export batches now run one parser-owned project hook per touched format after all file writes complete; the KiriKiri2 slice uses this for the `MainWindow.tjs` wordwrap bootstrap patch instead of ad hoc GUI-owned logic.
+- **Package staging helpers:** `functions/manifest_manager.py` now exposes shared `Package/Original` and `Package/Translated` trees for parser-owned package artifacts such as unpacked or rebuilt XP3 content, keeping archive staging out of GUI code.
+- **Manifest-backed archive settings:** Archive-aware projects can now persist `ArchiveSettings` per source archive, including `custom_magic`, `header_offset`, and `key`, so unpack and rebuild steps reuse the same metadata instead of depending on one fixed XP3 layout.
+- **XP3 Input and Output integration:** Step 0 can now load `.xp3` files directly, detect or prompt for archive settings, unpack parser-relevant members into `Package/Original`, and sync extracted members into the manifest. Protected text archives can now infer and persist the validated `xor:1` helper used by `dev/testgame/data.xp3`, while binary-only XP3 packages such as image, video, and voice archives are skipped for parsing instead of raising load errors. Parser-selected folder loads still scan the full tree before applying `can_handle()` so raw archives and unsupported companions are staged correctly. Step 9 groups those archive members back by source archive, renders translated members, rebuilds the archive through the same stored settings, and writes the translated archive to the chosen output.
 - **Manifest Options written:** `ParserName`, `ParserHandlesSpeakers`, `ParserHandlesWordwrap`, `ParserForbiddenChars` (dict), `ParserHandlesContextMarkers`
 
 LIGHT VN PARSER (Implemented)
@@ -3657,7 +3733,9 @@ and Mistral. Model information (pricing, rate limits, capabilities) is:
 - Fetched from provider APIs when API keys are available
 - Cached locally in `user/API.ini` for offline use
 - Updated via the "⟳ Refresh Models" button in Global Options
+- Re-fetched via the Available Models "Update" button without sending inference probes for pricing
 - Automatically up-to-date via curated built-in fallback data (Feb 2026)
+- Treated as unknown when a live model refresh succeeds but pricing cannot be documented
 
 **Models included** (27 built-in, more fetched live with keys):
 - OpenAI: GPT-5.2/5.1/5/5-mini/5-nano, GPT-4.1 family, GPT-4o family, o3/o4-mini reasoning
@@ -3667,6 +3745,11 @@ and Mistral. Model information (pricing, rate limits, capabilities) is:
 **Per-model information stored**: input/output/cached/batch/flex/priority pricing (USD/1M tokens),
 RPM/RPD rate limits per tier, context window, structured output, thinking mode,
 logit_bias support, temperature range.
+
+**Cost-cap guardrails:** CherryAI persists a global output-price cap in `CherryAI.ini` and blocks
+model-specific probes plus live translation requests whenever the selected model has no documented
+output price or its output rate exceeds the configured cap. The Available Models window hides
+Unknown Price / Above Cost Cap rows by default but can reveal them via explicit checkboxes.
 
 **API Key Management**: Encrypted or plaintext API key storage in `user/API.ini` with
 multiple named keys per provider (format: `[api_keys]` → `provider, name = encrypted_value`).

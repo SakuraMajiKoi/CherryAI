@@ -24,6 +24,7 @@ from CherryAI.functions.api_log import (
     LogCategory,
     LogEntry,
     LogStatus,
+    build_log_request_ref,
     get_api_log_store,
 )
 from CherryAI.functions.manifest_manager import ManifestManager
@@ -99,6 +100,10 @@ class APILogViewDialog(tk.Toplevel):
         cls,
         parent: tk.Misc,
         manifest_manager: ManifestManager,
+        *,
+        request_refs: Optional[List[str]] = None,
+        search_text: Optional[str] = None,
+        view_mode: Optional[str] = None,
     ) -> "APILogViewDialog":
         """Open the API Log dialog or bring the existing one to the front."""
         root = parent.winfo_toplevel()
@@ -106,6 +111,11 @@ class APILogViewDialog(tk.Toplevel):
         if isinstance(existing, cls):
             try:
                 if existing.winfo_exists():
+                    existing.apply_external_filters(
+                        request_refs=request_refs,
+                        search_text=search_text,
+                        view_mode=view_mode,
+                    )
                     existing._present()
                     return existing
             except tk.TclError:
@@ -114,6 +124,11 @@ class APILogViewDialog(tk.Toplevel):
         dialog = cls(root, manifest_manager)
         dialog._instance_owner = root
         setattr(root, cls._ROOT_ATTR, dialog)
+        dialog.apply_external_filters(
+            request_refs=request_refs,
+            search_text=search_text,
+            view_mode=view_mode,
+        )
         dialog._present()
         return dialog
 
@@ -132,6 +147,7 @@ class APILogViewDialog(tk.Toplevel):
         self._category_filter: Optional[str] = None  # None = all
         self._view_mode: str = "Both"
         self._search_text: str = ""
+        self._request_refs: Optional[set[str]] = None
         self._display_limit_label = normalize_api_log_display_limit(
             str(ini_manager.get_log_setting(_DISPLAY_LIMIT_KEY, "All") or "All"),
         )
@@ -227,6 +243,31 @@ class APILogViewDialog(tk.Toplevel):
                 background=theme.highlight_bg,
                 foreground=theme.highlight_fg,
             )
+
+    def apply_external_filters(
+        self,
+        *,
+        request_refs: Optional[List[str]] = None,
+        search_text: Optional[str] = None,
+        view_mode: Optional[str] = None,
+    ) -> None:
+        """Apply request-ref or search targeting from another shared window."""
+        self._request_refs = None
+        if request_refs is not None:
+            self._request_refs = {
+                ref for ref in request_refs if ref
+            } or None
+
+        if search_text is not None:
+            self._search_var.set(search_text)
+            self._search_text = search_text.strip()
+
+        if view_mode is not None and view_mode in VIEW_MODES:
+            self._view_var.set(view_mode)
+            self._view_mode = view_mode
+
+        if hasattr(self, "_text"):
+            self._render_all()
 
     # ------------------------------------------------------------------ #
     #  UI Construction                                                     #
@@ -414,11 +455,19 @@ class APILogViewDialog(tk.Toplevel):
 
     def _get_filtered_entries(self) -> List[LogEntry]:
         """Get entries matching current filter/search settings."""
-        return self._store.get_filtered(
+        entries = self._store.get_filtered(
             category=self._category_filter,
             search_text=self._search_text or None,
             view_mode=self._view_mode.lower(),
         )
+        if not self._request_refs:
+            return entries
+
+        matched: List[LogEntry] = []
+        for entry in entries:
+            if build_log_request_ref(entry, self._store.log_path) in self._request_refs:
+                matched.append(entry)
+        return matched
 
     def _render_all(self) -> None:
         """Clear and re-render all matching entries."""

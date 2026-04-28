@@ -89,6 +89,80 @@ def _read_dedup_tags(processor: Any, line_count: int) -> Dict[int, int]:
     return tag_sources
 
 
+def _parse_tag_parts(raw_tags: Any) -> List[str]:
+    """Return normalized tag strings from manifest/runtime tag storage."""
+    if raw_tags is None:
+        return []
+    if isinstance(raw_tags, str):
+        candidates = raw_tags.split(",")
+    elif isinstance(raw_tags, (list, tuple, set)):
+        candidates = raw_tags
+    else:
+        candidates = [raw_tags]
+
+    parts: List[str] = []
+    seen: Set[str] = set()
+    for candidate in candidates:
+        tag = str(candidate).strip()
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        parts.append(tag)
+    return parts
+
+
+def extract_dedup_source_from_tags(
+    raw_tags: Any,
+    *,
+    aggressive: bool = False,
+) -> Optional[int]:
+    """Return the dedup source index encoded in canonical line tags."""
+    parts = _parse_tag_parts(raw_tags)
+    required_tag = "aggressive_dedup" if aggressive else "dedup"
+    prefix = "AD" if aggressive else "D"
+    if required_tag not in parts:
+        return None
+    for part in parts:
+        if part.startswith(prefix) and part[len(prefix):].isdigit():
+            return int(part[len(prefix):])
+    return None
+
+
+def build_tagged_dedup_maps(lines: List[Any]) -> Tuple[Dict[int, int], Dict[int, int]]:
+    """Build standard/aggressive dedup maps from canonical line tags."""
+    dedup_map: Dict[int, int] = {}
+    aggr_map: Dict[int, int] = {}
+
+    for line in lines:
+        if isinstance(line, dict):
+            idx = line.get("idx")
+            raw_tags = line.get("tags")
+        else:
+            idx = getattr(line, "idx", None)
+            raw_tags = getattr(line, "tags", None)
+
+        try:
+            line_idx = int(idx)
+        except (TypeError, ValueError):
+            continue
+
+        src_idx = extract_dedup_source_from_tags(raw_tags)
+        if src_idx is not None:
+            dedup_map[line_idx] = src_idx
+
+        aggr_src_idx = extract_dedup_source_from_tags(raw_tags, aggressive=True)
+        if aggr_src_idx is not None:
+            aggr_map[line_idx] = aggr_src_idx
+
+    return dedup_map, aggr_map
+
+
+def aggressive_numbers_for_text(text: str) -> List[str] | Dict[str, str]:
+    """Return aggressive number slots derived directly from source text."""
+    _masked, numbers = aggressive_mask_line(text)
+    return numbers
+
+
 def _ensure_doc_id(processor: Any, lines: List[str]) -> str:
     """Return a stable doc id for the current file/session and persist it in metadata.
 

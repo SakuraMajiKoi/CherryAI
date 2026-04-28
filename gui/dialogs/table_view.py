@@ -22,7 +22,7 @@ import logging
 import os
 import re
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from CherryAI.functions.manifest_manager import (
@@ -129,14 +129,75 @@ class FullTableViewDialog(tk.Toplevel):
     line data from the project manifest.
     """
 
+    _WINDOW_ATTR = "_full_table_view_dialog"
+
+    @classmethod
+    def open_or_focus(
+        cls,
+        parent: tk.Misc,
+        manifest_manager: ManifestManager,
+        *,
+        initial_file: Optional[str] = None,
+        initial_locator: Optional[Dict[str, Any]] = None,
+        title: str = "Full Table View",
+        modal: bool = False,
+    ) -> "FullTableViewDialog":
+        """Open or focus a shared table dialog and optionally scope it to one file."""
+        root = parent.winfo_toplevel()
+        existing = getattr(root, cls._WINDOW_ATTR, None)
+        if isinstance(existing, cls) and existing.winfo_exists():
+            existing._mgr = manifest_manager
+            existing._modal = modal
+            existing.title(title)
+            existing._load_data()
+            if initial_file is not None:
+                if initial_locator is None:
+                    existing.apply_editor_file_selection(initial_file)
+                else:
+                    existing.apply_editor_file_selection(
+                        initial_file,
+                        locator_target=initial_locator,
+                    )
+            if not modal:
+                try:
+                    existing.grab_release()
+                except tk.TclError:
+                    pass
+            existing.deiconify()
+            existing.lift()
+            existing.focus_force()
+            return existing
+
+        init_kwargs: Dict[str, Any] = {
+            "title": title,
+            "modal": modal,
+            "initial_file": initial_file,
+        }
+        if initial_locator is not None:
+            init_kwargs["initial_locator"] = initial_locator
+        dialog = cls(
+            parent,
+            manifest_manager,
+            **init_kwargs,
+        )
+        setattr(root, cls._WINDOW_ATTR, dialog)
+        return dialog
+
     def __init__(
         self,
-        parent: tk.Tk,
+        parent: tk.Misc,
         manifest_manager: ManifestManager,
+        *,
+        title: str = "Full Table View",
+        modal: bool = True,
+        initial_file: Optional[str] = None,
+        initial_locator: Optional[Dict[str, Any]] = None,
     ) -> None:
         super().__init__(parent)
         self._parent = parent
         self._mgr = manifest_manager
+        self._modal = modal
+        self._window_root = parent.winfo_toplevel()
 
         # --- State ---
         self._all_lines: List[Dict[str, Any]] = []  # Deep copy of manifest lines
@@ -149,6 +210,7 @@ class FullTableViewDialog(tk.Toplevel):
         self._selected_columns: Set[str] = set()  # Columns marked as "Selected"
         self._changes: Dict[int, Dict[str, Any]] = {}  # idx -> {field: new_value}
         self._deleted_fields: Dict[int, Set[str]] = {}  # idx -> set of cleared fields
+        self._current_locator_target: Optional[Dict[str, Any]] = None
 
         # Pagination
         self._page_size = DEFAULT_PAGE_SIZE
@@ -176,7 +238,7 @@ class FullTableViewDialog(tk.Toplevel):
         self._sort_reverse: bool = False
 
         # Window setup
-        self.title("Full Table View")
+        self.title(title)
         self.minsize(900, 500)
         apply_window_preferences(
             self,
@@ -193,6 +255,8 @@ class FullTableViewDialog(tk.Toplevel):
 
         # Load data
         self._load_data()
+        if initial_file is not None:
+            self.apply_editor_file_selection(initial_file, locator_target=initial_locator)
 
         # Bind close protocol
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -202,7 +266,8 @@ class FullTableViewDialog(tk.Toplevel):
         self.bind("<Escape>", lambda e: self._on_close())
 
         self.focus_set()
-        self.grab_set()
+        if self._modal:
+            self.grab_set()
 
     def refresh_theme(self) -> None:
         """Reapply the active theme to table-specific custom surfaces."""
@@ -414,6 +479,26 @@ class FullTableViewDialog(tk.Toplevel):
         self._search_col_combo.pack(side="left")
         self._search_col_combo.bind("<<ComboboxSelected>>", self._on_search_changed)
 
+        ttk.Label(bottom_row, text="Locate idx:").pack(side="left", padx=(12, 4))
+        self._locator_idx_var = tk.StringVar()
+        ttk.Entry(bottom_row, textvariable=self._locator_idx_var, width=7).pack(
+            side="left", padx=(0, 4)
+        )
+
+        ttk.Label(bottom_row, text="ln:").pack(side="left", padx=(0, 4))
+        self._locator_ln_var = tk.StringVar()
+        ttk.Entry(bottom_row, textvariable=self._locator_ln_var, width=6).pack(
+            side="left", padx=(0, 4)
+        )
+
+        ttk.Label(bottom_row, text="f:").pack(side="left", padx=(0, 4))
+        self._locator_f_var = tk.StringVar()
+        ttk.Entry(bottom_row, textvariable=self._locator_f_var, width=5).pack(
+            side="left", padx=(0, 4)
+        )
+
+        ttk.Button(bottom_row, text="Locate", command=self._on_locate).pack(side="left")
+
     # ================================================================== #
     #                         TABLE                                       #
     # ================================================================== #
@@ -456,6 +541,7 @@ class FullTableViewDialog(tk.Toplevel):
         # Treeview bindings
         self._tree.bind("<Double-1>", self._on_cell_double_click)
         self._tree.bind("<Button-1>", self._on_tree_click)
+        self._tree.bind("<<TreeviewSelect>>", self._on_tree_selection_changed)
         self._tree.bind("<MouseWheel>", self._on_mousewheel)
 
         # Tag configurations for highlighting
@@ -475,6 +561,9 @@ class FullTableViewDialog(tk.Toplevel):
         # Left: showing info
         self._status_label = ttk.Label(status, text="Showing 0 / 0 Lines")
         self._status_label.pack(side="left")
+
+        self._locator_status_var = tk.StringVar(value="Locator: none")
+        ttk.Label(status, textvariable=self._locator_status_var).pack(side="left", padx=(16, 0))
 
         # Right: pagination
         page_frame = ttk.Frame(status)
@@ -713,6 +802,68 @@ class FullTableViewDialog(tk.Toplevel):
 
         self._page_offset = 0
         self._refresh_table()
+
+    def apply_editor_file_selection(
+        self,
+        rel_path: Optional[str],
+        *,
+        locator_target: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Apply file context passed from the shared Editor host."""
+        self._apply_file_filter(rel_path)
+        if locator_target:
+            self.locate_line_target(
+                rel_path,
+                idx=_coerce_optional_int(locator_target.get("idx")),
+                ln=_coerce_optional_int(locator_target.get("ln")),
+                field=_coerce_optional_int(locator_target.get("f")),
+            )
+
+    def locate_line_target(
+        self,
+        rel_path: Optional[str] = None,
+        *,
+        idx: Optional[int] = None,
+        ln: Optional[int] = None,
+        field: Optional[int] = None,
+    ) -> Optional[int]:
+        """Jump to the first visible row matching the given locator target."""
+        if rel_path is not None and rel_path != self._file_filter:
+            self._apply_file_filter(rel_path)
+
+        matches = self._mgr.get_lines_for_locator_target(
+            rel_path=rel_path,
+            idx=idx,
+            ln=ln,
+            field=field,
+        )
+        if not matches:
+            self._set_locator_target_display(None)
+            return None
+
+        target_line = matches[0]
+        target_idx = int(target_line.get("idx", -1))
+        self._selected_rows = {target_idx}
+        self._set_locator_target_display(target_line)
+
+        display_lines = self._get_display_lines()
+        visible_position = next(
+            (position for position, line in enumerate(display_lines) if line.get("idx") == target_idx),
+            None,
+        )
+        if visible_position is not None and not self._show_all:
+            self._page_offset = (visible_position // self._page_size) * self._page_size
+
+        self._refresh_table()
+        if hasattr(self, "_tree"):
+            item_id = str(target_idx)
+            try:
+                self._tree.selection_set(item_id)
+                self._tree.focus(item_id)
+                self._tree.see(item_id)
+            except tk.TclError:
+                pass
+        return target_idx
 
     # ================================================================== #
     #                       COLUMN FILTER                                 #
@@ -1299,6 +1450,61 @@ class FullTableViewDialog(tk.Toplevel):
             # Regular click — don't toggle, let treeview handle selection
             pass
 
+    def _on_tree_selection_changed(self, _event: tk.Event) -> None:
+        """Surface the active row's ``idx``/``ln``/``f`` locator values."""
+        selection = self._tree.selection()
+        if not selection:
+            self._set_locator_target_display(None)
+            return
+
+        try:
+            idx = int(selection[0])
+        except (TypeError, ValueError):
+            self._set_locator_target_display(None)
+            return
+
+        self._set_locator_target_display(self._find_line(idx))
+
+    def _on_locate(self) -> None:
+        """Locate a row from the lightweight ``idx``/``ln``/``f`` controls."""
+        idx = _coerce_optional_int(self._locator_idx_var.get())
+        ln = _coerce_optional_int(self._locator_ln_var.get())
+        field = _coerce_optional_int(self._locator_f_var.get())
+        if idx is None and ln is None and field is None:
+            messagebox.showinfo("Locate", "Enter at least one locator value.")
+            return
+
+        located = self.locate_line_target(
+            self._file_filter,
+            idx=idx,
+            ln=ln,
+            field=field,
+        )
+        if located is None:
+            messagebox.showinfo("Locate", "No matching line was found.")
+
+    def _set_locator_target_display(self, line: Optional[Dict[str, Any]]) -> None:
+        """Update the locator status text for the currently targeted row."""
+        if line is None:
+            self._current_locator_target = None
+            if hasattr(self, "_locator_status_var"):
+                self._locator_status_var.set("Locator: none")
+            return
+
+        target: Dict[str, Any] = {
+            "idx": line.get("idx"),
+            "ln": line.get("ln"),
+        }
+        if "f" in line:
+            target["f"] = line.get("f")
+        self._current_locator_target = target
+
+        parts = [f"idx={target['idx']}", f"ln={target['ln']}"]
+        if "f" in target:
+            parts.append(f"f={target['f']}")
+        if hasattr(self, "_locator_status_var"):
+            self._locator_status_var.set("Locator: " + "  ".join(parts))
+
     def _on_mousewheel(self, event: tk.Event) -> None:
         """Handle mousewheel scrolling from anywhere in the dialog."""
         self._tree.yview_scroll(-1 * (event.delta // 120), "units")
@@ -1528,7 +1734,7 @@ class FullTableViewDialog(tk.Toplevel):
     # ================================================================== #
 
     def _on_save(self) -> None:
-        """Save changes to manifest."""
+        """Save changes through the shared manifest staging pipeline."""
         if not self._has_changes():
             messagebox.showinfo("Save", "No changes to save.")
             return
@@ -1536,22 +1742,32 @@ class FullTableViewDialog(tk.Toplevel):
         # If rows are selected, only save selected rows
         save_indices = self._selected_rows if self._selected_rows else None
 
-        count = 0
-        for idx, fields in self._changes.items():
-            if save_indices is not None and idx not in save_indices:
-                continue
-            for field, value in fields.items():
-                if field in self._deleted_fields.get(idx, set()):
-                    continue
-                self._mgr.set_line_field(idx, field, value)
-                count += 1
+        change_label = ""
+        if hasattr(self, "tk"):
+            change_label = simpledialog.askstring(
+                "Save",
+                "Optional change label:",
+                parent=self,
+                initialvalue="",
+            )
+            if change_label is None:
+                return
 
-        for idx, deleted_fields in self._deleted_fields.items():
-            if save_indices is not None and idx not in save_indices:
-                continue
-            for field in deleted_fields:
-                self._mgr.clear_line_field(idx, field)
-                count += 1
+        change_snapshot = {
+            idx: dict(fields)
+            for idx, fields in self._changes.items()
+        }
+        deleted_snapshot = {
+            idx: set(fields)
+            for idx, fields in self._deleted_fields.items()
+        }
+
+        result = self._mgr.save_lines_only_changes(
+            change_snapshot,
+            deleted_snapshot,
+            selected_indices=save_indices,
+            change_label=change_label.strip(),
+        )
 
         # Clear saved changes from tracking
         if save_indices:
@@ -1569,7 +1785,12 @@ class FullTableViewDialog(tk.Toplevel):
         self._original_lines = copy.deepcopy(self._mgr.get_lines())
 
         self._refresh_table()
-        messagebox.showinfo("Save", f"Saved {count} field change(s) to manifest.")
+        messagebox.showinfo(
+            "Save",
+            "Saved "
+            f"{result.get('fields_saved', 0)} field change(s) across "
+            f"{result.get('files_updated', 0)} file(s).",
+        )
 
     def _on_reset(self) -> None:
         """Reset changes using manifest data."""
@@ -1630,7 +1851,13 @@ class FullTableViewDialog(tk.Toplevel):
             if result:
                 self._on_save()
 
-        self.grab_release()
+        if self._modal:
+            try:
+                self.grab_release()
+            except tk.TclError:
+                pass
+        if getattr(self._window_root, self._WINDOW_ATTR, None) is self:
+            setattr(self._window_root, self._WINDOW_ATTR, None)
         self.destroy()
 
 
@@ -1781,6 +2008,19 @@ class _FileFilterDropdown(tk.Toplevel):
     def _on_focus_out(self, event: tk.Event) -> None:
         """Close dropdown when focus leaves."""
         # Small delay to handle focus transitions
+
+
+def _coerce_optional_int(value: Any) -> Optional[int]:
+    """Return ``value`` as an ``int`` when possible, else ``None``."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
         self.after(150, self._check_focus)
 
     def _check_focus(self) -> None:

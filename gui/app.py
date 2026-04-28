@@ -3,7 +3,7 @@
 Provides the main application window with:
 - 10 workflow step tabs
 - Right-side progress tracker (collapsible)
-- Menu bar (File, Full Table View, Options, Help)
+- Menu bar (File, Full Table View, Editor, API Log, Options, Help)
 - Status bar with progress indicator
 - Keyboard shortcuts (Ctrl+D/Z/Y)
 - Pastel blue theme
@@ -26,8 +26,11 @@ from CherryAI.gui.dialogs.project_dialog import (
     LoadManifestDialog,
     WelcomeDialog,
 )
+from CherryAI.gui.dialogs.patch_editor_view import PatchEditorViewDialog
 from CherryAI.gui.dialogs.table_view import FullTableViewDialog
 from CherryAI.gui.dialogs.api_log_view import APILogViewDialog
+from CherryAI.gui.dialogs.ledger_view import LedgerViewDialog
+from CherryAI.gui.dialogs.regex_help_view import RegexHelpDialog
 from CherryAI.gui.theme.colors import THEME, apply_theme, apply_window_preferences, load_theme_from_ini
 from CherryAI.gui.state.store import (
     SessionState,
@@ -81,7 +84,8 @@ class App(tk.Tk):
     Features:
     - 10 workflow step tabs
     - Right-side progress tracker
-    - Menu bar with File (dropdown), Full Table View (direct), Options (direct), Help (dropdown)
+        - Menu bar with File (dropdown), Full Table View (direct), Editor (direct),
+            API Log (direct), Options (direct), Help (dropdown)
     - Status bar with progress indicator
     - Keyboard shortcuts
     - Pastel blue theme
@@ -110,7 +114,11 @@ class App(tk.Tk):
         self._session_path: Optional[Path] = None
         self.session = get_session()
         self._api_log_dialog: Optional[APILogViewDialog] = None
+        self._ledger_dialog: Optional[LedgerViewDialog] = None
+        self._editor_dialog: Optional[PatchEditorViewDialog] = None
         self._global_options_dialog: Optional[GlobalOptionsDialog] = None
+        self._patch_editor_dialog: Optional[PatchEditorViewDialog] = None
+        self._regex_help_dialog: Optional[RegexHelpDialog] = None
         
         # TASK 21.4: Flag to track if startup dialog should be shown
         self._show_startup_dialog = True
@@ -238,7 +246,8 @@ class App(tk.Tk):
     def _build_menu(self) -> None:
         """Build the menu bar.
 
-        Layout: File (dropdown) | Full Table View (direct) | Options (direct) | Help (dropdown)
+        Layout: File (dropdown) | Full Table View (direct) | Editor (direct) |
+        API Log (direct) | Ledger (direct) | Options (direct) | Help (dropdown)
         """
         menubar = tk.Menu(self)
         self.config(menu=menubar)
@@ -254,8 +263,14 @@ class App(tk.Tk):
         # Full Table View (direct — no dropdown)
         menubar.add_command(label="Full Table View", command=self._on_full_table_view)
 
+        # Editor (direct — no dropdown)
+        menubar.add_command(label="Editor", command=self._on_editor)
+
         # API Log (direct — no dropdown)
         menubar.add_command(label="API Log", command=self._on_api_log)
+
+        # Ledger (direct — no dropdown)
+        menubar.add_command(label="Ledger", command=self._on_ledger)
 
         # Options (direct — no dropdown)
         menubar.add_command(label="Options", command=self._on_options)
@@ -264,6 +279,7 @@ class App(tk.Tk):
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Help", menu=help_menu)
         help_menu.add_command(label="Documentation", command=self._on_help)
+        help_menu.add_command(label="RegEx Maker", command=self._on_regex_help)
         help_menu.add_separator()
         help_menu.add_command(label="About", command=self._on_about)
 
@@ -830,11 +846,43 @@ class App(tk.Tk):
             return
         FullTableViewDialog(self, self._manifest_manager)
 
+    def _on_editor(self) -> None:
+        """Open the shared Editor window."""
+        self.open_editor_dialog()
+
+    def open_editor_dialog(self) -> Optional[PatchEditorViewDialog]:
+        """Open or focus the shared Editor dialog for the current project."""
+        if not self._manifest_manager.is_loaded:
+            messagebox.showwarning(
+                "No Project",
+                "Please open or create a project first.",
+            )
+            return None
+
+        dialog = PatchEditorViewDialog.open_or_focus(self, self._manifest_manager)
+        self._editor_dialog = dialog
+        self._patch_editor_dialog = dialog
+        return dialog
+
+    def open_patch_editor_dialog(self) -> Optional[PatchEditorViewDialog]:
+        """Compatibility wrapper for the recycled Editor window."""
+        return App.open_editor_dialog(self)
+
     def _on_api_log(self) -> None:
         """Open the API Log viewer window."""
         self.open_api_log_dialog()
 
-    def open_api_log_dialog(self) -> Optional[APILogViewDialog]:
+    def _on_ledger(self) -> None:
+        """Open the Ledger analytics window."""
+        self.open_ledger_dialog()
+
+    def open_api_log_dialog(
+        self,
+        *,
+        request_refs: Optional[List[str]] = None,
+        search_text: Optional[str] = None,
+        view_mode: Optional[str] = None,
+    ) -> Optional[APILogViewDialog]:
         """Open or focus the shared API Log dialog for the current project."""
         if not self._manifest_manager.is_loaded:
             messagebox.showwarning(
@@ -843,8 +891,30 @@ class App(tk.Tk):
             )
             return None
 
-        dialog = APILogViewDialog.open_or_focus(self, self._manifest_manager)
+        dialog = APILogViewDialog.open_or_focus(
+            self,
+            self._manifest_manager,
+            request_refs=request_refs or [],
+            search_text=search_text,
+            view_mode=view_mode,
+        )
         self._api_log_dialog = dialog
+        return dialog
+
+    def open_ledger_dialog(self) -> LedgerViewDialog:
+        """Open or focus the shared Ledger dialog."""
+        dialog = LedgerViewDialog.open_or_focus(self)
+        self._ledger_dialog = dialog
+        return dialog
+
+    def _on_regex_help(self) -> None:
+        """Open the shared RegEx Maker helper window."""
+        self.open_regex_help_dialog()
+
+    def open_regex_help_dialog(self) -> RegexHelpDialog:
+        """Open or focus the shared RegEx Maker dialog."""
+        dialog = RegexHelpDialog.open_or_focus(self)
+        self._regex_help_dialog = dialog
         return dialog
 
     def _on_help(self) -> None:

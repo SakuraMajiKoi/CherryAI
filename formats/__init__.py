@@ -422,6 +422,12 @@ def _load_parsers() -> None:
     except Exception:
         pass  # Graceful degradation
 
+    try:
+        from .KiriKiri2 import KiriKiri2Parser
+        _parser_registry.register(KiriKiri2Parser())
+    except Exception:
+        pass  # Graceful degradation
+
 
 def detect_parser(file_path: Path) -> Optional["ParserScript"]:
     """Convenience: auto-detect parser for *file_path*."""

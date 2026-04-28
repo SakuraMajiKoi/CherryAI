@@ -203,6 +203,7 @@ def restore_custom_placeholders_batch(
 	"""
 	result = list(lines)
 	pending_by_token: Dict[str, List[str]] = {}
+	residuals_by_token: Dict[str, List[str]] = {}
 	local_restored = 0
 	global_restored = 0
 	preexisting_consumed = 0
@@ -235,7 +236,10 @@ def restore_custom_placeholders_batch(
 			local_restored += count
 
 			if values:
-				pending_by_token.setdefault(token, []).extend(values)
+				if bool(rec.get("recover_everywhere", False)):
+					pending_by_token.setdefault(token, []).extend(values)
+				else:
+					residuals_by_token.setdefault(token, []).extend(values)
 
 		result[idx] = new_line
 
@@ -251,9 +255,13 @@ def restore_custom_placeholders_batch(
 				global_restored += count
 			result[idx] = new_line
 
+	for token, values in pending_by_token.items():
+		if values:
+			residuals_by_token.setdefault(token, []).extend(list(values))
+
 	residuals = {
 		token: list(values)
-		for token, values in pending_by_token.items()
+		for token, values in residuals_by_token.items()
 		if values
 	}
 	stats = {

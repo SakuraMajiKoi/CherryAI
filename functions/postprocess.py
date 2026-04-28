@@ -149,6 +149,204 @@ TRANSLATED_PLACEHOLDER_PATTERNS = [
 # Known placeholder types (for recovery hinting)
 KNOWN_PLACEHOLDERS = {"PROT", "NAME", "CODE", "VAR", "ITEM", "SKILL", "NUM"}
 
+CUSTOM_PLACEHOLDER_TAG_PREFIX = "custom_placeholder"
+GENERIC_PLACEHOLDER_TAG_PREFIX = "generic_placeholder"
+
+
+def _placeholder_tag_index(tag: str, prefix: str) -> Optional[int]:
+    """Return the numeric suffix for a placeholder tag prefix."""
+    clean_tag = str(tag).strip()
+    if not clean_tag.startswith(prefix):
+        return None
+    suffix = clean_tag[len(prefix):]
+    if not suffix.isdigit():
+        return None
+    return int(suffix)
+
+
+def _ordered_placeholder_tags(
+    line_tags: List[str] | Tuple[str, ...] | Set[str],
+    prefix: str,
+) -> List[str]:
+    """Return placeholder tags with *prefix* sorted by their numeric suffix."""
+    tagged: List[Tuple[int, str]] = []
+    for raw_tag in line_tags:
+        tag = str(raw_tag).strip()
+        tag_idx = _placeholder_tag_index(tag, prefix)
+        if tag_idx is None:
+            continue
+        tagged.append((tag_idx, tag))
+    tagged.sort(key=lambda item: item[0])
+    return [tag for _idx, tag in tagged]
+
+
+def _compile_protect_pattern(pattern_entry: Any) -> Optional[re.Pattern[str]]:
+    """Compile one generic placeholder pattern entry."""
+    if isinstance(pattern_entry, dict):
+        pattern_str = str(pattern_entry.get("pattern", ""))
+        is_regex = bool(pattern_entry.get("is_regex", True))
+    else:
+        pattern_str = str(pattern_entry) if pattern_entry is not None else ""
+        is_regex = True
+
+    if not pattern_str.strip():
+        return None
+
+    try:
+        if is_regex:
+            return re.compile(pattern_str)
+        return re.compile(re.escape(pattern_str))
+    except re.error:
+        return None
+
+
+def _collect_protect_matches(
+    text: str,
+    patterns: List[Dict[str, Any]],
+) -> List[Tuple[int, int, str]]:
+    """Collect non-overlapping generic placeholder captures left-to-right."""
+    all_matches: List[Tuple[int, int, str]] = []
+    for pattern_entry in patterns:
+        compiled = _compile_protect_pattern(pattern_entry)
+        if compiled is None:
+            continue
+        for match in compiled.finditer(text):
+            value = match.group(0)
+            if value:
+                all_matches.append((match.start(), match.end(), value))
+
+    if not all_matches:
+        return []
+
+    all_matches.sort(key=lambda item: item[0])
+    filtered: List[Tuple[int, int, str]] = []
+    last_end = 0
+    for start, end, value in all_matches:
+        if start < last_end:
+            continue
+        filtered.append((start, end, value))
+        last_end = end
+    return filtered
+
+
+def capture_generic_placeholder_values(
+    text: str,
+    line_tags: List[str] | Tuple[str, ...] | Set[str],
+    placeholder_lookup: Dict[str, Dict[str, Any]],
+) -> List[str]:
+    """Recompute generic placeholder captures for one line from tags + lookup."""
+    patterns = [
+        placeholder_lookup[tag]
+        for tag in _ordered_placeholder_tags(line_tags, GENERIC_PLACEHOLDER_TAG_PREFIX)
+        if isinstance(placeholder_lookup.get(tag), dict)
+    ]
+    return [value for _start, _end, value in _collect_protect_matches(str(text), patterns)]
+
+
+def capture_custom_placeholder_records(
+    text: str,
+    line_tags: List[str] | Tuple[str, ...] | Set[str],
+    placeholder_lookup: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Recompute custom placeholder records for one line from tags + lookup."""
+    remaining_text = str(text)
+    records: List[Dict[str, Any]] = []
+
+    for tag in _ordered_placeholder_tags(line_tags, CUSTOM_PLACEHOLDER_TAG_PREFIX):
+        lookup_entry = placeholder_lookup.get(tag)
+        if not isinstance(lookup_entry, dict):
+            continue
+        token = str(lookup_entry.get("token", "__CUST__")).strip() or "__CUST__"
+        remaining_text, captured = _capture_custom_placeholder_rule(
+            remaining_text,
+            str(lookup_entry.get("pattern", "")),
+            token,
+            bool(lookup_entry.get("is_regex", True)),
+        )
+        if not captured:
+            continue
+
+        record: Dict[str, Any] = {
+            "tag": tag,
+            "token": token,
+            "values": captured,
+        }
+        if lookup_entry.get("recover_everywhere", False):
+            record["recover_everywhere"] = True
+        records.append(record)
+
+    return records
+
+
+def _capture_custom_placeholder_rule(
+    text: str,
+    pattern: str,
+    token: str,
+    is_regex: bool,
+) -> Tuple[str, List[str]]:
+    """Apply one placeholder rule and return rewritten text plus captured values."""
+    if not pattern:
+        return text, []
+
+    result = text
+    captured: List[str] = []
+    try:
+        if is_regex:
+            compiled = re.compile(pattern)
+            matches = list(compiled.finditer(result))
+            for match in reversed(matches):
+                value = match.group(0)
+                if not value:
+                    continue
+                captured.insert(0, value)
+                result = result[:match.start()] + token + result[match.end():]
+        else:
+            while pattern in result:
+                pos = result.find(pattern)
+                if pos < 0:
+                    break
+                captured.append(pattern)
+                result = result[:pos] + token + result[pos + len(pattern):]
+    except re.error:
+        return text, []
+
+    return result, captured
+
+
+def capture_custom_placeholder_values(
+    text: str,
+    rules: List[Dict[str, Any]],
+) -> List[str]:
+    """Recompute custom placeholder captures from the original line text."""
+    result = str(text)
+    records = capture_custom_placeholder_records(
+        result,
+        [f"{CUSTOM_PLACEHOLDER_TAG_PREFIX}{idx}" for idx in range(1, len(rules) + 1)],
+        {
+            f"{CUSTOM_PLACEHOLDER_TAG_PREFIX}{idx}": {
+                "pattern": rule.get("pattern", ""),
+                "token": rule.get("token", "__CUST__"),
+                "is_regex": rule.get("is_regex", True),
+            }
+            for idx, rule in enumerate(rules, start=1)
+        },
+    )
+    captured: List[str] = []
+    for record in records:
+        captured.extend([str(value) for value in record.get("values", [])])
+    return captured
+
+
+def capture_ellipsis_counts(text: str) -> List[int]:
+    """Recompute ellipsis compression counts from the original line text."""
+    try:
+        from CherryAI.modi.standard_mode import compress_ellipsis_line
+
+        _compressed, counts = compress_ellipsis_line(str(text))
+        return counts
+    except Exception:
+        return []
+
 
 # ============================================================================
 # Bracket/Quote Definitions

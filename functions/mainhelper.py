@@ -60,6 +60,8 @@ class LineEntry:
 
     idx: int  # Line index (0-based)
     orig: str  # Original text (always present)
+    ln: Optional[int] = None  # 1-based physical source line number
+    f: Optional[int] = None  # Optional shared-line field discriminator
 
     # Preprocessing (optional, sparse)
     prepro: Optional[str] = None  # Pre-processed text
@@ -363,6 +365,10 @@ class LineEntry:
         from .manifest_manager import canonicalize_line_dict, merge_line_tags
 
         result: Dict[str, Any] = {"idx": self.idx}
+        if self.ln is not None:
+            result["ln"] = self.ln
+        if self.f is not None:
+            result["f"] = self.f
 
         tags_value: Any = None
         if self.tags is not None:
@@ -447,6 +453,8 @@ class LineEntry:
         entry = LineEntry(
             idx=data.get("idx", 0),
             orig=data.get("orig", ""),
+            ln=data.get("ln", data.get("line")),
+            f=data.get("f", data.get("field")),
             prepro=data.get("prepro"),
             prepro_ops=data.get("prepro_ops"),
             edited_prepro=data.get("edited_prepro"),

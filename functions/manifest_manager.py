@@ -22,10 +22,12 @@ No manual save buttons required.
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import logging
 import os
+import tempfile
 import threading
 import time
 from copy import deepcopy
@@ -135,6 +137,295 @@ def _should_keep_line_value(value: Any) -> bool:
     return True
 
 
+def _coerce_int(value: Any, default: int = 0) -> int:
+    """Return *value* as ``int`` when possible, else *default*."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_positive_int(value: Any) -> Optional[int]:
+    """Return *value* as a positive integer, or ``None`` when invalid."""
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return None
+    return result if result >= 1 else None
+
+
+def _default_line_number(idx: int) -> int:
+    """Return the fallback 1-based line number for a global line index."""
+    return max(1, idx + 1)
+
+
+def _extract_line_number(line_data: Dict[str, Any]) -> Optional[int]:
+    """Read ``ln`` or legacy ``line`` from a raw line dict."""
+    ln_value = _coerce_positive_int(line_data.get("ln"))
+    if ln_value is not None:
+        return ln_value
+    return _coerce_positive_int(line_data.get("line"))
+
+
+def _extract_field_discriminator(line_data: Dict[str, Any]) -> Optional[int]:
+    """Read optional ``f`` or legacy ``field`` from a raw line dict."""
+    field_value = _coerce_positive_int(line_data.get("f"))
+    if field_value is not None:
+        return field_value
+    return _coerce_positive_int(line_data.get("field"))
+
+
+def _backfill_line_mapping(
+    lines: List[Dict[str, Any]],
+    filedir: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    """Populate missing ``ln``/``f`` data from current line and file metadata."""
+    normalized = [deepcopy(line) for line in lines]
+    if not normalized:
+        return normalized
+
+    lines_by_idx = {
+        _coerce_int(line.get("idx"), 0): line for line in normalized
+    }
+    covered_indices: set[int] = set()
+
+    for raw_entry in sorted(
+        filedir or [],
+        key=lambda entry: _coerce_int(entry.get("first_idx"), 0),
+    ):
+        first_idx = _coerce_int(raw_entry.get("first_idx"), 0)
+        last_idx = _coerce_int(raw_entry.get("last_idx"), first_idx - 1)
+        matching = [
+            lines_by_idx[idx]
+            for idx in sorted(lines_by_idx)
+            if first_idx <= idx <= last_idx
+        ]
+        for local_line_number, line in enumerate(matching, start=1):
+            explicit_line_number = _extract_line_number(line)
+            if explicit_line_number is None:
+                line["ln"] = local_line_number
+            else:
+                line["ln"] = explicit_line_number
+            field_value = _extract_field_discriminator(line)
+            if field_value is not None:
+                line["f"] = field_value
+            line.pop("line", None)
+            line.pop("field", None)
+            covered_indices.add(_coerce_int(line.get("idx"), 0))
+
+    for idx, line in lines_by_idx.items():
+        if idx in covered_indices:
+            continue
+        explicit_line_number = _extract_line_number(line)
+        if explicit_line_number is None:
+            line["ln"] = _default_line_number(idx)
+        else:
+            line["ln"] = explicit_line_number
+        field_value = _extract_field_discriminator(line)
+        if field_value is not None:
+            line["f"] = field_value
+        line.pop("line", None)
+        line.pop("field", None)
+
+    return normalized
+
+
+def _mapping_search_tokens(text: str) -> List[str]:
+    """Return ordered candidate substrings for source-line matching.
+
+    The first token is always the full extracted text. For speaker-prefixed
+    dialogue like ``Speaker: text``, the dialogue payload is also added so
+    parser outputs can still align with raw script lines that only contain the
+    spoken text.
+    """
+    clean_text = str(text).replace("\r\n", "\n").replace("\r", "\n")
+    tokens: List[str] = []
+    for candidate in (clean_text, clean_text.split(": ", 1)[1] if ": " in clean_text else ""):
+        if candidate and candidate not in tokens:
+            tokens.append(candidate)
+    return tokens
+
+
+def _source_window_matches(lines: List[str], start_idx: int, token: str) -> bool:
+    """Return whether *token* appears in a source line window starting at *start_idx*."""
+    if start_idx < 0 or start_idx >= len(lines):
+        return False
+
+    normalized_token = token.replace("\r\n", "\n").replace("\r", "\n")
+    if not normalized_token:
+        return False
+
+    window = lines[start_idx]
+    if normalized_token in window:
+        return True
+
+    if "\n" not in normalized_token:
+        return False
+
+    max_extra_lines = min(len(normalized_token.split("\n")) - 1, len(lines) - start_idx - 1)
+    for extra_lines in range(1, max_extra_lines + 1):
+        window = "\n".join(lines[start_idx:start_idx + extra_lines + 1])
+        if normalized_token in window:
+            return True
+    return False
+
+
+def capture_source_line_mappings(
+    source_text: str,
+    extracted_lines: List[str],
+) -> List[Dict[str, int]]:
+    """Map extracted lines back to 1-based source line numbers and optional fields.
+
+    The mapping is sequential and local: each extracted item is assigned to the
+    earliest source line at or after the previous match whose raw text contains
+    the extracted payload (or, for speaker-prefixed dialogue, the dialogue
+    portion). When multiple extracted items map to the same physical line, all
+    of them receive an ``f`` discriminator starting at 1.
+    """
+    physical_lines = source_text.splitlines()
+    if not physical_lines:
+        return [{"ln": max(1, i + 1)} for i, _ in enumerate(extracted_lines)]
+
+    matched_line_numbers: List[int] = []
+    search_start = 0
+    last_match_idx = 0
+
+    for extracted in extracted_lines:
+        match_idx: Optional[int] = None
+        tokens = _mapping_search_tokens(extracted)
+        for candidate_idx in range(search_start, len(physical_lines)):
+            if any(_source_window_matches(physical_lines, candidate_idx, token) for token in tokens):
+                match_idx = candidate_idx
+                break
+
+        if match_idx is None:
+            match_idx = min(last_match_idx, len(physical_lines) - 1)
+
+        matched_line_numbers.append(match_idx + 1)
+        last_match_idx = match_idx
+        search_start = match_idx
+
+    line_counts: Dict[int, int] = {}
+    for line_number in matched_line_numbers:
+        line_counts[line_number] = line_counts.get(line_number, 0) + 1
+
+    line_offsets: Dict[int, int] = {}
+    mappings: List[Dict[str, int]] = []
+    for line_number in matched_line_numbers:
+        mapping: Dict[str, int] = {"ln": line_number}
+        if line_counts.get(line_number, 0) > 1:
+            next_offset = line_offsets.get(line_number, 0) + 1
+            line_offsets[line_number] = next_offset
+            mapping["f"] = next_offset
+        mappings.append(mapping)
+
+    return mappings
+
+
+def build_line_locator_index(
+    lines: List[Dict[str, Any]],
+    *,
+    first_idx: Optional[int] = None,
+    last_idx: Optional[int] = None,
+) -> Dict[tuple[int, Optional[int]], Dict[str, Any]]:
+    """Index manifest rows by ``(ln, f)`` for a single file slice."""
+    result: Dict[tuple[int, Optional[int]], Dict[str, Any]] = {}
+    for line in lines:
+        idx = _coerce_int(line.get("idx"), 0)
+        if first_idx is not None and idx < first_idx:
+            continue
+        if last_idx is not None and idx > last_idx:
+            continue
+        locator = (
+            _coerce_positive_int(line.get("ln")) or _default_line_number(idx),
+            _coerce_positive_int(line.get("f")),
+        )
+        result[locator] = line
+    return result
+
+
+def match_manifest_lines_to_source(
+    source_text: str,
+    extracted_lines: List[str],
+    manifest_lines: List[Dict[str, Any]],
+    *,
+    first_idx: Optional[int] = None,
+    last_idx: Optional[int] = None,
+) -> List[Optional[Dict[str, Any]]]:
+    """Match extracted source lines to manifest rows using captured ``ln``/``f`` locators."""
+    locator_index = build_line_locator_index(
+        manifest_lines,
+        first_idx=first_idx,
+        last_idx=last_idx,
+    )
+    source_mappings = capture_source_line_mappings(source_text, extracted_lines)
+    matched_rows: List[Optional[Dict[str, Any]]] = []
+    for mapping in source_mappings:
+        locator = (mapping["ln"], mapping.get("f"))
+        matched_rows.append(locator_index.get(locator))
+    return matched_rows
+
+
+def refresh_file_line_locators(
+    lines: List[Dict[str, Any]],
+    entry: "FileDirEntry",
+    source_text: str,
+    extracted_lines: List[str],
+) -> bool:
+    """Refresh ``ln``/``f`` locators for one file slice in place.
+
+    This is used when the staged source view for a file changes without a full
+    Step 0 rebuild. The helper reapplies CherryAI's shared source-line mapping
+    to the existing manifest rows for the file's ``first_idx:last_idx`` slice.
+
+    Returns:
+        True when at least one line locator changed.
+    """
+    slice_lines = [
+        line
+        for line in lines
+        if entry.first_idx <= _coerce_int(line.get("idx"), -1) <= entry.last_idx
+    ]
+    if not slice_lines or not extracted_lines:
+        return False
+
+    mappings = capture_source_line_mappings(source_text, extracted_lines)
+    if len(slice_lines) != len(mappings):
+        logger.warning(
+            "Locator refresh count mismatch for %s: manifest=%d, extracted=%d",
+            entry.rel_path,
+            len(slice_lines),
+            len(mappings),
+        )
+
+    changed = False
+    for line_data, mapping in zip(slice_lines, mappings):
+        current_ln = _coerce_positive_int(line_data.get("ln")) or _default_line_number(
+            _coerce_int(line_data.get("idx"), 0)
+        )
+        current_f = _coerce_positive_int(line_data.get("f"))
+        next_ln = mapping["ln"]
+        next_f = mapping.get("f")
+
+        if current_ln == next_ln and current_f == next_f:
+            continue
+
+        line_data["ln"] = next_ln
+        if next_f is None:
+            line_data.pop("f", None)
+        else:
+            line_data["f"] = next_f
+        line_data.pop("line", None)
+        line_data.pop("field", None)
+
+        canonical = canonicalize_line_dict(line_data)
+        line_data.clear()
+        line_data.update(canonical)
+        changed = True
+
+    return changed
+
+
 def canonicalize_line_dict(line_data: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize a raw line dict into canonical CherryAI manifest order."""
     source = deepcopy(line_data)
@@ -144,7 +435,13 @@ def canonicalize_line_dict(line_data: Dict[str, Any]) -> Dict[str, Any]:
         source.get("context_marker"),
     )
 
-    result: Dict[str, Any] = {"idx": source.get("idx", 0)}
+    idx = _coerce_int(source.get("idx"), 0)
+    line_number = _extract_line_number(source)
+    field_discriminator = _extract_field_discriminator(source)
+
+    result: Dict[str, Any] = {"idx": idx, "ln": line_number or _default_line_number(idx)}
+    if field_discriminator is not None:
+        result["f"] = field_discriminator
     if merged_tags:
         result["tags"] = merged_tags
     result["orig"] = source.get("orig", "")
@@ -180,6 +477,10 @@ def canonicalize_line_dict(line_data: Dict[str, Any]) -> Dict[str, Any]:
 
     handled_keys = {
         "idx",
+        "ln",
+        "line",
+        "f",
+        "field",
         "tags",
         "tag",
         "context_marker",
@@ -209,11 +510,15 @@ def canonicalize_line_dict(line_data: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-def canonicalize_lines(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def canonicalize_lines(
+    lines: List[Dict[str, Any]],
+    filedir: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
     """Normalize and sort line dictionaries by idx."""
+    normalized = _backfill_line_mapping(lines, filedir)
     return [
         canonicalize_line_dict(line)
-        for line in sorted(lines, key=lambda item: int(item.get("idx", 0)))
+        for line in sorted(normalized, key=lambda item: _coerce_int(item.get("idx"), 0))
     ]
 
 
@@ -232,6 +537,171 @@ class _SafeManifestEncoder(json.JSONEncoder):
         if isinstance(o, Path):
             return str(o)
         return super().default(o)
+
+
+def _manifest_json_default(value: Any) -> Any:
+    """Return a JSON-serializable representation for manifest values."""
+    if hasattr(value, "to_dict"):
+        return value.to_dict()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, set):
+        return list(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _to_manifest_jsonable(value: Any) -> Any:
+    """Recursively normalize manifest values into JSON-safe primitives."""
+    try:
+        normalized = _manifest_json_default(value)
+    except TypeError:
+        normalized = value
+
+    if isinstance(normalized, dict):
+        return {
+            str(key): _to_manifest_jsonable(item)
+            for key, item in normalized.items()
+        }
+    if isinstance(normalized, list):
+        return [_to_manifest_jsonable(item) for item in normalized]
+    return normalized
+
+
+def _format_manifest_compact_json(value: Any) -> str:
+    """Return a compact single-line JSON fragment for *value*."""
+    return json.dumps(
+        _to_manifest_jsonable(value),
+        ensure_ascii=False,
+        separators=(", ", ": "),
+    )
+
+
+def _format_manifest_compact_object(value: Dict[str, Any]) -> str:
+    """Return a spaced one-line JSON object for compact manifest arrays."""
+    normalized = _to_manifest_jsonable(value)
+    if not normalized:
+        return "{}"
+    parts = [
+        f'{json.dumps(key, ensure_ascii=False)}: {_format_manifest_compact_json(item)}'
+        for key, item in normalized.items()
+    ]
+    return "{ " + ", ".join(parts) + " }"
+
+
+def _format_manifest_line_object(line_data: Dict[str, Any], indent: int) -> str:
+    """Format a manifest line entry with compact locators and one field per line."""
+    locator_keys = [key for key in ("idx", "ln", "f", "tags") if key in line_data]
+    payload_keys = [key for key in line_data if key not in locator_keys]
+
+    first_parts = [
+        f'{json.dumps(key, ensure_ascii=False)}: {_format_manifest_compact_json(line_data[key])}'
+        for key in locator_keys
+    ]
+    if payload_keys:
+        first_line = "{ " + ", ".join(first_parts) + ","
+    elif first_parts:
+        first_line = "{ " + ", ".join(first_parts) + " }"
+    else:
+        first_line = "{}"
+
+    if not payload_keys:
+        return first_line
+
+    lines = [(" " * indent) + first_line]
+    payload_indent = " " * (indent + 2)
+    for index, key in enumerate(payload_keys):
+        value_text = _format_manifest_compact_json(line_data[key])
+        suffix = "," if index < len(payload_keys) - 1 else " }"
+        lines.append(
+            f"{payload_indent}{json.dumps(key, ensure_ascii=False)}: {value_text}{suffix}"
+        )
+    return "\n".join(lines)
+
+
+def _format_manifest_array(values: List[Any], indent: int, path: tuple[str, ...]) -> str:
+    """Format a manifest array with targeted compact rules."""
+    if not values:
+        return "[]"
+
+    item_indent = indent + 2
+    closing_indent = " " * indent
+    special_compact_paths = {
+        ("filedir",),
+        ("code_patterns",),
+        ("glossary", "project_entries"),
+    }
+
+    rendered_items: List[str] = []
+    if path == ("lines",):
+        rendered_items = [
+            _format_manifest_line_object(item, item_indent)
+            if isinstance(item, dict)
+            else (" " * item_indent) + _format_manifest_compact_json(item)
+            for item in values
+        ]
+    elif path in special_compact_paths:
+        rendered_items = [
+            (" " * item_indent)
+            + (
+                _format_manifest_compact_object(item)
+                if isinstance(item, dict)
+                else _format_manifest_compact_json(item)
+            )
+            for item in values
+        ]
+    else:
+        rendered_items = [
+            _indent_multiline(_format_manifest_value(item, item_indent, path + ("[]",)), item_indent)
+            for item in values
+        ]
+
+    return "[\n" + ",\n".join(rendered_items) + "\n" + closing_indent + "]"
+
+
+def _format_manifest_dict(data: Dict[str, Any], indent: int, path: tuple[str, ...]) -> str:
+    """Format a manifest dict with stable insertion order."""
+    if not data:
+        return "{}"
+
+    indent_text = " " * indent
+    child_indent = indent + 2
+    rendered_items: List[str] = []
+    for key, value in data.items():
+        value_text = _format_manifest_value(value, child_indent, path + (str(key),))
+        value_lines = value_text.splitlines() or [value_text]
+        first_line = (
+            f'{" " * child_indent}{json.dumps(str(key), ensure_ascii=False)}: {value_lines[0]}'
+        )
+        if len(value_lines) == 1:
+            rendered_items.append(first_line)
+            continue
+        remaining = value_lines[1:]
+        rendered_items.append("\n".join([first_line, *remaining]))
+
+    return "{\n" + ",\n".join(rendered_items) + "\n" + indent_text + "}"
+
+
+def _format_manifest_value(value: Any, indent: int, path: tuple[str, ...]) -> str:
+    """Format a manifest value using the compact writer rules."""
+    normalized = _to_manifest_jsonable(value)
+    if isinstance(normalized, dict):
+        return _format_manifest_dict(normalized, indent, path)
+    if isinstance(normalized, list):
+        return _format_manifest_array(normalized, indent, path)
+    return _format_manifest_compact_json(normalized)
+
+
+def _indent_multiline(text: str, indent: int) -> str:
+    """Indent each line in *text* by *indent* spaces."""
+    prefix = " " * indent
+    return "\n".join(prefix + line if line else prefix for line in text.splitlines())
+
+
+def format_manifest_json(data: Dict[str, Any]) -> str:
+    """Return the manifest JSON text using CherryAI's compact writer rules."""
+    return _format_manifest_dict(_to_manifest_jsonable(data), 0, ()) + "\n"
 
 
 # Constants
@@ -749,6 +1219,9 @@ class ManifestManager:
             # ancestor.  NOT a resolvable path.  File resolution uses the
             # project's Original/ directory instead.
             "source_root": "",
+            # mode: internal resolves via staged Original/, external resolves
+            # via absolute source_root.
+            "mode": "internal",
             
             # === v3.1 File Directory (TASK 35.1) ===
             # Maps line index ranges to source files for input/output decoupling
@@ -875,6 +1348,9 @@ class ManifestManager:
                 "ExportProcessingLogs": defaults.get("output_export_processing_logs", False),
                 "ExportGlossaryEntries": defaults.get("output_export_glossary_entries", False),
             },
+
+            # === Archive Metadata ===
+            "ArchiveSettings": {},
 
             # === API Log ===
             "log": "",
@@ -1086,21 +1562,42 @@ class ManifestManager:
         """Set the source root folder name."""
         self._manifest_data["source_root"] = value
         self._mark_dirty()
+
+    @property
+    def source_mode(self) -> str:
+        """Return how ``source_root`` should be interpreted."""
+        raw_mode = str(self._manifest_data.get("mode", "internal")).strip().lower()
+        if raw_mode == "external":
+            return "external"
+        return "internal"
+
+    @source_mode.setter
+    def source_mode(self, value: str) -> None:
+        """Set how ``source_root`` should be interpreted."""
+        clean_mode = str(value).strip().lower()
+        self._manifest_data["mode"] = "external" if clean_mode == "external" else "internal"
+        self._mark_dirty()
     
     def resolve_file_path(self, rel_path: str) -> Path:
         """Resolve a relative path to an absolute path.
 
-        Uses the project's ``Original/`` directory as the base — this is
-        where source files are copied on first load.  ``source_root`` is
-        a display-only folder name and is **not** used for resolution.
+        Internal projects resolve via staged ``Original/``. External projects
+        resolve via the absolute ``source_root``.
 
         Args:
             rel_path: Path relative to the original files directory
                 (e.g. ``"battle_on.json"`` or ``"event/arena/arena_01.json"``).
 
         Returns:
-            Absolute Path inside ``<project>/Original/``.
+            Absolute source path for the requested relative path.
         """
+        archive_name = self.get_archive_name_for_rel_path(rel_path)
+        if archive_name:
+            return self.get_package_original_dir() / rel_path
+        if self.source_mode == "external":
+            source_root = str(self.source_root).strip()
+            if source_root:
+                return Path(source_root) / rel_path
         return self.get_original_dir() / rel_path
     
     def make_relative_path(self, abs_path: Path) -> str:
@@ -1281,10 +1778,11 @@ class ManifestManager:
                 content = file_path.read_text(encoding="utf-8")
                 file_lines = content.split("\n")
                 
-                for line_text in file_lines:
+                for line_number, line_text in enumerate(file_lines, start=1):
                     # TASK 38: Compact line format - only idx and orig
                     lines.append({
                         "idx": idx,
+                        "ln": line_number,
                         "orig": line_text,
                     })
                     idx += 1
@@ -1336,7 +1834,10 @@ class ManifestManager:
             
             # Migrate older versions if needed
             data = self._migrate_manifest(data)
-            data["lines"] = canonicalize_lines(data.get("lines", []))
+            data["lines"] = canonicalize_lines(
+                data.get("lines", []),
+                data.get("filedir", []),
+            )
             
             self._manifest_path = manifest_path
             self._manifest_data = data
@@ -1436,6 +1937,12 @@ class ManifestManager:
             
             if "current_step" not in data:
                 data["current_step"] = 0
+
+            if "mode" not in data:
+                data["mode"] = "internal"
+
+            if "ArchiveSettings" not in data:
+                data["ArchiveSettings"] = {}
             
             # Migrate source files - handle both singular and plural
             if "source_files" not in data:
@@ -1492,6 +1999,8 @@ class ManifestManager:
             full_root = self._compute_full_root(source_files) if source_files else ""
             folder_name = Path(full_root).name if full_root else ""
             data["source_root"] = folder_name
+            data["mode"] = str(data.get("mode", "internal") or "internal").lower()
+            data.setdefault("ArchiveSettings", {})
             
             # Update filedir entries — remove source_hint, make rel_path relative
             filedir = data.get("filedir", [])
@@ -1518,6 +2027,11 @@ class ManifestManager:
             data.pop("source_files", None)
             
             data["version"] = MANIFEST_VERSION
+
+        if "mode" not in data:
+            data["mode"] = "internal"
+        elif str(data.get("mode", "internal")).strip().lower() != "external":
+            data["mode"] = "internal"
         
         # TASK 71: Strip redundant step_state arrays.
         # all_lines, processed_lines, postprocessed_lines duplicate lines[].orig /
@@ -1637,14 +2151,14 @@ class ManifestManager:
                 # Snapshot to prevent concurrent modification
                 data_snapshot = deepcopy(self._manifest_data)
                 data_snapshot["lines"] = canonicalize_lines(
-                    data_snapshot.get("lines", [])
+                    data_snapshot.get("lines", []),
+                    data_snapshot.get("filedir", []),
                 )
 
                 # Atomic write: temp file → rename
                 tmp_path = self._manifest_path.with_suffix(".tmp")
                 with open(tmp_path, "w", encoding="utf-8") as f:
-                    json.dump(data_snapshot, f, ensure_ascii=False, indent=2,
-                              cls=_SafeManifestEncoder)
+                    f.write(format_manifest_json(data_snapshot))
                     f.flush()
                     os.fsync(f.fileno())
 
@@ -1967,7 +2481,10 @@ class ManifestManager:
     
     def set_lines(self, lines: List[Dict[str, Any]]) -> None:
         """Set all lines."""
-        self._manifest_data["lines"] = canonicalize_lines(lines)
+        self._manifest_data["lines"] = canonicalize_lines(
+            lines,
+            self._manifest_data.get("filedir", []),
+        )
         self._mark_dirty()
     
     def get_line(self, idx: int) -> Optional[Dict[str, Any]]:
@@ -1987,6 +2504,13 @@ class ManifestManager:
         """
         return [ln.get("orig", "") for ln in self._manifest_data.get("lines", [])]
 
+    def _infer_line_number_for_idx(self, idx: int) -> int:
+        """Return the default 1-based per-file line number for *idx*."""
+        entry = self.get_filedir_entry_for_idx(idx)
+        if entry is not None:
+            return max(1, idx - entry.first_idx + 1)
+        return _default_line_number(idx)
+
     def set_line_field(
         self,
         idx: int,
@@ -2003,12 +2527,45 @@ class ManifestManager:
             if line.get("idx") == idx:
                 if field in line and line[field] == value:
                     return True  # No change
-                line[field] = value
+
+                if field in {"ln", "line"}:
+                    normalized = _coerce_positive_int(value)
+                    if normalized is None:
+                        line.pop("ln", None)
+                    else:
+                        line["ln"] = normalized
+                    line.pop("line", None)
+                elif field in {"f", "field"}:
+                    normalized = _coerce_positive_int(value)
+                    if normalized is None:
+                        line.pop("f", None)
+                    else:
+                        line["f"] = normalized
+                    line.pop("field", None)
+                else:
+                    line[field] = value
+
+                if "ln" not in line:
+                    line["ln"] = self._infer_line_number_for_idx(idx)
+
+                canonical = canonicalize_line_dict(line)
+                line.clear()
+                line.update(canonical)
                 self._mark_dirty()
                 return True
         # Line not found - create it
-        line = {"idx": idx, field: value}
-        lines.append(line)
+        line = {"idx": idx, "ln": self._infer_line_number_for_idx(idx)}
+        if field in {"ln", "line"}:
+            normalized = _coerce_positive_int(value)
+            if normalized is not None:
+                line["ln"] = normalized
+        elif field in {"f", "field"}:
+            normalized = _coerce_positive_int(value)
+            if normalized is not None:
+                line["f"] = normalized
+        else:
+            line[field] = value
+        lines.append(canonicalize_line_dict(line))
         self._mark_dirty()
         return True
 
@@ -2609,6 +3166,805 @@ class ManifestManager:
             if entry.first_idx <= idx <= entry.last_idx:
                 lines.append(line)
         return lines
+
+    def get_lines_for_locator_target(
+        self,
+        *,
+        rel_path: Optional[str] = None,
+        idx: Optional[int] = None,
+        ln: Optional[int] = None,
+        field: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return manifest rows matching a file-scoped ``idx``/``ln``/``f`` target."""
+        if rel_path is not None:
+            entry = self.get_filedir_entry_by_rel_path(rel_path)
+            if entry is None:
+                return []
+            candidate_lines = self.get_lines_for_filedir_entry(entry)
+        else:
+            candidate_lines = list(self._manifest_data.get("lines", []))
+
+        result: List[Dict[str, Any]] = []
+        for line in candidate_lines:
+            line_idx = _coerce_int(line.get("idx"), -1)
+            line_ln = _coerce_int(line.get("ln"), -1)
+            line_field = _coerce_int(line.get("f"), -1) if "f" in line else None
+            if idx is not None and line_idx != idx:
+                continue
+            if ln is not None and line_ln != ln:
+                continue
+            if field is not None and line_field != field:
+                continue
+            result.append(line)
+
+        result.sort(key=lambda line: _coerce_int(line.get("idx"), -1))
+        return result
+
+    def get_filedir_entry_by_rel_path(self, rel_path: str) -> Optional[FileDirEntry]:
+        """Return the filedir entry for *rel_path*, if present."""
+        normalized = str(rel_path).replace("\\", "/")
+        for entry_dict in self._manifest_data.get("filedir", []):
+            entry = FileDirEntry.from_dict(entry_dict)
+            if entry.rel_path.replace("\\", "/") == normalized:
+                return entry
+        return None
+
+    def get_editor_file_view(
+        self,
+        rel_path: str,
+        *,
+        current_text: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Return shared Full Files view data for one staged file.
+
+        The returned payload centralizes path resolution, locator-aware line
+        history assembly, and unified diff generation so GUI consumers do not
+        duplicate those responsibilities.
+        """
+        entry = self.get_filedir_entry_by_rel_path(rel_path)
+        if entry is None:
+            raise ValueError(f"Unknown editor file path: {rel_path}")
+
+        current_path = self._resolve_editor_current_file_path(entry)
+        original_path = self.get_original_file_path(entry)
+        encoding = entry.encoding or "utf-8"
+        staged_current_text = self._read_editor_text(current_path, encoding)
+        editor_state = self._get_editor_state_files(create=False).get(entry.rel_path, {})
+
+        resolved_current_text = current_text
+        if resolved_current_text is None:
+            resolved_current_text = staged_current_text
+        original_text = self._read_editor_text(original_path, encoding)
+        line_history, locator_metadata = self._build_editor_line_history(
+            entry,
+            resolved_current_text,
+            current_path,
+            fallback_text=original_text,
+            allow_path_extract=current_text is None,
+        )
+
+        diff_to_original = "\n".join(
+            difflib.unified_diff(
+                original_text.splitlines(),
+                resolved_current_text.splitlines(),
+                fromfile=f"Original/{entry.rel_path}",
+                tofile=f"Current/{entry.rel_path}",
+                lineterm="",
+            )
+        )
+        if current_text is None:
+            diff_to_patch = str(editor_state.get("diff_to_patch", ""))
+        else:
+            diff_to_patch = self._build_diff_between_versions(
+                staged_current_text,
+                resolved_current_text,
+                entry.rel_path,
+                tofile=f"Edited/{entry.rel_path}",
+            )
+
+        return {
+            "entry": entry,
+            "rel_path": entry.rel_path,
+            "current_path": current_path,
+            "original_path": original_path,
+            "current_text": resolved_current_text,
+            "original_text": original_text,
+            "diff_to_original": diff_to_original,
+            "diff_to_patch": diff_to_patch,
+            "line_history": line_history,
+            "locator_metadata": locator_metadata,
+            "history": editor_state.get("history", []),
+            "patch_translated_path": editor_state.get("patch_translated_path"),
+        }
+
+    def save_editor_patch(
+        self,
+        rel_path: str,
+        text: str,
+        *,
+        change_label: str = "",
+        max_history: int = 10,
+    ) -> Dict[str, Any]:
+        """Persist one Full Files save into the staged translated layout."""
+        entry = self.get_filedir_entry_by_rel_path(rel_path)
+        if entry is None:
+            raise ValueError(f"Unknown editor file path: {rel_path}")
+
+        return self._stage_editor_text_save(
+            entry,
+            text,
+            change_label=change_label,
+            source="full_files",
+            max_history=max_history,
+        )
+
+    def save_lines_only_changes(
+        self,
+        changes: Dict[int, Dict[str, Any]],
+        deleted_fields: Optional[Dict[int, set[str]]] = None,
+        *,
+        selected_indices: Optional[set[int]] = None,
+        change_label: str = "",
+        max_history: int = 10,
+    ) -> Dict[str, Any]:
+        """Persist sparse row edits and refresh staged translated artifacts."""
+        deleted_fields = deleted_fields or {}
+        if selected_indices is not None:
+            target_indices = {
+                idx for idx in set(selected_indices)
+                if idx in changes or idx in deleted_fields
+            }
+        else:
+            target_indices = set(changes) | set(deleted_fields)
+
+        if not target_indices:
+            return {
+                "fields_saved": 0,
+                "files_updated": 0,
+                "artifacts": [],
+                "saved_indices": [],
+            }
+
+        affected_rel_paths: set[str] = set()
+        fields_saved = 0
+        for idx in sorted(target_indices):
+            line_changes = dict(changes.get(idx, {}))
+            deleted = set(deleted_fields.get(idx, set()))
+
+            for field_name, value in line_changes.items():
+                if field_name in deleted:
+                    continue
+                self.set_line_field(idx, field_name, value)
+                fields_saved += 1
+
+            for field_name in deleted:
+                self.clear_line_field(idx, field_name)
+                fields_saved += 1
+
+            self._promote_saved_stage_for_idx(
+                idx,
+                changed_fields=set(line_changes),
+                deleted_fields=deleted,
+            )
+
+            entry = self.get_filedir_entry_for_idx(idx)
+            if entry is not None:
+                affected_rel_paths.add(entry.rel_path)
+
+        artifacts: List[Dict[str, Any]] = []
+        for rel_path in sorted(affected_rel_paths):
+            entry = self.get_filedir_entry_by_rel_path(rel_path)
+            if entry is None:
+                continue
+            rendered_path = self._render_manifest_entry_to_temp_path(entry)
+            try:
+                artifacts.append(
+                    self.stage_translated_output_file(
+                        entry,
+                        rendered_path,
+                        change_label=change_label,
+                        source="lines_only",
+                        max_history=max_history,
+                        synthesize_patch_if_missing=True,
+                    )
+                )
+            finally:
+                try:
+                    rendered_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.debug("Failed to remove temporary rendered file: %s", rendered_path)
+                parent = rendered_path.parent
+                try:
+                    parent.rmdir()
+                except OSError:
+                    pass
+
+        return {
+            "fields_saved": fields_saved,
+            "files_updated": len(artifacts),
+            "artifacts": artifacts,
+            "saved_indices": sorted(target_indices),
+        }
+
+    def refresh_line_locators_for_entry(
+        self,
+        entry: FileDirEntry,
+        source_text: str,
+        extracted_lines: List[str],
+    ) -> bool:
+        """Refresh ``ln``/``f`` locators for *entry* from a changed source view."""
+        changed = refresh_file_line_locators(
+            self._manifest_data.get("lines", []),
+            entry,
+            source_text,
+            extracted_lines,
+        )
+        if changed:
+            self._mark_dirty()
+        return changed
+
+    def _get_editor_state_files(self, *, create: bool = False) -> Dict[str, Any]:
+        """Return the top-level ``EditorState.files`` mapping."""
+        editor_state = self._manifest_data.get("EditorState")
+        if not isinstance(editor_state, dict):
+            if not create:
+                return {}
+            editor_state = {}
+            self._manifest_data["EditorState"] = editor_state
+
+        files = editor_state.get("files")
+        if not isinstance(files, dict):
+            if not create:
+                return {}
+            files = {}
+            editor_state["files"] = files
+        return files
+
+    def _stage_editor_text_save(
+        self,
+        entry: FileDirEntry,
+        text: str,
+        *,
+        change_label: str,
+        source: str,
+        max_history: int,
+    ) -> Dict[str, Any]:
+        """Stage editor text into the current translated layout and state."""
+        previous_view = self.get_editor_file_view(entry.rel_path)
+        encoding = entry.encoding or "utf-8"
+        new_bytes = text.encode(encoding)
+        staged = self._stage_translated_bytes(
+            entry,
+            new_bytes,
+            decoded_text=text,
+            change_label=change_label,
+            source=source,
+            max_history=max_history,
+            synthesize_patch_if_missing=False,
+            previous_view=previous_view,
+        )
+        staged["diff_to_patch"] = self._build_diff_between_versions(
+            previous_view["current_text"],
+            text,
+            entry.rel_path,
+            tofile=f"Translated/{entry.rel_path}",
+        )
+        return staged
+
+    def _build_diff_between_versions(
+        self,
+        old_text: str,
+        new_text: str,
+        rel_path: str,
+        *,
+        tofile: str,
+    ) -> str:
+        """Build a unified diff between two editor-visible text versions."""
+        return "\n".join(
+            difflib.unified_diff(
+                old_text.splitlines(),
+                new_text.splitlines(),
+                fromfile=f"Previous/{rel_path}",
+                tofile=tofile,
+                lineterm="",
+            )
+        )
+
+    def _promote_saved_stage_for_idx(
+        self,
+        idx: int,
+        *,
+        changed_fields: set[str],
+        deleted_fields: set[str],
+    ) -> None:
+        """Clear later pipeline fields so the saved stage becomes current."""
+        from CherryAI.functions.manifest_fields import PIPELINE_FIELDS
+
+        chosen_stage: Optional[str] = None
+        for field_name in PIPELINE_FIELDS:
+            if field_name in changed_fields and field_name not in deleted_fields:
+                chosen_stage = field_name
+                break
+
+        if not chosen_stage:
+            return
+
+        line_data = self.get_line(idx)
+        if line_data is None or not _should_keep_line_value(line_data.get(chosen_stage)):
+            return
+
+        for field_name in PIPELINE_FIELDS:
+            if field_name == chosen_stage:
+                break
+            if field_name in changed_fields:
+                continue
+            if _should_keep_line_value(line_data.get(field_name)):
+                self.clear_line_field(idx, field_name)
+
+    def _render_manifest_entry_to_temp_path(self, entry: FileDirEntry) -> Path:
+        """Render one manifest-backed file to a temporary path."""
+        temp_dir = Path(tempfile.mkdtemp(prefix="cherryai-stage-"))
+        render_path = temp_dir / Path(entry.rel_path).name
+        self.render_manifest_entry_to_path(entry, render_path)
+        return render_path
+
+    def render_manifest_entry_to_path(self, entry: FileDirEntry, output_path: Path) -> Dict[str, Any]:
+        """Render one manifest-backed file to *output_path*."""
+        from CherryAI.formats import get_handler, get_parser_registry
+        from CherryAI.formats.parser_base import ParserScript
+        from CherryAI.functions.manifest_fields import resolve_line_field
+        from CherryAI.functions.output import sanitize_output_text
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        parser = get_parser_registry().get(entry.format)
+        if parser is not None:
+            source_path = self.resolve_file_path(entry.rel_path)
+            if not source_path.exists():
+                raise FileNotFoundError(f"Source file not found: {source_path}")
+
+            source_text = self._read_editor_text(source_path, entry.encoding or "utf-8")
+            extracted_keys = parser.extract(source_path)
+            self.refresh_line_locators_for_entry(entry, source_text, extracted_keys)
+            manifest_lines = self._manifest_data.get("lines", [])
+            matched_manifest_lines = match_manifest_lines_to_source(
+                source_text,
+                extracted_keys,
+                manifest_lines,
+                first_idx=entry.first_idx,
+                last_idx=entry.last_idx,
+            )
+
+            inject_items: List[tuple[int, str, str]] = []
+            failures: List[str] = []
+            for offset, key in enumerate(extracted_keys):
+                clean_key = sanitize_output_text(key)
+                matched = matched_manifest_lines[offset] if offset < len(matched_manifest_lines) else None
+                if matched is None:
+                    manifest_idx = entry.first_idx + offset
+                    if entry.first_idx <= manifest_idx <= entry.last_idx and manifest_idx < len(manifest_lines):
+                        matched = manifest_lines[manifest_idx]
+                    else:
+                        failures.append(
+                            f"Position {offset}: no manifest row for extracted locator {clean_key!r}"
+                        )
+                        inject_items.append((offset, clean_key, clean_key))
+                        continue
+
+                orig = sanitize_output_text(matched.get("orig", ""))
+                if orig != clean_key:
+                    failures.append(
+                        f"Position {offset} (ln={matched.get('ln')}, f={matched.get('f')}): "
+                        f"orig mismatch — extracted {clean_key!r}, manifest {orig!r}"
+                    )
+                    inject_items.append((offset, clean_key, orig))
+                    continue
+
+                inject_items.append((
+                    offset,
+                    sanitize_output_text(resolve_line_field(matched)),
+                    orig,
+                ))
+
+            inject_sequence = list(reversed(inject_items))
+            if type(parser).inject_to is not ParserScript.inject_to:
+                inject_sequence = inject_items
+
+            translated_lines = [translated for _position, translated, _orig in inject_sequence]
+            orig_lines = [orig for _position, _translated, orig in inject_sequence]
+            inject_failures = parser.inject_to(
+                source_path,
+                output_path,
+                translated_lines,
+                orig_lines=orig_lines,
+            )
+            return {
+                "line_count": len(extracted_keys),
+                "failures": failures,
+                "inject_failures": inject_failures,
+            }
+
+        handler = get_handler(entry.format) or get_handler(output_path.suffix)
+        if handler is None:
+            raise ValueError(f"No output handler for format {entry.format!r}")
+
+        lines = [
+            sanitize_output_text(resolve_line_field(line_data))
+            for line_data in self.get_lines_for_filedir_entry(entry)
+        ]
+        original_lines = [
+            sanitize_output_text(line_data.get("orig", ""))
+            for line_data in self.get_lines_for_filedir_entry(entry)
+        ]
+        handler.inject(
+            output_path,
+            lines,
+            original_lines=original_lines,
+            encoding=entry.encoding or "utf-8",
+        )
+        return {
+            "line_count": len(lines),
+            "failures": [],
+            "inject_failures": [],
+        }
+
+    def _derive_entry_input_root(self, entry: FileDirEntry) -> Optional[Path]:
+        """Return the reconstructed source root for one filedir entry."""
+        rel_path = Path(entry.rel_path)
+        if not rel_path.parts:
+            return None
+
+        source_path = self.resolve_file_path(entry.rel_path)
+        root = source_path
+        for _part in rel_path.parts:
+            root = root.parent
+        return root
+
+    def run_parser_post_inject_hooks(
+        self,
+        project_root: Path,
+        *,
+        file_indices: Optional[List[int]] = None,
+    ) -> List[str]:
+        """Run optional project-level hooks for parsers touched by Step 9."""
+        from CherryAI.formats import get_parser_registry
+
+        filedir = self.get_filedir()
+        indices = file_indices if file_indices is not None else list(range(len(filedir)))
+        seen: set[str] = set()
+        ran: List[str] = []
+
+        for index in indices:
+            if index < 0 or index >= len(filedir):
+                continue
+
+            entry = filedir[index]
+            parser = get_parser_registry().get(entry.format)
+            if parser is None or parser.name in seen:
+                continue
+
+            hook = getattr(parser, "post_inject_project", None)
+            if not callable(hook):
+                continue
+
+            hook(Path(project_root), input_root=self._derive_entry_input_root(entry))
+            seen.add(parser.name)
+            ran.append(parser.name)
+
+        return ran
+
+    def stage_translated_output_file(
+        self,
+        entry: FileDirEntry,
+        output_path: Path,
+        *,
+        change_label: str = "",
+        source: str = "output",
+        max_history: int = 10,
+        synthesize_patch_if_missing: bool = False,
+    ) -> Dict[str, Any]:
+        """Mirror a written output file into CherryAI's staged translated layout."""
+        previous_view = self.get_editor_file_view(entry.rel_path)
+        decoded_text: Optional[str]
+        try:
+            decoded_text = output_path.read_text(encoding=entry.encoding or "utf-8")
+        except (OSError, UnicodeDecodeError):
+            decoded_text = None
+        return self._stage_translated_bytes(
+            entry,
+            output_path.read_bytes(),
+            decoded_text=decoded_text,
+            change_label=change_label,
+            source=source,
+            max_history=max_history,
+            synthesize_patch_if_missing=synthesize_patch_if_missing,
+            previous_view=previous_view,
+        )
+
+    def _stage_translated_bytes(
+        self,
+        entry: FileDirEntry,
+        new_bytes: bytes,
+        *,
+        decoded_text: Optional[str],
+        change_label: str,
+        source: str,
+        max_history: int,
+        synthesize_patch_if_missing: bool,
+        previous_view: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Persist translated bytes and update manifest-backed editor state."""
+        previous_view = previous_view or self.get_editor_file_view(entry.rel_path)
+        translated_path = self.get_translated_file_path(entry)
+
+        artifact_info: Dict[str, Any]
+        if translated_path.exists():
+            artifact_info = self.capture_reverse_patch_for_translated_bytes(entry, new_bytes)
+            target_path = self.ensure_translated_file_path(entry)
+            target_path.write_bytes(new_bytes)
+        elif synthesize_patch_if_missing:
+            target_path = self.ensure_patch_translated_file_path(entry)
+            target_path.write_bytes(new_bytes)
+            artifact_info = {
+                "decision": "add",
+                "artifact_path": target_path,
+                "translated_path": translated_path,
+            }
+        else:
+            target_path = self.ensure_translated_file_path(entry)
+            target_path.write_bytes(new_bytes)
+            artifact_info = {
+                "decision": "missing",
+                "artifact_path": None,
+                "translated_path": translated_path,
+            }
+
+        current_view = self.get_editor_file_view(entry.rel_path)
+        saved_at = datetime.utcnow().isoformat() + "Z"
+        patch_artifact = artifact_info.get("artifact_path")
+        patch_rel_path = self._relativize_project_path(patch_artifact)
+
+        history_entry: Optional[Dict[str, Any]] = None
+        if patch_artifact is not None:
+            history_entry = {
+                "saved_at": saved_at,
+                "source": source,
+                "patch_path": patch_rel_path,
+                "patch_decision": artifact_info.get("decision"),
+            }
+            if change_label:
+                history_entry["change_label"] = change_label
+
+        files_state = self._get_editor_state_files(create=True)
+        existing_record = files_state.get(entry.rel_path, {})
+        history = existing_record.get("history", [])
+        if not isinstance(history, list):
+            history = []
+        if history_entry is not None:
+            history.append(history_entry)
+            if max_history > 0:
+                history = history[-max_history:]
+
+        files_state[entry.rel_path] = {
+            "edited_text": current_view["current_text"],
+            "saved_at": saved_at,
+            "diff_to_original": current_view["diff_to_original"],
+            "diff_to_patch": self._build_diff_between_versions(
+                previous_view["current_text"],
+                current_view["current_text"],
+                entry.rel_path,
+                tofile=self._display_stage_path(target_path),
+            ),
+            "line_history": current_view["line_history"],
+            "locator_metadata": current_view["locator_metadata"],
+            "translated_path": self._relativize_project_path(
+                translated_path if translated_path.exists() else None
+            ),
+            "patch_original_path": self._current_patch_original_reference(entry),
+            "patch_translated_path": patch_rel_path,
+            "latest_saved_row_state": self._build_latest_saved_row_state(entry),
+            "history": history,
+        }
+        self._mark_dirty()
+
+        result = {
+            "rel_path": entry.rel_path,
+            "saved_at": saved_at,
+            "translated_path": target_path,
+            "patch_info": artifact_info,
+            "line_history": current_view["line_history"],
+            "locator_metadata": current_view["locator_metadata"],
+            "diff_to_patch": files_state[entry.rel_path]["diff_to_patch"],
+        }
+        if decoded_text is not None:
+            result["text"] = decoded_text
+        return result
+
+    def _display_stage_path(self, path: Path) -> str:
+        """Return a stable staged display path for diffs."""
+        try:
+            return str(path.relative_to(self.get_project_dir())).replace("\\", "/")
+        except ValueError:
+            return str(path).replace("\\", "/")
+
+    def _relativize_project_path(self, path: Optional[Path]) -> Optional[str]:
+        """Return *path* relative to the current project directory when possible."""
+        if path is None:
+            return None
+        try:
+            return str(path.relative_to(self.get_project_dir())).replace("\\", "/")
+        except ValueError:
+            return str(path).replace("\\", "/")
+
+    def _current_patch_original_reference(self, entry: FileDirEntry) -> Optional[str]:
+        """Return the current patch-original artifact path for *entry*, if any."""
+        artifact_path = self.get_patch_original_file_path(entry)
+        diff_path = artifact_path.with_name(artifact_path.name + ".patch")
+        if diff_path.exists():
+            return self._relativize_project_path(diff_path)
+        if artifact_path.exists():
+            return self._relativize_project_path(artifact_path)
+        return None
+
+    def _build_latest_saved_row_state(self, entry: FileDirEntry) -> Dict[str, Dict[str, Any]]:
+        """Build the latest effective row state for one file slice."""
+        from CherryAI.functions.manifest_fields import resolve_line_field_with_source
+
+        state: Dict[str, Dict[str, Any]] = {}
+        for line_data in self.get_lines_for_filedir_entry(entry):
+            idx = _coerce_int(line_data.get("idx"), -1)
+            if idx < 0:
+                continue
+            resolved_text, source_field = resolve_line_field_with_source(line_data)
+            row_state: Dict[str, Any] = {
+                "text": resolved_text,
+                "field": source_field,
+                "ln": _coerce_positive_int(line_data.get("ln")) or _default_line_number(idx),
+            }
+            field_value = _coerce_positive_int(line_data.get("f"))
+            if field_value is not None:
+                row_state["f"] = field_value
+            state[str(idx)] = row_state
+        return state
+
+    def _resolve_editor_current_file_path(self, entry: FileDirEntry) -> Path:
+        """Return the preferred current staged file path for Full Files."""
+        translated_path = self.get_translated_file_path(entry)
+        if translated_path.exists():
+            return translated_path
+
+        patch_path = self.get_patch_translated_file_path(entry)
+        if patch_path.exists():
+            return patch_path
+
+        return self.get_original_file_path(entry)
+
+    def _read_editor_text(self, path: Path, encoding: str) -> str:
+        """Read text for editor consumers, returning an empty string on failure."""
+        try:
+            return path.read_text(encoding=encoding, errors="ignore")
+        except OSError:
+            logger.debug("Editor source file unavailable: %s", path)
+            return ""
+
+    def _extract_editor_lines(
+        self,
+        entry: FileDirEntry,
+        path: Path,
+    ) -> List[str]:
+        """Extract current staged lines using shared parser/format handlers."""
+        try:
+            from CherryAI.formats import get_handler, get_parser_registry
+        except Exception:
+            return self._read_editor_text(path, entry.encoding or "utf-8").splitlines()
+
+        parser_registry = get_parser_registry()
+        parser = parser_registry.get(entry.format) or parser_registry.detect(path)
+        if parser is not None:
+            try:
+                return parser.extract(path)
+            except Exception as exc:
+                logger.debug("Editor parser extract failed for %s: %s", path, exc)
+
+        handler = get_handler(entry.format) or get_handler(path.suffix)
+        if handler is not None:
+            try:
+                return handler.extract(path, encoding=entry.encoding or "utf-8")
+            except TypeError:
+                try:
+                    return handler.extract(path)
+                except Exception as exc:
+                    logger.debug("Editor handler extract failed for %s: %s", path, exc)
+            except Exception as exc:
+                logger.debug("Editor handler extract failed for %s: %s", path, exc)
+
+        return self._read_editor_text(path, entry.encoding or "utf-8").splitlines()
+
+    def _build_editor_line_history(
+        self,
+        entry: FileDirEntry,
+        source_text: str,
+        source_path: Path,
+        *,
+        fallback_text: str = "",
+        allow_path_extract: bool = True,
+    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Build locator-aware line history rows for one editor file view."""
+        from CherryAI.functions.manifest_fields import resolve_line_field
+
+        manifest_lines = self.get_lines_for_filedir_entry(entry)
+        extracted_lines = []
+        if allow_path_extract:
+            extracted_lines = self._extract_editor_lines(entry, source_path)
+        if not extracted_lines:
+            extracted_lines = source_text.splitlines()
+        if not extracted_lines and fallback_text:
+            extracted_lines = fallback_text.splitlines()
+
+        mappings = capture_source_line_mappings(source_text, extracted_lines)
+        matched_rows = match_manifest_lines_to_source(
+            source_text,
+            extracted_lines,
+            self._manifest_data.get("lines", []),
+            first_idx=entry.first_idx,
+            last_idx=entry.last_idx,
+        )
+
+        current_by_idx: Dict[int, str] = {}
+        locator_metadata: List[Dict[str, Any]] = []
+        for extracted_line, mapping, matched_row in zip(extracted_lines, mappings, matched_rows):
+            metadata: Dict[str, Any] = {
+                "editor_ln": mapping["ln"],
+            }
+            if "f" in mapping:
+                metadata["editor_f"] = mapping["f"]
+            if matched_row is None:
+                metadata["matched"] = False
+                metadata["current"] = extracted_line
+                locator_metadata.append(metadata)
+                continue
+
+            idx = _coerce_int(matched_row.get("idx"), -1)
+            current_by_idx[idx] = extracted_line
+            metadata.update({
+                "matched": True,
+                "idx": idx,
+                "ln": matched_row.get("ln"),
+                "current": extracted_line,
+            })
+            if "f" in matched_row:
+                metadata["f"] = matched_row.get("f")
+            locator_metadata.append(metadata)
+
+        fallback_lines = source_text.splitlines()
+        line_history: List[Dict[str, Any]] = []
+        for offset, line_data in enumerate(manifest_lines):
+            idx = _coerce_int(line_data.get("idx"), offset)
+            current_line = current_by_idx.get(idx, "")
+            if not current_line and offset < len(fallback_lines):
+                current_line = fallback_lines[offset]
+
+            original_line = str(line_data.get("orig", ""))
+            translated_line = resolve_line_field(line_data)
+            status = "all"
+            if current_line != original_line and current_line == translated_line:
+                status = "translated"
+            elif current_line != original_line:
+                status = "edited"
+
+            history_row: Dict[str, Any] = {
+                "idx": idx,
+                "ln": line_data.get("ln"),
+                "status": status,
+                "original": original_line,
+                "translated": translated_line,
+                "current": current_line,
+            }
+            if "f" in line_data:
+                history_row["f"] = line_data.get("f")
+            line_history.append(history_row)
+
+        return line_history, locator_metadata
     
     def get_project_dir(self) -> Path:
         """Get the project directory path.
@@ -2627,18 +3983,73 @@ class ManifestManager:
         TASK 35.2: Returns Projects/{project_name}/Original/
         """
         return self.get_project_dir() / "Original"
+
+    def get_translated_dir(self) -> Path:
+        """Get the Translated/ directory path for latest translated files."""
+        return self.get_project_dir() / "Translated"
+
+    def get_patch_original_dir(self) -> Path:
+        """Get the Patch/Original/ directory path for staged source patches."""
+        return self.get_project_dir() / "Patch" / "Original"
+
+    def get_patch_translated_dir(self) -> Path:
+        """Get the Patch/Translated/ directory path for translated patch files."""
+        return self.get_project_dir() / "Patch" / "Translated"
+
+    def get_package_original_dir(self) -> Path:
+        """Get the Package/Original/ directory path for unpacked archives."""
+        return self.get_project_dir() / "Package" / "Original"
+
+    def get_package_translated_dir(self) -> Path:
+        """Get the Package/Translated/ directory path for rebuilt archives."""
+        return self.get_project_dir() / "Package" / "Translated"
+
+    def get_archive_settings(self) -> Dict[str, Dict[str, Any]]:
+        """Return manifest-backed archive settings keyed by archive filename."""
+        raw_settings = self._manifest_data.get("ArchiveSettings", {})
+        if not isinstance(raw_settings, dict):
+            return {}
+        return deepcopy(raw_settings)
+
+    def set_archive_settings(self, settings: Dict[str, Dict[str, Any]]) -> None:
+        """Replace the archive settings mapping."""
+        self._manifest_data["ArchiveSettings"] = deepcopy(settings)
+        self._mark_dirty()
+
+    def get_archive_setting(self, archive_name: str) -> Dict[str, Any]:
+        """Return stored settings for *archive_name*, or an empty dict."""
+        return deepcopy(self.get_archive_settings().get(str(archive_name), {}))
+
+    def set_archive_setting(self, archive_name: str, settings: Dict[str, Any]) -> None:
+        """Store manifest-backed settings for one archive."""
+        archive_settings = self.get_archive_settings()
+        archive_settings[str(archive_name)] = deepcopy(settings)
+        self._manifest_data["ArchiveSettings"] = archive_settings
+        self._mark_dirty()
+
+    def get_archive_name_for_rel_path(self, rel_path: str) -> str:
+        """Return the archive filename prefix for *rel_path*, if any."""
+        parts = Path(rel_path).parts
+        if not parts:
+            return ""
+
+        archive_name = parts[0]
+        if archive_name in self.get_archive_settings():
+            return archive_name
+        if archive_name.lower().endswith(".xp3"):
+            return archive_name
+        return ""
     
     def get_patch_dir(self) -> Path:
-        """Get the Patch/ directory path for output files.
-        
-        TASK 35.3: Returns Projects/{project_name}/Patch/
-        """
+        """Get the legacy Patch/ root for backward-compatible callers."""
         return self.get_project_dir() / "Patch"
     
     def copy_originals_to_project(
         self,
         source_paths: Optional[Dict[str, Path]] = None,
         force: bool = False,
+        move_files: bool = False,
+        progress_callback: Optional[Callable[[Dict[str, Any]], bool]] = None,
     ) -> Dict[str, str]:
         """Copy source files into the project's Original/ directory.
 
@@ -2649,12 +4060,14 @@ class ManifestManager:
             source_paths: Mapping of ``rel_path`` → absolute source ``Path``.
                 If *None*, falls back to looking in ``step_state.Input.data.files``.
             force: If True, overwrite existing copies.
+            move_files: If True, remove the original file after staging.
+            progress_callback: Optional callback receiving staging progress.
+                Return ``False`` to cancel the operation.
 
         Returns:
             Dict mapping original paths to copied paths.
         """
-        import shutil
-
+        explicit_source_paths = source_paths is not None
         filedir = self.get_filedir()
 
         # Build source_paths from step_state.Input if not provided.
@@ -2665,7 +4078,9 @@ class ManifestManager:
             logger.warning("No source paths available to copy")
             return {}
 
-        if filedir:
+        if explicit_source_paths:
+            rel_paths = list(source_paths.keys())
+        elif filedir:
             rel_paths = [entry.rel_path for entry in filedir if entry.rel_path in source_paths]
         else:
             rel_paths = []
@@ -2680,8 +4095,20 @@ class ManifestManager:
         original_dir.mkdir(parents=True, exist_ok=True)
 
         copied_files: Dict[str, str] = {}
-
+        total_files = len(rel_paths)
+        total_bytes = 0
         for rel_path in rel_paths:
+            abs_source = source_paths.get(rel_path)
+            if abs_source is None or not abs_source.exists():
+                continue
+            try:
+                total_bytes += abs_source.stat().st_size
+            except OSError:
+                continue
+
+        bytes_completed = 0
+
+        for index, rel_path in enumerate(rel_paths, start=1):
             abs_source = source_paths.get(rel_path)
             if abs_source is None or not abs_source.exists():
                 logger.warning("Source file not found for rel_path=%s", rel_path)
@@ -2689,20 +4116,120 @@ class ManifestManager:
 
             dest_path = original_dir / rel_path
             dest_path.parent.mkdir(parents=True, exist_ok=True)
+            file_size = 0
+            try:
+                file_size = abs_source.stat().st_size
+            except OSError:
+                file_size = 0
 
             if dest_path.exists() and not force:
                 logger.debug("Original already exists: %s", dest_path)
                 copied_files[str(abs_source)] = str(dest_path)
+                bytes_completed += file_size
+                if progress_callback is not None:
+                    should_continue = progress_callback({
+                        "phase": "stage-originals",
+                        "rel_path": rel_path,
+                        "current_file": index,
+                        "total_files": total_files,
+                        "file_bytes": file_size,
+                        "file_total_bytes": file_size,
+                        "total_bytes": bytes_completed,
+                        "total_bytes_max": total_bytes,
+                    })
+                    if should_continue is False:
+                        break
                 continue
 
             try:
-                shutil.copy2(abs_source, dest_path)
+                staged = self._stage_file_with_progress(
+                    abs_source,
+                    dest_path,
+                    delete_source=move_files,
+                    progress_callback=progress_callback,
+                    rel_path=rel_path,
+                    current_file=index,
+                    total_files=total_files,
+                    total_bytes_before=bytes_completed,
+                    total_bytes_max=total_bytes,
+                )
+                if not staged:
+                    break
                 copied_files[str(abs_source)] = str(dest_path)
+                bytes_completed += file_size
                 logger.info("Copied original: %s -> %s", abs_source.name, dest_path)
             except Exception as e:
                 logger.error("Failed to copy %s: %s", abs_source, e)
 
         return copied_files
+
+    def _stage_file_with_progress(
+        self,
+        source_path: Path,
+        dest_path: Path,
+        *,
+        delete_source: bool,
+        progress_callback: Optional[Callable[[Dict[str, Any]], bool]],
+        rel_path: str,
+        current_file: int,
+        total_files: int,
+        total_bytes_before: int,
+        total_bytes_max: int,
+    ) -> bool:
+        """Stage one file into Original/ while optionally reporting byte progress."""
+        import shutil
+
+        file_total_bytes = 0
+        try:
+            file_total_bytes = source_path.stat().st_size
+        except OSError:
+            file_total_bytes = 0
+
+        bytes_written = 0
+        if progress_callback is not None:
+            should_continue = progress_callback({
+                "phase": "stage-originals",
+                "rel_path": rel_path,
+                "current_file": current_file,
+                "total_files": total_files,
+                "file_bytes": 0,
+                "file_total_bytes": file_total_bytes,
+                "total_bytes": total_bytes_before,
+                "total_bytes_max": total_bytes_max,
+            })
+            if should_continue is False:
+                return False
+
+        with source_path.open("rb") as src_handle, dest_path.open("wb") as dst_handle:
+            while True:
+                chunk = src_handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                dst_handle.write(chunk)
+                bytes_written += len(chunk)
+                if progress_callback is not None:
+                    should_continue = progress_callback({
+                        "phase": "stage-originals",
+                        "rel_path": rel_path,
+                        "current_file": current_file,
+                        "total_files": total_files,
+                        "file_bytes": bytes_written,
+                        "file_total_bytes": file_total_bytes,
+                        "total_bytes": total_bytes_before + bytes_written,
+                        "total_bytes_max": total_bytes_max,
+                    })
+                    if should_continue is False:
+                        dst_handle.close()
+                        try:
+                            dest_path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                        return False
+
+        shutil.copystat(source_path, dest_path)
+        if delete_source:
+            source_path.unlink(missing_ok=True)
+        return True
 
     def _build_source_paths_from_input(self) -> Dict[str, Path]:
         """Build rel_path → absolute-source-path map from Input step state.
@@ -2767,19 +4294,310 @@ class ManifestManager:
             Path to the original file in Original/ directory.
         """
         return self.get_original_dir() / entry.rel_path
-    
+
+    def get_translated_file_path(self, entry: FileDirEntry) -> Path:
+        """Get the path to the translated file for a filedir entry."""
+        return self.get_translated_dir() / entry.rel_path
+
+    def get_patch_original_file_path(self, entry: FileDirEntry) -> Path:
+        """Get the path to the Patch/Original file for a filedir entry."""
+        return self.get_patch_original_dir() / entry.rel_path
+
+    def get_patch_translated_file_path(self, entry: FileDirEntry) -> Path:
+        """Get the path to the Patch/Translated file for a filedir entry."""
+        return self.get_patch_translated_dir() / entry.rel_path
+
+    def get_package_original_file_path(self, entry: FileDirEntry) -> Path:
+        """Get the path to the Package/Original file for a filedir entry."""
+        return self.get_package_original_dir() / entry.rel_path
+
+    def get_package_translated_file_path(self, entry: FileDirEntry) -> Path:
+        """Get the path to the Package/Translated file for a filedir entry."""
+        return self.get_package_translated_dir() / entry.rel_path
+
+    def stage_package_original_archive(
+        self,
+        archive_path: Path,
+        *,
+        settings: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Path]:
+        """Unpack *archive_path* into Package/Original and return staged files."""
+        from CherryAI.formats.KiriKiri2 import unpack_xp3_archive
+
+        archive_path = Path(archive_path)
+        package_root = self.get_package_original_dir() / archive_path.name
+        extracted = unpack_xp3_archive(archive_path, package_root, settings=settings)
+        return {
+            f"{archive_path.name}/{path.relative_to(package_root).as_posix()}": path
+            for path in extracted
+        }
+
+    def build_package_translated_archive(
+        self,
+        source_dir: Path,
+        archive_name: str,
+        *,
+        settings: Optional[Dict[str, Any]] = None,
+    ) -> Path:
+        """Pack *source_dir* into Package/Translated/*archive_name*."""
+        from CherryAI.formats.KiriKiri2 import pack_xp3_archive
+
+        archive_file = Path(archive_name)
+        if archive_file.suffix.lower() != ".xp3":
+            archive_file = archive_file.with_suffix(".xp3")
+        output_path = self.get_package_translated_dir() / archive_file.name
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        return pack_xp3_archive(Path(source_dir), output_path, settings=settings)
+
     def get_patch_file_path(self, entry: FileDirEntry) -> Path:
-        """Get the output path in Patch/ directory for a filedir entry.
-        
-        TASK 35.3: Returns the path where the translated file should be written.
-        
-        Args:
-            entry: FileDirEntry to get patch path for.
-            
-        Returns:
-            Path to the output file in Patch/ directory.
+        """Get the legacy translated patch path for a filedir entry."""
+        return self.get_patch_translated_file_path(entry)
+
+    def ensure_translated_file_path(self, entry: FileDirEntry) -> Path:
+        """Return the Translated/ path for *entry* after creating its parent tree."""
+        translated_path = self.get_translated_file_path(entry)
+        translated_path.parent.mkdir(parents=True, exist_ok=True)
+        return translated_path
+
+    def ensure_patch_original_file_path(self, entry: FileDirEntry) -> Path:
+        """Return the Patch/Original path for *entry* after creating its parent tree."""
+        patch_path = self.get_patch_original_file_path(entry)
+        patch_path.parent.mkdir(parents=True, exist_ok=True)
+        return patch_path
+
+    def ensure_patch_translated_file_path(self, entry: FileDirEntry) -> Path:
+        """Return the Patch/Translated path for *entry* after creating its parent tree."""
+        patch_path = self.get_patch_translated_file_path(entry)
+        patch_path.parent.mkdir(parents=True, exist_ok=True)
+        return patch_path
+
+    def create_forward_patch_for_original(
+        self,
+        entry: FileDirEntry,
+        updated_source_path: Path,
+    ) -> Dict[str, Any]:
+        """Create a hash-first Patch/Original artifact for an updated source file.
+
+        Returns a payload with a ``decision`` of ``skip``, ``add``, ``diff``,
+        or ``full_copy`` plus the artifact path chosen for that decision.
         """
-        return self.get_patch_dir() / entry.rel_path
+        if not updated_source_path.exists():
+            raise FileNotFoundError(updated_source_path)
+
+        original_path = self.get_original_file_path(entry)
+        artifact_path = self.ensure_patch_original_file_path(entry)
+        diff_path = artifact_path.with_name(artifact_path.name + ".patch")
+
+        updated_bytes = updated_source_path.read_bytes()
+        updated_hash = hashlib.sha256(updated_bytes).hexdigest()
+
+        if not original_path.exists():
+            artifact_path.write_bytes(updated_bytes)
+            return {
+                "decision": "add",
+                "artifact_path": artifact_path,
+                "baseline_path": original_path,
+                "candidate_path": updated_source_path,
+                "baseline_hash": None,
+                "candidate_hash": updated_hash,
+            }
+
+        original_bytes = original_path.read_bytes()
+        original_hash = hashlib.sha256(original_bytes).hexdigest()
+        if original_hash == updated_hash:
+            return {
+                "decision": "skip",
+                "artifact_path": None,
+                "baseline_path": original_path,
+                "candidate_path": updated_source_path,
+                "baseline_hash": original_hash,
+                "candidate_hash": updated_hash,
+            }
+
+        encoding = entry.encoding or "utf-8"
+        try:
+            original_text = original_bytes.decode(encoding)
+            updated_text = updated_bytes.decode(encoding)
+        except UnicodeDecodeError:
+            artifact_path.write_bytes(updated_bytes)
+            return {
+                "decision": "full_copy",
+                "artifact_path": artifact_path,
+                "baseline_path": original_path,
+                "candidate_path": updated_source_path,
+                "baseline_hash": original_hash,
+                "candidate_hash": updated_hash,
+            }
+
+        diff_text = "\n".join(
+            difflib.unified_diff(
+                original_text.splitlines(),
+                updated_text.splitlines(),
+                fromfile=f"Original/{entry.rel_path}",
+                tofile=f"Patch/Original/{entry.rel_path}",
+                lineterm="",
+            )
+        )
+        if not diff_text:
+            return {
+                "decision": "skip",
+                "artifact_path": None,
+                "baseline_path": original_path,
+                "candidate_path": updated_source_path,
+                "baseline_hash": original_hash,
+                "candidate_hash": updated_hash,
+            }
+
+        diff_path.write_text(diff_text, encoding="utf-8", newline="")
+        return {
+            "decision": "diff",
+            "artifact_path": diff_path,
+            "baseline_path": original_path,
+            "candidate_path": updated_source_path,
+            "baseline_hash": original_hash,
+            "candidate_hash": updated_hash,
+        }
+
+    def capture_reverse_patch_for_translated(
+        self,
+        entry: FileDirEntry,
+        new_text: str,
+    ) -> Dict[str, Any]:
+        """Capture rollback material in Patch/Translated before an overwrite.
+
+        Returns a payload with a ``decision`` of ``missing``, ``skip``,
+        ``diff``, or ``full_copy`` plus the chosen artifact path.
+        """
+        translated_path = self.get_translated_file_path(entry)
+        if not translated_path.exists():
+            return {
+                "decision": "missing",
+                "artifact_path": None,
+                "translated_path": translated_path,
+            }
+
+        current_bytes = translated_path.read_bytes()
+        current_hash = hashlib.sha256(current_bytes).hexdigest()
+        new_hash = hashlib.sha256(new_text.encode(entry.encoding or "utf-8")).hexdigest()
+        if current_hash == new_hash:
+            return {
+                "decision": "skip",
+                "artifact_path": None,
+                "translated_path": translated_path,
+                "previous_hash": current_hash,
+                "new_hash": new_hash,
+            }
+
+        artifact_path = self.ensure_patch_translated_file_path(entry)
+        diff_path = artifact_path.with_name(artifact_path.name + ".patch")
+        encoding = entry.encoding or "utf-8"
+        try:
+            current_text = current_bytes.decode(encoding)
+        except UnicodeDecodeError:
+            artifact_path.write_bytes(current_bytes)
+            return {
+                "decision": "full_copy",
+                "artifact_path": artifact_path,
+                "translated_path": translated_path,
+                "previous_hash": current_hash,
+                "new_hash": new_hash,
+            }
+
+        diff_text = "\n".join(
+            difflib.unified_diff(
+                new_text.splitlines(),
+                current_text.splitlines(),
+                fromfile=f"Translated/{entry.rel_path}",
+                tofile=f"Patch/Translated/{entry.rel_path}",
+                lineterm="",
+            )
+        )
+        if not diff_text:
+            return {
+                "decision": "skip",
+                "artifact_path": None,
+                "translated_path": translated_path,
+                "previous_hash": current_hash,
+                "new_hash": new_hash,
+            }
+
+        diff_path.write_text(diff_text, encoding="utf-8", newline="")
+        return {
+            "decision": "diff",
+            "artifact_path": diff_path,
+            "translated_path": translated_path,
+            "previous_hash": current_hash,
+            "new_hash": new_hash,
+        }
+
+    def capture_reverse_patch_for_translated_bytes(
+        self,
+        entry: FileDirEntry,
+        new_bytes: bytes,
+    ) -> Dict[str, Any]:
+        """Capture rollback material for a translated overwrite from raw bytes."""
+        translated_path = self.get_translated_file_path(entry)
+        if not translated_path.exists():
+            return {
+                "decision": "missing",
+                "artifact_path": None,
+                "translated_path": translated_path,
+            }
+
+        current_bytes = translated_path.read_bytes()
+        current_hash = hashlib.sha256(current_bytes).hexdigest()
+        new_hash = hashlib.sha256(new_bytes).hexdigest()
+        if current_hash == new_hash:
+            return {
+                "decision": "skip",
+                "artifact_path": None,
+                "translated_path": translated_path,
+                "previous_hash": current_hash,
+                "new_hash": new_hash,
+            }
+
+        artifact_path = self.ensure_patch_translated_file_path(entry)
+        diff_path = artifact_path.with_name(artifact_path.name + ".patch")
+        encoding = entry.encoding or "utf-8"
+        try:
+            current_text = current_bytes.decode(encoding)
+            new_text = new_bytes.decode(encoding)
+        except UnicodeDecodeError:
+            artifact_path.write_bytes(current_bytes)
+            return {
+                "decision": "full_copy",
+                "artifact_path": artifact_path,
+                "translated_path": translated_path,
+                "previous_hash": current_hash,
+                "new_hash": new_hash,
+            }
+
+        diff_text = "\n".join(
+            difflib.unified_diff(
+                new_text.splitlines(),
+                current_text.splitlines(),
+                fromfile=f"Translated/{entry.rel_path}",
+                tofile=f"Patch/Translated/{entry.rel_path}",
+                lineterm="",
+            )
+        )
+        if not diff_text:
+            return {
+                "decision": "skip",
+                "artifact_path": None,
+                "translated_path": translated_path,
+                "previous_hash": current_hash,
+                "new_hash": new_hash,
+            }
+
+        diff_path.write_text(diff_text, encoding="utf-8", newline="")
+        return {
+            "decision": "diff",
+            "artifact_path": diff_path,
+            "translated_path": translated_path,
+            "previous_hash": current_hash,
+            "new_hash": new_hash,
+        }
     
     def has_original_copies(self) -> bool:
         """Check if original files have been copied to the project.
@@ -2822,12 +4640,16 @@ class ManifestManager:
             if line_count == 0:
                 continue
                 
-            # Calculate relative path from common base
-            try:
-                rel_path = file_path.relative_to(base_path)
-            except ValueError:
-                # If can't make relative, use just filename
-                rel_path = Path(file_path.name)
+            explicit_rel_path = str(file_info.get("rel_path", "")).strip()
+            if explicit_rel_path:
+                rel_path = Path(explicit_rel_path)
+            else:
+                # Calculate relative path from common base
+                try:
+                    rel_path = file_path.relative_to(base_path)
+                except ValueError:
+                    # If can't make relative, use just filename
+                    rel_path = Path(file_path.name)
             
             # TASK 38: v3.2 - no source_hint, rel_path is relative to source_root
             entry = FileDirEntry(
@@ -2879,7 +4701,7 @@ class ManifestManager:
     def add_files(
         self,
         new_file_infos: List[Dict[str, Any]],
-        new_lines_by_rel: Dict[str, List[str]],
+        new_lines_by_rel: Dict[str, List[Any]],
     ) -> int:
         """Add new files to an existing manifest without destroying existing data.
 
@@ -2897,7 +4719,7 @@ class ManifestManager:
                 - type: str (optional, default "")
                 - lines: List[str] — the orig text of each line
             new_lines_by_rel: Mapping of rel_path → list of orig line strings
-                for the new files.
+                or prebuilt manifest line dicts for the new files.
 
         Returns:
             Number of new files added.
@@ -2955,11 +4777,16 @@ class ManifestManager:
             if is_new:
                 # Insert new lines
                 new_orig_lines = new_lines_by_rel.get(rel_path, [])
-                for orig_text in new_orig_lines:
-                    final_lines.append({
-                        "idx": current_idx,
-                        "orig": orig_text,
-                    })
+                for raw_line in new_orig_lines:
+                    if isinstance(raw_line, dict):
+                        line_data = dict(raw_line)
+                        line_data["idx"] = current_idx
+                    else:
+                        line_data = {
+                            "idx": current_idx,
+                            "orig": raw_line,
+                        }
+                    final_lines.append(canonicalize_line_dict(line_data))
                     current_idx += 1
             else:
                 # Preserve existing lines with all their fields, just update idx

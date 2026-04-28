@@ -59,6 +59,7 @@ logger = logging.getLogger(__name__)
 
 REGISTRY_VERSION = 1
 DEFAULT_REFRESH_HOURS = 24       # cache is considered stale after 24 hours
+DEFAULT_COST_CAP = 25.0
 
 # Provider IDs - canonical names used throughout the module
 PROVIDER_OPENAI = "openai"
@@ -195,6 +196,176 @@ class ModelInfo:
             "provider": self.provider,
             "url": self.url,
         }
+
+
+@dataclass(frozen=True)
+class ModelCostStatus:
+    """Resolved cost-cap state for a model.
+
+    ``output_price`` is the governing price for request and probe eligibility.
+    ``price_known`` distinguishes an actual free model (``0.0``) from an
+    unknown price (``None``).
+    """
+
+    model_id: str
+    output_price: Optional[float]
+    cost_cap: Optional[float]
+    price_known: bool
+    above_cost_cap: bool
+    blocked: bool
+    block_reason: str = ""
+
+
+def _pricing_unknown_updates() -> Dict[str, Optional[float]]:
+    """Return field updates that mark all pricing data as unknown."""
+    return {
+        "input_price": None,
+        "cached_input_price": None,
+        "output_price": None,
+        "batch_input_price": None,
+        "batch_output_price": None,
+        "flex_input_price": None,
+        "flex_output_price": None,
+        "priority_input_price": None,
+        "priority_output_price": None,
+    }
+
+
+def with_unknown_pricing(model: ModelInfo, *, fetched_at: Optional[str] = None) -> ModelInfo:
+    """Return a copy of *model* with all pricing fields cleared.
+
+    This is used during refresh when model discovery succeeds but pricing
+    documentation cannot be confirmed. Clearing the values prevents CherryAI
+    from treating stale fallback prices as current documented prices.
+    """
+    updates: Dict[str, Any] = _pricing_unknown_updates()
+    if fetched_at is not None:
+        updates["fetched_at"] = fetched_at
+    return ModelInfo(**{**model.to_dict(), **updates})
+
+
+def is_price_known(price: Optional[float]) -> bool:
+    """Return True when *price* is documented.
+
+    ``0.0`` is considered known and represents a free tier, while ``None``
+    means the price is unknown or unavailable.
+    """
+    return price is not None
+
+
+def get_model_cost_status(model: ModelInfo, cost_cap: Optional[float] = None) -> ModelCostStatus:
+    """Resolve whether *model* is blocked by unknown pricing or the cost cap.
+
+    Args:
+        model: Model metadata to evaluate.
+        cost_cap: Maximum allowed output price in USD / 1M tokens. ``None``
+            disables the cap check while still blocking unknown prices.
+
+    Returns:
+        A :class:`ModelCostStatus` describing the model's price state.
+    """
+    output_price = model.output_price
+    price_known = is_price_known(output_price)
+    above_cost_cap = False
+    blocked = False
+    block_reason = ""
+
+    if not price_known:
+        blocked = True
+        block_reason = "unknown_price"
+    elif cost_cap is not None and output_price is not None and output_price > cost_cap:
+        above_cost_cap = True
+        blocked = True
+        block_reason = "above_cost_cap"
+
+    return ModelCostStatus(
+        model_id=model.model_id,
+        output_price=output_price,
+        cost_cap=cost_cap,
+        price_known=price_known,
+        above_cost_cap=above_cost_cap,
+        blocked=blocked,
+        block_reason=block_reason,
+    )
+
+
+def get_model_cost_status_by_id(
+    model_id: str,
+    cost_cap: Optional[float] = None,
+    path: Optional[Path] = None,
+) -> ModelCostStatus:
+    """Resolve cost-cap state for the model identified by *model_id*.
+
+    Missing registry entries are treated as having unknown pricing so callers
+    fail closed instead of implicitly allowing undocumented models.
+    """
+    model = get_model_info(model_id, path=path)
+    if model is None:
+        return ModelCostStatus(
+            model_id=model_id,
+            output_price=None,
+            cost_cap=cost_cap,
+            price_known=False,
+            above_cost_cap=False,
+            blocked=True,
+            block_reason="unknown_price",
+        )
+    return get_model_cost_status(model, cost_cap=cost_cap)
+
+
+def is_model_allowed_for_requests(
+    model_id: str,
+    cost_cap: Optional[float] = None,
+    path: Optional[Path] = None,
+) -> bool:
+    """Return True when the model is allowed under current price rules.
+
+    Unknown models return ``False`` so request call sites can fail closed.
+    """
+    status = get_model_cost_status_by_id(model_id, cost_cap=cost_cap, path=path)
+    return not status.blocked
+
+
+def get_configured_cost_cap(default: float = DEFAULT_COST_CAP) -> float:
+    """Return the persisted global cost cap from ``CherryAI.ini``.
+
+    Falls back to ``default`` when the INI manager is unavailable or the value
+    cannot be parsed.
+    """
+    try:
+        from CherryAI.functions import ini_manager
+
+        value = ini_manager.get_effective_default(
+            "api",
+            "cost_cap",
+            default,
+            float,
+        )
+        return float(value)
+    except Exception:
+        return default
+
+
+def describe_model_cost_status(status: ModelCostStatus) -> str:
+    """Return a user-facing explanation for a model cost status."""
+    if not status.price_known:
+        return (
+            f"Requests for model '{status.model_id}' are blocked because its "
+            "output price is unknown."
+        )
+
+    if status.above_cost_cap:
+        output_price = status.output_price or 0.0
+        cost_cap = status.cost_cap if status.cost_cap is not None else DEFAULT_COST_CAP
+        return (
+            f"Requests for model '{status.model_id}' are blocked because its "
+            f"output price (${output_price:.2f}/1M) exceeds the cost cap "
+            f"(${cost_cap:.2f}/1M)."
+        )
+
+    return (
+        f"Model '{status.model_id}' is allowed at ${status.output_price or 0.0:.2f}/1M."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1124,6 +1295,8 @@ def _http_post_json(
 def probe_openai_rate_limits(
     api_key: str,
     model_id: str,
+    model_info: Optional[ModelInfo] = None,
+    cost_cap: Optional[float] = None,
 ) -> Optional[Dict[str, int]]:
     """Probe a single OpenAI model for rate limits via response headers.
 
@@ -1138,6 +1311,25 @@ def probe_openai_rate_limits(
     Returns:
         Dict with ``rpm`` and ``tpm`` keys, or ``None`` on failure.
     """
+    effective_cost_cap = (
+        get_configured_cost_cap() if cost_cap is None else cost_cap
+    )
+    status = (
+        get_model_cost_status(model_info, cost_cap=effective_cost_cap)
+        if model_info is not None
+        else get_model_cost_status_by_id(
+            model_id,
+            cost_cap=effective_cost_cap,
+        )
+    )
+    if status.blocked:
+        logger.info(
+            "probe_rate_limits(%s): skipped: %s",
+            model_id,
+            describe_model_cost_status(status),
+        )
+        return None
+
     try:
         _, headers = _http_post_json(
             f"{OPENAI_BASE_URL}/chat/completions",
@@ -1319,9 +1511,11 @@ def fetch_openai_models(
 
     # --- Fetch pricing ---
     pricing_map: Dict[str, Dict[str, Optional[float]]] = {}
+    pricing_available = False
     try:
         pricing_html = _http_get(OPENAI_PRICING_URL)
         pricing_map = _parse_openai_pricing(pricing_html)
+        pricing_available = bool(pricing_map)
         logger.info("fetch_openai_models: parsed %d pricing entries", len(pricing_map))
     except Exception as exc:
         logger.warning("fetch_openai_models: pricing fetch failed (%s); using embedded", exc)
@@ -1361,7 +1555,7 @@ def fetch_openai_models(
                 }
             )
         else:
-            base = ModelInfo(**{**base.to_dict(), "fetched_at": now})
+            base = with_unknown_pricing(base, fetched_at=now)
         result.append(base)
 
     if not result:
@@ -1371,15 +1565,25 @@ def fetch_openai_models(
     present = {m.model_id for m in result}
     for fb in FALLBACK_MODELS[PROVIDER_OPENAI]:
         if fb.model_id not in present:
-            result.append(ModelInfo(**{**fb.to_dict(), "fetched_at": now}))
+            result.append(
+                with_unknown_pricing(fb, fetched_at=now)
+                if not pricing_available or fb.model_id not in pricing_map
+                else ModelInfo(**{**fb.to_dict(), "fetched_at": now})
+            )
 
     # Only keep models that support structured output
     result = [m for m in result if m.structured_output]
 
     # --- Probe rate limits from response headers ---
     if probe_limits and api_key:
+        cost_cap = get_configured_cost_cap()
         for i, m in enumerate(result):
-            limits = probe_openai_rate_limits(api_key, m.model_id)
+            limits = probe_openai_rate_limits(
+                api_key,
+                m.model_id,
+                model_info=m,
+                cost_cap=cost_cap,
+            )
             if limits:
                 updates: Dict[str, Any] = {}
                 if "rpm" in limits:
@@ -1453,9 +1657,11 @@ def fetch_google_models(api_key: str) -> List[ModelInfo]:
 
     # --- Fetch pricing ---
     pricing_map: Dict[str, Dict[str, Optional[float]]] = {}
+    pricing_available = False
     try:
         pricing_html = _http_get(GOOGLE_PRICING_URL)
         pricing_map = _parse_google_pricing(pricing_html)
+        pricing_available = bool(pricing_map)
         logger.info("fetch_google_models: parsed %d pricing entries", len(pricing_map))
     except Exception as exc:
         logger.warning("fetch_google_models: pricing fetch failed (%s)", exc)
@@ -1504,6 +1710,8 @@ def fetch_google_models(api_key: str) -> List[ModelInfo]:
                 "batch_input_price": p.get("batch_input"),
                 "batch_output_price": p.get("batch_output"),
             })
+        else:
+            updates.update(_pricing_unknown_updates())
 
         result.append(ModelInfo(**{**base.to_dict(), **updates}))
 
@@ -1514,7 +1722,11 @@ def fetch_google_models(api_key: str) -> List[ModelInfo]:
     present = {m.model_id for m in result}
     for fb in FALLBACK_MODELS[PROVIDER_GOOGLE]:
         if fb.model_id not in present:
-            result.append(ModelInfo(**{**fb.to_dict(), "fetched_at": now}))
+            result.append(
+                with_unknown_pricing(fb, fetched_at=now)
+                if not pricing_available or fb.model_id not in pricing_map
+                else ModelInfo(**{**fb.to_dict(), "fetched_at": now})
+            )
 
     # Only keep models that support structured output
     result = [m for m in result if m.structured_output]
@@ -1559,7 +1771,7 @@ def fetch_mistral_models(api_key: str) -> List[ModelInfo]:
             provider=PROVIDER_MISTRAL,
             url=MISTRAL_BASE_URL,
         )
-        result.append(ModelInfo(**{**base.to_dict(), "fetched_at": now}))
+        result.append(with_unknown_pricing(base, fetched_at=now))
 
     if not result:
         return list(FALLBACK_MODELS[PROVIDER_MISTRAL])

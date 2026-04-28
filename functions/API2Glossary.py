@@ -786,7 +786,7 @@ def infer_gender_llm(
 
         try:
             res = _call_api_for_excerpt_custom(
-                speaker, excerpt, api_key, mdl, base_url,
+                speaker, excerpt, api_key, mdl, base_url, prov,
             )
             gender = res.get("gender", "Unknown")
             if gender == "Unknown":
@@ -827,6 +827,7 @@ def _call_api_for_excerpt_custom(
     api_key: str,
     model: str,
     base_url: Optional[str] = None,
+    provider: str = "",
 ) -> Dict[str, str]:
     """Call LLM API for gender inference using the given credentials.
 
@@ -853,34 +854,91 @@ def _call_api_for_excerpt_custom(
         store=False,
     )
 
-    content = response.choices[0].message.content
-    parsed = json.loads(content)
-
-    # Log to structured API log
     try:
         from .api_log import (
-            LogCategory, LogStatus, LogEntrySent, LogEntryReceived,
+            FAILURE_KIND_INFERENCE,
+            LogCategory,
+            LogEntryReceived,
+            LogEntrySent,
+            LogStatus,
+            VALIDATION_STATUS_FAILED,
+            VALIDATION_STATUS_PASSED,
             get_api_log_store,
         )
-        _usage = response.usage
-        store = get_api_log_store()
-        store.log_pair(
-            LogCategory.GENDER_INFERENCE,
-            LogEntrySent(
-                model=model,
-                user_content=user_prompt,
-                extra={"speaker": speaker},
-            ),
-            LogEntryReceived(
-                content=content or "",
-                prompt_tokens=_usage.prompt_tokens if _usage else 0,
-                completion_tokens=_usage.completion_tokens if _usage else 0,
-                total_tokens=getattr(_usage, "total_tokens", 0) if _usage else 0,
-            ),
-            LogStatus.SUCCESS,
+
+        sent_entry = LogEntrySent(
+            task_type="gender_inference",
+            model=model,
+            provider=provider,
+            user_content=user_prompt,
+            extra={"speaker": speaker},
         )
+
+        def _log_gender_result(
+            status: Any,
+            *,
+            content_text: str = "",
+            error_message: str = "",
+            validation_status: str = "",
+            validation_error: str = "",
+            validation_category: str = "",
+        ) -> None:
+            usage = response.usage
+            extra: Dict[str, Any] = {}
+            if validation_status:
+                extra["validation_status"] = validation_status
+            if validation_error:
+                extra["validation_error"] = validation_error
+            if validation_category:
+                extra["validation_category"] = validation_category
+            if status == LogStatus.FAILED:
+                extra["failure_kind"] = FAILURE_KIND_INFERENCE
+            store = get_api_log_store()
+            store.log_pair(
+                LogCategory.GENDER_INFERENCE,
+                sent_entry,
+                LogEntryReceived(
+                    content=content_text,
+                    prompt_tokens=getattr(usage, "prompt_tokens", 0) if usage else 0,
+                    completion_tokens=getattr(usage, "completion_tokens", 0) if usage else 0,
+                    total_tokens=getattr(usage, "total_tokens", 0) if usage else 0,
+                    error_message=error_message,
+                    extra=extra,
+                ),
+                status,
+            )
     except Exception:
-        pass
+        def _log_gender_result(
+            status: Any,
+            *,
+            content_text: str = "",
+            error_message: str = "",
+            validation_status: str = "",
+            validation_error: str = "",
+            validation_category: str = "",
+        ) -> None:
+            return None
+
+    content = response.choices[0].message.content or ""
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError as exc:
+        message = f"LLM returned invalid JSON: {exc}"
+        _log_gender_result(
+            LogStatus.FAILED,
+            content_text=content,
+            error_message=message,
+            validation_status=VALIDATION_STATUS_FAILED,
+            validation_error=str(exc),
+            validation_category="non_structured_output",
+        )
+        raise
+
+    _log_gender_result(
+        LogStatus.SUCCESS,
+        content_text=content,
+        validation_status=VALIDATION_STATUS_PASSED,
+    )
 
     return {
         "gender": _normalize_gender(parsed.get("details", "Unknown")),

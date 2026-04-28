@@ -511,6 +511,73 @@ def _translate_llm_batch(
     max_tokens = max(100, len(terms) * 20)
 
     try:
+        from .api_log import (
+            FAILURE_KIND_API,
+            FAILURE_KIND_INFERENCE,
+            LogCategory,
+            LogEntryReceived,
+            LogEntrySent,
+            LogStatus,
+            VALIDATION_STATUS_FAILED,
+            VALIDATION_STATUS_PASSED,
+            VALIDATION_STATUS_RECOVERED,
+            VALIDATION_STATUS_UNKNOWN,
+            get_api_log_store,
+        )
+
+        sent_entry = LogEntrySent(
+            task_type="glossary",
+            model=model,
+            provider=provider,
+            system_prompt=system_prompt,
+            user_content=user_content,
+            line_count=len(terms),
+        )
+    except Exception:
+        sent_entry = None
+
+    def _log_term_translation(
+        status: Any,
+        *,
+        response_obj: Optional[Any] = None,
+        content_text: str = "",
+        error_message: str = "",
+        validation_status: str = "",
+        validation_error: str = "",
+        validation_category: str = "",
+        failure_kind: str = "",
+    ) -> None:
+        if sent_entry is None:
+            return
+        try:
+            store = get_api_log_store()
+            usage = getattr(response_obj, "usage", None) if response_obj is not None else None
+            extra: dict[str, Any] = {}
+            if validation_status:
+                extra["validation_status"] = validation_status
+            if validation_error:
+                extra["validation_error"] = validation_error
+            if validation_category:
+                extra["validation_category"] = validation_category
+            if failure_kind:
+                extra["failure_kind"] = failure_kind
+            store.log_pair(
+                LogCategory.TERM_TRANSLATION,
+                sent_entry,
+                LogEntryReceived(
+                    content=content_text,
+                    prompt_tokens=getattr(usage, "prompt_tokens", 0) if usage else 0,
+                    completion_tokens=getattr(usage, "completion_tokens", 0) if usage else 0,
+                    total_tokens=getattr(usage, "total_tokens", 0) if usage else 0,
+                    error_message=error_message,
+                    extra=extra,
+                ),
+                status,
+            )
+        except Exception:
+            pass
+
+    try:
         response = client.chat.completions.create(
             model=model,
             messages=[
@@ -523,72 +590,61 @@ def _translate_llm_batch(
             store=False,
         )
     except Exception as exc:
-        # Log failure to structured API log
-        try:
-            from .api_log import (
-                LogCategory, LogStatus, LogEntrySent, LogEntryReceived,
-                get_api_log_store,
-            )
-            store = get_api_log_store()
-            store.log_pair(
-                LogCategory.TERM_TRANSLATION,
-                LogEntrySent(
-                    model=model,
-                    provider=provider,
-                    system_prompt=system_prompt,
-                    user_content=user_content,
-                    line_count=len(terms),
-                ),
-                LogEntryReceived(error_message=str(exc)),
-                LogStatus.FAILED,
-            )
-        except Exception:
-            pass
+        _log_term_translation(
+            LogStatus.FAILED,
+            error_message=str(exc),
+            validation_status=VALIDATION_STATUS_UNKNOWN,
+            validation_error=str(exc),
+            failure_kind=FAILURE_KIND_API,
+        )
         raise RuntimeError(
             f"LLM term translation API call failed: {exc}"
         ) from exc
 
-    content = response.choices[0].message.content
-
-    # Log success to structured API log
-    try:
-        from .api_log import (
-            LogCategory, LogStatus, LogEntrySent, LogEntryReceived,
-            get_api_log_store,
-        )
-        _usage = response.usage
-        store = get_api_log_store()
-        store.log_pair(
-            LogCategory.TERM_TRANSLATION,
-            LogEntrySent(
-                model=model, provider=provider,
-                system_prompt=system_prompt,
-                user_content=user_content,
-                line_count=len(terms),
-            ),
-            LogEntryReceived(
-                content=content or "",
-                prompt_tokens=_usage.prompt_tokens if _usage else 0,
-                completion_tokens=_usage.completion_tokens if _usage else 0,
-                total_tokens=getattr(_usage, "total_tokens", 0) if _usage else 0,
-            ),
-            LogStatus.SUCCESS,
-        )
-    except Exception:
-        pass
+    content = response.choices[0].message.content or ""
 
     try:
         data = json.loads(content)
     except json.JSONDecodeError as exc:
+        message = f"LLM returned invalid JSON: {exc}"
+        _log_term_translation(
+            LogStatus.FAILED,
+            response_obj=response,
+            content_text=content,
+            error_message=message,
+            validation_status=VALIDATION_STATUS_FAILED,
+            validation_error=str(exc),
+            validation_category="non_structured_output",
+            failure_kind=FAILURE_KIND_INFERENCE,
+        )
         raise RuntimeError(
             f"LLM returned invalid JSON: {exc}"
         ) from exc
 
     translations = data.get("translations", [])
     if len(translations) != len(terms):
+        message = (
+            f"LLM returned {len(translations)} translations for {len(terms)} terms"
+        )
+        _log_term_translation(
+            LogStatus.RECOVERED,
+            response_obj=response,
+            content_text=content,
+            validation_status=VALIDATION_STATUS_RECOVERED,
+            validation_error=message,
+            validation_category="line_count_mismatch",
+            failure_kind=FAILURE_KIND_INFERENCE,
+        )
         logger.warning(
             "LLM returned %d translations for %d terms — padding/truncating",
             len(translations), len(terms),
         )
         return (translations + terms[len(translations):])[:len(terms)]
+
+    _log_term_translation(
+        LogStatus.SUCCESS,
+        response_obj=response,
+        content_text=content,
+        validation_status=VALIDATION_STATUS_PASSED,
+    )
     return translations

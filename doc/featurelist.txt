@@ -1,0 +1,68 @@
+[Text Manipulation]
+Parsing
+Translation
+Translation Check
+Editing
+Data Inference (Glossary)
+[Python Development]
+Minimal Requirements. Only LLM API and File Librariesrequired.
+Will be Packaged into an .exe while projects\, \user, logs\ and \doc should remain outside but accessible.
+[Scripts and Large Language Model Usage]
+Preferred Script Usage
+Additional LLM Layer
+LLM only when unavoidable (Core Translation)
+[Universal]
+Able to work with all Languages (LLM) 
+Able to work with any File Format once a Parser is developed
+[Extensible and Flexible]
+Parser Contract (Extraction, Injection, 'Name: Dialogue' Format, Wordwrap, Forbidden Characters, Encoding)
+[Efficiency]
+All features aim to improve translation accuracy, speed and affordability.
+[Interlinked Systems]
+The persistent Manifest file per project serves as save and reference file
+[Control]
+Visible Costs through the Costs Tab (Estimation), Display during Translation (Cost Tracking Window with Full Project and Business Accounting will be done later). 
+Many Options both for projects themselves and overall (global)
+API Log
+Manifest file as grand storage
+(Copy of all Original Files 
+Keep Diffs for the IDE
+Multiple Translation Branches 
+Need to be extended)
+[Automation]
+Manuel input still possible
+Scripts and LLM usage 
+Auto-Validation and Auto-Recovery of malformed output (during Translation, Post-Processing and Quality Assurance)
+Several small and one entire Pipeline with options to reduce clicks
+Widgets have default values and get values
+[Ease of use Not yet fully implemented]
+Tooltips that provide explanations on hover
+Progress Tracker that shows and jumps to fulfilled and unfulfilled tasks 
+[Security and legality]Password Protection
+Encrypt API Keys
+Warn against and possibly block illegal content (sexual, hateful, extremely violent)
+Warn against violating copyright. Only work on content you own, got permission for or permission is not needed
+Decryption only for Open Source Software
+[10 Primary Steps with their own tabs]
+1. Input Parsing (Extraction), Updating
+2. Analysis Script Analysis with optional LLM one
+3. Information Contains Information blocks that are used in the translation request like Summary, Genre, Glossary, Source and Target Language.
+4. Pre-Processing Edits Original lines with chosen scripts (deduplication, symbol replacement, temporary replacement)
+5. Costs Estimates Costs with Script 
+6. Translation Uses the chosen LLM with the set settings to translate the latest lines (Pre-Processing or Original) from Source to Target Language
+7. Post-Processing Edits the latest lines (Translated, Pre-Processing or Original) with chosen scripts, often reverting certain Pre-Processing steps.
+8. Quality Assurance Runs chosen Misc Scripts. Results are for review usually
+9. Wordwrap Applies Wordwrap as per set rules (can be set by the parser)
+10. Output Parsing (Injection)
+[Utility] 
+Full Table View to have all line iterations side-by-side
+API Log to review API Requests and Responses
+Validation scripts back Translation (Auto-Recovery and Retrival if not possible) and Post-Processes
+(Cost Tracker 
+IDE to work with the complete original and translated files before, for and after parsing. 
+Need to be extended)
+[Manifest System]
+Created for each Project
+Contains all project information. All lines, all their iterations, Data for the 10 Steps, Diff patches for the IDE and more.
+[User Data]
+Created for each user and saves their preferences, API information with keys and logs, and Accumulated Costs

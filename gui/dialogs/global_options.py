@@ -115,6 +115,7 @@ class APISettings:
     base_url: str = ""
     model: str = "gpt-4o-mini"
     temperature: float = 0.3
+    cost_cap: float = 999.0
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -124,6 +125,7 @@ class APISettings:
             "base_url": self.base_url,
             "model": self.model,
             "temperature": self.temperature,
+            "cost_cap": self.cost_cap,
         }
 
     @classmethod
@@ -135,6 +137,7 @@ class APISettings:
             base_url=data.get("base_url", ""),
             model=data.get("model", "gpt-4o-mini"),
             temperature=float(data.get("temperature", 0.3)),
+            cost_cap=float(data.get("cost_cap", 999.0)),
         )
 
 
@@ -949,6 +952,7 @@ class GlobalOptions:
             provider=_str("api", "provider", "openai"),
             model=_str("api", "model", "gpt-4o-mini"),
             temperature=_float("api", "temperature", 0.3),
+            cost_cap=_float("api", "cost_cap", _model_registry.DEFAULT_COST_CAP),
         )
 
         # -- Request settings (also stored under "api" prefix) --
@@ -1385,6 +1389,7 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.model_var = tk.StringVar(value=self.options.api.model)
         self.model_var.trace_add("write", self._on_model_change)
         self.temperature_var = tk.DoubleVar(value=self.options.api.temperature)
+        self.cost_cap_var = tk.DoubleVar(value=self.options.api.cost_cap)
 
         # Request settings
         self.timeout_var = tk.IntVar(value=self.options.request.timeout)
@@ -1750,6 +1755,16 @@ class GlobalOptionsDialog(tk.Toplevel):
             command=self._show_available_models,
         ).pack(side=tk.LEFT, padx=(10, 5))
 
+        ttk.Label(provider_row, text="Cost Cap: $").pack(side=tk.LEFT, padx=(10, 2))
+        ttk.Spinbox(
+            provider_row,
+            from_=0.0,
+            to=999.0,
+            increment=1.0,
+            textvariable=self.cost_cap_var,
+            width=8,
+        ).pack(side=tk.LEFT)
+
         self._test_status_label = ttk.Label(provider_row, text="")
         self._test_status_label.pack(side=tk.LEFT, padx=5)
 
@@ -1818,6 +1833,20 @@ class GlobalOptionsDialog(tk.Toplevel):
 
         # Populate from API.ini
         self._refresh_providers_tree()
+
+    def _get_cost_cap_value(self) -> float:
+        """Return the current cost cap, clamped to the supported range."""
+        try:
+            value = float(self.cost_cap_var.get())
+        except (TypeError, ValueError, tk.TclError):
+            value = _model_registry.get_configured_cost_cap()
+
+        value = max(0.0, min(999.0, value))
+        try:
+            self.cost_cap_var.set(value)
+        except tk.TclError:
+            pass
+        return value
 
     def _build_request_section(self) -> None:
         """Build the request settings section."""
@@ -4000,11 +4029,25 @@ class GlobalOptionsDialog(tk.Toplevel):
         _saved_cached = _api_config.get_api_setting(
             "filter_cached", "0",
         )
+        _saved_unknown_price = _api_config.get_api_setting(
+            "filter_unknown_price", "0",
+        )
+        _saved_above_cost_cap = _api_config.get_api_setting(
+            "filter_above_cost_cap", "0",
+        )
 
         struct_var = tk.BooleanVar(value=_saved_struct == "1")
         batch_var = tk.BooleanVar(value=_saved_batch == "1")
         thinking_var = tk.BooleanVar(value=_saved_thinking == "1")
         cached_var = tk.BooleanVar(value=_saved_cached == "1")
+        unknown_price_var = tk.BooleanVar(value=_saved_unknown_price == "1")
+        above_cost_cap_var = tk.BooleanVar(value=_saved_above_cost_cap == "1")
+
+        idx_structured = 1
+        idx_batch = 2
+        idx_thinking = 3
+        idx_cached_input = 4
+        idx_status = 7
 
         def _apply_filter() -> None:
             """Rebuild the Treeview based on current filter checkboxes."""
@@ -4021,19 +4064,31 @@ class GlobalOptionsDialog(tk.Toplevel):
             _api_config.set_api_setting(
                 "filter_cached", "1" if cached_var.get() else "0",
             )
+            _api_config.set_api_setting(
+                "filter_unknown_price",
+                "1" if unknown_price_var.get() else "0",
+            )
+            _api_config.set_api_setting(
+                "filter_above_cost_cap",
+                "1" if above_cost_cap_var.get() else "0",
+            )
             tree.delete(*tree.get_children())
             for mid in current_ids:
                 info = model_registry.get_model_info(mid)
                 row = _build_row(mid, info)
-                if struct_var.get() and row[1] != "✓":
+                if struct_var.get() and row[idx_structured] != "✓":
                     continue
-                if batch_var.get() and row[2] != "✓":
+                if batch_var.get() and row[idx_batch] != "✓":
                     continue
                 # "No / Optional Thinking" — hide models that *require*
                 # thinking (row[3] == "✓") when the checkbox is ON.
-                if thinking_var.get() and row[3] == "✓":
+                if thinking_var.get() and row[idx_thinking] == "✓":
                     continue
-                if cached_var.get() and row[4] == "—":
+                if cached_var.get() and row[idx_cached_input] == "—":
+                    continue
+                if not unknown_price_var.get() and row[idx_status] == "Unknown Price":
+                    continue
+                if not above_cost_cap_var.get() and row[idx_status] == "Above Cost Cap":
                     continue
                 tree.insert("", tk.END, values=row)
 
@@ -4053,16 +4108,25 @@ class GlobalOptionsDialog(tk.Toplevel):
             filter_bar, text="Cached Input",
             variable=cached_var, command=_apply_filter,
         ).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Checkbutton(
+            filter_bar, text="Unknown Price",
+            variable=unknown_price_var, command=_apply_filter,
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Checkbutton(
+            filter_bar, text="Above Cost Cap",
+            variable=above_cost_cap_var, command=_apply_filter,
+        ).pack(side=tk.LEFT, padx=(0, 10))
 
         # Treeview columns
         cols = (
             "model", "structured", "batch", "thinking",
-            "cached_input", "input_price", "output_price", "context",
+            "cached_input", "input_price", "output_price", "status", "context",
         )
         col_widths = {
             "model": 250, "structured": 90, "batch": 60,
             "thinking": 70, "cached_input": 90,
             "input_price": 100, "output_price": 100,
+            "status": 120,
             "context": 100,
         }
         col_headings = {
@@ -4070,6 +4134,7 @@ class GlobalOptionsDialog(tk.Toplevel):
             "batch": "Batch", "thinking": "Thinking",
             "cached_input": "Cached $/1M",
             "input_price": "Input $/1M", "output_price": "Output $/1M",
+            "status": "Status",
             "context": "Context",
         }
 
@@ -4093,7 +4158,16 @@ class GlobalOptionsDialog(tk.Toplevel):
             mid: str, info: Optional[model_registry.ModelInfo],
         ) -> tuple:
             """Build a display row from a model ID and optional registry info."""
+            def _format_price(value: Optional[float], unknown: str = "Unknown") -> str:
+                if value is None:
+                    return unknown
+                return f"${value:.2f}"
+
             if info:
+                cost_status = model_registry.get_model_cost_status(
+                    info,
+                    cost_cap=self._get_cost_cap_value(),
+                )
                 if info.thinking:
                     if info.thinking_mode in ("mandatory", "builtin"):
                         thinking_display = "✓"
@@ -4101,21 +4175,35 @@ class GlobalOptionsDialog(tk.Toplevel):
                         thinking_display = "Optional"
                 else:
                     thinking_display = "—"
+                if not cost_status.price_known:
+                    status_display = "Unknown Price"
+                elif cost_status.above_cost_cap:
+                    status_display = "Above Cost Cap"
+                elif info.output_price == 0.0:
+                    status_display = "Free"
+                else:
+                    status_display = "OK"
                 return (
                     mid,
                     "✓" if info.structured_output else "—",
                     "✓" if info.batch_mode else "—",
                     thinking_display,
-                    (
-                        f"${info.cached_input_price:.2f}"
-                        if info.cached_input_price is not None
-                        else "—"
-                    ),
-                    f"${info.input_price:.2f}" if info.input_price else "—",
-                    f"${info.output_price:.2f}" if info.output_price else "—",
+                    _format_price(info.cached_input_price, unknown="—"),
+                    _format_price(info.input_price),
+                    _format_price(info.output_price),
+                    status_display,
                     f"{info.context_window:,}" if info.context_window else "—",
                 )
-            return (mid, "?", "?", "?", "?", "?", "?", "?")
+            unknown_status = model_registry.get_model_cost_status_by_id(
+                mid,
+                cost_cap=self._get_cost_cap_value(),
+            )
+            status_display = (
+                "Above Cost Cap"
+                if unknown_status.above_cost_cap
+                else "Unknown Price"
+            )
+            return (mid, "?", "?", "?", "—", "Unknown", "Unknown", status_display, "?")
 
         # Populate table (respects current filter state)
         _apply_filter()
@@ -4746,6 +4834,17 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.base_url_var.set(
             ini_manager.get_initial_default("api", "base_url", "", str) or ""
         )
+        self.cost_cap_var.set(
+            float(
+                ini_manager.get_initial_default(
+                    "api",
+                    "cost_cap",
+                    _model_registry.DEFAULT_COST_CAP,
+                    float,
+                )
+                or _model_registry.DEFAULT_COST_CAP
+            )
+        )
 
         # Request defaults
         self.timeout_var.set(
@@ -4954,6 +5053,7 @@ class GlobalOptionsDialog(tk.Toplevel):
             base_url=self.base_url_var.get(),
             model=self.model_var.get(),
             temperature=self.temperature_var.get(),
+            cost_cap=self._get_cost_cap_value(),
         )
 
         self.options.request = RequestSettings(
@@ -5129,6 +5229,7 @@ class GlobalOptionsDialog(tk.Toplevel):
                 "provider": self.options.api.provider,
                 "model": self.options.api.model,
                 "temperature": str(self.options.api.temperature),
+                "cost_cap": str(self.options.api.cost_cap),
                 "timeout": str(self.options.request.timeout),
                 "retries": str(self.options.request.retries),
                 "rate_limit_requests": str(self.options.request.rate_limit),

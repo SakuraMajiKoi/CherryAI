@@ -36,6 +36,7 @@ class LoadingProgressDialog:
         self.cancelled = False
         self._total = max(total_files, 1)
         self._loaded = 0
+        self._phase_text = "Preparing"
 
         self._dialog = tk.Toplevel(parent)
         self._dialog.title("Loading Files...")
@@ -46,7 +47,7 @@ class LoadingProgressDialog:
             self._dialog,
             parent=parent,
             window_key="LoadingProgressDialog",
-            default_geometry="400x130",
+            default_geometry="420x170",
             center_on_parent=True,
         )
 
@@ -55,6 +56,9 @@ class LoadingProgressDialog:
 
         frame = ttk.Frame(self._dialog, padding=15)
         frame.pack(fill="both", expand=True)
+
+        self._phase_label = ttk.Label(frame, text=self._phase_text, anchor="w")
+        self._phase_label.pack(fill="x", pady=(0, 4))
 
         # Current file label
         self._file_label = ttk.Label(
@@ -71,6 +75,13 @@ class LoadingProgressDialog:
         )
         self._progress["maximum"] = self._total
         self._progress.pack(fill="x", pady=(0, 5))
+
+        self._detail_label = ttk.Label(
+            frame,
+            text="",
+            anchor="w",
+        )
+        self._detail_label.pack(fill="x", pady=(0, 5))
 
         # Count label + Cancel button
         bottom = ttk.Frame(frame)
@@ -98,7 +109,40 @@ class LoadingProgressDialog:
         self._progress["value"] = self._loaded
         self._count_label.configure(text=f"{self._loaded} / {self._total} files")
         self._file_label.configure(text=current_file)
-        self._dialog.update_idletasks()
+        self._detail_label.configure(text="")
+        self._pump_events()
+
+    def set_phase(self, text: str) -> None:
+        """Update the current phase label."""
+        self._phase_text = text
+        self._phase_label.configure(text=text)
+        self._pump_events()
+
+    def update_staging(
+        self,
+        *,
+        rel_path: str,
+        current_file: int,
+        total_files: int,
+        file_bytes: int,
+        file_total_bytes: int,
+    ) -> bool:
+        """Update progress while staging full source trees."""
+        self._total = max(total_files, 1)
+        self._progress["maximum"] = self._total
+        self._loaded = min(max(current_file, 0), self._total)
+        self._progress["value"] = self._loaded
+        self._count_label.configure(text=f"{min(current_file, total_files)} / {total_files} files")
+        self._phase_label.configure(text="Staging Original tree")
+        self._file_label.configure(text=rel_path)
+        if file_total_bytes > 0:
+            self._detail_label.configure(
+                text=f"{self._format_size(file_bytes)} / {self._format_size(file_total_bytes)}",
+            )
+        else:
+            self._detail_label.configure(text="")
+        self._pump_events()
+        return not self.cancelled
 
     def close(self) -> None:
         """Close the progress dialog."""
@@ -116,4 +160,25 @@ class LoadingProgressDialog:
         """Handle cancel button or window close."""
         self.cancelled = True
         self._file_label.configure(text="Cancelling...")
-        self._dialog.update_idletasks()
+        self._pump_events()
+
+    def _pump_events(self) -> None:
+        """Process pending UI events so long copies stay responsive."""
+        try:
+            self._dialog.update_idletasks()
+            self._dialog.update()
+        except tk.TclError:
+            pass
+
+    @staticmethod
+    def _format_size(size: int) -> str:
+        """Format a byte count for the detail label."""
+        value = float(max(size, 0))
+        units = ["B", "KB", "MB", "GB", "TB"]
+        for unit in units:
+            if value < 1024.0 or unit == units[-1]:
+                if unit == "B":
+                    return f"{int(value)} {unit}"
+                return f"{value:.1f} {unit}"
+            value /= 1024.0
+        return f"{int(size)} B"

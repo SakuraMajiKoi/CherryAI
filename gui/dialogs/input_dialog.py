@@ -21,9 +21,29 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _path_matches_format_filter(path: Path, format_filter: str) -> bool:
+    """Return whether *path* should be visible for the selected format."""
+    if format_filter == "auto":
+        return path.suffix.lower() in SUPPORTED_SUFFIXES
+
+    try:
+        from CherryAI.formats import get_parser_registry
+
+        parser = get_parser_registry().get(format_filter)
+        if parser is not None:
+            return parser.can_handle(path)
+    except Exception:
+        pass
+
+    allowed_suffixes = FORMAT_EXTENSIONS.get(format_filter)
+    if allowed_suffixes is None:
+        return True
+    return path.suffix.lower() in allowed_suffixes
+
 # Supported file extensions
 SUPPORTED_SUFFIXES: Set[str] = {
-    ".txt", ".csv", ".tsv", ".json", ".xlsx",
+    ".txt", ".csv", ".tsv", ".json", ".xlsx", ".xp3",
     ".png", ".jpg", ".jpeg", ".bmp",
 }
 
@@ -34,6 +54,7 @@ FORMAT_EXTENSIONS = {
     "tsv": {".tsv"},
     "json": {".json"},
     "xlsx": {".xlsx"},
+    "kirikiri2": {".ks", ".tjs", ".xp3"},
     "rpgmaker": {".json", ".js"},
     "image": {".png", ".jpg", ".jpeg", ".bmp"},
 }
@@ -88,8 +109,8 @@ class UnifiedInputDialog(tk.Toplevel):
         self._suggested_project_name = suggested_project_name
         self._project_name: str = ""
         
-        # Result - now includes project_name and auto_pipeline
-        self.result: Optional[Tuple[List[Path], str, str, str, str]] = None
+        # Result - now includes project_name, auto_pipeline, and source handling.
+        self.result: Optional[Tuple[List[Path], str, str, str, str, str]] = None
         
         self.title("Select Files or Folders")
         self.transient(parent)
@@ -316,6 +337,17 @@ class UnifiedInputDialog(tk.Toplevel):
         )
         encoding_cb.pack(side="left")
 
+        ttk.Label(options_frame, text="Original:").pack(side="left", padx=(20, 5))
+        self._source_mode_var = tk.StringVar(value="copy")
+        source_mode_cb = ttk.Combobox(
+            options_frame,
+            textvariable=self._source_mode_var,
+            values=["copy", "move", "external"],
+            width=10,
+            state="readonly",
+        )
+        source_mode_cb.pack(side="left")
+
         # Typing Enabled toggle button
         from CherryAI.functions.ini_manager import get_default, set_default
         typing_on = get_default("session", "typing_enabled", True, bool)
@@ -412,12 +444,7 @@ class UnifiedInputDialog(tk.Toplevel):
 
         # Filter files by format if needed
         format_filter = self._format_var.get() if hasattr(self, "_format_var") else "auto"
-        if format_filter != "auto" and format_filter in FORMAT_EXTENSIONS:
-            allowed_suffixes = FORMAT_EXTENSIONS[format_filter]
-            files = [f for f in files if f.suffix.lower() in allowed_suffixes]
-        else:
-            # Show only supported file types
-            files = [f for f in files if f.suffix.lower() in SUPPORTED_SUFFIXES]
+        files = [f for f in files if _path_matches_format_filter(f, format_filter)]
 
         # Add folders
         for folder in folders:
@@ -568,11 +595,12 @@ class UnifiedInputDialog(tk.Toplevel):
     def _quick_file_select(self) -> None:
         """Open a quick file dialog for direct file selection."""
         filetypes = [
-            ("All Supported", "*.txt *.csv *.tsv *.json *.xlsx *.png *.jpg *.jpeg *.bmp"),
+            ("All Supported", "*.txt *.csv *.tsv *.json *.xlsx *.xp3 *.png *.jpg *.jpeg *.bmp"),
             ("Text Files", "*.txt"),
             ("CSV Files", "*.csv"),
             ("JSON Files", "*.json"),
             ("Excel Files", "*.xlsx"),
+            ("XP3 Archives", "*.xp3"),
             ("Image Files", "*.png *.jpg *.jpeg *.bmp"),
             ("All Files", "*.*"),
         ]
@@ -619,7 +647,14 @@ class UnifiedInputDialog(tk.Toplevel):
             from CherryAI.functions import ini_manager
             ini_manager.set_last_input_dir(current_dir)
 
-        self.result = (list(self._selected_paths), format_filter, encoding, project_name, self._pipeline_var.get())
+        self.result = (
+            list(self._selected_paths),
+            format_filter,
+            encoding,
+            project_name,
+            self._pipeline_var.get(),
+            self._source_mode_var.get(),
+        )
 
         if self._on_load_callback:
             self._on_load_callback(self._selected_paths, format_filter, encoding)
@@ -631,7 +666,7 @@ class UnifiedInputDialog(tk.Toplevel):
         self.result = None
         self.destroy()
 
-    def show(self) -> Optional[Tuple[List[Path], str, str, str, str]]:
+    def show(self) -> Optional[Tuple[List[Path], str, str, str, str, str]]:
         """Show the dialog and wait for result.
 
         PHASE 58.12: Result now includes project name.

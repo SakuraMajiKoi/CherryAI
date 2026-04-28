@@ -1,6 +1,6 @@
-  - postprocess.py - Step 6: Postprocess 🔗postprocess, manifest_fields; _FAILURE_POLICY_MAP for legacy enum mapping; translated input uses stage ceiling `tl → prepro → orig`; dedup-tagged rows skip batch placeholder fallback and `recover_line()` so duplicate rows are restored only from source-line postprocessing and do not accumulate false placeholder/code-pattern flags; aggressive number restoration now routes through shared `aggressive_restore_line()` and accepts both legacy number lists and indexed token maps (`<NUM1>`, `<NUM2>`, ...); Processed Lines adds a dynamic flagged-case combobox and stores recovery-detail text in row metadata for searchable filtering
-6. Aggressive Number Restoration — replace aggressive dedup numeric placeholders from `aggr_numbers`; single-slot rows use `<NUM>`, while multi-slot rows use indexed tokens such as `<NUM1>`, `<NUM2>`, ... so reordered translations restore by explicit slot instead of left-to-right position
-9. Aggressive Dedup Restoration (P5) — restore numbers from per-line data, including sources reached through chained dedup resolution; step data accepts legacy lists and indexed token maps for backward-compatible manifest recovery
+  - postprocess.py - Step 6: Postprocess 🔗postprocess, manifest_fields; _FAILURE_POLICY_MAP for legacy enum mapping; translated input uses stage ceiling `tl → prepro → orig`; dedup-tagged rows skip batch placeholder fallback and `recover_line()` so duplicate rows are restored only from source-line postprocessing and do not accumulate false placeholder/code-pattern flags; aggressive number restoration now derives slots from each line's original text via shared `aggressive_numbers_for_text()` and restores through `aggressive_restore_line()`, preserving indexed tokens (`<NUM1>`, `<NUM2>`, ...) for reordered translations; Processed Lines adds a dynamic flagged-case combobox and stores recovery-detail text in row metadata for searchable filtering
+  6. Aggressive Number Restoration — recompute aggressive dedup numeric placeholders from the original line text; single-slot rows use `<NUM>`, while multi-slot rows use indexed tokens such as `<NUM1>`, `<NUM2>`, ... so reordered translations restore by explicit slot instead of left-to-right position
+  9. Aggressive Dedup Restoration (P5) — resolve canonical `D{idx}` / `AD{idx}` tags first, restore numbers from the duplicate row's own original text, and keep legacy step-data maps only as backward-compatible fallback for older manifests
 CHERRYAI - TECHNICAL DOCUMENTATION
 
 For Developers
@@ -34,7 +34,7 @@ MODULE AWARENESS (Always check these when implementing features):
 - formats/      : 8 format handlers - file I/O for CSV, TXT, JSON, etc.
 - gui/steps/    : 10 workflow tabs - display and user interaction only
 - gui/components/: Reusable UI widgets (1 module: table.py)
-- gui/dialogs/  : Modal dialogs and forms (7 modules: global_options.py, project_dialog.py, input_dialog.py, loading_progress.py, password_dialog.py, table_view.py, api_log_view.py)
+- gui/dialogs/  : Shared dialog modules for options/forms plus Full Table View, Editor, API Log, Ledger, and RegEx Maker
 - gui/widgets/  : Reusable standalone widgets (1 module: password_strength.py) [NEW 2026]
 - gui/helpers/  : 7 adapter modules bridging GUI config to processing (mode, analysis, glossary, chunker, prompt, manifest_binding, tooltip)
 - gui/state/    : Application state management (1 module: store.py)
@@ -131,7 +131,7 @@ TABLE OF CONTENTS
         * INI location: user/CherryAI.ini (automigrared from root on first run)
         * optionxform = str: case-preserving keys (required for preset names like "Natural")
         * _REQUIRED_SECTIONS: all 10 sections always present; auto-initialised + saved on load
-       * `[ui]` stores GUI-only persistence: `design`, `save_window_dimensions`, `launch_maximized`, `window_geometries`, `window_states`
+      * `[ui]` stores GUI-only persistence: `design`, `save_window_dimensions`, `launch_maximized`, `window_geometries`, `window_states`, and explicit `regex_maker_option_defaults`
        * GUI helpers: get/set GUI design, save-window toggle, maximize toggle, and per-window geometry/state JSON accessors
         * get_all_presets("style"|"tone") — returns built-in + user presets merged
         * set_preset_text / delete_preset — saves to [style] or [tone] section
@@ -142,6 +142,18 @@ TABLE OF CONTENTS
      3.34 manifest_manager.py ✅🔗 - Unified manifest state management (TASK 19)
        * Sparse line-field helpers include `clear_line_field()` for removing redundant per-line stage output when a result matches its stage input
        * Canonical content tags now include `items`, so parser-provided item rows remain first-class content during normalization and reload
+      * Editor backend helpers: `get_editor_file_view()` resolves staged `Translated/` → `Patch/Translated/` → `Original/` full-file content, emits unified diff-to-original plus diff-to-patch snapshots, derives parser-backed line history against manifest-resolved pipeline text, and returns locator metadata plus saved editor-state references for shared-line ownership
+      * Shared locator lookup: `get_lines_for_locator_target()` resolves file-scoped `idx` / `ln` / optional `f` targets for the retained `Lines Only` surface and Editor handoff
+      * Editor persistence: `save_editor_patch()` now writes exact text into staged `Translated/`, captures rollback artifacts in `Patch/Translated/` before overwrite, and stores bounded editor history, diff snapshots, translated/patch artifact references, locator metadata, latest effective row-state metadata, and parser-backed line-history metadata in top-level `EditorState.files[rel_path]`
+      * Shared staged helper base: `ensure_translated_file_path()`, `ensure_patch_original_file_path()`, and `ensure_patch_translated_file_path()` create the staged tree on demand, while `create_forward_patch_for_original()` and `capture_reverse_patch_for_translated()` provide hash-first forward/reverse patch artifact generation for later save/output flows
+            * Shared staged save pipeline: `render_manifest_entry_to_path()`, `stage_translated_output_file()`, `capture_reverse_patch_for_translated_bytes()`, and `save_lines_only_changes()` centralize locator-driven file rebuilds, translated overwrite/synthesis decisions, and per-row latest-stage promotion so GUI code does not own rebuild or patch bookkeeping
+          * Implemented Editor redesign slice: `gui/dialogs/patch_editor_view.py` now consumes those shared ManifestManager helpers for `Full Files` load/diff/history assembly, live diff-to-patch rendering, and saved patch-diff recovery instead of duplicating locator or diff logic in GUI code
+          * Implemented Editor redesign save target: `Lines Only` saves now resolve affected files by `idx`, `ln`, and optional `f`, update existing `Translated/` files when present, make the saved stage the latest effective row state for each changed `idx`, rebuild translated patch artifacts when needed, and keep bounded manifest history entries with optional human-readable change labels
+      * Implemented manifest schema base: sparse line rows now persist mandatory `ln`, preserve optional `f`, normalize legacy `line` / `field` aliases on load/save, and keep `idx`, `ln`, optional `f`, and `tags` adjacent ahead of payload fields in canonical order
+      * Preferred implementation order for that upgrade: first extend shared `ManifestManager` canonicalization/save/load plus Step 0 / Step 9 helpers (`canonicalize_line_dict()`, `canonicalize_lines()`, `load()`, `save()`, `_sync_lines_to_manifest()`, `_write_injection()`) so CherryAI owns the mapping centrally; only extend parser contracts afterward for formats that cannot be reconciled from staged originals and extraction order
+      * Shared locator refresh now also exists for changed source files: `refresh_line_locators_for_entry()` reapplies CherryAI's staged-source mapping to an existing file slice so `ln` / optional `f` can be updated when a file's current source text has moved rows without a full rebuild
+      * Implemented compact writer rule: `lines[]` rows now keep `idx`, `ln`, optional `f`, and `tags` on the opening line while writing each sparse stage/auxiliary field on its own following line; `filedir[]`, glossary `project_entries`, and `code_patterns[]` rows are emitted one object per line with preserved indent and no brace-only lines for those compact rows
+      * Implemented metadata migration: preprocessing no longer persists row-local `dedup_map`, `aggr_dedup_map`, `aggr_numbers`, `placeholder_captured`, or `ellipsis_counts`; canonical tags now carry dedup lineage plus per-rule placeholder ownership (`generic_placeholderN`, `custom_placeholderN`), Step 3 stores one shared `placeholder_lookup` table for generic/custom rule metadata, and postprocessing recomputes placeholder capture, ellipsis counts, and aggressive number slots from original lines while older manifests can still fall back to legacy dedup step data
   3.35 manifest_fields.py ✅ - Manifest field type helpers (TASK 22.1) + special format helpers (TASK 22.2) + shared priority resolution API: resolve_line_field(), resolve_line_field_with_source(), resolve_line_field_from(), resolve_line_field_for_stage(), get_final_field_source(), get_latest_line_text(), get_line_text_for_stage(), get_all_lines_resolved(), get_all_lines_for_stage(); PIPELINE_FIELDS chain: final → wordwr → qa → postpro → tl → prepro → orig for final display/output, while stage helpers enforce ceilings (Postprocessing: tl → prepro → orig; QA: postpro → tl → prepro → orig; Wordwrap: qa → postpro → tl → prepro → orig); save_code_glossary/load_code_glossary support count as int or `[total, inst1_ct, ...]` list with instance_counts deserialization; save_character_notes/load_character_notes with count field
    3.36 preset_manager.py ✅ - Preset save/load/delete operations (TASK 30.1)
    3.37 mock_translator.py ✅ - Mock translation engine with flaw injection (Phase 56)
@@ -153,9 +165,19 @@ TABLE OF CONTENTS
      3.43 output.py ✅🔗 - Output generation utilities (Phase 31, Step 8)
        * `sanitize_output_text()` strips only trailing `\r` / `\n` from resolved manifest output before Step 9 verification, logging, and generic file writing
    3.44 process_order.py ✅🔗 - Pre/post processing order management (Phase 26)
-   3.45 usage_tracker.py ✅ - API usage analytics and tracking (Phase 17.5)
+     3.45 usage_tracker.py ✅ - API usage analytics and tracking (Phase 17.5)
+       * Live store: TSV ledger at `user/ledger.tsv` keyed by one canonical `LEDGER_COLUMNS` schema
+       * Legacy compatibility: `user/usage.db` is deprecated migration input only and is imported idempotently via deterministic `legacy-sqlite:{id}` request references
+       * Public query/accounting helpers remain in place (`record_usage()`, `query_usage()`, `usage_summary()`, `total_cost()`, `total_tokens()`, `export_csv()`, `purge_before()`, `record_count()`)
+       * Current shared ledger bridge: `record_usage_event()` accepts structured API log entries or canonical ledger rows and deduplicates by stable request reference
+       * Current analytics surface: `query_usage()` supports project/task/provider/model/status/request-ref/date filtering, `usage_summary()` supports grouped or ungrouped Ledger views, and `summarize_usage_totals()` provides total/estimate/success-rate cards plus Unknown-pricing counts for the GUI
+       * Legacy caller fields (`prompt_tokens`, `completion_tokens`, `cost`, `success`) are normalized centrally into the ledger schema
    3.46 estimation.py ✅ - Token estimation utilities (legacy CLI support)
-   3.47 api_log.py ✅🔗 - Structured API log store with per-project persistence (JSON lines format), category/status filtering, live subscriptions for GUI updates
+     3.47 api_log.py ✅🔗 - Structured API log store with per-project persistence (JSON lines format), category/status filtering, live subscriptions for GUI updates
+       * Current ledger bridge: `build_ledger_row_from_entry()` / `LogEntry.to_ledger_row()` normalize structured request pairs into the shared ledger row schema without reconstructing payloads
+       * Current mirroring path: completed entries are mirrored into the TSV ledger from the shared store instead of parallel ad-hoc accounting paths
+       * Current lookup helpers: `find_entry_by_request_ref()` / `find_entries_by_request_refs()` resolve Ledger request references back to structured API log entries
+       * Structured entries now persist ledger-ready metadata through the request pair plus saved extras: resolved project/provider/model/task-type fallbacks, validation state/category, failure kind, exact-response cost snapshots from `user/API.ini`, and explicit Unknown pricing when model data is missing
    3.47 term_translation.py ✅🔗 - Unified term translation dispatcher (Romaji/LLM); json_schema structured output, prompt_type, configurable prompts; extract_code_segments() and validate_translation_code() for bracket-balanced code preservation validation
    
    3.48 glossaries/ (subfolder - 6 files)
@@ -195,6 +217,13 @@ TABLE OF CONTENTS
         * _EXAMPLE_BANK: ~35 example pairs covering PLACEHOLDER, VARIABLE, COLOR, LINEBREAK, MEDIA, ICON, FONT, SPEAKER, PRESERVE, RUBY, SPAN, COMPLEX, PLAIN
         * _detect_project_tags() maps manifest code_patterns to example bank tags
         * _renumber_lines() ensures sequential LineN keys across grouped output blocks; Input/Output pairs share same numbering
+
+     3.52 regex_maker.py ✅🔗 — Shared RegEx Maker candidate generation and replacement inference
+       * Core dataclasses: `RegexExampleRow`, `SpanAnnotation`, `RegexMakerOptions`, `RegexExampleSet`, `RegexCandidate`, and `RegexGenerationResult`
+       * Shared helpers: `generate_regex_suggestions()`, `infer_replace_pattern()`, `compile_candidate_pattern()`, `ensure_row_alignment()`, and `build_restriction_profile()`
+       * Candidate families currently include literal, digit wildcard, common prefix/suffix capture, guided annotation, and fallback patterns scored against all enabled examples
+       * Replacement inference stays aligned with CherryAI's Python `re` behavior and emits Python replacement-group syntax such as `\g<1>`
+       * GUI integration: consumed by `gui/dialogs/regex_help_view.py` so the tkinter layer remains display-only and all ranking/validation logic stays in `functions/`
 
 3A. PROVIDERS/ MODULES (7 providers - Unified LLM Provider Interface)
     ✅ = Verified exists | 🔗 = Integrated with api_client.py & options.py
@@ -249,7 +278,7 @@ TABLE OF CONTENTS
    5.3 document.py ✅ - PDF, EPUB handlers (placeholder)
    5.4 html.py ✅ - HTML parsing (under development)
    5.5 rpgmaker.py ✅ - RPG Maker MV/MZ (placeholder)
-  5.6 parser_base.py ✅ - ParserScript ABC, WordwrapConfig, ForbiddenChars, TagRules, ExtractedLine, SpeakerInfo; _split_speaker_dialogue() helper; inject_to() standardized 4-step Speaker:Dialogue-aware handshake (load→extract_tagged with speaker metadata→split speaker/dialogue and replace independently→save) returning List[int] failures, with a legacy adjacent `_translated` fallback only when a non-tagged parser cannot match any extracted key at all
+  5.6 parser_base.py ✅ - ParserScript ABC, WordwrapConfig, ForbiddenChars, TagRules, ExtractedLine, SpeakerInfo; _split_speaker_dialogue() helper; inject_to() standardized 4-step Speaker:Dialogue-aware handshake (load→extract_tagged with speaker metadata→split speaker/dialogue and replace independently→save) returning List[int] failures, with a legacy adjacent `_translated` fallback only when a non-tagged parser cannot match any extracted key at all; tagged metadata is now aligned to the actual search-key order so reverse Step 9 injection still keeps speaker-aware replacement intact for cleaned keys
    5.7 parser_rpgmaker.py ✅ - RpgMakerMVParser, RpgMakerMZParser implementations
    5.8 json_lenient.py ✅ - Lenient JSON parsing with error recovery
    5.9 handshake.py ✅ - ParserHandshake protocol: SpeakerInfo, ExtractedLine, ParserError, validate_parser()
@@ -260,6 +289,10 @@ TABLE OF CONTENTS
        * Bare `-"...` lines can start a fresh dialogue block for the current speaker after intervening `~画像` / `~ボイス` commands, preventing missed half-lines
        * Targeted quoted assignments may span physical source lines and still round-trip as one logical payload
        * Parser-side injection no longer performs code recovery or bracket-safety rewrites; code protection/recovery remain downstream responsibilities
+    5.11 KiriKiri2.py ✅ - KiriKiri2 parser for KAG `.ks` scripts plus targeted `Menus.tjs` / `MainWindow.tjs` handling
+      * Detects parser-owned files by extension/content and uses cp932-aware loading for KiriKiri script paths
+      * Preserves KAG script extraction/injection plus menu-caption handling from the legacy parser references while moving the `MainWindow.tjs` wordwrap patch into a parser-owned post-injection hook
+      * Includes XP3 helpers for settings detection, listing, unpacking, and rebuilding redirected/compressed archives, with manifest-facing support for `custom_magic`, `header_offset`, and `key`. The current slice treats the XP3 `adlr` chunk as the engine's file-hash field rather than an Adler32 integrity check and auto-infers the validated `xor:1` protected-text helper for readable `dev/testgame/data.xp3` members such as `AppConfig.tjs`. Broader protected `.ks` scenario decoding still needs real archive-side filter research rather than comparison-based fallback behavior.
 
 6. GUI V2 ARCHITECTURE (gui/ - 7 packages)
    
@@ -270,22 +303,22 @@ TABLE OF CONTENTS
    6.4 gui/steps/ (10 files - 10 workflow tabs)
        - __init__.py - Step exports
        - base.py - BaseStep abstract class (TASK 43.14: tab caching infra; on_new_project() lifecycle method for state flush)
-      - input_extract.py - Step 0: Input/Extraction 🔗formats/ (Phase 60: clickable column header sort with ▲/▼ indicators, file list filter entry, type column refresh fix, cross-file preview search with idx column and auto file-switching; non-destructive file addition with source root validation; Import Translation selection dialog with line fields and settings sections; preview columns: Project/File 1-based; parser-backed files are staged to `Original/` before final manifest sync and then re-extracted from that staged tree so LightVN project-scoped extraction stays aligned with Output injection; manifest/filedir rehydration now also restores `LoadedFile.tags` from canonical `lines[].tags`)
+      - input_extract.py - Step 0: Input/Extraction 🔗formats/ (Phase 60: clickable column header sort with ▲/▼ indicators, file list filter entry, type column refresh fix, cross-file preview search with idx column and auto file-switching; non-destructive file addition with source root validation; Import Translation selection dialog with line fields and settings sections; preview columns: Project/File 1-based; parser-backed files are staged to `Original/` before final manifest sync and then re-extracted from that staged tree so LightVN project-scoped extraction stays aligned with Output injection; manifest/filedir rehydration now also restores `LoadedFile.tags` from canonical `lines[].tags`; Step 0 now captures stable per-row `ln` plus optional `f` from the staged source view for both full sync and add-files paths; folder input stages the complete selected source tree into `Original/`, supports `copy` / `move` / `external` source handling, and drives byte-aware progress updates during large staged copies; parser-selected folder loads now collect the full tree first and then apply `parser.can_handle()` so KiriKiri2 `.xp3` targets are not dropped by stale suffix prefilters and unsupported companions still enter `Original/`; archive project bootstrap now starts empty instead of trying to read raw `.xp3` files as utf-8 text; Step 0 token validation now buffers warnings/errors across one load batch, writes one manifest-adjacent `.input_extract_validation.log`, and shows one final summary dialog instead of per-file popups; `.xp3` inputs now route through KiriKiri2 archive detection, protected-text key inference, parser-only archive-member loading, `Package/Original` staging, and manifest-backed `ArchiveSettings` persistence)
        - analysis.py - Step 1: Analysis ❌NO shared imports
        - costs.py - Step 4: Costs (renamed from estimate.py in Phase 40; _estimate_via_formation() returns FormationResult with per-request line lists; _compute_per_request_prompt_overhead() uses gather_prompt_data()+build_request_prompt() per chunk for selective filtering; _get_prompt_tokens() and _get_static_prompt_tokens() also unified via gather_prompt_data()+build_request_prompt(); per-model API.ini settings take priority over Global Options — _do_estimation() reads chunk_size/tokens_limit from _chunk_var/_tokens_var (set by _load_model_settings()), only request_slicing read from GlobalOptions; respects request_slicing mode; Per-model settings saved/loaded via api_config; "📤 Apply Settings to Model" button is a one-way write to API.ini — model changes do NOT reload settings, loaded once on first tab entry via _settings_loaded_once flag; Translation Options row with Thinking, Translated Context, Rolling Context spinboxes; Request Mode 2×2 grid (Normal/Batch/Flex/Priority) with "(Available)"/"(Unavailable)" suffix labels and Selected (blue) states driving mode-specific pricing; _recalculate_costs_for_mode() instantly updates costs from existing token counts without re-estimation; _reprice_for_model() fast-reprices all cost and time labels when model changes using stored EstimationResult token counts — no re-estimation required; EstimationResult.num_requests stores per-side request count to enable fast reprice; EstimationProgressDialog is a non-blocking Toplevel that shows 7 step indicators (○/●/✓) and a ttk.Progressbar — opened by _run_estimation(), updated via _report_progress() from background thread using after(), closed by _estimation_complete(); Model combo disabled during estimation (_run_estimation sets state="disabled", _estimation_complete restores state="readonly"); CACHE_HIT_RATE=0.80 applied to static prompt prefix via _get_static_prompt_tokens() for cache savings calculation; Token Counts panel shows Input/Prompt/Cached/Total/Output rows — Prompt Tokens displays the non-cached portion (prompt_tokens − cached_tokens) so that Input + Prompt + Cached = Total Input; EstimationResult dataclass includes content_tokens, prompt_tokens, cached_tokens, num_requests; input_cost stores content-only cost, prompt_cost stores non-cached prompt cost, cached_input_cost stores cached portion cost; Cost Estimate panel is purely additive: Input (content) + Prompt (non-cached) + Cached + Output = Total; all four cost rows are primary un-indented rows; module-level _ceil_to_cents() and _fmt_cost() helpers format every displayed dollar amount rounded up to the next cent; Full estimation persisted to manifest via _save_estimation_to_manifest(); Estimate button renamed to "↻ Update Counts" after first run)
        - information.py - Step 2: Information 🔗manifest_fields (Bug Fix: on_leave() and _save_metadata() now merge *_enabled toggle BooleanVar values into metadata dict after ProjectMetadata.to_dict() — fixes toggle state erasure on tab change; Save button removed from header — auto-save on tab change is sufficient; Bug Fix: on_enter() reordered to load _load_metadata() BEFORE _load_characters_from_manifest()/_load_code_patterns_from_manifest() so authoritative top-level manifest data overrides stale step_state; on_leave() now calls _save_characters_to_manifest() and _save_code_patterns_to_manifest() to sync dual storage; _import_analysis_speakers() persists to top-level immediately)
-      - preprocess.py - Step 3: Preprocessing 🔗manifest_fields; `_update_step_data()` persists `prepro` / `tags` by mutating loaded manifest line dicts in one indexed pass and then calling `_mark_dirty()` once, matching the `9721cba` behavior restored to avoid large-project tab-entry and Apply Rules freezes
+      - preprocess.py - Step 3: Preprocessing 🔗manifest_fields; `_update_step_data()` persists `prepro` / `tags` by mutating loaded manifest line dicts in one indexed pass and then calling `_mark_dirty()` once, matching the `9721cba` behavior restored to avoid large-project tab-entry and Apply Rules freezes; obsolete per-line lookup maps (`dedup_map`, `aggr_dedup_map`, `aggr_numbers`, `protect_code_captured`, `placeholder_records`, `placeholder_captured`, `ellipsis_counts`) are pruned from step data, while one shared `placeholder_lookup` table plus anchor captures remain persisted for postprocessing
       - translate.py - Step 5: Translation 🔗api_client, mock_translator, prompt_adapter, manifest_fields (Phase 43: merged columns, mock translation, provider model list, language skip, prompt editor redesign, retry refinement, tab caching; Preview Requests: PreviewRequest dataclass with _format_input_lines() for numbered line display and io_examples field, FILTER_PARTS constant (13 entries: meta, language, system_instructions, io_examples, style, tone, summary, genre, pov, conditional_prompts, glossary, rolling_context, input_lines), RequestPreviewDialog class with Pure/Formatted/Plain views and Jump/Search/Filter toolbar, _plain_text() preserves curly braces for game text, _build_preview_requests() mirrors real translation request building and gates each labeled section by *_enabled metadata flags, generates io_examples block with fill mode support, syncs _translation_options from current UI before _build_chunks(); _build_system_prompt_from_manifest() reads from `step_state.Information.data.metadata`; _load_model_settings() loads per-model API.ini settings (chunk_size, temperature, rolling_context, thinking) with Global Options fallback on tab entry; _build_chunks() reads rolling_context_between/after and chunk_max_tokens from per-model API.ini via get_model_settings() with Global Options fallback; Request Options: Key, Model, Request Mode combobox (Normal/Batch/Flex/Priority with "(Unavailable)" suffixes via _refresh_request_mode_options()), Model Settings/Translation Options Change… buttons, Character Whitelist/Blacklist (manifest-bound), Ban Tokens; TranslationOptions.request_mode field passed to APIConfig.request_mode in _do_translation(); _apply_char_filters() post-processes translations; _sync_from_global_options() syncs all hidden vars from GlobalOptions including TranslationSettings; _get_request_slicing_mode() reads slicing from GlobalOptions.translation)
-      - postprocess.py - Step 6: Postprocess 🔗postprocess, manifest_fields; _FAILURE_POLICY_MAP for legacy enum mapping; translated input uses stage ceiling `tl → prepro → orig`; dedup-tagged rows skip batch placeholder fallback and `recover_line()` so duplicate rows are restored only from source-line postprocessing and do not accumulate false placeholder/code-pattern flags; Processed Lines adds a dynamic flagged-case combobox and stores recovery-detail text in row metadata for searchable filtering
+      - postprocess.py - Step 6: Postprocess 🔗postprocess, manifest_fields; _FAILURE_POLICY_MAP for legacy enum mapping; translated input uses stage ceiling `tl → prepro → orig`; dedup-tagged rows skip batch placeholder fallback and `recover_line()` so duplicate rows are restored only from source-line postprocessing and do not accumulate false placeholder/code-pattern flags; custom placeholder captures and ellipsis counts are recomputed from each line's original text, canonical dedup lineage comes from `lines[].tags` (`dedup,D{idx}` / `aggressive_dedup,AD{idx}`), and legacy dedup step-data maps remain fallback-only for older manifests; Processed Lines adds a dynamic flagged-case combobox and stores recovery-detail text in row metadata for searchable filtering
       - qa.py - Step 7: QA 🔗validation, manifest_fields; table columns are Original / Quality Assurance / Overwrite; review input uses stage ceiling `postpro → tl → prepro → orig`; `qa` is review/display text only, while `qa_overwrite` is only persisted for explicit user edits that differ from QA input; includes inline overwrite editing and Copy to Overwrite action
       - wordwrap_overwrite.py - Step 8: Wordwrap 🔗wordwrap, manifest_fields; internal step id 8 but ninth user-facing tab after QA; preview column "Input"; input uses stage ceiling `qa → postpro → tl → prepro → orig`; manifest `filedir[].format` drives the preview format selector and per-format configs; stored `wordwr` is restored into the Wordwrap column without input fallback, and only explicit Apply persists sparse `wordwr` output; WrapMode now exposes `CUSTOM` and `SIMPLE` while still mapping legacy `manual` manifests to `CUSTOM`; WrapTarget adds `TAGS_FIRST`, `TAGS_ONLY`, `FILE_FIRST`, and `FILE_ONLY` strategies persisted in `WordwrapSettings.Target`; unresolved targets are preserved unchanged instead of defaulting to dialogue; Simple mode applies one shared wrap rule set to the selected file scope and does not auto-run when the mode changes; preview includes a compact Full-Table-View-derived file selector plus `View in File`; speaker-ignore width uses manifest `characters[]` as its allowlist, includes translated speaker aliases, falls back to parser `detect_speakers()` for the loaded preview rows when manifest speaker data is absent, and zero-width code comes only from manifest `code_patterns[]` entries marked `IsInvisible`
-      - output_inject.py - Step 9: Output/Inject 🔗manifest_fields; _NAMING_STRATEGY_MAP for legacy enum mapping; OutputFormat.INJECTION enum; _get_fresh_lines_for_file() for stale-data fix; _write_injection() 4-step parser handshake; manifest-resolved `orig` and output text are sanitized with trailing-newline stripping before verification and writing; _get_same_as_source_dir() returns parent of Original/
+      - output_inject.py - Step 9: Output/Inject 🔗manifest_fields; _NAMING_STRATEGY_MAP for legacy enum mapping; OutputFormat.INJECTION enum; _get_fresh_lines_for_file() for stale-data fix; _write_injection() 4-step parser handshake; shared-line parser formats now match extracted keys to manifest rows by `ln` plus optional `f` before falling back to positional slices, refresh those locators from the current staged source text before verification, reverse only base-handshake parser writes so earlier replacements cannot steal later search keys, and keep parser-driven `inject_to()` overrides such as LightVN in natural extraction order; manifest-resolved `orig` and output text are sanitized with trailing-newline stripping before verification and writing; successful parser-backed export batches now run one parser-owned post hook per touched format so KiriKiri2 can patch `MainWindow.tjs` after file writes; grouped archive outputs now rebuild parser-owned packages such as XP3 from manifest-rendered member files through stored `ArchiveSettings`; _get_same_as_source_dir() returns parent of Original/
    
    6.5 gui/components/ (2 files)
        - __init__.py - Component exports
       - table.py - SharedTable, ColumnDef, TableRow (Phase 43: batch insertion for large datasets; Phase 17: version tracking to cancel stale batches; TASK 71: bulk delete, 2000-row batches; TASK 72: page-based display (5000 rows/page), show_count_filter parameter, "Search:" label rename; text search now scans row values, tags, and nested metadata so Processed Lines can match Recovery Details text)
    
-   6.6 gui/dialogs/ (7 files - 6 dialog modules)
+  6.6 gui/dialogs/ (shared dialog modules + package export)
        - __init__.py - Dialog exports
        - global_options.py - GlobalOptionsDialog with section panels:
          - OptionSection enum: API, REQUEST, TRANSLATION, CACHING, LOGGING, SESSION, GUI, LIMIT, FILE_IO, PROMPTS, SECURITY, UTILITY (12 sections)
@@ -308,9 +341,10 @@ TABLE OF CONTENTS
          - "Set as Default" button saves default model per key via api_config.set_default_model()
          - "Save" button persists filtered model list to API.ini saved_models setting
          - Gemini model IDs normalized (strips "models/" prefix) for display consistency
-         - Filter states (Structured/Batch/No-Optional-Thinking/Cached-Input) saved to API.ini; Structured defaults to checked
+         - Filter states (Structured/Batch/No-Optional-Thinking/Cached-Input/Unknown-Price/Above-Cost-Cap) saved to API.ini; Structured defaults to checked while Unknown/Above-Cost-Cap default to hidden
          - "No / Optional Thinking" filter: shows "✓" for mandatory/builtin, "Optional" for optional, "—" for unavailable; filter excludes mandatory/builtin models (inverted logic)
-         - "Cached Input" filter keeps only models with cached_input_price; Treeview includes Cached $/1M column
+         - "Cached Input" filter keeps only models with cached_input_price; Treeview includes Cached $/1M column plus Status (`OK`, `Free`, `Unknown Price`, `Above Cost Cap`)
+         - Provider row includes persisted `cost_cap` spinbox (`[api].cost_cap` in CherryAI.ini, float/manual entry, 0-999, increment 1)
          - Temperature moved from API section to Request section (renamed "Model Settings")
          - TRANSLATION section: Workflow Defaults + Output Quality settings
          - API key entry with inline Save button between key entry and Show checkbox
@@ -323,7 +357,7 @@ TABLE OF CONTENTS
          - open_or_focus(): single-instance dialog helper keyed on the root window; reuses existing dialog, switches sections, and deduplicates save listeners
          - Sections organized in CATEGORY_ORDER: Connection (incl. Utility), Processing, Application (incl. Add-ons)
        - gui/theme/colors.py - Shared palette registry + live `THEME` proxy; `apply_theme()` styles ttk and classic Tk widgets, and `apply_window_preferences()` restores geometry/maximize preferences while applying the active palette
-       - gui/dialogs/api_log_view.py / gui/dialogs/table_view.py - custom `refresh_theme()` hooks recolor rich text tags, Treeview row tags, alternating dark table rows, and selection bars when the GUI design changes at runtime
+      - gui/dialogs/api_log_view.py / gui/dialogs/table_view.py / gui/dialogs/patch_editor_view.py / gui/dialogs/regex_help_view.py - custom `refresh_theme()` hooks recolor rich text tags, Treeview row tags, alternating dark table rows, selection bars, editor panes, and RegEx Maker outputs when the GUI design changes at runtime
          - UtilitySettings: 18 fields for Term Translation, Gender Inference, and Misc (speaker_threshold) configuration
            - Term Translation: mode (Romaji/LLM), api_key_provider, api_key_name, model, batch_size
            - Gender Inference: mode (Script only/Script + LLM), api_key_provider, api_key_name, model
@@ -367,6 +401,7 @@ TABLE OF CONTENTS
          - Left pane: File browser with multi-select
          - Right pane: Folder browser with multi-select
          - Path list display for selected items
+         - Parser-aware format matching now consults the parser registry so format-specific filters can expose parser-owned targets such as KiriKiri2 `.xp3` archives instead of relying only on static extension tables
          - **Phase 58.12:** Last directory persistence via ini_manager
          - **Phase 58.12:** Project Name field in Options panel (show_project_name parameter)
          - Returns 4-tuple: (paths, format, encoding, project_name)
@@ -397,10 +432,21 @@ TABLE OF CONTENTS
          - Save/Reset/Diff buttons: saves changes to manifest, resets from snapshot, diff mode
          - Change tracking: unsaved changes highlighted; close prompt to save/discard
          - Accessed via "Full Table View" menu bar entry (direct command, no dropdown)
+         - open_or_focus(): shared non-modal reuse helper for the Editor handoff; can retarget the dialog to one file via the existing file-filter path while leaving the legacy direct command intact
          - _FileFilterDropdown helper: hierarchical listbox with scrolling and keyboard nav
+       - patch_editor_view.py - Editor host dialog (2026):
+         - PatchEditorViewDialog: recycled non-modal `Editor` host for the first merge slice
+         - open_or_focus(): single-instance dialog helper keyed on the root window; reuses the existing Editor window and focuses it instead of creating duplicates
+         - Visible mode switch: `Full Files [Switch] Lines Only`
+         - Full Files layout: left file tree, central `tk.Text` editor with undo, inline search/replace controls, bottom diff and patch-diff tabs, and a line-history tab
+         - Full Files backend: uses `ManifestManager.get_editor_file_view()` for staged path resolution, diff-to-original generation, diff-to-patch generation, locator-aware line-history rows, and shared editor-line ownership metadata
+         - Full Files locator UI: matched source lines are highlighted in the editor text, the line-history grid surfaces `idx`, `ln`, and optional `f`, and the current caret or selected history row promotes the active locator target
+         - Lines Only handoff: switching modes opens or focuses `FullTableViewDialog.open_or_focus()` and passes the selected file plus the active locator target through the retained file-filter/locate path
+         - Accessed via the new "Editor" menu bar entry between Full Table View and API Log
        - api_log_view.py - API Log viewer dialog (2026):
          - APILogViewDialog: Non-blocking Toplevel window for viewing structured API log entries; calls self.lift() at end of __init__ to stay visible above translation progress
          - open_or_focus(): single-instance dialog helper keyed on the root window; reuses the existing API Log window and focuses it instead of creating duplicates
+         - External drill-down intake: `apply_external_filters()` accepts Ledger request refs plus optional search/view state so Ledger can reopen the shared API Log window on matching requests
          - Toolbar: search entry, category filter combobox, view mode radio buttons (Sent/Received/Both), display-limit spinbox (All/1000/2500/5000/Nothing), Clear Log button
          - Log display: tk.Text widget with word wrap, color-coded tags (success=green, recovered=yellow, failed=red, pending=grey)
          - Display limit is persisted via `ini_manager` in `[log].api_log_display_limit`; default is `All`, so `_render_wrapped_content()` renders every stored line unless the user chooses a smaller viewer-only limit
@@ -412,6 +458,18 @@ TABLE OF CONTENTS
          - Category filter: All Categories, Main Translation, Term Translation, Gender Inference, Other
          - Search: case-insensitive text search with yellow highlights across all entry fields
          - Accessed via "API Log" menu bar entry (direct command, no dropdown)
+       - regex_help_view.py - RegEx Maker helper dialog (2026):
+         - `RegexHelpDialog`: non-modal Toplevel window opened from `Help -> RegEx Maker`; `open_or_focus()` keeps one shared helper window per root
+         - Thin GUI over `functions/regex_maker.py`: gathers examples, notes, span annotations, and options, then renders ranked search/replace candidates from the shared backend
+         - Example editors: multiple `Line to find` rows plus index-aligned `Replace Target` rows, paste buttons, per-search-row enable toggles, and realtime refresh with debounce
+         - Selection guidance: persistent `tk.Text` span tags support right-click actions for constants, variables, captures, optional spans, literal requirements, and related hints, plus hover labels for teachability
+         - Candidate surface: read-only search/replace outputs, ranked Treeview candidate list, rationale pane, copy buttons, and double-click-to-copy on the search candidate
+         - `RegexOptionsDialog`: structured popup for strictness/whitespace/wildcard controls; explicit defaults round-trip through `ini_manager` key `[ui].regex_maker_option_defaults`
+
+      Planned dialog directions tied to existing modules:
+        - Ledger window (implemented): `ledger_view.py` is a single-instance non-modal dialog opened from the menu bar and Step 4, reads all analytics from shared `functions/usage_tracker.py` helpers, and reuses the shared API Log window for request drill-down
+        - Editor window (implemented staged slice): the host shell, mode handoff, locator-highlighting, retained `Lines Only` locate/jump surface, shared save delegation, and shared staged helper/save pipeline are now implemented; remaining redesign work is later host-surface consolidation, while diffing, parser alignment, locator resolution, staging, and aggregation already stay in shared `functions/` modules
+        - RegEx Maker window (implemented): `regex_help_view.py` is a single-instance non-modal helper opened from Help, while `functions/regex_maker.py` owns candidate generation, ranking, and replacement inference so CherryAI's regex semantics stay shared between GUI guidance and runtime behavior
 
    6.7 gui/widgets/ (2 files - 1 widget module) [NEW 2026]
        - __init__.py - Widget package
@@ -426,7 +484,7 @@ TABLE OF CONTENTS
    6.7 gui/helpers/ (9 files - 7 adapter modules + 1 confirmation module)
        - __init__.py - Helper exports
        - mode_adapter.py - Bridge between GUI config and modi/ modules (TASK 16.5; TASK 72: tags_by_line tracking, progress_cb parameter; TASK 73: apply_dedup_batch, apply_aggressive_dedup_batch, DEDUP_PLACEHOLDER, aggressive helper fallbacks)
-         - Custom Placeholder preprocessing persists both flat captures and token-aware `placeholder_records` so postprocessing can restore named replacements batch-wide when an LLM shifts them onto another line
+         - Placeholder preprocessing now tags lines with `generic_placeholderN` / `custom_placeholderN` and stores one shared `placeholder_lookup`; custom lookup entries can opt into batch-wide recovery with `recover_everywhere=true`, while postprocessing recomputes per-line captures from original text instead of persisting `placeholder_records`
        - analysis_adapter.py - Bridge between GUI and functions/analysis.py (TASK 16.6)
          - detect_individual_codes_batch(): Individual code patterns with counts, types, and instances dict (raw_code → occurrence count per normalized pattern)
          - analyze_lines(): Full analysis with speaker_samples and individual_codes
@@ -462,6 +520,7 @@ TABLE OF CONTENTS
          - create_new() computes folder name for source_root, copies files to Original/
          - source_files is no longer stored; file resolution uses Original/ directory
        - Shared import + patch helpers now live here so Input step stays GUI-only: manifest-to-manifest import, batch file pruning, identical-Original comparison, and Create Patch orchestration all execute in `functions/manifest_manager.py`
+      - Parser-backed project rebuild helpers now also live here: shared post-export hook dispatch, `Package/Original` / `Package/Translated` staging paths, manager-level XP3 package staging helpers, and top-level `ArchiveSettings` storage plus accessors keep archive/project plumbing out of GUI steps
 
    6.10 functions/ini_manager.py - INI Configuration (v3.0 + Phase 62)
        - Central INI path resolution relative to main module
@@ -756,7 +815,10 @@ TABLE OF CONTENTS
          - ManifestManager.remove_files(): batch-prunes filedir entries and rewrites remaining `idx` ranges in one pass; optionally deletes copied `Original/` files
          - ManifestManager.find_identical_original_files(): compares shared `Original/rel_path` files by size + SHA-256 hash
          - ManifestManager.create_patch_from_manifest_path(): imports all supported fields/settings from another manifest, prunes identical files first, then prunes fully matched files as a missing-Original fail-safe
-         - ManifestManager canonicalizes `lines[]` on load/save/set_lines: merges legacy `tag` into `tags` and writes canonical key order `idx`, `tags`, `orig`, `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, then auxiliary fields without stripping later-stage fields from dedup placeholder rows
+         - ManifestManager canonicalizes `lines[]` on load/save/set_lines: merges legacy `tag` into `tags`, persists mandatory `ln`, preserves optional `f`, upgrades legacy `line` / `field` aliases, and writes canonical key order `idx`, `ln`, optional `f`, `tags`, `orig`, `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, then auxiliary fields without stripping later-stage fields from dedup placeholder rows
+         - Implemented shared mapping follow-through: Step 0 now captures `ln` plus optional `f` from staged originals via shared manifest helpers, and Step 9 consumes the same locator mapping during injection verification before using positional fallback paths
+         - `save()` now routes through a manifest-specific formatter: `lines[]` entries keep `idx`, `ln`, optional `f`, and `tags` on the opening line, then write each sparse stage/auxiliary field on its own following line; `filedir[]`, glossary `project_entries`, and `code_patterns[]` rows are emitted one spaced object per line while keeping deterministic order and avoiding brace-only lines for those compact rows
+         - Implemented read/write upgrade for recovery metadata: canonical tags now serve as the primary dedup lineage for row-local consumption, preprocessing no longer saves separate `dedup_map` / `aggr_dedup_map` / `aggr_numbers` / `placeholder_captured` / `ellipsis_counts` lookup maps, and postprocessing recomputes placeholder, ellipsis, and aggressive-number data from the original line text while keeping legacy dedup maps as a compatibility fallback
          - output_inject._safe_output_format(): prevents ValueError on empty/invalid OutputFormat string
          - Preview tree headings: "Idx" → "Project", "#" → "File"; display uses 1-based global idx
          - TranslationOptions.skip_already_translated: bool field for skipping translated lines
@@ -4645,24 +4707,35 @@ Dependencies:
 
 USAGE_TRACKER.PY (Usage Analytics - Phase 17.5)
 
-Purpose: SQLite-backed usage database for token/cost analytics.
+Purpose: TSV-backed usage ledger for token/cost analytics with legacy SQLite migration.
 
 Functions:
 - record_usage(task_type, model, input_tokens, output_tokens, cost, ...) → int
-- query_usage(start, end, task_type, model) → List[Dict]
-- usage_summary(start, end) → Dict (totals by model and task_type)
+- record_usage_event(entry_or_row, ...) → int
+- query_usage(...) → List[Dict] with project/task/provider/model/status/request-ref/date filtering
+- usage_summary(...) → List[Dict] for grouped or ungrouped Ledger rows
+- summarize_usage_totals(...) → Dict for totals, success rate, and estimate-vs-actual deltas
 - total_cost(start, end) → float
 - total_tokens(start, end) → Tuple[int, int]
 - export_csv(path, start, end) → int
 - purge_before(cutoff) → int
 - record_count() → int
 
-Storage: user/usage.db (SQLite)
+Storage: `user/ledger.tsv` (tab-delimited via `csv` with `newline=''`)
+
+Schema:
+- Canonical ordered columns are stored in `LEDGER_COLUMNS`
+- Core columns: schema_version, timestamp, project_name, provider, model, task_type, status, input_tokens, prompt_tokens, cached_input_tokens, reasoning_tokens, output_tokens, total_tokens, input_cost, cached_cost, output_cost, total_cost, estimate_total_cost, estimate_delta_cost, request_ref
+- Compatibility columns retained in the shared layer: key_id, profile, success, error_msg
+
+Migration:
+- `user/usage.db` is legacy input only
+- Existing SQLite rows are imported into the TSV ledger through deterministic `legacy-sqlite:{id}` request references so repeated reads do not duplicate migrated rows
 
 TASK_TYPES: api_test, glossary, game_summary, translation, tlc, editing
 
 Dependencies:
-- Stdlib: sqlite3, csv, pathlib, datetime, logging
+- Stdlib: sqlite3, csv, pathlib, logging, time
 - Local: none
 
 AGENT_MODES.PY (Agent-Assisted Modes - Phase 17.8)
@@ -5645,6 +5718,7 @@ New module (Dynamic Model Registry). Single source of truth for model metadata.
 
 **Key classes/functions:**
 - `ModelInfo` — dataclass with 30+ fields (standard/batch/flex/priority pricing, limits, capabilities, timestamps)
+- `ModelCostStatus` — resolved price-policy state (`price_known`, `above_cost_cap`, `blocked`, `block_reason`)
 - `FALLBACK_MODELS` — curated built-in data for openai/google/mistral (27 models total)
 - `refresh_models(api_keys, path, providers)` — fetch from live APIs + save to INI
 - `save_to_ini(provider, models, path)` — persist to `[model_registry_<provider>]` section
@@ -5654,6 +5728,8 @@ New module (Dynamic Model Registry). Single source of truth for model metadata.
 - `get_provider_models(provider, path, max_age_hours)` → `List[ModelInfo]`
 - `get_provider_model_ids(provider, path)` → `List[str]`
 - `get_model_info(model_id, path)` → `Optional[ModelInfo]`
+- `get_model_cost_status(model, cost_cap)` / `get_model_cost_status_by_id(model_id, cost_cap, path)` → explicit unknown/free/over-cap resolution
+- `get_configured_cost_cap(default)` / `describe_model_cost_status(status)` → persisted cap lookup and shared user-facing policy text
 - `get_pricing_dict(path, max_age_hours)` → `MODEL_PRICING`-compatible dict
 - `get_registry_summary(path)` → status dict per provider
 - `is_data_fresh(provider, path, max_age_hours)` → `bool`
@@ -5681,6 +5757,12 @@ New module (Dynamic Model Registry). Single source of truth for model metadata.
 - Priority: `priority_input_price`, `priority_output_price` (~1.75-2x standard, lower latency)
 - GPT-4.1 family: standard + batch only (no flex, no priority)
 - GPT-5 family: all four tiers (standard, batch, flex, priority)
+
+**Price-policy behavior:**
+- Live refresh no longer silently keeps embedded fallback prices when the provider model list fetch succeeds but pricing documentation cannot be confirmed; affected models are stored with unknown pricing (`None`)
+- Missing registry entries are treated as unknown-priced for guards and Available Models display
+- `probe_openai_rate_limits()` now skips blocked models instead of sending a probe request
+- `api_config.test_model_translation()` and `APIClient` request entry points fail closed when output pricing is unknown or above the persisted cost cap
 
 **Thinking/Reasoning mode (ModelInfo fields):**
 - `thinking: bool` — legacy field, True if model supports any reasoning
@@ -5993,7 +6075,10 @@ use plain `content.find(search)` find-and-replace. No-change positions
 return list with logger warning.
 (3) Save to output_path (creates parent dirs).
 When `orig_lines` is provided, uses those as search strings instead of
-extracted keys. Returns `List[int]` of failed indices.
+extracted keys. Tagged extraction metadata is aligned to that effective
+search order first, so reversed Step 9 writes still preserve speaker-aware
+replacement for cleaned `Speaker: dialogue` keys. Returns `List[int]` of
+failed indices.
 
 **`_split_speaker_dialogue()` helper (NEW):** Module-level function that
 splits `"Speaker: dialogue"` into `(speaker, dialogue)` tuple using
@@ -6035,7 +6120,10 @@ standardized 4-step handshake:
 field. Resolve best text via `resolve_line_field()`. Mismatches preserve
 original text and log warnings.
 (3) Call `parser.inject_to(source, output, translated_lines,
-orig_lines=orig_lines)`. Report inject failures via logger.
+orig_lines=orig_lines)`. Base-handshake parsers receive reversed write
+order; parser-specific `inject_to()` overrides such as LightVN keep natural
+extraction order because they already perform their own structural
+reinjection. Report inject failures via logger.
 
 **`_build_file_list_from_filedir()`:** Updated `is_parser_format` check
 to include `is_injection = raw_fmt == OutputFormat.INJECTION.value`.

@@ -469,6 +469,13 @@ class CostsStep(BaseStep):
         )
         self._estimate_btn.pack(side="right", padx=(5, 0))
 
+        self._ledger_btn = ttk.Button(
+            row1,
+            text="Ledger",
+            command=self._open_ledger,
+        )
+        self._ledger_btn.pack(side="right", padx=(5, 0))
+
         # Apply Settings to Model button (one-way write to API.ini)
         self._save_btn = ttk.Button(
             row1,
@@ -1573,6 +1580,20 @@ class CostsStep(BaseStep):
         thread = threading.Thread(target=self._do_estimation)
         thread.daemon = True
         thread.start()
+
+    def _open_ledger(self) -> None:
+        """Open the shared Ledger window from Step 4."""
+        root = self.winfo_toplevel()
+        opener = getattr(root, "open_ledger_dialog", None)
+        if callable(opener):
+            opener()
+            return
+
+        messagebox.showinfo(
+            "Ledger",
+            "The Ledger window is not available from this host.",
+            parent=self,
+        )
 
     def _report_progress(self, step_idx: int) -> None:
         """Post a progress step update to the dialog on the main thread.

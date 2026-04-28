@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -141,6 +142,8 @@ class OutputFile:
     error: str = ""
     written: bool = False
     backup_path: str = ""
+    archive_name: str = ""
+    member_indices: List[int] = field(default_factory=list)
 
     @property
     def filename(self) -> str:
@@ -1333,6 +1336,7 @@ class OutputInjectStep(BaseStep):
         """Process the export operation."""
         dest_base = self._resolve_destination_dir()
         dest_base.mkdir(parents=True, exist_ok=True)
+        written_file_indices: List[int] = []
 
         for i, output_file in enumerate(files):
             if self._cancel_requested:
@@ -1343,6 +1347,7 @@ class OutputInjectStep(BaseStep):
                 output_file.status = "written"
                 output_file.written = True
                 self._stats.files_written += 1
+                written_file_indices.append(output_file.idx)
             except Exception as e:
                 output_file.status = "failed"
                 output_file.error = str(e)
@@ -1358,6 +1363,15 @@ class OutputInjectStep(BaseStep):
             progress = ((i + 1) / len(files)) * 100
             self.after(0, lambda p=progress: self._progress_var.set(p))  # type: ignore[misc]
             self.after(0, self._refresh_table)
+
+        mgr = self.manifest_manager
+        if (
+            mgr is not None
+            and mgr.is_loaded
+            and written_file_indices
+            and not self._cancel_requested
+        ):
+            mgr.run_parser_post_inject_hooks(dest_base, file_indices=written_file_indices)
 
         # Export manifest if requested
         if self._export_manifest_var.get() and not self._cancel_requested:
@@ -1387,14 +1401,22 @@ class OutputInjectStep(BaseStep):
         # Ensure parent directory exists
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        raw_format = self._format_var.get().strip()
         mgr = self.manifest_manager
+
+        if output_file.archive_name and output_file.member_indices:
+            if mgr is None or not mgr.is_loaded:
+                raise ValueError("Archive output requires a loaded manifest")
+            self._write_archive_file(output_file, output_path, mgr)
+            return
+
+        raw_format = self._format_var.get().strip()
         parser = get_parser_registry().get(raw_format) if raw_format else None
 
         # --- Injection mode (standardized manifest-orchestrated handshake) ---
         if raw_format.lower() == OutputFormat.INJECTION.value:
             if mgr is not None and mgr.is_loaded:
                 OutputInjectStep._write_injection(self, output_file, output_path, mgr)
+                self._stage_written_output(output_file, output_path, mgr)
                 return
             raise ValueError("Injection format requires a loaded manifest with filedir.")
 
@@ -1402,7 +1424,17 @@ class OutputInjectStep(BaseStep):
         if parser is not None:
             if mgr is None or not mgr.is_loaded:
                 raise ValueError("Parser output requires a loaded manifest with filedir.")
-            OutputInjectStep._write_parser_file(self, output_file, output_path, mgr, parser)
+            filedir = mgr.get_filedir()
+            if output_file.idx >= len(filedir):
+                raise ValueError(
+                    f"File index {output_file.idx} out of range "
+                    f"(filedir has {len(filedir)} entries)"
+                )
+            entry = filedir[output_file.idx]
+            render_result = mgr.render_manifest_entry_to_path(entry, output_path)
+            output_file.line_count = int(render_result.get("line_count", 0))
+            self._stats.total_lines += output_file.line_count
+            self._stage_written_output(output_file, output_path, mgr)
             return
 
         format_val = _safe_output_format(raw_format)
@@ -1425,6 +1457,25 @@ class OutputInjectStep(BaseStep):
 
         output_file.line_count = len(all_lines)
         self._stats.total_lines += len(all_lines)
+        if mgr is not None and mgr.is_loaded:
+            self._stage_written_output(output_file, output_path, mgr)
+
+    def _stage_written_output(
+        self,
+        output_file: OutputFile,
+        output_path: Path,
+        mgr: "ManifestManager",
+    ) -> None:
+        """Mirror a successful Step 9 write into the staged translated tree."""
+        filedir = mgr.get_filedir()
+        if output_file.idx >= len(filedir):
+            return
+        entry = filedir[output_file.idx]
+        mgr.stage_translated_output_file(
+            entry,
+            output_path,
+            source="step9",
+        )
 
     def _get_fresh_lines_for_file(self, output_file: OutputFile) -> List[str]:
         """Get fresh resolved lines for a single file from manifest.
@@ -1469,9 +1520,6 @@ class OutputInjectStep(BaseStep):
            and the line.  If match: replace.  If no match: mark as failure.
         3. Save the new files to the output path.
         """
-        from CherryAI.formats import get_parser_registry
-        from CherryAI.functions.manifest_fields import resolve_line_field
-
         filedir = mgr.get_filedir()
         if output_file.idx >= len(filedir):
             raise ValueError(
@@ -1480,72 +1528,22 @@ class OutputInjectStep(BaseStep):
             )
 
         entry = filedir[output_file.idx]
+        render_result = mgr.render_manifest_entry_to_path(entry, output_path)
+        output_file.line_count = int(render_result.get("line_count", 0))
+        self._stats.total_lines += output_file.line_count
 
-        # 0. Load Original into memory
-        source_path = mgr.resolve_file_path(entry.rel_path)
-        if not source_path.exists():
-            raise FileNotFoundError(f"Source file not found: {source_path}")
-
-        # Get parser for this format
-        parser = get_parser_registry().get(entry.format)
-        if parser is None:
-            raise ValueError(
-                f"No parser registered for format {entry.format!r}. "
-                "Select a generic format (TXT, CSV, …) instead of Injection."
-            )
-
-        # 1. Extract from Original to get real line positions
-        extracted_keys = parser.extract(source_path)
-
-        # 2. Sequential match against manifest lines
-        manifest_lines = mgr.get_lines()
-        translated_lines: List[str] = []
-        orig_lines: List[str] = []
-        failures: List[str] = []
-
-        for i, key in enumerate(extracted_keys):
-            clean_key = sanitize_output_text(key)
-            manifest_idx = entry.first_idx + i
-            if manifest_idx > entry.last_idx or manifest_idx >= len(manifest_lines):
-                failures.append(
-                    f"Position {i}: index {manifest_idx} out of range"
-                )
-                translated_lines.append(clean_key)
-                orig_lines.append(clean_key)
-                continue
-
-            ml = manifest_lines[manifest_idx]
-            orig = sanitize_output_text(ml.get("orig", ""))
-            orig_lines.append(orig)
-
-            if orig == clean_key:
-                resolved = sanitize_output_text(resolve_line_field(ml))
-                translated_lines.append(resolved)
-            else:
-                failures.append(
-                    f"Position {i} (idx {manifest_idx}): "
-                    f"orig mismatch — extracted {clean_key!r}, manifest {orig!r}"
-                )
-                translated_lines.append(clean_key)  # Preserve original on mismatch
-
-        # 3. Save via parser injection
-        inject_failures = parser.inject_to(
-            source_path, output_path, translated_lines,
-            orig_lines=orig_lines,
-        )
-
-        output_file.line_count = len(extracted_keys)
-        self._stats.total_lines += len(extracted_keys)
-
-        # Report failures
-        if failures:
+        failures = render_result.get("failures", [])
+        if isinstance(failures, list):
             for msg in failures:
                 logger.warning("Injection verification [%s]: %s", entry.rel_path, msg)
-        if inject_failures:
+
+        inject_failures = render_result.get("inject_failures", [])
+        if isinstance(inject_failures, list):
             for idx in inject_failures:
                 logger.warning(
                     "Injection write failure [%s] at position %d",
-                    entry.rel_path, idx,
+                    entry.rel_path,
+                    idx,
                 )
 
     def _write_parser_file(
@@ -1584,6 +1582,47 @@ class OutputInjectStep(BaseStep):
         """Write lines as plain text."""
         with open(path, "w", encoding=encoding) as f:
             f.write("\n".join(lines))
+
+    def _write_archive_file(
+        self,
+        output_file: OutputFile,
+        output_path: Path,
+        mgr: "ManifestManager",
+    ) -> None:
+        """Render archive members, run parser hooks, and rebuild the archive."""
+        filedir = mgr.get_filedir()
+        archive_root = Path(tempfile.mkdtemp(prefix="cherryai-xp3-"))
+        member_root = archive_root / output_file.archive_name
+        member_root.mkdir(parents=True, exist_ok=True)
+
+        try:
+            line_count = 0
+            for member_idx in output_file.member_indices:
+                if member_idx < 0 or member_idx >= len(filedir):
+                    continue
+                entry = filedir[member_idx]
+                rel_path = Path(entry.rel_path)
+                try:
+                    archive_rel_path = rel_path.relative_to(output_file.archive_name)
+                except ValueError:
+                    archive_rel_path = Path(rel_path.name)
+                render_result = mgr.render_manifest_entry_to_path(
+                    entry,
+                    member_root / archive_rel_path,
+                )
+                line_count += int(render_result.get("line_count", 0))
+
+            mgr.run_parser_post_inject_hooks(member_root, file_indices=output_file.member_indices)
+            built_archive = mgr.build_package_translated_archive(
+                member_root,
+                output_file.archive_name,
+                settings=mgr.get_archive_setting(output_file.archive_name),
+            )
+            shutil.copy2(built_archive, output_path)
+            output_file.line_count = line_count
+            self._stats.total_lines += line_count
+        finally:
+            shutil.rmtree(archive_root, ignore_errors=True)
 
     def _write_csv(self, path: Path, lines: List[str], encoding: str) -> None:
         """Write lines as CSV."""
@@ -1803,10 +1842,49 @@ class OutputInjectStep(BaseStep):
             _safe_output_format(raw_fmt),
             ".txt"
         )
+        archive_groups: Dict[str, List[int]] = {}
+        normal_indices: List[int] = []
+
+        for index, entry in enumerate(filedir):
+            archive_name = mgr.get_archive_name_for_rel_path(entry.rel_path) if mgr else ""
+            if archive_name:
+                archive_groups.setdefault(archive_name, []).append(index)
+            else:
+                normal_indices.append(index)
         
         self._files = []
+
+        for archive_name, member_indices in sorted(
+            archive_groups.items(),
+            key=lambda item: item[1][0],
+        ):
+            archive_source = Path(archive_name)
+            archive_output_name = self._generate_output_name(
+                archive_source,
+                strategy,
+                value,
+                archive_source.suffix or ".xp3",
+            )
+            if strategy == NamingStrategy.SUBFOLDER:
+                archive_output_path = dest_base / value / archive_output_name
+            else:
+                archive_output_path = dest_base / archive_output_name
+
+            line_count = sum(
+                filedir[idx].line_count for idx in member_indices if idx < len(filedir)
+            )
+            self._files.append(OutputFile(
+                idx=member_indices[0],
+                source_path=archive_name,
+                output_path=str(archive_output_path),
+                format=_safe_output_format(self._format_var.get()),
+                line_count=line_count,
+                archive_name=archive_name,
+                member_indices=list(member_indices),
+            ))
         
-        for i, entry in enumerate(filedir):
+        for i in normal_indices:
+            entry = filedir[i]
             # Preserve folder structure from rel_path
             rel_path = Path(entry.rel_path)
             stem = rel_path.stem

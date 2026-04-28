@@ -1369,6 +1369,7 @@ def save_custom_placeholders(
     - placeholder: str (replacement token)
     - is_regex: bool (whether pattern is regex)
     - restore_after: bool (whether to restore after translation)
+    - recover_everywhere: bool (whether misplaced tokens may restore batch-wide)
     
     Args:
         manager: ManifestManager instance.
@@ -1385,6 +1386,7 @@ def save_custom_placeholders(
                 "placeholder": str(ph.get("placeholder", "")),
                 "is_regex": bool(ph.get("is_regex", False)),
                 "restore_after": bool(ph.get("restore_after", True)),
+                "recover_everywhere": bool(ph.get("recover_everywhere", False)),
             })
     
     manager._manifest_data["CustomPlaceholders"] = cleaned
@@ -1397,7 +1399,7 @@ def load_custom_placeholders(
     """Load custom placeholder patterns from manifest.
     
     Returns list of placeholder dicts with fields:
-    pattern, placeholder, is_regex, restore_after
+    pattern, placeholder, is_regex, restore_after, recover_everywhere
     
     Args:
         manager: ManifestManager instance.
@@ -1417,6 +1419,7 @@ def load_custom_placeholders(
                 "placeholder": str(ph.get("placeholder", "")),
                 "is_regex": bool(ph.get("is_regex", False)),
                 "restore_after": bool(ph.get("restore_after", True)),
+                "recover_everywhere": bool(ph.get("recover_everywhere", False)),
             })
     
     return result

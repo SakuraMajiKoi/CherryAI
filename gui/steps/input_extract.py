@@ -12,7 +12,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import tkinter as tk
 from tkinter import ttk
@@ -23,6 +23,7 @@ from CherryAI.gui.dialogs.input_dialog import UnifiedInputDialog
 from CherryAI.functions.analysis import classify_file_type
 from CherryAI.functions.ini_manager import get_default
 from CherryAI.functions.manifest_manager import (
+    capture_source_line_mappings,
     get_primary_line_tag,
     set_primary_line_tag,
 )
@@ -44,12 +45,13 @@ DEFAULT_OUTPUT_BACKUP_EXTENSION = ".bk"
 
 # Supported file extensions for loading (TASK 39.3: rpgmaker and image added)
 SUPPORTED_EXTENSIONS = [
-    ("All Supported", "*.txt *.csv *.tsv *.json *.xlsx *.png *.jpg *.jpeg *.bmp"),
+    ("All Supported", "*.txt *.csv *.tsv *.json *.xlsx *.xp3 *.png *.jpg *.jpeg *.bmp"),
     ("Text Files", "*.txt"),
     ("CSV Files", "*.csv"),
     ("TSV Files", "*.tsv"),
     ("JSON Files", "*.json"),
     ("Excel Files", "*.xlsx"),
+    ("XP3 Archives", "*.xp3"),
     ("Image Files", "*.png *.jpg *.jpeg *.bmp"),
     ("All Files", "*.*"),
 ]
@@ -61,6 +63,7 @@ FORMAT_MAP = {
     ".tsv": "tsv",
     ".json": "json",
     ".xlsx": "xlsx",
+    ".xp3": "KiriKiri2",
     ".png": "image",
     ".jpg": "image",
     ".jpeg": "image",
@@ -74,6 +77,7 @@ FORMAT_EXTENSIONS = {
     "tsv": {".tsv"},
     "json": {".json"},
     "xlsx": {".xlsx"},
+    "KiriKiri2": {".ks", ".tjs", ".xp3"},
     "rpgmaker": {".json", ".js"},
     "image": {".png", ".jpg", ".jpeg", ".bmp"},
 }
@@ -138,7 +142,6 @@ class LoadedFile:
             "encoding": self.encoding,
         }
 
-
 # ======================================================================
 # Import Translation Dialog
 # ======================================================================
@@ -146,7 +149,6 @@ class LoadedFile:
 class _ImportTranslationDialog(tk.Toplevel):
     """Selection dialog for Import Translation.
 
-    Shows two groups of checkboxes:
     * **Line Fields** — which per-line data to copy (prepro, tl, …)
     * **Settings Sections** — which manifest-level settings to import
     """
@@ -193,19 +195,11 @@ class _ImportTranslationDialog(tk.Toplevel):
             "Do not overwrite lines that already have translations",
             False, **pad,
         )
-
-        # --- Settings Sections ---
-        sf = ttk.LabelFrame(self, text="Settings Sections")
-        sf.pack(fill="x", padx=10, pady=(4, 4))
-
-        self._add_check(sf, "import_analysis", "Analysis", False, **pad)
-        self._add_check(sf, "import_information", "Information (metadata, glossary, code DB)", True, **pad)
         self._add_check(sf, "import_preprocessing", "Preprocessing Settings", False, **pad)
         self._add_check(sf, "import_costs", "Costs / Request Settings", False, **pad)
         self._add_check(sf, "import_translation", "Translation Step State", False, **pad)
         self._add_check(sf, "import_postprocessing", "Postprocessing", False, **pad)
         self._add_check(sf, "import_wordwrap_settings", "Wordwrap Settings", False, **pad)
-        self._add_check(sf, "import_qa_settings", "QA / Validation Rules", False, **pad)
         self._add_check(sf, "import_file_settings", "File / Output Settings", False, **pad)
 
         # --- Source info ---
@@ -284,6 +278,12 @@ class InputExtractionStep(BaseStep):
 
         # Folder root for relative path display (set when loading folder)
         self._folder_root: Optional[Path] = None
+        self._pending_source_base: Optional[Path] = None
+        self._pending_source_handling: str = "copy"
+        self._pending_stage_source_paths: Dict[str, Path] = {}
+        self._extraction_validation_batch_depth: int = 0
+        self._pending_extraction_validation_issues: List[Dict[str, Any]] = []
+        self._last_extraction_validation_log: Optional[Path] = None
 
         # TASK 39.4: Tree item ID to LoadedFile index mapping
         self._tree_item_to_index: Dict[str, int] = {}
@@ -625,8 +625,8 @@ class InputExtractionStep(BaseStep):
         if result is None:
             return
 
-        # Unpack 5-tuple result
-        selected_paths, format_filter, enc, project_name, pipeline = result
+        # Unpack dialog result.
+        selected_paths, format_filter, enc, project_name, pipeline, source_handling = result
         if not selected_paths:
             return
 
@@ -639,7 +639,13 @@ class InputExtractionStep(BaseStep):
             self._pipeline_var.set(pipeline)
 
         # PHASE 58.12: Process with optional project name
-        self._load_selected_paths(selected_paths, enc, format_filter, project_name)
+        self._load_selected_paths(
+            selected_paths,
+            enc,
+            format_filter,
+            project_name,
+            source_handling,
+        )
 
     def _load_selected_paths(
         self,
@@ -647,6 +653,7 @@ class InputExtractionStep(BaseStep):
         encoding: str,
         format_override: str,
         project_name: str = "",
+        source_handling: str = "copy",
     ) -> None:
         """Load files from selected paths (files or folders).
 
@@ -661,13 +668,22 @@ class InputExtractionStep(BaseStep):
             format_override: Format filter to apply.
             project_name: Project name for new projects (bypasses dialog).
         """
+        self._begin_extraction_validation_batch()
+
         # PHASE 58.12: Store project name for later use
         self._pending_project_name = project_name
+        self._pending_source_handling = source_handling
+        self._pending_stage_source_paths = {}
+        self._pending_source_base = None
         
         files_to_load: List[Path] = []
         first_folder: Optional[Path] = None
 
-        # Collect all files from paths
+        stage_source_paths, source_base = self._build_stage_source_paths(paths)
+        self._pending_stage_source_paths = stage_source_paths
+        self._pending_source_base = source_base
+
+        # Collect all parseable files from paths
         for path in paths:
             if path.is_file():
                 files_to_load.append(path)
@@ -788,33 +804,40 @@ class InputExtractionStep(BaseStep):
                 f"the '{format_override}' format filter:\n\n{names}",
             )
 
-        if loaded_count > 0:
-            self._update_summary()
-            self._update_file_list()
-            if self._current_file_index < 0 and self._loaded_files:
-                self._select_first_file_in_tree()
-            self.set_status("in-progress")
-            logger.info("Loaded %d file(s)", loaded_count)
+        try:
+            if loaded_count > 0:
+                self._update_summary()
+                self._update_file_list()
+                if self._current_file_index < 0 and self._loaded_files:
+                    self._select_first_file_in_tree()
+                self.set_status("in-progress")
+                logger.info("Loaded %d file(s)", loaded_count)
 
-            if is_add_to_existing:
-                # Non-destructive addition to existing manifest
-                new_loaded = self._loaded_files[new_files_start:]
-                self._add_files_to_existing_manifest(new_loaded, format_override)
-            else:
-                self._populate_project_info_from_files()
-                self._ensure_project_created()
+                if is_add_to_existing:
+                    # Non-destructive addition to existing manifest
+                    new_loaded = self._loaded_files[new_files_start:]
+                    self._add_files_to_existing_manifest(new_loaded, format_override)
+                else:
+                    self._populate_project_info_from_files()
+                    mgr = self.manifest_manager
+                    if mgr is not None and mgr.is_loaded:
+                        self._sync_lines_to_manifest()
+                    else:
+                        self._ensure_project_created()
 
-            # Parser Handshake P3: Wire optional components to manifest
-            self._wire_parser_optionals(format_override)
+                # Parser Handshake P3: Wire optional components to manifest
+                self._wire_parser_optionals(format_override)
 
-            self._save_manifest_after_file_load()
+                self._save_manifest_after_file_load()
 
-            # Refresh file list after manifest sync to show Type column
-            self._update_file_list()
+                # Refresh file list after manifest sync to show Type column
+                self._update_file_list()
 
-            # PHASE 58.4: Execute automatic pipeline
-            if not is_add_to_existing:
-                self._execute_auto_pipeline()
+                # PHASE 58.4: Execute automatic pipeline
+                if not is_add_to_existing:
+                    self._execute_auto_pipeline()
+        finally:
+            self._end_extraction_validation_batch()
 
     def _collect_files_for_format(self, folder: Path, format_filter: str) -> List[Path]:
         """Collect files from a folder based on format filter.
@@ -833,10 +856,9 @@ class InputExtractionStep(BaseStep):
             from CherryAI.formats import get_parser_registry
             parser = get_parser_registry().get(format_filter)
             if parser is not None:
-                # Collect all files, then filter via can_handle
-                all_files = self._collect_files_from_folder(
-                    folder, {".txt", ".csv", ".tsv", ".json", ".xlsx", ".js"},
-                )
+                # Collect all files so parser-owned package targets such as
+                # `.xp3` are not filtered out before `can_handle()` runs.
+                all_files = self._collect_all_files_from_folder(folder)
                 return [f for f in all_files if parser.can_handle(f)]
         except Exception:
             pass
@@ -844,9 +866,15 @@ class InputExtractionStep(BaseStep):
         if format_filter != "auto" and format_filter in FORMAT_EXTENSIONS:
             suffixes = FORMAT_EXTENSIONS[format_filter]
         else:
-            suffixes = {".txt", ".csv", ".tsv", ".json", ".xlsx",
+            suffixes = {".txt", ".csv", ".tsv", ".json", ".xlsx", ".xp3",
                         ".png", ".jpg", ".jpeg", ".bmp"}
         return self._collect_files_from_folder(folder, suffixes)
+
+    def _prepare_folder_tree_staging(self, root_folder: Path) -> None:
+        """Prepare full-tree staging data for a selected folder."""
+        stage_source_paths, source_base = self._build_stage_source_paths([root_folder])
+        self._pending_stage_source_paths = stage_source_paths
+        self._pending_source_base = source_base
 
     def _get_pipeline_level(self) -> int:
         """Get the current auto-pipeline level (0-4).
@@ -951,6 +979,8 @@ class InputExtractionStep(BaseStep):
         if not filepaths:
             return
 
+        self._begin_extraction_validation_batch()
+
         encoding = self._encoding_var.get() if self._encoding_var else "auto"
         format_override = self._format_var.get() if self._format_var else "auto"
 
@@ -963,60 +993,67 @@ class InputExtractionStep(BaseStep):
         if len(paths_to_load) > 3:
             progress = LoadingProgressDialog(self, len(paths_to_load))
 
-        for path in paths_to_load:
-            if progress is not None and progress.cancelled:
-                break
-            # TASK 39.3: Format filtering - skip files that don't match forced format
-            if format_override != "auto" and not self._file_matches_format(path, format_override):
-                skipped_files.append(path.name)
+        try:
+            for path in paths_to_load:
+                if progress is not None and progress.cancelled:
+                    break
+                # TASK 39.3: Format filtering - skip files that don't match forced format
+                if format_override != "auto" and not self._file_matches_format(path, format_override):
+                    skipped_files.append(path.name)
+                    if progress is not None:
+                        progress.update(path.name)
+                    continue
+                if self._load_file(path, encoding, format_override):
+                    loaded_count += 1
                 if progress is not None:
                     progress.update(path.name)
-                continue
-            if self._load_file(path, encoding, format_override):
-                loaded_count += 1
+
             if progress is not None:
-                progress.update(path.name)
+                progress.close()
 
-        if progress is not None:
-            progress.close()
+            # TASK 39.3: Warn about skipped files
+            if skipped_files:
+                names = "\n".join(skipped_files[:10])
+                if len(skipped_files) > 10:
+                    names += f"\n...and {len(skipped_files) - 10} more"
+                messagebox.showwarning(
+                    "Files Skipped",
+                    f"The following files were skipped because they don't match "
+                    f"the '{format_override}' format filter:\n\n{names}",
+                )
 
-        # TASK 39.3: Warn about skipped files
-        if skipped_files:
-            names = "\n".join(skipped_files[:10])
-            if len(skipped_files) > 10:
-                names += f"\n...and {len(skipped_files) - 10} more"
-            messagebox.showwarning(
-                "Files Skipped",
-                f"The following files were skipped because they don't match "
-                f"the '{format_override}' format filter:\n\n{names}",
-            )
+            if loaded_count > 0:
+                self._update_summary()
+                self._update_file_list()
+                # Select first file if none selected
+                if self._current_file_index < 0 and self._loaded_files:
+                    self._select_first_file_in_tree()
+                self.set_status("in-progress")
+                logger.info("Loaded %d file(s)", loaded_count)
+                
+                # Populate project info suggestion from file path
+                self._populate_project_info_from_files()
+                
+                # TASK 19 Phase 5: Create project if no manifest loaded
+                mgr = self.manifest_manager
+                if mgr is not None and mgr.is_loaded:
+                    self._sync_lines_to_manifest()
+                else:
+                    self._ensure_project_created()
+                
+                # TASK 29.2: Save manifest after file load
+                self._save_manifest_after_file_load()
 
-        if loaded_count > 0:
-            self._update_summary()
-            self._update_file_list()
-            # Select first file if none selected
-            if self._current_file_index < 0 and self._loaded_files:
-                self._select_first_file_in_tree()
-            self.set_status("in-progress")
-            logger.info("Loaded %d file(s)", loaded_count)
-            
-            # Populate project info suggestion from file path
-            self._populate_project_info_from_files()
-            
-            # TASK 19 Phase 5: Create project if no manifest loaded
-            self._ensure_project_created()
-            
-            # TASK 29.2: Save manifest after file load
-            self._save_manifest_after_file_load()
-
-            # Refresh file list after manifest sync to show Type column
-            self._update_file_list()
-            
-            # Trigger auto-analysis if enabled
-            self._trigger_auto_analysis()
-            
-            # Trigger auto-preprocessing if enabled (runs after analysis)
-            self._trigger_auto_preprocessing()
+                # Refresh file list after manifest sync to show Type column
+                self._update_file_list()
+                
+                # Trigger auto-analysis if enabled
+                self._trigger_auto_analysis()
+                
+                # Trigger auto-preprocessing if enabled (runs after analysis)
+                self._trigger_auto_preprocessing()
+        finally:
+            self._end_extraction_validation_batch()
 
     def _on_load_folder(self) -> None:
         """Handle Load Folder button click.
@@ -1035,25 +1072,23 @@ class InputExtractionStep(BaseStep):
         if not root_folder.is_dir():
             return
 
+        self._begin_extraction_validation_batch()
+
         # Store the root folder for relative path display
         self._folder_root = root_folder
+        self._prepare_folder_tree_staging(root_folder)
 
         encoding = self._encoding_var.get() if self._encoding_var else "auto"
         format_override = self._format_var.get() if self._format_var else "auto"
 
-        # TASK 39.3: Determine supported suffixes based on format filter
-        if format_override != "auto" and format_override in FORMAT_EXTENSIONS:
-            supported_suffixes = FORMAT_EXTENSIONS[format_override]
-        else:
-            supported_suffixes = {".txt", ".csv", ".tsv", ".json", ".xlsx",
-                                  ".png", ".jpg", ".jpeg", ".bmp"}
-        file_paths = self._collect_files_from_folder(root_folder, supported_suffixes)
+        file_paths = self._collect_files_for_format(root_folder, format_override)
 
         if not file_paths:
+            supported_desc = format_override if format_override != "auto" else "default supported formats"
             messagebox.showinfo(
                 "No Files Found",
                 f"No supported files found in folder:\n{root_folder}\n\n"
-                f"Supported formats: {', '.join(sorted(supported_suffixes))}",
+                f"Selected filter: {supported_desc}",
             )
             return
 
@@ -1067,43 +1102,50 @@ class InputExtractionStep(BaseStep):
         if len(file_paths) > 3:
             progress = LoadingProgressDialog(self, len(file_paths))
 
-        for filepath in file_paths:
-            if progress is not None and progress.cancelled:
-                break
-            if self._load_file(filepath, encoding, format_override):
-                loaded_count += 1
+        try:
+            for filepath in file_paths:
+                if progress is not None and progress.cancelled:
+                    break
+                if self._load_file(filepath, encoding, format_override):
+                    loaded_count += 1
+                if progress is not None:
+                    progress.update(filepath.name)
+
             if progress is not None:
-                progress.update(filepath.name)
+                progress.close()
 
-        if progress is not None:
-            progress.close()
+            if loaded_count > 0:
+                self._update_summary()
+                self._update_file_list()
+                # Select first file if none selected
+                if self._current_file_index < 0 and self._loaded_files:
+                    self._select_first_file_in_tree()
+                self.set_status("in-progress")
+                logger.info("Loaded %d file(s) from folder %s", loaded_count, root_folder)
+                
+                # Populate project info suggestion from folder name
+                self._populate_project_info_from_files()
+                
+                # TASK 19 Phase 5: Create project if no manifest loaded
+                mgr = self.manifest_manager
+                if mgr is not None and mgr.is_loaded:
+                    self._sync_lines_to_manifest()
+                else:
+                    self._ensure_project_created()
+                
+                # TASK 29.2: Save manifest after file load
+                self._save_manifest_after_file_load()
 
-        if loaded_count > 0:
-            self._update_summary()
-            self._update_file_list()
-            # Select first file if none selected
-            if self._current_file_index < 0 and self._loaded_files:
-                self._select_first_file_in_tree()
-            self.set_status("in-progress")
-            logger.info("Loaded %d file(s) from folder %s", loaded_count, root_folder)
-            
-            # Populate project info suggestion from folder name
-            self._populate_project_info_from_files()
-            
-            # TASK 19 Phase 5: Create project if no manifest loaded
-            self._ensure_project_created()
-            
-            # TASK 29.2: Save manifest after file load
-            self._save_manifest_after_file_load()
-
-            # Refresh file list after manifest sync to show Type column
-            self._update_file_list()
-            
-            # Trigger auto-analysis if enabled
-            self._trigger_auto_analysis()
-            
-            # Trigger auto-preprocessing if enabled (runs after analysis)
-            self._trigger_auto_preprocessing()
+                # Refresh file list after manifest sync to show Type column
+                self._update_file_list()
+                
+                # Trigger auto-analysis if enabled
+                self._trigger_auto_analysis()
+                
+                # Trigger auto-preprocessing if enabled (runs after analysis)
+                self._trigger_auto_preprocessing()
+        finally:
+            self._end_extraction_validation_batch()
 
     def _collect_files_from_folder(
         self,
@@ -1129,6 +1171,81 @@ class InputExtractionStep(BaseStep):
         except Exception as e:
             logger.error("Error scanning folder %s: %s", folder, e)
         return files
+
+    def _collect_all_files_from_folder(self, folder: Path) -> List[Path]:
+        """Recursively collect every file from *folder*."""
+        files: List[Path] = []
+        try:
+            for item in folder.rglob("*"):
+                if item.is_file():
+                    files.append(item)
+        except PermissionError as e:
+            logger.warning("Permission denied accessing folder: %s", e)
+        except Exception as e:
+            logger.error("Error scanning folder %s: %s", folder, e)
+        return files
+
+    def _resolve_selection_anchor(self, path: Path, source_root_hint: str = "") -> Path:
+        """Resolve the folder anchor used to build relative staging paths."""
+        anchor = path if path.is_dir() else path.parent
+        if not source_root_hint:
+            return anchor
+
+        for candidate in (anchor, *anchor.parents):
+            if candidate.name == source_root_hint:
+                return candidate
+        return anchor
+
+    def _build_stage_source_paths(
+        self,
+        paths: List[Path],
+    ) -> Tuple[Dict[str, Path], Optional[Path]]:
+        """Build the full source-tree staging map for the selected input paths."""
+        mgr = self.manifest_manager
+        source_root_hint = ""
+        if mgr is not None and mgr.is_loaded and mgr.source_mode != "external":
+            source_root_hint = mgr.source_root
+
+        anchors: List[Path] = []
+        for path in paths:
+            anchors.append(self._resolve_selection_anchor(path, source_root_hint))
+
+        if not anchors:
+            return {}, None
+
+        if mgr is not None:
+            if len(anchors) > 1:
+                base_path = mgr._find_common_base(anchors)
+            else:
+                base_path = anchors[0]
+        else:
+            base_path = anchors[0]
+
+        staged: Dict[str, Path] = {}
+        for path in paths:
+            if path.is_file():
+                try:
+                    rel_path = str(path.relative_to(base_path))
+                except ValueError:
+                    rel_path = path.name
+                staged[rel_path] = path
+                continue
+
+            try:
+                for item in path.rglob("*"):
+                    if not item.is_file():
+                        continue
+                    try:
+                        rel_path = str(item.relative_to(base_path))
+                    except ValueError:
+                        rel_path = item.name
+                    staged[rel_path] = item
+            except PermissionError as exc:
+                logger.warning("Permission denied accessing folder: %s", exc)
+            except Exception as exc:
+                logger.error("Error scanning folder %s: %s", path, exc)
+
+        return staged, base_path
 
     def _file_matches_format(self, path: Path, format_id: str) -> bool:
         """Check if a file matches the specified format filter.
@@ -1171,6 +1288,126 @@ class InputExtractionStep(BaseStep):
         except Exception:
             return max(1, int(len(text) * 0.3))
 
+    @staticmethod
+    def _build_extraction_issue_preview(text: str, *, limit: int = 160) -> str:
+        """Return a single-line preview for extraction validation logs."""
+        cleaned = text.replace("\r", " ").replace("\n", " | ").strip()
+        if len(cleaned) <= limit:
+            return cleaned
+        return cleaned[: limit - 3] + "..."
+
+    def _begin_extraction_validation_batch(self) -> None:
+        """Start buffering extraction validation issues for one load batch."""
+        if self._extraction_validation_batch_depth == 0:
+            self._pending_extraction_validation_issues = []
+            self._last_extraction_validation_log = None
+        self._extraction_validation_batch_depth += 1
+
+    def _record_extraction_validation_issue(
+        self,
+        *,
+        severity: str,
+        filename: str,
+        line_number: int,
+        tokens: int,
+        limit: int,
+        text: str,
+    ) -> None:
+        """Buffer one extraction validation issue for later summary/logging."""
+        self._pending_extraction_validation_issues.append({
+            "severity": severity,
+            "filename": filename,
+            "line_number": line_number,
+            "tokens": tokens,
+            "limit": limit,
+            "chars": len(text),
+            "preview": self._build_extraction_issue_preview(text),
+        })
+
+    def _write_extraction_validation_log(self) -> Optional[Path]:
+        """Persist buffered extraction validation issues to one log file."""
+        if not self._pending_extraction_validation_issues:
+            return None
+
+        mgr = self.manifest_manager
+        manifest_path = mgr.manifest_path if mgr is not None and mgr.is_loaded else None
+        if manifest_path is not None:
+            log_path = manifest_path.parent / (
+                f"{manifest_path.stem}.input_extract_validation.log"
+            )
+        else:
+            log_dir = Path("logs")
+            log_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            log_path = log_dir / f"input_extract_validation_{timestamp}.log"
+
+        lines = [
+            "CherryAI Step 0 Extraction Validation Log",
+            f"Generated: {datetime.now().isoformat()}",
+            f"Issues: {len(self._pending_extraction_validation_issues)}",
+            "",
+        ]
+        for issue in self._pending_extraction_validation_issues:
+            lines.extend([
+                (
+                    f"[{issue['severity'].upper()}] {issue['filename']} "
+                    f"line {issue['line_number']}"
+                ),
+                (
+                    f"tokens={issue['tokens']} limit={issue['limit']} "
+                    f"chars={issue['chars']}"
+                ),
+                f"preview={issue['preview']}",
+                "",
+            ])
+
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("\n".join(lines), encoding="utf-8")
+
+        step_data = self.get_step_data()
+        step_data["last_extraction_validation_log"] = str(log_path)
+        self.set_step_data(step_data)
+        self._last_extraction_validation_log = log_path
+        return log_path
+
+    def _end_extraction_validation_batch(self) -> None:
+        """Flush a buffered extraction validation batch to one dialog/log."""
+        if self._extraction_validation_batch_depth <= 0:
+            return
+
+        self._extraction_validation_batch_depth -= 1
+        if self._extraction_validation_batch_depth != 0:
+            return
+
+        issues = list(self._pending_extraction_validation_issues)
+        self._pending_extraction_validation_issues = []
+        if not issues:
+            return
+
+        self._pending_extraction_validation_issues = issues
+        log_path = self._write_extraction_validation_log()
+        self._pending_extraction_validation_issues = []
+
+        error_count = sum(1 for issue in issues if issue["severity"] == "error")
+        warning_count = len(issues) - error_count
+        summary_lines = [
+            f"{issue['filename']} line {issue['line_number']}: {issue['tokens']} tokens"
+            for issue in issues[:8]
+        ]
+        if len(issues) > 8:
+            summary_lines.append(f"...and {len(issues) - 8} more")
+
+        message = (
+            f"Step 0 found {error_count} fatal and {warning_count} warning "
+            f"extraction issue(s)."
+        )
+        if summary_lines:
+            message += "\n\n" + "\n".join(summary_lines)
+        if log_path is not None:
+            message += f"\n\nLog written to:\n{log_path}"
+
+        messagebox.showwarning("Extraction Validation Log", message)
+
     def _validate_extracted_lines(
         self, lines: List[str], filename: str,
     ) -> bool:
@@ -1182,31 +1419,27 @@ class InputExtractionStep(BaseStep):
         Returns:
             True if no fatal errors, False if load should be aborted.
         """
-        warnings: List[str] = []
         for idx, line in enumerate(lines):
             tok = self._estimate_tokens(line)
             if tok > 2048:
-                messagebox.showerror(
-                    "Token Limit Exceeded",
-                    f"File: {filename}\n"
-                    f"Line {idx + 1} is {tok} tokens (max 2048).\n"
-                    f"Consider splitting this line.",
+                self._record_extraction_validation_issue(
+                    severity="error",
+                    filename=filename,
+                    line_number=idx + 1,
+                    tokens=tok,
+                    limit=2048,
+                    text=line,
                 )
                 return False
             if tok > 1024:
-                warnings.append(
-                    f"Line {idx + 1}: {tok} tokens "
-                    f"({tok - 1024} over recommended 1024)"
+                self._record_extraction_validation_issue(
+                    severity="warning",
+                    filename=filename,
+                    line_number=idx + 1,
+                    tokens=tok,
+                    limit=1024,
+                    text=line,
                 )
-        if warnings:
-            msg = "\n".join(warnings[:10])
-            if len(warnings) > 10:
-                msg += f"\n...and {len(warnings) - 10} more"
-            messagebox.showwarning(
-                "Token Warning",
-                f"File: {filename}\nSome lines exceed 1024 tokens "
-                f"(recommended limit):\n\n{msg}",
-            )
         return True
 
     def _validate_parser_selection(self, format_id: str) -> bool:
@@ -1276,6 +1509,144 @@ class InputExtractionStep(BaseStep):
             return "latin-1"  # Always succeeds
         except Exception:
             return "utf-8"
+
+    def _suggest_project_name_for_path(self, path: Path) -> str:
+        """Return a stable fallback project name for a selected input path."""
+        pending_name = getattr(self, "_pending_project_name", "")
+        if pending_name:
+            return pending_name
+        if path.stem:
+            return path.stem
+        if path.parent.name:
+            return path.parent.name
+        return "Untitled"
+
+    def _ensure_archive_project_loaded(self, archive_path: Path) -> bool:
+        """Create a manifest early when archive extraction needs project staging."""
+        mgr = self.manifest_manager
+        if mgr is None:
+            return False
+        if mgr.is_loaded:
+            return True
+
+        project_name = self._suggest_project_name_for_path(archive_path)
+        try:
+            manifest_path = mgr.create_new(project_name, [])
+        except Exception as exc:
+            logger.error("Failed to create archive project for %s: %s", archive_path, exc)
+            messagebox.showerror(
+                "Archive Load Error",
+                f"Failed to create a project for archive input:\n{archive_path.name}\n\nError: {exc}",
+            )
+            return False
+
+        app = self.winfo_toplevel()
+        if hasattr(app, "session"):
+            app.session.manifest_path = manifest_path
+        if hasattr(app, "_step_tabs"):
+            for tab in app._step_tabs:
+                tab._manifest_manager = mgr
+        return True
+
+    def _prompt_xp3_archive_settings(self, archive_path: Path) -> Optional[Dict[str, Any]]:
+        """Prompt for manual XP3 archive settings when auto-detection fails."""
+        custom_magic = simpledialog.askstring(
+            "XP3 Custom Magic",
+            (
+                f"CherryAI could not find standard XP3 magic in {archive_path.name}.\n\n"
+                "Enter custom magic as plain text or as hex:..."
+            ),
+            parent=self,
+        )
+        if custom_magic is None:
+            return None
+
+        header_offset_raw = simpledialog.askstring(
+            "XP3 Header Offset",
+            "Enter the archive header offset as a non-negative integer.",
+            initialvalue="0",
+            parent=self,
+        )
+        if header_offset_raw is None:
+            return None
+        try:
+            header_offset = max(0, int(header_offset_raw))
+        except ValueError:
+            messagebox.showerror(
+                "XP3 Header Offset",
+                f"Invalid header offset: {header_offset_raw}",
+            )
+            return None
+
+        key = simpledialog.askstring(
+            "XP3 Key",
+            "Enter the archive key if one is required. Leave blank if unused.",
+            initialvalue="",
+            parent=self,
+        )
+        if key is None:
+            return None
+
+        return {
+            "custom_magic": custom_magic,
+            "header_offset": header_offset,
+            "key": key,
+        }
+
+    def _can_load_archive_member(self, path: Path) -> bool:
+        """Return whether an extracted archive member should be loaded into Step 0."""
+        try:
+            from CherryAI.formats import detect_parser
+
+            return detect_parser(path) is not None
+        except Exception:
+            return False
+
+    def _load_archive_file(self, path: Path) -> bool:
+        """Load an XP3 archive by unpacking it into Package/Original first."""
+        mgr = self.manifest_manager
+        if mgr is None:
+            raise ValueError("Manifest manager unavailable for archive input")
+        if not self._ensure_archive_project_loaded(path):
+            return False
+
+        from CherryAI.formats.KiriKiri2 import detect_xp3_archive_settings
+        from CherryAI.formats.KiriKiri2 import infer_xp3_archive_key
+        from CherryAI.formats.KiriKiri2 import list_xp3_entries
+
+        detected = detect_xp3_archive_settings(path)
+        settings = detected.to_dict() if detected is not None else self._prompt_xp3_archive_settings(path)
+        if settings is None:
+            return False
+
+        if not settings.get("key"):
+            inferred_key = infer_xp3_archive_key(path, settings=settings)
+            if inferred_key:
+                settings["key"] = inferred_key
+
+        entries = list_xp3_entries(path, settings=settings)
+        if not any(self._can_load_archive_member(Path(entry.name)) for entry in entries):
+            return False
+
+        settings.update({
+            "format": "KiriKiri2",
+            "source_path": str(path),
+        })
+        mgr.set_archive_setting(path.name, settings)
+
+        staged = mgr.stage_package_original_archive(path, settings=settings)
+        loaded_any = False
+        for extracted_path in sorted(staged.values()):
+            if not self._can_load_archive_member(extracted_path):
+                continue
+            loaded_any = self._load_file(extracted_path, "auto", "auto") or loaded_any
+
+        if loaded_any:
+            self._sync_lines_to_manifest()
+            self._sync_output_defaults_to_manifest()
+            self._save_manifest_after_file_load()
+
+        return loaded_any
 
     def _save_manifest_after_file_load(self) -> None:
         """Save manifest after files are loaded (TASK 29.2).
@@ -1530,7 +1901,7 @@ class InputExtractionStep(BaseStep):
 
         # Build file_infos and new_lines_by_rel --------------------------
         new_file_infos: List[Dict[str, Any]] = []
-        new_lines_by_rel: Dict[str, List[str]] = {}
+        new_lines_by_rel: Dict[str, List[Dict[str, Any]]] = {}
 
         # Derive rel_paths consistent with existing filedir
         new_paths = [lf.path for lf in new_loaded]
@@ -1576,8 +1947,10 @@ class InputExtractionStep(BaseStep):
                 "encoding": loaded_file.encoding,
                 "type": file_type,
             })
-
-            new_lines_by_rel[rel_path] = list(loaded_file.lines)
+            new_lines_by_rel[rel_path] = self._build_manifest_line_entries(
+                loaded_file,
+                rel_path,
+            )
 
         added = mgr.add_files(new_file_infos, new_lines_by_rel)
         logger.info("Added %d new file(s) to manifest", added)
@@ -1622,26 +1995,67 @@ class InputExtractionStep(BaseStep):
         if len(self._loaded_files) <= 1:
             typing_enabled = False
 
-        # Copy files into the staged Original/ tree before syncing parser-backed
-        # lines so extraction sees the same project-local context used later by
-        # output injection.
-        self._copy_originals_to_project()
-        self._refresh_loaded_files_from_project_originals()
+        source_handling = getattr(self, "_pending_source_handling", "copy")
+        stage_source_paths = dict(getattr(self, "_pending_stage_source_paths", {}))
+        source_base = getattr(self, "_pending_source_base", None)
+        package_original_dir = mgr.get_package_original_dir().resolve()
+
+        if not stage_source_paths and self._loaded_files:
+            fallback_paths = [loaded_file.path for loaded_file in self._loaded_files]
+            if len(fallback_paths) > 1:
+                source_base = mgr._find_common_base(fallback_paths)
+            elif fallback_paths:
+                source_base = fallback_paths[0].parent
+            if source_base is not None:
+                for loaded_file in self._loaded_files:
+                    try:
+                        rel_path = str(loaded_file.path.relative_to(source_base))
+                    except ValueError:
+                        rel_path = loaded_file.path.name
+                    stage_source_paths[rel_path] = loaded_file.path
+
+        archive_only = bool(self._loaded_files) and all(
+            package_original_dir in loaded_file.path.resolve().parents
+            or loaded_file.path.resolve() == package_original_dir
+            for loaded_file in self._loaded_files
+        )
+
+        if source_handling == "external":
+            mgr.source_mode = "external"
+            mgr.source_root = str(source_base.resolve()) if source_base is not None else ""
+        else:
+            mgr.source_mode = "internal"
+            mgr.source_root = source_base.name if source_base is not None else ""
+            if not archive_only and not self._copy_originals_to_project(stage_source_paths, source_handling):
+                return
+
+        self._refresh_loaded_files_from_project_originals(base_path=source_base)
         
         # Collect all lines (compact: idx + orig only)
         lines: List[Dict[str, Any]] = []
         file_infos: List[Dict[str, Any]] = []
         idx = 0
+        source_paths = [f.path for f in self._loaded_files]
+        if source_base is not None:
+            base_path = source_base
+        elif archive_only:
+            base_path = mgr.get_package_original_dir()
+        elif len(source_paths) > 1:
+            base_path = mgr._find_common_base(source_paths)
+        elif source_paths:
+            base_path = source_paths[0].parent
+        else:
+            base_path = Path.cwd()
         
         for loaded_file in self._loaded_files:
             _file_start_idx = idx
-            for j, line_text in enumerate(loaded_file.lines):
-                entry: Dict[str, Any] = {
-                    "idx": idx,
-                    "orig": line_text,
-                }
-                if loaded_file.tags and j < len(loaded_file.tags):
-                    set_primary_line_tag(entry, loaded_file.tags[j])
+            try:
+                rel_path = str(loaded_file.path.relative_to(base_path))
+            except ValueError:
+                rel_path = loaded_file.path.name
+
+            for entry in self._build_manifest_line_entries(loaded_file, rel_path):
+                entry["idx"] = idx
                 lines.append(entry)
                 idx += 1
             
@@ -1653,6 +2067,7 @@ class InputExtractionStep(BaseStep):
             # Build file info for filedir
             file_infos.append({
                 "path": str(loaded_file.path),
+                "rel_path": rel_path,
                 "format": loaded_file.format_id,
                 "line_count": loaded_file.line_count,
                 "encoding": loaded_file.encoding,
@@ -1666,11 +2081,52 @@ class InputExtractionStep(BaseStep):
         filedir_entries = mgr.build_filedir_from_files(file_infos)
         mgr.set_filedir(filedir_entries)
         
-        # Compute and store source_root as folder name only
-        source_paths = [f.path for f in self._loaded_files]
-        mgr.source_root = mgr.compute_source_root(source_paths)
+        if mgr.source_mode != "external":
+            mgr.source_root = base_path.name if base_path is not None else mgr.compute_source_root(source_paths)
 
         self._sync_output_defaults_to_manifest()
+
+    def _build_manifest_line_entries(
+        self,
+        loaded_file: LoadedFile,
+        rel_path: str,
+    ) -> List[Dict[str, Any]]:
+        """Build canonical manifest line entries with source ``ln``/``f`` capture."""
+        mgr = self.manifest_manager
+        mappings: List[Dict[str, int]] = []
+
+        if mgr is not None and mgr.is_loaded and loaded_file.lines:
+            staged_path = mgr.resolve_file_path(rel_path)
+            source_path = staged_path if staged_path.exists() else loaded_file.path
+            try:
+                with open(source_path, "r", encoding=loaded_file.encoding, errors="ignore") as fh:
+                    source_text = fh.read()
+                mappings = capture_source_line_mappings(source_text, loaded_file.lines)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to capture source line mappings for %s: %s",
+                    rel_path,
+                    exc,
+                )
+
+        if len(mappings) < len(loaded_file.lines):
+            mappings.extend(
+                {"ln": len(mappings) + i + 1}
+                for i in range(len(loaded_file.lines) - len(mappings))
+            )
+
+        entries: List[Dict[str, Any]] = []
+        for j, line_text in enumerate(loaded_file.lines):
+            entry: Dict[str, Any] = {
+                "orig": line_text,
+                "ln": mappings[j].get("ln", j + 1),
+            }
+            if "f" in mappings[j]:
+                entry["f"] = mappings[j]["f"]
+            if loaded_file.tags and j < len(loaded_file.tags):
+                set_primary_line_tag(entry, loaded_file.tags[j])
+            entries.append(entry)
+        return entries
 
     def _refresh_loaded_files_from_project_originals(
         self,
@@ -1703,7 +2159,6 @@ class InputExtractionStep(BaseStep):
             logger.warning("Failed to access parser registry for staged refresh: %s", exc)
             return False
 
-        original_dir = mgr.get_original_dir()
         refreshed = False
 
         for loaded_file in files:
@@ -1716,7 +2171,7 @@ class InputExtractionStep(BaseStep):
             except ValueError:
                 rel_path = loaded_file.path.name
 
-            staged_path = original_dir / rel_path
+            staged_path = mgr.resolve_file_path(rel_path)
             if not staged_path.exists():
                 continue
 
@@ -1829,7 +2284,11 @@ class InputExtractionStep(BaseStep):
         if changed:
             mgr.set_output_options(output_options)
 
-    def _copy_originals_to_project(self) -> None:
+    def _copy_originals_to_project(
+        self,
+        source_paths: Optional[Dict[str, Path]] = None,
+        source_handling: str = "copy",
+    ) -> bool:
         """Copy source files to the project's Original/ directory.
         
         TASK 35.2: Ensures the project can be reopened and processed
@@ -1839,34 +2298,61 @@ class InputExtractionStep(BaseStep):
         """
         mgr = self.manifest_manager
         if mgr is None or not mgr.is_loaded:
-            return
+            return False
+
+        if source_handling == "external":
+            return True
         
         try:
-            # Build rel_path → absolute source path mapping from loaded files
-            filedir = mgr.get_filedir()
-            source_paths: Dict[str, Path] = {}
+            stage_source_paths = dict(source_paths or getattr(self, "_pending_stage_source_paths", {}))
+            if not stage_source_paths:
+                filedir = mgr.get_filedir()
+                all_abs = [lf.path for lf in self._loaded_files]
+                base = mgr._find_common_base(all_abs)
+                for loaded_file in self._loaded_files:
+                    try:
+                        rel = str(loaded_file.path.relative_to(base))
+                    except ValueError:
+                        rel = loaded_file.path.name
+                    for entry in filedir:
+                        if entry.rel_path == rel:
+                            stage_source_paths[entry.rel_path] = loaded_file.path
+                            break
 
-            # Compute the same common base used when building filedir
-            all_abs = [lf.path for lf in self._loaded_files]
-            base = mgr._find_common_base(all_abs)
+            progress: Optional[LoadingProgressDialog] = None
+            if len(stage_source_paths) > 3:
+                progress = LoadingProgressDialog(self, len(stage_source_paths))
+                progress.set_phase("Staging Original tree")
 
-            for loaded_file in self._loaded_files:
-                try:
-                    rel = str(loaded_file.path.relative_to(base))
-                except ValueError:
-                    rel = loaded_file.path.name
-                # Match by rel_path to filedir entries
-                for entry in filedir:
-                    if entry.rel_path == rel:
-                        source_paths[entry.rel_path] = loaded_file.path
-                        break
+            def _progress_callback(payload: Dict[str, Any]) -> bool:
+                if progress is None:
+                    self.update_idletasks()
+                    return True
+                return progress.update_staging(
+                    rel_path=payload.get("rel_path", ""),
+                    current_file=int(payload.get("current_file", 0)),
+                    total_files=int(payload.get("total_files", len(stage_source_paths))),
+                    file_bytes=int(payload.get("file_bytes", 0)),
+                    file_total_bytes=int(payload.get("file_total_bytes", 0)),
+                )
 
-            copied = mgr.copy_originals_to_project(source_paths=source_paths)
+            copied = mgr.copy_originals_to_project(
+                source_paths=stage_source_paths,
+                force=True,
+                move_files=(source_handling == "move"),
+                progress_callback=_progress_callback if stage_source_paths else None,
+            )
+            if progress is not None:
+                progress.close()
+            if progress is not None and progress.cancelled:
+                return False
             if copied:
                 logger.info("Copied %d original file(s) to project", len(copied))
+            return True
         except Exception as e:
             logger.warning("Failed to copy originals: %s", e)
             # Non-fatal - project can still work without copies
+            return False
 
     def _on_load_manifest(self) -> None:
         """Handle Load Manifest button click."""
@@ -2306,6 +2792,9 @@ class InputExtractionStep(BaseStep):
             True if loaded successfully.
         """
         try:
+            if path.suffix.lower() == ".xp3":
+                return self._load_archive_file(path)
+
             # Detect format — try parser registry first for auto or parser names
             if format_override != "auto":
                 format_id = format_override
@@ -2680,12 +3169,9 @@ class InputExtractionStep(BaseStep):
         
         # Get relocated files (TASK 32.1)
         relocated = getattr(self, "_relocated_files", {})
-        
-        # Determine Original/ directory for file resolution
+
+        # Determine source root for file resolution.
         mgr = self.manifest_manager
-        original_dir: Optional[Path] = None
-        if mgr is not None and mgr.is_loaded:
-            original_dir = mgr.get_original_dir()
         
         # v3.2 format: use filedir to map lines to files
         if filedir:
@@ -2699,9 +3185,8 @@ class InputExtractionStep(BaseStep):
                 rel_path = file_entry.get("rel_path", "unknown")
                 file_format = file_entry.get("format", "txt")
                 
-                # Resolve via Original/ directory (project-local copies)
-                if original_dir is not None:
-                    file_path = original_dir / rel_path
+                if mgr is not None and mgr.is_loaded:
+                    file_path = mgr.resolve_file_path(rel_path)
                 else:
                     file_path = Path(rel_path)
                 
@@ -3244,6 +3729,9 @@ class InputExtractionStep(BaseStep):
         self._loaded_files.clear()
         self._current_file_index = -1
         self._folder_root = None
+        self._pending_source_base = None
+        self._pending_source_handling = "copy"
+        self._pending_stage_source_paths = {}
         self._tree_item_to_index.clear()
         if hasattr(self, "_pending_project_name"):
             self._pending_project_name = ""

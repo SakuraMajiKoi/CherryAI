@@ -566,17 +566,19 @@ class PreprocessingStep(BaseStep):
         tree_frame = ttk.Frame(section)
         tree_frame.pack(fill="x", padx=10, pady=5)
 
-        cols = ("pattern", "token", "is_regex")
+        cols = ("pattern", "token", "is_regex", "recover_everywhere")
         self._placeholder_tree = ttk.Treeview(
             tree_frame, columns=cols, show="headings", height=4,
         )
         self._placeholder_tree.heading("pattern", text="Pattern")
         self._placeholder_tree.heading("token", text="Token")
         self._placeholder_tree.heading("is_regex", text="RegEx")
+        self._placeholder_tree.heading("recover_everywhere", text="Everywhere")
 
         self._placeholder_tree.column("pattern", width=180, stretch=True)
         self._placeholder_tree.column("token", width=120)
         self._placeholder_tree.column("is_regex", width=50, anchor="center")
+        self._placeholder_tree.column("recover_everywhere", width=80, anchor="center")
 
         scrollbar = ttk.Scrollbar(
             tree_frame, orient="vertical", command=self._placeholder_tree.yview,
@@ -1240,50 +1242,27 @@ class PreprocessingStep(BaseStep):
             if (entry[3] if len(entry) == 4 else entry[2])
         )
 
+        for legacy_key in (
+            "dedup_map",
+            "aggr_dedup_map",
+            "aggr_numbers",
+            "protect_code_captured",
+            "placeholder_lookup",
+            "placeholder_records",
+            "placeholder_captured",
+            "ellipsis_counts",
+        ):
+            data.pop(legacy_key, None)
+
         # Persist dedup mappings for postprocessing restoration
         last_stats = getattr(self, "_last_stats", {})
-        dedup_map = last_stats.get("dedup_map", {})
-        aggr_dedup_map = last_stats.get("aggr_dedup_map", {})
-        aggr_numbers = last_stats.get("aggr_numbers", {})
 
-        if dedup_map:
-            # Serialize with string keys for JSON compatibility
-            data["dedup_map"] = {str(k): v for k, v in dedup_map.items()}
-        if aggr_dedup_map:
-            data["aggr_dedup_map"] = {
-                str(k): v for k, v in aggr_dedup_map.items()
-            }
-        if aggr_numbers:
-            data["aggr_numbers"] = {
-                str(k): v for k, v in aggr_numbers.items()
-            }
-
-        # Persist protect code captured values for postprocessing restoration
-        prot_captured = last_stats.get("protect_code_captured", {})
-        if prot_captured:
-            data["protect_code_captured"] = {
-                str(k): v for k, v in prot_captured.items()
-            }
-
-        # Persist custom placeholder captured values
-        ph_captured = last_stats.get("placeholder_captured", {})
-        if ph_captured:
-            data["placeholder_captured"] = {
-                str(k): v for k, v in ph_captured.items()
-            }
-
-        # Persist token-aware placeholder records for batch restoration
-        ph_records = last_stats.get("placeholder_records", {})
-        if ph_records:
-            data["placeholder_records"] = {
-                str(k): v for k, v in ph_records.items()
-            }
-
-        # Persist ellipsis counts for decompression
-        ell_counts = last_stats.get("ellipsis_counts", {})
-        if ell_counts:
-            data["ellipsis_counts"] = {
-                str(k): v for k, v in ell_counts.items()
+        placeholder_lookup = last_stats.get("placeholder_lookup", {})
+        if placeholder_lookup:
+            data["placeholder_lookup"] = {
+                str(k): dict(v)
+                for k, v in placeholder_lookup.items()
+                if isinstance(v, dict)
             }
 
         # Persist anchor captured data for restoration
@@ -1522,18 +1501,28 @@ class PreprocessingStep(BaseStep):
             ["Pattern:", "Token:"],
             regex_default=False,
             show_regex=True,
+            show_recover_everywhere=True,
         )
         if dialog.result:
             pattern = dialog.result[0]
             token = dialog.result[1] or "__CUST__"
             is_regex = dialog.regex_result
+            recover_everywhere = dialog.recover_everywhere_result
             if pattern:
                 self._placeholder_tree.insert(
                     "", tk.END,
-                    values=(pattern, token, "✓" if is_regex else "✗"),
+                    values=(
+                        pattern,
+                        token,
+                        "✓" if is_regex else "✗",
+                        "✓" if recover_everywhere else "✗",
+                    ),
                 )
                 self._config["placeholder_rules"].append({
-                    "pattern": pattern, "token": token, "is_regex": is_regex,
+                    "pattern": pattern,
+                    "token": token,
+                    "is_regex": is_regex,
+                    "recover_everywhere": recover_everywhere,
                 })
                 self._save_custom_placeholders_to_manifest()
                 self.session.set_dirty(True)
@@ -1576,17 +1565,29 @@ class PreprocessingStep(BaseStep):
             [rule.get("pattern", ""), rule.get("token", "")],
             regex_default=rule.get("is_regex", False),
             show_regex=True,
+            recover_everywhere_default=rule.get("recover_everywhere", False),
+            show_recover_everywhere=True,
         )
         if dialog.result:
             pattern = dialog.result[0]
             token = dialog.result[1] or "__CUST__"
             is_regex = dialog.regex_result
+            recover_everywhere = dialog.recover_everywhere_result
             if pattern:
                 self._placeholder_tree.item(
-                    sel[0], values=(pattern, token, "✓" if is_regex else "✗"),
+                    sel[0],
+                    values=(
+                        pattern,
+                        token,
+                        "✓" if is_regex else "✗",
+                        "✓" if recover_everywhere else "✗",
+                    ),
                 )
                 self._config["placeholder_rules"][idx] = {
-                    "pattern": pattern, "token": token, "is_regex": is_regex,
+                    "pattern": pattern,
+                    "token": token,
+                    "is_regex": is_regex,
+                    "recover_everywhere": recover_everywhere,
                 }
                 self._save_custom_placeholders_to_manifest()
                 self.session.set_dirty(True)
@@ -1903,6 +1904,7 @@ class PreprocessingStep(BaseStep):
                 "placeholder": r.get("token", "__CUST__"),
                 "is_regex": r.get("is_regex", False),  # TASK 42.2: From config
                 "restore_after": True,
+                "recover_everywhere": r.get("recover_everywhere", False),
             }
             for r in rules
         ]
@@ -1929,6 +1931,7 @@ class PreprocessingStep(BaseStep):
                 "pattern": p.get("pattern", ""),
                 "token": p.get("placeholder", "__CUST__"),
                 "is_regex": p.get("is_regex", False),
+                "recover_everywhere": p.get("recover_everywhere", False),
             }
             for p in manifest_placeholders
             if p.get("pattern")
@@ -1946,8 +1949,9 @@ class PreprocessingStep(BaseStep):
                 pattern = rule.get("pattern", "")
                 token = rule.get("token", "__CUST__")
                 is_regex = "Yes" if rule.get("is_regex", False) else "No"
+                recover_everywhere = "Yes" if rule.get("recover_everywhere", False) else "No"
                 self._placeholder_tree.insert(
-                    "", "end", values=(pattern, token, is_regex),
+                    "", "end", values=(pattern, token, is_regex, recover_everywhere),
                 )
 
     def _save_anchor_removal_to_manifest(self) -> None:
@@ -2018,6 +2022,8 @@ class _RuleDialog(tk.Toplevel):
         defaults: Optional[List[str]] = None,
         regex_default: bool = False,
         show_regex: bool = False,
+        recover_everywhere_default: bool = False,
+        show_recover_everywhere: bool = False,
     ) -> None:
         """Initialize rule dialog.
 
@@ -2028,6 +2034,8 @@ class _RuleDialog(tk.Toplevel):
             defaults: Default values for inputs.
             regex_default: Default state for RegEx checkbox (TASK 42.2).
             show_regex: Whether to show the RegEx checkbox (TASK 42.2).
+            recover_everywhere_default: Default Recover Everywhere state.
+            show_recover_everywhere: Whether to show the Recover Everywhere checkbox.
         """
         super().__init__(parent)
         self.title(title)
@@ -2036,8 +2044,10 @@ class _RuleDialog(tk.Toplevel):
 
         self.result: Optional[List[str]] = None
         self.regex_result: bool = regex_default
+        self.recover_everywhere_result: bool = recover_everywhere_default
         self._entries: List[ttk.Entry] = []
         self._regex_var: Optional[tk.BooleanVar] = None
+        self._recover_everywhere_var: Optional[tk.BooleanVar] = None
 
         defaults = defaults or [""] * len(labels)
 
@@ -2060,6 +2070,19 @@ class _RuleDialog(tk.Toplevel):
             self._regex_var = tk.BooleanVar(value=regex_default)
             ttk.Checkbutton(
                 regex_frame, variable=self._regex_var, text="Enabled",
+            ).pack(side="left")
+
+        if show_recover_everywhere:
+            recover_frame = ttk.Frame(self)
+            recover_frame.pack(fill="x", padx=10, pady=5)
+            ttk.Label(recover_frame, text="Recover:", width=12).pack(side="left")
+            self._recover_everywhere_var = tk.BooleanVar(
+                value=recover_everywhere_default,
+            )
+            ttk.Checkbutton(
+                recover_frame,
+                variable=self._recover_everywhere_var,
+                text="Everywhere",
             ).pack(side="left")
 
         # Buttons
@@ -2090,6 +2113,8 @@ class _RuleDialog(tk.Toplevel):
         self.result = [entry.get() for entry in self._entries]
         if self._regex_var is not None:
             self.regex_result = self._regex_var.get()
+        if self._recover_everywhere_var is not None:
+            self.recover_everywhere_result = self._recover_everywhere_var.get()
         self.destroy()
 
     def _on_cancel(self) -> None:

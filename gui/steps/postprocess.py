@@ -33,6 +33,10 @@ from CherryAI.functions.manifest_fields import (
 try:
     # Explicit import of shared processing logic per architecture rules
     from CherryAI.functions.postprocess import (
+        capture_custom_placeholder_records,
+        capture_custom_placeholder_values,
+        capture_ellipsis_counts,
+        capture_generic_placeholder_values,
         recover_line,
         RecoveryResult,
         RecoveryType as FuncRecoveryType,
@@ -41,6 +45,50 @@ try:
     _HAS_POSTPROCESS = True
 except ImportError:  # pragma: no cover
     _HAS_POSTPROCESS = False
+
+    def capture_custom_placeholder_values(
+        text: str,
+        rules: List[Dict[str, Any]],
+    ) -> List[str]:
+        return []
+
+    def capture_custom_placeholder_records(
+        text: str,
+        line_tags: List[str] | Tuple[str, ...],
+        placeholder_lookup: Dict[str, Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        return []
+
+    def capture_generic_placeholder_values(
+        text: str,
+        line_tags: List[str] | Tuple[str, ...],
+        placeholder_lookup: Dict[str, Dict[str, Any]],
+    ) -> List[str]:
+        return []
+
+    def capture_ellipsis_counts(text: str) -> List[int]:
+        return []
+
+try:
+    from CherryAI.functions.dedup import (
+        aggressive_numbers_for_text,
+        aggressive_restore_line,
+        build_tagged_dedup_maps,
+    )
+except ImportError:  # pragma: no cover
+    def aggressive_numbers_for_text(text: str) -> List[str] | Dict[str, str]:
+        return []
+
+    def aggressive_restore_line(
+        masked: str,
+        numbers: List[str] | Dict[str, str],
+    ) -> str:
+        return masked
+
+    def build_tagged_dedup_maps(
+        lines: List[Any],
+    ) -> Tuple[Dict[int, int], Dict[int, int]]:
+        return {}, {}
 
 try:
     from CherryAI.modi.standard_mode import decompress_ellipsis_line  # noqa: F401
@@ -1613,21 +1661,18 @@ class PostprocessingStep(BaseStep):
             prepro_data = self.session.get_step(3).data
         else:
             prepro_data = {}
+        placeholder_lookup = {
+            str(k): dict(v)
+            for k, v in (prepro_data.get("placeholder_lookup") or {}).items()
+            if isinstance(v, dict)
+        }
         prot_captured = {
             int(k): v
             for k, v in (prepro_data.get("protect_code_captured") or {}).items()
         }
-        ph_captured = {
-            int(k): v
-            for k, v in (prepro_data.get("placeholder_captured") or {}).items()
-        }
         ph_records = {
             int(k): v
             for k, v in (prepro_data.get("placeholder_records") or {}).items()
-        }
-        ell_counts = {
-            int(k): v
-            for k, v in (prepro_data.get("ellipsis_counts") or {}).items()
         }
         anchor_captured = {
             int(k): v
@@ -1636,17 +1681,17 @@ class PostprocessingStep(BaseStep):
         # Build placeholder token → pattern map from config rules
         ph_rules = (prepro_data.get("config") or {}).get("placeholder_rules", [])
 
-        # Aggressive dedup numbers for ALL lines (source + dup)
-        aggr_nums: Dict[int, List[str] | Dict[str, str]] = {}
-        for k, v in (prepro_data.get("aggr_numbers") or {}).items():
-            try:
-                idx = int(k)
-            except Exception:
-                continue
-            if isinstance(v, dict):
-                aggr_nums[idx] = {str(token): str(value) for token, value in v.items()}
-            elif isinstance(v, list):
-                aggr_nums[idx] = [str(item) for item in v]
+        ph_captured = {
+            line.idx: capture_custom_placeholder_values(line.original, ph_rules)
+            for line in self._lines
+            if ph_rules
+        }
+        ell_counts = {
+            line.idx: counts
+            for line in self._lines
+            for counts in [capture_ellipsis_counts(line.original)]
+            if counts
+        }
 
         # Load code patterns for preserve-action recovery
         code_patterns = []
@@ -1657,7 +1702,59 @@ class PostprocessingStep(BaseStep):
             line.idx: line.translated for line in self._lines
         }
 
-        if ph_records:
+        if placeholder_lookup:
+            custom_records_by_line = {
+                line.idx: capture_custom_placeholder_records(
+                    line.original,
+                    list(line.tags),
+                    placeholder_lookup,
+                )
+                for line in self._lines
+            }
+            generic_captures_by_line = {
+                line.idx: capture_generic_placeholder_values(
+                    line.original,
+                    list(line.tags),
+                    placeholder_lookup,
+                )
+                for line in self._lines
+            }
+            dedup_line_ids = {
+                line.idx for line in self._lines if self._is_dedup_line(line)
+            }
+            active_placeholder_records = {
+                idx: records
+                for idx, records in custom_records_by_line.items()
+                if idx not in dedup_line_ids
+            }
+            for line in self._lines:
+                if line.translated == "__DEDUP__" or self._is_dedup_line(line):
+                    batch_placeholder_texts[line.idx] = line.translated
+                    continue
+                text = self._reverse_prot_compression(line.translated)
+                text = self._reverse_protect_code(
+                    text,
+                    line.idx,
+                    {line.idx: generic_captures_by_line.get(line.idx, [])},
+                )
+                batch_placeholder_texts[line.idx] = text
+
+            try:
+                from CherryAI.functions.modehelper import (
+                    restore_custom_placeholders_batch,
+                )
+
+                ordered_texts = [batch_placeholder_texts[line.idx] for line in self._lines]
+                restored_texts, _restore_stats, _restore_residuals = (
+                    restore_custom_placeholders_batch(
+                        ordered_texts, active_placeholder_records,
+                    )
+                )
+                for pos, line in enumerate(self._lines):
+                    batch_placeholder_texts[line.idx] = restored_texts[pos]
+            except Exception:
+                logger.exception("Batch custom placeholder restoration failed")
+        elif ph_records:
             dedup_line_ids = {
                 line.idx for line in self._lines if self._is_dedup_line(line)
             }
@@ -1715,7 +1812,7 @@ class PostprocessingStep(BaseStep):
                 # corrupted by bracket insertion from the original text.
                 # Order follows specs §5.9 postprocessing priorities.
 
-                if not ph_records:
+                if not placeholder_lookup and not ph_records:
                     text = self._reverse_prot_compression(text)
                     text = self._reverse_protect_code(
                         text, line.idx, prot_captured,
@@ -1737,7 +1834,7 @@ class PostprocessingStep(BaseStep):
 
                 # Restore <NUM> tokens from aggressive dedup
                 text = self._reverse_aggr_numbers(
-                    text, line.idx, aggr_nums,
+                    text, line.idx, {},
                 )
 
                 # ── Phase 2: Post-exclusive LLM artifact recovery ──────
@@ -1893,47 +1990,31 @@ class PostprocessingStep(BaseStep):
     def _restore_dedup_lines(self) -> None:
         """Restore deduplicated lines from their source lines.
 
-        Reads the dedup_map / aggr_dedup_map / aggr_numbers from the
-        preprocessing step data (step 3).  For each dedup'd line the
-        most up-to-date text is copied from the *in-RAM* source line
-        (postpro → tl → prepro → orig).
-
-        For aggressive-dedup lines the number tokens are restored from
-        the per-line numbers list stored in ``aggr_numbers``.
+        Canonical tag markers are the primary source of truth:
+        ``dedup,D{idx}`` and ``aggressive_dedup,AD{idx}``. Older manifests
+        still fall back to legacy preprocessing step maps when those tags
+        are absent.
         """
-        # Load dedup maps from preprocessing step data
-        # Prefer ManifestManager (where preprocess writes data) over session
+        dedup_map, aggr_map = build_tagged_dedup_maps(self._lines)
+
         mgr = self.manifest_manager
+        legacy_prepro_data: Dict[str, Any] = {}
         if mgr is not None and mgr.is_loaded:
-            prepro_data = mgr.get_step_data(3)
+            legacy_prepro_data = mgr.get_step_data(3)
         elif self.session:
-            prepro_data = self.session.get_step(3).data
-        else:
-            prepro_data = {}
-        if not prepro_data:
-            return
+            legacy_prepro_data = self.session.get_step(3).data
 
-        dedup_map_raw = prepro_data.get("dedup_map", {})
-        aggr_map_raw = prepro_data.get("aggr_dedup_map", {})
-        aggr_nums_raw = prepro_data.get("aggr_numbers", {})
-
-        # Keys may be strings due to JSON serialisation
-        dedup_map: Dict[int, int] = {
-            int(k): int(v) for k, v in dedup_map_raw.items()
-        }
-        aggr_map: Dict[int, int] = {
-            int(k): int(v) for k, v in aggr_map_raw.items()
-        }
-        aggr_nums: Dict[int, List[str] | Dict[str, str]] = {}
-        for k, v in aggr_nums_raw.items():
-            try:
-                idx = int(k)
-            except Exception:
-                continue
-            if isinstance(v, dict):
-                aggr_nums[idx] = {str(token): str(value) for token, value in v.items()}
-            elif isinstance(v, list):
-                aggr_nums[idx] = [str(item) for item in v]
+        if legacy_prepro_data:
+            for key, value in (legacy_prepro_data.get("dedup_map") or {}).items():
+                try:
+                    dedup_map.setdefault(int(key), int(value))
+                except Exception:
+                    continue
+            for key, value in (legacy_prepro_data.get("aggr_dedup_map") or {}).items():
+                try:
+                    aggr_map.setdefault(int(key), int(value))
+                except Exception:
+                    continue
 
         if not dedup_map and not aggr_map:
             return
@@ -1956,7 +2037,6 @@ class PostprocessingStep(BaseStep):
                 by_idx,
                 dedup_map,
                 aggr_map,
-                aggr_nums,
                 resolved_cache,
             )
             if text:
@@ -1978,7 +2058,6 @@ class PostprocessingStep(BaseStep):
                 by_idx,
                 dedup_map,
                 aggr_map,
-                aggr_nums,
                 resolved_cache,
             )
             if not text:
@@ -2001,7 +2080,6 @@ class PostprocessingStep(BaseStep):
         by_idx: Dict[int, PostprocessLine],
         dedup_map: Dict[int, int],
         aggr_map: Dict[int, int],
-        aggr_nums: Dict[int, List[str] | Dict[str, str]],
         cache: Dict[int, str],
         visiting: Optional[set[int]] = None,
         *,
@@ -2026,7 +2104,6 @@ class PostprocessingStep(BaseStep):
                     by_idx,
                     dedup_map,
                     aggr_map,
-                    aggr_nums,
                     cache,
                     visiting,
                     prefer_pre_aggr=True,
@@ -2034,15 +2111,10 @@ class PostprocessingStep(BaseStep):
                 if not template:
                     return ""
 
-                nums = aggr_nums.get(idx, [])
+                line = by_idx.get(idx)
+                nums = aggressive_numbers_for_text(line.original) if line is not None else []
                 if nums:
-                    try:
-                        from CherryAI.gui.helpers.mode_adapter import (
-                            aggressive_restore_line,
-                        )
-                        template = aggressive_restore_line(template, nums)
-                    except ImportError:
-                        pass
+                    template = aggressive_restore_line(template, nums)
 
                 cache[idx] = template
                 return template
@@ -2053,7 +2125,6 @@ class PostprocessingStep(BaseStep):
                     by_idx,
                     dedup_map,
                     aggr_map,
-                    aggr_nums,
                     cache,
                     visiting,
                 )
@@ -2289,15 +2360,13 @@ class PostprocessingStep(BaseStep):
         Returns:
             Text with aggressive number tokens replaced by original numbers.
         """
-        numbers = aggr_nums.get(idx)
+        line = self._lines[idx] if 0 <= idx < len(self._lines) else None
+        numbers = aggressive_numbers_for_text(line.original) if line is not None else []
+        if not numbers:
+            numbers = aggr_nums.get(idx)
         if not numbers:
             return text
-        try:
-            from CherryAI.gui.helpers.mode_adapter import aggressive_restore_line
-
-            return aggressive_restore_line(text, numbers)
-        except ImportError:
-            return text
+        return aggressive_restore_line(text, numbers)
 
     def _apply_symbol_conversion(self, text: str) -> str:
         """Apply symbol conversion to text (TASK 45.5: bidirectional).

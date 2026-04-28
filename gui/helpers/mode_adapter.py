@@ -296,23 +296,25 @@ def apply_protect_code(
         Tuple of (processed_line, was_changed, captured_values).
     """
     original = line
-    all_matches: List[Tuple[int, int, str]] = []  # (start, end, value)
+    all_matches: List[Tuple[int, int, str, int]] = []  # (start, end, value, rule_idx)
 
-    for entry in patterns:
+    for rule_idx, entry in enumerate(patterns, start=1):
         # Handle both dict entries and raw strings
         if isinstance(entry, dict):
             pattern_str = entry.get("pattern", "")
+            is_regex = bool(entry.get("is_regex", True))
         else:
             pattern_str = str(entry) if entry is not None else ""
+            is_regex = True
 
         if not pattern_str.strip():
             continue
         try:
-            compiled = re.compile(pattern_str)
+            compiled = re.compile(pattern_str if is_regex else re.escape(pattern_str))
             for m in compiled.finditer(line):
                 val = m.group(0)
                 if val:
-                    all_matches.append((m.start(), m.end(), val))
+                    all_matches.append((m.start(), m.end(), val, rule_idx))
         except re.error as e:
             logger.warning("Invalid protect code pattern %r: %s", pattern_str, e)
 
@@ -321,18 +323,18 @@ def apply_protect_code(
 
     # Sort by position; resolve overlaps (leftmost wins)
     all_matches.sort(key=lambda x: x[0])
-    filtered: List[Tuple[int, int, str]] = []
+    filtered: List[Tuple[int, int, str, int]] = []
     last_end = 0
-    for start, end, val in all_matches:
+    for start, end, val, rule_idx in all_matches:
         if start >= last_end:
-            filtered.append((start, end, val))
+            filtered.append((start, end, val, rule_idx))
             last_end = end
 
     # captured in left-to-right order (matches __PROTECTED__ token order)
-    captured = [val for _, _, val in filtered]
+    captured = [val for _, _, val, _rule_idx in filtered]
 
     # Replace from right-to-left to preserve positions
-    for start, end, _val in reversed(filtered):
+    for start, end, _val, _rule_idx in reversed(filtered):
         line = line[:start] + "__PROTECTED__" + line[end:]
 
     return line, line != original, captured
@@ -441,10 +443,11 @@ def apply_placeholder_batch(
     captured_by_line: Dict[int, List[str]] = {}
     records_by_line: Dict[int, List[Dict[str, Any]]] = {}
 
-    for rule in rules:
+    for rule_idx, rule in enumerate(rules, start=1):
         pattern = rule.get("pattern", "")
         token = rule.get("token", "__CUST__")
         is_regex = rule.get("is_regex", True)
+        recover_everywhere = bool(rule.get("recover_everywhere", False))
 
         for idx, line in enumerate(result):
             new_line, changed, captured = apply_custom_placeholder(
@@ -457,8 +460,10 @@ def apply_placeholder_batch(
                     changed_count += 1
                 captured_by_line.setdefault(idx, []).extend(captured)
                 records_by_line.setdefault(idx, []).append({
+                    "tag": f"custom_placeholder{rule_idx}",
                     "token": token,
                     "values": list(captured),
+                    "recover_everywhere": recover_everywhere,
                 })
 
     return (
@@ -1040,9 +1045,16 @@ def apply_preprocessing(
         "aggr_numbers": {},
     }
 
+    def _add_tag(idx: int, tag: str) -> None:
+        if not tag:
+            return
+        line_tags = tags_by_line.setdefault(idx, [])
+        if tag not in line_tags:
+            line_tags.append(tag)
+
     def _tag_indices(indices: List[int], tag: str) -> None:
         for i in indices:
-            tags_by_line.setdefault(i, []).append(tag)
+            _add_tag(i, tag)
 
     def _report(name: str, frac: float) -> None:
         if progress_cb is not None:
@@ -1071,6 +1083,20 @@ def apply_preprocessing(
     _report("Protect Code Patterns", 0.10)
     patterns = config.get("protect_code_patterns", [])
     if patterns:
+        stats["placeholder_lookup"] = {
+            f"generic_placeholder{idx}": {
+                "type": "generic",
+                "pattern": str(
+                    entry.get("pattern", "") if isinstance(entry, dict) else entry or ""
+                ),
+                "token": "__PROTECTED__",
+                "is_regex": bool(entry.get("is_regex", True)) if isinstance(entry, dict) else True,
+            }
+            for idx, entry in enumerate(patterns, start=1)
+            if str(entry.get("pattern", "") if isinstance(entry, dict) else entry or "").strip()
+        }
+    if patterns:
+        protect_input = list(result)
         result, count, indices, captured = apply_protect_batch(result, patterns)
         if count:
             stats["changes_by_rule"]["protect_code"] = count
@@ -1078,10 +1104,43 @@ def apply_preprocessing(
             stats["changed_lines"].update(indices)
             stats["protect_code_captured"] = captured
             _tag_indices(indices, "protect_code")
+            for idx in indices:
+                matched_rule_ids: List[int] = []
+                line = protect_input[idx]
+                for rule_idx, entry in enumerate(patterns, start=1):
+                    pattern_str = str(
+                        entry.get("pattern", "") if isinstance(entry, dict) else entry or ""
+                    )
+                    if not pattern_str.strip():
+                        continue
+                    is_regex = bool(entry.get("is_regex", True)) if isinstance(entry, dict) else True
+                    try:
+                        compiled = re.compile(pattern_str if is_regex else re.escape(pattern_str))
+                    except re.error:
+                        continue
+                    if compiled.search(line):
+                        matched_rule_ids.append(rule_idx)
+                for rule_idx in matched_rule_ids:
+                    _add_tag(idx, f"generic_placeholder{rule_idx}")
 
     # P17. Custom placeholder rules (before symbol conversion)
     _report("Custom Placeholders", 0.15)
     rules = config.get("placeholder_rules", [])
+    if rules:
+        placeholder_lookup = dict(stats.get("placeholder_lookup", {}))
+        placeholder_lookup.update({
+            f"custom_placeholder{idx}": {
+                "type": "custom",
+                "pattern": str(rule.get("pattern", "")),
+                "token": str(rule.get("token", "__CUST__")).strip() or "__CUST__",
+                "is_regex": bool(rule.get("is_regex", True)),
+                "recover_everywhere": bool(rule.get("recover_everywhere", False)),
+            }
+            for idx, rule in enumerate(rules, start=1)
+            if str(rule.get("pattern", "")).strip()
+        })
+        if placeholder_lookup:
+            stats["placeholder_lookup"] = placeholder_lookup
     if rules:
         result, count, indices, captured, records = apply_placeholder_batch(result, rules)
         if count:
@@ -1091,6 +1150,11 @@ def apply_preprocessing(
             stats["placeholder_captured"] = captured
             stats["placeholder_records"] = records
             _tag_indices(indices, "placeholder")
+            for idx, line_records in records.items():
+                for record in line_records:
+                    tag = str(record.get("tag", "")).strip()
+                    if tag:
+                        _add_tag(idx, tag)
 
     # P20. Anchoring (before symbol conversion)
     _report("Anchoring", 0.20)

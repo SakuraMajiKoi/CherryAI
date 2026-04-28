@@ -63,6 +63,34 @@ def _split_speaker_dialogue(text: str) -> Tuple[str, str]:
     return "", text
 
 
+def _align_tagged_lines_to_search_keys(
+    tagged_lines: List["ExtractedLine"],
+    search_keys: List[str],
+) -> List[Optional["ExtractedLine"]]:
+    """Align tagged extraction metadata to the search order used for injection.
+
+    Step 9 reverses ``orig_lines`` before calling ``inject_to()`` so later
+    source occurrences are rewritten first. Tagged parsers must mirror that
+    order or speaker-aware injection will fall back to raw cleaned keys that do
+    not appear verbatim in source content.
+    """
+    extracted_texts = [line.text for line in tagged_lines]
+    if search_keys == extracted_texts:
+        return list(tagged_lines)
+    if search_keys == extracted_texts[::-1]:
+        return list(reversed(tagged_lines))
+
+    buckets: Dict[str, List["ExtractedLine"]] = {}
+    for tagged_line in tagged_lines:
+        buckets.setdefault(tagged_line.text, []).append(tagged_line)
+
+    aligned: List[Optional["ExtractedLine"]] = []
+    for key in search_keys:
+        bucket = buckets.get(key)
+        aligned.append(bucket.pop(0) if bucket else None)
+    return aligned
+
+
 # ---------------------------------------------------------------------------
 # Configuration dataclasses
 # ---------------------------------------------------------------------------
@@ -473,13 +501,15 @@ class ParserScript(ABC):
             search_keys = orig_lines if orig_lines is not None else [
                 el.text for el in tagged
             ]
-            speakers = [el.speaker for el in tagged]
+            ordered_tagged = _align_tagged_lines_to_search_keys(tagged, search_keys)
+            speakers = [el.speaker if el is not None else "" for el in ordered_tagged]
         else:
             search_keys = (
                 orig_lines if orig_lines is not None
                 else self.extract(source_path)
             )
             speakers = [""] * len(search_keys)
+            ordered_tagged = None
 
         failures: List[int] = []
         last_replaced_speaker: Optional[str] = None
@@ -578,7 +608,7 @@ class ParserScript(ABC):
             search_keys=search_keys,
             translated_lines=lines,
             orig_lines=orig_lines,
-            tagged_lines=tagged,
+            tagged_lines=ordered_tagged,
         )
         if rewritten is not None:
             content = rewritten
