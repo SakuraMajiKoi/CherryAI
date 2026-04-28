@@ -61,6 +61,10 @@ coverage.xml
 .dmypy.json
 dmypy.json
 
+# CherryAI agent and GitHub config (ignore these folders)
+.agents/
+.github/
+
 # OS files
 .DS_Store
 Thumbs.db
