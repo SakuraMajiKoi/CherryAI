@@ -3405,14 +3405,21 @@ Pre-built configs:
 
 Flow:
 1. On startup: `_init_header_rate_limiter()` loads stored RPM/TPM from API.ini
-2. Before each request: `pre_request(model, estimated_tokens)` — blocks until capacity
-3. After each response: `update_from_headers(model, headers)` — reads reset timing
-4. Counters reset automatically when the monotonic reset instant elapses
+2. Before each request: `pre_request(model, estimated_tokens)` reserves the request in a rolling 60-second token window and blocks until capacity is available
+3. `pre_request()` returns a reservation ID so the exact in-flight request can be reconciled later
+4. After each response: `update_from_headers(model, headers, reservation_id=..., usage=...)` updates limits/reset timing and replaces the reservation's estimate with actual usage when the observation is unambiguous
+5. Token counters now expire from request-start timestamps instead of only waiting for a single reset timestamp, which avoids transient TPM overshoot under concurrency
 
 Token estimation formula:
 ```
 estimated_tokens = sent_request_token_count + (input_line_token_count × 1.5)
 ```
+
+TPM enforcement:
+- `active_window_tokens = sum(counted_tokens for requests started within the last 60 seconds)`
+- Admit only when `active_window_tokens + estimated_tokens <= TPM_limit`
+- Otherwise sleep until the oldest reservation expires, then retry the check
+- RPM enforcement still uses the provider reset headers and monotonic reset instants
 
 Duration parser handles OpenAI reset header formats: "1s", "6m0s", "200ms", "1h2m3s"
 
@@ -3422,7 +3429,7 @@ Dependencies:
 
 Integration:
 - `api_client.py._wait_for_rate_limit()` — primary enforcement (priority over sliding window)
-- `api_client.py._translate_chunk()` — uses `with_raw_response` to capture HTTP headers
+- `api_client.py._translate_chunk()` — uses `with_raw_response` to capture HTTP headers and reconcile reservation usage
 - `model_registry.py.refresh_models()` — calls `fetch_openai_model_limits()` after model update
 - `providers/openai_provider.py.send_request()` — returns headers in `ProviderResponse`
 

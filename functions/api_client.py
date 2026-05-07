@@ -1158,7 +1158,7 @@ class APIClient:
             chunk_size=chunk_size or self.config.chunk_size,
         ))
 
-    def _wait_for_rate_limit(self, estimated_tokens: int = 0) -> None:
+    def _wait_for_rate_limit(self, estimated_tokens: int = 0) -> Optional[int]:
         """Enforce rate limiting (requests per minute).
 
         Priority order:
@@ -1170,8 +1170,9 @@ class APIClient:
             estimated_tokens: Estimated tokens for the request.
         """
         # 1. Header-based rate limiter — always active when initialised
+        reservation_id: Optional[int] = None
         if self._header_rate_limiter is not None:
-            self._header_rate_limiter.pre_request(
+            reservation_id = self._header_rate_limiter.pre_request(
                 self.config.model,
                 estimated_tokens,
             )
@@ -1201,7 +1202,7 @@ class APIClient:
                 model=self.config.model,
                 input_tokens=estimated_tokens,
             )
-            return
+            return reservation_id
         
         # 3. Fallback: simple timestamp-based rate limiting
         now = time.time()
@@ -1217,6 +1218,7 @@ class APIClient:
                 self._request_timestamps = [t for t in self._request_timestamps if now - t < 60]
 
         self._request_timestamps.append(now)
+        return reservation_id
 
     def check_content_warning(self, text: str) -> Optional[str]:
         """Check if text contains explicit content terms that may trigger API issues.
@@ -1982,7 +1984,9 @@ class APIClient:
         
         while attempt < max_retries:
             try:
-                self._wait_for_rate_limit(estimated_tokens=estimated_tokens)
+                reservation_id = self._wait_for_rate_limit(
+                    estimated_tokens=estimated_tokens,
+                )
                 
                 if self.client is None:
                     raise TranslationError("API client not initialized")
@@ -2031,6 +2035,21 @@ class APIClient:
                         } if response.usage else None,
                     }
                     self._log_api_call(request_data, response_data)
+
+                if self._header_rate_limiter is not None and reservation_id is not None:
+                    usage_data = None
+                    if response.usage:
+                        usage_data = {
+                            "prompt_tokens": response.usage.prompt_tokens,
+                            "completion_tokens": response.usage.completion_tokens,
+                            "total_tokens": getattr(response.usage, "total_tokens", 0),
+                        }
+                    self._header_rate_limiter.update_from_headers(
+                        self.config.model,
+                        {},
+                        reservation_id=reservation_id,
+                        usage=usage_data,
+                    )
 
                 # Structured API log for API Log Window
                 try:
@@ -2143,8 +2162,14 @@ class APIClient:
 
         while attempt < max_retries:
             try:
-                self._wait_for_rate_limit(estimated_tokens=estimated_tokens)
-                return self._translate_chunk(chunk, system_prompt)
+                reservation_id = self._wait_for_rate_limit(
+                    estimated_tokens=estimated_tokens,
+                )
+                return self._translate_chunk(
+                    chunk,
+                    system_prompt,
+                    reservation_id=reservation_id,
+                )
             except TranslationAbortError:
                 # Already classified and fatal — propagate immediately
                 raise
@@ -2177,7 +2202,12 @@ class APIClient:
             f"Failed to translate chunk after {max_retries} attempts.",
         )
 
-    def _translate_chunk(self, chunk: List[str], system_prompt: Optional[str]) -> List[str]:
+    def _translate_chunk(
+        self,
+        chunk: List[str],
+        system_prompt: Optional[str],
+        reservation_id: Optional[int] = None,
+    ) -> List[str]:
         """Perform the actual API call for a chunk."""
         if not self.client:
              raise TranslationError("Client not initialized")
@@ -2309,8 +2339,18 @@ class APIClient:
             }
             # Feed response headers into the header-based rate limiter
             if self._header_rate_limiter is not None:
+                usage_data = None
+                if response.usage:
+                    usage_data = {
+                        "prompt_tokens": response.usage.prompt_tokens,
+                        "completion_tokens": response.usage.completion_tokens,
+                        "total_tokens": response.usage.total_tokens,
+                    }
                 self._header_rate_limiter.update_from_headers(
-                    self.config.model, resp_headers,
+                    self.config.model,
+                    resp_headers,
+                    reservation_id=reservation_id,
+                    usage=usage_data,
                 )
         except TranslationError:
             raise

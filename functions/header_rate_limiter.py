@@ -38,7 +38,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +116,19 @@ class ModelWindowState:
     # ``None`` means "not yet known — use default_reset_seconds".
     reset_requests_at: Optional[float] = None
     reset_tokens_at: Optional[float] = None
+    token_reservations: List["TokenReservation"] = field(default_factory=list)
+    next_reservation_id: int = 1
+    token_accounting_mode: Optional[str] = None
+
+
+@dataclass
+class TokenReservation:
+    """A token reservation for one request started within the active window."""
+
+    reservation_id: int
+    started_at: float
+    estimated_tokens: int
+    counted_tokens: int
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +253,7 @@ class HeaderBasedRateLimiter:
         *,
         max_wait: float = 120.0,
         progress_callback: Optional[Any] = None,
-    ) -> None:
+    ) -> int:
         """Block until the model's rate limit window has capacity.
 
         Increments ``requests_in_window`` and ``tokens_in_window`` before
@@ -255,7 +268,7 @@ class HeaderBasedRateLimiter:
         """
         waited = 0.0
 
-        while waited < max_wait:
+        while True:
             with self._lock:
                 state = self._get_or_create(model)
                 self._maybe_reset(state)
@@ -263,37 +276,47 @@ class HeaderBasedRateLimiter:
                 # Unlimited → nothing to enforce
                 if state.limit_requests == 0 and state.limit_tokens == 0:
                     state.requests_in_window += 1
-                    state.tokens_in_window += estimated_tokens
-                    return
+                    return self._reserve_tokens(state, estimated_tokens)
 
                 # Check request limit
                 wait_for: float = 0.0
+                request_wait_for = 0.0
+                token_wait_for = 0.0
                 if (state.limit_requests > 0
                         and state.requests_in_window + 1 > state.limit_requests):
-                    wait_for = max(wait_for, self._time_until_reset(
+                    request_wait_for = self._time_until_reset(
                         state.reset_requests_at,
-                    ))
+                    )
+                    wait_for = max(wait_for, request_wait_for)
 
                 # Check token limit
                 if (state.limit_tokens > 0
                         and state.tokens_in_window + estimated_tokens
                         > state.limit_tokens):
-                    wait_for = max(wait_for, self._time_until_reset(
-                        state.reset_tokens_at,
-                    ))
+                    token_wait_for = self._time_until_token_capacity(state)
+                    wait_for = max(wait_for, token_wait_for)
 
                 if wait_for <= 0:
                     # Capacity available — commit the counters
                     state.requests_in_window += 1
-                    state.tokens_in_window += estimated_tokens
                     # If no reset time is set yet, schedule default
                     now = time.monotonic()
                     default = self._config.default_reset_seconds
                     if state.reset_requests_at is None:
                         state.reset_requests_at = now + default
-                    if state.reset_tokens_at is None:
-                        state.reset_tokens_at = now + default
-                    return
+                    return self._reserve_tokens(state, estimated_tokens, now=now)
+
+                if token_wait_for <= 0 and waited >= max_wait:
+                    logger.warning(
+                        "Rate limit %s/%s: max wait %.1fs exceeded, proceeding anyway",
+                        self._config.provider_name, model, max_wait,
+                    )
+                    state.requests_in_window += 1
+                    if state.reset_requests_at is None:
+                        state.reset_requests_at = (
+                            time.monotonic() + self._config.default_reset_seconds
+                        )
+                    return self._reserve_tokens(state, estimated_tokens)
 
             # --- Must wait (outside the lock) ---
             sleep_step = min(1.0, wait_for)
@@ -309,16 +332,6 @@ class HeaderBasedRateLimiter:
             if progress_callback is not None:
                 progress_callback(waited, max_wait)
 
-        # Exceeded max_wait — log warning and proceed (best-effort)
-        logger.warning(
-            "Rate limit %s/%s: max wait %.1fs exceeded, proceeding anyway",
-            self._config.provider_name, model, max_wait,
-        )
-        with self._lock:
-            state = self._get_or_create(model)
-            state.requests_in_window += 1
-            state.tokens_in_window += estimated_tokens
-
     # ------------------------------------------------------------------ #
     #  Public: post-response header update                                #
     # ------------------------------------------------------------------ #
@@ -326,7 +339,10 @@ class HeaderBasedRateLimiter:
     def update_from_headers(
         self,
         model: str,
-        headers: Dict[str, str],
+        headers: Optional[Dict[str, str]],
+        *,
+        reservation_id: Optional[int] = None,
+        usage: Optional[Dict[str, int]] = None,
     ) -> None:
         """Update limits and reset timers from provider response headers.
 
@@ -337,15 +353,13 @@ class HeaderBasedRateLimiter:
             model:   Model identifier.
             headers: HTTP response headers (case-insensitive keys).
         """
-        if not headers:
-            return
-
         # Normalise header keys to lower-case
-        h = {k.lower(): v for k, v in headers.items()}
+        h = {k.lower(): v for k, v in (headers or {}).items()}
         now = time.monotonic()
 
         with self._lock:
             state = self._get_or_create(model)
+            self._maybe_reset(state)
 
             # Update limits if provided
             cfg = self._config
@@ -378,11 +392,7 @@ class HeaderBasedRateLimiter:
             rem_tok = h.get(cfg.remaining_tokens_header)
             if rem_tok is not None:
                 try:
-                    remaining_tok = int(rem_tok)
-                    if state.limit_tokens > 0:
-                        state.tokens_in_window = (
-                            state.limit_tokens - remaining_tok
-                        )
+                    int(rem_tok)
                 except ValueError:
                     pass
 
@@ -398,6 +408,19 @@ class HeaderBasedRateLimiter:
                 seconds = parse_reset_duration(reset_tok)
                 if seconds > 0:
                     state.reset_tokens_at = now + seconds
+
+            if reservation_id is not None:
+                reservation = self._find_reservation(state, reservation_id)
+                if reservation is not None:
+                    reservation.counted_tokens = self._resolve_counted_tokens(
+                        state=state,
+                        reservation=reservation,
+                        usage=usage,
+                        remaining_tokens_header=h.get(
+                            cfg.remaining_tokens_header,
+                        ),
+                    )
+                    state.tokens_in_window = self._sum_reserved_tokens(state)
 
     # ------------------------------------------------------------------ #
     #  Public: stats / diagnostics                                        #
@@ -431,7 +454,7 @@ class HeaderBasedRateLimiter:
                 ),
                 "seconds_until_token_reset": max(
                     0.0,
-                    (state.reset_tokens_at or now) - now,
+                    self._token_reset_at(state, now) - now,
                 ),
             }
 
@@ -444,6 +467,8 @@ class HeaderBasedRateLimiter:
                 state.tokens_in_window = 0
                 state.reset_requests_at = None
                 state.reset_tokens_at = None
+                state.token_reservations.clear()
+                state.token_accounting_mode = None
 
     # ------------------------------------------------------------------ #
     #  Internal helpers                                                   #
@@ -470,10 +495,10 @@ class HeaderBasedRateLimiter:
                 and now >= state.reset_requests_at):
             state.requests_in_window = 0
             state.reset_requests_at = None
-        if (state.reset_tokens_at is not None
-                and now >= state.reset_tokens_at):
-            state.tokens_in_window = 0
-            state.reset_tokens_at = None
+        self._prune_expired_reservations(state, now)
+        if state.tokens_in_window == 0 and state.reset_tokens_at is not None:
+            if now >= state.reset_tokens_at:
+                state.reset_tokens_at = None
 
     def _time_until_reset(self, reset_at: Optional[float]) -> float:
         """Seconds until the given reset instant (≥ 0).
@@ -484,3 +509,143 @@ class HeaderBasedRateLimiter:
             return self._config.default_reset_seconds
         remaining = reset_at - time.monotonic()
         return max(0.0, remaining)
+
+    def _reserve_tokens(
+        self,
+        state: ModelWindowState,
+        estimated_tokens: int,
+        *,
+        now: Optional[float] = None,
+    ) -> int:
+        """Reserve estimated tokens in the rolling 60-second window."""
+        if now is None:
+            now = time.monotonic()
+        reservation_id = state.next_reservation_id
+        state.next_reservation_id += 1
+        state.token_reservations.append(TokenReservation(
+            reservation_id=reservation_id,
+            started_at=now,
+            estimated_tokens=max(0, estimated_tokens),
+            counted_tokens=max(0, estimated_tokens),
+        ))
+        state.tokens_in_window = self._sum_reserved_tokens(state)
+        next_reset = self._token_reset_at(state, now)
+        state.reset_tokens_at = next_reset if next_reset > now else None
+        return reservation_id
+
+    def _prune_expired_reservations(
+        self,
+        state: ModelWindowState,
+        now: float,
+    ) -> None:
+        """Drop reservations whose 60-second window has elapsed."""
+        window_seconds = self._config.default_reset_seconds
+        state.token_reservations = [
+            reservation
+            for reservation in state.token_reservations
+            if now - reservation.started_at < window_seconds
+        ]
+        state.tokens_in_window = self._sum_reserved_tokens(state)
+
+    def _sum_reserved_tokens(self, state: ModelWindowState) -> int:
+        return sum(reservation.counted_tokens for reservation in state.token_reservations)
+
+    def _time_until_token_capacity(self, state: ModelWindowState) -> float:
+        now = time.monotonic()
+        self._prune_expired_reservations(state, now)
+        if not state.token_reservations:
+            return 0.0
+        oldest = state.token_reservations[0]
+        return max(0.0, oldest.started_at + self._config.default_reset_seconds - now)
+
+    def _find_reservation(
+        self,
+        state: ModelWindowState,
+        reservation_id: int,
+    ) -> Optional[TokenReservation]:
+        for reservation in state.token_reservations:
+            if reservation.reservation_id == reservation_id:
+                return reservation
+        return None
+
+    def _resolve_counted_tokens(
+        self,
+        *,
+        state: ModelWindowState,
+        reservation: TokenReservation,
+        usage: Optional[Dict[str, int]],
+        remaining_tokens_header: Optional[str],
+    ) -> int:
+        """Replace the estimated reservation with the best known counted value."""
+        prompt_tokens = max(0, int((usage or {}).get("prompt_tokens", 0) or 0))
+        completion_tokens = max(0, int((usage or {}).get("completion_tokens", 0) or 0))
+        total_tokens = max(
+            0,
+            int((usage or {}).get("total_tokens", 0) or (prompt_tokens + completion_tokens)),
+        )
+
+        if state.token_accounting_mode is None:
+            inferred_mode = self._infer_token_accounting_mode(
+                state=state,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                remaining_tokens_header=remaining_tokens_header,
+            )
+            if inferred_mode is not None:
+                state.token_accounting_mode = inferred_mode
+
+        mode = state.token_accounting_mode
+        if mode == "prompt":
+            return prompt_tokens or reservation.estimated_tokens
+        if mode == "completion":
+            return completion_tokens or max(0, reservation.estimated_tokens - prompt_tokens)
+        if mode == "total":
+            return total_tokens or reservation.estimated_tokens
+
+        if total_tokens > 0:
+            return max(reservation.estimated_tokens, total_tokens)
+        return reservation.estimated_tokens
+
+    def _infer_token_accounting_mode(
+        self,
+        *,
+        state: ModelWindowState,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        remaining_tokens_header: Optional[str],
+    ) -> Optional[str]:
+        """Infer what the provider counts when the observation is unambiguous."""
+        if state.limit_tokens <= 0:
+            return None
+        if remaining_tokens_header is None:
+            return None
+        if len(state.token_reservations) != 1:
+            return None
+        try:
+            remaining_tokens = int(remaining_tokens_header)
+        except ValueError:
+            return None
+
+        observed_consumed = max(0, state.limit_tokens - remaining_tokens)
+        candidates = {
+            "prompt": prompt_tokens,
+            "completion": completion_tokens,
+            "total": total_tokens,
+        }
+        for mode, candidate in candidates.items():
+            if candidate > 0 and candidate == observed_consumed:
+                return mode
+        return None
+
+    def _token_reset_at(
+        self,
+        state: ModelWindowState,
+        now: Optional[float] = None,
+    ) -> float:
+        if now is None:
+            now = time.monotonic()
+        if state.token_reservations:
+            return state.token_reservations[0].started_at + self._config.default_reset_seconds
+        return state.reset_tokens_at or now

@@ -5302,14 +5302,20 @@ This catalog lists every existing function that participates in recovery, valida
 | Function / Class | Purpose |
 |------------------|---------|
 | `ProviderRateLimitConfig` | Configurable header names per provider |
-| `ModelWindowState` | Per-model runtime counters and reset timers |
-| `HeaderBasedRateLimiter` | Thread-safe, per-model enforcement using monotonic timer |
-| `HeaderBasedRateLimiter.pre_request()` | Block until capacity available; increments counters |
-| `HeaderBasedRateLimiter.update_from_headers()` | Read reset timing from response headers |
+| `ModelWindowState` | Per-model runtime counters, reset timers, and active token reservations |
+| `HeaderBasedRateLimiter` | Thread-safe, per-model enforcement using monotonic timer plus rolling token reservations |
+| `HeaderBasedRateLimiter.pre_request()` | Block until capacity available, then create a request reservation in the active 60-second TPM window |
+| `HeaderBasedRateLimiter.update_from_headers()` | Read reset timing from response headers and reconcile a reservation with response usage |
 | `HeaderBasedRateLimiter.set_model_limits()` | Set RPM/TPM limits for a model |
 | `HeaderBasedRateLimiter.get_stats()` | Return current counters and limits |
 | `parse_reset_duration()` | Parse OpenAI duration strings ("6m0s", "1s", "200ms") |
 | `OPENAI_RATE_LIMIT_CONFIG` | Pre-built config for OpenAI headers |
+
+TPM admission rule:
+- `active_window_tokens = sum(tokens for requests started within the last 60 seconds)`
+- If `active_window_tokens + next_request_tokens <= TPM_limit`, send immediately
+- Otherwise wait until the oldest active reservation expires, then re-check
+- Response usage may replace the original estimate for that same request when the header observation clearly matches prompt-only, completion-only, or total-token accounting
 
 #### 9.7.2 Validation Functions
 
@@ -5752,6 +5758,7 @@ symbol-only dialogue, skip generic placeholders.
 | Version | Date | Changes |
 |---------|------|---------|
 | 3.7 | 2026-03-07 | Bug Fix — Glossary ↔ Term Translation Dual-Storage Desync: Fixed `on_enter()` in information.py loading characters from top-level manifest BEFORE `_load_metadata()` replaced `self._metadata` with stale step_state (reordered to load after). Fixed `on_leave()` not syncing characters/code_patterns to top-level manifest (added `_save_characters_to_manifest()` and `_save_code_patterns_to_manifest()` calls). Fixed `_import_analysis_speakers()` not persisting auto-imported entries to top-level key. 19 new tests (test_glossary_term_link.py). |
+| 3.7 | 2026-03-07 | Step 5 (Translation) — Rolling TPM Gate: Reworked `functions/header_rate_limiter.py` so TPM enforcement uses a rolling 60-second reservation window keyed by request start time instead of only reset-timer counters. `pre_request()` now returns a reservation ID, `api_client.py` reconciles that reservation with response usage after `with_raw_response`, and the gate waits until the oldest reservation expires before admitting another over-limit request. Added `test_response_usage_can_replace_estimate` and reworked token-expiry tests; cheap live `gpt-4.1-nano` validation with a temporary local 210-TPM / 5-second window showed the second request waiting ~3.3s and the active token window returning to 0 after expiry. |
 | 3.6 | 2026-03-06 | Bug Fix — Section Toggle Persistence & Preview Gating: Fixed `on_leave()` in information.py erasing `*_enabled` flags (root cause: `ProjectMetadata.to_dict()` excludes them, then `set_step_data()` replaced entire metadata dict). Fixed `_build_preview_requests()` in translate.py ignoring enabled flags (now gates sys_instructions, style, tone, summary, genre, glossary, character sections). Removed redundant Save button from Information step header (auto-save on tab change is sufficient). 35 new tests (test_section_toggles.py). |
 | 3.5 | 2026-03-05 | Task 42 — Per-Request Prompt Overhead: `_estimate_via_formation()` returns `FormationResult` dataclass (num_requests + request_line_lists). New `_compute_per_request_prompt_overhead()` builds each request's prompt individually via `build_full_system_prompt(chunk_lines=...)` for selective glossary/conditional filtering, sums token counts. Display format changed from `~Z total (Y Requests, ~X per)` to `~Z total (Y Requests, ~X avg/request)`. 29 new tests (test_prompt_overhead_fix.py). |
 | 3.4 | 2026-03-04 | Task 41 — Max Input Tokens: Added `max_input_tokens` field to RequestSettings (0 = no limit, input lines only), Global Options spinbox (0–128000, increment 500), INI persistence (`[api].max_input_tokens`), wired into translate.py `_build_chunks()` and costs.py `_estimate_via_formation()` via `RequestFormationConfig.max_tokens`. 34 new tests (test_max_input_tokens.py). |

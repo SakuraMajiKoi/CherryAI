@@ -2207,6 +2207,9 @@ RATE LIMIT MANAGEMENT (Implemented)
 - **Header-Based Rate Limiting (New):**
   - Per-model runtime counters: `requests_in_window` and `tokens_in_window`
   - Token estimation: `estimated_tokens = sent_request_token_count + (input_line_token_count × 1.5)`
+  - TPM gate now uses a rolling 60-second reservation window keyed by request start time, so concurrent requests only launch when `active_window_tokens + next_request_tokens <= TPM_limit`
+  - Each admitted request reserves its estimated token budget immediately; the reservation expires when its 60-second window ages out
+  - After the response arrives, the limiter can replace that estimate with actual usage for the same request when the provider response makes the accounting mode unambiguous
   - Reads `x-ratelimit-reset-requests` and `x-ratelimit-reset-tokens` from every API response
   - Monotonic timer (immune to system clock changes) for reset timing
   - Default 60-second reset window when headers are missing

@@ -1691,7 +1691,9 @@ Token estimation: `estimated_tokens = sent_request_token_count + (input_line_tok
 - Created `functions/header_rate_limiter.py` — `HeaderBasedRateLimiter` class with
   `ProviderRateLimitConfig` for provider-agnostic header names
 - `parse_reset_duration()` parses OpenAI duration strings ("6m0s", "1s", "200ms")
-- `pre_request()` blocks (sleeps) until capacity; `update_from_headers()` reads reset timing
+- `pre_request()` now uses a rolling 60-second TPM reservation window keyed by request start time, so concurrent sends only proceed when the active token window has room
+- `pre_request()` returns a reservation ID and `update_from_headers()` can reconcile that same reservation with response usage after the request completes
+- When a request would exceed TPM, the limiter sleeps until the oldest reservation expires, then retries the admission check
 - Modified `providers/openai_provider.py` `send_request()` to use
   `client.chat.completions.with_raw_response.create()` — captures HTTP headers
 - Added `headers: Dict[str, str]` field to `ProviderResponse` dataclass
@@ -1710,11 +1712,16 @@ Token estimation: `estimated_tokens = sent_request_token_count + (input_line_tok
 - `providers/__init__.py` — Added `headers` field to `ProviderResponse`
 - `providers/openai_provider.py` — `with_raw_response` in `send_request()`, headers in `parse_response()`
 
-**Tests:** `dev/test_header_rate_limiter.py` — 36 tests (all passing)
+**Tests:** `dev/test_header_rate_limiter.py` — 37 tests (all passing)
   Classes: TestParseResetDuration (9), TestModelWindowState (1),
-  TestProviderRateLimitConfig (2), TestHeaderBasedRateLimiter (13),
+  TestProviderRateLimitConfig (2), TestHeaderBasedRateLimiter (14),
   TestThreadSafety (2), TestCustomProviderConfig (1), TestMonotonicTimer (1),
   TestParseDurationEdgeCases (4)
+
+**Live Validation:** Cheap `gpt-4.1-nano` smoke run with a temporary local
+210-TPM / 5-second window: first tiny request admitted immediately, second tiny
+request waited ~3.3 seconds behind the active reservation, and the token window
+returned to 0 after expiry.
 
 ---
 

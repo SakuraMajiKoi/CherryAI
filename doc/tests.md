@@ -7445,10 +7445,11 @@ Rate limiting system tests for API request management and usage tracking.
 | | `test_rapid_requests` | Rapid requests |
 | | `test_model_family_inference` | Model family inference |
 
-#### dev/test_header_rate_limiter.py (36 tests)
+#### dev/test_header_rate_limiter.py (37 tests)
 
 Header-based rate limiter tests covering duration parsing, per-model counters,
-thread safety, monotonic timer usage, and custom provider configuration.
+thread safety, rolling-token expiry, monotonic timer usage, and custom provider
+configuration.
 
 | Class | Test | Purpose |
 |-------|------|---------|
@@ -7471,6 +7472,7 @@ thread safety, monotonic timer usage, and custom provider configuration.
 | | `test_unlimited_model_never_blocks` | Unlimited pass-through |
 | | `test_request_limit_blocks` | RPM wait enforcement |
 | | `test_token_limit_blocks` | TPM wait enforcement |
+| | `test_response_usage_can_replace_estimate` | Response usage can shrink a reservation to the provider-counted amount |
 | | `test_update_limits_from_headers` | Header-driven limit update |
 | | `test_update_reset_timing` | Reset timing from headers |
 | | `test_empty_headers_ignored` | Empty/None headers safe |
@@ -7488,6 +7490,11 @@ thread safety, monotonic timer usage, and custom provider configuration.
 | | `test_hours_only` | "2h" format |
 | | `test_fractional_seconds` | "1.5s" format |
 | | `test_zero` | "0s" and "0" |
+
+Manual live validation for the rolling TPM gate also used `gpt-4.1-nano` with
+two tiny requests under a temporary local 210-TPM / 5-second window. The second
+request waited about 3.3 seconds for the first reservation to expire, and the
+active token window returned to 0 after expiry.
 
 #### dev/test_local_llm.py (63 tests)
 
