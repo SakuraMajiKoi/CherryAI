@@ -915,76 +915,6 @@ def test_model_translation(
         _resp_fmt = {"type": "json_object"}
 
     t0 = _time.monotonic()
-
-    try:
-        from .api_log import (
-            FAILURE_KIND_API,
-            FAILURE_KIND_INFERENCE,
-            LogCategory,
-            LogEntryReceived,
-            LogEntrySent,
-            LogStatus,
-            VALIDATION_STATUS_FAILED,
-            VALIDATION_STATUS_PASSED,
-            VALIDATION_STATUS_UNKNOWN,
-            get_api_log_store,
-        )
-
-        sent_entry = LogEntrySent(
-            task_type="api_test",
-            model=model_id,
-            provider=provider,
-            temperature=0.2,
-            system_prompt=system_prompt,
-            user_content=user_msg,
-            extra={"type": "model_translation_test"},
-        )
-    except Exception:
-        sent_entry = None
-
-    def _log_model_test(
-        status: Any,
-        *,
-        response_obj: Optional[Any] = None,
-        raw_content: str = "",
-        error_message: str = "",
-        validation_status: str = "",
-        validation_error: str = "",
-        validation_category: str = "",
-        failure_kind: str = "",
-        elapsed_seconds: float = 0.0,
-    ) -> None:
-        if sent_entry is None:
-            return
-        try:
-            store = get_api_log_store()
-            usage = getattr(response_obj, "usage", None) if response_obj is not None else None
-            extra: dict[str, Any] = {}
-            if validation_status:
-                extra["validation_status"] = validation_status
-            if validation_error:
-                extra["validation_error"] = validation_error
-            if validation_category:
-                extra["validation_category"] = validation_category
-            if failure_kind:
-                extra["failure_kind"] = failure_kind
-            store.log_pair(
-                LogCategory.OTHER,
-                sent_entry,
-                LogEntryReceived(
-                    content=raw_content,
-                    prompt_tokens=getattr(usage, "prompt_tokens", 0) if usage else 0,
-                    completion_tokens=getattr(usage, "completion_tokens", 0) if usage else 0,
-                    total_tokens=getattr(usage, "total_tokens", 0) if usage else 0,
-                    duration_ms=round(elapsed_seconds * 1000),
-                    error_message=error_message,
-                    extra=extra,
-                ),
-                status,
-            )
-        except Exception:
-            pass
-
     try:
         client = OpenAI(api_key=api_key.strip(), base_url=url, timeout=timeout)
         response = client.chat.completions.create(
@@ -998,16 +928,62 @@ def test_model_translation(
         )
         elapsed = _time.monotonic() - t0
         raw = response.choices[0].message.content or ""
+        # Log success to structured API log
+        try:
+            from .api_log import (
+                LogCategory, LogStatus, LogEntrySent, LogEntryReceived,
+                get_api_log_store,
+            )
+            _usage = getattr(response, "usage", None)
+            store = get_api_log_store()
+            store.log_pair(
+                LogCategory.OTHER,
+                LogEntrySent(
+                    task_type="api_test",
+                    model=model_id, provider=provider,
+                    temperature=0.2,
+                    system_prompt=system_prompt,
+                    user_content=user_msg,
+                    extra={"type": "model_translation_test"},
+                ),
+                LogEntryReceived(
+                    content=raw,
+                    prompt_tokens=getattr(_usage, "prompt_tokens", 0) if _usage else 0,
+                    completion_tokens=getattr(_usage, "completion_tokens", 0) if _usage else 0,
+                    total_tokens=getattr(_usage, "total_tokens", 0) if _usage else 0,
+                    duration_ms=round(elapsed * 1000),
+                ),
+                LogStatus.SUCCESS,
+            )
+        except Exception:
+            pass
     except Exception as exc:
         elapsed = _time.monotonic() - t0
-        _log_model_test(
-            LogStatus.FAILED,
-            error_message=str(exc),
-            validation_status=VALIDATION_STATUS_UNKNOWN,
-            validation_error=str(exc),
-            failure_kind=FAILURE_KIND_API,
-            elapsed_seconds=elapsed,
-        )
+        # Log failure to structured API log
+        try:
+            from .api_log import (
+                LogCategory, LogStatus, LogEntrySent, LogEntryReceived,
+                get_api_log_store,
+            )
+            store = get_api_log_store()
+            store.log_pair(
+                LogCategory.OTHER,
+                LogEntrySent(
+                    task_type="api_test",
+                    model=model_id, provider=provider,
+                    temperature=0.2,
+                    system_prompt=system_prompt,
+                    user_content=user_msg,
+                    extra={"type": "model_translation_test"},
+                ),
+                LogEntryReceived(
+                    error_message=str(exc),
+                    duration_ms=round(elapsed * 1000),
+                ),
+                LogStatus.FAILED,
+            )
+        except Exception:
+            pass
         return {"success": False, "message": f"API call failed: {exc}",
                 "checks": [], "raw_response": "", "elapsed_seconds": round(elapsed, 2)}
 
@@ -1020,18 +996,6 @@ def test_model_translation(
         checks.append({"name": "Structured Output (JSON)", "passed": True,
                         "detail": "Valid JSON returned"})
     except _json.JSONDecodeError as e:
-        message = f"Structured output failed — invalid JSON: {e}"
-        _log_model_test(
-            LogStatus.FAILED,
-            response_obj=response,
-            raw_content=raw,
-            error_message=message,
-            validation_status=VALIDATION_STATUS_FAILED,
-            validation_error=str(e),
-            validation_category="non_structured_output",
-            failure_kind=FAILURE_KIND_INFERENCE,
-            elapsed_seconds=elapsed,
-        )
         checks.append({"name": "Structured Output (JSON)", "passed": False,
                         "detail": f"Invalid JSON: {e}"})
         return {"success": False, "message": "Structured output failed — invalid JSON",
@@ -1087,30 +1051,6 @@ def test_model_translation(
 
     all_passed = all(c["passed"] for c in checks)
     passed_count = sum(1 for c in checks if c["passed"])
-    if all_passed:
-        _log_model_test(
-            LogStatus.SUCCESS,
-            response_obj=response,
-            raw_content=raw,
-            validation_status=VALIDATION_STATUS_PASSED,
-            elapsed_seconds=elapsed,
-        )
-    else:
-        failed_checks = [c for c in checks if not c["passed"]]
-        validation_error = "; ".join(
-            f"{check['name']}: {check['detail']}" for check in failed_checks
-        )
-        _log_model_test(
-            LogStatus.FAILED,
-            response_obj=response,
-            raw_content=raw,
-            error_message=validation_error,
-            validation_status=VALIDATION_STATUS_FAILED,
-            validation_error=validation_error,
-            validation_category="validation_failed",
-            failure_kind=FAILURE_KIND_INFERENCE,
-            elapsed_seconds=elapsed,
-        )
     return {
         "success": all_passed,
         "message": f"{passed_count}/{len(checks)} checks passed"

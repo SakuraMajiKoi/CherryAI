@@ -33,10 +33,12 @@ COMMENT_RE = re.compile(r"^\s*;")
 LABEL_RE = re.compile(r"^\s*\*")
 AT_COMMAND_RE = re.compile(r"^\s*@")
 TAG_RE = re.compile(r"^\s*\[[^\]]*\]\s*$")
+MULTI_TAG_RE = re.compile(r"^\s*(?:\[[^\]]*\]\s*)+$")
 BRACE_COMMAND_RE = re.compile(r"^\s*\{[^{}]*\}\s*$")
 SPEAKER_RE = re.compile(r"^\s*【(?P<speaker>[^】]+)】(?:\[(?P<voice_id>[^\]]+)\])?\s*$")
 NAME_TAG_RE = re.compile(r'\[name\s+text\s*=\s*"([^"]+)"\]')
 STRING_LITERAL_RE = re.compile(r'"((?:\\.|[^"\\])*)"')
+SPEAKER_DIALOGUE_RE = re.compile(r"^(.+?)(?:：|: )(.+)$", re.DOTALL)
 NEW_KAG_MENU_ITEM_RE = re.compile(r"new\s+KAGMenuItem\s*\(", re.IGNORECASE)
 NEW_MENU_ITEM_RE = re.compile(r"new\s+MenuItem\s*\(", re.IGNORECASE)
 PROCESS_CH_RE = re.compile(r"if\s*\(\s*current\.processCh\(\s*text\s*\)\s*\)\s*\{")
@@ -47,6 +49,32 @@ CXDEC_CONTROL_BLOCK_SIGNATURE = b" Encryption control block"
 
 SOFT_BRIDGE_KINDS = {"tag", "brace_command", "at_command"}
 HARD_BREAK_KINDS = {"blank", "comment", "label"}
+SAFE_BRIDGE_TAG_TOKENS = {
+    "br",
+    "clickse",
+    "cm",
+    "delay",
+    "er",
+    "l",
+    "name",
+    "nowait",
+    "p",
+    "pcm",
+    "pg",
+    "playse",
+    "playvoice",
+    "r",
+    "ruby",
+    "se",
+    "speed",
+    "style",
+    "voice",
+    "vo",
+    "wait",
+    "wc",
+    "wm",
+}
+TAG_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
 
 _WRAP_VARS_SNIPPET = """
 \tvar wrapNum = 0; // wordwrapping word counter
@@ -116,6 +144,7 @@ class ClassifiedLine:
 class PendingSpeaker:
     speaker: str
     voice_id: str = ""
+    line_number: int = 0
     bridge_code_lines: List[Tuple[int, str, str]] = field(default_factory=list)
 
 
@@ -126,6 +155,7 @@ class KsBlock:
     tag: str
     speaker: str
     voice_id: str
+    speaker_line_number: int
     start_line: int
     end_line: int
     text_line_numbers: List[int] = field(default_factory=list)
@@ -135,6 +165,10 @@ class KsBlock:
     @property
     def joined_text(self) -> str:
         return "\n".join(self.source_text_lines)
+
+    @property
+    def extracted_text(self) -> str:
+        return _format_extracted_text(self.joined_text, self.speaker)
 
 
 @dataclass(slots=True)
@@ -1158,6 +1192,8 @@ def _classify_line(number: int, raw_line: str) -> ClassifiedLine:
         kind = "label"
     elif AT_COMMAND_RE.match(stripped):
         kind = "at_command"
+    elif MULTI_TAG_RE.match(stripped):
+        kind = "tag"
     elif TAG_RE.match(stripped):
         kind = "tag"
     elif BRACE_COMMAND_RE.match(stripped):
@@ -1167,6 +1203,19 @@ def _classify_line(number: int, raw_line: str) -> ClassifiedLine:
     return ClassifiedLine(number=number, text=text, newline=newline, kind=kind)
 
 
+def _format_extracted_text(text: str, speaker: str) -> str:
+    if speaker:
+        return f"{speaker}: {text}"
+    return text
+
+
+def _split_extracted_text(text: str) -> Tuple[str, str]:
+    match = SPEAKER_DIALOGUE_RE.match(text)
+    if match:
+        return match.group(1), match.group(2)
+    return "", text
+
+
 def _next_significant_kind(lines: Sequence[ClassifiedLine], start_index: int) -> Optional[str]:
     for index in range(start_index, len(lines)):
         kind = lines[index].kind
@@ -1174,6 +1223,21 @@ def _next_significant_kind(lines: Sequence[ClassifiedLine], start_index: int) ->
             continue
         return kind
     return None
+
+
+def _is_bridge_safe_tag_line(text: str) -> bool:
+    tag_payloads = re.findall(r"\[([^\]]*)\]", text)
+    if not tag_payloads:
+        return False
+
+    for payload in tag_payloads:
+        tokens = {token.lower() for token in TAG_TOKEN_RE.findall(payload)}
+        if not tokens:
+            return False
+        if not tokens.intersection(SAFE_BRIDGE_TAG_TOKENS):
+            return False
+
+    return True
 
 
 def _should_keep_as_bridge(
@@ -1187,6 +1251,8 @@ def _should_keep_as_bridge(
     if line.kind not in SOFT_BRIDGE_KINDS:
         return False
     if not has_open_block and pending_speaker is None:
+        return False
+    if line.kind == "tag" and not _is_bridge_safe_tag_line(line.text):
         return False
     return _next_significant_kind(lines, index + 1) == "text"
 
@@ -1206,7 +1272,7 @@ def _extract_ks_blocks(path: Path) -> List[KsBlock]:
             if current is not None and current.joined_text:
                 blocks.append(current)
             current = None
-            pending_speaker = PendingSpeaker(line.speaker, line.voice_id)
+            pending_speaker = PendingSpeaker(line.speaker, line.voice_id, line.number)
             continue
 
         if line.kind == "text":
@@ -1221,6 +1287,7 @@ def _extract_ks_blocks(path: Path) -> List[KsBlock]:
                     tag="dialogue" if speaker else "narration",
                     speaker=speaker,
                     voice_id=voice_id,
+                    speaker_line_number=(pending_speaker.line_number if pending_speaker else 0),
                     start_line=line.number,
                     end_line=line.number,
                     bridge_code_lines=bridges,
@@ -1431,6 +1498,19 @@ def _serialize_ks_block(block: KsBlock, translated_text: str, line_endings: Dict
     return replacements
 
 
+def _serialize_speaker_line(
+    block: KsBlock,
+    translated_speaker: str,
+    line_endings: Dict[int, str],
+) -> Dict[int, str]:
+    if not translated_speaker or not block.speaker_line_number:
+        return {}
+    line = f"【{translated_speaker}】"
+    if block.voice_id:
+        line += f"[{block.voice_id}]"
+    return {block.speaker_line_number: line + line_endings.get(block.speaker_line_number, "")}
+
+
 def _read_text_with_bom(path: Path) -> Tuple[str, str, bytes]:
     data = path.read_bytes()
     if data.startswith(codecs.BOM_UTF16_LE):
@@ -1611,7 +1691,7 @@ class KiriKiri2Parser(ParserScript):
             blocks = _extract_ks_blocks(path)
             return [
                 ExtractedLine(
-                    text=block.joined_text,
+                    text=block.extracted_text,
                     tag=block.tag,
                     speaker=block.speaker,
                     context=f"{path.name}:{block.start_line}",
@@ -1674,7 +1754,11 @@ class KiriKiri2Parser(ParserScript):
             text, encoding = _read_text(path, KS_ENCODING_CANDIDATES)
             raw_lines = text.splitlines(keepends=True)
             blocks = _extract_ks_blocks(path)
-            search_keys = orig_lines if orig_lines is not None else [block.joined_text for block in blocks]
+            search_keys = (
+                orig_lines
+                if orig_lines is not None
+                else [block.extracted_text for block in blocks]
+            )
             line_endings = {
                 index + 1: _split_line_ending(raw_line)[1]
                 for index, raw_line in enumerate(raw_lines)
@@ -1689,7 +1773,20 @@ class KiriKiri2Parser(ParserScript):
                 search = search_keys[index] if index < len(search_keys) else block.joined_text
                 if translated == search:
                     continue
-                replacements.update(_serialize_ks_block(block, translated, line_endings))
+                search_speaker, search_dialogue = _split_extracted_text(search)
+                translated_speaker, translated_dialogue = _split_extracted_text(translated)
+                if block.speaker:
+                    if not search_dialogue:
+                        search_dialogue = block.joined_text
+                    if translated_speaker and translated_speaker != (search_speaker or block.speaker):
+                        replacements.update(
+                            _serialize_speaker_line(block, translated_speaker, line_endings)
+                        )
+                    replacements.update(
+                        _serialize_ks_block(block, translated_dialogue, line_endings)
+                    )
+                else:
+                    replacements.update(_serialize_ks_block(block, translated, line_endings))
             for line_number, replacement in replacements.items():
                 raw_lines[line_number - 1] = replacement
             _write_text(output_path, "".join(raw_lines), encoding)

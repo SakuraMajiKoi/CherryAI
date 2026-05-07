@@ -52,98 +52,23 @@ MODULE COUNTS (Verified January 2026)
 
 =============================================================================
 
-### FEATURE: KiriKiri2 Parser + XP3 Package Support
-**Priority:** HIGH | **Status:** MOSTLY DONE | **Effort:** LARGE
-
-Goal: Add a new KiriKiri2 parser that follows the Parser Handshake, preserves the documented `Menus.tjs` and `MainWindow.tjs` behaviors, and introduces constrained XP3 package support with shared `Package/Original` and `Package/Translated` staging.
-
-**Completed work:**
-1. **`formats/KiriKiri2.py`** — Added the new parser for KAG/KiriKiri projects, covering `.ks` extraction/injection, targeted menu handling, the `MainWindow.tjs` project patch path, and XP3 settings detection plus list/unpack/rebuild helpers for the verified archive layouts, including manifest-facing `custom_magic`, `header_offset`, and `key` support.
-2. **`formats/__init__.py`** — Registered `KiriKiri2` in the shared parser registry so parser detection and selection can route into the new implementation.
-3. **`functions/manifest_manager.py`** — Added shared parser post-export hook dispatch plus `Package/Original` and `Package/Translated` manager helpers, package-aware archive-member resolution, and top-level `ArchiveSettings` persistence/accessors so parser-owned archive rebuild logic stays out of GUI code.
-4. **`gui/dialogs/input_dialog.py` / `gui/steps/input_extract.py` / `gui/steps/output_inject.py`** — Wired Step 0 `.xp3` loading through archive detection, optional settings prompts, package staging, and manifest sync; taught the unified selector to use parser-aware matching so `KiriKiri2` shows `.xp3` in Select Items; made parser-filtered folder loads stage the full tree so unsupported companions still land in `Original/`; stopped archive-project bootstrap from trying to read raw `.xp3` files as utf-8 text; restricted archive-member loading to parser-owned text targets so binary-only XP3 packages are skipped instead of throwing load errors; and replaced repeated Step 0 token-limit popups with one buffered extraction-validation log plus one summary dialog per load batch.
-5. **`formats/KiriKiri2.py` / `dev/test_parser_input_routing.py` / `dev/test_parser_scripts.py` / `dev/test_source_root.py`** — Corrected the XP3 `adlr` handling to treat it as file-hash metadata instead of an Adler32 integrity check, added protected-text filter inference for the currently validated `xor:1` `dev/testgame/data.xp3` helper slice, and added focused regressions for unified-dialog `.xp3` recognition, parser-filtered folder collection, unsupported-companion staging, archive bootstrap behavior, binary-only archive skipping, XP3 settings detection, custom-magic plus header-offset round-trips, Step 0 extraction-validation batching/log writing, archive-member source resolution, and package-settings preservation. Verified commands: `python -m pytest dev/test_parser_input_routing.py dev/test_parser_scripts.py dev/test_source_root.py -k "KiriKiri2 or xp3 or archive or package or routing or unified_dialog or folder_tree_staging"` → `55 passed, 4 skipped, 87 deselected`; `python -m pytest dev/test_parser_input_routing.py -k "validation or token"` → `11 passed, 36 deselected`.
-6. **Real archive validation** — The XP3 helper path successfully enumerated `dev/testgame/data.xp3`, found 1555 entries including `MainWindow.tjs` and `.ks` scripts, detected archive settings `custom_magic=hex:5850330d0a200a1a8b6701`, `header_offset=0`, auto-inferred `key='xor:1'`, and decoded `AppConfig.tjs` into readable cp932 script text. Protected scenario members still do not have a confirmed offline decode path that matches the comparison tree under `dev/data/scenario`.
-7. **Documentation** — Updated `doc/features.md`, `doc/technical.md`, `doc/specs.md`, `doc/tests.md`, and this roadmap entry to capture the implemented slice and current limits.
-
-**Remaining work:**
-1. **End-to-end workflow validation** — Run a fuller Step 0 → translation/edit → Step 9 archive rebuild flow against the supplied `dev/testgame` project through the GUI surface, not just helper-level and focused pytest coverage.
-2. **Protected scenario decode follow-up** — `key` is now stored and threaded through manifest/archive settings, and the validated `xor:1` helper slice is enough for some protected members. Remaining work is to reconstruct the game's broader extraction filter so protected scenario decoding from `dev/testgame/data.xp3` itself matches the comparison tree under `dev/data/scenario` without any substitution step.
-
 ### PHASE PLAN: Ledger TSV Migration
-**Priority:** HIGH | **Status:** DONE | **Effort:** LARGE
+**Priority:** HIGH | **Status:** REVIEW FIRST | **Effort:** LARGE
 
 Goal: Replace the old usage database plan with a TSV-backed `Ledger` system.
 
 **Review checklist before implementation:**
-1. Approve `user/ledger.tsv` as the only primary aggregate store. `APPROVED`
-2. Approve one-time migration behavior from legacy `user/usage.db`. `APPROVED`
-3. Approve the final TSV schema and column order. `APPROVED`
-4. Approve the `Ledger` entry points: direct menu button plus Step 4 Costs button. `APPROVED`
+1. Approve `user/ledger.tsv` as the only primary aggregate store.
+2. Approve one-time migration behavior from legacy `user/usage.db`.
+3. Approve the final TSV schema and column order.
+4. Approve the `Ledger` entry points: direct menu button plus Step 4 Costs button.
 
 **Implementation tasks after review:**
-1. **Freeze the ledger schema and public storage contract first**  `DONE`
-  - `functions/usage_tracker.py` — replace the current SQLite-only `UsageRecord` shape with a ledger-row contract that matches `doc/costtracking.md` exactly: `timestamp`, `project_name`, `provider`, `model`, `task_type`, `status`, `input_tokens`, `prompt_tokens`, `cached_input_tokens`, `reasoning_tokens`, `output_tokens`, `total_tokens`, `input_cost`, `cached_cost`, `output_cost`, `total_cost`, `estimate_total_cost`, `estimate_delta_cost`, plus a stable request reference field.
-  - `functions/usage_tracker.py` — add one canonical `LEDGER_COLUMNS` constant and keep all writer, reader, export, and aggregation code keyed from that single ordered column list so TSV round-trips and later doc updates cannot drift.
-  - `functions/usage_tracker.py` — normalize legacy fields (`prompt_tokens`, `completion_tokens`, `cost`, `success`) into the new ledger columns centrally instead of letting GUI code reinterpret them.
-2. **Replace SQLite as the live store with TSV helpers in shared `functions/` code**  `DONE`
-  - `functions/usage_tracker.py` — replace `_DB_PATH`, `_connect()`, `_ensure_schema()`, and every direct SQL query path with TSV-backed helpers such as `_ledger_path()`, `_ensure_ledger_file()`, `_read_ledger_rows()`, `_append_ledger_row()`, and `_write_ledger_rows()`.
-  - `functions/usage_tracker.py` — use Python's standard `csv` module in tab-delimited mode with `newline=''` for all ledger IO so quoting, embedded newlines, and export stability stay correct.
-  - `functions/usage_tracker.py` — keep the existing public entry points (`record_usage()`, `query_usage()`, `usage_summary()`, `total_cost()`, `total_tokens()`, `export_csv()`, `purge_before()`, `record_count()`) but retarget them to TSV so callers do not need a second migration.
-3. **Add one-time SQLite-to-TSV migration and make `usage.db` legacy input only**  `DONE`
-  - `functions/usage_tracker.py` — add a migration helper such as `migrate_legacy_usage_db()` that reads `user/usage.db`, converts each row into the canonical ledger schema, appends it into `user/ledger.tsv`, and never writes back to SQLite.
-  - `functions/usage_tracker.py` — make migration idempotent by recording a migration marker or deterministic duplicate key so repeated startups do not import the same SQLite rows twice.
-  - `functions/usage_tracker.py` — keep `usage.db` readable only as deprecated legacy input; all new writes and all query helpers must resolve against `user/ledger.tsv` after migration.
-4. **Make API Log the authoritative per-request detail source for Ledger rows**  `DONE`
-  - `functions/api_log.py` — persist the ledger-critical metadata that is currently optional or fragmented through the structured entry plus saved extras: project name/task type fallbacks, stable request/log reference, provider/model, final status, validation outcome, failure kind, estimate totals when known, saved pricing status, and the full token/cost breakdown needed by the ledger schema.
-  - `functions/api_log.py` — add a shared conversion/helper path such as `to_ledger_row()` or `build_ledger_row_from_entry()` so ledger writes derive from structured API Log entries instead of each API caller inventing its own accounting rules.
-  - `functions/api_log.py` — keep the API Log contract strict: it must continue storing exact sent and received payload copies, not reconstructed summaries, because Ledger drill-down depends on the original request/response data.
-5. **Audit and harden structured API logging for every real API producer**  `DONE`
-  - `functions/api_client.py` — keep `translate_batch()`, `translate_line_by_line()`, `_translate_chunk()`, and `_translate_single_line()` routed through shared structured logging with complete sent/received payloads, attempt counts, token usage, and final status.
-  - `functions/term_translation.py` — ensure `translate_term()`, `translate_terms()`, and `_translate_llm_batch()` always produce structured API Log entries for both success and failure paths, including task type normalization for Ledger.
-  - `functions/API2Glossary.py` — ensure `infer_gender_llm()` and `_call_api_for_excerpt_custom()` continue to log gender-inference requests and responses with enough metadata for ledger grouping and drill-down.
-  - `functions/api_config.py` — ensure `test_api_connection()` and `test_model_translation()` log probe/model-test traffic through the same structured API Log path so Ledger covers all API calls from any source, not only main translation.
-  - `functions/api_log.py` plus the producer modules above — add one shared helper for category/task-type mapping so `Main Translation`, `Term Translation`, `Gender Inference`, and `Other` stay consistent between API Log filters and Ledger grouping.
-6. **Write ledger rows from structured API events instead of parallel ad-hoc accounting**  `DONE`
-  - `functions/usage_tracker.py` — add a shared write path that accepts either canonical ledger rows or `api_log.LogEntry` instances and persists a single normalized TSV row per completed request.
-  - `functions/api_log.py` or `functions/usage_tracker.py` — wire the store so successful and failed API responses can be mirrored into the ledger once the response is complete, without duplicating writes during retries or partial attempts.
-  - `functions/api_client.py`, `functions/term_translation.py`, `functions/API2Glossary.py`, and `functions/api_config.py` — remove any future need for direct manual cost writes by routing accounting through the shared API-log-to-ledger bridge only.
-7. **Add shared aggregation, filtering, and estimate-vs-actual helpers in `functions/`**  `DONE`
-  - `functions/usage_tracker.py` — expand `query_usage()` and `usage_summary()` beyond the current SQLite-era filters so they support the planned Ledger filters: project, task type, provider, model, status, date presets/date range, and grouped or ungrouped request rows.
-  - `functions/usage_tracker.py` — add explicit grouping helpers for `By Day`, `By Project`, `By Task`, `By Provider`, `By Model`, `By Project then Day`, and `Ungrouped Requests`.
-  - `functions/usage_tracker.py` — add summary helpers for total cost, total requests, total tokens, cached tokens, reasoning tokens, success rate, and estimate-vs-actual deltas so the GUI dialog remains a thin display layer.
-8. **Add the non-modal Ledger dialog without putting analytics logic in GUI code**  `DONE`
-  - `gui/dialogs/ledger_view.py` — add a new reusable non-modal dialog following the API Log window pattern: single-instance reuse, refreshable table, summary band, filter toolbar, grouping selector, and request drill-down action.
-  - `gui/dialogs/ledger_view.py` — keep the dialog display-only: it should call shared helpers in `functions/usage_tracker.py` and reuse `functions/api_log.py` references for request details instead of re-aggregating inside Tk code.
-  - `gui/dialogs/__init__.py` — export the Ledger dialog alongside the existing shared windows.
-9. **Wire both approved Ledger entry points**  `DONE`
-  - `gui/app.py` — add a direct `Ledger` menu-bar command beside the existing direct-window entries and implement an `open_ledger_dialog()` / `_on_ledger()` reuse path matching the `API Log` and `Editor` patterns.
-  - `gui/steps/costs.py` — add a `Ledger` button in Step 4 that opens or focuses the same shared Ledger window without turning Step 4 into a historical analytics surface.
-  - `gui/app.py` and `gui/steps/costs.py` — keep the boundary explicit: Step 4 remains the estimator, while Ledger is the cross-project historical view.
-10. **Reuse API Log for request drill-down instead of building a second inspector**  `DONE`
-  - `gui/dialogs/ledger_view.py` — add `Show matching requests` for a selected aggregate row and route it through the existing API Log viewer where possible.
-  - `gui/dialogs/api_log_view.py` — add any minimal intake needed for Ledger drill-down, such as preselected filters or request-reference targeting, without moving aggregation logic into the API Log window.
-  - `functions/api_log.py` — expose any lookup helpers needed to resolve ledger request references back to matching structured log entries.
-11. **Retire legacy wording and deprecated storage references once the implementation lands**  `DONE`
-  - `functions/usage_tracker.py`, `doc/technical.md`, `doc/tests.md`, `doc/features.md`, `doc/specs.md`, and `doc/todo.md` — stop describing `user/usage.db` as the live analytics source and describe it only as deprecated migration input.
-  - `gui/app.py`, `gui/steps/costs.py`, and all user-facing text — use the final name `Ledger` consistently and stop using `Lifetime Cost Tracking` as an active UI name.
-12. **Run focused script coverage and then synchronize the documentation set**  `DONE`
-  - `dev/test_usage_tracker.py` — replaced SQLite-era expectations with TSV round-trip, migration, filtering, summary, export, purge, and compatibility coverage. `DONE`
-  - `dev/test_api_log.py` — added ledger-row normalization coverage and request-reference resolution checks for structured entries. `DONE`
-  - `dev/test_app_startup.py`, `dev/test_gui_dialogs.py`, and focused Step 4 tests now cover the direct menu-bar `Ledger` entry, the Step 4 `Ledger` button, API Log request-ref intake, and single-window reuse. `DONE`
-  - Updated `doc/features.md`, `doc/technical.md`, `doc/specs.md`, `doc/tests.md`, and this roadmap block in `doc/todo.md` so the implementation, test commands, storage model, and API Log/Ledger boundary are documented accurately. `DONE`
-
-**Current progress update:**
-- `functions/usage_tracker.py` now uses `user/ledger.tsv` as the live aggregate store, with one canonical `LEDGER_COLUMNS` contract and TSV IO implemented through Python's `csv` module in tab-delimited mode.
-- Legacy `user/usage.db` is now readable only as migration input and is imported idempotently through deterministic `legacy-sqlite:{id}` request references.
-- `functions/api_log.py` now exposes `build_ledger_row_from_entry()` plus `LogEntry.to_ledger_row()` / `APILogStore.entry_to_ledger_row()` so request-backed rows normalize through one shared path.
-- Structured API producers in `functions/api_client.py`, `functions/term_translation.py`, `functions/API2Glossary.py`, and `functions/api_config.py` now save validated outcomes, failure-kind metadata, and task-type/category data needed by Ledger, including the distinct `gender_inference` task type.
-- Completed API log mirroring now writes one normalized ledger row per finished structured event without request-ref duplication, using a saved pricing snapshot from `user/API.ini` instead of recalculating prices when Ledger opens.
-- `functions/usage_tracker.py` now exposes shared Ledger filters, groupings, date presets, and estimate-vs-actual summary helpers consumed directly by the GUI dialog.
-- `gui/dialogs/ledger_view.py` now provides the non-modal Ledger window, while `gui/app.py` and `gui/steps/costs.py` expose the approved menu-bar and Step 4 entry points.
-- Ledger request drill-down now reuses the existing API Log window through request-reference targeting instead of introducing a second inspector.
-- Saved Unknown-price states now flow through both the TSV ledger and the GUI summary/table display instead of silently appearing as `$0.00`.
-- Focused validation passed: `python -m pytest dev/test_api_log.py dev/test_line_by_line.py dev/test_term_translation.py dev/test_usage_tracker.py -q --timeout=20` → `220 passed`.
+1. Port or recycle `functions/usage_tracker.py` logic so reads and writes target TSV instead of SQLite.
+2. Add one-time migration from `usage.db` into `ledger.tsv` and mark `usage.db` deprecated everywhere.
+3. Add shared grouping and filtering helpers in `functions/`.
+4. Add the non-modal `Ledger` window and wire both `Ledger` buttons.
+5. Keep API Log as the drill-down detail surface.
 
 **Required tests for this phase:**
 1. TSV round-trip read/write.
@@ -151,107 +76,35 @@ Goal: Replace the old usage database plan with a TSV-backed `Ledger` system.
 3. Grouping by day, project, task, provider, and model.
 4. Cached/reasoning-token accounting.
 5. Menu-bar and Step 4 `Ledger` button wiring.
-6. API-log-to-ledger mirroring and request-reference drill-down intake.
 
 ### PHASE PLAN: Unified Editor Window
-**Priority:** HIGH | **Status:** DONE (CURRENT STAGED SLICE) | **Effort:** LARGE
+**Priority:** HIGH | **Status:** REVIEW FIRST | **Effort:** LARGE
 
 Goal: Merge Full Table View, Patch Editor, and the workbench draft into one separate non-modal `Editor` window.
 
 **Review checklist before implementation:**
-1. Approve the final naming: `Editor`, `Full Files`, and `Lines Only`. `APPROVED`
-2. Approve the visible switch layout: `Full Files [Switch] Lines Only`. `APPROVED`
-3. Approve that Patch Editor disappears as a standalone name after migration. `APPROVED`
-4. Approve that `Lines Only` is the renamed successor to Full Table View. `APPROVED`
-5. Approve that API Log and Ledger remain separate windows. `APPROVED`
-6. Approve whether `Lines Only` change labels are optional per save, per batch, or both.  `PER SAVE`
-7. Approve that the final `Lines Only` save path depends on the manifest IO upgrade described below.  `APPROVED`
+1. Approve the final naming: `Editor`, `Full Files`, and `Lines Only`.
+2. Approve the visible switch layout: `Full Files [Switch] Lines Only`.
+3. Approve that Patch Editor disappears as a standalone name after migration.
+4. Approve that `Lines Only` is the renamed successor to Full Table View.
+5. Approve that API Log and Ledger remain separate windows.
 
-**Combined cross-phase implementation order due to interdependence:**
-
-Prerequisites already completed before this sequence starts:
-1. Staged Folder And Patch Redesign tasks 1 and 2 are done.
-2. Manifest IO And Compact Writer Upgrade tasks 1 through 6 and 8 through 11 are done and validated.
-
-Remaining work should be implemented in this dependency order:
-1. **Editor command + shared host shell**  `DONE`
-  - `gui/app.py` — replace the standalone `Patch Editor` entry with `Editor`, add `_on_editor()`, keep `_on_full_table_view()` as the direct legacy command during migration, and route reopen/focus through one shared window instance.
-  - `gui/dialogs/patch_editor_view.py` — restore this module as the single-instance `Editor` host with `open_or_focus()`, the visible `Full Files [Switch] Lines Only` mode control, and shared file-context handoff.
-2. **Keep the current surfaces and wire the mode handoff first**  `DONE`
-  - `gui/dialogs/table_view.py` — keep `FullTableViewDialog` as the retained `Lines Only` surface and add the mode-switch handshake plus shared file-selection intake.
-  - `gui/dialogs/patch_editor_view.py` — keep the existing full-file editor, diff, and history UI as the `Full Files` side of the new host instead of creating a second full-file surface.
-  - `gui/dialogs/__init__.py` — export the recycled Editor dialog without removing the legacy Full Table View export during migration.
-3. **Build the shared manifest-manager editor targeting layer**  `DONE`
-  - `functions/manifest_manager.py` — add shared helpers that resolve file scope and manifest rows from `idx`, `ln`, optional `f`, and `filedir` ownership, and reuse `get_filedir_entry_for_idx()`, `get_lines_for_filedir_entry()`, and `refresh_line_locators_for_entry()` instead of creating a second locator source.
-  - `functions/manifest_manager.py` — keep `get_editor_file_view()` and `save_editor_patch()` as the `Full Files` backend, but return enough locator metadata for the Editor to highlight row ownership inside the full file.
-4. **Fold the remaining Manifest IO work into the Editor consumers**  `DONE`
-  - This is Manifest IO And Compact Writer Upgrade task 7.
-  - Ensure translated patch generation, line-history alignment, and future `Lines Only` save resolution consume the same `ln` / optional `f` mapping already used by Step 0 and Step 9.
-  - Keep one manifest patch-history entry per produced diff patch while preserving row-accurate rebuilds on shared-line formats.
-5. **Add precise navigation and locator highlighting in both Editor modes**  `DONE`
-  - `gui/dialogs/table_view.py` — added lightweight locate/jump by file + `idx` / `ln` / optional `f`, plus locator status surfaced in the retained `Lines Only` UI. `DONE`
-  - `gui/dialogs/patch_editor_view.py` — now carries the active locator target across mode handoff and highlights matched editor lines from shared locator metadata while surfacing `idx` / `ln` / optional `f` in line history. `DONE`
-6. **Finish the shared staged-layout persistence helpers before changing save flows**  `DONE`
-  - `functions/manifest_manager.py` — added shared translated-path resolution and tree creation helpers for `Translated/`. `DONE`
-  - `functions/manifest_manager.py` — added hash-first forward patch generation for `Patch/Original/` with `skip` / `diff` / `full copy` decisions and `difflib.unified_diff()`-style artifacts where appropriate. `DONE`
-  - `functions/manifest_manager.py` — added the shared reverse-patch capture helper for `Patch/Translated/` before overwrites. `DONE`
-7. **Align manifest-backed Editor history with the new staged layout**  `DONE`
-  - `functions/manifest_manager.py` — `EditorState.files[rel_path]` now stores `Translated/`, `Patch/Original/`, and `Patch/Translated/` artifact references, latest effective saved row-state metadata, bounded history entries for produced patch artifacts, and optional change labels. `DONE`
-  - `gui/dialogs/patch_editor_view.py` and `gui/dialogs/table_view.py` — both save surfaces now prompt for an optional per-save label without duplicating manifest-owned persistence details in GUI code. `DONE`
-8. **Route `Full Files` saves and Step 9 through the redesigned patch pipeline**  `DONE`
-  - `gui/dialogs/patch_editor_view.py` — `Full Files` saves now overwrite the staged `Translated/` tree through shared helpers instead of writing only to legacy `Patch/`. `DONE`
-  - `gui/steps/output_inject.py` — successful Step 9 writes now mirror output files into staged `Translated/` and reuse the same translated staging helper used by the Editor save flows. `DONE`
-  - `functions/output.py` and `functions/manifest_manager.py` — output sanitization, locator refresh, rebuild, and staged overwrite logic now stay centralized in shared code. `DONE`
-9. **Implement the shared `Lines Only` save pipeline after staged storage is ready**  `DONE`
-  - `functions/manifest_manager.py` — `save_lines_only_changes()` now updates sparse manifest fields, promotes the saved stage to the latest effective value for each changed `idx`, resolves affected files precisely, updates existing `Translated/` files when present, and synthesizes translated artifacts under `Patch/Translated/` when `Translated/` does not exist yet. `DONE`
-  - `gui/dialogs/table_view.py` — `_on_save()` now delegates to the shared save flow and surfaces the returned summary instead of owning manifest-only writes. `DONE`
-10. **Use the same locator-driven targeted rebuild path everywhere**  `DONE`
-  - `functions/manifest_manager.py` — Editor and output rebuilds stay locator-first with positional fallback only as compatibility behavior, and `get_editor_file_view()` now exposes the same patch-diff state used by the Full Files surface. `DONE`
-  - `gui/dialogs/table_view.py`, `gui/dialogs/patch_editor_view.py`, and `gui/steps/output_inject.py` — `Lines Only`, `Full Files`, and Step 9 now consume the same shared rebuild/helper results so they agree on the physical row being patched. `DONE`
-11. **Preserve search, replace, diff, and history parity once the save path is stable**  `DONE`
-  - `gui/dialogs/table_view.py` — preserved the existing line-level search/replace and diff workflow while adding Editor handoff. `DONE`
-  - `gui/dialogs/patch_editor_view.py` — `Full Files` now preserves full-file search/replace, diff-to-original, diff-to-patch, and parser-backed line history. `DONE`
-  - `functions/manifest_manager.py` — diff generation and line-history alignment remain in shared `functions/`, not in GUI code. `DONE`
-12. **Run the focused script coverage after the combined implementation lands**  `DONE`
-  - Extended the focused regressions in the existing test modules: `dev/test_app_startup.py`, `dev/test_table_view.py`, `dev/test_patch_editor_view.py`, `dev/test_manifest_state.py`, `dev/test_output_injection.py`, and `dev/test_output_injection_reverse.py`.
-  - Kept optional split files such as `dev/test_editor_window.py`, `dev/test_lines_only_save.py`, and `dev/test_staged_patch_layout.py` as later suite-organization targets instead of blocking the current coverage slice.
-13. **After implementation and passing tests, synchronize the documentation set**  `DONE`
-  - Update `doc/features.md`, `doc/technical.md`, `doc/specs.md`, `doc/tests.md`, and this roadmap section in `doc/todo.md` to describe the final merged Editor surface, the staged folder layout, the locator-driven save path, the new focused regression commands, and the completed status of the three interdependent phase slices.
-  - Completed for the staged Editor/Lines Only/Step 9 save-path slice. `DONE`
-
-**Latest focused validation for tasks 12 and 13:**
-`python -m pytest dev/test_app_startup.py dev/test_table_view.py dev/test_patch_editor_view.py -q --timeout=20`  → `184 passed`
-
-`python -m pytest dev/test_manifest_state.py::TestManifestManager::test_get_editor_file_view_aligns_history_with_locator_matching dev/test_manifest_state.py::TestManifestManager::test_save_editor_patch_writes_patch_and_updates_editor_state dev/test_manifest_state.py::TestManifestManager::test_save_lines_only_changes_synthesizes_patch_when_translated_missing dev/test_manifest_state.py::TestManifestManager::test_save_lines_only_changes_promotes_saved_stage_and_updates_translated dev/test_table_view.py::TestSaveResetDiff::test_save_uses_clear_line_field_for_deletions dev/test_table_view.py::TestSaveDelegation::test_on_save_delegates_to_shared_lines_only_pipeline dev/test_patch_editor_view.py::TestEditorHostModeHandoff::test_save_current_file_uses_manifest_manager_pipeline dev/test_output_injection.py::TestFreshLineReads::test_write_file_stages_successful_output_into_translated_tree --timeout=120`  → `8 passed`
-
-`python -m pytest dev/test_output_injection.py -q -k "TestWriteInjection or write_file_stages_successful_output_into_translated_tree" --timeout=20`  → `5 passed`
-
-`python -m pytest dev/test_patch_editor_view.py dev/test_manifest_state.py -q -k "patch_editor_view or get_editor_file_view_builds_live_diff_to_patch or get_editor_file_view_aligns_history_with_locator_matching or save_editor_patch" --timeout=20`  → `16 passed`
-
-`python -m pytest dev/test_patch_editor_view.py dev/test_table_view.py dev/test_manifest_state.py -q -k "get_editor_file_view_aligns_history_with_locator_matching or save_editor_patch_writes_patch_and_updates_editor_state or ensure_translated_file_path_creates_parent_tree or create_forward_patch_for_original or capture_reverse_patch_for_translated or get_lines_for_locator_target_filters_file_scope_and_locator or test_open_or_focus or TestEditorHostModeHandoff or TestLocatorNavigation" --timeout=20`  → `23 passed`
+**Implementation tasks after review:**
+1. Reuse Patch Editor behavior for the `Full Files` mode.
+2. Reuse Full Table View behavior for the `Lines Only` mode.
+3. Build one single-instance non-modal Editor window with shared project/file context.
+4. Preserve manifest-aware diffing, parser-backed line history, and search/replace in both modes.
+5. Retire menu naming that exposes Patch Editor as a separate destination.
 
 **Required tests for this phase:**
 1. Single-instance Editor reuse.
 2. Mode switching between `Full Files` and `Lines Only`.
 3. Shared file-selection carry-over across the switch.
-4. Lightweight `Lines Only` search targeting in large files.
-5. Existing `Translated/` files are updated correctly from `Lines Only` saves.
-6. Changed rows become the latest effective stage entries for their `idx` values after save.
-7. Optional change-name storage and lookup.
-8. Search/replace behavior in both modes.
-9. Manifest sync and EditorState continuity after the rename.
-10. `Lines Only` save behavior on parser formats where multiple extracted entries share one physical line.
-
-**Latest focused validation for tasks 7 through 9:**
-`python -m pytest dev/test_manifest_state.py::TestManifestManager::test_get_editor_file_view_aligns_history_with_locator_matching dev/test_manifest_state.py::TestManifestManager::test_save_editor_patch_writes_patch_and_updates_editor_state dev/test_manifest_state.py::TestManifestManager::test_save_lines_only_changes_synthesizes_patch_when_translated_missing dev/test_manifest_state.py::TestManifestManager::test_save_lines_only_changes_promotes_saved_stage_and_updates_translated dev/test_table_view.py::TestSaveResetDiff::test_save_uses_clear_line_field_for_deletions dev/test_table_view.py::TestSaveDelegation::test_on_save_delegates_to_shared_lines_only_pipeline dev/test_patch_editor_view.py::TestEditorHostModeHandoff::test_save_current_file_uses_manifest_manager_pipeline dev/test_output_injection.py::TestFreshLineReads::test_write_file_stages_successful_output_into_translated_tree --timeout=120`  → `8 passed`
-
-**Latest focused validation for tasks 10 and 11:**
-`python -m pytest dev/test_output_injection.py -q -k "TestWriteInjection or write_file_stages_successful_output_into_translated_tree" --timeout=20`  → `5 passed`
-
-`python -m pytest dev/test_patch_editor_view.py dev/test_manifest_state.py -q -k "patch_editor_view or get_editor_file_view_builds_live_diff_to_patch or get_editor_file_view_aligns_history_with_locator_matching or save_editor_patch" --timeout=20`  → `16 passed`
+4. Search/replace behavior in both modes.
+5. Manifest sync and EditorState continuity after the rename.
 
 ### PHASE PLAN: Staged Folder And Patch Redesign
-**Priority:** HIGH | **Status:** DONE (CURRENT STAGED SLICE) | **Effort:** LARGE
+**Priority:** HIGH | **Status:** REVIEW FIRST | **Effort:** LARGE
 
 Goal: Redesign staged storage so originals, latest translated files, and patch history are separated cleanly.
 
@@ -262,82 +115,24 @@ Goal: Redesign staged storage so originals, latest translated files, and patch h
 4. `Patch/Translated/` stores reverse patches and rollback history for `Translated/`.
 
 **Review checklist before implementation:**
-1. Approve that Step 0 copies the entire loaded folder tree into `Original/`, not only files with parseable content.  `APPROVED`
-2. Approve hash-first behavior for patch generation.  `APPROVED`
-3. Approve `same hash = skip`, `different hash = diff or full copy`, `new file = add`. `APPROVED`
-4. Approve that Editor save and Output both overwrite `Translated/` and first record rollback data in `Patch/Translated/`. `APPROVED`
-5. Approve that `Lines Only` saves also record translated patch artifacts and instructions even when `Translated/` does not exist yet. `APPROVED`
-6. Approve that the manifest stores one patch-history entry per produced diff patch while the actual diff instructions live in `Patch/Original/` or `Patch/Translated/`. `APPROVED`
-7. Approve optional naming for translated patch entries so saved changes can be found later. `APPROVED`
-8. Approve that translated patch/injection work will use the upgraded manifest `ln` and optional `f` mapping instead of `idx`-only assumptions. `APPROVED`
+1. Approve that Step 0 copies the entire loaded folder tree into `Original/`, not only files with parseable content.
+2. Approve hash-first behavior for patch generation.
+3. Approve `same hash = skip`, `different hash = diff or full copy`, `new file = add`.
+4. Approve that Editor save and Output both overwrite `Translated/` and first record rollback data in `Patch/Translated/`.
 
-**Progress update:**
-- Tasks 1 and 2 plus the dependent staged save/output slice are implemented.
-- Step 0 stages the full selected source tree into `Original/`, including non-parseable companions, and the unified Input dialog exposes `copy`, `move`, and `external` source handling.
-- `Full Files`, `Lines Only`, and Step 9 now use the staged `Translated/` tree plus `Patch/Original/` and `Patch/Translated/` helpers for overwrite, synthesis, and rollback behavior.
-- Manifest projects store `mode: internal` for staged projects and `mode: external` when `source_root` is an absolute external baseline.
-- Focused validation: `python -m pytest dev/test_source_root.py dev/test_lightvn_fixes.py -q --timeout=20` → `82 passed`
-
-**Remaining implementation work:**
-No remaining implementation work in the completed staged save-path slice. Follow-on redesign items are outside this finished phase block.
+**Implementation tasks after review:**
+1. Change staging helpers so the first load mirrors the complete source tree into `Original/`.
+2. Route latest full translated files into `Translated/`.
+3. Add forward patch generation into `Patch/Original/`.
+4. Add reverse patch capture into `Patch/Translated/`.
+5. Update `EditorState.files` metadata so it remains aligned with the new directory model.
 
 **Required tests for this phase:**
 1. Full-folder copy into `Original/`, including files without parseable lines.
 2. Hash-first skip/diff/copy behavior.
 3. Editor-save overwrite into `Translated/` plus reverse-patch capture.
-4. `Lines Only` save writes translated patch history even when `Translated/` is still absent.
-5. `Lines Only` save updates existing `Translated/` files correctly and keeps the saved row stage latest for each changed `idx`.
-6. Output overwrite into `Translated/` plus reverse-patch capture.
-7. Exactly one manifest patch-history entry is kept per produced diff patch.
-8. Optional patch/change labels are preserved and searchable.
-9. Manifest and filedir continuity after the new staging layout.
-10. Reverse patch generation remains correct when multiple extracted rows share one source line.
-
-### PHASE PLAN: Manifest IO And Compact Writer Upgrade
-**Priority:** HIGH | **Status:** DONE (CURRENT STAGED SLICE) | **Effort:** LARGE
-
-Goal: Upgrade manifest extraction/input and injection/output so `Lines Only` diffs remain reliable on
-shared-line parser formats while the manifest writer emits a more compact, more diff-friendly JSON shape.
-
-**Review checklist before implementation:**
-1. Approve that every manifest `lines[]` row stores `ln` and that `f` is written only when more than one extracted entry comes from the same physical line.  `APPROVED`
-2. Approve that `idx`, `ln`, optional `f`, and `tags` must be written on the same compact object line as the sparse stage fields. `APPROVED`
-3. Approve one-object-per-line formatting for `filedir[]`, glossary objects, and code-pattern objects. `APPROVED`
-4. Approve that braces should never be written alone on their own line. `APPROVED`
-5. Approve that `ellipsis_counts`, `dedup_map`, and `placeholder_captured` become canonical tag-centered metadata that is written there and read from there. `APPROVED`
-6. Approve that extraction/input and injection/output will use this upgraded mapping as the fast path for precise file rebuilds and patch application. `APPROVED`
-
-**Implementation principle:**
-CherryAI should own `ln` / optional `f` centrally in shared manifest and IO code first. The preferred path is to derive and preserve that mapping from staged originals, `filedir`, extraction order, and shared manifest helpers without forcing parsers to emit raw source line/field metadata themselves. Only add parser or handshake upgrades for a specific format if the central mapping cannot reconstruct a stable physical-line owner.
-
-**Progress update:**
-Tasks 1 through 11 are implemented and validated, including the former task 7 dependency that landed through the shared Editor/save-path consumers.
-
-**Remaining implementation work:**
-No remaining implementation work in the completed manifest IO plus compact-writer slice.
-
-**Required tests for this phase:**
-1. Manifest round-trip for `ln`, optional `f`, and compact sparse line objects.
-2. Golden-output writer tests for one-line `filedir[]`, glossary, and code-pattern objects with no brace-only lines.
-3. Backward-compatible loading of older manifests that lack `ln` or `f`.
-4. `Lines Only` diff generation on formats where multiple extracted rows share one physical line.
-5. Injection/output targeted updates using `ln` plus optional `f`.
-6. Tag-centered persistence and reload of `ellipsis_counts`, `dedup_map`, and `placeholder_captured`.
-7. Step 0 re-extraction preserves the same `ln` / `f` mapping after reopen and staged-original refresh.
-8. Parser fallback coverage only for formats that cannot use the central CherryAI mapping.
-
-**Implemented validation for tasks 1 through 4:**
-`python -m pytest dev/test_source_root.py dev/test_manifest_state.py::TestManifestManager::test_create_new_initializes_lines dev/test_manifest_state.py::TestManifestManager::test_create_new_resets_ln_per_file dev/test_manifest_state.py::TestManifestManager::test_set_line_field_keeps_get_line_consistent dev/test_manifest_state.py::TestManifestManager::test_canonicalize_line_dict_adds_ln_and_orders_locator_fields dev/test_manifest_state.py::TestManifestManager::test_canonicalize_line_dict_migrates_legacy_line_aliases dev/test_manifest_state.py::TestManifestManager::test_load_backfills_missing_ln_from_filedir dev/test_manifest_state.py::TestManifestManager::test_save_and_load dev/test_manifest_state.py::TestManifestManager::test_save_compacts_filedir_and_lines_without_breaking_reload dev/test_manifest_state.py::TestManifestManager::test_save_compacts_glossary_entries_and_code_patterns dev/test_manifest_state.py::TestManifestMigration::test_migrate_v2_to_v3 dev/test_manifest_v2.py::TestLineEntrySerialization -q --timeout=20`  → `42 passed`
-
-**Implemented validation for tasks 8 and 9:**
-`python -m pytest dev/test_dedup.py dev/test_postprocess_recovery_metadata.py dev/test_preprocess_step_data_migration.py -q --timeout=20`  → `38 passed`
-
-**Implemented validation for tasks 10 and 11:**
-`python -m pytest dev/test_manifest_state.py -q -k "capture_source_line_mappings or build_line_locator_index or match_manifest_lines_to_source or add_files_accepts_mapped_line_dicts or refresh_line_locators_for_entry_updates_ln_and_f or canonicalize_line_dict or load_backfills_missing_ln_from_filedir" --timeout=20`  → `5 passed`
-
-`python -m pytest dev/test_output_injection.py -q -k "central_locators_for_tagged_multiline_and_shared_line_rows or lightvn_injection_keeps_parser_order or injection_handshake_simple or strips_manifest_trailing_newlines_before_match" --timeout=20`  → `4 passed`
-
-`python -m pytest dev/test_output_injection_reverse.py -q --timeout=20`  → `1 passed`
+4. Output overwrite into `Translated/` plus reverse-patch capture.
+5. Manifest and filedir continuity after the new staging layout.
 
 **Follow-on note:**
 The old multi-version patch-update workflow should be re-reviewed only after these three phases land, because its conflict model depends on the new Editor naming and the new staged folder layout.
@@ -857,16 +652,16 @@ Goal: Fix two related postprocessing edge cases. First, restore custom placehold
 
 **Changes:**
 1. **`functions/modehelper.py`** — Added `restore_custom_placeholders_batch()` with a two-pass restore strategy: local per-line restoration first, then a batch-wide exact-token fallback for unresolved named replacements.
-2. **`gui/helpers/mode_adapter.py`**, **`gui/steps/preprocess.py`**, **`gui/steps/postprocess.py`** — Later upgraded that path to canonical placeholder tags plus a shared `placeholder_lookup` table, so postprocessing now recomputes generic/custom captures from original text and only allows batch-wide custom restoration when `recover_everywhere=true`.
+2. **`gui/helpers/mode_adapter.py`**, **`gui/steps/preprocess.py`**, **`gui/steps/postprocess.py`** — Persist token-aware `placeholder_records` alongside legacy `placeholder_captured` and use them for batch-wide postprocessing restoration.
 3. **`modi/custom_placeholder.py`** — Switched Post restoration to the shared batch helper so the processor path and GUI path behave the same way.
 4. **`functions/validation.py`** and **`functions/postprocess.py`** — Filter nested balanced-code matches so inner `{...}` substrings are ignored when they only exist inside a larger balanced token like `{{...}}`.
 5. **Tests** — Added `dev/test_custom_placeholder_recovery.py` and expanded `dev/test_code_pattern_recovery.py` with the doubled-curly overlap regression.
 
 **Files Modified:**
 - `functions/modehelper.py` — batch custom placeholder restore helper
-- `gui/helpers/mode_adapter.py` — canonical placeholder tag emission and shared lookup generation
-- `gui/steps/preprocess.py` — persist `placeholder_lookup`
-- `gui/steps/postprocess.py` — tag-driven placeholder recomputation before post-exclusive recovery
+- `gui/helpers/mode_adapter.py` — token-aware placeholder capture records
+- `gui/steps/preprocess.py` — persist `placeholder_records`
+- `gui/steps/postprocess.py` — batch placeholder restore before post-exclusive recovery
 - `modi/custom_placeholder.py` — shared batch restoration path
 - `functions/validation.py` — nested code-pattern match filtering
 - `functions/postprocess.py` — nested code-pattern match filtering
@@ -1754,9 +1549,6 @@ configurable APIConfig fields.
 - `check_static_prompt_cache_status(token_breakdown)` — ok/suggest/warn classification
 - Update button now calls `refresh_models()` + `reload_model_pricing()` to save to API.ini
 - Available Models: added Cached Input filter, inverted Thinking filter, Save button, Cached $/1M column
-- Available Models: added `Unknown Price` and `Above Cost Cap` visibility toggles plus a Status column (`OK`, `Free`, `Unknown Price`, `Above Cost Cap`)
-- Global Options → API Provider: added persisted `Cost Cap: $` spinbox (`CherryAI.ini [api].cost_cap`, float/manual entry, range 0-999)
-- Model-specific probes and live requests now fail closed when output pricing is unknown or exceeds the configured cost cap
 - Costs step: `estimate_cost()` supports `cached_tokens` param, Prompt/Cached Input Cost rows, Cached $/1M in comparison table
 
 **Files Modified:**
@@ -1792,26 +1584,6 @@ Goal: Fix the missing OpenAI prompt-cache-key wiring so the auto-generated key i
 
 **Tests:** `C:/Python314/python.exe -m pytest dev/test_prompt_caching.py dev/test_request_preview.py dev/test_api_log.py`
 - Result: 204 passed, 2 skipped
-
----
-
-### FEATURE: RegEx Maker Help Window
-**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 4 hours
-
-Goal: Add a non-modal `Help -> RegEx Maker` window that teaches users through example-driven regex search and replacement suggestions while staying aligned with CherryAI's runtime regex behavior.
-
-**Completed work:**
-1. **`functions/regex_maker.py`** — Added the shared backend for example normalization, annotation-guided candidate generation, ranking, safe regex compilation, and replacement-pattern inference using CherryAI-compatible Python `re` semantics.
-2. **`gui/dialogs/regex_help_view.py`** — Added the single-instance non-modal RegEx Maker dialog with multiple `Line to find` rows, aligned `Replace Target` rows, right-click span annotations with hover labels, ranked candidates, copyable output panes, and a structured RegEx Options popup.
-3. **`gui/app.py` / `gui/dialogs/__init__.py`** — Wired the shared Help-menu entry and app-level `open_regex_help_dialog()` reuse path.
-4. **`dev/test_regex_maker_backend.py` / `dev/test_gui_dialogs.py` / `dev/test_app_startup.py`** — Added focused backend, dialog reuse, Help-menu wiring, and `CherryAI.ini` default round-trip coverage.
-5. **Documentation** — Updated `doc/features.md`, `doc/technical.md`, `doc/specs.md`, and `doc/tests.md` for the implemented window, backend, persistence rule, and verification command.
-
-**Verified tests:**
-- `C:/Python314/python.exe -m pytest dev/test_regex_maker_backend.py dev/test_gui_dialogs.py dev/test_app_startup.py -q` → `72 passed`
-
-**Current scope note:**
-- The implemented slice covers the shared backend, Help-menu entry point, annotation-guided candidate ranking, single-window reuse, and explicit RegEx-option default persistence. Deeper end-to-end widget interaction tests remain optional future coverage if the helper window grows more complex.
 
 ---
 
@@ -2307,7 +2079,6 @@ COMPLETED: Pricing & Reasoning Mode Fixes (2026)
    ✅ API client: provider-based get_thinking_params() using ThinkingConfig.build_params()
    ✅ Chat Completions: reasoning_effort as top-level param (not nested); thinking via extra_body for Claude
    ✅ THINKING_MODELS: added GPT-4.1, GPT-5, o4-mini; is_openai_reasoning_model() includes all families
-  ✅ Cost cap guardrail: `ModelCostStatus` helpers, persisted Global Options cap, unknown-price refresh semantics, blocked model probes/live requests, and default-hidden Unknown/Above-Cost-Cap model filters
    ✅ Tests: dev/test_pricing_and_reasoning.py (108 tests — pricing, thinking modes, build_params, persistence, API wiring)
 
 PENDING TASKS - QUALITY

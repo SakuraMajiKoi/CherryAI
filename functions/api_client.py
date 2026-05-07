@@ -2296,92 +2296,6 @@ class APIClient:
             self.logger.debug(f"Prompt caching: {cache_params}")
 
         try:
-            from .api_log import (
-                FAILURE_KIND_API,
-                FAILURE_KIND_INFERENCE,
-                LogCategory,
-                LogEntryReceived,
-                LogEntrySent,
-                LogStatus,
-                VALIDATION_STATUS_FAILED,
-                VALIDATION_STATUS_PASSED,
-                VALIDATION_STATUS_UNKNOWN,
-            )
-
-            sent_entry = LogEntrySent(
-                project_name=getattr(self, "_prompt_cache_project_name", ""),
-                model=self.config.model,
-                provider=self.config.provider,
-                task_type="translation",
-                temperature=self.config.temperature,
-                system_prompt=final_system_prompt,
-                user_content=user_content,
-                chunk_index=self._chunk_counter,
-                total_chunks=self._initial_chunk_count,
-                line_count=len(chunk),
-                extra=cache_params.copy(),
-            )
-        except Exception:
-            sent_entry = None
-
-        def _log_structured_pair(
-            status: Any,
-            *,
-            response_obj: Optional[Any] = None,
-            content_text: str = "",
-            error_message: str = "",
-            validation_status: str = "",
-            validation_error: str = "",
-            validation_category: str = "",
-            failure_kind: str = "",
-        ) -> None:
-            if sent_entry is None:
-                return
-            store = getattr(self, "_api_log_store", None)
-            if store is None:
-                return
-            try:
-                usage = getattr(response_obj, "usage", None) if response_obj is not None else None
-                prompt_details = getattr(usage, "prompt_tokens_details", None) if usage else None
-                completion_details = (
-                    getattr(usage, "completion_tokens_details", None) if usage else None
-                )
-                extra: Dict[str, Any] = {}
-                if validation_status:
-                    extra["validation_status"] = validation_status
-                if validation_error:
-                    extra["validation_error"] = validation_error
-                if validation_category:
-                    extra["validation_category"] = validation_category
-                if failure_kind:
-                    extra["failure_kind"] = failure_kind
-                store.log_pair(
-                    LogCategory.MAIN_TRANSLATION,
-                    sent_entry,
-                    LogEntryReceived(
-                        content=content_text,
-                        prompt_tokens=getattr(usage, "prompt_tokens", 0) if usage else 0,
-                        completion_tokens=getattr(usage, "completion_tokens", 0) if usage else 0,
-                        total_tokens=getattr(usage, "total_tokens", 0) if usage else 0,
-                        cached_tokens=(
-                            getattr(prompt_details, "cached_tokens", 0) or 0
-                        ) if prompt_details else 0,
-                        reasoning_tokens=(
-                            getattr(completion_details, "reasoning_tokens", 0) or 0
-                        ) if completion_details else 0,
-                        finish_reason=(
-                            response_obj.choices[0].finish_reason or ""
-                            if response_obj is not None and response_obj.choices else ""
-                        ),
-                        error_message=error_message,
-                        extra=extra,
-                    ),
-                    status,
-                )
-            except Exception:
-                pass
-
-        try:
             if self.client is None:
                 raise TranslationError("API client not initialized")
             from typing import Any, cast
@@ -2409,33 +2323,13 @@ class APIClient:
                 classified = self._provider.classify_error(e)
             if classified is None:
                 classified = classify_api_error(e)
-            _log_structured_pair(
-                LogStatus.FAILED,
-                error_message=str(e),
-                validation_status=VALIDATION_STATUS_UNKNOWN,
-                validation_error=str(e),
-                validation_category=classified.category.value,
-                failure_kind=FAILURE_KIND_API,
-            )
             if classified.is_fatal:
                 raise TranslationAbortError(classified) from e
             raise TranslationError(f"OpenAI API call failed: {str(e)}") from e
 
-        content = response.choices[0].message.content or ""
+        content = response.choices[0].message.content
         if not content:
-            message = "API returned empty response"
-            classified = classify_api_error(TranslationError(message))
-            _log_structured_pair(
-                LogStatus.FAILED,
-                response_obj=response,
-                content_text=content,
-                error_message=message,
-                validation_status=VALIDATION_STATUS_FAILED,
-                validation_error=message,
-                validation_category=classified.category.value,
-                failure_kind=FAILURE_KIND_INFERENCE,
-            )
-            raise TranslationError(message)
+            raise TranslationError("API returned empty response")
         
         # Log API call if enabled
         if self.enable_api_log:
@@ -2468,56 +2362,65 @@ class APIClient:
             }
             self._log_api_call(request_data, response_data)
 
+        # Structured API log for API Log Window
+        try:
+            from .api_log import (
+                LogCategory, LogStatus, LogEntrySent, LogEntryReceived,
+            )
+            sent_entry = LogEntrySent(
+                project_name=getattr(self, "_prompt_cache_project_name", ""),
+                model=self.config.model,
+                provider=self.config.provider,
+                task_type="translation",
+                temperature=self.config.temperature,
+                system_prompt=final_system_prompt,
+                user_content=user_content,
+                chunk_index=self._chunk_counter,
+                total_chunks=self._initial_chunk_count,
+                line_count=len(chunk),
+                extra=cache_params.copy(),
+            )
+            _usage = response.usage
+            _ptd = getattr(_usage, "prompt_tokens_details", None) if _usage else None
+            _ctd = getattr(_usage, "completion_tokens_details", None) if _usage else None
+            recv_entry = LogEntryReceived(
+                content=content,
+                prompt_tokens=_usage.prompt_tokens if _usage else 0,
+                completion_tokens=_usage.completion_tokens if _usage else 0,
+                total_tokens=_usage.total_tokens if _usage else 0,
+                cached_tokens=(getattr(_ptd, "cached_tokens", 0) or 0) if _ptd else 0,
+                reasoning_tokens=(getattr(_ctd, "reasoning_tokens", 0) or 0) if _ctd else 0,
+                finish_reason=response.choices[0].finish_reason or "" if response.choices else "",
+            )
+            self._api_log_store.log_pair(
+                LogCategory.MAIN_TRANSLATION, sent_entry, recv_entry,
+                LogStatus.SUCCESS,
+            )
+        except Exception:
+            pass
+
         # Parse JSON output
         try:
             data = json.loads(content)
             translations = data.get("translations")
         except json.JSONDecodeError:
             # Non-structured output is fatal — model cannot produce JSON
-            message = "API returned invalid JSON"
-            classified = classify_api_error(TranslationError(message))
-            _log_structured_pair(
-                LogStatus.FAILED,
-                response_obj=response,
-                content_text=content,
-                error_message=message,
-                validation_status=VALIDATION_STATUS_FAILED,
-                validation_error=message,
-                validation_category=classified.category.value,
-                failure_kind=FAILURE_KIND_INFERENCE,
+            classified = classify_api_error(
+                TranslationError("API returned invalid JSON"),
             )
             raise TranslationAbortError(classified)
         
         if not isinstance(translations, list):
-            message = "API returned JSON but 'translations' is not a list"
-            classified = classify_api_error(TranslationError(message))
-            _log_structured_pair(
-                LogStatus.FAILED,
-                response_obj=response,
-                content_text=content,
-                error_message=message,
-                validation_status=VALIDATION_STATUS_FAILED,
-                validation_error=message,
-                validation_category=classified.category.value,
-                failure_kind=FAILURE_KIND_INFERENCE,
+            classified = classify_api_error(
+                TranslationError(
+                    "API returned JSON but 'translations' is not a list",
+                ),
             )
             raise TranslationAbortError(classified)
 
         # Validation
         if len(translations) != len(chunk):
-            message = f"Line count mismatch: Input {len(chunk)}, Output {len(translations)}"
-            classified = classify_api_error(TranslationError(message))
-            _log_structured_pair(
-                LogStatus.FAILED,
-                response_obj=response,
-                content_text=content,
-                error_message=message,
-                validation_status=VALIDATION_STATUS_FAILED,
-                validation_error=message,
-                validation_category=classified.category.value,
-                failure_kind=FAILURE_KIND_INFERENCE,
-            )
-            raise TranslationError(message)
+            raise TranslationError(f"Line count mismatch: Input {len(chunk)}, Output {len(translations)}")
 
         # Check for refusal or empty lines (basic heuristic)
         for i, (original, translated) in enumerate(zip(chunk, translations)):
@@ -2529,26 +2432,7 @@ class APIClient:
             
             # Check for common refusal patterns
             if "I cannot translate" in translated or "I am unable to translate" in translated:
-                message = f"API refused to translate line {i}: {translated}"
-                classified = classify_api_error(TranslationError(message))
-                _log_structured_pair(
-                    LogStatus.FAILED,
-                    response_obj=response,
-                    content_text=content,
-                    error_message=message,
-                    validation_status=VALIDATION_STATUS_FAILED,
-                    validation_error=message,
-                    validation_category=classified.category.value,
-                    failure_kind=FAILURE_KIND_INFERENCE,
-                )
-                raise TranslationError(message)
-
-        _log_structured_pair(
-            LogStatus.SUCCESS,
-            response_obj=response,
-            content_text=content,
-            validation_status=VALIDATION_STATUS_PASSED,
-        )
+                 raise TranslationError(f"API refused to translate line {i}: {translated}")
 
         return translations
 

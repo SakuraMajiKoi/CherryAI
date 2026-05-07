@@ -30,6 +30,7 @@ import os
 import tempfile
 import threading
 import time
+import codecs
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -44,6 +45,15 @@ logger = logging.getLogger(__name__)
 
 DEDUP_PLACEHOLDER = "__DEDUP__"
 CONTENT_TAGS = frozenset({"file_end", "dialogue", "menu", "choice", "variable", "items"})
+SOURCE_TEXT_ENCODING_CANDIDATES = (
+    "utf-8-sig",
+    "utf-8",
+    "cp932",
+    "shift_jis",
+    "utf-16",
+    "utf-16-le",
+    "utf-16-be",
+)
 
 
 def parse_line_tags(raw_tags: Any) -> List[str]:
@@ -119,6 +129,28 @@ def set_primary_line_tag(line_data: Dict[str, Any], tag: str) -> None:
         line_data["tags"] = merged_tags
     else:
         line_data.pop("tags", None)
+
+
+def _read_source_text_for_manifest(path: Path) -> str:
+    """Read text files for manifest bootstrapping without assuming UTF-8.
+
+    Project creation may ingest source scripts before a parser-specific extraction
+    pass runs. KiriKiri sources are commonly cp932/Shift-JIS, so this bootstrap
+    read must not hard-fail on UTF-8-only assumptions.
+    """
+    data = path.read_bytes()
+    if data.startswith(codecs.BOM_UTF8):
+        return data.decode("utf-8-sig")
+    if data.startswith(codecs.BOM_UTF16_LE) or data.startswith(codecs.BOM_UTF16_BE):
+        return data.decode("utf-16")
+
+    for encoding in SOURCE_TEXT_ENCODING_CANDIDATES:
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+
+    return data.decode("utf-8", errors="replace")
 
     line_data.pop("tag", None)
     line_data.pop("context_marker", None)
@@ -1775,7 +1807,7 @@ class ManifestManager:
         for file_path in source_files:
             try:
                 first_idx = idx
-                content = file_path.read_text(encoding="utf-8")
+                content = _read_source_text_for_manifest(file_path)
                 file_lines = content.split("\n")
                 
                 for line_number, line_text in enumerate(file_lines, start=1):

@@ -193,227 +193,49 @@ Verified command:
 python -m pytest CherryAI/dev/test_app_startup.py CherryAI/dev/test_input_import_fixes.py CherryAI/dev/test_lightvn_fixes.py -q --timeout=10
 ```
 
-### Focused KiriKiri2 Parser + Package Regression
+### Focused Patch Editor Regression
 
-The implemented KiriKiri2 slice is currently covered by a focused parser/package regression set:
+The staged full-file Patch Editor plus its app entry points are covered by a focused regression set:
 
-- `dev/test_parser_input_routing.py` verifies parser registration, `.ks` routing/detection, unified dialog parser-aware `.xp3` recognition for `KiriKiri2`, parser-filtered folder collection of `.xp3`, full-tree staging of unsupported companion files into `Original/`, archive-project bootstrap without pre-reading raw `.xp3` files as utf-8 text, binary-only XP3 archives being skipped because they expose no parser-loadable members, and Step 0 extraction-validation batching/log writing.
-- `dev/test_parser_scripts.py` verifies KiriKiri2 parser extraction/injection behavior, XP3 settings detection at offset zero and after scan, custom `custom_magic` plus `header_offset` round-trip rebuilds, and the currently validated `xor:1` protected-member helper slice for readable entries such as `AppConfig.tjs`.
-- `dev/test_source_root.py` verifies parser post-injection hook dispatch, archive-member resolution into `Package/Original`, and that shared package staging preserves manifest-backed archive settings.
-
-Verified command:
-
-```bash
-python -m pytest dev/test_parser_input_routing.py dev/test_parser_scripts.py dev/test_source_root.py -k "KiriKiri2 or xp3 or archive or package or routing or unified_dialog or folder_tree_staging"
-```
-
-Latest verified result: 55 passed, 4 skipped, 87 deselected.
-
-Additional focused validation command:
-
-```bash
-python -m pytest dev/test_parser_input_routing.py -k "validation or token"
-```
-
-Latest focused validation result: 11 passed, 36 deselected.
-
-Additional real-archive validation: the KiriKiri2 XP3 helper path successfully enumerated `dev/testgame/data.xp3`, returned 1555 entries, confirmed the presence of `MainWindow.tjs` plus `.ks` script files, detected settings `custom_magic=hex:5850330d0a200a1a8b6701`, `header_offset=0`, auto-inferred `key='xor:1'`, and decoded `AppConfig.tjs` into readable cp932 text. Protected scenario members still need further archive-side decode research before Step 0 extraction can be claimed to match the comparison tree under `dev/data/scenario`.
-
-### Focused Editor Host Regression
-
-The implemented Editor host plus shared `Full Files` backend slice is covered by a focused regression set:
-
-- `dev/test_app_startup.py` verifies both the new `Editor` menu entry point and the compatibility Patch Editor entry point: each requires a loaded project and reuses the shared host window.
-- `dev/test_table_view.py` verifies the retained `Lines Only` handoff hooks, shared dialog reuse, file-context intake through the existing file filter, and the new file-scoped `idx` / `ln` / optional `f` locate-jump path.
-- `dev/test_patch_editor_view.py` verifies the recycled Editor host reuse, the visible mode handoff, selected-file carry-over into `Lines Only`, shared locator-target carry-over, editor-line locator highlighting, patch-diff rendering in `Full Files`, and the full-file replace / replace-all actions.
-- `dev/test_manifest_state.py` verifies locator-aware `get_editor_file_view()` alignment on shared-line parser mappings, shared file-scoped locator lookup, live diff-to-patch generation for unsaved Full Files edits, `save_editor_patch()` persistence into staged `Translated/` plus rollback metadata in `Patch/Translated/` and `EditorState.files`, plus the staged helper base for `Translated/`, `Patch/Original/`, and `Patch/Translated/` artifacts.
+- `dev/test_patch_editor_view.py` verifies that editor file views prefer staged `Patch/` files, fall back to `Original/` when no patch exists, and persist manifest-backed editor diffs/history when a full-file save occurs.
+- `dev/test_app_startup.py` verifies that opening Patch Editor requires a loaded project and that reopening it reuses the shared window instead of creating duplicates.
 
 Verified command:
 
 ```bash
-python -m pytest dev/test_app_startup.py dev/test_table_view.py dev/test_patch_editor_view.py -q --timeout=20
+python -m pytest dev/test_patch_editor_view.py dev/test_app_startup.py -q --timeout=20
 ```
 
-Latest verified result: 184 passed.
-
-Additional focused command for the shared manifest-manager editor backend:
-
-```bash
-python -m pytest dev/test_manifest_state.py::TestManifestManager::test_get_editor_file_view_aligns_history_with_locator_matching dev/test_manifest_state.py::TestManifestManager::test_save_editor_patch_writes_patch_and_updates_editor_state dev/test_patch_editor_view.py::TestEditorHostModeHandoff::test_load_selected_file_uses_manifest_manager_editor_view -q --timeout=20
-```
-
-Latest verified result: 3 passed.
-
-Additional focused command for the staged Editor, Lines Only, and Step 9 save pipeline:
-
-```bash
-python -m pytest dev/test_manifest_state.py::TestManifestManager::test_get_editor_file_view_aligns_history_with_locator_matching dev/test_manifest_state.py::TestManifestManager::test_save_editor_patch_writes_patch_and_updates_editor_state dev/test_manifest_state.py::TestManifestManager::test_save_lines_only_changes_synthesizes_patch_when_translated_missing dev/test_manifest_state.py::TestManifestManager::test_save_lines_only_changes_promotes_saved_stage_and_updates_translated dev/test_table_view.py::TestSaveResetDiff::test_save_uses_clear_line_field_for_deletions dev/test_table_view.py::TestSaveDelegation::test_on_save_delegates_to_shared_lines_only_pipeline dev/test_patch_editor_view.py::TestEditorHostModeHandoff::test_save_current_file_uses_manifest_manager_pipeline dev/test_output_injection.py::TestFreshLineReads::test_write_file_stages_successful_output_into_translated_tree --timeout=120
-```
-
-Latest verified result: 8 passed.
-
-Additional focused command for the completed locator-driven rebuild and Full Files parity slice:
-
-```bash
-python -m pytest dev/test_output_injection.py -q -k "TestWriteInjection or write_file_stages_successful_output_into_translated_tree" --timeout=20
-python -m pytest dev/test_patch_editor_view.py dev/test_manifest_state.py -q -k "patch_editor_view or get_editor_file_view_builds_live_diff_to_patch or get_editor_file_view_aligns_history_with_locator_matching or save_editor_patch" --timeout=20
-```
-
-Latest verified result: 5 passed in `dev/test_output_injection.py` and 16 passed across `dev/test_patch_editor_view.py` plus `dev/test_manifest_state.py`.
-
-Additional focused command for locator navigation/highlighting plus the staged helper base:
-
-```bash
-python -m pytest dev/test_patch_editor_view.py dev/test_table_view.py dev/test_manifest_state.py -q -k "get_editor_file_view_aligns_history_with_locator_matching or save_editor_patch_writes_patch_and_updates_editor_state or ensure_translated_file_path_creates_parent_tree or create_forward_patch_for_original or capture_reverse_patch_for_translated or get_lines_for_locator_target_filters_file_scope_and_locator or test_open_or_focus or TestEditorHostModeHandoff or TestLocatorNavigation" --timeout=20
-```
-
-Latest verified result: 23 passed.
-
-### Focused RegEx Maker Regression
-
-The implemented RegEx Maker help window is covered by a focused regression set:
-
-- `dev/test_regex_maker_backend.py` verifies row alignment, invalid-regex safety, digit wildcard ranking, replacement inference, and annotation-biased ranking for the shared backend in `functions/regex_maker.py`
-- `dev/test_gui_dialogs.py` verifies single-instance `RegexHelpDialog.open_or_focus()` reuse and registration behavior
-- `dev/test_app_startup.py` verifies the shared app entry point for `Help -> RegEx Maker`, confirms the Help menu source includes the new entry, and round-trips explicit RegEx Maker option defaults through `CherryAI.ini`
-
-Verified command:
-
-```bash
-C:/Python314/python.exe -m pytest dev/test_regex_maker_backend.py dev/test_gui_dialogs.py dev/test_app_startup.py -q
-```
-
-Latest verified result: 72 passed.
+Latest verified result: 29 passed.
 
 ### Focused Cost Tracking + Editor Surface Regression
 
-The currently implemented building blocks behind the planned `Ledger` window and Translation Workbench are covered by a focused regression set:
+The currently implemented building blocks behind the planned Lifetime Cost Tracking window and Translation Workbench are covered by a focused regression set:
 
-- `dev/test_usage_tracker.py` verifies TSV ledger round-trip behavior, public API compatibility, idempotent migration from legacy `user/usage.db`, structured-event mirroring intake, expanded Ledger filters, grouped summaries, and estimate-vs-actual totals
-- `dev/test_api_log.py` verifies structured API log persistence, filtering, metadata rendering, ledger-row normalization from request entries, saved pricing snapshots, Unknown fallbacks, request-reference lookup helpers, producer validation logging, and completed-entry mirroring into the ledger
-- `dev/test_line_by_line.py` verifies chunked translation logs validated success/failure outcomes to API Log instead of marking invalid structured responses as success
-- `dev/test_term_translation.py` verifies LLM term-translation batches log failed structured-output responses with response usage, and log recovered count-mismatch batches distinctly from clean success paths
-- `dev/test_gui_dialogs.py` verifies single-instance Ledger reuse and API Log request-ref intake for Ledger drill-down
-- `dev/test_app_startup.py` verifies the direct menu-bar `Ledger` entry point reuses the shared window without a project-loaded guard
-- `dev/test_costs_step_phase40.py` verifies Step 4 exposes the `Ledger` button entry point while keeping Costs scoped to estimation
+- `dev/test_usage_tracker.py` verifies persistent usage aggregation in `user/usage.db`
+- `dev/test_api_log.py` verifies structured API log persistence, filtering, and metadata rendering
 - `dev/test_patch_editor_view.py` verifies staged full-file editing, diffs, and manifest-backed editor history
 - `dev/test_table_view.py` verifies the line-level editing and search/replace surface that the planned workbench will continue to reuse
 
-These tests now cover the implemented Ledger storage layer, the API-log-to-ledger mirroring path, saved pricing/Unknown handling, validated success-vs-failure classification across current structured API producers, the shared aggregation helpers, the non-modal Ledger window reuse path, API Log drill-down intake, and both approved Ledger entry points.
+These tests describe the current foundation only. The redesign plan changes the future target to a TSV-backed `Ledger` plus a merged non-modal `Editor` window, so new focused coverage will be required when implementation starts.
 
 Verified command:
 
 ```bash
-python -m pytest dev/test_api_log.py dev/test_line_by_line.py dev/test_term_translation.py dev/test_usage_tracker.py -q --timeout=20
+python -m pytest CherryAI/dev/test_usage_tracker.py CherryAI/dev/test_api_log.py CherryAI/dev/test_patch_editor_view.py CherryAI/dev/test_table_view.py -q --timeout=20
 ```
 
-Latest verified result: 220 passed.
+### Planned Redesign Coverage
 
-### Remaining Planned Coverage
+When the Ledger, Editor, and staged-folder redesign phases begin, add focused script coverage for:
 
-The editor, staged-folder, and manifest-IO save-path slice now has focused regression coverage in the existing suite. Remaining future-focused coverage is primarily for the later `Ledger` window plus any optional test-suite reshaping if the current files become too broad.
-
-Still-planned focused coverage:
-
-- Optional deeper widget-interaction coverage inside the Ledger dialog itself if later UI behavior becomes more complex
-- Optional future extraction of current Editor/save-path coverage into dedicated split files if `dev/test_patch_editor_view.py`, `dev/test_manifest_state.py`, or `dev/test_table_view.py` become too broad
-
-Current coverage distribution for the implemented save-path slice:
-
-- `dev/test_app_startup.py` — `Editor` and `Ledger` menu wiring, single-window reuse, and project-loaded guards where applicable.
-- `dev/test_table_view.py` — `Lines Only` handoff from the recycled Editor host, locate/jump by file + `idx` / `ln` / optional `f`, and save delegation to shared manifest helpers.
-- `dev/test_patch_editor_view.py` — Editor host reuse, visible mode handoff, selected-file carry-over, live diff-to-patch behavior, locator-target carry-over, locator highlighting, and `Full Files` save entry points.
-- `dev/test_manifest_state.py` — shared directory helpers, file-scoped locator lookup, translated/patch artifact references in `EditorState.files`, optional change-label persistence, staged helper behavior, and latest-stage promotion for `Lines Only` saves.
-- `dev/test_output_injection.py` / `dev/test_output_injection_reverse.py` — shared locator-driven targeted rebuilds, staged translated mirroring, reverse-patch-related output coverage, and the current `_write_injection()` delegation contract.
-- `dev/test_editor_window.py`, `dev/test_lines_only_save.py`, and `dev/test_staged_patch_layout.py` remain reserved only as optional future suite-splitting targets; the current implementation is covered in the existing files above.
-
-### Focused Tag-Centered Recovery Metadata Regression
-
-The tag-centered recovery metadata migration for dedup lineage, placeholder capture, ellipsis decompression, and aggressive number restoration is covered by a focused regression slice:
-
-- `dev/test_dedup.py` verifies canonical `dedup,D{idx}` / `aggressive_dedup,AD{idx}` tag parsing plus source-derived aggressive number slots.
-- `dev/test_postprocess_recovery_metadata.py` verifies generic/custom placeholder captures are recomputed from original line text using canonical placeholder tags plus `placeholder_lookup`, and that ellipsis counts are recomputed from original line text.
-- `dev/test_custom_placeholder_recovery.py` verifies the batch-wide custom-placeholder fallback now requires `recover_everywhere=true` and still prefers local restoration when possible.
-- `dev/test_preprocess_step_data_migration.py` verifies preprocessing prunes obsolete per-line lookup keys from step data while persisting the shared `placeholder_lookup` metadata.
-
-Verified command:
-
-```bash
-python -m pytest dev/test_dedup.py dev/test_postprocess_recovery_metadata.py dev/test_custom_placeholder_recovery.py dev/test_preprocess_step_data_migration.py -q --timeout=20
-```
-
-Latest verified result: 38 passed.
-- Step 0 staged re-extraction coverage that the same file reopens with the same `ln` / optional `f` ownership after manifest reload
-- Parser-handshake fallback coverage only for formats that cannot be stabilized by the shared CherryAI-owned mapping
-
-### Focused Manifest ln/f Regression
-
-The implemented manifest schema/load-save base for mandatory `ln` and optional `f` is currently covered by a focused regression slice:
-
-- `dev/test_manifest_state.py` verifies that new manifests assign 1-based per-file `ln`, `set_line_field()` keeps appended rows immediately canonical, legacy `line` / `field` aliases normalize to `ln` / `f`, and older manifests backfill missing `ln` from `filedir` on load.
-- `dev/test_manifest_v2.py` verifies that `LineEntry.to_dict()` / `from_dict()` preserve the new locator fields for compatibility helpers.
-- `dev/test_source_root.py` provides adjacent coverage that the file ownership path used for the shared mapping remains stable.
-- `dev/test_manifest_state.py` also verifies shared source-line mapping capture for speaker-prefixed, multiline cleaned dialogue, and same-line multi-field extraction, locator-index matching that skips shifted manifest rows, non-destructive `add_files()` preservation of mapped `ln` / `f` line dicts, and in-place locator refresh when a file's staged source text moves multiple extracted rows onto one physical line.
-
-Verified command:
-
-```bash
-python -m pytest dev/test_source_root.py dev/test_manifest_state.py::TestManifestManager::test_create_new_initializes_lines dev/test_manifest_state.py::TestManifestManager::test_create_new_resets_ln_per_file dev/test_manifest_state.py::TestManifestManager::test_set_line_field_keeps_get_line_consistent dev/test_manifest_state.py::TestManifestManager::test_canonicalize_line_dict_adds_ln_and_orders_locator_fields dev/test_manifest_state.py::TestManifestManager::test_canonicalize_line_dict_migrates_legacy_line_aliases dev/test_manifest_state.py::TestManifestManager::test_load_backfills_missing_ln_from_filedir dev/test_manifest_state.py::TestManifestMigration::test_migrate_v2_to_v3 dev/test_manifest_v2.py::TestLineEntrySerialization -q --timeout=20
-```
-
-Latest verified result: 46 passed across the documented focused locator slice over time; current narrowed implementation check for the new mapping helpers, locator refresh, and mapped add-files path is 8 passed.
-
-Current narrowed verification command:
-
-```bash
-python -m pytest dev/test_manifest_state.py -q -k "capture_source_line_mappings or build_line_locator_index or match_manifest_lines_to_source or add_files_accepts_mapped_line_dicts or refresh_line_locators_for_entry_updates_ln_and_f or canonicalize_line_dict or load_backfills_missing_ln_from_filedir"
-```
-
-### Focused Reverse-Order Injection Regression
-
-The standardized Step 9 injection path now has a dedicated narrow regression that avoids the unrelated GUI import blocker:
-
-- `dev/test_output_injection_reverse.py` loads `gui/steps/output_inject.py` with minimal GUI stubs and verifies that the standardized injection handshake feeds the parser from the end of the file slice toward the start, preventing earlier replacements from stealing later search keys when translated text equals another source key.
-- `dev/test_output_injection.py` verifies that Step 9 delegates parser-backed output writes to the shared manifest-manager rebuild helper, still surfaces shared-render failures through the Step 9 warnings, and keeps staging continuity for successful writes.
-
-Verified command:
-
-```bash
-python -m pytest dev/test_output_injection.py -q -k "TestWriteInjection or write_file_stages_successful_output_into_translated_tree" --timeout=20
-python -m pytest dev/test_output_injection_reverse.py -q --timeout=20
-```
-
-Latest verified result: 5 passed in `dev/test_output_injection.py`; the reverse-order regression remains covered separately in `dev/test_output_injection_reverse.py`.
-
-### Focused Manifest Compact Writer Regression
-
-The compact manifest writer for `lines[]`, `filedir[]`, glossary project entries, and `code_patterns[]` is covered by a focused regression slice:
-
-- `dev/test_manifest_state.py` verifies that manifest save/load still round-trips project metadata, that `filedir[]` entries are written one object per line, that `lines[]` keep `idx` / `ln` / optional `f` / `tags` on the opening line while sparse stage fields remain on following lines, and that the saved JSON still reloads via both `json.loads()` and `ManifestManager.load()`.
-- `dev/test_manifest_state.py` also verifies that glossary `project_entries` and `code_patterns[]` rows are emitted one object per line without changing their schema or reload behavior.
-
-Verified command:
-
-```bash
-python -m pytest dev/test_source_root.py dev/test_manifest_state.py::TestManifestManager::test_create_new_initializes_lines dev/test_manifest_state.py::TestManifestManager::test_create_new_resets_ln_per_file dev/test_manifest_state.py::TestManifestManager::test_set_line_field_keeps_get_line_consistent dev/test_manifest_state.py::TestManifestManager::test_canonicalize_line_dict_adds_ln_and_orders_locator_fields dev/test_manifest_state.py::TestManifestManager::test_canonicalize_line_dict_migrates_legacy_line_aliases dev/test_manifest_state.py::TestManifestManager::test_load_backfills_missing_ln_from_filedir dev/test_manifest_state.py::TestManifestManager::test_save_and_load dev/test_manifest_state.py::TestManifestManager::test_save_compacts_filedir_and_lines_without_breaking_reload dev/test_manifest_state.py::TestManifestManager::test_save_compacts_glossary_entries_and_code_patterns dev/test_manifest_state.py::TestManifestMigration::test_migrate_v2_to_v3 dev/test_manifest_v2.py::TestLineEntrySerialization -q --timeout=20
-```
-
-Latest verified result: 42 passed.
-
-### Focused Step 0 Staged Tree Regression
-
-The first implemented slice of the staged-folder redesign is covered by a focused regression set:
-
-- `dev/test_source_root.py` verifies the new manifest `mode` defaults, internal/external source resolution, split directory helpers, and move-mode staging.
-- `dev/test_lightvn_fixes.py` verifies staged parser refresh still re-extracts from `Original/`, full-tree staging copies non-parseable companions into `Original/`, and external mode keeps absolute source-root resolution without copying into `Original/`.
-
-Verified command:
-
-```bash
-python -m pytest dev/test_source_root.py dev/test_lightvn_fixes.py
-```
-
-Latest verified result: 82 passed.
+- `ledger.tsv` read/write behavior and DB-to-TSV migration from legacy `user/usage.db`
+- Ledger grouping, filtering, and Step 4/menu-bar `Ledger` entry points
+- Editor single-window reuse and mode switching between `Full Files` and `Lines Only`
+- Shared file-context carry-over across the Editor mode switch
+- `Patch/Original/` hash-first skip/diff/full-copy behavior
+- `Patch/Translated/` reverse-patch capture before Editor save and Output overwrite
+- Full-folder staging into `Original/`, including files without parseable content
 
 ### Focused GUI Design + Window Persistence Regression
 
@@ -1543,7 +1365,7 @@ Settings helper methods for processing function integration (Task 21.3).
 
 ---
 
-### dev/test_app_startup.py (32 tests)
+### dev/test_app_startup.py (23 tests)
 
 Application startup manifest loading tests (Task 21.4).
 
@@ -1628,19 +1450,6 @@ Application startup manifest loading tests (Task 21.4).
 | `test_project_name_field_shown_when_no_manifest` | Project Name field appears when show_project_name=True |
 | `test_project_name_validated` | Empty project name triggers validation error |
 | `test_result_tuple_includes_project_name` | Dialog result includes project_name as 4th element |
-
-#### TestRegexHelpOptionDefaults (1 test)
-
-| Test | Purpose |
-|------|---------|
-| `test_regex_help_defaults_round_trip` | RegEx Maker option defaults round-trip through `CherryAI.ini` |
-
-#### TestRegexHelpDialog (2 tests)
-
-| Test | Purpose |
-|------|---------|
-| `test_open_regex_help_dialog_reuses_shared_window` | App entry point reuses the shared RegEx Maker window |
-| `test_build_menu_source_mentions_regex_maker_entry` | Help menu source includes the `RegEx Maker` command |
 
 ---
 
@@ -3632,14 +3441,14 @@ Thank you.
 | test_modehelper.py | 30 | Mode helper utilities (TASK 15.6) |
 | test_model_encodings.py | 52 | Model encodings consolidation (TASK 16.3) |
 | test_model_pricing.py | 52 | Model pricing consolidation (TASK 16.4) |
-| test_model_registry.py | 151 | Model registry: fetch/save/load, structured_output filter, unknown-price refresh behavior, cost-cap helpers, blocked rate-limit probing, derived concurrent, current selection, per-model settings, costs tab save settings, request mode, token breakdown, manifest estimation persistence, estimate button rename |
+| test_model_registry.py | 140 | Model registry: fetch/save/load, structured_output filter, rate limit probing, derived concurrent, current selection, per-model settings, costs tab save settings, request mode, token breakdown, manifest estimation persistence, estimate button rename |
 | test_model_selection.py | 23 | Model presets (TASK 8) |
 | test_modi_all.py | 44 | Modi comprehensive (TASK 15.6) |
 | test_modi_v2.py | 14 | Modi integration |
 | test_options.py | 29 | Options dialog & API config |
 | test_partial_translation.py | 18 | Partial translation mode (TASK 9) |
 | test_postprocess.py | 79 | Post-process recovery suite |
-| test_prompt_caching.py | 110 | Prompt caching (ordering, model detection, token tracking, Available Models row/filter logic including cached input, unknown-price and above-cost-cap visibility, reasoning/prediction logging, explicit vs. auto-generated cache key resolution, support helpers, static prompt size check, cost estimation with cached input) |
+| test_prompt_caching.py | 110 | Prompt caching (ordering, model detection, token tracking, filter logic, cached input column, reasoning/prediction logging, explicit vs. auto-generated cache key resolution, support helpers, static prompt size check, cost estimation with cached input) |
 | test_project_config.py | 19 | Project configuration |
 | test_quote_stripping.py | 33 | Quote stripping modes |
 | test_rate_limiter.py | 70 | Rate limiting system |
@@ -3647,7 +3456,6 @@ Thank you.
 | test_replication.py | 40 | Game updates |
 | test_request_cache.py | 48 | Request caching system (modes, TTL, eviction) |
 | test_retry_handler.py | 47 | Retry strategies (batch, contextual, isolated, skip) |
-| test_regex_maker_backend.py | 5 | RegEx Maker shared backend ranking, invalid-regex safety, and replacement inference |
 | test_rolling_context.py | 23 | Rolling context (TASK 7) |
 | test_speaker_format.py | 45 | Speaker format preservation (TASK 10) |
 | test_standard_mode.py | 37 | Standard mode processing |
@@ -3658,7 +3466,7 @@ Thank you.
 | test_unique_placeholders.py | 3 | Unique placeholders (integration) |
 | test_validation.py | 81 | Pre/Post API validation |
 | test_wordwrap.py | 74 | Word wrapping with speaker modes (TASK 15.5) |
-| test_gui_dialogs.py | 30 | GlobalOptions dialog tests plus single-instance API Log / Global Options reuse, Ledger reuse, RegEx Maker reuse, and API Log request-ref intake coverage (TASK 18.7 + shared utility windows) |
+| test_gui_dialogs.py | 26 | GlobalOptions dialog tests plus single-instance API Log / Global Options reuse coverage and API Log display-limit rendering helpers (TASK 18.7) |
 | test_cli_estimation.py | 13 | CLI estimation verification (TASK 18.6) |
 | test_manifest_automation.py | 12 | Manifest auto-creation (TASK 18.8) |
 | test_glossary_integration.py | 12 | Analysis→Information integration (TASK 18.4) |
@@ -3685,7 +3493,7 @@ Thank you.
 | test_line_saving.py | 39 | Line field saving across all steps (Task 3) |
 | test_knowledge_base.py | 56 | Knowledge Base widget, Active columns, collapsible design, prompt adapter (TASK 76) |
 | test_estimation_skip.py | 41 | Estimation skip logic Phase 78 (Task 3), kept aligned with Translation/Preview shared skip classification |
-| test_costs_step_phase40.py | 58 | Costs step Phase 40+78 improvements (rename, dual estimation, dual ticks, concurrent time, prepro lines, prompt overhead format, request preview tokens, Ledger button entry point) |
+| test_costs_step_phase40.py | 57 | Costs step Phase 40+78 improvements (rename, dual estimation, dual ticks, concurrent time, prepro lines, prompt overhead format, request preview tokens) |
 | test_costs_api_rework.py | 35 | API Requests & Costs rework (cache calculation, mode buttons, instant recalculation, model lock, settings decoupling, button rename, translation request mode) |
 | test_costs_additive_display.py | 30 | Additive cost display rework (ceil-to-cents, content-only input_cost, non-cached prompt tokens, label layout, additive total) |
 | test_rolling_context_phase78.py | 10 | Rolling context file-boundary fix Phase 78 (Task 7) |
@@ -3700,7 +3508,7 @@ Thank you.
 | test_provider_handshake.py | 188 | Provider Handshake: ABC, registry, validation, OpenAI/Google/Mistral/Anthropic/Local providers, APIClient integration, options.py migration, UI constraints, structured output |
 | test_provider_live_api.py | 11 | Live API tests: GPT-5-nano (no temp, reasoning) + GPT-4.1-nano (temp 0-2, no reasoning) |
 | test_pricing_and_reasoning.py | 108 | Pricing + Reasoning: GPT 4.1 no flex/priority, GPT 5 all tiers, ThinkingConfig 5 modes (builtin/explicit/optional/mandatory/""), build_params Chat Completions format, reasoning_effort persistence (RequestSettings/APIConfig/TranslationOptions/INI), provider-based get_thinking_params, THINKING_MODELS, is_openai_reasoning_model |
-| test_api_log.py | 60 | API Log: LogEntry serialization, APILogStore CRUD/filtering/subscription/persistence, singleton management, enum values, dataclass defaults, prompt-cache metadata preservation, status string compatibility (5), manifest save thread safety (2), structured log full-content guardrails (7), saved pricing snapshots, producer validation logging, request-reference lookup, and ledger mirroring |
+| test_api_log.py | 52 | API Log: LogEntry serialization, APILogStore CRUD/filtering/subscription/persistence, singleton management, enum values, dataclass defaults, prompt-cache metadata preservation, status string compatibility (5), manifest save thread safety (2), structured log full-content guardrails (7) |
 | test_patch_editor_view.py | 3 | Patch Editor manifest helpers: staged Patch-vs-Original resolution, parser-backed translated/edit history rows, and manifest-backed save history persistence |
 | test_bugfix_batch_79.py | 33 | Bugfix Batch 79: API Log visibility (lift/non-modal), global glossary merge (4), ellipsis-only detection (14), ellipsis compression order (5), dedup/skip progress (3), cached/reasoning tokens (5) |
 | test_unified_request_builder.py | 28 | Unified Request Builder: gather_prompt_data (importable, keys, None/unloaded mgr, sample_lines, metadata read, fallback field merging), build_request_prompt (importable, tuple return, language prompt, style/tone/summary/genre enabled/disabled, rolling context, chunk_lines), unified call sites (costs 3 methods, translate 2 methods, no direct build_full_system_prompt), API Log full prompt (no truncation, line-by-line system_prompt), identical prompt output (deterministic, same data same prompt) |
@@ -4206,11 +4014,10 @@ Dependency checking module tests validating hash computation, caching, and insta
 
 ---
 
-### dev/test_dedup.py (35 tests)
+### dev/test_dedup.py (34 tests)
 
 Deduplication module tests validating placeholder tokens, normalization, roundtrips,
-per-line tag storage, canonical tag-map reconstruction, source-derived aggressive
-number slots, and top-N group limiting.
+per-line tag storage, and top-N group limiting.
 
 #### TestPlaceholderTokens (4 tests)
 
@@ -4238,23 +4045,13 @@ number slots, and top-N group limiting.
 | `test_mask_line_preserves_non_numbers` | Text preserved |
 | `test_mask_multiple_numbers` | Multiple numbers handled |
 
-#### TestAggressiveRestore (5 tests)
+#### TestAggressiveRestore (3 tests)
 
 | Test | Purpose |
 |------|---------|
 | `test_restore_line_replaces_tokens` | Tokens → numbers |
 | `test_restore_multiple_numbers_in_order` | Order preserved |
-| `test_restore_indexed_numbers_by_explicit_slot` | Indexed slots survive reorder |
 | `test_restore_empty_numbers_list` | Empty list handled |
-| `test_aggressive_numbers_for_text_uses_indexed_slots` | Source-derived slots keep `<NUM1>`, `<NUM2>` |
-
-#### TestTaggedDedupMetadata (3 tests)
-
-| Test | Purpose |
-|------|---------|
-| `test_extract_dedup_source_from_standard_tags` | Reads canonical `D{idx}` source tag |
-| `test_extract_dedup_source_from_aggressive_tags` | Reads canonical `AD{idx}` source tag |
-| `test_build_tagged_dedup_maps_reads_both_marker_types` | Rebuilds both dedup maps from tags |
 
 #### TestDeduplicatePre (4 tests)
 
@@ -9452,7 +9249,7 @@ Tests for preserve-action code pattern recovery, validation, and the full pipeli
 python -m pytest CherryAI/dev/test_code_pattern_recovery.py -v --timeout=10
 ```
 
-### dev/test_custom_placeholder_recovery.py (3 tests)
+### dev/test_custom_placeholder_recovery.py (2 tests)
 
 Focused regression tests for line-agnostic custom placeholder restoration.
 
@@ -9460,9 +9257,8 @@ Focused regression tests for line-agnostic custom placeholder restoration.
 
 | Test | Purpose |
 |------|---------|
-| `test_restores_named_placeholder_on_different_line` | Restores a named token such as `Jane` on another line when `recover_everywhere` is enabled |
+| `test_restores_named_placeholder_on_different_line` | Restores a named token such as `Jane` even when the LLM moved it to a different line |
 | `test_prefers_local_restore_before_global_fallback` | Ensures per-line restoration still wins before the batch-wide fallback runs |
-| `test_skips_global_fallback_without_recover_everywhere` | Ensures shifted tokens stay unresolved when batch-wide recovery is not explicitly enabled |
 
 ```
 python -m pytest CherryAI/dev/test_custom_placeholder_recovery.py -v --timeout=10

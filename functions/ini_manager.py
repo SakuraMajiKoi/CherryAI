@@ -29,6 +29,9 @@ from __future__ import annotations
 
 import configparser
 import logging
+import os
+import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -928,24 +931,38 @@ def _save_ini(config: configparser.ConfigParser) -> None:
         config: ConfigParser instance to persist.
     """
     ini_path = get_ini_path()
-    tmp_path = ini_path.with_suffix(".tmp")
+    tmp_path: Optional[Path] = None
     try:
         ini_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(tmp_path, "w", encoding="utf-8") as fh:
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f"{ini_path.stem}.",
+            suffix=".tmp",
+            dir=ini_path.parent,
+        )
+        tmp_path = Path(tmp_name)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
             config.write(fh)
             fh.flush()
-            import os
             os.fsync(fh.fileno())
-        # Atomic rename (os.replace is atomic on the same filesystem)
-        import os
-        os.replace(str(tmp_path), str(ini_path))
+
+        # Windows can transiently deny replace while another handle is closing.
+        for attempt in range(5):
+            try:
+                os.replace(str(tmp_path), str(ini_path))
+                tmp_path = None
+                return
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
     except Exception as exc:
         logger.error("Failed to write INI file %s: %s", ini_path, exc)
-        # Clean up temp file on failure
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except Exception:
-            pass
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 def remove_section(section: str) -> bool:
