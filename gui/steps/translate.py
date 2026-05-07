@@ -168,6 +168,8 @@ class TranslationOptions:
     request_slicing: str = "conservative"
     # Request mode: normal, batch, flex, or priority
     request_mode: str = "normal"
+    # Maximum concurrent request strings to execute in parallel
+    max_concurrent: int = 3
 
 
 @dataclass
@@ -1723,6 +1725,37 @@ class TranslationStep(BaseStep):
             )
         )
 
+        # Number of Threads (row 4) — max concurrent request strings
+        threads_frame = ttk.Frame(frame)
+        threads_frame.pack(fill="x", pady=2)
+
+        ttk.Label(threads_frame, text="Number of Threads:").pack(side="left")
+        self._threads_var = tk.IntVar(value=3)
+        self._threads_spin = ttk.Spinbox(
+            threads_frame,
+            from_=1,
+            to=512,
+            textvariable=self._threads_var,
+            width=20,
+        )
+        self._threads_spin.pack(side="right")
+
+        self._manifest_bindings.append(
+            bind_spinbox_to_field(
+                spinbox=self._threads_spin,
+                var=self._threads_var,
+                manager_getter=lambda: (
+                    None if getattr(self, "_initializing", False)
+                    else self.manifest_manager
+                ),
+                field_key="NumberOfThreads",
+                min_val=1,
+                max_val=512,
+                default=3,
+                parent_key="RequestOptions",
+            )
+        )
+
         # Populate keys only after all dependent request widgets exist.
         self._populate_key_dropdown()
         self._refresh_request_mode_options()
@@ -2327,6 +2360,8 @@ class TranslationStep(BaseStep):
             edit_before_translation=self._edit_before_var.get(),
             skip_already_translated=self._skip_translated_var.get(),
             request_slicing=self._get_request_slicing_mode(),
+            request_mode=self._get_request_mode_key(),
+            max_concurrent=max(1, self._threads_var.get()),
         )
 
     def _get_prompt_cache_context(self) -> Tuple[str, str]:
@@ -2718,10 +2753,13 @@ class TranslationStep(BaseStep):
                         self._api_client.config.cache_enabled = (
                             self._translation_options.cache_enabled
                         )
+                        self._api_client.config.max_concurrent = max(
+                            1,
+                            self._translation_options.max_concurrent,
+                        )
 
                         # Apply request mode (normal/batch/flex/priority)
-                        mode_display = self._request_mode_var.get()
-                        mode_key = mode_display.lower().split()[0]
+                        mode_key = self._translation_options.request_mode
                         self._api_client.config.request_mode = mode_key
                         if mode_key == "batch":
                             self._api_client.config.batch_mode = True
@@ -4309,6 +4347,12 @@ class TranslationStep(BaseStep):
         )
         self._chunk_var.set(chunk_size)
 
+        # Load NumberOfThreads
+        max_concurrent = load_nested_int_field(
+            mgr, "RequestOptions", "NumberOfThreads", 3, 1, 512
+        )
+        self._threads_var.set(max_concurrent)
+
         # Load RetryStrategy
         retry = load_nested_text_field(mgr, "RequestOptions", "RetryStrategy", "")
         if retry:
@@ -4450,6 +4494,10 @@ class TranslationStep(BaseStep):
         if chunk >= 1:
             self._chunk_var.set(chunk)
 
+        # Max concurrent request strings
+        max_concurrent = _int("max_concurrent", 3)
+        self._threads_var.set(max(1, min(512, max_concurrent)))
+
         # Temperature
         if "temperature" in saved:
             temp = _float("temperature", 0.2)
@@ -4471,6 +4519,16 @@ class TranslationStep(BaseStep):
             if val in ("low", "medium", "high"):
                 self._reasoning_effort_var.set(val)
 
+        if "request_mode" in saved:
+            request_mode = saved["request_mode"]
+            display = request_mode.title()
+            options = list(self._request_mode_combo["values"])
+            if display in options:
+                self._request_mode_var.set(display)
+            elif f"{display} (Unavailable)" in options:
+                self._request_mode_var.set(f"{display} (Unavailable)")
+            self._refresh_request_mode_options()
+
     def on_leave(self) -> None:
         """Called when leaving step."""
         # Store current state
@@ -4485,6 +4543,8 @@ class TranslationStep(BaseStep):
             "thinking_enabled": self._thinking_var.get(),
             "thinking_budget": self._thinking_budget_var.get(),
             "reasoning_effort": self._reasoning_effort_var.get(),
+            "max_concurrent": self._threads_var.get(),
+            "request_mode": self._get_request_mode_key(),
         }
 
     def _load_prompt_data(self) -> None:
@@ -5009,9 +5069,14 @@ class TranslationStep(BaseStep):
         pricing availability and applies the selection to the
         translation options.
         """
-        display = self._request_mode_var.get()
-        mode_key = display.lower()  # "normal", "batch", "flex", "priority"
-        self._translation_options.request_slicing = mode_key
+        self._translation_options.request_mode = self._get_request_mode_key()
+
+    def _get_request_mode_key(self) -> str:
+        """Return the normalized request mode key from the combobox value."""
+        display = self._request_mode_var.get().strip()
+        if not display:
+            return "normal"
+        return display.lower().split()[0]
 
     def _refresh_request_mode_options(self) -> None:
         """Update request mode combobox options based on model availability.

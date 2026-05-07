@@ -3959,6 +3959,43 @@ requests by content type, and fix context-type conditional prompt injection.
 
 ---
 
+### FEATURE: Translation Step Number of Threads Control
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** Session
+
+Goal: Expose the existing concurrent request limit in Translation Step →
+Request Options as a user-facing **Number of Threads** control, persist it, and
+verify that live concurrent requests still return outputs in sorted order.
+
+**Completed Sub-tasks:**
+1. ✅ Added **Number of Threads** `ttk.Spinbox` below Request Mode in
+  `gui/steps/translate.py` (range 1-32, default 3)
+2. ✅ Bound the widget to manifest field `RequestOptions.NumberOfThreads`
+3. ✅ Added `TranslationOptions.max_concurrent` and returned it from
+  `_get_options_from_ui()`
+4. ✅ Applied the UI value to `self._api_client.config.max_concurrent` in
+  `_do_translation()`
+5. ✅ Restored the value from both manifest data and per-model `API.ini`
+  `max_concurrent`
+6. ✅ Fixed `_on_request_mode_changed()` to update
+  `TranslationOptions.request_mode` with normalized keys instead of mutating
+  `request_slicing`
+7. ✅ Added regression coverage for request-option round-trip and sorted output
+  under out-of-order future completion
+8. ✅ Ran a live `gpt-4.1-nano` smoke test on four tiny Japanese lines:
+  ordered output preserved, 1 worker = 6.446 s, 3 workers = 2.646 s
+
+**Files Modified:**
+- `gui/steps/translate.py` — Number of Threads UI, manifest/model restore,
+  runtime max_concurrent wiring, request-mode bug fix
+- `dev/test_request_preview.py` — 3 new request-options regression tests
+- `dev/test_concurrent_execution.py` — sorted-completion ordering regression
+
+**Tests:**
+- `C:/Python314/python.exe -m pytest dev/test_request_preview.py dev/test_concurrent_execution.py -q --timeout=20`
+  → 75 passed, 2 skipped
+
+---
+
 ### Phase 60: Input Step Improvements
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** Session
 

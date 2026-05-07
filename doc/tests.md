@@ -3483,7 +3483,7 @@ Thank you.
 | test_output_phase47.py | 52 | Output + Pipeline Completeness + Import Phase 47 |
 | test_pipeline_logging.py | 52 | Pipeline Logging System Phase 48 |
 | test_request_formation.py | 50 | Request Formation 4-Step Process Phase 49 |
-| test_request_preview.py | 50 | Preview Requests dialog: PreviewRequest dataclass with _format_input_lines and request_params, FILTER_PARTS, RequestPreviewDialog (Pure/Formatted/Plain views preserving {}, Jump/Search/Filter), `_build_preview_requests()` integration including prompt cache metadata visibility, skip-already-translated parity, Global Options re-sync on Preview, explicit-boolean lock guarding, CJK-aware non-source filtering, cached tab-entry coverage, and Translation-tab status summary |
+| test_request_preview.py | 53 | Preview Requests dialog: PreviewRequest dataclass with _format_input_lines and request_params, FILTER_PARTS, RequestPreviewDialog (Pure/Formatted/Plain views preserving {}, Jump/Search/Filter), `_build_preview_requests()` integration including prompt cache metadata visibility, skip-already-translated parity, Global Options re-sync on Preview, explicit-boolean lock guarding, CJK-aware non-source filtering, cached tab-entry coverage, Translation-tab status summary, and Translation Request Options round-trip for request_mode + Number of Threads |
 | test_context_markers.py | 70 | Context Markers Full Implementation Phase 50 |
 | test_speaker_dedup.py | 47 | Speaker Duplicate Removal Phase 51 |
 | test_glossary_selective.py | 28 | Selective Glossary Per Chunk Phase 52 |
@@ -12916,7 +12916,7 @@ python -m pytest dev/test_api_keys.py -v --timeout=30
 
 =============================================================================
 
-## dev/test_request_preview.py — 44 tests
+## dev/test_request_preview.py — 53 tests
 
 Tests for the Preview Requests feature: `PreviewRequest` dataclass, `FILTER_PARTS` constant, `RequestPreviewDialog` class, and `_build_preview_requests()` integration. Run with:
 ```bash
@@ -12933,6 +12933,7 @@ python -m pytest dev/test_request_preview.py -v --timeout=15
 | `TestRequestPreviewDialogFilter` | 3 | Deselect hides section from display, Select All restores, Deselect All clears |
 | `TestRequestPreviewDialogViewModes` | 3 | Switch to Pure validates JSON, switch to Plain strips markers, switch to Formatted shows headers |
 | `TestBuildPreviewRequests` | 6 | Correct chunk count (3 lines / chunk_size 2 → 2 requests), all parts populated, prompt cache key appears in Meta + Pure JSON, input_lines valid JSON, POV excluded on low confidence, glossary entries present with selective per-chunk filtering |
+| `TestTranslationRequestOptions` | 3 | UI options include Number of Threads + normalized request_mode, per-model settings restore both fields, unavailable mode labels normalize back to internal keys |
 | `TestEdgeCases` | 7 | Empty request list, all empty parts, Unicode in Pure JSON, case-insensitive search, info label updates, cross-request search counts across all requests, cross-request navigation switches requests |
 
 **Key implementation details tested:**
@@ -13287,7 +13288,7 @@ python -m pytest dev/test_request_sorting.py -v --timeout=10
 
 ---
 
-### dev/test_concurrent_execution.py (23 tests) - TASK 78.5
+### dev/test_concurrent_execution.py (24 tests) - TASK 78.5
 
 Concurrent request execution engine tests. Validates `_process_single_chunk()`,
 `_execute_string_sequential()`, `_group_chunks_into_strings()`, and
@@ -13298,12 +13299,17 @@ ThreadPoolExecutor-based parallel string execution.
 | TestGroupChunksIntoStrings | 5 | Empty, single, two independent, RC chain stays together, mixed chains + standalone |
 | TestProcessSingleChunk | 6 | Successful translation, cancel before processing, abort on fatal, rolling context extends, rolling context clears, thread-safe progress |
 | TestExecuteStringSequential | 4 | Sequential order, cancel stops, abort raises TranslationAbortError, rolling context flows |
-| TestConcurrentExecution | 3 | Independent strings run in parallel, abort in one stops others, sequential fallback with max_concurrent=1 |
+| TestConcurrentExecution | 4 | Independent strings run in parallel, abort in one stops others, sequential fallback with max_concurrent=1, completion order still writes sorted line output |
 | TestEdgeCases | 5 | Empty string group, single-line chunk, already-set abort skips, provides_context=False, source text context |
 
 ```bash
 python -m pytest dev/test_concurrent_execution.py -v --timeout=10
 ```
+
+Manual live validation for this feature also used `gpt-4.1-nano` on four tiny
+Japanese lines with the real CherryAI concurrent worker flow. Ordered output was
+preserved in both runs. A 1-worker run completed in 6.446 s using 1 worker
+thread; a 3-worker run completed in 2.646 s using 3 worker threads.
 
 ---
 

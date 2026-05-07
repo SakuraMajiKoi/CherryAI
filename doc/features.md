@@ -1183,6 +1183,11 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
       Normal.  Availability determined by `get_model_pricing()` checking for
       batch_input/flex_input/priority_input rates.  Selection stored in
       `TranslationOptions.request_mode` and passed to `APIConfig.request_mode`.
+    - **Number of Threads spinbox**: 1-32 concurrent request strings
+      (default 3), shown directly below Request Mode. Saved to
+      `RequestOptions.NumberOfThreads`, restored from manifest and per-model
+      `API.ini` `max_concurrent`, and applied to `APIConfig.max_concurrent` at
+      translation start.
     - Translation Options "Change…" button → opens Global Options at Translation Options panel
       Reuses the existing Global Options window if it is already open.
     - Character Whitelist: comma-separated ranges of allowed characters (manifest-bound to `RequestOptions.CharacterWhitelist`)
@@ -1874,7 +1879,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - _group_chunks_into_strings() maps formation chunks to sorted request strings
     - _process_single_chunk() handles one chunk with thread-safe progress locking
     - _execute_string_sequential() processes all chunks of one string in order (designed for ThreadPoolExecutor threads)
-    - _do_translation() uses ThreadPoolExecutor(max_workers=max_concurrent) for parallel string execution
+  - _do_translation() uses ThreadPoolExecutor(max_workers=max_concurrent) for parallel string execution; `max_concurrent` is user-configurable in Request Options via Number of Threads
     - Sequential within a string (rolling context preserved), parallel across independent strings
     - Thread-safe progress updates via threading.Lock on translated_lines / failed_lines
     - Abort in any thread sets _cancel_requested and cancels remaining futures
@@ -2193,7 +2198,7 @@ RATE LIMIT MANAGEMENT (Implemented)
   - Pre-request warning: "Will exceed daily limit"
 - **Concurrent Requests:**
   - Parallel API requests within RPM limits
-  - Configurable: max_concurrent_requests (default: 3)
+  - Configurable in the Translation step as **Number of Threads** (`max_concurrent`, default: 3)
   - Smart batch queue with priority ordering
   - Automatic throttling on 429 errors
 - **Persistent Storage:**
