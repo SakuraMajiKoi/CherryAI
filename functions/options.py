@@ -178,7 +178,13 @@ _CLOUD_FALLBACK_MODELS: Dict[str, List[str]] = {
         "gpt-5", "gpt-5.1", "gpt-5.2", "gpt-5-nano",
     ],
     "gemini": ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"],
-    "mistral": ["mistral-large-latest", "mistral-small-latest", "ministral-8b-latest"],
+    "mistral": [
+        "mistral-medium-latest",
+        "mistral-medium-3.5",
+        "mistral-small-latest",
+        "mistral-large-latest",
+        "codestral-latest",
+    ],
 }
 
 

@@ -27,6 +27,7 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import tempfile
 import threading
 import time
@@ -216,10 +217,9 @@ def _backfill_line_mapping(
     if not normalized:
         return normalized
 
-    lines_by_idx = {
-        _coerce_int(line.get("idx"), 0): line for line in normalized
-    }
+    sorted_lines = sorted(normalized, key=lambda line: _coerce_int(line.get("idx"), 0))
     covered_indices: set[int] = set()
+    line_position = 0
 
     for raw_entry in sorted(
         filedir or [],
@@ -227,12 +227,20 @@ def _backfill_line_mapping(
     ):
         first_idx = _coerce_int(raw_entry.get("first_idx"), 0)
         last_idx = _coerce_int(raw_entry.get("last_idx"), first_idx - 1)
-        matching = [
-            lines_by_idx[idx]
-            for idx in sorted(lines_by_idx)
-            if first_idx <= idx <= last_idx
-        ]
-        for local_line_number, line in enumerate(matching, start=1):
+        while line_position < len(sorted_lines):
+            current_idx = _coerce_int(sorted_lines[line_position].get("idx"), 0)
+            if current_idx >= first_idx:
+                break
+            line_position += 1
+
+        probe_position = line_position
+        local_line_number = 1
+        while probe_position < len(sorted_lines):
+            line = sorted_lines[probe_position]
+            idx = _coerce_int(line.get("idx"), 0)
+            if idx > last_idx:
+                break
+
             explicit_line_number = _extract_line_number(line)
             if explicit_line_number is None:
                 line["ln"] = local_line_number
@@ -243,9 +251,12 @@ def _backfill_line_mapping(
                 line["f"] = field_value
             line.pop("line", None)
             line.pop("field", None)
-            covered_indices.add(_coerce_int(line.get("idx"), 0))
+            covered_indices.add(idx)
+            local_line_number += 1
+            probe_position += 1
 
-    for idx, line in lines_by_idx.items():
+    for line in sorted_lines:
+        idx = _coerce_int(line.get("idx"), 0)
         if idx in covered_indices:
             continue
         explicit_line_number = _extract_line_number(line)
@@ -542,12 +553,73 @@ def canonicalize_line_dict(line_data: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+def _line_is_canonical(line_data: Any, previous_idx: int | None) -> bool:
+    """Return whether a line already matches CherryAI's canonical load shape."""
+    if not isinstance(line_data, dict):
+        return False
+
+    idx = _coerce_int(line_data.get("idx"), 0)
+    if previous_idx is not None and idx < previous_idx:
+        return False
+
+    if "orig" not in line_data:
+        return False
+
+    if _extract_line_number(line_data) is None:
+        return False
+
+    if any(key in line_data for key in ("line", "field", "tag", "context_marker")):
+        return False
+
+    raw_tags = line_data.get("tags")
+    if raw_tags is not None:
+        if not isinstance(raw_tags, str):
+            return False
+        if merge_line_tags(raw_tags) != raw_tags:
+            return False
+
+    if "f" in line_data and _extract_field_discriminator(line_data) is None:
+        return False
+
+    return True
+
+
+def _lines_are_canonical(lines: List[Dict[str, Any]]) -> bool:
+    """Return whether a manifest line array can bypass canonicalization."""
+    previous_idx: int | None = None
+    for line_data in lines:
+        if not _line_is_canonical(line_data, previous_idx):
+            return False
+        previous_idx = _coerce_int(line_data.get("idx"), 0)
+    return True
+
+
+def _lines_need_locator_backfill(lines: List[Dict[str, Any]]) -> bool:
+    """Return whether lines still contain legacy locator fields or gaps."""
+    for line_data in lines:
+        if _extract_line_number(line_data) is None:
+            return True
+        if "line" in line_data or "field" in line_data:
+            return True
+    return False
+
+
 def canonicalize_lines(
     lines: List[Dict[str, Any]],
     filedir: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Normalize and sort line dictionaries by idx."""
-    normalized = _backfill_line_mapping(lines, filedir)
+    if not lines:
+        return []
+
+    if _lines_are_canonical(lines):
+        return lines
+
+    normalized = (
+        _backfill_line_mapping(lines, filedir)
+        if _lines_need_locator_backfill(lines)
+        else lines
+    )
     return [
         canonicalize_line_dict(line)
         for line in sorted(normalized, key=lambda item: _coerce_int(item.get("idx"), 0))
@@ -652,8 +724,12 @@ def _format_manifest_line_object(line_data: Dict[str, Any], indent: int) -> str:
     return "\n".join(lines)
 
 
-def _format_manifest_array(values: List[Any], indent: int, path: tuple[str, ...]) -> str:
-    """Format a manifest array with targeted compact rules."""
+def _format_manifest_array_normalized(
+    values: List[Any],
+    indent: int,
+    path: tuple[str, ...],
+) -> str:
+    """Format a manifest array after JSON-safe normalization."""
     if not values:
         return "[]"
 
@@ -685,15 +761,22 @@ def _format_manifest_array(values: List[Any], indent: int, path: tuple[str, ...]
         ]
     else:
         rendered_items = [
-            _indent_multiline(_format_manifest_value(item, item_indent, path + ("[]",)), item_indent)
+            _indent_multiline(
+                _format_manifest_value_normalized(item, item_indent, path + ("[]",)),
+                item_indent,
+            )
             for item in values
         ]
 
     return "[\n" + ",\n".join(rendered_items) + "\n" + closing_indent + "]"
 
 
-def _format_manifest_dict(data: Dict[str, Any], indent: int, path: tuple[str, ...]) -> str:
-    """Format a manifest dict with stable insertion order."""
+def _format_manifest_dict_normalized(
+    data: Dict[str, Any],
+    indent: int,
+    path: tuple[str, ...],
+) -> str:
+    """Format a manifest dict after JSON-safe normalization."""
     if not data:
         return "{}"
 
@@ -701,7 +784,11 @@ def _format_manifest_dict(data: Dict[str, Any], indent: int, path: tuple[str, ..
     child_indent = indent + 2
     rendered_items: List[str] = []
     for key, value in data.items():
-        value_text = _format_manifest_value(value, child_indent, path + (str(key),))
+        value_text = _format_manifest_value_normalized(
+            value,
+            child_indent,
+            path + (str(key),),
+        )
         value_lines = value_text.splitlines() or [value_text]
         first_line = (
             f'{" " * child_indent}{json.dumps(str(key), ensure_ascii=False)}: {value_lines[0]}'
@@ -715,14 +802,22 @@ def _format_manifest_dict(data: Dict[str, Any], indent: int, path: tuple[str, ..
     return "{\n" + ",\n".join(rendered_items) + "\n" + indent_text + "}"
 
 
+def _format_manifest_value_normalized(
+    normalized: Any,
+    indent: int,
+    path: tuple[str, ...],
+) -> str:
+    """Format an already-normalized manifest value using compact rules."""
+    if isinstance(normalized, dict):
+        return _format_manifest_dict_normalized(normalized, indent, path)
+    if isinstance(normalized, list):
+        return _format_manifest_array_normalized(normalized, indent, path)
+    return _format_manifest_compact_json(normalized)
+
+
 def _format_manifest_value(value: Any, indent: int, path: tuple[str, ...]) -> str:
     """Format a manifest value using the compact writer rules."""
-    normalized = _to_manifest_jsonable(value)
-    if isinstance(normalized, dict):
-        return _format_manifest_dict(normalized, indent, path)
-    if isinstance(normalized, list):
-        return _format_manifest_array(normalized, indent, path)
-    return _format_manifest_compact_json(normalized)
+    return _format_manifest_value_normalized(_to_manifest_jsonable(value), indent, path)
 
 
 def _indent_multiline(text: str, indent: int) -> str:
@@ -733,7 +828,7 @@ def _indent_multiline(text: str, indent: int) -> str:
 
 def format_manifest_json(data: Dict[str, Any]) -> str:
     """Return the manifest JSON text using CherryAI's compact writer rules."""
-    return _format_manifest_dict(_to_manifest_jsonable(data), 0, ()) + "\n"
+    return _format_manifest_value_normalized(_to_manifest_jsonable(data), 0, ()) + "\n"
 
 
 # Constants
@@ -1318,6 +1413,14 @@ class ManifestManager:
                 "RerunPolicy": defaults.get("qa_rerun_policy", "FailedOnly"),
                 "MaxSourceLanguageChars": defaults.get("qa_max_source_language_chars", defaults.get("qa_max_japanese_chars", 4)),
                 "MaxLineLength": defaults.get("qa_max_line_length", 0),
+                "EncodingSafetyEnabled": defaults.get(
+                    "qa_encoding_safety_enabled",
+                    False,
+                ),
+                "EncodingCheckEncoding": defaults.get(
+                    "qa_encoding_check_encoding",
+                    "shift_jis",
+                ),
             },
             
             # === v3.0 Request Options (passed to API client) ===
@@ -1725,12 +1828,20 @@ class ManifestManager:
     
     # ========================== Project Operations ========================== #
     
-    def create_new(self, project_name: str, source_files: List[Path]) -> Path:
+    def create_new(
+        self,
+        project_name: str,
+        source_files: List[Path],
+        *,
+        save_immediately: bool = True,
+    ) -> Path:
         """Create a new project manifest.
         
         Args:
             project_name: Name for the project (used in filename)
             source_files: List of source file paths
+            save_immediately: Whether to write the initial manifest to disk
+                right away.
             
         Returns:
             Path to the created manifest file
@@ -1778,7 +1889,8 @@ class ManifestManager:
 
         self._dirty = True
         self._current_step = 0
-        self.save()
+        if save_immediately:
+            self.save()
         
         # Start autosave thread
         self.start_autosave()
@@ -2073,6 +2185,7 @@ class ManifestManager:
             "Input": ["all_lines", "files"],
             "Preprocessing": ["processed_lines"],
             "Postprocessing": ["postprocessed_lines"],
+            "Output": ["lines"],
         }
         step_state = data.get("step_state", {})
         for step_name, keys in _REDUNDANT_STEP_KEYS.items():
@@ -2083,6 +2196,29 @@ class ManifestManager:
                     logger.debug("Stripping redundant key '%s' from %s step_data",
                                  key, step_name)
                     del step_data[key]
+
+        editor_state = data.get("EditorState")
+        if isinstance(editor_state, dict):
+            files = editor_state.get("files")
+            if isinstance(files, dict):
+                redundant_editor_keys = {
+                    "diff_to_patch",
+                    "edited_text",
+                    "diff_to_original",
+                    "line_history",
+                    "locator_metadata",
+                    "latest_saved_row_state",
+                }
+                for state in files.values():
+                    if not isinstance(state, dict):
+                        continue
+                    for key in redundant_editor_keys:
+                        if key in state:
+                            logger.debug(
+                                "Stripping redundant EditorState key '%s'",
+                                key,
+                            )
+                            del state[key]
         
         return data
     
@@ -2209,7 +2345,9 @@ class ManifestManager:
                 # Also persist the API log
                 try:
                     from .api_log import get_api_log_store
-                    get_api_log_store().save()
+                    store = get_api_log_store()
+                    if store.dirty:
+                        store.save()
                 except Exception:
                     logger.debug("API log save skipped")
 
@@ -3285,7 +3423,12 @@ class ManifestManager:
             )
         )
         if current_text is None:
-            diff_to_patch = str(editor_state.get("diff_to_patch", ""))
+            diff_to_patch = self._load_saved_patch_diff_text(
+                entry,
+                current_text=resolved_current_text,
+                current_path=current_path,
+                original_text=original_text,
+            )
         else:
             diff_to_patch = self._build_diff_between_versions(
                 staged_current_text,
@@ -3474,12 +3617,6 @@ class ManifestManager:
             max_history=max_history,
             synthesize_patch_if_missing=False,
             previous_view=previous_view,
-        )
-        staged["diff_to_patch"] = self._build_diff_between_versions(
-            previous_view["current_text"],
-            text,
-            entry.rel_path,
-            tofile=f"Translated/{entry.rel_path}",
         )
         return staged
 
@@ -3730,7 +3867,16 @@ class ManifestManager:
         translated_path = self.get_translated_file_path(entry)
 
         artifact_info: Dict[str, Any]
-        if translated_path.exists():
+        if source == "step9":
+            self._remove_patch_translated_artifacts_for_entry(entry)
+            target_path = self.ensure_translated_file_path(entry)
+            target_path.write_bytes(new_bytes)
+            artifact_info = {
+                "decision": "replaced" if translated_path.exists() else "written",
+                "artifact_path": None,
+                "translated_path": translated_path,
+            }
+        elif translated_path.exists():
             artifact_info = self.capture_reverse_patch_for_translated_bytes(entry, new_bytes)
             target_path = self.ensure_translated_file_path(entry)
             target_path.write_bytes(new_bytes)
@@ -3772,29 +3918,20 @@ class ManifestManager:
         history = existing_record.get("history", [])
         if not isinstance(history, list):
             history = []
+        if source == "step9":
+            history = []
         if history_entry is not None:
             history.append(history_entry)
             if max_history > 0:
                 history = history[-max_history:]
 
         files_state[entry.rel_path] = {
-            "edited_text": current_view["current_text"],
             "saved_at": saved_at,
-            "diff_to_original": current_view["diff_to_original"],
-            "diff_to_patch": self._build_diff_between_versions(
-                previous_view["current_text"],
-                current_view["current_text"],
-                entry.rel_path,
-                tofile=self._display_stage_path(target_path),
-            ),
-            "line_history": current_view["line_history"],
-            "locator_metadata": current_view["locator_metadata"],
             "translated_path": self._relativize_project_path(
                 translated_path if translated_path.exists() else None
             ),
             "patch_original_path": self._current_patch_original_reference(entry),
-            "patch_translated_path": patch_rel_path,
-            "latest_saved_row_state": self._build_latest_saved_row_state(entry),
+            "patch_translated_path": None if source == "step9" else patch_rel_path,
             "history": history,
         }
         self._mark_dirty()
@@ -3806,8 +3943,13 @@ class ManifestManager:
             "patch_info": artifact_info,
             "line_history": current_view["line_history"],
             "locator_metadata": current_view["locator_metadata"],
-            "diff_to_patch": files_state[entry.rel_path]["diff_to_patch"],
         }
+        result["diff_to_patch"] = self._load_saved_patch_diff_text(
+            entry,
+            current_text=current_view["current_text"],
+            current_path=current_view["current_path"],
+            original_text=current_view["original_text"],
+        )
         if decoded_text is not None:
             result["text"] = decoded_text
         return result
@@ -3818,6 +3960,15 @@ class ManifestManager:
             return str(path.relative_to(self.get_project_dir())).replace("\\", "/")
         except ValueError:
             return str(path).replace("\\", "/")
+
+    def _resolve_project_relative_path(self, rel_path: Optional[str]) -> Optional[Path]:
+        """Return a project-scoped path from stored manifest metadata."""
+        if not rel_path:
+            return None
+        path = Path(str(rel_path))
+        if path.is_absolute():
+            return path
+        return self.get_project_dir() / path
 
     def _relativize_project_path(self, path: Optional[Path]) -> Optional[str]:
         """Return *path* relative to the current project directory when possible."""
@@ -3837,6 +3988,116 @@ class ManifestManager:
         if artifact_path.exists():
             return self._relativize_project_path(artifact_path)
         return None
+
+    def _apply_unified_diff_to_text(self, source_text: str, diff_text: str) -> Optional[str]:
+        """Apply a unified diff generated from *source_text* and return the target text."""
+        source_lines = source_text.splitlines()
+        diff_lines = diff_text.splitlines()
+        result: List[str] = []
+        source_index = 0
+        line_index = 0
+        saw_hunk = False
+
+        while line_index < len(diff_lines):
+            line = diff_lines[line_index]
+            if not line.startswith("@@ "):
+                line_index += 1
+                continue
+
+            saw_hunk = True
+            try:
+                header = line.split("@@", 2)[1].strip()
+                source_range = header.split(" ")[0]
+                source_start_text = source_range[1:].split(",", 1)[0]
+                source_start = max(int(source_start_text) - 1, 0)
+            except (IndexError, ValueError):
+                return None
+
+            while source_index < source_start and source_index < len(source_lines):
+                result.append(source_lines[source_index])
+                source_index += 1
+
+            line_index += 1
+            while line_index < len(diff_lines):
+                diff_line = diff_lines[line_index]
+                if diff_line.startswith("@@ "):
+                    break
+                if diff_line.startswith("--- ") or diff_line.startswith("+++ "):
+                    line_index += 1
+                    continue
+                if diff_line.startswith("\\ No newline"):
+                    line_index += 1
+                    continue
+                if not diff_line:
+                    tag = " "
+                    content = ""
+                else:
+                    tag = diff_line[0]
+                    content = diff_line[1:]
+
+                if tag == " ":
+                    if source_index >= len(source_lines):
+                        return None
+                    result.append(source_lines[source_index])
+                    source_index += 1
+                elif tag == "-":
+                    if source_index >= len(source_lines):
+                        return None
+                    source_index += 1
+                elif tag == "+":
+                    result.append(content)
+                else:
+                    return None
+                line_index += 1
+
+        if not saw_hunk:
+            return None
+
+        result.extend(source_lines[source_index:])
+        return "\n".join(result)
+
+    def _load_saved_patch_diff_text(
+        self,
+        entry: FileDirEntry,
+        *,
+        current_text: str,
+        current_path: Path,
+        original_text: str,
+    ) -> str:
+        """Rebuild patch diff text from staged artifacts instead of manifest state."""
+        editor_state = self._get_editor_state_files(create=False).get(entry.rel_path, {})
+        patch_path = self._resolve_project_relative_path(editor_state.get("patch_translated_path"))
+        if patch_path is None or not patch_path.exists():
+            return ""
+
+        if patch_path.suffix == ".patch":
+            try:
+                reverse_diff_text = patch_path.read_text(encoding="utf-8")
+            except OSError:
+                logger.debug("Failed to read patch diff artifact: %s", patch_path)
+                return ""
+
+            previous_text = self._apply_unified_diff_to_text(current_text, reverse_diff_text)
+            if previous_text is None:
+                return reverse_diff_text
+
+            return self._build_diff_between_versions(
+                previous_text,
+                current_text,
+                entry.rel_path,
+                tofile=self._display_stage_path(current_path),
+            )
+
+        baseline_text = original_text
+        if patch_path != current_path:
+            baseline_text = self._read_editor_text(patch_path, entry.encoding or "utf-8")
+
+        return self._build_diff_between_versions(
+            baseline_text,
+            current_text,
+            entry.rel_path,
+            tofile=self._display_stage_path(current_path),
+        )
 
     def _build_latest_saved_row_state(self, entry: FileDirEntry) -> Dict[str, Dict[str, Any]]:
         """Build the latest effective row state for one file slice."""
@@ -4028,6 +4289,10 @@ class ManifestManager:
         """Get the Patch/Translated/ directory path for translated patch files."""
         return self.get_project_dir() / "Patch" / "Translated"
 
+    def get_backup_dir(self) -> Path:
+        """Get the Backups/ directory path for saved translated branches."""
+        return self.get_project_dir() / "Backups"
+
     def get_package_original_dir(self) -> Path:
         """Get the Package/Original/ directory path for unpacked archives."""
         return self.get_project_dir() / "Package" / "Original"
@@ -4075,6 +4340,227 @@ class ManifestManager:
     def get_patch_dir(self) -> Path:
         """Get the legacy Patch/ root for backward-compatible callers."""
         return self.get_project_dir() / "Patch"
+
+    def has_active_translated_branch(self) -> bool:
+        """Return whether the project currently has an active translated branch."""
+        translated_dir = self.get_translated_dir()
+        patch_dir = self.get_patch_translated_dir()
+        if translated_dir.exists() and any(translated_dir.iterdir()):
+            return True
+        if patch_dir.exists() and any(patch_dir.iterdir()):
+            return True
+
+        files_state = self._get_editor_state_files(create=False)
+        for state in files_state.values():
+            if not isinstance(state, dict):
+                continue
+            if state.get("translated_path") or state.get("patch_translated_path"):
+                return True
+        return False
+
+    def _get_editor_state_backups(self, *, create: bool = False) -> List[Dict[str, Any]]:
+        """Return the top-level ``EditorState.backups`` list."""
+        editor_state = self._manifest_data.get("EditorState")
+        if not isinstance(editor_state, dict):
+            if not create:
+                return []
+            editor_state = {}
+            self._manifest_data["EditorState"] = editor_state
+
+        backups = editor_state.get("backups")
+        if not isinstance(backups, list):
+            if not create:
+                return []
+            backups = []
+            editor_state["backups"] = backups
+        return backups
+
+    def _capture_active_translated_editor_state(self) -> Dict[str, Dict[str, Any]]:
+        """Capture active translated-branch metadata for backup/restore."""
+        files_state = self._get_editor_state_files(create=False)
+        snapshot: Dict[str, Dict[str, Any]] = {}
+        for rel_path, state in files_state.items():
+            if not isinstance(state, dict):
+                continue
+            record: Dict[str, Any] = {}
+            for key in ("saved_at", "translated_path", "patch_translated_path", "history"):
+                value = state.get(key)
+                if value:
+                    record[key] = deepcopy(value)
+            if record:
+                snapshot[rel_path] = record
+        return snapshot
+
+    def _clear_active_translated_editor_state(self) -> bool:
+        """Remove active translated-branch metadata while preserving unrelated editor state."""
+        files_state = self._get_editor_state_files(create=False)
+        changed = False
+        for rel_path in list(files_state):
+            state = files_state.get(rel_path)
+            if not isinstance(state, dict):
+                continue
+            for key in ("saved_at", "translated_path", "patch_translated_path", "history"):
+                if key in state:
+                    del state[key]
+                    changed = True
+            if not state:
+                del files_state[rel_path]
+        return changed
+
+    def _restore_active_translated_editor_state(
+        self,
+        snapshot: Dict[str, Dict[str, Any]],
+    ) -> bool:
+        """Restore active translated-branch metadata from a backup snapshot."""
+        if not snapshot:
+            return False
+
+        files_state = self._get_editor_state_files(create=True)
+        changed = False
+        for rel_path, backup_state in snapshot.items():
+            existing = files_state.get(rel_path, {})
+            if not isinstance(existing, dict):
+                existing = {}
+            existing.update(deepcopy(backup_state))
+            files_state[rel_path] = existing
+            changed = True
+        return changed
+
+    def _remove_patch_translated_artifacts_for_entry(self, entry: FileDirEntry) -> bool:
+        """Delete active Patch/Translated artifacts for one file entry."""
+        changed = False
+        patch_base = self.get_patch_translated_file_path(entry)
+        for candidate in (patch_base.with_name(patch_base.name + ".patch"), patch_base):
+            try:
+                if candidate.exists():
+                    candidate.unlink()
+                    changed = True
+            except OSError:
+                logger.debug("Failed to remove translated patch artifact: %s", candidate)
+
+        parent = patch_base.parent
+        patch_root = self.get_patch_translated_dir()
+        while parent != patch_root and parent.exists():
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent
+        return changed
+
+    def backup_active_translated_branch(self, *, reason: str = "step9_export") -> Dict[str, Any]:
+        """Rename the active translated branch into Backups/ and snapshot its metadata."""
+        snapshot = self._capture_active_translated_editor_state()
+        translated_dir = self.get_translated_dir()
+        patch_dir = self.get_patch_translated_dir()
+        has_translated = translated_dir.exists() and any(translated_dir.iterdir())
+        has_patch = patch_dir.exists() and any(patch_dir.iterdir())
+        if not has_translated and not has_patch and not snapshot:
+            return {"created": False}
+
+        backup_id = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        backup_root = self.get_backup_dir()
+        translated_backup_rel: Optional[str] = None
+        patch_backup_rel: Optional[str] = None
+
+        if has_translated:
+            translated_backup = backup_root / "Translated" / backup_id
+            translated_backup.parent.mkdir(parents=True, exist_ok=True)
+            translated_dir.rename(translated_backup)
+            translated_backup_rel = self._relativize_project_path(translated_backup)
+
+        if has_patch:
+            patch_backup = backup_root / "Patch" / "Translated" / backup_id
+            patch_backup.parent.mkdir(parents=True, exist_ok=True)
+            patch_dir.rename(patch_backup)
+            patch_backup_rel = self._relativize_project_path(patch_backup)
+
+        backup_record: Dict[str, Any] = {
+            "id": backup_id,
+            "created_at": datetime.utcnow().isoformat() + "Z",
+            "reason": reason,
+        }
+        if translated_backup_rel:
+            backup_record["translated_dir"] = translated_backup_rel
+        if patch_backup_rel:
+            backup_record["patch_translated_dir"] = patch_backup_rel
+        if snapshot:
+            backup_record["files"] = snapshot
+
+        backups = self._get_editor_state_backups(create=True)
+        backups.append(backup_record)
+        changed = self._clear_active_translated_editor_state()
+        if backups or changed:
+            self._mark_dirty()
+        return {
+            "created": True,
+            "backup": backup_record,
+        }
+
+    def discard_active_translated_branch(self) -> Dict[str, Any]:
+        """Delete the active translated branch and clear its editor metadata."""
+        removed = False
+        for path in (self.get_translated_dir(), self.get_patch_translated_dir()):
+            if path.exists():
+                shutil.rmtree(path, ignore_errors=True)
+                removed = True
+
+        metadata_cleared = self._clear_active_translated_editor_state()
+        if removed or metadata_cleared:
+            self._mark_dirty()
+        return {
+            "removed": removed or metadata_cleared,
+        }
+
+    def restore_translated_branch_backup(
+        self,
+        backup_id: str,
+        *,
+        backup_current: bool = False,
+    ) -> Dict[str, Any]:
+        """Restore one saved translated-branch backup into the active branch."""
+        backups = self._get_editor_state_backups(create=True)
+        backup_index = next(
+            (index for index, item in enumerate(backups) if item.get("id") == backup_id),
+            None,
+        )
+        if backup_index is None:
+            raise ValueError(f"Unknown translated backup id: {backup_id}")
+
+        current_backup: Optional[Dict[str, Any]] = None
+        if self.has_active_translated_branch():
+            if backup_current:
+                current_backup = self.backup_active_translated_branch(
+                    reason=f"restore:{backup_id}",
+                )
+            else:
+                self.discard_active_translated_branch()
+
+        backup_record = backups.pop(backup_index)
+        translated_backup = self._resolve_project_relative_path(backup_record.get("translated_dir"))
+        patch_backup = self._resolve_project_relative_path(backup_record.get("patch_translated_dir"))
+
+        if translated_backup is not None and translated_backup.exists():
+            translated_target = self.get_translated_dir()
+            translated_target.parent.mkdir(parents=True, exist_ok=True)
+            translated_backup.rename(translated_target)
+
+        if patch_backup is not None and patch_backup.exists():
+            patch_target = self.get_patch_translated_dir()
+            patch_target.parent.mkdir(parents=True, exist_ok=True)
+            patch_backup.rename(patch_target)
+
+        restored = self._restore_active_translated_editor_state(
+            backup_record.get("files", {}),
+        )
+        if restored or translated_backup is not None or patch_backup is not None:
+            self._mark_dirty()
+
+        return {
+            "restored": True,
+            "backup": backup_record,
+            "current_backup": current_backup,
+        }
     
     def copy_originals_to_project(
         self,
@@ -4082,6 +4568,8 @@ class ManifestManager:
         force: bool = False,
         move_files: bool = False,
         progress_callback: Optional[Callable[[Dict[str, Any]], bool]] = None,
+        source_text_cache: Optional[Dict[str, str]] = None,
+        source_text_encodings: Optional[Dict[str, str]] = None,
     ) -> Dict[str, str]:
         """Copy source files into the project's Original/ directory.
 
@@ -4095,6 +4583,10 @@ class ManifestManager:
             move_files: If True, remove the original file after staging.
             progress_callback: Optional callback receiving staging progress.
                 Return ``False`` to cancel the operation.
+            source_text_cache: Optional rel-path text cache populated while bytes
+                are staged so later manifest sync can reuse the same read.
+            source_text_encodings: Optional rel-path encoding lookup used when
+                populating ``source_text_cache``.
 
         Returns:
             Dict mapping original paths to copied paths.
@@ -4179,6 +4671,8 @@ class ManifestManager:
                     dest_path,
                     delete_source=move_files,
                     progress_callback=progress_callback,
+                    source_text_cache=source_text_cache,
+                    source_text_encoding=(source_text_encodings or {}).get(rel_path),
                     rel_path=rel_path,
                     current_file=index,
                     total_files=total_files,
@@ -4202,6 +4696,8 @@ class ManifestManager:
         *,
         delete_source: bool,
         progress_callback: Optional[Callable[[Dict[str, Any]], bool]],
+        source_text_cache: Optional[Dict[str, str]],
+        source_text_encoding: Optional[str],
         rel_path: str,
         current_file: int,
         total_files: int,
@@ -4218,6 +4714,7 @@ class ManifestManager:
             file_total_bytes = 0
 
         bytes_written = 0
+        captured_bytes = bytearray() if source_text_cache is not None else None
         if progress_callback is not None:
             should_continue = progress_callback({
                 "phase": "stage-originals",
@@ -4238,6 +4735,8 @@ class ManifestManager:
                 if not chunk:
                     break
                 dst_handle.write(chunk)
+                if captured_bytes is not None:
+                    captured_bytes.extend(chunk)
                 bytes_written += len(chunk)
                 if progress_callback is not None:
                     should_continue = progress_callback({
@@ -4257,6 +4756,15 @@ class ManifestManager:
                         except OSError:
                             pass
                         return False
+
+        if captured_bytes is not None:
+            try:
+                source_text_cache[rel_path] = captured_bytes.decode(
+                    source_text_encoding or "utf-8",
+                    errors="ignore",
+                )
+            except Exception:
+                pass
 
         shutil.copystat(source_path, dest_path)
         if delete_source:
@@ -5232,17 +5740,23 @@ class ManifestManager:
         - RerunPolicy: Which lines to rerun
         - MaxSourceLanguageChars: Max allowed source-language characters or markers
         - MaxLineLength: Max line length (0 = unlimited)
+        - EncodingSafetyEnabled: Enable legacy encoding compatibility checks
+        - EncodingCheckEncoding: Target encoding to validate against
         """
         options = deepcopy(self._manifest_data.get("QAOptions", {
             "RerunPolicy": "FailedOnly",
             "MaxSourceLanguageChars": 4,
             "MaxLineLength": 0,
+            "EncodingSafetyEnabled": False,
+            "EncodingCheckEncoding": "shift_jis",
         }))
         if "MaxSourceLanguageChars" not in options and "MaxJapaneseChars" in options:
             options["MaxSourceLanguageChars"] = options["MaxJapaneseChars"]
             self._manifest_data.setdefault("QAOptions", {})["MaxSourceLanguageChars"] = options["MaxSourceLanguageChars"]
             self._manifest_data["QAOptions"].pop("MaxJapaneseChars", None)
             self._mark_dirty()
+        options.setdefault("EncodingSafetyEnabled", False)
+        options.setdefault("EncodingCheckEncoding", "shift_jis")
         return options
     
     def set_qa_options(self, options: Dict[str, Any]) -> None:

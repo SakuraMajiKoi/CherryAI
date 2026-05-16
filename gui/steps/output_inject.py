@@ -1241,6 +1241,9 @@ class OutputInjectStep(BaseStep):
             messagebox.showinfo("Info", "Export is already running.")
             return
 
+        if not self._prepare_translated_branch_export():
+            return
+
         # Pre-export dirty flag check (Task 47.5)
         if self._manifest_manager:
             try:
@@ -1331,6 +1334,30 @@ class OutputInjectStep(BaseStep):
 
         self._export_thread = threading.Thread(target=run_export, daemon=True)
         self._export_thread.start()
+
+    def _prepare_translated_branch_export(self) -> bool:
+        """Prompt for how Step 9 should handle an existing translated branch."""
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            return True
+        if not mgr.has_active_translated_branch():
+            return True
+
+        response = messagebox.askyesnocancel(
+            "Existing translated branch",
+            "Step 9 found an existing Translated branch.\n\n"
+            "Yes: replace the current Translated branch and clear active patch artifacts.\n"
+            "No: back up the current Translated/Patch/Translated branch first.\n"
+            "Cancel: stop this export.",
+            parent=self,
+        )
+        if response is None:
+            return False
+        if response:
+            mgr.discard_active_translated_branch()
+        else:
+            mgr.backup_active_translated_branch(reason="step9_export")
+        return True
 
     def _process_export(self, files: List[OutputFile]) -> None:
         """Process the export operation."""
@@ -1553,7 +1580,11 @@ class OutputInjectStep(BaseStep):
         mgr: "ManifestManager",
         parser: Any,
     ) -> None:
-        """Route parser-format outputs directly to the parser's inject_to()."""
+        """Route parser-format outputs directly to the parser's inject_to().
+
+        This legacy path still avoids stale session caches by reading fresh
+        resolved lines when a manifest is loaded.
+        """
         filedir = mgr.get_filedir()
         if output_file.idx >= len(filedir):
             raise ValueError(
@@ -1566,12 +1597,7 @@ class OutputInjectStep(BaseStep):
         if not source_path.exists():
             raise FileNotFoundError(f"Source file not found: {source_path}")
 
-        step_data = self.get_step_data()
-        all_lines = step_data.get("lines", [])
-        translated_lines = [
-            sanitize_output_text(line)
-            for line in all_lines[entry.first_idx:entry.last_idx + 1]
-        ]
+        translated_lines = self._get_fresh_lines_for_file(output_file)
 
         parser.inject_to(source_path, output_path, translated_lines)
 
@@ -2177,18 +2203,15 @@ class OutputInjectStep(BaseStep):
     def _load_from_session(self) -> None:
         """Load data from session state.
 
-        Populates ``step_data["lines"]`` from manifest using the full
-        pipeline resolution so the latest processed text is available
-        for export.
+        For manifest-backed projects, Step 9 reads fresh lines directly from the
+        manifest on demand and no longer persists a redundant ``lines`` cache in
+        step data.
         """
         step_data = self.get_step_data()
 
-        # Populate lines from manifest (latest processed text)
         mgr = self.manifest_manager
         if mgr is not None and mgr.is_loaded:
-            resolved = get_all_lines_resolved(mgr)
-            if resolved:
-                step_data["lines"] = resolved
+            step_data.pop("lines", None)
 
         # Load destination if saved
         if "destination" in step_data and not self._dest_var.get().strip():
@@ -2205,6 +2228,8 @@ class OutputInjectStep(BaseStep):
     def _save_to_session(self) -> None:
         """Save current state to session."""
         step_data = self.get_step_data()
+        if self.manifest_manager is not None and self.manifest_manager.is_loaded:
+            step_data.pop("lines", None)
         step_data["destination"] = self._dest_var.get()
         step_data["output_options"] = {
             "format": self._format_var.get(),

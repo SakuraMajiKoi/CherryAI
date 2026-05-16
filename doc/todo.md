@@ -52,6 +52,287 @@ MODULE COUNTS (Verified January 2026)
 
 =============================================================================
 
+### PERFORMANCE AUDIT: Large WOLF RPG Project Responsiveness
+**Priority:** HIGH | **Status:** PARTIALLY COMPLETE | **Effort:** Multi-phase
+
+Goal: Keep the GUI responsive on very large projects while preserving output parity. The current benchmark corpus used the WOLF RPG text folders in `dev/data/` with Shift-JIS input and produced `187200` extracted rows (`last idx = 187199`) across `Evtext`, `Evtext_2`, `Evtext_b`, and `Evtext_kh`. This differs from the earlier `176818` expectation and should be reconciled before future benchmark comparisons rely on one fixed baseline.
+
+**Measured runtime on the current implementation:**
+1. Step 0 Input load: `1085.199s` with one progress dialog covering `Loading selected files` -> `Staging Original tree` -> `Saving project`.
+2. Historical Open Project manifest load before the manifest-load fast path: `38.649s` with one progress dialog covering `Loading manifest` -> `Applying project` -> `Restoring active step` -> `Finalizing`.
+3. Historical tab-enter timings after reopen: Analysis and Information were effectively light; Preprocessing `0.861s` enter / `0.459s` leave; Costs light after removing auto-estimate; Translation previously measured `908.716s`; Postprocessing `1.598s`; QA `1.077s`; Wordwrap `1.781s`; Output remained light.
+4. Current verified heavy-tab restore results after the shared lazy-row materialization pass:
+  - `Projects/Kano.CherryAI.json`: Step 3 `0.847s`, Step 5 `0.496s`, Step 6 `0.852s`, Step 7 `0.674s`, Step 8 `1.109s`
+  - `Projects/wolf_perf_probe.CherryAI.json` (`187200` lines): Step 3 `0.905s`, Step 5 `0.553s`, Step 6 `0.925s`, Step 7 `0.873s`, Step 8 `1.171s`
+5. Current verified Open Project timings after the canonical-load fast path and final benchmark fix:
+  - `Projects/Kano.CherryAI.json`: current Open Project benchmark reports `2.289s` total with phase breakdown `Loading manifest 1.362s`, `Restoring active step 0.586s`, `Finalizing 0.263s`
+  - Saved-step restore benchmark semantics now disable benchmark-only autosave noise, snapshot readiness once after restore, and exit without lingering Python processes
+  - Benchmark operating rule: every local benchmark run must go through the hard 60-second external wrapper that captures stdout/stderr and force-kills overruns; raw Python benchmark commands are argument reference only
+
+**Implemented in this pass:**
+1. **`gui/steps/input_extract.py` / `gui/dialogs/loading_progress.py`** — One Step 0 progress dialog now spans extraction, staging, and manifest save with safe cancel checks between phases.
+2. **`gui/app.py` / `gui/dialogs/loading_progress.py`** — Open Project now uses the same style of responsive progress dialog for manifest load and delays activation until the worker completes successfully.
+3. **`gui/steps/input_extract.py`** — Manifest-backed Step 0 restore now keeps file content lazy through `LoadedFile.content_loader` instead of eagerly duplicating all extracted lines into memory on reopen.
+4. **`gui/steps/costs.py`** — Entering Costs no longer auto-runs estimation.
+5. **`functions/prompt_builder.py` / `gui/steps/costs.py`** — Fixed the shared Costs "Preparing lines" hotspot by caching one combined preserve-pattern CODE_ONLY matcher per pattern tuple and by short-circuiting already-skipped rows before extra placeholder/code-only checks in request formation.
+6. **`gui/app.py` / `gui/steps/translate.py`** — Saved-step manifest restore now suppresses app-driven notebook tab-change side effects while the target tab is selected and entered, preventing duplicate `on_enter()` work and mid-restore saves on expensive tabs.
+7. **`gui/steps/translate.py`** — Fixed the remaining Step 5 restore hotspot by caching manifest `tl` values once during `_refresh_lines()` and by deferring the grouped status-summary rebuild until Tk is idle instead of blocking passive tab entry on a second whole-project validation sweep.
+8. **`gui/components/table.py` + heavy tabs** — Added shared lazy row materialization (`set_lazy_data`) so Preprocessing, Translation, Postprocessing, QA, and Wordwrap keep full backing line state but only build visible filtered `TableRow` objects on passive entry.
+9. **Tests / scripts** — Added focused regressions for the matcher cache, Costs skip short-circuit, deferred Translation status summary, shared table batching/versioning after the lazy-row path, plus a synthetic benchmark with verbal timeout behavior, a real-manifest Translation tab-entry benchmark, a real-manifest saved-step restore benchmark, and richer KiriKiri2 CSV custom-column analysis scripts.
+10. **`functions/manifest_manager.py`** — Added a canonical v3.2 load fast path so already-normalized large manifests skip redundant locator backfill, sorting, and deep-copy canonicalization during `load()`.
+
+**Verified in this pass:**
+1. Focused pytest: `python -m pytest dev/test_request_slicing_fix.py dev/test_estimation_skip.py -q --timeout=20` — `93 passed`
+2. Synthetic Costs benchmark: `python dev/benchmark_costs_prepare_lines.py --lines 12000 --patterns 300 --timeout 2.0` — improved from `10.613s` before the fix to `0.075s` after the fix
+3. Focused Translation pytest: `python -m pytest dev/test_translation_status_cache.py -q --timeout=20` — `1 passed`
+4. Updated Translation pytest: `python -m pytest dev/test_translation_status_cache.py -q --timeout=20` — `3 passed`
+5. Real Translation benchmark: `python dev/benchmark_translation_tab_entry.py --manifest Projects/wolf_perf_probe.CherryAI.json --timeout 15` — `2.267s` total after the restore-path fix, within the `15.0s` timeout
+6. Focused lazy-row pytest: `python -m pytest dev/test_table_batch_insert.py dev/test_translation_status_cache.py dev/test_app_startup.py -q --timeout=20` — `47 passed`
+7. Real saved-step restore benchmarks: `python dev/benchmark_manifest_restore.py --manifest Projects/Kano.CherryAI.json --step {3,5,6,7,8} --timeout 20` and the same for `Projects/wolf_perf_probe.CherryAI.json` — all heavy tabs completed within `1.171s`, with Step 5 on `wolf_perf_probe` now at `0.553s`
+8. Manifest-load microbenchmark: `Projects/Kano.CherryAI.json` JSON parse `0.632s`, canonicalization `0.597s` after the canonical fast path (down from `5.941s` before the change)
+9. Final usable-idle benchmark semantics: `dev/benchmark_manifest_restore.py` now disables benchmark-only autosave/save-on-close noise on temporary managers, snapshots local restore blockers once after activation, skips in-script Tk teardown, and force-exits after printing results so benchmark runs terminate promptly inside the guarded wrapper
+10. CSV analysis artifacts: `temp/kirikiri2_csv_analysis.json` and `temp/kirikiri2_csv_headers.json` generated from `dev/ws/data/csv`; current review found `32` schema groups, `719` custom headers, and notable custom Japanese-content columns such as repeated `.` columns in `edit_randomcomment_2.csv`
+
+**Per-tab current behavior and follow-up tasks:**
+1. **Step 0 Input** — Current owner: `gui/steps/input_extract.py` (`_load_selected_paths()`, `_restore_files_from_session()`, `_populate_from_manifest()`). Current behavior: extraction and staging are now covered by one progress dialog; manifest reopen is lazy for Step 0 files. Follow-up: keep file-tree restore count-only by default, stream tree inserts for very large file sets, and avoid preview-wide text materialization until the user selects a file or searches.
+2. **Step 1 Analysis** — Current owner: `gui/steps/analysis.py`. Current behavior: tab entry is already light and should stay summary-first. Follow-up: keep analysis results manifest-backed, and if new previews are added, they must not force a full `lines[]` load on passive tab entry.
+3. **Step 2 Information** — Current owner: `gui/steps/information.py`. Current behavior: metadata, characters, and code patterns should load without needing line text. Follow-up: preserve this rule explicitly; imports from Analysis should stay summary/data driven instead of touching the full line corpus on tab entry.
+4. **Step 3 Preprocessing** — Current owner: `gui/steps/preprocess.py`. Current behavior: passive entry now restores preview state through the shared lazy-row path, so only the visible filtered preview slice is materialized as table rows. Follow-up: keep explicit Apply/Refresh work on the full backing preview state and avoid adding new passive full-corpus summary passes.
+5. **Step 4 Costs** — Current owner: `gui/steps/costs.py`. Current behavior: passive entry is now light because estimation is manual, and the explicit "Preparing lines" phase is no longer the bottleneck after the shared matcher-cache fix. Follow-up: restore saved counts and last estimation summary first, and only gather all source text during explicit Update Counts / Estimate runs.
+6. **Step 5 Translation** — Current owner: `gui/steps/translate.py` (`on_enter()`, `_refresh_lines()`, `_get_lines_from_previous_steps()`, `_update_lines_table()`). Current behavior: the catastrophic tab-entry stall is fixed, passive status-summary work is deferred, and the shared lazy-row path means passive entry only materializes the visible page. Current saved-step restore timings: `0.496s` on `Kano` and `0.553s` on `wolf_perf_probe`. Follow-up: keep new restore work off the passive path unless it is strictly visible-page scoped.
+  - Open Project teardown rule: once the replacement manifest is active, the previous manager is closed with `save_on_close` disabled so the prior save/discard decision is not overridden during activation cleanup.
+  - Live translation persistence rule: completed chunks now queue manifest writes for a translation-scoped `15s` batch flush plus one forced final flush on completion; crash salvage relies on the append-first API log rather than per-chunk full-manifest rewrites.
+7. **Step 6 Postprocessing** — Current owner: `gui/steps/postprocess.py`. Current behavior: Processed Lines now uses the shared lazy row path, so passive entry keeps filtered ids but only materializes the visible page. Current saved-step restore timings: `0.852s` on `Kano`, `0.925s` on `wolf_perf_probe`. Follow-up: keep summary/filter work cheap and action-scoped.
+8. **Step 7 QA** — Current owner: `gui/steps/qa.py`. Current behavior: QA now restores backing state plus the visible page through the shared lazy row path instead of building a full table-model list up front. Current saved-step restore timings: `0.674s` on `Kano`, `0.873s` on `wolf_perf_probe`. Follow-up: keep future review enrichments action-scoped.
+9. **Step 8 Wordwrap** — Current owner: `gui/steps/wordwrap_overwrite.py`. Current behavior: Wordwrap preview now restores through the shared lazy row path, so passive entry keeps filtered row ids and materializes only the visible page until explicit wrap work begins. Current saved-step restore timings: `1.109s` on `Kano`, `1.171s` on `wolf_perf_probe`. Follow-up: keep file/tag filter expansion page-scoped.
+10. **Step 9 Output** — Current owner: `gui/steps/output_inject.py`. Current behavior: light on entry. Follow-up: keep it manifest-backed and stream verification/write work during export rather than building whole-project preview caches just to enter the tab.
+
+**Benchmark follow-up tasks:**
+1. Reconcile the benchmark corpus so the documented expected final idx matches the actual selected WOLF folders and parser output.
+2. Add a repeatable timing script under `dev/` that records Step 0 load, Open Project load, and tab enter/leave timings in one run.
+3. Add one repeatable benchmark wrapper that runs the full heavy-tab set (Steps 3/5/6/7/8) in a single invocation and stores comparable timing snapshots without leaving stale redirected child-process handles behind.
+
+=============================================================================
+
+### PERFORMANCE: KiriKiri2 Step 0 Sampled Load Path
+**Priority:** HIGH | **Status:** COMPLETE | **Effort:** Multi-phase
+
+Goal: Reduce live Step 0 load overhead on the large `dev/ws` KiriKiri2 corpus without losing manifest parity, while switching day-to-day benchmark iteration to a representative one-file-per-folder sample instead of the full 5,572-file tree.
+
+**Representative benchmark mode:**
+1. `dev/benchmark_kirikiri2_input_load.py --sample one-per-folder` now selects one parser-accepted file per folder under `dev/ws`; the current representative set is `321` files with `22,876` extracted lines.
+2. The mojibake sentinel still exists in the full corpus at `dev/ws/patch_edp/A_B1h12800+.ks:119`, but the representative sample is not guaranteed to include that exact file.
+
+**Measured sampled benchmark progression (real GUI, `dev/ws`, `KiriKiri2`, one file per folder):**
+1. Baseline sampled profile before this pass: `117.730s` total, `progress_update 96.924s`, `_sync_lines_to_manifest 9.350s`, `save 6.786s`.
+2. After dialog-side batching only: `99.099s` total, `progress_update 84.320s`, `_sync_lines_to_manifest 7.369s`, `save 4.146s`.
+3. After Step 0 driver-side progress batching + staged-refresh gating + deferred initial save: profiled run `93.685s` total, `progress_update 0.000s`, `_sync_lines_to_manifest 6.328s`, `save 0.868s`.
+4. Official harness verification: first sampled run `102.096s` total, second sampled run `93.035s` total; both completed within the `180s` timeout.
+5. Before the final bulk-load/session slice, the representative hotspot profile still measured `60.114s` total with `_update_step_data 0.042s`, `_build_manifest_line_entries 4.625s`, `_sync_lines_to_manifest 6.298s`, and the Progress sidebar still rebuilding throughout the load.
+6. After deferring per-file Step 0 state writes, coalescing session notifications, and priming a rel-path source-text cache for manifest sync: final sampled profile `6.165s` total, `_update_step_data 0.001s`, `progress_panel_refresh 0.178s` across `1` refresh, `_build_manifest_line_entries 0.254s`, `_sync_lines_to_manifest 1.788s`, `save 1.017s`.
+7. Final official harness benchmark with parity-safe caching: `6.931s` total (`6.181s` load + `0.750s` settle) within the `180s` timeout.
+8. After the parser/staging/save slice, the official sampled benchmark dropped again to `4.905s` total (`4.155s` load + `0.750s` settle) while still matching the earlier sampled baseline manifest.
+
+**Measured full-corpus benchmark progression (real GUI, `dev/ws`, `KiriKiri2`):**
+1. Before all changes, the live Step 0 load took `1085.199s` with one progress dialog covering `Loading selected files` -> `Staging Original tree` -> `Saving project`.
+2. After the full optimization series through the parser/staging/save slice, the same full-corpus real-GUI run completed in `31.213s` (`30.463s` load + `0.750s` settle) while loading `3,716` files and `154,565` extracted lines.
+
+**Implemented in this pass:**
+1. **`gui/dialogs/loading_progress.py`** — Progress dialog refreshes now coalesce visible label/count updates and only force full event processing at coarse checkpoints or forced states instead of repainting for every file.
+2. **`gui/steps/input_extract.py`** — Step 0 now batches live file-progress publications through `_maybe_update_load_progress()` so the hot loop no longer calls dialog `update()` for every path.
+3. **`formats/parser_base.py` / `formats/LightVN.py` / `gui/steps/input_extract.py`** — Added `ParserScript.requires_staged_refresh`; LightVN opts in because its extraction depends on staged `Original/` context, while KiriKiri2 skips the redundant staged re-extraction pass.
+4. **`functions/manifest_manager.py` / `gui/app.py` / `gui/steps/input_extract.py`** — Added `create_new(save_immediately=False)` so Step 0 can keep a live manifest manager and autosave state without writing a throwaway pre-sync manifest; the first real disk write now happens after manifest sync.
+5. **`dev/benchmark_kirikiri2_input_load.py`** — Added `--sample one-per-folder` so performance iteration stays representative without needing a full-corpus run for each slice.
+6. **`gui/state/store.py` / `gui/steps/input_extract.py`** — Added deferred session notifications plus Step 0 bulk-load state batching so per-file `_update_step_data()` calls no longer fan out into hundreds of Progress sidebar rebuilds while the modal loading dialog is active.
+7. **`gui/steps/input_extract.py`** — Step 0 now flushes one final Input step-data update after the batch ends instead of writing session fallback state on every file load.
+8. **`gui/steps/input_extract.py` / `functions/manifest_manager.py`** — Manifest sync now fills the temporary rel-path source-text cache directly from staged copy bytes, removing the old extra pre-read before staging while still reusing cached text during `_build_manifest_line_entries()` for parity-safe locator capture.
+9. **`gui/steps/input_extract.py`** — `_load_file()` now routes through `_extract_file_content()` so parsers with `extract_tagged()` can return text, tags, and locator metadata in one pass instead of making a separate tag-extraction call after line extraction.
+10. **`functions/manifest_manager.py`** — The compact manifest writer now formats already-normalized subtrees without renormalizing every nested dict/list on the way down, trimming redundant serializer work in large saves while preserving manifest output shape.
+
+**Verified in this pass:**
+1. Focused pytest: `python -m pytest dev/test_input_step_improvements.py::TestLoadProgressBatching dev/test_autosave.py::TestAutosaveProjectLifecycle::test_create_new_can_defer_initial_save dev/test_lightvn_fixes.py::TestStagedRefreshCapability -q --timeout=10` — `5 passed`.
+2. Official sampled parity check: `python dev/validate_manifest_parity.py --baseline temp/kirikiri2_sample_probe_a.json --candidate temp/kirikiri2_sample_probe_b.json` — manifests matched after normalizing volatile fields.
+3. Final targeted Step 0 regressions: `python -m pytest dev/test_input_step_improvements.py -q --timeout=20 -k "BulkLoadStateBatching or ManifestEntryBuildCaching or SessionNotificationDeferral or LoadProgressBatching"` — `7 passed`.
+4. Final official sampled benchmark: `python dev/benchmark_kirikiri2_input_load.py --source dev/ws --format KiriKiri2 --sample one-per-folder --project-name kirikiri2_sample_probe --launch-gui --save-manifest temp/kirikiri2_sample_after_bulk_state_final.json --timeout 180` — `6.931s` total.
+5. Final sampled parity check: `python dev/validate_manifest_parity.py --baseline temp/kirikiri2_sample_probe_a.json --candidate temp/kirikiri2_sample_after_bulk_state_final.json` — manifests matched after normalizing volatile fields.
+6. Final parser/staging/save regressions: `python -m pytest dev/test_input_step_improvements.py dev/test_manifest_filedir.py -q --timeout=20 -k "extract_file_content_uses_tagged_extraction_as_single_pass or copy_can_capture_source_text_cache or ManifestEntryBuildCaching or BulkLoadStateBatching or SessionNotificationDeferral"` — `7 passed`.
+7. Final sampled benchmark for this slice: `python dev/benchmark_kirikiri2_input_load.py --source dev/ws --format KiriKiri2 --sample one-per-folder --project-name kirikiri2_sample_probe --launch-gui --save-manifest temp/kirikiri2_sample_after_slice_same_name.json --timeout 180` — `4.905s` total.
+8. Final sampled parity for this slice: `python dev/validate_manifest_parity.py --baseline temp/kirikiri2_sample_probe_a.json --candidate temp/kirikiri2_sample_after_slice_same_name.json` — manifests matched after normalizing volatile fields.
+9. Sentinel verification on the full corpus: `dev/ws/patch_edp/A_B1h12800+.ks:119` still contains `ま、確かにこれから景色でも眺めながら、しみじみと話したかった気もする。`.
+10. Final full-corpus benchmark: `python dev/benchmark_kirikiri2_input_load.py --source dev/ws --format KiriKiri2 --project-name kirikiri2_full_probe --launch-gui --save-manifest temp/kirikiri2_full_after_slice.json --timeout 1800` — `31.213s` total.
+11. Final full-corpus parity check: `python dev/validate_manifest_parity.py --baseline temp/kirikiri2_full_after_slice.json --candidate temp/kirikiri2_full_after_slice_b.json` — manifests matched after normalizing volatile fields.
+
+**Remaining follow-up:**
+1. Any further Step 0 gains will likely need deeper parser-specific extraction work or a manifest-save format change; the major GUI/state/staging overheads are no longer the controlling cost on the current KiriKiri2 path.
+
+=============================================================================
+
+### BUG FIX: KiriKiri2 MainWindow Wordwrap Patch For Stock KAG Variant
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 1 hour
+
+Goal: Make `formats/KiriKiri2.py` patch real stock `MainWindow.tjs` files so Kirikiri/KAG message wrapping switches from per-character behavior to per-word behavior, including the verified Shift-JIS `MainWindow.tjs` fixture in `dev/data/system/`.
+
+**Root Causes:**
+1. `_patch_add_wrap_block()` only looked for the simplified `if(current.processCh(text))` form, so it missed stock KAG handlers that use `repage = current.processCh(text, chUserMode ? acs : 0);`.
+2. The live `_WRAP_BLOCK_SNIPPET` only inserted a stub marker/reset block and never injected the actual tokenization, quote-attachment, width-check, and `processReturn()` logic needed for word-based wrapping.
+3. `_patch_add_wrap_vars()` anchored too narrowly, which was brittle outside minimal fixtures.
+4. A later broken injection could leave literal `\t` escape text at the start of the inserted TJS block, producing a `文法エラーです(syntax error)` launch failure instead of valid script indentation.
+5. Regex-based block replacement originally passed `_WRAP_BLOCK_SNIPPET` directly to `re.sub(...)`, so backslashes in TJS string literals were interpreted as replacement escapes and collapsed `\\`, `\t`, `\n`, and `\r` into malformed source text such as `if(ch != '\')`.
+
+**Changes:**
+1. **`formats/KiriKiri2.py`** — Replaced the stub `MainWindow.tjs` wrap block with the full word-tokenizing logic already documented in the repo reference, updated `_patch_add_wrap_block()` to target the real `ch : function(elm)` layouts used by stock KAG `MainWindow.tjs`, and made `_patch_add_wrap_vars()` prefer class-scope insertion with a fallback for minimal fixtures.
+2. **`formats/KiriKiri2.py`** — Fixed the generated block so it writes real indentation into `MainWindow.tjs` instead of literal `\t` escape text, replaces stale or malformed existing wrap blocks in-place, and uses function-based regex replacement so literal TJS escape source (`\\`, `\t`, `\n`, `\r`) survives patching unchanged.
+3. **`dev/test_parser_scripts.py`** — Added regressions that read the real `dev/data/system/MainWindow.tjs` fixture via `_read_text_with_bom()`, verify the word-based wrap logic, verify the repaired literal backslash/control-character lines, confirm cp932 round-trip, and verify that malformed escaped or malformed in-place legacy blocks are rewritten into one valid block.
+4. **Quick verification** — Applied `KiriKiri2Parser.post_inject_project(Path("dev"))` to the real fixture and confirmed `encoding cp932`, no literal `\t` escape marker, canonical backslash/control-character literals present, inserted wrap vars, inserted `splitLine[wrapNum]` logic, inserted `processReturn()` overflow handling, and preserved Japanese text such as `KAG のウィンドウ クラス`.
+
+**Tests:**
+- `python -m pytest dev/test_parser_scripts.py dev/test_source_root.py -k "mainwindow or kirikiri_hook_patches_mainwindow" -q --timeout=20` — 4 passed
+
+### BUG FIX: KiriKiri2 Choice + SaveLocation + System Menu Literal Extraction
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Extend `formats/KiriKiri2.py` so Taisho/KAG scenario choices, chapter/save-location titles, and hardcoded system-menu captions can be extracted, translated, and injected safely while preserving Shift-JIS source files.
+
+**Root Causes:**
+1. The `.ks` parser only emitted dialogue/narration blocks, so visible `[seladd text="..."]` choices and `*label|title` chapter/save-location titles never reached the translation pipeline.
+2. The `.tjs` parser only handled `Menus.tjs` `MenuItem` literals, so real system-menu captions stored as `caption:"..."` in files such as `data/sysscn/Override.tjs` were invisible to extraction and injection.
+3. The first literal extractor draft filtered choice/title/caption rows to Japanese-only text, which would have hidden already translated English payloads on later parser passes.
+
+**Changes:**
+1. **`formats/KiriKiri2.py`** — Added source-ordered `.ks` literal extraction/injection for `[seladd text="..."]` (`choice`) and `*label|title` (`SaveLocation`) alongside the existing dialogue/narration block path.
+2. **`formats/KiriKiri2.py`** — Added generic `.tjs` `caption:"..."` extraction/injection for visible menu captions in files such as `Override.tjs`, while preserving the dedicated `Menus.tjs` path.
+3. **`formats/KiriKiri2.py`** — Relaxed the new literal extractors so non-empty translated English payloads still round-trip on re-extraction instead of being dropped by a Japanese-only gate.
+4. **`dev/test_parser_scripts.py`** — Added focused regressions for `.ks` choice/save-location extraction and injection, generic `caption:"..."` injection, and real `Override.tjs` menu caption extraction.
+5. **Local verification artifact** — Generated a reproducible local patch mirror under `temp/taisho_patch/patch/` with translated `dev/update/scenario` choice/save-location rows, translated `dev/data/sysscn/Override.tjs` menu captions, and a patched `system/MainWindow.tjs` for manual external staging.
+
+**Tests:**
+- `python -m pytest dev/test_parser_scripts.py -k "KiriKiri2Parser and (choice or save_location or Override or caption)" -q --timeout=20` — 4 passed
+- `python -m pytest dev/test_parser_scripts.py -k "KiriKiri2Parser" -q --timeout=20` — 23 passed
+
+### BUG FIX: KiriKiri2 Kano2 Speaker Variables + Dialog Calls + CSV Extraction
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Extend `formats/KiriKiri2.py` so the Kano2 sample in `dev/ws/` parses real `@talk name=[SF]` speakers, code-heavy dialog-manager `.tjs` literals, and KiriKiri-style `.csv` sheets without loading the whole project into memory.
+
+**Root Causes:**
+1. The `.ks` parser only treated `【speaker】` rows as speakers, so real Kano2 `@talk name=[SF]` blocks were downgraded to narration and no valid speaker tokens were extracted.
+2. Generic `.tjs` parsing only handled menu captions, so dialog-manager strings embedded in calls such as `SetYesNo("...")` and `SetOK("...")` were invisible when surrounded by code.
+3. KiriKiri2 had no parser-owned `.csv` path, so Kano2 data sheets stayed outside the engine-aware parser surface and there was no header-level whitelist to protect IDs, file references, jumps, flags, and numeric-only columns.
+
+**Changes:**
+1. **`formats/KiriKiri2.py`** — Added `@talk` command parsing so `name=[SF]` keeps the bracketed variable token as the speaker, while bare `@talk` still opens the following text block without inventing a fake speaker.
+2. **`formats/KiriKiri2.py`** — Added dialog-call `.tjs` extraction/injection for `SetYesNo("...")`, `SetOK("...")`, `SetMessage("...")`, and `SetError("...")` special cases, preserving the surrounding function-call code.
+3. **`formats/KiriKiri2.py`** — Added schema-based `.csv` support with header-level whitelist rules, column-by-column extraction order, UTF-8/Shift-JIS detection, and surgical cell injection that leaves excluded control columns untouched.
+4. **`dev/test_parser_scripts.py`** — Added focused regressions for `@talk name=[SF]` extraction/injection, dialog-manager `.tjs` literals, CSV auto-detection, column-order extraction, and whitelisted-cell-only injection.
+5. **`dev/analyze_kirikiri2_csv.py` / `dev/group_kirikiri2_csv_headers.py`** — Added repeatable CSV analysis scripts for per-column profiling and header-signature grouping across `dev/ws/data/csv`.
+6. **Local verification artifacts** — Wrote analyzer outputs to `temp/kirikiri2_csv_analysis.json` and `temp/kirikiri2_csv_headers.json` for the Kano2 sample set.
+
+**Tests:**
+- `python -m pytest dev/test_parser_scripts.py -k "parses_talk_name_variable_speakers or preserves_talk_name_variable_speaker_lines or detect_parser_for_tjs_dialog_calls or extract_and_inject_tjs_dialog_literals or detect_parser_for_kirikiri_csv or reads_whitelisted_csv_columns_in_column_order or updates_whitelisted_csv_cells_only" -q --timeout=20` — 7 passed
+- `python dev/analyze_kirikiri2_csv.py dev/ws/data/csv > temp/kirikiri2_csv_analysis.json` — completed
+- `python dev/group_kirikiri2_csv_headers.py dev/ws/data/csv > temp/kirikiri2_csv_headers.json` — completed
+
+### BUG FIX: KiriKiri2 SelectLayer Choice Overflow Patch
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 1 hour
+
+Goal: Make `formats/KiriKiri2.py` patch real stock `SelectLayer.tjs` files so translated KAG choices wrap by word, grow the button height for multiline text, and default to a smaller hidden choice font size while preserving Shift-JIS source files.
+
+**Root Causes:**
+1. `KiriKiri2Parser.post_inject_project()` only patched `MainWindow.tjs`, so output staging never touched the real choice-layout script.
+2. Stock `SelectLayer.tjs` rendered choice captions as one line with a fixed `selectHeight = 50`, which caused long translated choices to overflow.
+3. The stock vertical layout evenly divided the available height by choice count, so variable-height wrapped buttons would overlap without a second layout patch.
+
+**Changes:**
+1. **`formats/KiriKiri2.py`** — Added `_patch_select_layer()` plus shared project-script staging helpers so post-inject patching now targets both `MainWindow.tjs` and `SelectLayer.tjs` under either `data/system/` or `system/`.
+2. **`formats/KiriKiri2.py`** — Patched `SelectButtonLayer.redraw()` to wrap choice captions by word, measure multiline height from the wrapped caption, and keep the hidden default choice font size at `18` unless the script explicitly sets `elm.size`.
+3. **`formats/KiriKiri2.py`** — Patched `SelectLayer.getSelectPositions()` so stacked choice buttons are spaced from their actual heights plus a fixed gap instead of the old equal-slot count layout.
+4. **`dev/test_parser_scripts.py`** — Added focused regressions for the real Shift-JIS `SelectLayer.tjs` fixture and for staged output + `.bak` creation through `post_inject_project()`.
+5. **Local verification artifact** — Generated patched manual-inspection copies under `dev/tomove/data/system/`, including `MainWindow.tjs`, `MainWindow.tjs.bak`, `SelectLayer.tjs`, and `SelectLayer.tjs.bak`.
+
+**Tests:**
+- `python -m pytest dev/test_parser_scripts.py -k "selectlayer_patch_handles_real_shift_jis_variant or post_inject_project_patches_selectlayer_and_creates_backup or mainwindow_patch" -q --timeout=20` — 5 passed
+
+### BUG FIX: Editor Theme Refresh `_root()` Collision
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 30 minutes
+
+Goal: Stop the live Editor window from crashing immediately on open when theme refresh walks the classic-widget tree.
+
+**Root Cause:**
+1. `gui/dialogs/patch_editor_view.py` stored the owner toplevel on `self._root`, which shadowed Tkinter's internal `_root()` widget helper.
+2. `gui/theme/colors.py::apply_theme()` calls `winfo_children()` while traversing classic widgets, and Tkinter's child/widget resolution path calls `_root()` / `nametowidget()` internally.
+3. Once `_root` had been replaced with the `App` instance, opening Editor raised `TypeError: 'App' object is not callable` during theme refresh and later during event substitution/error reporting.
+
+**Changes:**
+1. **`gui/dialogs/patch_editor_view.py`** — Renamed the stored owner reference to `_window_root` and kept close-time window deregistration on that safe attribute instead of shadowing Tkinter internals.
+2. **`dev/test_patch_editor_view.py`** — Added a regression proving the dialog keeps Tkinter's `_root()` helper callable.
+3. **Validation** — Re-ran the focused Editor/App pytest slice and a real dialog smoke test using the repo bootstrap to confirm the Editor window now constructs cleanly.
+
+**Tests:**
+- `python -m pytest dev/test_patch_editor_view.py dev/test_app_startup.py -k "PatchEditorDialog or EditorHostOpenOrFocus" -q --timeout=20` — 5 passed
+- Smoke test: real `PatchEditorViewDialog(root, mgr)` construction succeeded after bootstrapping `conftest._setup_cherryai_package()`.
+
+### BUG FIX: CherryAI.ini Preset Alias Cleanup + API.ini Key Bridge + Step 6 Crash
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Remove duplicate built-in style/tone preset entries that made strict CherryAI.ini reads fail, stop runtime API warnings from checking stale CherryAI.ini key paths during translation, and fix the Step 6 aggressive-number helper crash on Apply Postprocessing.
+
+**Root Causes:**
+1. CherryAI.ini still contained lowercase aliases such as `literal` / `neutral` alongside canonical `Literal` / `Neutral`, and any strict default-`optionxform` reader treated them as duplicate options.
+2. Runtime API helper paths still modeled `api_key` as if it lived in CherryAI.ini, while the actual saved-key source of truth had already moved to `user/API.ini`.
+3. Step 5 created `APIClient()` before injecting the selected saved key, so the client logged a false "No API key found in configuration" warning even when translation then proceeded normally.
+4. `gui/steps/postprocess.py::_reverse_aggr_numbers()` was left as a staticmethod even though it dereferenced `self._lines`, causing the Apply Postprocessing button to fail with `name 'self' is not defined`.
+
+**Changes:**
+1. **`functions/ini_manager.py`** — Extended legacy-key normalization to built-in `[style]` / `[tone]` preset aliases so lowercase duplicates are migrated to canonical mixed-case keys and removed on load.
+2. **`functions/config.py`** — Switched the canonical runtime config path to `user/CherryAI.ini`, preserved INI key case during reads, and repointed runtime `get_api_config()` / `set_api_config()` to `user/API.ini` while keeping explicit test-file overrides working.
+3. **`functions/api_client.py` / `gui/steps/translate.py`** — Added `APIClient(initial_config=...)` and changed Step 5 to construct the client with the already resolved saved key/provider/base URL, eliminating the false missing-key warning.
+4. **`functions/common_errors.py`** — API-key validation now checks the canonical runtime API config bridge instead of the old CherryAI.ini secret path.
+5. **`gui/steps/postprocess.py`** — `_reverse_aggr_numbers()` is now an instance helper so indexed aggressive-number restoration can read the loaded line set safely during Step 6.
+6. **Tests** — Added focused regressions in `dev/test_ini_manager.py`, `dev/test_config.py`, `dev/test_common_errors.py`, `dev/test_api_client.py`, and updated `dev/test_postprocess_phase45.py` for the instance-method helper contract.
+
+**Tests:**
+- `python -m pytest CherryAI/dev/test_api_client.py CherryAI/dev/test_ini_manager.py CherryAI/dev/test_config.py CherryAI/dev/test_common_errors.py CherryAI/dev/test_postprocess_phase45.py -k "initial_config_skips_legacy_load_and_missing_key_warning or lowercase_style_and_tone_aliases_migrate_to_canonical_keys or runtime_reads_default_key_from_api_ini or runtime_writes_default_key_to_api_ini or uses_api_ini_default_key_when_validating or AggressiveDedupIndexedRestore" -q --timeout=20` — 6 passed
+
+### BUG FIX: Translation Preview Reopens Finished Projects As Full Runs
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 1 hour
+
+Goal: When loading a nearly finished manifest such as `Projects/TML.CherryAI.json`, make the Translation tab and Preview Requests respect the persisted overwrite-off policy immediately so only the remaining untranslated work is requested.
+
+**Root Causes:**
+1. `gui/app.py` created and reset `SessionState` objects without seeding `session.global_options`, so Step 5 had no persisted TranslationSettings until the Global Options dialog was opened manually.
+2. `gui/steps/translate.py` used `TranslationOptions.skip_already_translated = False` as its local fallback, which inverted the documented default `overwrite_translation = false` during those startup/load windows.
+
+**Changes:**
+1. **`gui/app.py`** — App startup now loads `GlobalOptions` from INI into the session immediately, and `_reset_runtime_state()` preserves that object across project activation so loaded manifests keep the same translation-policy defaults.
+2. **`gui/steps/translate.py`** — `TranslationOptions.skip_already_translated` now defaults to `True`, matching the documented overwrite-off behavior when Global Options have not been attached yet.
+3. **Tests** — Added regressions in `dev/test_app_startup.py` for Global Options carry-over during project activation and in `dev/test_request_preview.py` for the Step 5 overwrite-off fallback default.
+
+**Tests:**
+- `python -m pytest dev/test_request_preview.py dev/test_app_startup.py -q --timeout=20` — 80 passed, 2 skipped
+
+### BUG FIX: Translation Tab Live GUI Restore Loop + Visible Benchmark Coverage
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 3 hours
+
+Goal: Reproduce the Translation tab restore bug through the real visible GUI using `Projects/Kano.CherryAI.json`, stop Step 5 from getting trapped in a deferred status-summary rebuild after the window appears, and make the benchmark detect the live GUI path instead of only timing withdrawn widgets.
+
+**Root Causes:**
+1. The existing real-manifest restore benchmarks timed withdrawn or activation-only paths, so they missed the live Tk event-cycle where the Translation header's deferred summary actually runs.
+2. `gui/steps/translate.py::_get_existing_translation_text()` still re-entered manifest lookup logic on cache misses; when the deferred status summary classified every line after the visible window appeared, untranslated rows could trigger repeated manifest rescans.
+3. Live GUI project loading needed its own non-blocking callback path so the benchmark and menu-driven loads could exercise the running Tk event loop without relying on a nested synchronous restore helper.
+
+**Changes:**
+1. **`dev/benchmark_manifest_restore.py`** — Added `--launch-gui` mode that starts the real `App` mainloop first, loads a manifest from inside that running event loop, and polls until the restored tab is actually usable instead of only timing a withdrawn restore snapshot.
+2. **`gui/steps/translate.py`** — Added a one-time `tl` cache hydration guard so deferred status-summary rebuilds never fall back to per-row manifest lookups after cache misses; the Translation table also restores a smaller first visible page (`500` rows) for the live GUI path.
+3. **`gui/app.py`** — Added `_load_manifest_from_path_async()` and routed live GUI manifest loads through it so the running application uses an `after()`-polled worker path while the older synchronous helper remains available for non-mainloop tooling and withdrawn benchmarks.
+4. **Tests** — Expanded `dev/test_translation_status_cache.py` for empty-cache and one-time hydration coverage, and `dev/test_app_startup.py` for the new async live GUI loader contract.
+
+**Tests:**
+- `python -m pytest dev/test_translation_status_cache.py dev/test_app_startup.py -q --timeout=20` — `35 passed`
+- Guarded visible GUI benchmark: `python dev/benchmark_manifest_restore.py --manifest Projects/Kano.CherryAI.json --step 5 --launch-gui --timeout 8 --trace` — reached usable Translation idle in `2.109s`
+- Guarded withdrawn benchmark: `python dev/benchmark_manifest_restore.py --manifest Projects/Kano.CherryAI.json --step 5 --timeout 8 --trace` — reached idle in `1.080s`
+
+=============================================================================
+
 ### PHASE PLAN: Ledger TSV Migration
 **Priority:** HIGH | **Status:** REVIEW FIRST | **Effort:** LARGE
 
@@ -138,6 +419,26 @@ Goal: Redesign staged storage so originals, latest translated files, and patch h
 The old multi-version patch-update workflow should be re-reviewed only after these three phases land, because its conflict model depends on the new Editor naming and the new staged folder layout.
 
 =============================================================================
+
+### BUG FIX: Manifest Bloat From EditorState + Output Lines
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Shrink `.CherryAI.json` manifests by removing redundant persisted caches from `EditorState.files[...]` and `step_state.Output.data.lines`.
+
+**Changes:**
+1. **`functions/manifest_manager.py`** — `_stage_translated_bytes()` now persists only the compact `EditorState.files[rel_path]` contract: `saved_at`, staged artifact references, and bounded history. It no longer serializes `diff_to_patch`, `edited_text`, `diff_to_original`, `line_history`, `locator_metadata`, or `latest_saved_row_state`.
+2. **`functions/manifest_manager.py`** — `get_editor_file_view()` now rebuilds `diff_to_patch` from staged artifacts on demand, including reconstructing the forward-facing editor diff from the Editor-owned reverse patch artifact when necessary.
+3. **`functions/manifest_manager.py`** — Added translated-branch backup helpers: `backup_active_translated_branch()`, `discard_active_translated_branch()`, and `restore_translated_branch_backup()`. Backups rename `Translated/` plus `Patch/Translated/` into `Backups/` and store artifact-only metadata in `EditorState.backups`.
+4. **`functions/manifest_manager.py`** — `_migrate_manifest()` now strips legacy `step_state.Output.data.lines` plus the removed heavyweight `EditorState.files[...]` keys on load so the next save rewrites compact manifests.
+5. **`gui/steps/output_inject.py`** — `_load_from_session()` and `_save_to_session()` now remove the redundant manifest-backed Step 9 `lines` cache instead of persisting it.
+6. **`gui/steps/output_inject.py`** — Step 9 now prompts when an active translated branch already exists: replace it, back it up first, or cancel the export.
+7. **`functions/manifest_manager.py` / `gui/steps/output_inject.py`** — Reverse diff artifacts are now Editor-owned only. Successful Step 9 staging writes directly into `Translated/` and clears active `Patch/Translated/` artifacts instead of generating new ones.
+8. **Tests** — Updated the manifest-state assertions to the artifact-only EditorState contract and added regressions for migration cleanup, Step 9 patch clearing, translated-branch backup/restore, and the new Output-step prompt flow.
+
+**Tests:**
+- `python -m pytest dev/test_manifest_state.py -k "get_editor_file_view_builds_live_diff_to_patch or save_editor_patch_writes_patch_and_updates_editor_state or save_lines_only_changes_synthesizes_patch_when_translated_missing or save_lines_only_changes_promotes_saved_stage_and_updates_translated or stage_translated_output_file_step9_clears_patch_artifacts or backup_and_restore_translated_branch_roundtrip or migrate_strips_output_lines_and_redundant_editor_state" -q --timeout=20` — 6 passed
+- `python -m pytest dev/test_output_injection.py -k "write_file_stages_successful_output_into_translated_tree or prepare_translated_branch_export" -q --timeout=20` — 4 passed
+- `python -m pytest dev/test_patch_editor_view.py dev/test_output_injection.py -k "refresh_aux_views_sets_patch_diff_text or load_selected_file_uses_manifest_manager_editor_view or write_file_stages_successful_output_into_translated_tree or prepare_translated_branch_export" -q --timeout=20` — 6 passed
 
 =============================================================================
 [Archived: Sessions 43–24 + Phase 62 → see doc/archived.md]
@@ -443,6 +744,22 @@ Goal: Fix the inert QA tab, keep the Quality Assurance column sparse, and replac
 
 **Tests:** Focused pytest run passed: `dev/test_validation.py`, `dev/test_qa_manifest.py`, `dev/test_api_validation.py`, `dev/test_settings_flow.py`, `dev/test_estimate_manifest.py`, `dev/test_manifest_fields.py`, and targeted QA classes in `dev/test_gui_v2.py` — 490 passed.
 
+### BUG FIX: QA Encoding Safety For Legacy Output Codecs
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Catch `shift_jis` / `cp932` write failures earlier in Step 7 by validating the effective QA review text against a selected output encoding, surfacing the first offending character, and offering a safe overwrite suggestion based on explicit transliteration plus Unicode normalization.
+
+**Changes:**
+1. **`functions/validation.py`** — Added `validate_encoding_safety()` and `make_encoding_safe_text()` using explicit transliteration for macron vowels and EM/EN dash variants, followed by `unicodedata.normalize("NFKD", ...)` and combining-mark removal. `validate_qa_line()` now emits `encoding_unsafe` findings with the offending character, position, and an auto-fix replacement when the transformed text encodes cleanly.
+2. **`gui/steps/qa.py`** — Added manifest-backed QA options `EncodingSafetyEnabled` and `EncodingCheckEncoding`, surfaced as a checkbox plus encoding spinbox, mapped new `ENCODING_UNSAFE` issues, and changed Apply Fix / Auto-fix to write encoding-safe replacements into `qa_overwrite`.
+3. **`functions/manifest_manager.py`** — Extended `QAOptions` defaults and getters with the new encoding-safety fields while keeping older manifests backward-compatible.
+4. **Tests** — Added focused regressions for the shared encoding helper, QA options persistence, GUI dataclass defaults, and applying encoding-safe auto-fixes through `qa_overwrite`.
+
+**Tests:**
+- `python -m pytest dev/test_validation.py -q --timeout=20` — 95 passed
+- `python -m pytest dev/test_validation.py dev/test_qa_manifest.py dev/test_gui_v2.py dev/test_manifest_defaults.py -k "EncodingSafety or encoding_safety or apply_current_fix_writes_encoding_safe_overwrite or on_leave_does_not_auto_write_qa_fields or test_issue_type_enum_values or test_qa_issue_creation or test_qa_options_defaults or test_qa_options_custom or test_manifest_has_qa_options" -q --timeout=20` — 11 passed
+- `python -m pytest dev/test_validation.py dev/test_qa_manifest.py dev/test_manifest_defaults.py -q --timeout=20` — `dev/test_validation.py` and `dev/test_qa_manifest.py` passed; `dev/test_manifest_defaults.py` still has unrelated pre-existing failures outside this change slice
+
 ### BUG FIX: Safe Open Project Reset + Canonical Tags Import
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
 
@@ -531,6 +848,75 @@ Goal: Make Translation Refresh, Preview Requests, Start Translation, and Costs e
 
 **Follow-up:**
 - Add separate Global Options toggles for individual optional skip classes shown in the Translation status summary, especially placeholders, code-only, symbols-only, empty, and non-source lines.
+
+### BUG FIX: Deferred Validation Retries + Speaker Delimiter Discard
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Separate API retry handling from translation-validation failures, enforce speaker-format preservation with a strict per-line colon/fullwidth-colon count check, and move validation retries to a deferred pass after the main translation run.
+
+**Root Causes:**
+1. Step 5 accepted successful API responses without running the shared batch validation path, so speaker-format and structural checks were not consistently enforced in the live workflow.
+2. Line-count mismatches were raised as normal `TranslationError`s inside `functions/api_client.py`, which caused them to be retried inline as if they were transport/API faults.
+3. Speaker-format preservation relied on broader pattern inference instead of the requested concrete `:` / `：` count parity per line.
+
+**Changes:**
+1. **`functions/validation.py`** — Added delimiter-count speaker validation for `:` and `：`, plus explicit full-response discard signaling for unsafe structural mismatches.
+2. **`functions/api_client.py`** — Added `ResponseValidationError` so line-count mismatches bypass inline API retries and stay in the validation lane.
+3. **`gui/steps/translate.py`** — Step 5 now validates successful responses before persisting them, queues validation-only failures into deferred retry jobs, retries them after the main pass with the configured retry strategy, and feeds untranslated source text into rolling context for lines still awaiting validation recovery.
+4. **Tests** — Added focused regressions in `dev/test_api_validation.py`, `dev/test_first_request_gate.py`, and `dev/test_translation_phase43.py`.
+
+**Tests:** Focused pytest run passed: `dev/test_api_validation.py`, `dev/test_first_request_gate.py`, `dev/test_translation_phase43.py` — 120 passed, 2 skipped.
+
+### BUG FIX: Content Warning Refusal Group + Unsafe-Request Policy
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Treat model refusals as a dedicated Step 5 outcome instead of generic malformed output, make them filterable in API Log, and connect the behavior to explicit Limits settings.
+
+**Changes:**
+1. **`functions/api_client.py`** — Added provider-agnostic refusal detection after structured-output failure, routed unsafe refusals through `APIErrorCategory.CONTENT_FILTERED`, skipped-or-split chunks according to `skip_unsafe_requests`, and downgraded the old preflight content warning to a prompt-context stub.
+2. **`functions/api_log.py` / `gui/dialogs/api_log_view.py`** — Added Status `CONTENT_WARNING` / `Content Warning` so refused requests can be filtered separately from ordinary failed attempts.
+3. **`gui/dialogs/global_options.py`** — Replaced the old content-warning toggle with `Abort after [N] Unsafe Request` plus `Skip unsafe requests`, while keeping legacy aliases for saved settings.
+4. **`gui/steps/translate.py`** — Applied the new limit settings to each live API client and added a run-level unsafe-request abort counter.
+5. **Tests** — Added focused regressions in `dev/test_first_request_gate.py`, `dev/test_api_log.py`, and `dev/test_translation_phase43.py`.
+
+**Tests:** Focused pytest runs passed: `dev/test_first_request_gate.py`, `dev/test_api_log.py`, and targeted `dev/test_translation_phase43.py` cases.
+
+### BUG FIX: Exact-Length OpenAI Structured Output + API Log Failure Filter
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Investigate the recurring line-count mismatch on a concrete OpenAI `gpt-4.1` translation request, prevent that failure mode where plausible, and make the API Log able to isolate failed requests directly.
+
+**Root Causes:**
+1. The failing request returned valid JSON but merged two adjacent source lines into one translated item, so cardinality drift survived prompt-only instructions.
+2. CherryAI still used plain `json_object` for cloud OpenAI translation chunks, which guarantees valid JSON but not schema adherence or exact array length.
+3. The API Log store already tracked request status, but the dialog toolbar did not expose a failure-focused filter.
+4. `test_model_translation()` logged success immediately after the HTTP response, so invalid structured output could appear as a successful API Log entry.
+
+**Changes:**
+1. **`functions/api_client.py`** — OpenAI translation chunks now use strict `json_schema` with exact `minItems` / `maxItems` for the `translations` array when the provider supports structured output.
+2. **`gui/dialogs/api_log_view.py`** — Added a status filter so Failed, Recovered, Successful, and Pending requests can be isolated directly in the API Log window.
+3. **`functions/api_config.py`** — `test_model_translation()` now logs validation failures as failed inference entries instead of premature success.
+4. **Tests** — Added focused regressions for exact-length response-format selection and API Log status-filter mapping, while keeping the existing API Log failure-classification coverage green.
+
+**Tests:** Focused pytest run passed: `dev/test_api_log.py`, `dev/test_api_validation.py`, `dev/test_first_request_gate.py`, `dev/test_translation_phase43.py` — 186 passed, 1 skipped.
+
+### BUG FIX: Relaxed Fatal API Policy + 10-Chunk Validation Gate
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Stop aborting Step 5 on the first retryable API hiccup. Only billing/quota exhaustion and concrete not-found failures should remain immediate hard stops, transient upstream reset/overflow errors should retry, and the validation-failure-rate stop should not arm until at least 10 chunks have been sampled.
+
+**Root Causes:**
+1. `functions/common_errors.py` still defaulted most classified API categories to fatal unless a caller opted into `is_retryable=True`, so auth, permission, content-filter, generic bad-request, and unknown failures aborted too aggressively.
+2. Proxy/gateway messages such as `upstream connect error or disconnect/reset before headers. reset reason: overflow` did not match any retryable classifier branch and therefore fell through to fatal `UNKNOWN`.
+3. `gui/steps/translate.py` armed the validation-failure-rate stop after only 20 lines, which let a single early discarded chunk present as a 100% failure rate and cancel the whole run.
+
+**Changes:**
+1. **`functions/common_errors.py`** — Changed the shared default so only quota/billing exhaustion and concrete not-found failures remain fatal by default; auth, permission, content-filter, generic bad-request, and unknown failures now stay on the retry path. Added explicit retryable matching for upstream reset/overflow gateway text.
+2. **`providers/__init__.py`** — Aligned provider-level `AuthenticationError` and `ContentFilteredError` defaults with the relaxed shared retry policy.
+3. **`gui/steps/translate.py`** — Added chunk counters and changed the validation-failure-rate abort gate so it only activates after 10 sampled chunks, while still using the line-based failure ratio for the actual threshold.
+4. **Tests** — Expanded focused regressions in `dev/test_api_error_classification.py`, `dev/test_first_request_gate.py`, `dev/test_translation_phase43.py`, and provider spot-checks in `dev/test_provider_handshake.py`.
+
+**Tests:** Focused pytest slices passed: `dev/test_api_log.py`, `dev/test_api_error_classification.py`, `dev/test_first_request_gate.py`, `dev/test_translation_phase43.py` — 198 passed, 2 skipped. Provider spot-check passed: `dev/test_provider_handshake.py -k "authentication_error or content_filtered_error"` — 2 passed.
 
 ### BUG FIX: QA Before Wordwrap + Dedicated QA Field
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
@@ -1584,6 +1970,26 @@ Goal: Fix the missing OpenAI prompt-cache-key wiring so the auto-generated key i
 
 **Tests:** `C:/Python314/python.exe -m pytest dev/test_prompt_caching.py dev/test_request_preview.py dev/test_api_log.py`
 - Result: 204 passed, 2 skipped
+
+### FEATURE: Mistral Provider Parity
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 1 session
+
+Goal: Bring the Mistral provider up to parity with the current OpenAI-compatible provider path for model refresh, prompt caching, temperature/thinking controls, rate limits, pricing metadata, and utility LLM features.
+
+**Solution:**
+- Moved prompt-cache support in `functions/api_client.py` from OpenAI-only checks to provider-driven capability lookup via `ProviderRegistry.get(...).get_cached_input_config(model)`
+- Added live Mistral header-rate-limit config (`x-ratelimit-limit-req-minute`, `x-ratelimit-limit-tokens-minute`, remaining-* headers) and wired `APIClient` to choose rate-limit configs per provider instead of always seeding OpenAI
+- Updated `providers/mistral_provider.py` to advertise prompt caching, `reasoning_effort`-based thinking, and provider-clamped effort levels (`none` / `high`)
+- Refreshed curated Mistral fallback metadata in `functions/model_registry.py` for current live IDs (`mistral-small-latest`, `mistral-medium-3.5`, Magistral, Codestral, Ministral), including cached-input pricing and Experimental-plan defaults (`50 RPM`, `50000 TPM` observed live)
+- Changed `fetch_mistral_models()` to preserve curated pricing for known live IDs while still surfacing unknown live chat-capable models with unknown pricing
+- Added Mistral URL detection to `functions/CLI.py`
+- Updated utility LLM paths (`functions/term_translation.py`, `functions/API2Glossary.py`) to omit `store=False` for Mistral, because the live API now rejects unsupported extra request fields with HTTP 422
+- Live-verified CherryAI-native paths for model refresh/specs, main translation, model probe, term translation, gender inference, and prompt-cache accounting
+
+**Tests:**
+- `python -m pytest dev/test_api_client.py dev/test_api_providers.py dev/test_model_registry.py -q --timeout=20`
+- `python -m pytest dev/test_term_translation.py -q --timeout=20`
+- Live verification via CherryAI package imports against the Mistral Experimental plan key
 
 ---
 
@@ -2900,7 +3306,22 @@ Wired each optional component to its consuming pipeline step:
   `tag_rules` and applies regex to extracted lines, writing
   `tag` tags. `detect_tags()` in `functions/analysis.py`
   accepts optional `parser_rules` parameter to override built-in heuristics.
-- **O1/O2 Decrypt/Encrypt**: Deferred — requires permission UX design.
+- **O1/O2 Decrypt/Encrypt**: Parser-level hooks now exist in `ParserScript` and can be exposed as explicit no-op pass-throughs for exported/unpacked content. Native encrypted archive handling remains deferred pending permission UX and a defensible format implementation.
+
+### FEATURE: WOLF RPG JSON + Text Parser Formats
+
+Goal: Add CherryAI-compliant parser formats for the two relevant Dazed WOLF parser surfaces: exported/unpacked JSON data (`wolf.py`) and line-based WOLF text scripts (`wolf2.py`), while mirroring Dazed's code/flag naming in extraction tags.
+
+What changed:
+1. **`formats/wolf_rpg.py`** — Added `WolfRPGJsonParser` for JSON files containing `events`, `types`, or `commands`, with structural injection and Dazed-mirroring tags: `CODE101`, `CODE102`, `CODE122`, `CODE150`, `CODE210`, `CODE250`, `CODE300`, `SCENARIOFLAG`, `OPTIONSFLAG`, `NPCFLAG`, `DBNAMEFLAG`, `DBVALUEFLAG`, `ITEMFLAG`, `STATEFLAG`, `ENEMYFLAG`, `ARMORFLAG`, `WEAPONFLAG`, `SKILLFLAG`.
+2. **`formats/wolf_rpg.py`** — Added `WolfRPGTextParser` for line-based WOLF text scripts with cp932 / Shift-JIS detection, speaker-aware grouped dialogue extraction, `//選択肢` choice extraction, and in-place speaker/dialogue/choice injection.
+3. **`formats/parser_base.py`** — Added explicit default `decrypt()` / `encrypt()` hooks plus capability metadata flags so plain exported formats can declare O1/O2 pass-through behavior without pretending to own native binary archive crypto.
+4. **`formats/__init__.py`** — Registered both WOLF parsers for auto-detection and direct format selection.
+5. **`dev/test_parser_scripts.py`** — Added focused regressions for WOLF JSON auto-detection, full code/flag tag coverage, JSON injection, WOLF text encoding/extraction/injection, and O1/O2 capability reporting.
+6. **Documentation** — Updated `doc/features.md`, `doc/technical.md`, `doc/specs.md`, and `doc/tests.md` to describe the new parser formats and their current scope.
+
+Verified command:
+- `python -m pytest dev/test_parser_scripts.py -k "WolfRPG" -q --timeout=20` — 8 passed
 
 **Files Modified:**
 - `gui/steps/input_extract.py` — `_wire_parser_optionals()` (~100 lines) called
@@ -3008,7 +3429,7 @@ All provider logic currently lives in scattered locations:
        - `is_local_provider()` — checks `LOCAL_PROVIDERS` tuple
        - `is_openai_reasoning_model()` — checks for "o1", "o3" in model name
        - `is_claude_thinking_model()` — checks for "claude" + versioned names
-       - `supports_prompt_caching()` — OpenAI-only (Gemini excluded)
+      - `supports_prompt_caching()` — provider-driven via the registered provider capability (currently OpenAI and Mistral; Gemini excluded)
        - `supports_extended_cache_retention()` — gpt-4.1/gpt-5 only
      - `_translate_chunk()` has the biggest provider branch:
        - Local → `response_format = json_schema` (strict schema)
@@ -3139,10 +3560,10 @@ class ThinkingConfig:
 
 | # | Component | Signature / Type | Description |
 |---|-----------|-----------------|-------------|
-| OP1 | **Cached Input** | `get_cached_input_config(model_id) → CachedInputConfig \| None` | Check whether model supports prompt caching, minimum static prompt size to trigger it, and how cached tokens are reported. Currently OpenAI-only: prefix-based, auto-triggered at ≥1024 tokens, reported via `prompt_tokens_details.cached_tokens`. | Claude is know to be vastly different.
+| OP1 | **Cached Input** | `get_cached_input_config(model_id) → CachedInputConfig \| None` | Check whether model supports prompt caching, minimum static prompt size to trigger it, and how cached tokens are reported. Currently implemented for OpenAI and Mistral: OpenAI is prefix-based with optional 24h retention; Mistral uses `prompt_cache_key`, in-memory retention, and reports hits via `prompt_tokens_details.cached_tokens`. | Claude is know to be vastly different.
 | OP2 | **Batch / Flex / Priority Mode** | `get_batch_config(model_id) → BatchConfig \| None` | Check availability of discount batch modes: Batch (50% off, 24h), Flex (variable discount), Priority (faster, premium). Returns differing input/output prices per mode. Currently only OpenAI has Batch. | Must be looked up for other providers.
 | OP3 | **Model List Fetcher** | `fetch_models(api_key) → list[ModelInfo]` | Fetch available models from the provider API. Currently implemented for OpenAI, Google, Mistral. Each has its own endpoint and response format. |
-| OP4 | **Rate Limit Probing** | `probe_rate_limits(api_key, model_id) → RateLimitInfo \| None` | Send a minimal request to read rate limit headers. Currently OpenAI-only (`x-ratelimit-*` headers). |
+| OP4 | **Rate Limit Probing** | `probe_rate_limits(api_key, model_id) → RateLimitInfo \| None` | Send a minimal request to read rate limit headers. OpenAI has explicit probing; Mistral limits are now consumed from live response headers during normal requests (`x-ratelimit-limit-req-minute`, `x-ratelimit-limit-tokens-minute`, remaining-*). |
 | OP5 | **Error Classifier** | `classify_error(error) → ClassifiedError` | Provider-specific error classification. When absent, falls back to the default classifier in `common_errors.py`. |
 
 **`CachedInputConfig` dataclass:**
@@ -3524,7 +3945,7 @@ Goal: Fix 7 issues in the Costs step and Translation step related to API request
   - All pricing returns `0.0` (FREE)
   - `supports_structured_output()` returns `True` (LM Studio and Ollama
     support JSON schema)
-  - `get_thinking_config()` returns default (not available)
+  - `get_thinking_config()` may return default (not available) for non-thinking local models; cloud providers override this per model family
   - `fetch_models()` queries `/v1/models` endpoint on localhost
   - Subclasses `LMStudioProvider` (port 1234) and `OllamaProvider` (port 11434)
     can override `base_url`
@@ -3657,7 +4078,7 @@ codebase that must be preserved during migration:
 | **Pricing** | Per-model (model_registry) | Default $1/$2 per M (no registry models yet) | FREE tier (some paid) | Per-model (model_registry) | FREE ($0.0) |
 | **Token usage** | Full details (cached, reasoning, prediction) | Basic (prompt + completion) | Basic (prompt + completion) | Basic (prompt + completion) | Basic (prompt + completion) |
 | **Error patterns** | All categories from `classify_api_error()` | Same (via compat) + thinking-specific | Same (via compat) + content filter likelihood | Same (via compat) | Connection errors more common |
-| **Rate limit headers** | `x-ratelimit-*` (probeable) | Not available | Not available | Not available | Not applicable |
+| **Rate limit headers** | `x-ratelimit-*` (probeable) | Not available | Not available | `x-ratelimit-limit-req-minute`, `x-ratelimit-limit-tokens-minute`, remaining-* | Not applicable |
 | **Model fetcher** | `fetch_openai_models()` — `/v1/models` + pricing page HTML | None (hardcoded) | `fetch_google_models()` — `/v1beta/models` + pricing page | `fetch_mistral_models()` — `/v1/models` | `/v1/models` on localhost |
 | **Logit bias** | Supports `logit_bias` param | Not supported (ignored) | Limited support | Not supported | Varies by backend |
 | **Temperature** | 0.0-2.0 (some models no temperature: o1) | 0.0-1.0 | 0.0-2.0 | 0.0-1.0 | Varies |
@@ -3878,14 +4299,14 @@ to_dict/from_dict roundtrip and legacy mode migration.
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** Session
 
 Goal: Minimise output-token waste (previously 2k input → 33k output in 15
-requests) by enforcing strict JSON-schema structured output, adding `max_tokens`
-caps and `store=False`. Make prompts for Term Translation and Gender Inference
+requests) by enforcing strict JSON-schema structured output and adding `max_tokens`
+caps. OpenAI requests may also use `store=False`. Make prompts for Term Translation and Gender Inference
 configurable in Global Options → Prompts. Hide Edit/TLC prompt sections.
 
 **Structured Output (json_schema):**
 - `term_translation.py` — `_TERM_TRANSLATION_SCHEMA` with strict `{"translations": [...]}` schema
 - `API2Glossary.py` — `RESPONSE_SCHEMA` with single `details` string field (no enum constraint; accepts any gender value)
-- Both use `store=False` (prevents storing requests for model training)
+- `store=False` is sent for OpenAI utility requests; strict providers such as Mistral omit unsupported extra fields
 - `term_translation.py` — `max_tokens=max(100, len(terms) * 20)`
 - `API2Glossary.py` — `max_tokens=150`
 
@@ -3914,8 +4335,8 @@ configurable in Global Options → Prompts. Hide Edit/TLC prompt sections.
 
 **Files Modified:**
 - `gui/dialogs/global_options.py` — PromptsSettings + 3 new defaults + UI sections + hide Edit/TLC
-- `functions/term_translation.py` — json_schema, store=False, max_tokens, prompt_type, configurable prompt
-- `functions/API2Glossary.py` — json_schema single details field (no enum), store=False, max_tokens=150, case-insensitive _normalize_gender, configurable prompt
+- `functions/term_translation.py` — json_schema, provider-gated `store=False`, max_tokens, prompt_type, configurable prompt
+- `functions/API2Glossary.py` — json_schema single details field (no enum), provider-gated `store=False`, max_tokens=150, case-insensitive _normalize_gender, configurable prompt
 - `gui/steps/analysis.py` — prompt_type="glossary" / "code" pass-through
 
 **Tests:**
@@ -3937,9 +4358,9 @@ requests by content type, and fix context-type conditional prompt injection.
    - TranslationAbortError with format_for_display()
 2. ✅ First-Request Validation Gate (`gui/steps/translate.py`)
    - First chunk sent alone; fatal errors abort immediately
-3. ✅ Instant-Stop on Non-Structured Output (`functions/api_client.py`)
-   - _translate_chunk_with_retry() classifies errors; fatal = no retry
-   - _translate_chunk() reclassifies before re-raising
+3. ✅ Retryable Non-Structured Output + API Log Failure Capture (`functions/api_client.py`)
+  - _translate_chunk_with_retry() now keeps invalid/non-JSON structured-output failures on the retry path and only aborts after retries are exhausted
+  - _translate_chunk() logs API-call failures, invalid JSON, invalid `translations` payloads, and discarded line-count mismatches to the structured API Log before re-raising
 4. ✅ Request String Sorting by Type (`functions/prompt_builder.py`)
    - sort_requests_by_type(): Dialogue > Choice > Mixed/Unknown > Menu
    - RequestString dataclass with priority, RC chain detection
@@ -3966,12 +4387,14 @@ requests by content type, and fix context-type conditional prompt injection.
 
 ---
 
-### FEATURE: Translation Step Number of Threads Control
+### FEATURE: Translation Step Number of Threads + Requests / Second Control
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** Session
 
 Goal: Expose the existing concurrent request limit in Translation Step →
-Request Options as a user-facing **Number of Threads** control, persist it, and
-verify that live concurrent requests still return outputs in sorted order.
+Request Options as a user-facing **Number of Threads** control, add an optional
+**Requests / Second** pacing control beside it, persist both values, and verify
+that live concurrent requests still return outputs in sorted order while paced
+requests stay below the target rate.
 
 **Completed Sub-tasks:**
 1. ✅ Added **Number of Threads** `ttk.Spinbox` below Request Mode in
@@ -3990,12 +4413,56 @@ verify that live concurrent requests still return outputs in sorted order.
   under out-of-order future completion
 8. ✅ Ran a live `gpt-4.1-nano` smoke test on four tiny Japanese lines:
   ordered output preserved, 1 worker = 6.446 s, 3 workers = 2.646 s
+9. ✅ Follow-up bug fix: Translation-tab re-entry now preserves the saved
+  manifest thread count instead of resetting to per-model/default `3`; normal
+  transient 429 rate limits pause for 60 seconds before retry, while
+  quota/billing/account-limit 429 messages abort immediately with a warning
+  dialog; legacy lowercase `CherryAI.ini` aliases for Summary/SystemInstruction
+  presets are normalized to canonical mixed-case keys
+10. ✅ Added **Requests / Second** checkbox + float spinbox below Number of
+  Threads in `gui/steps/translate.py`, persisted to
+  `RequestOptions.RequestsPerSecondEnabled` /
+  `RequestOptions.RequestsPerSecond` (range `0.01`-`999.99`)
+11. ✅ Added shared API-client request-start pacing in
+  `functions/api_client.py` so concurrent Translation workers respect one
+  project-level RPS cap
+12. ✅ Added adaptive RPS slowdown parsing for provider 429 text plus fallback
+  reduction rules (`stated value` else `current × 0.9` below `1`, `current ×
+  0.75` above `1`, unlimited treated as `50` before reducing)
+13. ✅ Added official `mistral-medium-2505` fallback pricing/context metadata
+  from the current Mistral Medium 3 model card and fixed model lookup to prefer
+  curated fallback pricing over stale persisted unknown-pricing entries for the
+  same model id
+14. ✅ Added focused regressions in `dev/test_api_client.py`,
+  `dev/test_translate_manifest.py`, and `dev/test_model_registry.py`
+15. ✅ Added live verification script `dev/test_mistral_rps.py`; observed that
+  an 8-request burst against `mistral-medium-2505` did not trigger a provider
+  429 on the Experimental plan key, while a paced `0.40 RPS` run completed
+  successfully and respected the configured delay
+16. ✅ Follow-up Step 5 restore fix: manifest-saved model, Number of Threads,
+  and Requests / Second values are now reapplied after Global Options and
+  per-model defaults on Translation-tab re-entry, so projects like Kano no
+  longer fall back to `Mock Translation`, default thread count, or `1.00 RPS`
+17. ✅ Legacy manifest compatibility: Translation now restores older top-level
+  `RequestsPerSecond` values on reopen and mirrors the current project RPS back
+  to that key on save for backward-compatible round-trips
+18. ✅ Progress window follow-up: the active `Processing chunk X/Y` line is now
+  replaced by the final chunk result, and close/cancel is blocked while
+  outstanding requests remain, reporting the remaining request count instead
+19. ✅ Added focused regressions for the follow-up fixes in
+  `dev/test_translation_status_cache.py` and `dev/test_api_client.py`
 
 **Files Modified:**
 - `gui/steps/translate.py` — Number of Threads UI, manifest/model restore,
-  runtime max_concurrent wiring, request-mode bug fix
-- `dev/test_request_preview.py` — 3 new request-options regression tests
+  runtime max_concurrent wiring, request-mode bug fix, manifest-precedence fix,
+  quota warning dialog routing
+- `dev/test_request_preview.py` — 5 request-options regression tests
+- `functions/common_errors.py` — explicit quota/billing 429 phrase detection
+- `functions/api_client.py` — fixed 60-second transient 429 retry pause for chunked and line-by-line translation
+- `functions/ini_manager.py` — canonical mixed-case alias normalization before seeding
 - `dev/test_concurrent_execution.py` — sorted-completion ordering regression
+- `dev/test_api_error_classification.py` — classifier phrase coverage + 60-second retry regressions
+- `dev/test_ini_manager.py` — lowercase alias normalization regression
 
 **Tests:**
 - `C:/Python314/python.exe -m pytest dev/test_request_preview.py dev/test_concurrent_execution.py -q --timeout=20`

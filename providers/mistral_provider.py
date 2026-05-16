@@ -6,6 +6,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from . import (
+    CachedInputConfig,
     ProviderRegistry,
     TemperatureConfig,
     ThinkingConfig,
@@ -37,17 +38,52 @@ class MistralProvider(OpenAICompatProvider):
             return info.output_price
         return 0.0
 
-    # ---- No prompt caching for Mistral ----
+    # ---- Prompt caching ----
 
-    def get_cached_input_config(self, model_id: str) -> None:
-        return None
+    def get_cached_input_config(self, model_id: str) -> Optional[CachedInputConfig]:
+        info = self._get_model_info(model_id)
+        if info and not info.structured_output:
+            return None
+        return CachedInputConfig(
+            supported=True,
+            min_prefix_tokens=1024,
+            retention="in_memory",
+            cached_price_ratio=0.1,
+        )
 
-    # ---- Thinking: Magistral models support thinking ----
+    # ---- Thinking: Mistral reasoning models advertise their mode in model_registry ----
 
     def get_thinking_config(self, model_id: str) -> ThinkingConfig:
         info = self._get_model_info(model_id)
         if info and info.thinking:
-            return ThinkingConfig(available=True, mode="builtin")
+            mode = info.thinking_mode or "optional"
+            if mode == "mandatory":
+                return ThinkingConfig(
+                    available=True,
+                    mode="mandatory",
+                    mandatory=True,
+                    effort_levels=("none", "high"),
+                    effort_default="high",
+                )
+            if mode == "explicit":
+                return ThinkingConfig(
+                    available=True,
+                    mode="explicit",
+                    budget_default=10000,
+                )
+            if mode == "builtin":
+                return ThinkingConfig(
+                    available=True,
+                    mode="builtin",
+                    mandatory=True,
+                )
+            return ThinkingConfig(
+                available=True,
+                mode="optional",
+                mandatory=False,
+                effort_levels=("none", "high"),
+                effort_default="high",
+            )
         return ThinkingConfig(available=False)
 
     # ---- Temperature: 0-1 for Mistral ----

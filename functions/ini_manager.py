@@ -475,6 +475,10 @@ def _load_ini() -> configparser.ConfigParser:
     # Seed empty sections from factory defaults (embedded in _FACTORY_DEFAULTS_INI_TEXT).
     populated = _populate_from_defaults(_ini_cache)
 
+    # Normalize legacy lowercase aliases before seeding so existing user
+    # values are preserved under their canonical mixed-case keys.
+    normalized = _normalize_legacy_case_variants(_ini_cache)
+
     # Seed built-in Python-constant data into [style], [tone],
     # [system_instructions], and [defaults] long-text keys.
     seeded = _seed_builtin_sections(_ini_cache)
@@ -482,7 +486,7 @@ def _load_ini() -> configparser.ConfigParser:
     # Fix any corrupted / mis-assigned built-in preset values.
     migrated = _migrate_preset_values(_ini_cache)
 
-    if sections_added or dirty or populated or seeded or migrated:
+    if sections_added or dirty or populated or seeded or migrated or normalized:
         _save_ini(_ini_cache)
 
     return _ini_cache
@@ -685,6 +689,76 @@ def _migrate_preset_values(config: configparser.ConfigParser) -> bool:
                     "Fixed mis-assigned [%s].%s (was another preset's text)",
                     section, name,
                 )
+    return changed
+
+
+def _normalize_legacy_case_variants(config: configparser.ConfigParser) -> bool:
+    """Normalize stale lowercase aliases for canonical mixed-case INI keys."""
+    changed = False
+    legacy_map: Dict[str, Dict[str, str]] = {
+        "defaults": {
+            "summary": "Summary",
+            "systeminstruction": "SystemInstruction",
+        },
+        "system_instructions": {
+            "default": "Default",
+            "eroi": "Eroi",
+        },
+    }
+
+    for section, aliases in legacy_map.items():
+        if not config.has_section(section):
+            continue
+        for legacy_key, canonical_key in aliases.items():
+            if not config.has_option(section, legacy_key):
+                continue
+            legacy_value = config.get(section, legacy_key)
+            if not config.has_option(section, canonical_key):
+                config.set(section, canonical_key, legacy_value)
+                logger.info(
+                    "Migrated [%s].%s to canonical key [%s].%s",
+                    section,
+                    legacy_key,
+                    section,
+                    canonical_key,
+                )
+            config.remove_option(section, legacy_key)
+            changed = True
+            logger.info(
+                "Removed legacy lowercase alias [%s].%s",
+                section,
+                legacy_key,
+            )
+
+    preset_sections: Dict[str, Dict[str, str]] = {
+        "style": {name.lower(): name for name in _BUILTIN_STYLE_DEFAULTS},
+        "tone": {name.lower(): name for name in _BUILTIN_TONE_DEFAULTS},
+    }
+
+    for section, canonical_names in preset_sections.items():
+        if not config.has_section(section):
+            continue
+        for legacy_key, canonical_key in canonical_names.items():
+            if legacy_key == canonical_key or not config.has_option(section, legacy_key):
+                continue
+            legacy_value = config.get(section, legacy_key)
+            if not config.has_option(section, canonical_key):
+                config.set(section, canonical_key, legacy_value)
+                logger.info(
+                    "Migrated [%s].%s to canonical key [%s].%s",
+                    section,
+                    legacy_key,
+                    section,
+                    canonical_key,
+                )
+            config.remove_option(section, legacy_key)
+            changed = True
+            logger.info(
+                "Removed legacy lowercase alias [%s].%s",
+                section,
+                legacy_key,
+            )
+
     return changed
 
 

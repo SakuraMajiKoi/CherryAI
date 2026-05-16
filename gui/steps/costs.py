@@ -941,7 +941,7 @@ class CostsStep(BaseStep):
         # Savings summary
         if result.cost_saved > 0:
             self._savings_label.configure(
-                text=f"💰 Save {_fmt_cost(result.cost_saved)} "
+                text=f"💰 Saved {_fmt_cost(result.cost_saved)} "
                      f"({result.savings_percent:.1f}% tokens)",
             )
         else:
@@ -1085,7 +1085,7 @@ class CostsStep(BaseStep):
         # Savings summary
         if result.cost_saved > 0:
             self._savings_label.configure(
-                text=f"💰 Save {_fmt_cost(result.cost_saved)} "
+                text=f"💰 Saved {_fmt_cost(result.cost_saved)} "
                      f"({result.savings_percent:.1f}% tokens)",
             )
         else:
@@ -1976,10 +1976,10 @@ class CostsStep(BaseStep):
         for idx, text in enumerate(lines):
             is_invalid = (
                 not text.strip()
+                or idx in _skip
                 or is_placeholder_only(text)
                 or (preserve_patterns
                     and is_code_pattern_only(text, preserve_patterns))
-                or idx in _skip
             )
             line_infos.append(LineInfo(index=idx, text=text, is_invalid=is_invalid))
 
@@ -2148,7 +2148,7 @@ class CostsStep(BaseStep):
             cost = self._estimation_result.cost_saved
             if cost > 0:
                 self._savings_label.configure(
-                    text=f"💰 Save {_fmt_cost(cost)} ({pct:.1f}% tokens)"
+                    text=f"💰 Saved {_fmt_cost(cost)} ({pct:.1f}% tokens)"
                 )
             else:
                 self._savings_label.configure(text="")
@@ -2472,10 +2472,6 @@ class CostsStep(BaseStep):
 
         # Refresh lines from previous steps
         self._refresh_lines()
-
-        # Task 40.4: Auto-estimate on enter if files loaded but no estimation yet
-        if self._lines_original and not self._estimation_state["original_complete"]:
-            self._run_estimation()
 
     def on_leave(self) -> None:
         """Called when leaving step."""

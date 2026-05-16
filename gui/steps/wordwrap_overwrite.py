@@ -1979,7 +1979,7 @@ class WordwrapOverwriteStep(BaseStep):
 
     def _refresh_table(self) -> None:
         """Refresh the preview table with current lines and filter."""
-        rows: List[TableRow] = []
+        row_ids: List[int] = []
         trunc = 45
         active_filter = self._filter_var.get()
         selected_format = self._format_var.get().strip().lower()
@@ -1997,11 +1997,21 @@ class WordwrapOverwriteStep(BaseStep):
             if active_filter == "new_textbox" and not line.new_textbox_applied:
                 continue
 
-            orig = (line.original[:trunc] + "..."
-                    if len(line.original) > trunc else line.original)
-            wrap = (line.wrapped[:trunc] + "..."
-                    if len(line.wrapped) > trunc else line.wrapped)
-            row = TableRow(
+            row_ids.append(line.idx)
+
+        def build_row(row_id: int) -> TableRow:
+            line = self._lines[row_id]
+            orig = (
+                line.original[:trunc] + "..."
+                if len(line.original) > trunc
+                else line.original
+            )
+            wrap = (
+                line.wrapped[:trunc] + "..."
+                if len(line.wrapped) > trunc
+                else line.wrapped
+            )
+            return TableRow(
                 id=line.idx,
                 values={
                     "idx": str(line.idx),
@@ -2016,9 +2026,8 @@ class WordwrapOverwriteStep(BaseStep):
                     "source_format": line.source_format,
                 },
             )
-            rows.append(row)
 
-        self._preview_table.load_data(rows)
+        self._preview_table.set_lazy_data(row_ids, build_row)
 
     def _update_ruler(self, line_idx: int) -> None:
         """Update the line length ruler for selected line."""

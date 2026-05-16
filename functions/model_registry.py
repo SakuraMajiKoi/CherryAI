@@ -932,15 +932,15 @@ FALLBACK_MODELS: Dict[str, List[ModelInfo]] = {
             provider=PROVIDER_MISTRAL,
             url=MISTRAL_BASE_URL,
             input_price=2.00,
-            cached_input_price=None,
+            cached_input_price=0.20,
             output_price=6.00,
             batch_input_price=None,
             batch_output_price=None,
             batch_mode=False,
-            rpm_free=1,
+            rpm_free=50,
             rpm_tier1=2000,
             rpd_free=None,
-            tpm_free=500_000,
+            tpm_free=50_000,
             max_concurrent=5,
             structured_output=True,
             thinking=False,
@@ -949,20 +949,89 @@ FALLBACK_MODELS: Dict[str, List[ModelInfo]] = {
             temperature_max=1.0,
             context_window=131_072,
             token_speed=80,
-            notes="Mistral's flagship open-weight large model",
+            notes="Flagship large text model; Experimental plan observed at 50 RPM / 50k TPM",
         ),
         _mi(
             model_id="mistral-medium-latest",
-            display_name="Mistral Medium 3.1",
+            display_name="Mistral Medium 3.5",
+            provider=PROVIDER_MISTRAL,
+            url=MISTRAL_BASE_URL,
+            input_price=1.50,
+            cached_input_price=0.15,
+            output_price=7.50,
+            batch_mode=False,
+            rpm_free=50,
+            rpm_tier1=2000,
+            tpm_free=50_000,
+            max_concurrent=5,
+            structured_output=True,
+            thinking=True,
+            thinking_mode="optional",
+            logit_bias=False,
+            temperature_min=0.0,
+            temperature_max=1.0,
+            context_window=262_144,
+            token_speed=90,
+            notes="Frontier multimodal model; reasoning_effort accepts none/high",
+        ),
+        _mi(
+            model_id="mistral-medium-3.5",
+            display_name="Mistral Medium 3.5",
+            provider=PROVIDER_MISTRAL,
+            url=MISTRAL_BASE_URL,
+            input_price=1.50,
+            cached_input_price=0.15,
+            output_price=7.50,
+            batch_mode=False,
+            rpm_free=50,
+            rpm_tier1=2000,
+            tpm_free=50_000,
+            max_concurrent=5,
+            structured_output=True,
+            thinking=True,
+            thinking_mode="optional",
+            logit_bias=False,
+            temperature_min=0.0,
+            temperature_max=1.0,
+            context_window=262_144,
+            token_speed=90,
+            notes="Canonical Medium 3.5 model id from current Mistral docs",
+        ),
+        _mi(
+            model_id="mistral-medium-3-5",
+            display_name="Mistral Medium 3.5",
+            provider=PROVIDER_MISTRAL,
+            url=MISTRAL_BASE_URL,
+            input_price=1.50,
+            cached_input_price=0.15,
+            output_price=7.50,
+            batch_mode=False,
+            rpm_free=50,
+            rpm_tier1=2000,
+            tpm_free=50_000,
+            max_concurrent=5,
+            structured_output=True,
+            thinking=True,
+            thinking_mode="optional",
+            logit_bias=False,
+            temperature_min=0.0,
+            temperature_max=1.0,
+            context_window=262_144,
+            token_speed=90,
+            notes="Alias used by the live /v1/models API for Medium 3.5",
+        ),
+        _mi(
+            model_id="mistral-medium-2505",
+            display_name="Mistral Medium 3",
             provider=PROVIDER_MISTRAL,
             url=MISTRAL_BASE_URL,
             input_price=0.40,
             cached_input_price=None,
             output_price=2.00,
             batch_mode=False,
-            rpm_free=1,
+            rpm_free=50,
             rpm_tier1=2000,
-            tpm_free=500_000,
+            tpm_free=50_000,
             max_concurrent=5,
             structured_output=True,
             thinking=False,
@@ -970,30 +1039,80 @@ FALLBACK_MODELS: Dict[str, List[ModelInfo]] = {
             temperature_min=0.0,
             temperature_max=1.0,
             context_window=131_072,
-            token_speed=100,
-            notes="Multimodal frontier model released Aug 2025",
+            token_speed=90,
+            notes=(
+                "Mistral Medium 3 model card (May 2025 docs): 128k context, "
+                "$0.4/M input, $2/M output"
+            ),
         ),
         _mi(
-            model_id="mistral-small-latest",
-            display_name="Mistral Small 3.2",
+            model_id="mistral-medium-2604",
+            display_name="Mistral Medium 3.5",
             provider=PROVIDER_MISTRAL,
             url=MISTRAL_BASE_URL,
-            input_price=0.10,
-            cached_input_price=None,
-            output_price=0.30,
+            input_price=1.50,
+            cached_input_price=0.15,
+            output_price=7.50,
             batch_mode=False,
-            rpm_free=1,
+            rpm_free=50,
             rpm_tier1=2000,
-            tpm_free=500_000,
-            max_concurrent=10,
+            tpm_free=50_000,
+            max_concurrent=5,
             structured_output=True,
-            thinking=False,
+            thinking=True,
+            thinking_mode="optional",
             logit_bias=False,
             temperature_min=0.0,
             temperature_max=1.0,
-            context_window=32_768,
+            context_window=262_144,
+            token_speed=90,
+            notes="Version-pinned Medium 3.5 id from April 2026 docs",
+        ),
+        _mi(
+            model_id="mistral-small-latest",
+            display_name="Mistral Small 4",
+            provider=PROVIDER_MISTRAL,
+            url=MISTRAL_BASE_URL,
+            input_price=0.15,
+            cached_input_price=0.015,
+            output_price=0.60,
+            batch_mode=False,
+            rpm_free=50,
+            rpm_tier1=2000,
+            tpm_free=50_000,
+            max_concurrent=10,
+            structured_output=True,
+            thinking=True,
+            thinking_mode="optional",
+            logit_bias=False,
+            temperature_min=0.0,
+            temperature_max=1.0,
+            context_window=262_144,
             token_speed=150,
-            notes="Updated small model released June 2025",
+            notes="Hybrid instruct/reasoning/coding model; reasoning_effort accepts none/high",
+        ),
+        _mi(
+            model_id="mistral-small-2603",
+            display_name="Mistral Small 4",
+            provider=PROVIDER_MISTRAL,
+            url=MISTRAL_BASE_URL,
+            input_price=0.15,
+            cached_input_price=0.015,
+            output_price=0.60,
+            batch_mode=False,
+            rpm_free=50,
+            rpm_tier1=2000,
+            tpm_free=50_000,
+            max_concurrent=10,
+            structured_output=True,
+            thinking=True,
+            thinking_mode="optional",
+            logit_bias=False,
+            temperature_min=0.0,
+            temperature_max=1.0,
+            context_window=262_144,
+            token_speed=150,
+            notes="Version-pinned Small 4 id from March 2026 docs",
         ),
         _mi(
             model_id="magistral-medium-latest",
@@ -1001,22 +1120,22 @@ FALLBACK_MODELS: Dict[str, List[ModelInfo]] = {
             provider=PROVIDER_MISTRAL,
             url=MISTRAL_BASE_URL,
             input_price=2.00,
-            cached_input_price=None,
+            cached_input_price=0.20,
             output_price=5.00,
             batch_mode=False,
-            rpm_free=1,
+            rpm_free=50,
             rpm_tier1=500,
-            tpm_free=500_000,
+            tpm_free=50_000,
             max_concurrent=3,
             structured_output=True,
             thinking=True,
-            thinking_mode="explicit",
+            thinking_mode="optional",
             logit_bias=False,
             temperature_min=0.0,
             temperature_max=1.0,
             context_window=131_072,
             token_speed=60,
-            notes="Reasoning model with thinking budgets",
+            notes="Reasoning model using reasoning_effort on current API",
         ),
         _mi(
             model_id="magistral-small-latest",
@@ -1024,22 +1143,22 @@ FALLBACK_MODELS: Dict[str, List[ModelInfo]] = {
             provider=PROVIDER_MISTRAL,
             url=MISTRAL_BASE_URL,
             input_price=0.50,
-            cached_input_price=None,
+            cached_input_price=0.05,
             output_price=2.00,
             batch_mode=False,
-            rpm_free=1,
+            rpm_free=50,
             rpm_tier1=1000,
-            tpm_free=500_000,
+            tpm_free=50_000,
             max_concurrent=5,
             structured_output=True,
             thinking=True,
-            thinking_mode="explicit",
+            thinking_mode="optional",
             logit_bias=False,
             temperature_min=0.0,
             temperature_max=1.0,
             context_window=131_072,
             token_speed=100,
-            notes="Small reasoning model with thinking budgets",
+            notes="Small reasoning model using reasoning_effort on current API",
         ),
         _mi(
             model_id="codestral-latest",
@@ -1047,12 +1166,12 @@ FALLBACK_MODELS: Dict[str, List[ModelInfo]] = {
             provider=PROVIDER_MISTRAL,
             url=MISTRAL_BASE_URL,
             input_price=0.30,
-            cached_input_price=None,
+            cached_input_price=0.03,
             output_price=0.90,
             batch_mode=False,
-            rpm_free=1,
+            rpm_free=50,
             rpm_tier1=2000,
-            tpm_free=500_000,
+            tpm_free=50_000,
             max_concurrent=5,
             structured_output=True,
             thinking=False,
@@ -1069,12 +1188,12 @@ FALLBACK_MODELS: Dict[str, List[ModelInfo]] = {
             provider=PROVIDER_MISTRAL,
             url=MISTRAL_BASE_URL,
             input_price=0.10,
-            cached_input_price=None,
+            cached_input_price=0.01,
             output_price=0.10,
             batch_mode=False,
-            rpm_free=1,
+            rpm_free=50,
             rpm_tier1=2000,
-            tpm_free=500_000,
+            tpm_free=50_000,
             max_concurrent=10,
             structured_output=True,
             thinking=False,
@@ -1091,12 +1210,12 @@ FALLBACK_MODELS: Dict[str, List[ModelInfo]] = {
             provider=PROVIDER_MISTRAL,
             url=MISTRAL_BASE_URL,
             input_price=0.04,
-            cached_input_price=None,
+            cached_input_price=0.004,
             output_price=0.04,
             batch_mode=False,
-            rpm_free=1,
+            rpm_free=50,
             rpm_tier1=2000,
-            tpm_free=500_000,
+            tpm_free=50_000,
             max_concurrent=10,
             structured_output=True,
             thinking=False,
@@ -1737,11 +1856,50 @@ def fetch_google_models(api_key: str) -> List[ModelInfo]:
 
 # --- Mistral ---
 
+_MISTRAL_ALIAS_IDS = {
+    "mistral-medium": "mistral-medium-3.5",
+    "mistral-medium-3": "mistral-medium-3.5",
+    "mistral-medium-2505": "mistral-medium-2505",
+    "mistral-medium-c21211-r0-75": "mistral-medium-3.5",
+}
+
+_MISTRAL_EXCLUDED_MODEL_TOKENS = (
+    "embed",
+    "moderation",
+    "transcribe",
+    "tts",
+    "ocr",
+)
+
+_MISTRAL_CHAT_PREFIXES = (
+    "mistral-",
+    "magistral-",
+    "codestral",
+    "ministral-",
+    "devstral",
+)
+
+
+def _is_mistral_chat_model(model_id: str) -> bool:
+    """Return True for Mistral chat-capable text models."""
+    mid = model_id.lower()
+    if any(token in mid for token in _MISTRAL_EXCLUDED_MODEL_TOKENS):
+        return False
+    return any(mid.startswith(prefix) for prefix in _MISTRAL_CHAT_PREFIXES)
+
+
+def _mistral_supports_reasoning(model_id: str) -> bool:
+    """Return True when a Mistral model should expose reasoning_effort."""
+    mid = model_id.lower()
+    return mid.startswith("mistral-") or mid.startswith("magistral-")
+
 def fetch_mistral_models(api_key: str) -> List[ModelInfo]:
     """Fetch Mistral model list from the /v1/models API.
 
-    Pricing is taken from fallback (Mistral's pricing page is JS-rendered
-    and cannot be scraped reliably without a headless browser).
+    Pricing and known capabilities are merged from curated fallback metadata.
+    Unknown chat-capable models are kept with unknown pricing so callers can
+    still inspect the live Experimental-plan catalog while cost checks fail
+    closed for undocumented entries.
     Falls back to ``FALLBACK_MODELS[PROVIDER_MISTRAL]`` on failure.
     """
     try:
@@ -1758,20 +1916,40 @@ def fetch_mistral_models(api_key: str) -> List[ModelInfo]:
     fallback_by_id = {m.model_id: m for m in FALLBACK_MODELS[PROVIDER_MISTRAL]}
     now = _ts()
     result: List[ModelInfo] = []
+    seen: set[str] = set()
 
     for model_obj in api_models:
         mid = model_obj.get("id", "")
-        if not mid:
+        if not mid or mid in seen:
             continue
-        # Skip alias "latest" models that are duplicated (keep the ones with
-        # explicit version dates too if present)
-        base = fallback_by_id.get(mid) or ModelInfo(
+        seen.add(mid)
+
+        alias_id = _MISTRAL_ALIAS_IDS.get(mid, mid)
+        base = fallback_by_id.get(mid) or fallback_by_id.get(alias_id)
+        if base is not None:
+            result.append(ModelInfo(**{
+                **base.to_dict(),
+                "model_id": mid,
+                "fetched_at": now,
+            }))
+            continue
+
+        if not _is_mistral_chat_model(mid):
+            continue
+
+        result.append(with_unknown_pricing(ModelInfo(
             model_id=mid,
             display_name=model_obj.get("name", mid),
             provider=PROVIDER_MISTRAL,
             url=MISTRAL_BASE_URL,
-        )
-        result.append(with_unknown_pricing(base, fetched_at=now))
+            structured_output=True,
+            thinking=_mistral_supports_reasoning(mid),
+            thinking_mode=(
+                "optional" if _mistral_supports_reasoning(mid) else None
+            ),
+            rpm_free=50,
+            tpm_free=50_000,
+        ), fetched_at=now))
 
     if not result:
         return list(FALLBACK_MODELS[PROVIDER_MISTRAL])
@@ -1912,19 +2090,31 @@ def get_model_info(
 
     Returns ``None`` if not found.
     """
+    fallback_match: Optional[ModelInfo] = None
+    for provider_models in FALLBACK_MODELS.values():
+        for fallback_model in provider_models:
+            if fallback_model.model_id == model_id:
+                fallback_match = fallback_model
+                break
+        if fallback_match is not None:
+            break
+
     for provider in ALL_PROVIDERS:
         models, _ = load_from_ini(provider, path)
         if not models:
             models = FALLBACK_MODELS.get(provider, [])
         for m in models:
             if m.model_id == model_id:
+                if (
+                    fallback_match is not None
+                    and (m.input_price is None or m.output_price is None)
+                    and fallback_match.input_price is not None
+                    and fallback_match.output_price is not None
+                ):
+                    return fallback_match
                 return m
     # Try fallback
-    for provider_models in FALLBACK_MODELS.values():
-        for m in provider_models:
-            if m.model_id == model_id:
-                return m
-    return None
+    return fallback_match
 
 
 def get_pricing_dict(

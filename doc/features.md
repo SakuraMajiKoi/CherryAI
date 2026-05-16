@@ -71,13 +71,14 @@ TABLE OF CONTENTS
 
 4. ADVANCED FEATURES
    - Request Caching System
-   - Prompt Caching (OpenAI)
+  - Prompt Caching (OpenAI + Mistral)
    - Progress Indicators
    - Rate Limit Management
    - Adaptive Chunk Sizing
    - Speaker Quote Stripping
    - Token-Based Chunking
    - Persistent API Logging
+  - Batched Translation Manifest Flushes
    - Automatic Line Recovery
    - Retry Strategy Options
    - Line-by-Line Translation Mode
@@ -106,6 +107,7 @@ TABLE OF CONTENTS
    - Manifests & Templates
    - Config File & API Configuration
    - Options Dialog
+  - Large Project Reopen Performance
 
 9. HOW TO USE - STEP BY STEP
    - First Time Setup
@@ -198,6 +200,12 @@ CherryAI is built on **batch processing**: you can load one or multiple files an
      * Shows progress for all files
    - You get all translated files with formatting restored
 
+6. Reopen Large Projects
+  - Open Project now uses a visible loading dialog with four phases: Loading manifest, Applying project, Restoring active step, and Finalizing
+  - Current-format manifests skip redundant full-line canonicalization on load when line locators are already canonical, so large projects reopen much faster instead of spending several extra seconds normalizing every row again
+  - The restored tab is activated only after the new project state is ready, so reopening a large project does not re-run duplicate tab-enter work or background saves just to show the saved step
+  - Internal performance verification for these reopen paths now uses a guarded 60-second benchmark wrapper that force-stops overruns and avoids leaving background Python processes behind
+
 =============================================================================
 
 WHAT CAN THE TOOL PROTECT?
@@ -271,15 +279,16 @@ FULL TABLE VIEW
 - **Close Prompt**: Asks to save or discard unsaved changes on close
 
 PATCH EDITOR
-- **Menu Bar Access**: Direct access via "Patch Editor" entry in the menu bar between Full Table View and API Log
+- **Menu Bar Access**: Direct access via the live "Editor" entry in the menu bar between Full Table View and API Log; this currently hosts the retained Patch Editor full-file surface
 - **Purpose**: Full-file editor for staged patch work. Opens files from the current project's `translated/` tree when present and falls back to the staged `Original/` copy when no patch file exists yet.
 - **VS-Code-Like Workflow**: Left-side file tree, large central text editor, tabbed auxiliary panes, and direct save/reload flow for patch-authoring work that is broader than line-by-line table edits.
 - **Search And Replace**: In-file search with next/previous navigation, optional regex mode, replace current, and replace all.
 - **Diff Views**: Shows unified diff against the staged original file and, when available, the previously saved patch version.
-- **Manifest-Backed Persistence**: Saving writes the edited full file into `Projects/{project_name}/Patch/` and stores editor metadata, diff snapshots, and bounded save history in the manifest `EditorState.files` section.
+- **Manifest-Backed Persistence**: Saving writes the edited full file into the staged translated layout and stores compact editor metadata in `EditorState.files`: save timestamp, staged artifact references, and bounded save history. Patch diff text is rebuilt from staged artifacts on demand instead of being duplicated in the manifest. Live line history, locator metadata, and current file text are rebuilt on demand instead of being duplicated in the manifest.
 - **Per-Line History**: Re-extracts the saved file with the same parser/format path used by the main workflow, aligns the extracted rows against the manifest pipeline, and shows line history filtered as `all`, `edited`, or `translated`.
 - **Line Comparison Columns**: History view shows line index, status, original text, manifest-resolved translated text, and the current extracted text from the saved patch file.
 - **Single Window Reuse**: Reopening Patch Editor reuses the same window and brings it to the foreground instead of opening duplicates.
+- **Theme Refresh Stability**: The Editor host keeps its root-owner reference separate from Tkinter's internal `_root()` helper, so opening the window and refreshing themes no longer crashes classic-widget traversal.
 
 API LOG
 - **Menu Bar Access**: Direct access via "API Log" entry in the menu bar (direct button, no dropdown)
@@ -288,15 +297,19 @@ API LOG
 - **Non-Modal Progress**: Translation progress window is non-modal — users can interact with API Log and other windows during translation
 - **Translation Progress Access**: The translation progress window includes an "API Log" button that opens or focuses the same API Log window during active translation
 - **Live Updates**: Subscribes to the API log store for real-time display of new entries as API calls complete
+- **Crash-Salvage Durability**: Completed request snapshots are appended to disk immediately so API activity survives even when Step 5 batches manifest writes for throughput
 - **Category Filter**: Dropdown to filter by Main Translation, Term Translation, Gender Inference, or Other (probing/testing)
+- **Status Filter**: Dropdown to isolate Content Warning, Failed, Recovered, Successful, or Pending requests so refusals and inference failures can be reviewed directly
 - **View Mode Switch**: Radio buttons to toggle between Sent, Received, or Both views
 - **Display Limit Spinbox**: Toolbar spinbox controls how many lines each prompt/content block shows: All (default), 1000, 2500, 5000, or Nothing; this changes display only and does not alter stored log data
 - **Search Bar**: Case-insensitive text search across all entry fields with yellow highlights
-- **Color-Coded Headers**: Green (✔ success), Yellow (⚠ recovered), Red (✘ failed) status indicators
+- **Color-Coded Headers**: Green (✔ success), Yellow (⚠ recovered), Amber (⚠ content warning), Red (✘ failed) status indicators
 - **Sent Block**: Displays model, provider, temperature, chunk info, full system prompt, and full user content from the structured log store
+- **Translation Throughput Guard**: Step 5 collects translated-line manifest updates and flushes them in one periodic batch instead of rewriting the whole manifest after every completed chunk
 - **Prompt Cache Visibility**: When OpenAI prompt caching is active, the Sent block also shows the effective `prompt_cache_key` and `prompt_cache_retention` taken from the actual request metadata
 - **Received Block**: Displays token statistics (prompt/completion/total/cached/reasoning), duration, finish reason, full error messages, and full response content from the structured log store
 - **Exact Request Copy**: API Log only stores copies of the actual sent/received data — it does not build its own requests. Main translation, line-by-line translation, term translation, gender inference, and model tests now hand their full prompt/content text to the structured log when available.
+- **Failed And Discarded Attempt Visibility**: Main-translation API call failures, invalid/non-JSON structured-output responses, invalid `translations` payloads, whole-response validation discards such as line-count mismatch, and post-parse content refusals are written to the API Log before CherryAI retries, skips, or aborts. Unsafe refusals use the dedicated `Content Warning` status so they can be filtered separately from transport/output failures.
 - **Status Bar**: Shows entry count (filtered vs. total) and aggregated token totals
 - **Per-Project Persistence**: Log stored as `.api_log.jsonl` alongside the manifest file; referenced by manifest "log" key
 - **Infinite Scroll**: Text widget with word wrap supports unlimited entries
@@ -449,6 +462,7 @@ API RESPONSE VALIDATION ✓ (Enhanced - Session 14+)
   - Skip context markers (__DIALOGUE__, __MENU__, __CHOICE__, __FILE__)
   - Skip __DEDUP__ and __PROTECTED__ only lines
   - Skip dot/ellipsis-only lines (e.g., "...", "..................", "…", "．．．")
+  - Preserve-pattern CODE_ONLY detection now uses a cached combined matcher, so the shared skip pass stays fast even when large projects carry hundreds of protect/preserve patterns
   - Skip lines without Japanese characters
   - Skip already translated lines
   - Auto-translate symbol-only lines (…→..., 。→., etc.)
@@ -456,6 +470,8 @@ API RESPONSE VALIDATION ✓ (Enhanced - Session 14+)
 - **Post-Translation Validation**:
   - Japanese character count check (max 4 allowed in output)
   - Anchor character preservation verification
+  - Speaker delimiter preservation check: each response line must keep the same count of `:` / `：` as its input line
+  - Speaker delimiter mismatches discard the affected response instead of partially accepting a broken speaker layout
   - Uses ANCHOR_EQUIVS for fullwidth/halfwidth equivalence
 - **Placeholder Preservation** ✓ (NEW - TASK 4):
   - Validates __PROTECTED__, __PROTECTED_1__, custom placeholders preserved
@@ -468,6 +484,9 @@ API RESPONSE VALIDATION ✓ (Enhanced - Session 14+)
     SPEAKER_FORMAT_LOST, TOO_MANY_JAPANESE, LINE_COUNT_MISMATCH,
     CODE_PATTERN_TRANSLATED
   - Batch validation with lines_to_retry list for targeted retries
+  - Full-batch discard when line-count or speaker-delimiter structure mismatches prove the whole response is unsafe
+  - Validation retries are deferred until after the main translation pass; API/transport retries stay separate
+  - OpenAI cloud translation requests now use strict `json_schema` with exact `minItems`/`maxItems` for the `translations` array so structurally valid JSON cannot silently merge adjacent lines
   - Success rate calculation for batch quality assessment
   - Code pattern preservation check: verifies preserve-action patterns
     survive translation; triggers retry when missing
@@ -514,8 +533,8 @@ PROJECT FILE STAGING (v3.1 + PLANNED REDESIGN)
 - Planned redesign target: `Original/` keeps the first full staged source snapshot and must copy the complete loaded folder tree, not only files with parseable content
 - Planned redesign target: `Translated/` becomes the latest full translated output tree
 - Planned redesign target: `Patch/Original/` stores forward patches relative to `Original/` using hash-first skip/diff/full-copy rules
-- Planned redesign target: `Patch/Translated/` stores reverse patches and rollback history before Editor saves or Output overwrites `Translated/`
-- Manifest `EditorState.files` continues to store per-file editor diffs, line-history snapshots, save timestamps, and bounded history entries alongside the staged files
+- Current behavior: `Patch/Translated/` reverse diff artifacts are owned by the Editor only. Step 9 Output now writes directly into `Translated/`, asks whether to replace or back up the active translated branch first, and clears active translated patch artifacts instead of generating new ones.
+- Manifest `EditorState.files` stores compact per-file editor metadata: staged artifact references, save timestamps, and bounded history entries, while `EditorState.backups` tracks renamed translated-branch backups. Heavy live-view data such as current text, locator metadata, line-history snapshots, and patch diff text are rebuilt from staged files and manifest rows when the Editor opens.
 - `source_root` stores only the folder name (privacy-safe, portable)
 - File resolution uses the local `Original/` directory, not original user paths
 - Projects remain functional even if original source files are moved/deleted
@@ -666,7 +685,7 @@ LOCAL LLM SUPPORT (Current + Planned Enhancement)
 - **Implementation Details:**
   - Provider detection: `APIClient.is_local_provider()` checks provider name and URL
   - `LOCAL_PROVIDERS = ("local", "lmstudio", "ollama")` in `api_client.py`
-  - Response format: `json_schema` (with strict schema enforcing `{"translations": [...]}`) for local providers, `json_object` for cloud providers
+  - Response format: strict `json_schema` for local providers and for OpenAI cloud translation requests; exact-length array constraints are used when the provider can enforce them, with `json_object` kept only as a fallback for providers without strict schema support
   - `test_model_translation()` in `api_config.py` also uses `json_schema` for local providers
   - `_filter_models_by_provider()` in `translate.py` queries the live server for model lists
   - `functions/local_llm.py`: `LocalLLMProvider` enum, `discover_models()`, `check_server_health()`, `is_local_url()`
@@ -753,11 +772,22 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   2. **Analysis** - Analyze content, detect patterns ✅ Implemented
   3. **Information** - Configure context, glossary, summary
   4. **Preprocessing** - Apply protection rules, dedupe ✅ Implemented
+    - Passive tab entry now restores filter/summary state without prebuilding preview rows for the full corpus; the shared table only materializes the visible filtered page on demand
   5. **Costs** - Token counts, cost estimates, time projection ✅ Implemented
+    - The initial "Preparing lines..." stage now stays responsive on large preserve-pattern sets because it reuses the shared cached CODE_ONLY matcher and short-circuits already-skipped rows before extra placeholder/code-only checks
+    - Verified with a synthetic `12000`-line / `300`-pattern benchmark: shared prepare-lines pass improved from `10.613s` to `0.075s`
   6. **Translation** - API configuration, batch translation ✅ Implemented
+    - Large-manifest tab entry no longer rescans the full manifest once per row when summarizing already translated lines; Step 5 caches manifest `tl` values by line index during `_refresh_lines()` and reuses that map for status/skip classification
+    - The deferred skip-policy summary now hydrates the manifest translation cache at most once per refresh and treats later cache misses as untranslated instead of re-querying the manifest row-by-row, so the live GUI no longer gets trapped rebuilding the Translation header after the window appears
+    - Passive tab entry now restores the visible table first and defers the full skip-policy status summary until Tk is idle, so saved-step reopen does not block on a second whole-project validation sweep before the window becomes usable
+    - The shared table path now materializes only the currently displayed filtered rows on passive entry instead of constructing a full-project `TableRow` list up front; the Translation table now restores a smaller first page so the live Treeview becomes usable before users page deeper into massive manifests
+    - Verified restore timings: `Projects/Kano.CherryAI.json` Step 5 saved-step idle `0.496s` in the withdrawn restore benchmark, `2.109s` in the new visible-GUI settle benchmark; `Projects/wolf_perf_probe.CherryAI.json` (`187200` lines) Step 5 saved-step idle `0.553s`; reusable real-manifest benchmarks live in `dev/benchmark_translation_tab_entry.py` and `dev/benchmark_manifest_restore.py`
   7. **Postprocessing** - Restore placeholders, apply fixes ✅ Implemented
+    - Passive entry no longer prebuilds the full Processed Lines table-model list; visible filtered rows are materialized on demand
   8. **Wordwrap** - Line breaking, width limits ✅ Implemented
+    - Passive entry no longer prebuilds the full preview row list; file/tag-filtered visible rows are materialized on demand while explicit wrap/apply actions still operate on full backing state
   9. **QA** - Quality checks, auto-tagging ✅ Implemented
+    - Passive entry no longer prebuilds the full QA row list; visible filtered rows are materialized on demand while overwrite/edit behavior stays unchanged
   10. **Output** - Export formats, save results
 - **Input Tab (Phase 1, updated Phase 39, 58, 60):**
   - **Unified Input Button (Phase 58.1):** Single "Input" button opens UnifiedInputDialog
@@ -776,6 +806,24 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - New context menu items: Select All, Expand All, Collapse All
   - **Clickable Column Headers (Phase 60):**
     - Name, Type, Lines columns clickable to sort ascending/descending
+  - **Large-Project Loading Flow (2026 performance pass):**
+    - One `LoadingProgressDialog` now spans the full Step 0 load sequence: file extraction, `Original/` staging, and manifest save
+    - Cancel remains available during the unified load flow and the dialog keeps the window responsive while long copies and saves progress
+    - Step 0 now batches live progress-label/count refreshes at coarse checkpoints instead of round-tripping through Tk for every single file, so visible loads stay responsive without spending the hot path inside dialog repaint calls
+    - Step 0 bulk loads now defer session-driven sidebar refresh notifications and per-file `Input` step-data writes until the batch ends, so the modal loading dialog no longer triggers hundreds of full Progress sidebar rebuilds while files are being collected
+    - Parser-backed staged re-extraction is now opt-in through `ParserScript.requires_staged_refresh`; LightVN keeps the staged `Original/` refresh path, while KiriKiri2 and other context-free parsers skip the redundant second parse during Step 0 sync
+    - New-project Step 0 loads can create the manifest manager state in memory first and defer the initial disk write until the post-sync save, avoiding a throwaway pre-sync manifest write during large imports
+    - Step 0 now fills a temporary rel-path source-text cache directly from staged copy bytes and reuses that cached text for `ln`/`f` capture during manifest sync, so `_build_manifest_line_entries()` no longer needs either the old pre-stage reread or the old staged-file reopen path
+    - Parser-backed loads now reuse `extract_tagged()` as the single Step 0 extraction pass when available, so `_load_file()` can keep per-line text, tags, and locator metadata aligned without a second parser call
+    - The compact manifest writer now formats already-normalized values without renormalizing every nested subtree during save, reducing redundant serializer work on large manifests while preserving the existing output format
+    - `dev/benchmark_kirikiri2_input_load.py` supports `--sample one-per-folder` for representative real-GUI Step 0 benchmarking on one parser-accepted file per source folder
+    - Reopening a large manifest now restores file metadata and counts first; `LoadedFile.lines` are materialized lazily only when preview/search or downstream processing needs the text
+    - Live GUI project loads triggered from the Welcome dialog or File → Open Project now use an `after()`-polled worker path instead of blocking the running Tk event loop with a nested wait, so the visible app continues processing Translation restore callbacks after project activation
+    - Open Project saved-step restore suppresses app-driven notebook tab-change handling while it selects and enters the target tab, preventing duplicate `on_enter()` work and mid-restore manifest saves on expensive tabs like Translation
+    - Heavy manifest-backed tabs now restore through shared lazy row providers: Preprocessing, Translation, Postprocessing, QA, and Wordwrap keep full backing line state for actions, but only the currently visible filtered rows are converted into `TableRow` objects during passive entry
+    - Benchmark runs for these large-project reopen checks are now executed through a guarded 60-second wrapper that captures output and force-kills overruns, because raw Python benchmark runs previously left lingering background workers
+    - `dev/benchmark_manifest_restore.py --launch-gui` now launches the real App window, loads the manifest from inside the running Tk mainloop, and polls until the restored tab is actually usable instead of only timing a withdrawn restore path
+    - Latest verified benchmark timings: `Projects/Kano.CherryAI.json` full Open Project `2.289s`, activation-only Step 5 idle `0.755s` (`on_enter()` `0.468s`), visible-GUI Step 5 settle `2.109s`; all modes exit cleanly inside the guarded 60-second wrapper
     - ▲/▼ indicators show current sort column and direction
     - Folder hierarchy flattened when sorting by Type or Lines
     - Replaces previous Sort Combobox
@@ -970,6 +1018,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Values auto-load on step entry via `_load_from_manifest_bindings()`
   - **Application Startup (Task 21.4, Phase 58.11):**
     - On launch, reads last manifest path from INI [session] section
+    - Seeds `session.global_options` from INI immediately on startup and after project/session resets, so step tabs can honor persisted translation settings before the Global Options window is opened
     - Auto-loads last project if load_last enabled (default)
     - Shows WelcomeDialog if no last manifest or file missing:
       - Resume: Load last project
@@ -1187,7 +1236,52 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
       (default 3), shown directly below Request Mode. Saved to
       `RequestOptions.NumberOfThreads`, restored from manifest and per-model
       `API.ini` `max_concurrent`, and applied to `APIConfig.max_concurrent` at
-      translation start.
+      translation start. Once a project has an explicit manifest value, that
+      saved thread count stays authoritative on Translation-tab re-entry and is
+      no longer overwritten by the per-model default.
+    - **Requests / Second control**: optional Step 5 pacing gate shown directly
+      below Number of Threads as `Requests / Second` plus an `Enable` tickbox.
+      Stored in `RequestOptions.RequestsPerSecondEnabled` and
+      `RequestOptions.RequestsPerSecond` (float range `0.01`-`999.99`). When
+      enabled, CherryAI now gates provider request starts through a shared
+      API-client RPS scheduler so concurrent Translation workers still respect
+      one project-level cap.
+    - **Project restore precedence**: when a manifest already stores an explicit
+      Step 5 model, thread count, or Requests / Second value, Translation-tab
+      re-entry now reapplies those project values after Global Options and
+      per-model `API.ini` defaults are loaded, so provider filtering no longer
+      drops the selection back to `Mock Translation` or `1.00 RPS`.
+    - **Legacy RPS reopen compatibility**: older manifests that still store the
+      numeric pacing value at the top-level `RequestsPerSecond` key now reopen
+      with the saved project value instead of defaulting to `1.00`.
+    - **Adaptive RPS fallback**: retryable provider 429/rate-limit responses now
+      let `functions/api_client.py` derive a slower active RPS cap from the
+      error text when possible (`0.42 requests per second`, `0.42 RPS`, etc.).
+      If the provider does not state a limit, CherryAI falls back to `current ×
+      0.9` below `1 RPS`, `current × 0.75` above `1 RPS`, and treats an
+      unlimited project as a temporary `50 RPS` baseline before reducing it.
+    - **Translation failure regrouping**: Step 5 now hard-stops only for
+      authorization/permission failures, concrete model-not-found failures, and
+      billing/quota exhaustion. Timeout/server/connection failures use a
+      dedicated temporary-backoff schedule, while invalid JSON, empty response,
+      and line-count mismatch failures stay non-fatal and can exhaust locally
+      without aborting the whole run.
+    - **Recursive structured-output recovery**: invalid JSON and line-count
+      mismatches now split the affected chunk recursively instead of blindly
+      repeating the full request. When recovery still exhausts, only the
+      affected lines are marked failed and the rest of the run continues.
+    - **API failure-rate stop guard**: Step 5 now stops submitting new work when
+      exhausted output/rate-limit failures stay above 50% after at least 10
+      chunk attempts, mirroring the existing validation-failure-rate safety
+      gate.
+    - **Transient gateway reset handling**: provider/proxy messages such as
+      `upstream connect error`, `disconnect/reset before headers`, and
+      `reset reason: overflow` are classified as retryable connection failures
+      instead of aborting on the first chunk.
+    - **Mistral Medium 3 registry support**: `functions/model_registry.py` now
+      includes curated metadata for `mistral-medium-2505` (Mistral Medium 3)
+      using the current model card values: `128k` context, `$0.4/M` input, and
+      `$2/M` output, so Step 5 no longer blocks that model as unknown pricing.
     - Translation Options "Change…" button → opens Global Options at Translation Options panel
       Reuses the existing Global Options window if it is already open.
     - Character Whitelist: comma-separated ranges of allowed characters (manifest-bound to `RequestOptions.CharacterWhitelist`)
@@ -1196,6 +1290,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - `_apply_char_filters()` post-processes each chunk's translations
     - Hidden backward-compat variables for: chunk_size, retry, retries, cache, edit_before, skip_translated, skip_non_source, line_by_line, context_lines (no UI, synced from GlobalOptions)
     - `_sync_from_global_options()` applies GlobalOptions overrides including TranslationSettings (overwrite_translation, skip_non_source_language, retry_strategy, request_slicing)
+    - Project load keeps those persisted Global Options attached to the fresh session state, so a reopened manifest immediately skips existing `tl` rows when `overwrite_translation` is off and Preview Requests reflects the remaining work instead of the full file set
     - `_load_model_settings()` loads per-model API.ini settings (chunk_size, temperature, rolling_context_before/between/after, thinking) with Global Options fallback; called after `_sync_from_global_options()` on tab entry
     - `_build_preview_requests()` syncs `_translation_options` from current UI before building chunks, ensuring Preview Requests respects current settings
     - `_build_chunks()` reads rolling_context_between, rolling_context_after, and chunk_max_tokens from per-model API.ini via `get_model_settings()`, falling back to Global Options
@@ -1223,6 +1318,12 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - API Log button that opens or focuses the shared non-blocking API Log window
     - State indicators: ● Running, ● Paused, ✓ Completed, ✗ Failed, ⊘ Cancelled
     - Inline log pane with scrollable history
+    - Active chunk status line now updates in place: `Processing chunk X/Y`
+      is replaced by the final success / retry / validation result for that
+      chunk instead of leaving stale in-flight text behind
+    - While API requests are still outstanding, Cancel and window-close keep the
+      progress window open and show how many requests remain instead of closing
+      immediately
   - **API Usage Panel (Always Visible):**
     - Tokens used counter
     - Estimated cost display
@@ -1232,6 +1333,8 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Automatic line refresh from preprocessing step
     - Session state persistence
     - Simulation mode when API unavailable
+    - Validation-failure-rate auto-stop now waits until at least 10 translated
+      chunks have been sampled before cancelling the remaining requests.
   - **Manifest Integration (Phase 26):**
     - RequestOptions nested structure with all request settings:
       - ApiKeyProvider, ApiKeyName, Model, Temperature, LinesPerChunk, RetryStrategy
@@ -1259,7 +1362,8 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - **Manifest Integration (Phase 25-26):**
     - ValidationRules nested: PlaceholderPreservation, AnchorPreservation,
       SourceLanguageDetection, SpeakerFormat, QuoteBalance, EmptyTranslation
-    - QAOptions nested: RerunPolicy, MaxSourceLanguageChars, MaxLineLength
+    - QAOptions nested: RerunPolicy, MaxSourceLanguageChars, MaxLineLength,
+      EncodingSafetyEnabled, EncodingCheckEncoding
     - All toggles persist to manifest and load on step enter
     - QA does not auto-write `qa`, `qa_overwrite`, or review text on tab leave
     - QA review input is stage-bounded: `postpro → tl → prepro → orig`
@@ -1267,11 +1371,12 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - `qa_overwrite` only populates the Overwrite column and never becomes QA input
     - `qa_overwrite` is only stored when the user explicitly changes it and it differs from the QA input chain
     - SourceLanguageDetection ignores preserve-action `code_patterns` and adapts by language pair, including full Japanese detection for Japanese→English, kana-only detection for Japanese→Chinese, distinctive-marker detection for languages such as German, and no regex-based detection for unsupported pairs such as English→German
+    - Optional encoding-safety QA checks validate whether the effective review text can be written with a selected legacy output codec such as `shift_jis` or `cp932`, report the first offending character, and suggest a normalized/transliterated overwrite when available
   - **Issue Types (IssueType enum):**
     - PLACEHOLDER_MISSING, PLACEHOLDER_EXTRA, PLACEHOLDER_MANGLED
     - ANCHOR_MISSING, ANCHOR_EXTRA
     - SOURCE_LANGUAGE_REMAINING
-    - SPEAKER_FORMAT_LOST, QUOTE_IMBALANCE
+    - SPEAKER_FORMAT_LOST, QUOTE_IMBALANCE, ENCODING_UNSAFE
     - LINE_TOO_LONG, EMPTY_TRANSLATION, CUSTOM
   - **Issue Details Panel:**
     - Original and translated text display (ScrolledText)
@@ -1282,6 +1387,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Max Japanese characters threshold (default 4)
     - Max line length limit (0 = no limit)
     - Re-run policy: Failed only, All lines, None (skip checked)
+    - Encoding safety toggle plus target-encoding spinbox (`shift_jis`, `cp932`, `utf-8`, `utf-8-sig`, `utf-16`)
   - **Batch Operations:**
     - Accept Selected - Mark lines as reviewed/approved
     - Reject Selected - Flag lines for re-translation
@@ -1294,8 +1400,9 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - **Integration with functions/validation.py:**
     - validate_placeholder_preserved() for placeholder checks
     - detect_speaker_dialogue_format() for speaker format detection
-    - has_japanese() / count_japanese() for Japanese detection
+    - detect_source_language_content() for shared source-language detection
     - extract_anchors() for anchor preservation checks
+    - validate_encoding_safety() / make_encoding_safe_text() for legacy output codec checks and suggested QA overwrite fixes
   - **Summary Panel (Always Visible):**
     - Total lines count
     - Lines with issues count (red)
@@ -1683,6 +1790,8 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
       legacy full-text values (multi-line) are returned as-is for backward compatibility
     - Migration: if `[defaults].SystemInstruction` contains newlines (legacy full text from prior sessions),
       `_seed_builtin_sections()` replaces it with `"Default"` on next load
+    - Legacy lowercase aliases such as `[defaults].systeminstruction`, `[defaults].summary`, and
+      `[system_instructions].default` / `eroi` are normalized to canonical mixed-case keys on load
     - `_on_si_preset_changed()` reads via `ini_manager.get_si_preset(name)` directly (always fresh from INI)
   - **Data Classes:**
     - CharacterInfo: original_name, translation, notes (with to_dict/from_dict; legacy `name`/`gender`/`role`/`speaking_style` auto-migrated on load)
@@ -1780,6 +1889,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Mock Translation: "Mock Translation" as first MODEL_OPTIONS entry, routes to `MockTranslator` in `functions/mock_translator.py`
     - API Provider Management: `APIProviderEntry` dataclass, `PROVIDER_PRESETS` (6 presets: OpenAI GPT-4o-mini, GPT-4o, Gemini Flash, Claude Sonnet, Local LLM, LM Studio), `_PresetPickerDialog` helper dialog
     - API Key Management: "Saved API Keys" Treeview (Name, Provider columns) with Save Key/Load Key/Remove buttons; encrypted storage via `api_config.set_api_key(provider, key, password, name)` in `[api_keys]` as `provider, name = encrypted_value`; master password prompt with first-time setup flow
+    - Translation startup now constructs the live API client with the already selected saved key from `user/API.ini`, avoiding false "No API key found in configuration" warnings before the real key is applied
     - Connection Test: Real `test_api_connection()` using OpenAI-compatible `models.list()` endpoint; returns `(bool, str, list)` with model IDs; threaded execution with specific error messages (auth failure, timeout, connection refused); on success, opens API Test Results dialog with filterable model table and per-model translation testing via `test_model_translation()`
     - Settings Migration: caching.mode in CachingSettings, thinking_enabled/thinking_budget/reasoning_effort in RequestSettings, rolling_context_lines in RequestSettings; `_sync_from_global_options()` applies overrides on tab enter
     - Retry Refinement: UI shows only Batch + Contextual (`RETRY_STRATEGIES`); `ALL_RETRY_STRATEGIES` kept for CLI with all 4; max retries minimum changed from 1 to 0
@@ -1868,7 +1978,8 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
 - **First-Request Validation Gate (Phase 78.2):**
     - First chunk of first string sent alone before batch execution begins
     - Fatal errors (auth, model-not-found, quota, content-filter) abort immediately — no retries, no wasted tokens
-    - Retryable errors (rate-limit, timeout, server) use standard exponential backoff
+    - Retryable structured-output failures such as invalid JSON or non-list `translations` stay on the retry path instead of triggering an immediate abort
+  - Retryable 429 rate-limit errors now apply the shared adaptive Requests / Second fallback; other retryable errors use backoff
     - User sees instant feedback: "First request validated — API configuration OK" or detailed error dialog
 - **Request String Sorting by Type (Phase 78.2):**
     - sort_requests_by_type() groups requests into rolling-context chains, sorts by type priority
@@ -1946,7 +2057,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - LoggingSettings: level, location, debug, api_log
     - SessionSettings: autosave, interval, theme, load_last
     - GUISettings: design, save_window_dimensions, launch_maximized
-    - LimitSettings: banned (comma-sep chars), output (tokens), warnings, safe; SafetySettings = alias
+    - LimitSettings: banned (comma-sep chars), output (tokens), warning_abort_enabled, warning_abort_after, skip_unsafe_requests; SafetySettings = alias
     - FileIOSettings: encoding, lines, preservebom, backup
     - PromptsSettings: edit, tlc, glossary, summary, code, input, tlc_include_* booleans,
       dialogue, menu, choice, unknown (conditional context-type prompts — Session 24+)
@@ -2017,7 +2128,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Ban tokens entry (comma-separated)
     - Common tokens quick-add buttons
     - Max output tokens limit
-    - Content warning toggle
+    - Unsafe-request policy controls: `Abort after [N] Unsafe Request` and `Skip unsafe requests`
   - **File I/O Section:**
     - Default encoding dropdown
     - Line ending style dropdown
@@ -2132,17 +2243,19 @@ REQUEST CACHING SYSTEM (Implemented)
   - TTL expiration (default: 30 days)
   - LRU eviction when size limit reached
 
-PROMPT CACHING — OpenAI (Implemented)
-- Leverages OpenAI's automatic prompt caching for gpt-4o and newer models
+PROMPT CACHING — OpenAI + Mistral (Implemented)
+- Leverages provider-side prompt caching for OpenAI gpt-4o+ models and Mistral chat models
 - **How It Works:**
   - OpenAI caches identical prompt prefixes (≥1024 tokens) across API requests
+  - Mistral caches repeated prompt prefixes when the same `prompt_cache_key` is reused; cached tokens are billed at 10% of normal input price and reported via `usage.prompt_tokens_details.cached_tokens`
   - Static prompt sections (language, instructions, style, tone, summary, genre, POV) are assembled first as a stable prefix
   - Dynamic sections (conditional prompts, glossary, rolling context) follow the static prefix
   - Repeated requests with the same static prefix reuse cached tokens automatically
 - **Benefits:**
-  - Up to 50% reduction in input token cost for cached tokens
+  - Up to 50% reduction in input token cost for cached tokens on OpenAI
+  - 90% discounted cached-input billing on Mistral (`cached_input_price = 10%` of input price)
   - Up to 80% reduction in latency for cache hits
-  - No code changes required for basic caching (automatic)
+  - No CherryAI workflow changes required once prompt caching is enabled for a supported provider/model
 - **Extended Retention (24h):**
   - Supported models: gpt-4.1, gpt-4.1-mini, gpt-4.1-nano, gpt-5.x
   - Extends cache lifetime from 5-10 minutes to 24 hours
@@ -2152,6 +2265,7 @@ PROMPT CACHING — OpenAI (Implemented)
   - gpt-4.1, gpt-4.1-mini, gpt-4.1-nano
   - gpt-5, gpt-5.x
   - o1, o1-mini, o1-preview, o3, o3-mini
+  - Mistral chat models surfaced by `MistralProvider` / `fetch_mistral_models()` (for example `mistral-small-latest`, `mistral-medium-3.5`, `magistral-small-latest`, `codestral-latest`)
 - **Statistics Tracking:**
   - Cached token count per chunk in API log
   - Cache hit rate (%) in log footer
@@ -2161,7 +2275,7 @@ PROMPT CACHING — OpenAI (Implemented)
   - `prompt_cache_enabled`: Enable/disable (default: true)
   - `prompt_cache_retention`: "" (default), "in_memory", or "24h"
   - `prompt_cache_key`: Routing hint for cache slot affinity (auto-generated from manifest)
-  - Auto-generated OpenAI cache keys are derived from manifest `project_name` + `created_at`, used in live request metadata, and surfaced in both Preview Requests and the API Log Sent block
+  - Auto-generated provider cache keys are derived from manifest `project_name` + `created_at`, used in live request metadata, and surfaced in both Preview Requests and the API Log Sent block
 - **Static Prompt Size Check:**
   - Evaluates static prefix (slots 1-7b) estimated token count
   - ≥1280 tokens: "ok" — caching active (80%+)
@@ -2210,7 +2324,7 @@ RATE LIMIT MANAGEMENT (Implemented)
   - TPM gate now uses a rolling 60-second reservation window keyed by request start time, so concurrent requests only launch when `active_window_tokens + next_request_tokens <= TPM_limit`
   - Each admitted request reserves its estimated token budget immediately; the reservation expires when its 60-second window ages out
   - After the response arrives, the limiter can replace that estimate with actual usage for the same request when the provider response makes the accounting mode unambiguous
-  - Reads `x-ratelimit-reset-requests` and `x-ratelimit-reset-tokens` from every API response
+  - Reads provider-specific reset headers when available; Mistral uses `x-ratelimit-limit-req-minute`, `x-ratelimit-remaining-req-minute`, `x-ratelimit-limit-tokens-minute`, and `x-ratelimit-remaining-tokens-minute`
   - Monotonic timer (immune to system clock changes) for reset timing
   - Default 60-second reset window when headers are missing
   - Waits instead of failing when limits would be exceeded
@@ -2359,6 +2473,7 @@ TRANSLATION STYLE PRESETS (Implemented — INI-based since 2026)
 - Built-in presets: Literal, Natural, Creative, Formal, Casual, Technical, Literary
 - User presets are saved in ``user/CherryAI.ini`` under the ``[style]`` section
 - Tone presets (Neutral, Serious, Humorous, Dramatic, etc.) saved under ``[tone]``
+- Built-in preset names are canonicalized to mixed-case keys on load; legacy lowercase aliases such as ``literal`` and ``neutral`` are removed automatically so strict INI readers do not hit duplicate-option warnings
 - Saved/deleted via the Information step (Step 3) of the GUI workflow
 - Old JSON files (``user/presets/style_presets.json``, ``tone_presets.json``) have been removed
 - CLI style: `--style-preset fantasy_medieval`
@@ -2436,9 +2551,11 @@ PARSER SCRIPTS (Implemented)
 - **Base interface** (`formats/parser_base.py`): `ParserScript` ABC with mandatory `name`, `extract`, `inject` methods and default `inject_to(source, output, lines, *, orig_lines=None) → List[int]` implementing standardized 4-step Speaker:Dialogue-aware surgical injection handshake (load original → extract keys via `extract_tagged()` with speaker metadata → split speaker/dialogue via `_split_speaker_dialogue()` and replace independently, speaker only on first occurrence for consecutive same-speaker lines → save; returns failed indices)
 - **Configuration dataclasses:** `WordwrapConfig`, `ForbiddenChars`, `TagRules`
 - **RPG Maker MV/MZ** (`formats/parser_rpgmaker.py`): Full implementations with wordwrap defaults, forbidden chars, context markers
+- **KiriKiri2** (`formats/KiriKiri2.py`): Handles `.ks` scripts, `Menus.tjs`, generic caption-driven or dialog-call `.tjs` files, schema-based KiriKiri2 `.csv` files, and XP3 archives. Scenario extraction now covers dialogue/narration blocks, `@talk name=[SF]`-style speaker variables with brackets preserved in `Speaker: Dialogue` output, `[seladd text="..."]` choices (`choice` tag), and `*label|title` save-location titles (`SaveLocation` tag). System/menu extraction also covers dictionary-style `caption:"..."` literals in files such as `Override.tjs` (`menu` tag) plus dialog-manager calls such as `SetYesNo("...")` and `SetOK("...")` (`dialog` tag). CSV extraction uses header-based whitelists and processes approved text columns one column at a time, so visible fields such as `タイトル`, `概要テキスト`, `内容文章(72文字)`, `施設効果文章(72文字)`, `文章`, `スキル名`, and `パーツ名` are translated while IDs, file references, jump targets, flags, and numeric-only columns remain untouched. Injection rewrites only those payloads while preserving surrounding KAG/TJS/CSV structure and Shift-JIS-safe encoding behavior. After output staging it can also patch `MainWindow.tjs` so the stock `ch : function(elm)` handler wraps by word instead of per character, and patch `SelectLayer.tjs` so choice captions wrap by word, default to a smaller hidden font size (`18`), grow button height to fit multiline text, and reflow stacked choice positions to avoid overlap, all while preserving the file's original `cp932` / Shift-JIS encoding and BOM state. The patcher also repairs older malformed injected blocks, replaces stale wordwrap blocks with the canonical block, and preserves literal TJS escapes such as `\\`, `\t`, `\n`, and `\r` so launch-time syntax errors are not reintroduced
+- **WOLF RPG JSON/Text** (`formats/wolf_rpg.py`): Adds two Dazed-aligned parser formats for exported or unpacked WOLF RPG content. `WolfRPGJsonParser` auto-detects JSON exports containing `events`, `types`, or `commands`, extracts/injects visible payloads with Dazed-mirroring tags (`CODE101`, `CODE102`, `CODE122`, `CODE150`, `CODE210`, `CODE250`, `CODE300`, `SCENARIOFLAG`, `OPTIONSFLAG`, `NPCFLAG`, `DBNAMEFLAG`, `DBVALUEFLAG`, `ITEMFLAG`, `STATEFLAG`, `ENEMYFLAG`, `ARMORFLAG`, `WEAPONFLAG`, `SKILLFLAG`), preserves speaker-aware event/scenario text, and rewrites the original JSON structure surgically instead of flattening it. `WolfRPGTextParser` handles line-based WOLF script text with cp932 / Shift-JIS detection, speaker-aware dialogue grouping, `//選択肢` choice extraction, explicit per-block injection, and parser wordwrap defaults for dialogue while leaving menu/choice tags unwrapped. Both parsers expose O1/O2 decrypt/encrypt hooks as transparent pass-throughs for already exported or unpacked content; native `.wolf` archive cryptography remains outside CherryAI's current parser scope.
 - **Parser Registry** (`formats/__init__.py`): `ParserRegistry` with register, get, detect, list_parsers
 - Auto-detection via `can_handle()` probes file structure (e.g. www/data/*.json, null-first arrays)
-- **Wordwrap Integration** (`gui/steps/wordwrap_overwrite.py`): Parser wordwrap configs pre-populate editable per-tag settings; the step resolves wrap targets through the user-selected `Target:` strategy and preserves rows unchanged when no target resolves
+- **Wordwrap Integration** (`gui/steps/wordwrap_overwrite.py`): Parser wordwrap configs pre-populate editable per-tag settings; the step resolves wrap targets through the user-selected `Target:` strategy and preserves rows unchanged when no target resolves. KiriKiri2 additionally uses a parser-owned post-inject hook to patch real `MainWindow.tjs` variants that call `repage = current.processCh(text, chUserMode ? acs : 0);` and to patch `SelectLayer.tjs` so translated choice text wraps by word with multiline height/layout updates in the staged output tree.
 - **Forbidden Characters:** Merged into logit bias via `merge_parser_forbidden_chars()`; auto-replaced or flagged via `replace_forbidden_chars()`
 - **API Integration** (`functions/api_client.py`): `apply_parser_forbidden_chars()` method on ApiClient
 
@@ -2447,6 +2564,7 @@ PARSER HANDSHAKE — UNIFIED I/O PARSER INTERFACE (Implemented)
 - **Handshake module** (`formats/handshake.py`): `SpeakerInfo`, `ExtractedLine`, `ParserError`, `validate_parser()`
 - **Mandatory contract:** M1=Extract, M2=Inject, M3=Identity (format_id+extensions or can_handle)
 - **Optional components:** O1=Decrypt, O2=Encrypt, O3=Encoding, O4=Speaker Detection, O5=Wordwrap Config, O6=Custom Wordwrap, O7=Forbidden Chars, O8=Context Markers, O9=Injection Rewrite Hook, O10=Pretty Wrap Hook
+- **Default O1/O2 behavior:** `ParserScript` now exposes no-op `decrypt(path)` / `encrypt(path)` hooks so parser capability metadata can report whether a format owns pre/post file transforms without forcing binary-archive behavior onto plain-text formats.
 - **Handler retrofit (P4):** All registered FormatHandlers and ParserScripts verified against M1-M3 via `validate_parser()`. RPG Maker handler stubs raise `ParserError` with metadata instead of silent no-ops.
 - **Tagged extraction** (`parser_base.py`): `extract_tagged()` returns `List[ExtractedLine]` with per-line tag, speaker, context
 - **Tag-specific wordwrap** (`parser_base.py`): `wordwrap_for_tag(tag)` returns different `WordwrapConfig` per extraction tag
@@ -2508,6 +2626,14 @@ LIGHT VN PARSER (Implemented)
 - **Stylized angle brackets stay translatable:** LightVN leaves translated stylized suffixes such as `〈Limit per battle: 2〉` untouched, and no parser-side bracket recovery rewrites them back to source text.
 - **Corpus verified:** 55604 total lines, 50212 unique across 1056 .txt files, 843 speakers
 
+WOLF RPG PARSERS (Implemented)
+- Two parser formats now cover the Dazed WOLF translation surfaces without importing unrelated translation/runtime code: `WolfRPGJson` for JSON exports and `WolfRPGText` for line-based text scripts.
+- **WOLF JSON tags:** Extraction mirrors Dazed's existing code/flag naming exactly: `CODE101`, `CODE102`, `CODE122`, `CODE150`, `CODE210`, `CODE250`, `CODE300`, `SCENARIOFLAG`, `OPTIONSFLAG`, `NPCFLAG`, `DBNAMEFLAG`, `DBVALUEFLAG`, `ITEMFLAG`, `STATEFLAG`, `ENEMYFLAG`, `ARMORFLAG`, `WEAPONFLAG`, `SKILLFLAG`.
+- **WOLF JSON coverage:** Event-message speaker parsing, event choices, Set String literals, picture text, common-event log text, common-event-by-name windows/questions, scenario blocks, quiz/options, NPC text, DB names/values, items, armor, enemies, weapons, skills, and states all extract in document order and inject back into the original JSON fields.
+- **WOLF Text coverage:** Line-based scripts detect cp932 / Shift-JIS first, expose `Speaker: text` extraction for speaker-led blocks, treat `//選択肢` lists as separate `WOLF2_CHOICE` rows, preserve narration/grouped text as `WOLF2_DIALOGUE`, and inject speaker, body, and choice replacements without disturbing surrounding command lines.
+- **Wordwrap defaults:** Dialogue-facing WOLF tags seed parser wordwrap defaults at 45 chars / 3 lines; choice/menu-like tags remain no-wrap defaults so Step 8 can still edit them explicitly if a project needs different behavior.
+- **Decrypt/encrypt scope:** These parsers target exported or already unpacked text/JSON content. Their O1/O2 hooks are present and capability-visible, but intentionally behave as pass-throughs until CherryAI has a defensible native `.wolf` archive implementation and permission UX.
+
 WIDTH CONVERSION (Implemented)
 - Converts character width from source language to target language encoding
 - East Asian languages (Chinese/Japanese/Korean) use fullwidth characters
@@ -2534,6 +2660,7 @@ AGGRESSIVE DEDUPLICATION (Implemented)
   - `DEDUP_PLACEHOLDER = "__DEDUP__"` sentinel replaces duplicate content
   - Preprocessing step persists `dedup_map`, `aggr_dedup_map`, `aggr_numbers` in step data; multi-number aggressive rows now store token maps such as `{"<NUM1>": "1", "<NUM2>": "120"}` while single-number rows remain the legacy list form
   - Postprocessing (`_restore_dedup_lines`) reads maps from step 3 data, recursively resolves chained standard/aggressive dedup sources against in-RAM lines (postprocessed → translated → preprocessed → original), and restores aggressive dedup lines through the shared `aggressive_restore_line()` helper so reordered indexed slots restore correctly
+  - Step 6 aggressive-number restoration now runs as an instance helper over the loaded line set, so Apply Postprocessing no longer fails with ``name 'self' is not defined`` while restoring indexed aggressive dedup numbers
   - Test suite: `dev/test_dedup_pipeline.py` (37 tests)
   - **Postprocessing Reversal:** Phase 1 (preprocessing reversal): PROT decompression → Protect Code restoration → Custom Placeholder restoration → Ellipsis expansion → Anchoring restoration → aggressive number restoration from step-3 `aggr_numbers`. Single-slot rows still use `<NUM>`; multi-slot rows now use indexed tokens (`<NUM1>`, `<NUM2>`, ...) and restore through the shared `aggressive_restore_line()` helper so translated slot reordering is preserved. Custom Placeholder restoration now runs in two passes: per-line replacement first, then a batch-wide exact-token fallback so named replacements that drifted to another line are still restored. Dedup-tagged duplicate rows are excluded from that batch fallback and from per-line post-exclusive recovery so they do not consume another line's placeholder record or produce false preserve/code-pattern flags before source-copy restoration. Phase 2 (post-exclusive LLM recovery): `recover_line()` fixes LLM artifacts (bracket/quote balance, whitespace normalization) on the already-restored text, with `enable_placeholder_recovery=False`. Bracket recovery treats `【】` as equivalent to `[]`, removes truly extra unmatched brackets such as an LLM-added third `}` after `{{...}}`, and only runs when the source bracket structure is balanced. Code pattern recovery matches doubled delimiters such as `{{...}}` as whole tokens and ignores nested inner matches like `{...}` inside a doubled token, so preserve-action restores do not leave trailing braces behind or double-flag the same source code. After all lines: Dedup restoration → Aggressive Dedup restoration.
 
@@ -2602,7 +2729,7 @@ TERM TRANSLATION — MULTI-MODE DISPATCHER (Implemented)
 - **Two modes** (configurable in Global Options → Utility → Term Translation Mode):
   - `Romaji` (default) — Uses the built-in Modified Hepburn romanization engine, then capitalizes the first letter. Skips terms containing kanji. Zero dependencies.
   - `LLM` — Uses the API key and model configured in the Utility section. Reads provider/key_name/model from API.ini `[term_translation]` profile.
-- **Structured Output**: LLM mode uses strict JSON-schema (`response_format=json_schema`) enforcing `{"translations": [...]}`. Output capped with `max_tokens` and `store=False` to minimise token waste.
+- **Structured Output**: LLM mode uses strict JSON-schema (`response_format=json_schema`) enforcing `{"translations": [...]}`. Output is capped with `max_tokens`; `store=False` is sent only for OpenAI-compatible utility requests that support it, while strict providers such as Mistral omit unsupported extra fields.
 - **Two prompt types**: `prompt_type="glossary"` for character name/glossary terms (succinct translation) and `prompt_type="code"` for code pattern labels (succinct explanation). Analysis step routes each type automatically.
 - **Configurable prompts**: Global Options → Prompts shows "Translate Terms — Glossary" and "Translate Terms — Code" sections. Templates use `{source_lang}`, `{target_lang}`, and `{count}` placeholders. Stored in CherryAI.ini `[prompts]` section with compiled-in defaults as fallback.
 - **API key/model selection**: Global Options → Utility provides dropdowns to select any API key saved in API.ini and a **model Combobox** that auto-populates from `get_provider_models()` when the API key changes. Settings are persisted to API.ini `[term_translation]` section. Gender Inference has its own model Combobox that updates independently.
@@ -3269,7 +3396,7 @@ inference before being added to the glossary.
 - **Script only** (default) — Built-in batch analysis using `infer_genders_batch()`: single-pass line scanning with five phases (index pass → explicit gender → honorifics from others → self-pronouns → combine signals). Optimized for large manifests (845+ speakers, 64K+ lines processed in ~5 seconds). Runs in a background thread with Cancel button visible from the start. No API required.
 - **Script + LLM** — Runs batch script first in a background thread, then uses the configured LLM API to resolve remaining unknowns via dialogue excerpt analysis. Both passes run in background threads with queue-based polling (`after(100)`) to keep the UI responsive; a Cancel button allows aborting either pass.
 
-**Structured Output**: LLM mode uses strict JSON-schema (`response_format=json_schema`) with a single `details` string field for free-form gender output. Output capped with `max_tokens=150` and `store=False` to minimise token waste. Responses are normalized case-insensitively (e.g., "female" → "Female", "MALE" → "Male"). "Unsure" and "Unknown" map to "Unknown"; empty responses clear the field.
+**Structured Output**: LLM mode uses strict JSON-schema (`response_format=json_schema`) with a single `details` string field for free-form gender output. Output is capped with `max_tokens=150`; `store=False` is sent only when the selected provider accepts it. Responses are normalized case-insensitively (e.g., "female" → "Female", "MALE" → "Male"). "Unsure" and "Unknown" map to "Unknown"; empty responses clear the field.
 
 **Configurable prompt**: Global Options → Prompts shows a "Gender Inference" section. The template uses `{name}`/`{Original_Name}` and `{excerpt}`/`{Excerpt}` placeholders. Stored in CherryAI.ini `[prompts] gender_inference` with a compiled-in default as fallback.
 
@@ -3572,18 +3699,19 @@ CherryAI can be run from the command line for automation or headless operation.
    - **Statistics**: Cost per 1M tokens (FREE noted for Gemini), structured output mode
    - **Skipped Lines**: DEDUP markers, symbol-only lines, no-source-lang lines
    - **Missing Sections**: Lists components not included (Glossary, Rolling Context)
-   - **Content Warnings**: Explicit content detection results (if any)
+  - **Content Warnings**: Prompt-side preflight warnings (if any) and unsafe refusal notes
    - **Chunk Format**: `CHUNK #N - TIMESTAMP | Tokens: X in / Y out | Running Total: Z`
    - **Section Headers**: `[SYSTEM PROMPT]`, `[USER MESSAGE]` (LOG-ONLY, not sent to API)
    - **Line Numbers**: Each input/output line numbered (`[  1]`, `[  2]`)
    - **Footer**: Final chunk count, total tokens, estimated cost
    
-   Content Warning System:
-   The tool detects potentially explicit content that may trigger API refusals:
-   - Terms like "erotic", "explicit", "sexual", "violent" are detected
-   - A warning is logged to both console and api_log.txt
-   - Recommendations provided (use Gemini, local models, etc.)
-   - Disable with `content_warning_enabled = false` in CherryAI.ini [api] section
+  Content Warning System:
+  CherryAI now treats content refusals as a dedicated translation outcome:
+  - A lightweight preflight scan only warns on risky wording found in summary/system-prompt context
+  - When structured output is missing, CherryAI checks the raw model text for provider-agnostic refusal wording
+  - Refusals are logged to the structured API Log as Status `Content Warning`
+  - `Skip unsafe requests` skips the refused chunk without halving; disabling it falls back to recursive chunk splitting
+  - `Abort after [N] Unsafe Request` stops the run after the configured number of refused requests
    
    Prompt Optimization:
    System prompts are automatically optimized to reduce token usage:
@@ -3704,7 +3832,7 @@ and Mistral. Model information (pricing, rate limits, capabilities) is:
 **Models included** (27 built-in, more fetched live with keys):
 - OpenAI: GPT-5.2/5.1/5/5-mini/5-nano, GPT-4.1 family, GPT-4o family, o3/o4-mini reasoning
 - Google: Gemini 3.x/2.5/2.0 Flash and Pro variants
-- Mistral: Mistral Large/Medium/Small 3.x, Magistral reasoning, Codestral, Ministral
+- Mistral: Mistral Large 3, Mistral Medium 3.5, Mistral Small 4, Magistral, Codestral, Ministral, plus live chat-capable IDs such as Devstral when returned by `/v1/models`
 
 **Per-model information stored**: input/output/cached/batch/flex/priority pricing (USD/1M tokens),
 RPM/RPD rate limits per tier, context window, structured output, thinking mode,
@@ -3828,6 +3956,11 @@ costs step and the translation step are fully decoupled, so changing the
 lines-per-request slider in Model Settings no longer affects translation
 chunk sizes and vice-versa.
 
+**Large-Project Costs Entry (2026 performance pass)**: Entering the Costs tab
+no longer auto-runs estimation just because files are present. The tab still
+restores saved counts and visible state, but the expensive token pass now runs
+only from `Estimate` / `Update Counts` or an explicit automation path.
+
 ## Provider Handshake — Unified LLM Provider Interface
 
 A pluggable provider abstraction layer that moves all provider-specific
@@ -3847,7 +3980,7 @@ classes registered in a global registry.
 |----------|-------|-------------|
 | OpenAI | `OpenAIProvider` | Reference implementation. GPT-5 family (mandatory reasoning w/ effort levels, no temperature), GPT-4.1 (optional reasoning w/ effort levels), o-series (builtin reasoning), prompt caching, batch mode |
 | Google/Gemini | `GoogleProvider` | OpenAI-compatible. Thinking via FALLBACK_MODELS lookup |
-| Mistral | `MistralProvider` | OpenAI-compatible. Temperature max 1.0, Magistral thinking |
+| Mistral | `MistralProvider` | OpenAI-compatible. Temperature max 1.0, prompt caching via `prompt_cache_key`, `reasoning_effort` exposed as optional thinking (`none`/`high`) for current Mistral + Magistral chat models, live header-based rate-limit support |
 | Anthropic | `AnthropicProvider` | OpenAI-compatible. Explicit thinking mode (extra_body.thinking), budget 10K default |
 | Local | `LocalProvider` | Direct ProviderBase. json_schema format, $0 pricing, no API key |
 | LM Studio | `LMStudioProvider` | Inherits Local. Port 1234 |

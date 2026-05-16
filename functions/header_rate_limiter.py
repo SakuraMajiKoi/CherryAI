@@ -93,6 +93,14 @@ GEMINI_RATE_LIMIT_CONFIG = ProviderRateLimitConfig(
     reset_tokens_header="x-ratelimit-reset-tokens",
 )
 
+MISTRAL_RATE_LIMIT_CONFIG = ProviderRateLimitConfig(
+    provider_name="mistral",
+    limit_requests_header="x-ratelimit-limit-req-minute",
+    limit_tokens_header="x-ratelimit-limit-tokens-minute",
+    remaining_requests_header="x-ratelimit-remaining-req-minute",
+    remaining_tokens_header="x-ratelimit-remaining-tokens-minute",
+)
+
 
 # ---------------------------------------------------------------------------
 # Per-model runtime state

@@ -34,6 +34,7 @@ This is needed because the manager may not exist when widgets are created.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import logging
 from tkinter import scrolledtext
 from typing import TYPE_CHECKING, Any, Callable, List, Optional, Union
@@ -71,6 +72,31 @@ logger = logging.getLogger(__name__)
 
 # Type alias for manager getter - a callable that returns ManifestManager or None
 ManagerGetter = Callable[[], Optional["ManifestManager"]]
+
+
+def _binding_save_suppressed(widget: Optional[tk.Widget]) -> bool:
+    """Return whether binding-triggered saves are currently suppressed."""
+    current: Any = widget
+    while current is not None:
+        if bool(getattr(current, "_suspend_manifest_binding_saves", False)):
+            return True
+        current = getattr(current, "master", None)
+    return False
+
+
+@contextmanager
+def _suppress_binding_saves(widget: Optional[tk.Widget]):
+    """Temporarily suppress binding-triggered saves for a widget subtree."""
+    if widget is None:
+        yield
+        return
+
+    previous = bool(getattr(widget, "_suspend_manifest_binding_saves", False))
+    setattr(widget, "_suspend_manifest_binding_saves", True)
+    try:
+        yield
+    finally:
+        setattr(widget, "_suspend_manifest_binding_saves", previous)
 
 
 # ============================================================================
@@ -175,6 +201,8 @@ def bind_entry_to_field(
     
     def on_change(*args: Any) -> None:
         """Handle variable change - save to manifest."""
+        if _binding_save_suppressed(entry):
+            return
         manager = manager_getter()
         if manager is None:
             return
@@ -208,8 +236,8 @@ def bind_entry_to_field(
         else:
             value = load_text_field(manager, field_key, default)
         
-        # Temporarily remove trace to avoid triggering save
-        var.set(value)
+        with _suppress_binding_saves(entry):
+            var.set(value)
         binding.record_load(value)
         logger.debug("Entry loaded: %s = %r", field_key, value)
         return value
@@ -263,6 +291,8 @@ def bind_checkbox_to_field(
     
     def on_change(*args: Any) -> None:
         """Handle variable change - save to manifest."""
+        if _binding_save_suppressed(checkbox):
+            return
         manager = manager_getter()
         if manager is None:
             return
@@ -295,7 +325,8 @@ def bind_checkbox_to_field(
         else:
             value = load_bool_field(manager, field_key, default)
         
-        var.set(value)
+        with _suppress_binding_saves(checkbox):
+            var.set(value)
         binding.record_load(value)
         logger.debug("Checkbox loaded: %s = %r", field_key, value)
         return value
@@ -352,6 +383,8 @@ def bind_combobox_to_field(
     
     def on_change(*args: Any) -> None:
         """Handle variable change - save to manifest."""
+        if _binding_save_suppressed(combobox):
+            return
         manager = manager_getter()
         if manager is None:
             return
@@ -389,7 +422,8 @@ def bind_combobox_to_field(
         else:
             value = load_enum_field(manager, field_key, default, options)
         
-        var.set(value)
+        with _suppress_binding_saves(combobox):
+            var.set(value)
         binding.record_load(value)
         logger.debug("Combobox loaded: %s = %r", field_key, value)
         return value
@@ -449,6 +483,8 @@ def bind_spinbox_to_field(
     
     def on_change(*args: Any) -> None:
         """Handle variable change - save to manifest."""
+        if _binding_save_suppressed(spinbox):
+            return
         manager = manager_getter()
         if manager is None:
             return
@@ -488,7 +524,8 @@ def bind_spinbox_to_field(
         else:
             value = load_int_field(manager, field_key, default, min_val, max_val)
         
-        var.set(value)
+        with _suppress_binding_saves(spinbox):
+            var.set(value)
         binding.record_load(value)
         logger.debug("Spinbox loaded: %s = %r", field_key, value)
         return value
@@ -542,6 +579,8 @@ def bind_text_to_field(
     
     def save_to_manifest(event: Optional[tk.Event] = None) -> None:
         """Save current text content to manifest."""
+        if _binding_save_suppressed(text_widget):
+            return
         manager = manager_getter()
         if manager is None:
             return
@@ -578,8 +617,9 @@ def bind_text_to_field(
         else:
             value = load_text_field(manager, field_key, default)
         
-        text_widget.delete("1.0", "end")
-        text_widget.insert("1.0", value)
+        with _suppress_binding_saves(text_widget):
+            text_widget.delete("1.0", "end")
+            text_widget.insert("1.0", value)
         binding.record_load(value)
         logger.debug("Text loaded: %s = %r (len=%d)", field_key, value[:50] if value else "", len(value) if value else 0)
         return value
@@ -637,6 +677,8 @@ def bind_radio_group_to_field(
     
     def on_change(*args: Any) -> None:
         """Handle variable change - save to manifest."""
+        if _binding_save_suppressed(radios[0] if radios else None):
+            return
         manager = manager_getter()
         if manager is None:
             return
@@ -666,7 +708,8 @@ def bind_radio_group_to_field(
         # Use load_enum_field which validates against options
         value = load_enum_field(manager, field_key, default, options)
         
-        var.set(value)
+        with _suppress_binding_saves(radios[0] if radios else None):
+            var.set(value)
         binding.record_load(value)
         logger.debug("Radio loaded: %s = %r", field_key, value)
         return value
@@ -726,6 +769,8 @@ def bind_float_spinbox_to_field(
     
     def on_change(*args: Any) -> None:
         """Handle variable change - save to manifest."""
+        if _binding_save_suppressed(spinbox):
+            return
         manager = manager_getter()
         if manager is None:
             return
@@ -755,7 +800,8 @@ def bind_float_spinbox_to_field(
         
         value = load_float_field(manager, field_key, default, min_val, max_val)
         
-        var.set(value)
+        with _suppress_binding_saves(spinbox):
+            var.set(value)
         binding.record_load(value)
         logger.debug("Float spinbox loaded: %s = %r", field_key, value)
         return value

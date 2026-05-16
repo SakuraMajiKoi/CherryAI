@@ -1153,7 +1153,7 @@ class PreprocessingStep(BaseStep):
 
         Filters entirely by reading the per-line tags list (read-only).
         """
-        rows = []
+        row_ids: List[int] = []
         changed_count = 0
         active_filter = "All"
         if hasattr(self, "_preview_filter_var"):
@@ -1182,26 +1182,32 @@ class PreprocessingStep(BaseStep):
             if required_tag and required_tag not in line_tags:
                 continue
 
-            rows.append(
-                TableRow(
-                    id=idx,
-                    values={
-                        "line_num": str(idx + 1),
-                        "original": original[:100] + "..." if len(original) > 100 else original,
-                        "processed": (
-                            processed[:100] + "..." if len(processed) > 100 else processed
-                        ),
-                        "diff": changes,
-                    },
-                )
+            row_ids.append(idx)
+
+        def build_row(row_id: int) -> TableRow:
+            entry = self._preview_lines[row_id]
+            if len(entry) == 4:
+                original, processed, changes, _line_tags = entry
+            else:
+                original, processed, changes = entry[:3]
+            return TableRow(
+                id=row_id,
+                values={
+                    "line_num": str(row_id + 1),
+                    "original": original[:100] + "..." if len(original) > 100 else original,
+                    "processed": (
+                        processed[:100] + "..." if len(processed) > 100 else processed
+                    ),
+                    "diff": changes,
+                },
             )
 
-        self._preview_table.set_data(rows)
+        self._preview_table.set_lazy_data(row_ids, build_row)
 
         # Update filter count
         if hasattr(self, "_filter_count_label") and active_filter != "All":
             self._filter_count_label.configure(
-                text=f"({len(rows)} of {len(self._preview_lines)} lines)",
+                text=f"({len(row_ids)} of {len(self._preview_lines)} lines)",
             )
         elif hasattr(self, "_filter_count_label"):
             self._filter_count_label.configure(text="")

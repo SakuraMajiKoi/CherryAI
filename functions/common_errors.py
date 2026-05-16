@@ -210,7 +210,7 @@ def validate_config_for_api() -> ErrorCollector:
     Returns:
         ErrorCollector with any validation errors.
     """
-    from .config import load_config, get_config_file, ensure_config_initialized
+    from .config import get_api_config, get_config_file, ensure_config_initialized
 
     collector = ErrorCollector()
     config_file = get_config_file()
@@ -221,11 +221,7 @@ def validate_config_for_api() -> ErrorCollector:
         # Initialize with defaults
         ensure_config_initialized(config_file)
 
-    # Load config (with_defaults=True ensures [api] section exists)
-    config = load_config(config_file, with_defaults=True)
-
-    # [api] section should always exist now due to defaults
-    api_config = config.get("api", {})
+    api_config = get_api_config()
 
     # Check API key (this is the critical one for actual API calls)
     api_key = api_config.get("api_key", "").strip()
@@ -403,15 +399,16 @@ _API_ERROR_INFO: Dict[APIErrorCategory, Dict[str, Any]] = {
     APIErrorCategory.RATE_LIMITED: {
         "message": "Too many requests. The API rate limit has been reached.",
         "steps": [
-            "Wait a moment and try again.",
+            "CherryAI will pause new requests for 60 seconds before retrying.",
             "Reduce the number of concurrent requests in Global Options.",
             "Consider upgrading your API plan for higher rate limits.",
         ],
     },
     APIErrorCategory.QUOTA_EXCEEDED: {
-        "message": "API quota exhausted. You have run out of credits or hit your monthly limit.",
+        "message": "API quota or billing limit reached. Translation has been paused.",
         "steps": [
             "Check your billing/usage on the provider's dashboard.",
+            "Restore credits, enable billing, or raise the account usage limit.",
             "Add more credits or upgrade your plan.",
             "Switch to a free-tier model (e.g., Gemini Flash Lite).",
         ],
@@ -505,7 +502,7 @@ _API_ERROR_INFO: Dict[APIErrorCategory, Dict[str, Any]] = {
         "message": "Prompt caching is not available for this model or provider.",
         "steps": [
             "Disable Prompt Caching in Global Options.",
-            "Prompt caching is only available for OpenAI gpt-4o and newer.",
+            "Prompt caching is currently supported by OpenAI gpt-4o+ and Mistral chat models with prompt_cache_key.",
         ],
     },
     APIErrorCategory.PERMISSION_DENIED: {
@@ -535,6 +532,49 @@ _API_ERROR_INFO: Dict[APIErrorCategory, Dict[str, Any]] = {
 }
 
 
+_QUOTA_OR_BILLING_MARKERS = (
+    "insufficient_quota",
+    "exceeded your current quota",
+    "usage limit",
+    "billing disabled",
+    "billing hard limit reached",
+    "credit balance too low",
+    "insufficient credit balance",
+    "account limit reached",
+)
+
+_RETRYABLE_UPSTREAM_OVERFLOW_MARKERS = (
+    "upstream connect error",
+    "disconnect/reset before headers",
+    "reset reason: overflow",
+    "reset before headers",
+)
+
+_DEFAULT_FATAL_CATEGORIES = {
+    APIErrorCategory.AUTH_INVALID,
+    APIErrorCategory.AUTH_WRONG_KEY,
+    APIErrorCategory.MODEL_NOT_FOUND,
+    APIErrorCategory.PERMISSION_DENIED,
+    APIErrorCategory.QUOTA_EXCEEDED,
+}
+
+
+def _is_quota_or_billing_exhaustion(raw_lower: str) -> bool:
+    """Return True when a 429-style error is really a billing/quota stop."""
+    if any(marker in raw_lower for marker in _QUOTA_OR_BILLING_MARKERS):
+        return True
+    return (
+        "quota" in raw_lower
+        or "billing" in raw_lower
+        or "credit" in raw_lower
+    )
+
+
+def _is_retryable_upstream_overflow(raw_lower: str) -> bool:
+    """Return True for transient proxy/upstream reset and overflow failures."""
+    return any(marker in raw_lower for marker in _RETRYABLE_UPSTREAM_OVERFLOW_MARKERS)
+
+
 def classify_api_error(error: Exception) -> ClassifiedAPIError:
     """Classify an API exception into a user-facing error with guidance.
 
@@ -560,21 +600,23 @@ def classify_api_error(error: Exception) -> ClassifiedAPIError:
             cat = APIErrorCategory.AUTH_WRONG_KEY
         else:
             cat = APIErrorCategory.AUTH_INVALID
-        return _build_classified(cat, raw)
+        return _build_classified(cat, raw, is_retryable=False)
 
     # --- Permission / region ---
     if err_type == "PermissionDeniedError" or "403" in raw:
-        return _build_classified(APIErrorCategory.PERMISSION_DENIED, raw)
+        return _build_classified(
+            APIErrorCategory.PERMISSION_DENIED, raw, is_retryable=False,
+        )
 
     # --- Model not found ---
     if err_type == "NotFoundError" or "404" in raw:
         if "model" in raw_lower:
             return _build_classified(APIErrorCategory.MODEL_NOT_FOUND, raw)
-        return _build_classified(APIErrorCategory.BAD_REQUEST, raw)
+        return _build_classified(APIErrorCategory.BAD_REQUEST, raw, is_retryable=False)
 
     # --- Rate limit / quota ---
     if err_type == "RateLimitError" or "429" in raw:
-        if "quota" in raw_lower or "billing" in raw_lower or "credit" in raw_lower:
+        if _is_quota_or_billing_exhaustion(raw_lower):
             return _build_classified(APIErrorCategory.QUOTA_EXCEEDED, raw)
         return _build_classified(APIErrorCategory.RATE_LIMITED, raw, is_retryable=True)
 
@@ -582,25 +624,25 @@ def classify_api_error(error: Exception) -> ClassifiedAPIError:
     if err_type == "BadRequestError" or "400" in raw:
         if "thinking" in raw_lower or "reasoning" in raw_lower:
             return _build_classified(
-                APIErrorCategory.THINKING_NOT_AVAILABLE, raw,
+                APIErrorCategory.THINKING_NOT_AVAILABLE, raw, is_retryable=True,
             )
         if "batch" in raw_lower:
             return _build_classified(
-                APIErrorCategory.BATCH_NOT_AVAILABLE, raw,
+                APIErrorCategory.BATCH_NOT_AVAILABLE, raw, is_retryable=True,
             )
         if "temperature" in raw_lower:
             return _build_classified(
-                APIErrorCategory.TEMPERATURE_NOT_AVAILABLE, raw,
+                APIErrorCategory.TEMPERATURE_NOT_AVAILABLE, raw, is_retryable=True,
             )
         if "prompt_cache" in raw_lower or "cache" in raw_lower:
             return _build_classified(
-                APIErrorCategory.PROMPT_CACHE_NOT_AVAILABLE, raw,
+                APIErrorCategory.PROMPT_CACHE_NOT_AVAILABLE, raw, is_retryable=True,
             )
         if ("content" in raw_lower and "policy" in raw_lower) or "flagged" in raw_lower:
             return _build_classified(
-                APIErrorCategory.CONTENT_FILTERED, raw,
+                APIErrorCategory.CONTENT_FILTERED, raw, is_retryable=True,
             )
-        return _build_classified(APIErrorCategory.BAD_REQUEST, raw)
+        return _build_classified(APIErrorCategory.BAD_REQUEST, raw, is_retryable=True)
 
     # --- Timeout ---
     if err_type == "APITimeoutError" or "timeout" in raw_lower:
@@ -621,7 +663,11 @@ def classify_api_error(error: Exception) -> ClassifiedAPIError:
         )
 
     # --- Connection errors ---
-    if err_type == "APIConnectionError" or "connection" in raw_lower:
+    if (
+        err_type == "APIConnectionError"
+        or "connection" in raw_lower
+        or _is_retryable_upstream_overflow(raw_lower)
+    ):
         return _build_classified(
             APIErrorCategory.CONNECTION_ERROR, raw, is_retryable=True,
         )
@@ -630,12 +676,22 @@ def classify_api_error(error: Exception) -> ClassifiedAPIError:
     if ("refuse" in raw_lower or "cannot translate" in raw_lower
             or "unable to translate" in raw_lower
             or "content policy" in raw_lower):
-        return _build_classified(APIErrorCategory.CONTENT_FILTERED, raw)
+        return _build_classified(
+            APIErrorCategory.CONTENT_FILTERED, raw, is_retryable=True,
+        )
 
     # --- Translation-specific errors ---
-    if "invalid json" in raw_lower or "non-json" in raw_lower:
+    if (
+        "invalid json" in raw_lower
+        or "non-json" in raw_lower
+        or "non structured" in raw_lower
+        or "non-structured" in raw_lower
+        or "structured output" in raw_lower
+        or "translations' is not a list" in raw_lower
+        or 'translations" is not a list' in raw_lower
+    ):
         return _build_classified(
-            APIErrorCategory.NON_STRUCTURED_OUTPUT, raw,
+            APIErrorCategory.NON_STRUCTURED_OUTPUT, raw, is_retryable=True,
         )
     if "line count mismatch" in raw_lower:
         return _build_classified(
@@ -647,16 +703,18 @@ def classify_api_error(error: Exception) -> ClassifiedAPIError:
         )
 
     # --- Fallback: unknown ---
-    return _build_classified(APIErrorCategory.UNKNOWN, raw)
+    return _build_classified(APIErrorCategory.UNKNOWN, raw, is_retryable=True)
 
 
 def _build_classified(
     category: APIErrorCategory,
     raw_message: str,
-    is_retryable: bool = False,
+    is_retryable: Optional[bool] = None,
 ) -> ClassifiedAPIError:
     """Build a ClassifiedAPIError from a category lookup."""
     info = _API_ERROR_INFO.get(category, _API_ERROR_INFO[APIErrorCategory.UNKNOWN])
+    if is_retryable is None:
+        is_retryable = category not in _DEFAULT_FATAL_CATEGORIES
     return ClassifiedAPIError(
         category=category,
         user_message=info["message"],

@@ -845,14 +845,17 @@ def _call_api_for_excerpt_custom(
 
     user_prompt = _get_gender_prompt(speaker, excerpt)
 
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": user_prompt}],
-        response_format=RESPONSE_SCHEMA,
-        temperature=0.0,
-        max_tokens=150,
-        store=False,
-    )
+    request_kwargs = {
+        "model": model,
+        "messages": [{"role": "user", "content": user_prompt}],
+        "response_format": RESPONSE_SCHEMA,
+        "temperature": 0.0,
+        "max_tokens": 150,
+    }
+    if provider.lower() == "openai":
+        request_kwargs["store"] = False
+
+    response = client.chat.completions.create(**request_kwargs)
 
     try:
         from .api_log import (

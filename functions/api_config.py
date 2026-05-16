@@ -497,6 +497,8 @@ _MODEL_SETTING_KEYS = (
     "max_concurrent", "request_mode", "rolling_context_before",
     "rolling_context_between", "rolling_context_after",
     "use_translated_context", "optimal_cache_size",
+    "temporary_backoff_mode", "temporary_backoff_attempts",
+    "temporary_backoff_total_seconds",
 )
 
 
@@ -886,6 +888,47 @@ def test_model_translation(
 
     user_msg = _json.dumps(test_lines, ensure_ascii=False)
 
+    def _log_model_translation_result(
+        *,
+        status: str,
+        raw_content: str,
+        duration_ms: int,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        total_tokens: int = 0,
+        error_message: str = "",
+    ) -> None:
+        try:
+            from .api_log import (
+                LogCategory, LogEntryReceived, LogEntrySent, LogStatus,
+                get_api_log_store,
+            )
+
+            store = get_api_log_store()
+            store.log_pair(
+                LogCategory.OTHER,
+                LogEntrySent(
+                    task_type="api_test",
+                    model=model_id,
+                    provider=provider,
+                    temperature=0.2,
+                    system_prompt=system_prompt,
+                    user_content=user_msg,
+                    extra={"type": "model_translation_test"},
+                ),
+                LogEntryReceived(
+                    content=raw_content,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    duration_ms=duration_ms,
+                    error_message=error_message,
+                ),
+                LogStatus(status),
+            )
+        except Exception:
+            pass
+
     # Determine response_format based on provider/URL.
     # Local providers (LM Studio, Ollama) reject {"type": "json_object"} and
     # require {"type": "json_schema", ...} instead.
@@ -928,62 +971,16 @@ def test_model_translation(
         )
         elapsed = _time.monotonic() - t0
         raw = response.choices[0].message.content or ""
-        # Log success to structured API log
-        try:
-            from .api_log import (
-                LogCategory, LogStatus, LogEntrySent, LogEntryReceived,
-                get_api_log_store,
-            )
-            _usage = getattr(response, "usage", None)
-            store = get_api_log_store()
-            store.log_pair(
-                LogCategory.OTHER,
-                LogEntrySent(
-                    task_type="api_test",
-                    model=model_id, provider=provider,
-                    temperature=0.2,
-                    system_prompt=system_prompt,
-                    user_content=user_msg,
-                    extra={"type": "model_translation_test"},
-                ),
-                LogEntryReceived(
-                    content=raw,
-                    prompt_tokens=getattr(_usage, "prompt_tokens", 0) if _usage else 0,
-                    completion_tokens=getattr(_usage, "completion_tokens", 0) if _usage else 0,
-                    total_tokens=getattr(_usage, "total_tokens", 0) if _usage else 0,
-                    duration_ms=round(elapsed * 1000),
-                ),
-                LogStatus.SUCCESS,
-            )
-        except Exception:
-            pass
+        _usage = getattr(response, "usage", None)
     except Exception as exc:
         elapsed = _time.monotonic() - t0
         # Log failure to structured API log
-        try:
-            from .api_log import (
-                LogCategory, LogStatus, LogEntrySent, LogEntryReceived,
-                get_api_log_store,
-            )
-            store = get_api_log_store()
-            store.log_pair(
-                LogCategory.OTHER,
-                LogEntrySent(
-                    task_type="api_test",
-                    model=model_id, provider=provider,
-                    temperature=0.2,
-                    system_prompt=system_prompt,
-                    user_content=user_msg,
-                    extra={"type": "model_translation_test"},
-                ),
-                LogEntryReceived(
-                    error_message=str(exc),
-                    duration_ms=round(elapsed * 1000),
-                ),
-                LogStatus.FAILED,
-            )
-        except Exception:
-            pass
+        _log_model_translation_result(
+            status="failed",
+            raw_content="",
+            duration_ms=round(elapsed * 1000),
+            error_message=str(exc),
+        )
         return {"success": False, "message": f"API call failed: {exc}",
                 "checks": [], "raw_response": "", "elapsed_seconds": round(elapsed, 2)}
 
@@ -998,6 +995,14 @@ def test_model_translation(
     except _json.JSONDecodeError as e:
         checks.append({"name": "Structured Output (JSON)", "passed": False,
                         "detail": f"Invalid JSON: {e}"})
+        _log_model_translation_result(
+            status="failed",
+            raw_content=raw,
+            duration_ms=round(elapsed * 1000),
+            prompt_tokens=getattr(_usage, "prompt_tokens", 0) if _usage else 0,
+            completion_tokens=getattr(_usage, "completion_tokens", 0) if _usage else 0,
+            total_tokens=getattr(_usage, "total_tokens", 0) if _usage else 0,
+        )
         return {"success": False, "message": "Structured output failed — invalid JSON",
                 "checks": checks, "raw_response": raw, "elapsed_seconds": round(elapsed, 2)}
 
@@ -1051,6 +1056,14 @@ def test_model_translation(
 
     all_passed = all(c["passed"] for c in checks)
     passed_count = sum(1 for c in checks if c["passed"])
+    _log_model_translation_result(
+        status="success" if all_passed else "failed",
+        raw_content=raw,
+        duration_ms=round(elapsed * 1000),
+        prompt_tokens=getattr(_usage, "prompt_tokens", 0) if _usage else 0,
+        completion_tokens=getattr(_usage, "completion_tokens", 0) if _usage else 0,
+        total_tokens=getattr(_usage, "total_tokens", 0) if _usage else 0,
+    )
     return {
         "success": all_passed,
         "message": f"{passed_count}/{len(checks)} checks passed"

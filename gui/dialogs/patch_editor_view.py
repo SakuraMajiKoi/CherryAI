@@ -81,7 +81,7 @@ class PatchEditorViewDialog(tk.Toplevel):
 	) -> None:
 		super().__init__(parent)
 		self._parent = parent
-		self._root = parent.winfo_toplevel()
+		self._window_root = parent.winfo_toplevel()
 		self._mgr = manifest_manager
 		self._entry_by_rel_path: Dict[str, FileDirEntry] = {}
 		self._selected_rel_path: Optional[str] = None
@@ -711,8 +711,8 @@ class PatchEditorViewDialog(tk.Toplevel):
 
 	def _on_close(self) -> None:
 		"""Close the shared Editor host and clear the root registration."""
-		if getattr(self._root, self._WINDOW_ATTR, None) is self:
-			setattr(self._root, self._WINDOW_ATTR, None)
+		if getattr(self._window_root, self._WINDOW_ATTR, None) is self:
+			setattr(self._window_root, self._WINDOW_ATTR, None)
 		self.destroy()
 
 

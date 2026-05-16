@@ -421,31 +421,65 @@ class LimitSettings:
 
     banned: str = "\u2014, \u2013"  # em-dash, en-dash
     output: int = 4096
-    warnings: bool = True   # Enable Content Warning
-    safe: bool = True       # Skip Unsafe Requests
+    warning_abort_enabled: bool = True
+    warning_abort_after: int = 1
+    skip_unsafe_requests: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
             "banned": self.banned,
             "output": self.output,
-            "warnings": self.warnings,
-            "safe": self.safe,
+            "warning_abort_enabled": self.warning_abort_enabled,
+            "warning_abort_after": self.warning_abort_after,
+            "skip_unsafe_requests": self.skip_unsafe_requests,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "LimitSettings":
         """Create from dictionary."""
+        def _as_bool(value: Any, default: bool) -> bool:
+            if value is None:
+                return default
+            if isinstance(value, bool):
+                return value
+            return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
         return cls(
             banned=str(data.get("banned", "\u2014, \u2013")),
             output=int(data.get("output", 4096)),
-            warnings=bool(data.get("warnings", True)),
-            safe=bool(data.get("safe", True)),
+            warning_abort_enabled=_as_bool(
+                data.get("warning_abort_enabled", data.get("warnings")),
+                True,
+            ),
+            warning_abort_after=max(1, int(data.get("warning_abort_after", 1))),
+            skip_unsafe_requests=_as_bool(
+                data.get("skip_unsafe_requests", data.get("safe")),
+                True,
+            ),
         )
 
     def get_banned_chars(self) -> List[str]:
         """Return the banned characters as a list (split on comma)."""
         return [c.strip() for c in self.banned.split(",") if c.strip()]
+
+    @property
+    def warnings(self) -> bool:
+        """Backward-compatible alias for the unsafe abort toggle."""
+        return self.warning_abort_enabled
+
+    @warnings.setter
+    def warnings(self, value: bool) -> None:
+        self.warning_abort_enabled = bool(value)
+
+    @property
+    def safe(self) -> bool:
+        """Backward-compatible alias for the skip-unsafe policy toggle."""
+        return self.skip_unsafe_requests
+
+    @safe.setter
+    def safe(self, value: bool) -> None:
+        self.skip_unsafe_requests = bool(value)
 
 
 # Keep old name as alias for backwards compatibility with existing tests
@@ -1017,8 +1051,17 @@ class GlobalOptions:
         limit = LimitSettings(
             banned=_str("limit", "banned", "\u2014, \u2013"),
             output=_int("limit", "output", 4096),
-            warnings=_bool("limit", "warnings", True),
-            safe=_bool("limit", "safe", True),
+            warning_abort_enabled=_bool(
+                "limit",
+                "unsafe_abort_enabled",
+                _bool("limit", "warnings", True),
+            ),
+            warning_abort_after=max(1, _int("limit", "unsafe_abort_after", 1)),
+            skip_unsafe_requests=_bool(
+                "limit",
+                "skip_unsafe_requests",
+                _bool("limit", "safe", True),
+            ),
         )
 
         # -- File I/O settings --
@@ -1395,6 +1438,9 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.timeout_var = tk.IntVar(value=self.options.request.timeout)
         self.retries_var = tk.IntVar(value=self.options.request.retries)
         self.rate_limit_var = tk.IntVar(value=self.options.request.rate_limit)
+        self.temporary_backoff_mode_var = tk.StringVar(value="exponential")
+        self.temporary_backoff_attempts_var = tk.IntVar(value=5)
+        self.temporary_backoff_total_seconds_var = tk.IntVar(value=120)
         self.chunk_size_var = tk.IntVar(value=self.options.request.chunk_size)
         self.max_input_tokens_var = tk.IntVar(
             value=self.options.request.max_input_tokens,
@@ -1486,9 +1532,18 @@ class GlobalOptionsDialog(tk.Toplevel):
 
         # Limit settings (replaces Safety)
         self.ban_tokens_var = tk.StringVar(value=self.options.limit.banned)
-        self.content_warning_var = tk.BooleanVar(value=self.options.limit.warnings)
+        self.warning_abort_enabled_var = tk.BooleanVar(
+            value=self.options.limit.warning_abort_enabled,
+        )
+        self.content_warning_var = self.warning_abort_enabled_var
+        self.warning_abort_after_var = tk.IntVar(
+            value=self.options.limit.warning_abort_after,
+        )
         self.max_output_tokens_var = tk.IntVar(value=self.options.limit.output)
-        self.safe_var = tk.BooleanVar(value=self.options.limit.safe)
+        self.skip_unsafe_requests_var = tk.BooleanVar(
+            value=self.options.limit.skip_unsafe_requests,
+        )
+        self.safe_var = self.skip_unsafe_requests_var
 
         # File I/O settings
         self.encoding_var = tk.StringVar(value=self.options.file_io.encoding)
@@ -1925,6 +1980,57 @@ class GlobalOptionsDialog(tk.Toplevel):
         ttk.Label(retries_row, text="Max Retries:", width=18).pack(side=tk.LEFT)
         ttk.Spinbox(retries_row, from_=0, to=10, textvariable=self.retries_var, width=10).pack(side=tk.LEFT, padx=5)
         ttk.Label(retries_row, text="(0-10, default: 3)", foreground="gray").pack(side=tk.LEFT, padx=5)
+
+        backoff_mode_row = ttk.Frame(settings_frame)
+        backoff_mode_row.pack(fill=tk.X, pady=5)
+
+        ttk.Label(backoff_mode_row, text="Temp. Backoff:", width=18).pack(side=tk.LEFT)
+        ttk.Combobox(
+            backoff_mode_row,
+            textvariable=self.temporary_backoff_mode_var,
+            values=["linear", "exponential"],
+            state="readonly",
+            width=18,
+        ).pack(side=tk.LEFT, padx=5)
+        ttk.Label(
+            backoff_mode_row,
+            text="(used only for timeout/server/connection retries)",
+            foreground="gray",
+        ).pack(side=tk.LEFT, padx=5)
+
+        backoff_attempts_row = ttk.Frame(settings_frame)
+        backoff_attempts_row.pack(fill=tk.X, pady=5)
+
+        ttk.Label(backoff_attempts_row, text="Backoff Attempts:", width=18).pack(side=tk.LEFT)
+        ttk.Spinbox(
+            backoff_attempts_row,
+            from_=0,
+            to=20,
+            textvariable=self.temporary_backoff_attempts_var,
+            width=10,
+        ).pack(side=tk.LEFT, padx=5)
+        ttk.Label(
+            backoff_attempts_row,
+            text="(temporary failures only)",
+            foreground="gray",
+        ).pack(side=tk.LEFT, padx=5)
+
+        backoff_total_row = ttk.Frame(settings_frame)
+        backoff_total_row.pack(fill=tk.X, pady=5)
+
+        ttk.Label(backoff_total_row, text="Backoff Budget (s):", width=18).pack(side=tk.LEFT)
+        ttk.Spinbox(
+            backoff_total_row,
+            from_=0,
+            to=3600,
+            textvariable=self.temporary_backoff_total_seconds_var,
+            width=10,
+        ).pack(side=tk.LEFT, padx=5)
+        ttk.Label(
+            backoff_total_row,
+            text="(total wait cap across temporary retries)",
+            foreground="gray",
+        ).pack(side=tk.LEFT, padx=5)
 
         # Rate limit
         rate_row = ttk.Frame(settings_frame)
@@ -2515,12 +2621,28 @@ class GlobalOptionsDialog(tk.Toplevel):
         ttk.Spinbox(tokens_row, from_=256, to=16384, textvariable=self.max_output_tokens_var, width=10).pack(side=tk.LEFT, padx=5)
         ttk.Label(tokens_row, text="(256-16384, default: 4096)", foreground="gray").pack(side=tk.LEFT, padx=5)
 
-        # Content warning
-        warning_check = ttk.Checkbutton(panel, text="Enable content warnings in output", variable=self.content_warning_var)
-        warning_check.pack(anchor=tk.W, pady=5)
+        warning_row = ttk.Frame(panel)
+        warning_row.pack(anchor=tk.W, pady=5)
+        ttk.Checkbutton(
+            warning_row,
+            variable=self.warning_abort_enabled_var,
+        ).pack(side=tk.LEFT)
+        ttk.Label(warning_row, text="Abort after").pack(side=tk.LEFT, padx=(6, 6))
+        ttk.Spinbox(
+            warning_row,
+            from_=1,
+            to=999,
+            textvariable=self.warning_abort_after_var,
+            width=6,
+        ).pack(side=tk.LEFT)
+        ttk.Label(warning_row, text="Unsafe Request").pack(side=tk.LEFT, padx=(6, 0))
 
         # Safe mode
-        safe_check = ttk.Checkbutton(panel, text="Skip unsafe requests", variable=self.safe_var)
+        safe_check = ttk.Checkbutton(
+            panel,
+            text="Skip unsafe requests",
+            variable=self.skip_unsafe_requests_var,
+        )
         safe_check.pack(anchor=tk.W, pady=5)
 
     def _build_file_io_section(self) -> None:
@@ -3648,6 +3770,12 @@ class GlobalOptionsDialog(tk.Toplevel):
         # --- Thinking constraints ---
         think_cfg = provider.get_thinking_config(model_id)
         if think_cfg.available:
+            effort_levels = list(think_cfg.effort_levels or ("low", "medium", "high"))
+            default_effort = think_cfg.effort_default or effort_levels[-1]
+            if hasattr(self, "_reasoning_effort_combo"):
+                self._reasoning_effort_combo.configure(values=effort_levels)
+            if self.reasoning_effort_var.get() not in effort_levels:
+                self.reasoning_effort_var.set(default_effort)
             self._think_frame.pack(fill=tk.X, pady=(0, 10))
             if think_cfg.mandatory:
                 # Mandatory thinking — force on and disable toggle
@@ -3742,6 +3870,7 @@ class GlobalOptionsDialog(tk.Toplevel):
         """
         try:
             from CherryAI.functions import ini_manager
+            from CherryAI.functions.api_config import get_model_settings
         except Exception:
             return
 
@@ -3750,7 +3879,27 @@ class GlobalOptionsDialog(tk.Toplevel):
             return
 
         saved = ini_manager.get_all_user_defaults("model_settings")
+        api_saved = get_model_settings(model_id)
         prefix = f"{model_id}."
+        allowed_efforts = ("low", "medium", "high")
+        default_effort = "medium"
+        try:
+            from CherryAI.providers import ProviderRegistry
+
+            provider = ProviderRegistry.get(self.provider_var.get())
+            if provider:
+                think_cfg = provider.get_thinking_config(model_id)
+                if think_cfg.effort_levels:
+                    allowed_efforts = tuple(
+                        str(level).strip().lower()
+                        for level in think_cfg.effort_levels
+                    )
+                if think_cfg.effort_default:
+                    default_effort = think_cfg.effort_default.strip().lower()
+                elif allowed_efforts:
+                    default_effort = allowed_efforts[-1]
+        except Exception:
+            pass
 
         # Temperature
         temp_key = f"{prefix}temperature"
@@ -3784,10 +3933,33 @@ class GlobalOptionsDialog(tk.Toplevel):
         effort_key = f"{prefix}reasoning_effort"
         if effort_key in saved:
             val = saved[effort_key].strip().lower()
-            if val in ("low", "medium", "high"):
+            if val in allowed_efforts:
                 self.reasoning_effort_var.set(val)
+            else:
+                self.reasoning_effort_var.set(default_effort)
         else:
-            self.reasoning_effort_var.set("medium")
+            self.reasoning_effort_var.set(default_effort)
+
+        backoff_mode = str(
+            api_saved.get("temporary_backoff_mode", "exponential"),
+        ).strip().lower()
+        if backoff_mode not in ("linear", "exponential"):
+            backoff_mode = "exponential"
+        self.temporary_backoff_mode_var.set(backoff_mode)
+
+        try:
+            self.temporary_backoff_attempts_var.set(
+                max(0, int(api_saved.get("temporary_backoff_attempts", 5))),
+            )
+        except (ValueError, tk.TclError, TypeError):
+            self.temporary_backoff_attempts_var.set(5)
+
+        try:
+            self.temporary_backoff_total_seconds_var.set(
+                max(0, int(api_saved.get("temporary_backoff_total_seconds", 120))),
+            )
+        except (ValueError, tk.TclError, TypeError):
+            self.temporary_backoff_total_seconds_var.set(120)
 
     def _apply_provider_temp_default(self, model_id: str) -> None:
         """Set temperature to the provider's default for this model."""
@@ -3805,6 +3977,7 @@ class GlobalOptionsDialog(tk.Toplevel):
         """Persist per-model settings (temperature, thinking) to INI."""
         try:
             from CherryAI.functions import ini_manager
+            from CherryAI.functions.api_config import set_model_settings
         except Exception:
             return
 
@@ -3821,6 +3994,18 @@ class GlobalOptionsDialog(tk.Toplevel):
             f"{model_id}.reasoning_effort": self.reasoning_effort_var.get(),
         }
         ini_manager.save_as_user_defaults("model_settings", vals)
+        set_model_settings(
+            model_id,
+            {
+                "temporary_backoff_mode": self.temporary_backoff_mode_var.get(),
+                "temporary_backoff_attempts": str(
+                    self.temporary_backoff_attempts_var.get(),
+                ),
+                "temporary_backoff_total_seconds": str(
+                    self.temporary_backoff_total_seconds_var.get(),
+                ),
+            },
+        )
 
     def _on_refresh_models(self) -> None:
         """Refresh model lists — uses built-in curated fallback data.
@@ -4960,11 +5145,34 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.ban_tokens_var.set(
             ini_manager.get_initial_default("limit", "banned", "\u2014, \u2013", str) or "\u2014, \u2013"
         )
-        self.content_warning_var.set(
-            bool(ini_manager.get_initial_default("limit", "warnings", True, bool))
+        self.warning_abort_enabled_var.set(
+            bool(
+                ini_manager.get_initial_default(
+                    "limit",
+                    "unsafe_abort_enabled",
+                    bool(ini_manager.get_initial_default("limit", "warnings", True, bool)),
+                    bool,
+                )
+            )
+        )
+        self.warning_abort_after_var.set(
+            max(
+                1,
+                int(ini_manager.get_initial_default("limit", "unsafe_abort_after", 1, int) or 1),
+            )
         )
         self.max_output_tokens_var.set(
             int(ini_manager.get_initial_default("limit", "output", 4096, int) or 4096)
+        )
+        self.skip_unsafe_requests_var.set(
+            bool(
+                ini_manager.get_initial_default(
+                    "limit",
+                    "skip_unsafe_requests",
+                    bool(ini_manager.get_initial_default("limit", "safe", True, bool)),
+                    bool,
+                )
+            )
         )
 
         # File I/O defaults
@@ -5163,9 +5371,10 @@ class GlobalOptionsDialog(tk.Toplevel):
 
         self.options.limit = LimitSettings(
             banned=self.ban_tokens_var.get(),
-            warnings=self.content_warning_var.get(),
+            warning_abort_enabled=self.warning_abort_enabled_var.get(),
+            warning_abort_after=max(1, self.warning_abort_after_var.get()),
             output=self.max_output_tokens_var.get(),
-            safe=self.safe_var.get(),
+            skip_unsafe_requests=self.skip_unsafe_requests_var.get(),
         )
 
         self.options.file_io = FileIOSettings(
@@ -5369,8 +5578,11 @@ class GlobalOptionsDialog(tk.Toplevel):
             # Limits
             limit_vals = {
                 "banned": self.options.limit.banned,
+                "unsafe_abort_enabled": str(self.options.limit.warning_abort_enabled).lower(),
+                "unsafe_abort_after": str(self.options.limit.warning_abort_after),
                 "warnings": str(self.options.limit.warnings).lower(),
                 "output": str(self.options.limit.output),
+                "skip_unsafe_requests": str(self.options.limit.skip_unsafe_requests).lower(),
                 "safe": str(self.options.limit.safe).lower(),
             }
             ini_manager.save_as_user_defaults("limit", limit_vals)

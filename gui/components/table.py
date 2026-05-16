@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from tkinter import filedialog, messagebox
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple, cast
 import tkinter as tk
 from tkinter import ttk
 
@@ -149,6 +149,10 @@ class SharedTable(ttk.Frame):
         self.columns = columns or DEFAULT_COLUMNS.copy()
         self._rows: List[TableRow] = []
         self._filtered_rows: List[TableRow] = []
+        self._row_ids: List[int] = []
+        self._filtered_row_ids: List[int] = []
+        self._row_provider: Optional[Callable[[int], TableRow]] = None
+        self._row_cache: Dict[int, TableRow] = {}
         self._show_filter = show_filter
         self._show_checkboxes = show_checkboxes
         self._show_count_filter = show_count_filter
@@ -475,6 +479,10 @@ class SharedTable(ttk.Frame):
             self._current_count_filter, default_op=default_op,
         )
 
+        if getattr(self, "_row_provider", None) is not None:
+            self._apply_lazy_filter(count_pred)
+            return
+
         if not self._current_filter and count_pred is None:
             self._filtered_rows = self._rows.copy()
         else:
@@ -500,6 +508,59 @@ class SharedTable(ttk.Frame):
             self._filtered_rows = filtered
         self._current_page = 0
         self._refresh_display()
+
+    def _apply_lazy_filter(
+        self,
+        count_pred: Optional[Callable[[int], bool]],
+    ) -> None:
+        """Apply text/count filters using the configured row provider."""
+        if not self._current_filter and count_pred is None:
+            self._filtered_row_ids = getattr(self, "_row_ids", []).copy()
+        else:
+            filtered: List[int] = []
+            for row_id in getattr(self, "_row_ids", []):
+                row = self._get_row(row_id)
+
+                if self._current_filter:
+                    if not self._row_matches_text_filter(row, self._current_filter):
+                        continue
+
+                if count_pred is not None:
+                    try:
+                        count_val = int(row.values.get("count", 0))
+                    except (ValueError, TypeError):
+                        count_val = 0
+                    if not count_pred(count_val):
+                        continue
+
+                filtered.append(row_id)
+            self._filtered_row_ids = filtered
+
+        self._filtered_rows = []
+        self._current_page = 0
+        self._refresh_display()
+
+    def _contains_row_id(self, row_id: int) -> bool:
+        """Return whether the current dataset contains *row_id*."""
+        return row_id in getattr(self, "_row_ids", [])
+
+    def _get_row(self, row_id: int) -> TableRow:
+        """Return a row by id, materializing it on demand when lazy mode is active."""
+        row_provider = getattr(self, "_row_provider", None)
+        if row_provider is None:
+            row = next((item for item in getattr(self, "_rows", []) if item.id == row_id), None)
+            if row is None:
+                raise KeyError(f"Unknown row id: {row_id}")
+            return row
+
+        row_cache = getattr(self, "_row_cache", {})
+        cached = row_cache.get(row_id)
+        if cached is not None:
+            return cached
+
+        row = row_provider(row_id)
+        row_cache[row_id] = row
+        return row
 
     @classmethod
     def _iter_search_values(cls, value: Any) -> List[str]:
@@ -546,8 +607,13 @@ class SharedTable(ttk.Frame):
         # Get visible columns
         visible_cols = [c for c in self.columns if c.visible]
 
-        rows = self._filtered_rows
-        total = len(rows)
+        row_provider = getattr(self, "_row_provider", None)
+        if row_provider is not None:
+            row_ids = getattr(self, "_filtered_row_ids", [])
+            total = len(row_ids)
+        else:
+            rows = getattr(self, "_filtered_rows", [])
+            total = len(rows)
 
         # Compute pagination bounds
         total_pages = max(1, (total + self._page_size - 1) // self._page_size)
@@ -556,7 +622,10 @@ class SharedTable(ttk.Frame):
 
         start = self._current_page * self._page_size
         end = min(start + self._page_size, total)
-        display_rows = rows[start:end]
+        if row_provider is not None:
+            display_rows = [self._get_row(row_id) for row_id in row_ids[start:end]]
+        else:
+            display_rows = rows[start:end]
 
         batch_size = 2000
 
@@ -593,10 +662,12 @@ class SharedTable(ttk.Frame):
 
     def _next_page(self) -> None:
         """Navigate to the next page."""
-        total_pages = max(
-            1,
-            (len(self._filtered_rows) + self._page_size - 1) // self._page_size,
+        filtered_total = len(
+            getattr(self, "_filtered_row_ids", [])
+            if getattr(self, "_row_provider", None) is not None
+            else getattr(self, "_filtered_rows", [])
         )
+        total_pages = max(1, (filtered_total + self._page_size - 1) // self._page_size)
         if self._current_page < total_pages - 1:
             self._current_page += 1
             self._refresh_display()
@@ -671,9 +742,13 @@ class SharedTable(ttk.Frame):
 
     def _update_status(self) -> None:
         """Update the status bar text."""
-        total = len(self._rows)
-        filtered = len(self._filtered_rows)
-        checked = len(self._checked_rows)
+        if getattr(self, "_row_provider", None) is not None:
+            total = len(getattr(self, "_row_ids", []))
+            filtered = len(getattr(self, "_filtered_row_ids", []))
+        else:
+            total = len(getattr(self, "_rows", []))
+            filtered = len(getattr(self, "_filtered_rows", []))
+        checked = len(getattr(self, "_checked_rows", set()))
 
         if self._current_filter:
             text = f"{filtered} of {total} rows (filtered)"
@@ -805,10 +880,16 @@ class SharedTable(ttk.Frame):
 
         # Sort rows
         reverse = new_dir == "desc"
-        self._filtered_rows.sort(
-            key=lambda r: str(r.values.get(column_key, "")),
-            reverse=reverse,
-        )
+        if getattr(self, "_row_provider", None) is not None:
+            self._filtered_row_ids.sort(
+                key=lambda row_id: str(self._get_row(row_id).values.get(column_key, "")),
+                reverse=reverse,
+            )
+        else:
+            self._filtered_rows.sort(
+                key=lambda r: str(r.values.get(column_key, "")),
+                reverse=reverse,
+            )
         self._refresh_display()
 
     def _export_csv(self) -> None:
@@ -828,11 +909,12 @@ class SharedTable(ttk.Frame):
                 # Header
                 writer.writerow([c.title for c in visible_cols])
                 # Data
-                for row in self._filtered_rows:
+                filtered_rows = self.get_filtered_data()
+                for row in filtered_rows:
                     row_data = [str(row.values.get(c.key, "")) for c in visible_cols]
                     writer.writerow(row_data)
 
-            messagebox.showinfo("Export Complete", f"Exported {len(self._filtered_rows)} rows to {file_path}")
+            messagebox.showinfo("Export Complete", f"Exported {len(filtered_rows)} rows to {file_path}")
         except Exception as e:
             logger.error("Failed to export CSV: %s", e)
             messagebox.showerror("Export Failed", f"Failed to export: {e}")
@@ -846,6 +928,30 @@ class SharedTable(ttk.Frame):
             rows: List of TableRow objects.
         """
         self._rows = rows
+        self._row_ids = [row.id for row in rows]
+        self._checked_rows.clear()
+        self._row_provider = None
+        self._row_cache.clear()
+        self._filtered_row_ids = []
+        self._apply_filter()
+
+    def set_lazy_data(
+        self,
+        row_ids: Sequence[int],
+        row_provider: Callable[[int], TableRow],
+    ) -> None:
+        """Set lazily materialized table data.
+
+        Args:
+            row_ids: Ordered row ids that define the dataset.
+            row_provider: Callback that builds a TableRow for a given row id.
+        """
+        self._rows = []
+        self._filtered_rows = []
+        self._row_ids = list(row_ids)
+        self._filtered_row_ids = []
+        self._row_provider = row_provider
+        self._row_cache.clear()
         self._checked_rows.clear()
         self._apply_filter()
 
@@ -871,6 +977,8 @@ class SharedTable(ttk.Frame):
         Returns:
             List of TableRow objects.
         """
+        if getattr(self, "_row_provider", None) is not None:
+            return [self._get_row(row_id) for row_id in getattr(self, "_row_ids", [])]
         return self._rows.copy()
 
     def get_filtered_data(self) -> List[TableRow]:
@@ -879,6 +987,8 @@ class SharedTable(ttk.Frame):
         Returns:
             List of filtered TableRow objects.
         """
+        if getattr(self, "_row_provider", None) is not None:
+            return [self._get_row(row_id) for row_id in getattr(self, "_filtered_row_ids", [])]
         return self._filtered_rows.copy()
 
     def get_checked_rows(self) -> List[TableRow]:
@@ -887,6 +997,8 @@ class SharedTable(ttk.Frame):
         Returns:
             List of checked TableRow objects.
         """
+        if getattr(self, "_row_provider", None) is not None:
+            return [self._get_row(row_id) for row_id in getattr(self, "_checked_rows", set())]
         return [r for r in self._rows if r.id in self._checked_rows]
 
     def get_selected_rows(self) -> List[TableRow]:
@@ -896,6 +1008,8 @@ class SharedTable(ttk.Frame):
             List of selected TableRow objects.
         """
         selected_ids = {int(iid) for iid in self._tree.selection()}
+        if getattr(self, "_row_provider", None) is not None:
+            return [self._get_row(row_id) for row_id in selected_ids]
         return [r for r in self._rows if r.id in selected_ids]
 
     def get_selected_ids(self) -> List[int]:
@@ -929,7 +1043,7 @@ class SharedTable(ttk.Frame):
             row_id: Row identifier.
             tag: Tag name (e.g., 'error', 'success').
         """
-        row = next((r for r in self._rows if r.id == row_id), None)
+        row = self._get_row(row_id) if self._contains_row_id(row_id) else None
         if row and tag not in row.tags:
             row.tags.append(tag)
             self._refresh_display()
@@ -941,7 +1055,7 @@ class SharedTable(ttk.Frame):
             row_id: Row identifier.
             tag: Tag name to remove.
         """
-        row = next((r for r in self._rows if r.id == row_id), None)
+        row = self._get_row(row_id) if self._contains_row_id(row_id) else None
         if row and tag in row.tags:
             row.tags.remove(tag)
             self._refresh_display()
@@ -965,6 +1079,8 @@ class SharedTable(ttk.Frame):
         Returns:
             Number of rows.
         """
+        if getattr(self, "_row_provider", None) is not None:
+            return len(getattr(self, "_row_ids", []))
         return len(self._rows)
 
     def get_filtered_count(self) -> int:
@@ -973,11 +1089,18 @@ class SharedTable(ttk.Frame):
         Returns:
             Number of filtered rows.
         """
+        if getattr(self, "_row_provider", None) is not None:
+            return len(getattr(self, "_filtered_row_ids", []))
         return len(self._filtered_rows)
 
     def clear(self) -> None:
         """Clear all table data."""
         self._rows.clear()
+        self._filtered_rows.clear()
+        self._row_ids.clear()
+        self._filtered_row_ids.clear()
+        self._row_provider = None
+        self._row_cache.clear()
         self._filtered_rows.clear()
         self._checked_rows.clear()
         self._current_filter = ""

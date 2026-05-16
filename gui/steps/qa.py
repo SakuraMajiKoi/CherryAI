@@ -72,6 +72,7 @@ class IssueType(Enum):
     QUOTE_IMBALANCE = "quote_imbalance"
     LINE_TOO_LONG = "line_too_long"
     EMPTY_TRANSLATION = "empty_translation"
+    ENCODING_UNSAFE = "encoding_unsafe"
     CUSTOM = "custom"
 
 
@@ -102,6 +103,7 @@ class QAIssue:
     message: str
     suggestion: str = ""
     auto_fixable: bool = False
+    replacement_text: str = ""
     fixed: bool = False
 
 
@@ -174,6 +176,8 @@ class QAOptions:
     max_japanese_chars: int = 4
     max_line_length: int = 0  # 0 = no limit
     rerun_policy: str = "failed_only"
+    encoding_safety_enabled: bool = False
+    encoding_check_encoding: str = "shift_jis"
 
     def __post_init__(self) -> None:
         """Keep the legacy max_japanese_chars alias synchronized."""
@@ -674,6 +678,60 @@ class QAStep(BaseStep):
         )
         self._manifest_bindings.append(binding)
 
+        encoding_values = ("shift_jis", "cp932", "utf-8", "utf-8-sig", "utf-16")
+
+        encoding_enable_frame = ttk.Frame(frame)
+        encoding_enable_frame.pack(fill="x", pady=(8, 2))
+
+        self._encoding_safety_enabled_var = tk.BooleanVar(
+            value=self._qa_options.encoding_safety_enabled
+        )
+        encoding_checkbox = ttk.Checkbutton(
+            encoding_enable_frame,
+            text="Check output encoding safety",
+            variable=self._encoding_safety_enabled_var,
+        )
+        encoding_checkbox.pack(side="left")
+        binding = bind_checkbox_to_field(
+            checkbox=encoding_checkbox,
+            var=self._encoding_safety_enabled_var,
+            manager_getter=lambda: self.manifest_manager,
+            field_key="EncodingSafetyEnabled",
+            default=False,
+            parent_key="QAOptions",
+        )
+        self._manifest_bindings.append(binding)
+
+        encoding_frame = ttk.Frame(frame)
+        encoding_frame.pack(fill="x", pady=2)
+
+        ttk.Label(encoding_frame, text="Encoding to check:").pack(side="left")
+        self._encoding_check_var = tk.StringVar(
+            value=self._qa_options.encoding_check_encoding
+        )
+        encoding_spinbox = ttk.Spinbox(
+            encoding_frame,
+            values=encoding_values,
+            textvariable=self._encoding_check_var,
+            width=12,
+            wrap=True,
+        )
+        encoding_spinbox.pack(side="right")
+
+        def on_encoding_check_changed(*args: Any) -> None:
+            """Persist the target QA encoding when changed."""
+            if self.manifest_manager is None:
+                return
+            value = self._encoding_check_var.get().strip() or "shift_jis"
+            save_nested_text_field(
+                self.manifest_manager,
+                "QAOptions",
+                "EncodingCheckEncoding",
+                value,
+            )
+
+        self._encoding_check_var.trace_add("write", on_encoding_check_changed)
+
         # Re-run policy
         policy_frame = ttk.Frame(frame)
         policy_frame.pack(fill="x", pady=5)
@@ -842,8 +900,8 @@ class QAStep(BaseStep):
 
     def _update_lines_table(self) -> None:
         """Update the lines table with current data."""
-        rows: List[TableRow] = []
         filter_value = self._filter_var.get()
+        row_ids: List[int] = []
 
         for line in self._lines:
             # Apply filter
@@ -872,7 +930,22 @@ class QAStep(BaseStep):
             else:
                 status = "✓ OK"
 
-            row = TableRow(
+            row_ids.append(line.idx)
+
+        def build_row(row_id: int) -> TableRow:
+            line = self._lines[row_id]
+            if line.rejected:
+                status = "✗ Rejected"
+            elif line.accepted:
+                status = "✓ Accepted"
+            elif line.has_errors:
+                status = "⚠ Error"
+            elif line.has_issues:
+                status = "○ Warning"
+            else:
+                status = "✓ OK"
+
+            return TableRow(
                 id=line.idx,
                 values={
                     "idx": str(line.idx + 1),
@@ -883,9 +956,8 @@ class QAStep(BaseStep):
                     "overwrite": line.overwrite_text,
                 },
             )
-            rows.append(row)
 
-        self._lines_table.set_data(rows)
+        self._lines_table.set_lazy_data(row_ids, build_row)
 
     def _update_summary(self) -> None:
         """Update the summary panel."""
@@ -1024,6 +1096,10 @@ class QAStep(BaseStep):
         self._qa_options.max_japanese_chars = self._qa_options.max_source_language_chars
         self._qa_options.max_line_length = self._max_len_var.get()
         self._qa_options.rerun_policy = self._rerun_var.get()
+        self._qa_options.encoding_safety_enabled = self._encoding_safety_enabled_var.get()
+        self._qa_options.encoding_check_encoding = (
+            self._encoding_check_var.get().strip() or "shift_jis"
+        )
 
         # Determine which lines to check
         lines_to_check: List[QALine] = []
@@ -1078,6 +1154,7 @@ class QAStep(BaseStep):
                 "quote_imbalance": IssueType.QUOTE_IMBALANCE,
                 "line_too_long": IssueType.LINE_TOO_LONG,
                 "empty_translation": IssueType.EMPTY_TRANSLATION,
+                "encoding_unsafe": IssueType.ENCODING_UNSAFE,
             }
             severity_map = {
                 "error": IssueSeverity.ERROR,
@@ -1097,6 +1174,8 @@ class QAStep(BaseStep):
                     source_language=source_language,
                     target_language=target_language,
                     code_patterns=code_patterns,
+                    encoding_check_enabled=self._qa_options.encoding_safety_enabled,
+                    target_encoding=self._qa_options.encoding_check_encoding,
                 )
                 for finding in findings:
                     line.issues.append(
@@ -1107,6 +1186,7 @@ class QAStep(BaseStep):
                             message=finding.message,
                             suggestion=finding.suggestion,
                             auto_fixable=finding.auto_fixable,
+                            replacement_text=finding.replacement_text,
                         )
                     )
 
@@ -1174,10 +1254,23 @@ class QAStep(BaseStep):
         if 0 <= issue_idx < len(line.issues):
             issue = line.issues[issue_idx]
             if issue.auto_fixable and not issue.fixed:
-                issue.fixed = True
+                self._apply_issue_fix(line, issue)
                 self._show_line_details(line)
                 self._update_lines_table()
                 self._update_summary()
+
+    def _apply_issue_fix(self, line: QALine, issue: QAIssue) -> None:
+        """Apply an auto-fix suggestion to the line overwrite column."""
+        if issue.replacement_text:
+            line.overwrite_text = issue.replacement_text
+            if self.manifest_manager is not None:
+                _persist_sparse_qa_overwrite(
+                    self.manifest_manager,
+                    line.idx,
+                    line.qa_text,
+                    line.overwrite_text,
+                )
+        issue.fixed = True
 
     def _accept_selected(self) -> None:
         """Accept selected lines."""
@@ -1222,7 +1315,7 @@ class QAStep(BaseStep):
                 line = self._lines[line_idx]
                 for issue in line.issues:
                     if issue.auto_fixable and not issue.fixed:
-                        issue.fixed = True
+                        self._apply_issue_fix(line, issue)
                         fixed_count += 1
 
         self._update_lines_table()
@@ -1414,6 +1507,14 @@ class QAStep(BaseStep):
         self._qa_options.max_source_language_chars = self._max_source_var.get()
         self._qa_options.max_japanese_chars = self._qa_options.max_source_language_chars
         self._max_len_var.set(int(qa_options.get("MaxLineLength", 0) or 0))
+        self._encoding_safety_enabled_var.set(
+            bool(qa_options.get("EncodingSafetyEnabled", False))
+        )
+        self._encoding_check_var.set(
+            str(qa_options.get("EncodingCheckEncoding", "shift_jis") or "shift_jis")
+        )
+        self._qa_options.encoding_safety_enabled = self._encoding_safety_enabled_var.get()
+        self._qa_options.encoding_check_encoding = self._encoding_check_var.get()
         
         logger.debug("Loaded QA options from manifest")
 
@@ -1451,6 +1552,8 @@ class QAStep(BaseStep):
             "max_source_language_chars": self._max_source_var.get(),
             "max_line_length": self._max_len_var.get(),
             "rerun_policy": self._rerun_var.get(),
+            "encoding_safety_enabled": self._encoding_safety_enabled_var.get(),
+            "encoding_check_encoding": self._encoding_check_var.get(),
         }
         step_data["qa_lines"] = [line.qa_text for line in self._lines]
         step_data["qa_overwrite_lines"] = [line.overwrite_text for line in self._lines]

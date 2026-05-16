@@ -287,6 +287,25 @@ class ParserScript(ABC):
         """Tag detection patterns, or ``None``."""
         return None
 
+    @property
+    def requires_staged_refresh(self) -> bool:
+        """Return whether Step 0 must re-extract from staged ``Original/`` files."""
+        return False
+
+    def decrypt(self, file_path: Path) -> Path:
+        """Optional pre-extraction decryption hook (O1).
+
+        Default implementation is a no-op for plain-text formats.
+        """
+        return file_path
+
+    def encrypt(self, file_path: Path) -> Path:
+        """Optional post-injection encryption hook (O2).
+
+        Default implementation is a no-op for plain-text formats.
+        """
+        return file_path
+
     # Backward-compatible alias
     @property
     def context_marker_rules(self) -> Optional[TagRules]:
@@ -636,6 +655,7 @@ class ParserScript(ABC):
             "has_wordwrap": self.wordwrap_config is not None,
             "has_forbidden_chars": self.forbidden_chars is not None,
             "has_tag_rules": self.tag_rules is not None,
+            "requires_staged_refresh": self.requires_staged_refresh,
             "has_tagged_extraction": (
                 type(self).extract_tagged is not ParserScript.extract_tagged
             ),
@@ -651,6 +671,8 @@ class ParserScript(ABC):
             "has_encoding_detection": (
                 type(self).detect_encoding is not ParserScript.detect_encoding
             ),
+            "has_decrypt": type(self).decrypt is not ParserScript.decrypt,
+            "has_encrypt": type(self).encrypt is not ParserScript.encrypt,
             "has_injection_rewrite": (
                 type(self).rewrite_injected_content
                 is not ParserScript.rewrite_injected_content

@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union, TYPE_CHECKING
 
@@ -53,6 +55,13 @@ from .header_rate_limiter import (
     HeaderBasedRateLimiter,
     OPENAI_RATE_LIMIT_CONFIG,
     ProviderRateLimitConfig,
+    GEMINI_RATE_LIMIT_CONFIG,
+    MISTRAL_RATE_LIMIT_CONFIG,
+)
+from .validation import (
+    PROMPT_CONTEXT_WARNING_MESSAGE,
+    ResponseValidationError,
+    has_prompt_context_risky_terms,
 )
 
 
@@ -91,6 +100,11 @@ class APIConfig:
     rate_limit_enabled: bool = False  # Enable comprehensive rate limit management
     max_concurrent: int = 3  # Maximum concurrent API requests
     rate_limit_margin: float = 0.1  # Safety margin for rate limits (0.0-0.5)
+    requests_per_second_enabled: bool = False  # Optional per-request pacing gate
+    requests_per_second: float = 1.0  # Request pacing cap when enabled
+    temporary_backoff_mode: str = "exponential"  # linear or exponential
+    temporary_backoff_attempts: int = 5  # Retry attempts for temporary failures
+    temporary_backoff_total_seconds: int = 120  # Total wait budget across retries
     # Local LLM settings
     no_api_key: bool = False  # Skip API key validation for local LLMs
     # Batch API settings (TASK 17.1)
@@ -101,12 +115,20 @@ class APIConfig:
     prompt_cache_enabled: bool = True  # Enable OpenAI prompt caching (auto for gpt-4o+)
     prompt_cache_retention: str = ""  # "" = default (in_memory), "in_memory", or "24h"
     prompt_cache_key: str = ""  # Semi-unique key to improve cache hit routing
+    content_warning_abort_enabled: bool = True  # Stop run after unsafe-request threshold
+    unsafe_abort_after: int = 1  # Abort after N unsafe requests when enabled
+    skip_unsafe_requests: bool = True  # Skip refused chunks instead of halving them
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> APIConfig:
         """Create config from dictionary, ignoring unknown keys."""
+        alias_values = dict(data)
+        if "content_warning_abort_enabled" not in alias_values and "content_warning_enabled" in alias_values:
+            alias_values["content_warning_abort_enabled"] = alias_values["content_warning_enabled"]
+        if "skip_unsafe_requests" not in alias_values and "safe" in alias_values:
+            alias_values["skip_unsafe_requests"] = alias_values["safe"]
         known_keys = cls.__annotations__.keys()
-        filtered_data = {k: v for k, v in data.items() if k in known_keys}
+        filtered_data = {k: v for k, v in alias_values.items() if k in known_keys}
         
         # Type conversion for numeric fields
         if "temperature" in filtered_data:
@@ -144,6 +166,17 @@ class APIConfig:
             filtered_data["max_concurrent"] = int(filtered_data["max_concurrent"])
         if "rate_limit_margin" in filtered_data:
             filtered_data["rate_limit_margin"] = float(filtered_data["rate_limit_margin"])
+        if "requests_per_second_enabled" in filtered_data:
+            val = filtered_data["requests_per_second_enabled"]
+            filtered_data["requests_per_second_enabled"] = val if isinstance(val, bool) else str(val).lower() in ("true", "1", "yes")
+        if "requests_per_second" in filtered_data:
+            filtered_data["requests_per_second"] = float(filtered_data["requests_per_second"])
+        if "temporary_backoff_mode" in filtered_data:
+            filtered_data["temporary_backoff_mode"] = str(filtered_data["temporary_backoff_mode"])
+        if "temporary_backoff_attempts" in filtered_data:
+            filtered_data["temporary_backoff_attempts"] = int(filtered_data["temporary_backoff_attempts"])
+        if "temporary_backoff_total_seconds" in filtered_data:
+            filtered_data["temporary_backoff_total_seconds"] = int(filtered_data["temporary_backoff_total_seconds"])
         # Local LLM fields
         if "no_api_key" in filtered_data:
             val = filtered_data["no_api_key"]
@@ -160,8 +193,155 @@ class APIConfig:
             filtered_data["prompt_cache_retention"] = str(filtered_data["prompt_cache_retention"])
         if "prompt_cache_key" in filtered_data:
             filtered_data["prompt_cache_key"] = str(filtered_data["prompt_cache_key"])
+        if "content_warning_abort_enabled" in filtered_data:
+            val = filtered_data["content_warning_abort_enabled"]
+            filtered_data["content_warning_abort_enabled"] = val if isinstance(val, bool) else str(val).lower() in ("true", "1", "yes")
+        if "unsafe_abort_after" in filtered_data:
+            filtered_data["unsafe_abort_after"] = max(1, int(filtered_data["unsafe_abort_after"]))
+        if "skip_unsafe_requests" in filtered_data:
+            val = filtered_data["skip_unsafe_requests"]
+            filtered_data["skip_unsafe_requests"] = val if isinstance(val, bool) else str(val).lower() in ("true", "1", "yes")
             
         return cls(**filtered_data)
+
+
+_RPS_MIN = 0.01
+_RPS_MAX = 999.99
+_DEFAULT_UNLIMITED_RPS_BASE = 50.0
+_RUNAWAY_REPEAT_RE = re.compile(r"(.)\1{11,}")
+_STRUCTURED_SPLIT_CATEGORIES = frozenset(
+    {
+        APIErrorCategory.NON_STRUCTURED_OUTPUT,
+        APIErrorCategory.LINE_COUNT_MISMATCH,
+    }
+)
+_FATAL_TRANSLATION_CATEGORIES = frozenset(
+    {
+        APIErrorCategory.AUTH_INVALID,
+        APIErrorCategory.AUTH_WRONG_KEY,
+        APIErrorCategory.MODEL_NOT_FOUND,
+        APIErrorCategory.PERMISSION_DENIED,
+        APIErrorCategory.QUOTA_EXCEEDED,
+    }
+)
+_TEMPORARY_BACKOFF_CATEGORIES = frozenset(
+    {
+        APIErrorCategory.TIMEOUT,
+        APIErrorCategory.SERVER_ERROR,
+        APIErrorCategory.SERVER_OVERLOADED,
+        APIErrorCategory.CONNECTION_ERROR,
+    }
+)
+_RPS_ERROR_PATTERNS = (
+    re.compile(
+        r"(?P<value>\d+(?:\.\d+)?)\s*(?:requests?|req(?:uests?)?)\s*(?:/|per)\s*second",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(?P<value>\d+(?:\.\d+)?)\s*rps\b", re.IGNORECASE),
+)
+
+
+def clamp_requests_per_second(value: float) -> float:
+    """Clamp an RPS value to the supported Translation Step range."""
+    return max(_RPS_MIN, min(_RPS_MAX, float(value)))
+
+
+def compute_backoff_schedule(
+    mode: str,
+    attempts: int,
+    total_seconds: float,
+) -> List[float]:
+    """Compute a retry-delay schedule that fits inside a total wait budget."""
+    retry_attempts = max(int(attempts), 0)
+    total_budget = max(float(total_seconds), 0.0)
+    if retry_attempts <= 0:
+        return []
+    if total_budget <= 0:
+        return [0.0] * retry_attempts
+
+    normalized_mode = (mode or "exponential").strip().lower()
+    if normalized_mode == "linear":
+        delay = total_budget / retry_attempts
+        return [delay] * retry_attempts
+
+    weights = [float(2 ** idx) for idx in range(retry_attempts)]
+    weight_total = sum(weights) or 1.0
+    return [total_budget * weight / weight_total for weight in weights]
+
+
+def _extract_completed_translations_from_partial_json(content: str) -> List[str]:
+    """Extract fully completed translation strings from a truncated JSON payload."""
+    if not content:
+        return []
+
+    key_pos = content.find('"translations"')
+    if key_pos < 0:
+        return []
+
+    array_start = content.find("[", key_pos)
+    if array_start < 0:
+        return []
+
+    decoder = json.JSONDecoder()
+    pos = array_start + 1
+    results: List[str] = []
+    content_len = len(content)
+
+    while pos < content_len:
+        while pos < content_len and content[pos] in " \r\n\t":
+            pos += 1
+        if pos >= content_len or content[pos] == "]":
+            break
+
+        try:
+            value, end = decoder.raw_decode(content, pos)
+        except json.JSONDecodeError:
+            break
+
+        if not isinstance(value, str):
+            break
+
+        results.append(value)
+        pos = end
+
+        while pos < content_len and content[pos] in " \r\n\t":
+            pos += 1
+        if pos < content_len and content[pos] == ",":
+            pos += 1
+
+    return results
+
+
+def _looks_like_runaway_text(text: str) -> bool:
+    """Heuristic for run-on output such as repeated laughter or elongated sounds."""
+    return bool(text and _RUNAWAY_REPEAT_RE.search(text))
+
+
+def parse_requests_per_second_from_rate_limit_error(
+    error_text: str,
+) -> Optional[float]:
+    """Extract an actionable requests-per-second value from a rate-limit error."""
+    if not error_text:
+        return None
+    for pattern in _RPS_ERROR_PATTERNS:
+        match = pattern.search(error_text)
+        if not match:
+            continue
+        try:
+            value = float(match.group("value"))
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return clamp_requests_per_second(value)
+    return None
+
+
+def get_reduced_requests_per_second(current: Optional[float]) -> float:
+    """Return the next slower RPS step after a rate-limit hit."""
+    base = _DEFAULT_UNLIMITED_RPS_BASE if current is None else clamp_requests_per_second(current)
+    if base < 1.0:
+        return clamp_requests_per_second(base * 0.9)
+    return clamp_requests_per_second(base * 0.75)
 
 
 def generate_prompt_cache_key(
@@ -220,6 +400,34 @@ def _normalize_prompt_cache_retention(retention: str) -> str:
     return ""
 
 
+def _normalize_provider_name(provider: str) -> str:
+    """Normalize UI/provider aliases to ProviderRegistry keys."""
+    value = (provider or "").strip().lower()
+    if value == "gemini":
+        return "google"
+    return value
+
+
+def _get_registered_provider(provider: str) -> Any:
+    """Resolve a provider from ProviderRegistry when available."""
+    try:
+        from CherryAI.providers import ProviderRegistry
+
+        return ProviderRegistry.get(_normalize_provider_name(provider))
+    except Exception:
+        return None
+
+
+def _get_rate_limit_config(provider: str) -> ProviderRateLimitConfig:
+    """Return the header-rate-limit config for a provider."""
+    normalized = _normalize_provider_name(provider)
+    if normalized == "google":
+        return GEMINI_RATE_LIMIT_CONFIG
+    if normalized == "mistral":
+        return MISTRAL_RATE_LIMIT_CONFIG
+    return OPENAI_RATE_LIMIT_CONFIG
+
+
 def supports_prompt_caching_for(
     provider: str,
     model: str,
@@ -227,7 +435,12 @@ def supports_prompt_caching_for(
     base_url: Optional[str] = None,
 ) -> bool:
     """Check whether a provider/model combination supports prompt caching."""
-    provider_lower = (provider or "").strip().lower()
+    registered = _get_registered_provider(provider)
+    if registered is not None:
+        cfg = registered.get_cached_input_config(model)
+        return bool(cfg and cfg.supported)
+
+    provider_lower = _normalize_provider_name(provider)
     if provider_lower != "openai":
         return False
     from CherryAI.functions.local_llm import is_local_url
@@ -249,6 +462,11 @@ def supports_extended_cache_retention_for(
     base_url: Optional[str] = None,
 ) -> bool:
     """Check whether 24h retention is supported for a provider/model."""
+    registered = _get_registered_provider(provider)
+    if registered is not None:
+        cfg = registered.get_cached_input_config(model)
+        return bool(cfg and cfg.supported and cfg.retention == "24h")
+
     if not supports_prompt_caching_for(provider, model, base_url=base_url):
         return False
 
@@ -361,11 +579,119 @@ class TranslationError(Exception):
     pass
 
 
-# Content warning terms that may trigger API refusal/ban
-EXPLICIT_CONTENT_TERMS = [
-    "erotic", "explicit", "sexual", "violent", "18+", "adult content",
-    "pornographic", "nsfw", "hentai", "rape", "incest",
-]
+@dataclass
+class TranslationFailure:
+    """Detailed non-fatal failure metadata for one source line."""
+
+    index: int
+    source_text: str
+    classified: ClassifiedAPIError
+    attempts: int
+    error_message: str = ""
+
+
+@dataclass
+class TranslationBatchResult:
+    """Detailed translation result including any exhausted non-fatal failures."""
+
+    translations: List[str]
+    failures: List[TranslationFailure] = field(default_factory=list)
+
+    @property
+    def failed_indices(self) -> List[int]:
+        """Return failed line indices in input order."""
+        return [failure.index for failure in self.failures]
+
+    @property
+    def has_failures(self) -> bool:
+        """Return whether any lines failed after non-fatal retry exhaustion."""
+        return bool(self.failures)
+
+
+class StructuredOutputError(TranslationError):
+    """Retryable structured-output failure with payload context for split recovery."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        category: APIErrorCategory,
+        content_text: str = "",
+        finish_reason: str = "",
+        partial_translations: Optional[List[str]] = None,
+        parse_error_pos: int = -1,
+    ) -> None:
+        super().__init__(message)
+        self.classified = classify_api_error(TranslationError(message))
+        self.category = category
+        self.content_text = content_text
+        self.finish_reason = finish_reason
+        self.partial_translations = list(partial_translations or [])
+        self.parse_error_pos = parse_error_pos
+
+
+class ChunkTranslationExhaustedError(TranslationError):
+    """Raised when a chunk has non-fatal exhausted lines but translation may continue."""
+
+    def __init__(self, result: TranslationBatchResult) -> None:
+        self.result = result
+        message = "Chunk translation exhausted"
+        if result.failures:
+            message = result.failures[0].error_message or message
+        super().__init__(message)
+
+
+def _offset_translation_failures(
+    failures: List[TranslationFailure],
+    offset: int,
+) -> List[TranslationFailure]:
+    """Shift failure indices when merging sub-results."""
+    if offset == 0:
+        return list(failures)
+    return [
+        TranslationFailure(
+            index=failure.index + offset,
+            source_text=failure.source_text,
+            classified=failure.classified,
+            attempts=failure.attempts,
+            error_message=failure.error_message,
+        )
+        for failure in failures
+    ]
+
+
+def _merge_translation_batch_results(
+    left: TranslationBatchResult,
+    right: TranslationBatchResult,
+) -> TranslationBatchResult:
+    """Merge two sub-results into one combined translation result."""
+    return TranslationBatchResult(
+        translations=left.translations + right.translations,
+        failures=left.failures + _offset_translation_failures(
+            right.failures,
+            len(left.translations),
+        ),
+    )
+
+
+_CONTENT_REFUSAL_PATTERNS = (
+    re.compile(
+        r"\b(?:cannot|can't|can not|unable to|won't|will not)\b.{0,48}\b(?:assist|help|comply|translate|provide|process)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        r"\b(?:request|content|material)\b.{0,48}\b(?:unsafe|disallowed|not permitted|blocked|restricted)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        r"\b(?:content|safety|usage)\s+polic(?:y|ies)\b.{0,48}\b(?:violation|violates|restricted|disallowed|unsafe|prevent)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        r"\b(?:refuse|refusal|decline|declined)\b.{0,48}\b(?:request|translation|content|prompt)\b",
+        re.IGNORECASE | re.DOTALL,
+    ),
+)
 
 
 class APIClient:
@@ -377,6 +703,7 @@ class APIClient:
         api_log_path: Optional[str] = None,
         content_warning_enabled: bool = True,
         persistent_log: bool = True,
+        initial_config: Optional[APIConfig] = None,
     ) -> None:
         """Initialize the API client.
         
@@ -385,15 +712,18 @@ class APIClient:
             api_log_path: Custom path for API log file. If None, uses logs/api_log.txt.
             content_warning_enabled: If True, warn when explicit content detected.
             persistent_log: If True, create timestamped log files instead of overwriting.
+            initial_config: Optional pre-resolved config used instead of loading from disk.
         """
         if openai is None:
             logging.error("OpenAI package not installed. Please run dependency check.")
             raise ImportError("openai package is required for API Client")
 
         self.logger = logging.getLogger("cherryai.api")
-        self.config = self._load_api_config()
+        self.config = initial_config or self._load_api_config()
         self.client: Optional[OpenAI] = None
         self._request_timestamps: List[float] = []
+        self._requests_per_second_lock = threading.Lock()
+        self._next_request_start_monotonic = 0.0
         
         # API logging
         self.enable_api_log = enable_api_log
@@ -478,10 +808,10 @@ class APIClient:
         self._init_header_rate_limiter()
 
     def _load_api_config(self) -> APIConfig:
-        """Load configuration from CherryAI.ini."""
-        full_config = load_config()
-        api_section = full_config.get("api", {})
-        return APIConfig.from_dict(api_section)
+        """Load runtime API configuration from the canonical config bridge."""
+        from .config import get_api_config
+
+        return APIConfig.from_dict(get_api_config())
 
     def _init_client(self) -> None:
         """Initialize the OpenAI client.
@@ -522,7 +852,7 @@ class APIClient:
         headers are received.
         """
         self._header_rate_limiter = HeaderBasedRateLimiter(
-            OPENAI_RATE_LIMIT_CONFIG,
+            _get_rate_limit_config(self.config.provider),
         )
         try:
             from functions.api_config import get_rate_limit
@@ -803,9 +1133,16 @@ class APIClient:
                 # Mandatory models always send reasoning params
                 if not think_cfg.mandatory and not self.config.thinking_enabled:
                     return {}
+                reasoning_effort = self.config.reasoning_effort
+                if (think_cfg.effort_levels
+                        and reasoning_effort not in think_cfg.effort_levels):
+                    reasoning_effort = (
+                        think_cfg.effort_default
+                        or think_cfg.effort_levels[-1]
+                    )
                 params = think_cfg.build_params(
                     budget=self.config.thinking_budget,
-                    reasoning_effort=self.config.reasoning_effort,
+                    reasoning_effort=reasoning_effort,
                 )
                 if params:
                     self.logger.debug(
@@ -1169,6 +1506,8 @@ class APIClient:
         Args:
             estimated_tokens: Estimated tokens for the request.
         """
+        self._wait_for_requests_per_second()
+
         # 1. Header-based rate limiter — always active when initialised
         reservation_id: Optional[int] = None
         if self._header_rate_limiter is not None:
@@ -1220,6 +1559,62 @@ class APIClient:
         self._request_timestamps.append(now)
         return reservation_id
 
+    def _get_effective_requests_per_second(self) -> Optional[float]:
+        """Return the current active RPS cap, or ``None`` when unlimited."""
+        if not self.config.requests_per_second_enabled:
+            return None
+        return clamp_requests_per_second(self.config.requests_per_second)
+
+    def _wait_for_requests_per_second(self) -> None:
+        """Gate request start times so concurrent workers respect a shared RPS cap."""
+        rps = self._get_effective_requests_per_second()
+        if rps is None:
+            return
+
+        interval = 1.0 / rps
+        while True:
+            with self._requests_per_second_lock:
+                now = time.monotonic()
+                wait_time = max(0.0, self._next_request_start_monotonic - now)
+                if wait_time <= 0.0:
+                    self._next_request_start_monotonic = max(
+                        self._next_request_start_monotonic,
+                        now,
+                    ) + interval
+                    return
+            time.sleep(wait_time)
+
+    def adapt_requests_per_second_from_error(self, error_text: str) -> float:
+        """Enable or lower the active RPS cap after a rate-limit error."""
+        stated_rps = parse_requests_per_second_from_rate_limit_error(error_text)
+        current_rps = self._get_effective_requests_per_second()
+        new_rps = (
+            stated_rps
+            if stated_rps is not None
+            else get_reduced_requests_per_second(current_rps)
+        )
+        interval = 1.0 / new_rps
+
+        with self._requests_per_second_lock:
+            self.config.requests_per_second_enabled = True
+            self.config.requests_per_second = new_rps
+            self._next_request_start_monotonic = max(
+                self._next_request_start_monotonic,
+                time.monotonic() + interval,
+            )
+
+        if stated_rps is not None:
+            self.logger.warning(
+                "Rate limit hit; provider-stated RPS cap applied: %.2f",
+                new_rps,
+            )
+        else:
+            self.logger.warning(
+                "Rate limit hit; reduced active RPS cap to %.2f",
+                new_rps,
+            )
+        return new_rps
+
     def check_content_warning(self, text: str) -> Optional[str]:
         """Check if text contains explicit content terms that may trigger API issues.
         
@@ -1231,19 +1626,31 @@ class APIClient:
         """
         if not self.content_warning_enabled:
             return None
-        
-        text_lower = text.lower()
-        found_terms = [term for term in EXPLICIT_CONTENT_TERMS if term in text_lower]
-        
-        if found_terms:
-            warning = (
-                f"⚠️ CONTENT WARNING: Input contains potentially explicit terms: {', '.join(found_terms[:3])}...\n"
-                "   Some API providers (OpenAI, Anthropic) may refuse or ban accounts for explicit content.\n"
-                "   Consider using Gemini, local models, or providers with fewer content restrictions."
-            )
-            self._content_warnings.append(warning)
+
+        if has_prompt_context_risky_terms(text):
+            warning = PROMPT_CONTEXT_WARNING_MESSAGE
+            if warning not in self._content_warnings:
+                self._content_warnings.append(warning)
             return warning
         return None
+
+    def _detect_content_refusal_reason(self, text: str) -> Optional[str]:
+        """Return the matched refusal phrase when raw content looks like a refusal."""
+        normalized = re.sub(r"\s+", " ", text or "").strip()
+        if not normalized:
+            return None
+        for pattern in _CONTENT_REFUSAL_PATTERNS:
+            match = pattern.search(normalized)
+            if match:
+                return match.group(0).strip()
+        return None
+
+    def _build_content_warning_error(self, refusal_reason: str) -> TranslationError:
+        """Create a stable content-warning error used for classification/logging."""
+        return TranslationError(
+            "API refusal detected after structured-output failure due to content policy restrictions: "
+            f"{refusal_reason}"
+        )
 
     def write_log_header(self, filename: str, total_lines: int, chunk_count: int, missing_sections: Optional[List[str]] = None) -> None:
         """Write the API log header with statistics.
@@ -1768,19 +2175,30 @@ class APIClient:
         :class:`~functions.mock_translator.MockTranslator` instead of a live
         API, enabling full pipeline testing without network or API keys.
         """
+        detailed = self.translate_batch_detailed(lines, system_prompt=system_prompt)
+        if detailed.failures:
+            raise ChunkTranslationExhaustedError(detailed)
+        return detailed.translations
+
+    def translate_batch_detailed(
+        self,
+        lines: List[str],
+        system_prompt: Optional[str] = None,
+    ) -> TranslationBatchResult:
+        """Translate a list of lines and preserve non-fatal exhausted failures."""
         if not lines:
-            return []
+            return TranslationBatchResult(translations=[])
 
         self._raise_if_model_blocked()
 
-        # Route to mock translator when model is "mock"
         if self.config.model == "mock":
-            return self._mock_translate(lines, system_prompt=system_prompt)
+            return TranslationBatchResult(
+                translations=self._mock_translate(lines, system_prompt=system_prompt),
+            )
 
         if not self.client:
             raise TranslationError("API Client not initialized (missing API key?)")
-        
-        # Check cache first if enabled
+
         if self._request_cache and self.config.cache_enabled:
             cached = self._request_cache.get(
                 lines,
@@ -1791,29 +2209,35 @@ class APIClient:
             if cached is not None:
                 self.logger.info(f"Cache hit: {len(lines)} lines retrieved from cache")
                 from typing import cast
-                return cast(List[str], cached)
+
+                return TranslationBatchResult(translations=cast(List[str], cached))
 
         results: List[str] = []
-        
-        # Use the configurable chunker
+        failures: List[TranslationFailure] = []
+
         chunker = self._create_chunker()
         chunks = chunker.chunk_lines(lines)
-        
+
         total_chunks = len(chunks)
         mode_info = f" (mode={self.config.chunk_mode})" if self.config.chunk_mode != "lines" else ""
         self.logger.info(f"Starting translation: {len(lines)} lines in {total_chunks} chunks{mode_info}")
 
+        offset = 0
         for i, chunk in enumerate(chunks):
             chunk_info = chunker.get_chunk_info(chunk)
             self.logger.info(
                 f"Processing chunk {i+1}/{total_chunks} "
                 f"({chunk_info['line_count']} lines, ~{chunk_info['token_count']} tokens)"
             )
-            translated_chunk = self._translate_chunk_with_retry(chunk, system_prompt)
-            results.extend(translated_chunk)
-        
-        # Store in cache if enabled
-        if self._request_cache and self.config.cache_enabled and len(results) == len(lines):
+            chunk_result = self._translate_chunk_with_retry_detailed(
+                chunk,
+                system_prompt,
+            )
+            results.extend(chunk_result.translations)
+            failures.extend(_offset_translation_failures(chunk_result.failures, offset))
+            offset += len(chunk)
+
+        if self._request_cache and self.config.cache_enabled and not failures:
             self._request_cache.store(
                 lines,
                 results,
@@ -1823,7 +2247,7 @@ class APIClient:
             )
             self.logger.debug(f"Cached {len(lines)} lines")
 
-        return results
+        return TranslationBatchResult(translations=results, failures=failures)
 
     def _mock_translate(self, lines: List[str], system_prompt: Optional[str] = None) -> List[str]:
         """Route translation to MockTranslator for offline pipeline testing.
@@ -2092,10 +2516,25 @@ class APIClient:
                 return result
                 
             except (RateLimitError, APITimeoutError) as e:
+                classified = classify_api_error(e)
+                if classified.is_fatal:
+                    raise TranslationAbortError(classified) from e
                 attempt += 1
                 last_error = e
-                wait_time = min(2 ** attempt, 60)
-                self.logger.warning(f"Line {line_index} retry {attempt}: {e}. Waiting {wait_time}s...")
+                if classified.category == APIErrorCategory.RATE_LIMITED:
+                    new_rps = self.adapt_requests_per_second_from_error(
+                        classified.raw_message,
+                    )
+                    wait_time = max(1.0 / new_rps, 0.5)
+                else:
+                    wait_time = min(2 ** attempt, 60)
+                self.logger.warning(
+                    "Line %s retry %s: %s. Waiting %ss...",
+                    line_index,
+                    attempt,
+                    e,
+                    wait_time,
+                )
                 time.sleep(wait_time)
             except Exception as e:
                 attempt += 1
@@ -2146,60 +2585,292 @@ class APIClient:
         Retryable errors (rate limit, timeout, server error) use
         exponential backoff up to *max_retries* attempts.
         """
-        import random
-        attempt = 0
-        last_error: Exception | None = None
-        max_retries = max(self.config.retries, 5)
+        result = self._translate_chunk_with_retry_detailed(chunk, system_prompt)
+        if result.failures:
+            raise ChunkTranslationExhaustedError(result)
+        return result.translations
 
-        # Token estimation per spec:
-        # estimated_tokens = sent_request_token_count + (input_line_token_count * 1.5)
+    def _translate_chunk_with_retry_detailed(
+        self,
+        chunk: List[str],
+        system_prompt: Optional[str],
+    ) -> TranslationBatchResult:
+        """Translate a chunk and return partial non-fatal failures instead of aborting."""
+        retry_budget = max(int(self.config.retries), 0)
+        temporary_schedule = self._get_temporary_backoff_schedule()
+        return self._translate_chunk_segment(
+            chunk,
+            system_prompt,
+            retry_budget=retry_budget,
+            temporary_schedule=temporary_schedule,
+        )
+
+    def _translate_chunk_segment(
+        self,
+        chunk: List[str],
+        system_prompt: Optional[str],
+        *,
+        retry_budget: int,
+        temporary_schedule: List[float],
+    ) -> TranslationBatchResult:
+        """Translate one segment, recursively splitting output failures when needed."""
+        if not chunk:
+            return TranslationBatchResult(translations=[])
+
         input_line_tokens = sum(len(line) // 4 + 1 for line in chunk)
-        # Approximate system prompt tokens (sent_request overhead)
-        sent_request_tokens = input_line_tokens + 200  # ~200 tok for system prompt
+        sent_request_tokens = input_line_tokens + 200
         estimated_tokens = int(sent_request_tokens + input_line_tokens * 1.5)
 
         self._raise_if_model_blocked()
 
-        while attempt < max_retries:
+        retry_count = 0
+        temporary_retry_count = 0
+        max_attempts = max(1, retry_budget + 1, len(temporary_schedule) + 1)
+
+        while True:
             try:
                 reservation_id = self._wait_for_rate_limit(
                     estimated_tokens=estimated_tokens,
                 )
-                return self._translate_chunk(
+                translations = self._translate_chunk(
                     chunk,
                     system_prompt,
                     reservation_id=reservation_id,
+                    attempt=retry_count + temporary_retry_count + 1,
+                    max_attempts=max_attempts,
                 )
-            except TranslationAbortError:
-                # Already classified and fatal — propagate immediately
+                return TranslationBatchResult(translations=translations)
+            except ResponseValidationError:
                 raise
-            except (RateLimitError, APITimeoutError, APIError, TranslationError) as e:
-                classified = classify_api_error(e)
-                if classified.is_fatal:
-                    raise TranslationAbortError(classified) from e
-                attempt += 1
-                last_error = e
-                base_wait = 3 ** attempt
-                jitter = random.uniform(0, base_wait * 0.2)
-                wait_time = min(base_wait + jitter, 120)
-                self.logger.warning(
-                    "Translation failed (attempt %d/%d): %s. Retrying in %.1fs...",
-                    attempt, max_retries, e, wait_time,
-                )
-                time.sleep(wait_time)
-            except Exception as e:
-                classified = classify_api_error(e)
-                if classified.is_fatal:
-                    raise TranslationAbortError(classified) from e
-                self.logger.error("Unexpected error during translation: %s", e)
-                raise TranslationError(f"Unexpected error: {e}") from e
+            except TranslationAbortError:
+                raise
+            except StructuredOutputError as error:
+                if error.category == APIErrorCategory.CONTENT_FILTERED:
+                    if not getattr(self.config, "skip_unsafe_requests", True) and len(chunk) > 1:
+                        midpoint = len(chunk) // 2
+                        left_result = self._translate_chunk_segment(
+                            chunk[:midpoint],
+                            system_prompt,
+                            retry_budget=retry_budget,
+                            temporary_schedule=temporary_schedule,
+                        )
+                        right_result = self._translate_chunk_segment(
+                            chunk[midpoint:],
+                            system_prompt,
+                            retry_budget=retry_budget,
+                            temporary_schedule=temporary_schedule,
+                        )
+                        return _merge_translation_batch_results(left_result, right_result)
 
-        # All retries exhausted — classify the last error for the user
-        if last_error is not None:
-            classified = classify_api_error(last_error)
-            raise TranslationAbortError(classified)
-        raise TranslationError(
-            f"Failed to translate chunk after {max_retries} attempts.",
+                    return self._build_failed_segment_result(
+                        chunk,
+                        error.classified,
+                        retry_count + temporary_retry_count + 1,
+                        str(error),
+                    )
+
+                if error.category in _STRUCTURED_SPLIT_CATEGORIES and len(chunk) > 1:
+                    salvaged = self._try_salvage_runaway_chunk(
+                        chunk,
+                        system_prompt,
+                        error,
+                        retry_budget=retry_budget,
+                        temporary_schedule=temporary_schedule,
+                    )
+                    if salvaged is not None:
+                        return salvaged
+
+                    midpoint = len(chunk) // 2
+                    left_result = self._translate_chunk_segment(
+                        chunk[:midpoint],
+                        system_prompt,
+                        retry_budget=retry_budget,
+                        temporary_schedule=temporary_schedule,
+                    )
+                    right_result = self._translate_chunk_segment(
+                        chunk[midpoint:],
+                        system_prompt,
+                        retry_budget=retry_budget,
+                        temporary_schedule=temporary_schedule,
+                    )
+                    return _merge_translation_batch_results(left_result, right_result)
+
+                if retry_count >= retry_budget:
+                    return self._build_failed_segment_result(
+                        chunk,
+                        error.classified,
+                        retry_count + 1,
+                        str(error),
+                    )
+
+                retry_count += 1
+                self.logger.warning(
+                    "Translation output failure (retry %d/%d): %s. Retrying immediately...",
+                    retry_count,
+                    retry_budget,
+                    error,
+                )
+            except (RateLimitError, APITimeoutError, APIError, TranslationError) as error:
+                classified = classify_api_error(error)
+                if self._is_fatal_translation_error(classified):
+                    raise TranslationAbortError(classified) from error
+
+                if classified.category == APIErrorCategory.RATE_LIMITED:
+                    self.adapt_requests_per_second_from_error(classified.raw_message)
+                    if retry_count >= retry_budget:
+                        return self._build_failed_segment_result(
+                            chunk,
+                            classified,
+                            retry_count + 1,
+                            str(error),
+                        )
+                    retry_count += 1
+                    self.logger.warning(
+                        "Translation rate limited (retry %d/%d): %s. Retrying without backoff...",
+                        retry_count,
+                        retry_budget,
+                        error,
+                    )
+                    continue
+
+                if classified.category in _TEMPORARY_BACKOFF_CATEGORIES:
+                    if temporary_retry_count >= len(temporary_schedule):
+                        return self._build_failed_segment_result(
+                            chunk,
+                            classified,
+                            temporary_retry_count + 1,
+                            str(error),
+                        )
+                    wait_time = temporary_schedule[temporary_retry_count]
+                    temporary_retry_count += 1
+                    self.logger.warning(
+                        "Translation temporary failure (retry %d/%d): %s. Retrying in %.1fs...",
+                        temporary_retry_count,
+                        len(temporary_schedule),
+                        error,
+                        wait_time,
+                    )
+                    if wait_time > 0:
+                        time.sleep(wait_time)
+                    continue
+
+                if retry_count >= retry_budget:
+                    return self._build_failed_segment_result(
+                        chunk,
+                        classified,
+                        retry_count + 1,
+                        str(error),
+                    )
+
+                retry_count += 1
+                self.logger.warning(
+                    "Translation failed (retry %d/%d): %s. Retrying immediately...",
+                    retry_count,
+                    retry_budget,
+                    error,
+                )
+            except Exception as error:
+                classified = classify_api_error(error)
+                if self._is_fatal_translation_error(classified):
+                    raise TranslationAbortError(classified) from error
+                if retry_count >= retry_budget:
+                    return self._build_failed_segment_result(
+                        chunk,
+                        classified,
+                        retry_count + 1,
+                        str(error),
+                    )
+                retry_count += 1
+                self.logger.warning(
+                    "Unexpected translation failure (retry %d/%d): %s. Retrying immediately...",
+                    retry_count,
+                    retry_budget,
+                    error,
+                )
+
+    def _get_temporary_backoff_schedule(self) -> List[float]:
+        """Return the configured temporary-failure retry schedule."""
+        return compute_backoff_schedule(
+            getattr(self.config, "temporary_backoff_mode", "exponential"),
+            getattr(self.config, "temporary_backoff_attempts", 5),
+            getattr(self.config, "temporary_backoff_total_seconds", 120),
+        )
+
+    def _is_fatal_translation_error(
+        self,
+        classified: ClassifiedAPIError,
+    ) -> bool:
+        """Return whether a classified error should stop the run immediately."""
+        return classified.category in _FATAL_TRANSLATION_CATEGORIES
+
+    def _build_failed_segment_result(
+        self,
+        chunk: List[str],
+        classified: ClassifiedAPIError,
+        attempts: int,
+        error_message: str,
+    ) -> TranslationBatchResult:
+        """Return a non-fatal exhausted result for a segment."""
+        failures = [
+            TranslationFailure(
+                index=idx,
+                source_text=line,
+                classified=classified,
+                attempts=attempts,
+                error_message=error_message,
+            )
+            for idx, line in enumerate(chunk)
+        ]
+        return TranslationBatchResult(
+            translations=[""] * len(chunk),
+            failures=failures,
+        )
+
+    def _try_salvage_runaway_chunk(
+        self,
+        chunk: List[str],
+        system_prompt: Optional[str],
+        error: StructuredOutputError,
+        *,
+        retry_budget: int,
+        temporary_schedule: List[float],
+    ) -> Optional[TranslationBatchResult]:
+        """Salvage completed prefix lines when one runaway line hits max output."""
+        finish_reason = (error.finish_reason or "").strip().lower()
+        if finish_reason not in {"length", "max_tokens", "max_output_tokens"}:
+            return None
+
+        completed = list(error.partial_translations)
+        if not completed:
+            completed = _extract_completed_translations_from_partial_json(
+                error.content_text,
+            )
+
+        if not completed or len(completed) >= len(chunk):
+            return None
+
+        problem_index = len(completed)
+        tail_start = max(error.parse_error_pos - 120, 0)
+        tail = error.content_text[tail_start:]
+        if not (_looks_like_runaway_text(chunk[problem_index]) or _looks_like_runaway_text(tail)):
+            return None
+
+        prefix_result = TranslationBatchResult(translations=completed)
+        problem_result = self._translate_chunk_segment(
+            [chunk[problem_index]],
+            system_prompt,
+            retry_budget=retry_budget,
+            temporary_schedule=temporary_schedule,
+        )
+        rest_result = self._translate_chunk_segment(
+            chunk[problem_index + 1 :],
+            system_prompt,
+            retry_budget=retry_budget,
+            temporary_schedule=temporary_schedule,
+        )
+        return _merge_translation_batch_results(
+            prefix_result,
+            _merge_translation_batch_results(problem_result, rest_result),
         )
 
     def _translate_chunk(
@@ -2207,60 +2878,35 @@ class APIClient:
         chunk: List[str],
         system_prompt: Optional[str],
         reservation_id: Optional[int] = None,
+        attempt: int = 1,
+        max_attempts: int = 1,
     ) -> List[str]:
         """Perform the actual API call for a chunk."""
         if not self.client:
              raise TranslationError("Client not initialized")
 
-        # Check for content warnings
-        chunk_text = "\n".join(chunk)
-        warning = self.check_content_warning(chunk_text)
-        if warning:
-            self.logger.warning(warning)
-
-        # Construct the prompt
-        # We use JSON mode to ensure structured output
-        user_content = json.dumps({"lines": chunk}, ensure_ascii=False)
-
-        # JSON format instructions are always appended
-        json_instructions = (
-            "Output must be a valid JSON object with a single key "
-            "'translations' containing an array of strings.\n"
-            "The array must have exactly the same number of elements "
-            "as the input 'lines' array.\n"
-            "Preserve all special tokens like __PROTECTED__ exactly.\n"
-            "Do not translate proper names if you are unsure, or "
-            "follow the glossary if provided."
+        final_system_prompt, user_content = self._build_translation_request_payload(
+            chunk,
+            system_prompt,
         )
-
-        if system_prompt and system_prompt.strip():
-            # Full system prompt assembled by the caller (translate step)
-            # already contains Language, System Instructions, Style, Tone,
-            # Summary, Genre, Conditional Prompts, Glossary, Rolling Context.
-            final_system_prompt = (
-                f"{system_prompt.strip()}\n\n"
-                f"# Output Format\n{json_instructions}"
-            )
-        else:
-            # Fallback: no caller prompt — use a minimal default
-            final_system_prompt = (
-                f"You are a professional translator translating from "
-                f"{self.config.source_lang} to {self.config.target_lang}.\n"
-                f"{json_instructions}"
-            )
 
         messages = [
             {"role": "system", "content": final_system_prompt},
             {"role": "user", "content": user_content}
         ]
 
-        # Build API call parameters
+        # Build API call parameters.
         #
         # Local providers (LM Studio, Ollama) may not support
         # {"type": "json_object"}.  LM Studio requires
         # {"type": "json_schema", "json_schema": {...}} instead.
-        # We detect the provider and choose the right format.
-        if self._provider:
+        # OpenAI gets an exact-length schema so the model cannot legally
+        # collapse adjacent lines into fewer array items.
+        if self._should_use_openai_exact_translation_schema():
+            response_fmt = self._build_translation_response_format(
+                expected_count=len(chunk),
+            )
+        elif self._provider:
             response_fmt: Dict[str, Any] = self._provider.get_response_format(
                 self.config.model
             )
@@ -2325,6 +2971,8 @@ class APIClient:
             api_params.update(cache_params)
             self.logger.debug(f"Prompt caching: {cache_params}")
 
+        usage = None
+        finish_reason = ""
         try:
             if self.client is None:
                 raise TranslationError("API client not initialized")
@@ -2334,6 +2982,9 @@ class APIClient:
                 **api_params,
             )
             response = raw_resp.parse()
+            usage = response.usage
+            if response.choices:
+                finish_reason = response.choices[0].finish_reason or ""
             resp_headers = {
                 k.lower(): v for k, v in raw_resp.headers.items()
             }
@@ -2363,12 +3014,42 @@ class APIClient:
                 classified = self._provider.classify_error(e)
             if classified is None:
                 classified = classify_api_error(e)
+            self._log_main_translation_result(
+                chunk=chunk,
+                final_system_prompt=final_system_prompt,
+                user_content=user_content,
+                cache_params=cache_params,
+                status=(
+                    self._get_log_status_for_classified_error(classified)
+                ),
+                error_message=str(e),
+                failure_kind="api_failure",
+                attempt=attempt,
+                max_attempts=max_attempts,
+            )
             if classified.is_fatal:
                 raise TranslationAbortError(classified) from e
             raise TranslationError(f"OpenAI API call failed: {str(e)}") from e
 
         content = response.choices[0].message.content
         if not content:
+            self._log_main_translation_result(
+                chunk=chunk,
+                final_system_prompt=final_system_prompt,
+                user_content=user_content,
+                cache_params=cache_params,
+                response_obj=response,
+                status=self._get_log_status_for_classified_error(
+                    classify_api_error(TranslationError("API returned empty response")),
+                ),
+                error_message="API returned empty response",
+                validation_status="failed",
+                validation_error="API returned empty response",
+                validation_category="empty_response",
+                failure_kind="inference_failure",
+                attempt=attempt,
+                max_attempts=max_attempts,
+            )
             raise TranslationError("API returned empty response")
         
         # Log API call if enabled
@@ -2402,11 +3083,286 @@ class APIClient:
             }
             self._log_api_call(request_data, response_data)
 
-        # Structured API log for API Log Window
+        # Parse JSON output
+        try:
+            data = json.loads(content)
+            translations = data.get("translations")
+        except json.JSONDecodeError as exc:
+            refusal_reason = self._detect_content_refusal_reason(content)
+            if refusal_reason:
+                warning_error = self._build_content_warning_error(refusal_reason)
+                classified = classify_api_error(warning_error)
+                self._log_main_translation_result(
+                    chunk=chunk,
+                    final_system_prompt=final_system_prompt,
+                    user_content=user_content,
+                    cache_params=cache_params,
+                    response_obj=response,
+                    content_text=content,
+                    status=self._get_log_status_for_classified_error(classified),
+                    error_message=str(warning_error),
+                    validation_status="content_warning",
+                    validation_error=str(warning_error),
+                    validation_category="content_warning",
+                    failure_kind="content_warning",
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                )
+                raise StructuredOutputError(
+                    str(warning_error),
+                    category=APIErrorCategory.CONTENT_FILTERED,
+                    content_text=content,
+                    finish_reason=finish_reason,
+                    partial_translations=[],
+                    parse_error_pos=getattr(exc, "pos", -1),
+                ) from exc
+
+            message = f"API returned invalid JSON: {exc}"
+            classified = classify_api_error(
+                TranslationError(message),
+            )
+            self._log_main_translation_result(
+                chunk=chunk,
+                final_system_prompt=final_system_prompt,
+                user_content=user_content,
+                cache_params=cache_params,
+                response_obj=response,
+                content_text=content,
+                status=self._get_log_status_for_classified_error(classified),
+                error_message=message,
+                validation_status="failed",
+                validation_error=str(exc),
+                validation_category="non_structured_output",
+                failure_kind="inference_failure",
+                attempt=attempt,
+                max_attempts=max_attempts,
+            )
+            raise StructuredOutputError(
+                message,
+                category=APIErrorCategory.NON_STRUCTURED_OUTPUT,
+                content_text=content,
+                finish_reason=finish_reason,
+                partial_translations=_extract_completed_translations_from_partial_json(content),
+                parse_error_pos=getattr(exc, "pos", -1),
+            ) from exc
+        
+        if not isinstance(translations, list):
+            refusal_reason = self._detect_content_refusal_reason(content)
+            if refusal_reason:
+                warning_error = self._build_content_warning_error(refusal_reason)
+                classified = classify_api_error(warning_error)
+                self._log_main_translation_result(
+                    chunk=chunk,
+                    final_system_prompt=final_system_prompt,
+                    user_content=user_content,
+                    cache_params=cache_params,
+                    response_obj=response,
+                    content_text=content,
+                    status=self._get_log_status_for_classified_error(classified),
+                    error_message=str(warning_error),
+                    validation_status="content_warning",
+                    validation_error=str(warning_error),
+                    validation_category="content_warning",
+                    failure_kind="content_warning",
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                )
+                raise StructuredOutputError(
+                    str(warning_error),
+                    category=APIErrorCategory.CONTENT_FILTERED,
+                    content_text=content,
+                    finish_reason=finish_reason,
+                    partial_translations=[],
+                )
+
+            message = "API returned JSON but 'translations' is not a list"
+            classified = classify_api_error(
+                TranslationError(message),
+            )
+            self._log_main_translation_result(
+                chunk=chunk,
+                final_system_prompt=final_system_prompt,
+                user_content=user_content,
+                cache_params=cache_params,
+                response_obj=response,
+                content_text=content,
+                status=self._get_log_status_for_classified_error(classified),
+                error_message=message,
+                validation_status="failed",
+                validation_error=message,
+                validation_category="non_structured_output",
+                failure_kind="inference_failure",
+                attempt=attempt,
+                max_attempts=max_attempts,
+            )
+            raise StructuredOutputError(
+                message,
+                category=APIErrorCategory.NON_STRUCTURED_OUTPUT,
+                content_text=content,
+                finish_reason=finish_reason,
+                partial_translations=[],
+            )
+
+        # Validation
+        if len(translations) != len(chunk):
+            message = (
+                f"Line count mismatch: Input {len(chunk)}, "
+                f"Output {len(translations)}"
+            )
+            self._log_main_translation_result(
+                chunk=chunk,
+                final_system_prompt=final_system_prompt,
+                user_content=user_content,
+                cache_params=cache_params,
+                response_obj=response,
+                content_text=content,
+                status=self._get_log_status_for_validation_failure(
+                    "line_count_mismatch",
+                ),
+                validation_status="failed",
+                validation_error=message,
+                validation_category="line_count_mismatch",
+                failure_kind="inference_failure",
+                attempt=attempt,
+                max_attempts=max_attempts,
+            )
+            raise StructuredOutputError(
+                message,
+                category=APIErrorCategory.LINE_COUNT_MISMATCH,
+                content_text=content,
+                finish_reason=finish_reason,
+                partial_translations=[
+                    translation
+                    for translation in translations
+                    if isinstance(translation, str)
+                ],
+            )
+
+        # Check for empty lines after structured validation.
+        for i, (original, translated) in enumerate(zip(chunk, translations)):
+            if not translated.strip() and original.strip():
+                # Allow empty translation only if original was empty (though chunking usually handles non-empty)
+                # But here we assume input chunk might have empty lines? 
+                # Actually, usually we filter empty lines before sending, but let's be safe.
+                pass 
+
+        self._log_main_translation_result(
+            chunk=chunk,
+            final_system_prompt=final_system_prompt,
+            user_content=user_content,
+            cache_params=cache_params,
+            response_obj=response,
+            content_text=content,
+            status=self._get_log_status_for_validation_failure("passed"),
+            validation_status="passed",
+            attempt=attempt,
+            max_attempts=max_attempts,
+        )
+
+        return translations
+
+    def _build_translation_request_payload(
+        self,
+        chunk: List[str],
+        system_prompt: Optional[str],
+    ) -> tuple[str, str]:
+        """Build the final translation prompt and JSON user payload."""
+        user_content = json.dumps({"lines": chunk}, ensure_ascii=False)
+        json_instructions = (
+            "Output must be a valid JSON object with a single key "
+            "'translations' containing an array of strings.\n"
+            "The array must have exactly the same number of elements "
+            "as the input 'lines' array.\n"
+            "Preserve all special tokens like __PROTECTED__ exactly.\n"
+            "Do not translate proper names if you are unsure, or "
+            "follow the glossary if provided."
+        )
+
+        if system_prompt and system_prompt.strip():
+            final_system_prompt = (
+                f"{system_prompt.strip()}\n\n"
+                f"# Output Format\n{json_instructions}"
+            )
+        else:
+            final_system_prompt = (
+                f"You are a professional translator translating from "
+                f"{self.config.source_lang} to {self.config.target_lang}.\n"
+                f"{json_instructions}"
+            )
+        return final_system_prompt, user_content
+
+    def _get_log_status_for_classified_error(
+        self,
+        classified: ClassifiedAPIError,
+    ) -> Any:
+        """Map a classified error to an API Log status."""
+        try:
+            from .api_log import LogStatus
+
+            if classified.category == APIErrorCategory.CONTENT_FILTERED:
+                return LogStatus.CONTENT_WARNING
+            return LogStatus.FAILED
+        except Exception:
+            return None
+
+    def _get_log_status_for_validation_failure(self, validation_status: str) -> Any:
+        """Map validation outcomes to API Log statuses."""
+        try:
+            from .api_log import LogStatus
+
+            if validation_status == "passed":
+                return LogStatus.SUCCESS
+            if validation_status == "content_warning":
+                return LogStatus.CONTENT_WARNING
+            return LogStatus.FAILED
+        except Exception:
+            return None
+
+    def _log_main_translation_result(
+        self,
+        *,
+        chunk: List[str],
+        final_system_prompt: str,
+        user_content: str,
+        cache_params: Dict[str, Any],
+        status: Any,
+        response_obj: Optional[Any] = None,
+        content_text: str = "",
+        error_message: str = "",
+        validation_status: str = "",
+        validation_error: str = "",
+        validation_category: str = "",
+        failure_kind: str = "",
+        attempt: int = 1,
+        max_attempts: int = 1,
+    ) -> None:
+        """Write one structured API log entry for a translation attempt."""
         try:
             from .api_log import (
-                LogCategory, LogStatus, LogEntrySent, LogEntryReceived,
+                LogCategory,
+                LogEntryReceived,
+                LogEntrySent,
+                LogStatus,
+                get_api_log_store,
             )
+
+            resolved_status = status or LogStatus.FAILED
+            usage = getattr(response_obj, "usage", None) if response_obj is not None else None
+            prompt_details = getattr(usage, "prompt_tokens_details", None) if usage else None
+            completion_details = (
+                getattr(usage, "completion_tokens_details", None)
+                if usage else None
+            )
+            extra: Dict[str, Any] = {}
+            if validation_status:
+                extra["validation_status"] = validation_status
+            if validation_error:
+                extra["validation_error"] = validation_error
+            if validation_category:
+                extra["validation_category"] = validation_category
+            if failure_kind:
+                extra["failure_kind"] = failure_kind
+
             sent_entry = LogEntrySent(
                 project_name=getattr(self, "_prompt_cache_project_name", ""),
                 model=self.config.model,
@@ -2415,66 +3371,76 @@ class APIClient:
                 temperature=self.config.temperature,
                 system_prompt=final_system_prompt,
                 user_content=user_content,
-                chunk_index=self._chunk_counter,
-                total_chunks=self._initial_chunk_count,
+                chunk_index=getattr(self, "_chunk_counter", 0),
+                total_chunks=getattr(self, "_initial_chunk_count", 0),
                 line_count=len(chunk),
                 extra=cache_params.copy(),
             )
-            _usage = response.usage
-            _ptd = getattr(_usage, "prompt_tokens_details", None) if _usage else None
-            _ctd = getattr(_usage, "completion_tokens_details", None) if _usage else None
             recv_entry = LogEntryReceived(
-                content=content,
-                prompt_tokens=_usage.prompt_tokens if _usage else 0,
-                completion_tokens=_usage.completion_tokens if _usage else 0,
-                total_tokens=_usage.total_tokens if _usage else 0,
-                cached_tokens=(getattr(_ptd, "cached_tokens", 0) or 0) if _ptd else 0,
-                reasoning_tokens=(getattr(_ctd, "reasoning_tokens", 0) or 0) if _ctd else 0,
-                finish_reason=response.choices[0].finish_reason or "" if response.choices else "",
+                content=content_text,
+                prompt_tokens=getattr(usage, "prompt_tokens", 0) if usage else 0,
+                completion_tokens=getattr(usage, "completion_tokens", 0) if usage else 0,
+                total_tokens=getattr(usage, "total_tokens", 0) if usage else 0,
+                cached_tokens=(
+                    getattr(prompt_details, "cached_tokens", 0) or 0
+                ) if prompt_details else 0,
+                reasoning_tokens=(
+                    getattr(completion_details, "reasoning_tokens", 0) or 0
+                ) if completion_details else 0,
+                finish_reason=(
+                    response_obj.choices[0].finish_reason or ""
+                    if response_obj is not None and getattr(response_obj, "choices", None)
+                    else ""
+                ),
+                error_message=error_message,
+                extra=extra,
             )
-            self._api_log_store.log_pair(
-                LogCategory.MAIN_TRANSLATION, sent_entry, recv_entry,
-                LogStatus.SUCCESS,
+            store = getattr(self, "_api_log_store", None) or get_api_log_store()
+            store.log_pair(
+                LogCategory.MAIN_TRANSLATION,
+                sent_entry,
+                recv_entry,
+                resolved_status,
+                attempt=attempt,
+                max_attempts=max_attempts,
             )
         except Exception:
             pass
 
-        # Parse JSON output
-        try:
-            data = json.loads(content)
-            translations = data.get("translations")
-        except json.JSONDecodeError:
-            # Non-structured output is fatal — model cannot produce JSON
-            classified = classify_api_error(
-                TranslationError("API returned invalid JSON"),
-            )
-            raise TranslationAbortError(classified)
-        
-        if not isinstance(translations, list):
-            classified = classify_api_error(
-                TranslationError(
-                    "API returned JSON but 'translations' is not a list",
-                ),
-            )
-            raise TranslationAbortError(classified)
+    def _should_use_openai_exact_translation_schema(self) -> bool:
+        """Return whether translation requests should use OpenAI json_schema."""
+        provider_name = (self.config.provider or "").strip().lower()
+        if provider_name != "openai":
+            return False
+        if self.is_local_provider():
+            return False
+        if self._provider is None:
+            return True
+        return bool(self._provider.supports_structured_output(self.config.model))
 
-        # Validation
-        if len(translations) != len(chunk):
-            raise TranslationError(f"Line count mismatch: Input {len(chunk)}, Output {len(translations)}")
-
-        # Check for refusal or empty lines (basic heuristic)
-        for i, (original, translated) in enumerate(zip(chunk, translations)):
-            if not translated.strip() and original.strip():
-                # Allow empty translation only if original was empty (though chunking usually handles non-empty)
-                # But here we assume input chunk might have empty lines? 
-                # Actually, usually we filter empty lines before sending, but let's be safe.
-                pass 
-            
-            # Check for common refusal patterns
-            if "I cannot translate" in translated or "I am unable to translate" in translated:
-                 raise TranslationError(f"API refused to translate line {i}: {translated}")
-
-        return translations
+    @staticmethod
+    def _build_translation_response_format(expected_count: int) -> Dict[str, Any]:
+        """Build an exact-length schema for translation array responses."""
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "translation",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "translations": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "minItems": expected_count,
+                            "maxItems": expected_count,
+                        },
+                    },
+                    "required": ["translations"],
+                    "additionalProperties": False,
+                },
+            },
+        }
 
     # ------------------------------------------------------------------
     # Batch API methods (TASK 17.1)

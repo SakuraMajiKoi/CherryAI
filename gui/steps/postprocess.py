@@ -1262,11 +1262,11 @@ class PostprocessingStep(BaseStep):
 
     def _update_lines_table(self) -> None:
         """Update the lines table with current data (TASK 45.9)."""
-        rows: List[TableRow] = []
         filter_value = self._filter_var.get()
         selected_flag_case = (
             self._flag_case_var.get() if hasattr(self, "_flag_case_var") else "All"
         )
+        row_ids: List[int] = []
 
         for line in self._lines:
             # Apply filter (TASK 45.9: All/Changed/Written/Flagged)
@@ -1293,7 +1293,20 @@ class PostprocessingStep(BaseStep):
             else:
                 status = "– Same"
 
-            row = TableRow(
+            row_ids.append(line.idx)
+
+        def build_row(row_id: int) -> TableRow:
+            line = self._lines[row_id]
+            if line.flagged:
+                status = "⚠ Flagged"
+            elif line.written:
+                status = "✓ Written"
+            elif line.has_changes:
+                status = "✓ Changed"
+            else:
+                status = "– Same"
+
+            return TableRow(
                 id=line.idx,
                 values={
                     "idx": str(line.idx + 1),
@@ -1318,9 +1331,8 @@ class PostprocessingStep(BaseStep):
                     "line_tags": list(line.tags),
                 },
             )
-            rows.append(row)
 
-        self._lines_table.set_data(rows)
+        self._lines_table.set_lazy_data(row_ids, build_row)
 
     def _update_summary(self) -> None:
         """Update the summary panel (TASK 45.8: live updates)."""
@@ -2340,8 +2352,8 @@ class PostprocessingStep(BaseStep):
         except ImportError:
             return text
 
-    @staticmethod
     def _reverse_aggr_numbers(
+        self,
         text: str,
         idx: int,
         aggr_nums: Dict[int, List[str] | Dict[str, str]],

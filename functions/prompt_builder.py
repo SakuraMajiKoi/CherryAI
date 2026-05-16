@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from functools import lru_cache
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -184,6 +185,27 @@ _DOTS_ONLY_RE = re.compile(r"^[\s.…．·•・]+$")
 _NON_TRANSLATABLE_CONNECTOR_RE = re.compile(r"[\s+\-=:;,./\\|!?*#@&^~()\[\]{}<>]+")
 
 
+@lru_cache(maxsize=128)
+def _build_preserve_pattern_only_regex(
+    preserve_patterns: Tuple[str, ...],
+) -> Optional[re.Pattern[str]]:
+    """Build a cached alternation regex for preserved code patterns."""
+    escaped_patterns: List[str] = []
+    for pattern in preserve_patterns:
+        clean = pattern.strip()
+        if not clean:
+            continue
+        escaped_patterns.append(
+            re.escape(clean).replace(re.escape("<NUM>"), r"\d+")
+        )
+
+    if not escaped_patterns:
+        return None
+
+    alternation = "|".join(f"(?:{pattern})" for pattern in escaped_patterns)
+    return re.compile(alternation)
+
+
 def is_placeholder_only(text: str) -> bool:
     """Return ``True`` when *text* consists entirely of placeholder tokens
     or non-translatable punctuation (dot-only lines).
@@ -263,13 +285,11 @@ def is_code_pattern_only(
     if not preserve_patterns:
         return False
 
-    remaining = stripped
-    for pattern in preserve_patterns:
-        clean = pattern.strip()
-        if not clean:
-            continue
-        pattern_re = re.escape(clean).replace(re.escape("<NUM>"), r"\d+")
-        remaining = re.sub(pattern_re, "", remaining)
+    matcher = _build_preserve_pattern_only_regex(tuple(preserve_patterns))
+    if matcher is None:
+        return False
+
+    remaining = matcher.sub("", stripped)
 
     # Also strip placeholders and non-translatable punctuation/whitespace
     remaining = _PLACEHOLDER_TOKEN_RE.sub("", remaining)

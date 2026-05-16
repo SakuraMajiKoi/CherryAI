@@ -11,9 +11,10 @@ Provides pre-translation and post-translation validation to:
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 
 from .analysis import detect_line_script
 from .modehelper import ANCHOR_EQUIVS, get_equivs
@@ -74,6 +75,26 @@ _LATIN_LANGUAGE_MARKER_PATTERNS: Dict[str, re.Pattern[str]] = {
         r"[ĂÂĐÊÔƠƯăâđêôơưÁÀẢÃẠẤẦẨẪẬẮẰẲẴẶÉÈẺẼẸẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌỐỒỔỖỘỚỜỞỠỢÚÙỦŨỤỨỪỬỮỰÝỲỶỸỴáàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]"
     ),
 }
+
+_PROMPT_CONTEXT_RISKY_TERMS = (
+    "erotic",
+    "explicit",
+    "sexual",
+    "violent",
+    "18+",
+    "adult content",
+    "pornographic",
+    "nsfw",
+    "hentai",
+    "rape",
+    "incest",
+)
+
+PROMPT_CONTEXT_WARNING_MESSAGE = (
+    "The Summary or System Instructions may contain content that could violate "
+    "a Provider's Terms of Service.\n\n"
+    "Continue to start translation anyway?"
+)
 
 
 def _normalize_language_name(language: str) -> str:
@@ -216,6 +237,39 @@ class QAFinding:
     message: str
     suggestion: str = ""
     auto_fixable: bool = False
+    replacement_text: str = ""
+
+
+@dataclass
+class EncodingSafetyResult:
+    """Result of checking whether text can be encoded safely."""
+
+    is_safe: bool
+    encoding: str
+    offending_text: str = ""
+    position: int = -1
+    error_message: str = ""
+    suggested_text: str = ""
+
+
+ENCODING_SAFETY_TRANSLITERATION = str.maketrans(
+    {
+        "ō": "ou",
+        "Ō": "Ou",
+        "ū": "uu",
+        "Ū": "Uu",
+        "ē": "ee",
+        "Ē": "Ee",
+        "ī": "ii",
+        "Ī": "Ii",
+        "ā": "aa",
+        "Ā": "Aa",
+        "—": "-",
+        "–": "-",
+        "―": "-",
+        "−": "-",
+    }
+)
 
 
 class SkipReason(Enum):
@@ -253,6 +307,56 @@ class BatchValidationResult:
     lines_to_translate: List[Tuple[int, str]]  # (original_index, line)
     skipped_lines: List[Tuple[int, str, SkipReason]]  # (index, line, reason)
     auto_translations: Dict[int, str]  # index -> auto-translated content
+
+
+class ResponseValidationError(Exception):
+    """Raised when a response succeeds transport-wise but fails validation."""
+
+    def __init__(self, message: str, validation_category: str) -> None:
+        super().__init__(message)
+        self.validation_category = validation_category
+
+
+def has_prompt_context_risky_terms(text: str) -> bool:
+    """Return whether prompt context text contains advisory risky wording."""
+    normalized = (text or "").lower()
+    if not normalized.strip():
+        return False
+    return any(term in normalized for term in _PROMPT_CONTEXT_RISKY_TERMS)
+
+
+def get_prompt_context_warning_message(
+    metadata: Mapping[str, Any],
+) -> Optional[str]:
+    """Return a generic Terms-of-Service warning for enabled prompt blocks.
+
+    Only Summary and System Instructions are scanned here because they are the
+    static manifest-backed prompt blocks that should be checked once before any
+    request-building work begins.
+    """
+    if not metadata:
+        return None
+
+    prompt_sections: List[str] = []
+
+    if bool(metadata.get("system_instructions_enabled", True)):
+        system_instructions = str(metadata.get("system_instructions", "") or "")
+        if system_instructions.strip():
+            prompt_sections.append(system_instructions)
+
+    if bool(metadata.get("summary_enabled", False)):
+        summary = str(metadata.get("summary", "") or "")
+        if summary.strip():
+            prompt_sections.append(summary)
+
+    if not prompt_sections:
+        return None
+
+    combined_prompt_context = "\n".join(prompt_sections)
+    if not has_prompt_context_risky_terms(combined_prompt_context):
+        return None
+
+    return PROMPT_CONTEXT_WARNING_MESSAGE
 
 
 # Symbol normalization map: fullwidth → halfwidth
@@ -610,6 +714,31 @@ class SpeakerFormatInfo:
         }
 
 
+def count_speaker_delimiters(text: str) -> int:
+    """Count speaker/dialogue delimiter characters in a line.
+
+    Speaker:Dialogue preservation is keyed off halfwidth and fullwidth colon
+    separators. Validation treats any count change as a structural mismatch.
+    """
+    return sum(1 for ch in text if ch in COLON_CHARS)
+
+
+def get_speaker_delimiter_mismatch(
+    original: str,
+    translated: str,
+) -> Optional[str]:
+    """Return a mismatch message when colon-equivalent counts differ."""
+    original_count = count_speaker_delimiters(original)
+    translated_count = count_speaker_delimiters(translated)
+    if original_count == translated_count:
+        return None
+    return (
+        "Speaker delimiter mismatch: "
+        f"original has {original_count} ':'/'：' separator(s), "
+        f"translation has {translated_count}"
+    )
+
+
 def detect_speaker_dialogue_format(line: str) -> SpeakerFormatInfo:
     """Detect Speaker: "Dialogue" format in a line.
     
@@ -741,6 +870,11 @@ def validate_speaker_format_preserved(
     """
     errors: List[str] = []
     warnings: List[str] = []
+
+    delimiter_mismatch = get_speaker_delimiter_mismatch(original, translated)
+    if delimiter_mismatch is not None:
+        errors.append(delimiter_mismatch)
+        return False, errors, warnings
     
     orig_info = detect_speaker_dialogue_format(original)
     trans_info = detect_speaker_dialogue_format(translated)
@@ -793,6 +927,9 @@ def should_retry_for_speaker_format(
     Returns:
         True if retranslation is recommended
     """
+    if get_speaker_delimiter_mismatch(original, translated) is not None:
+        return True
+
     orig_info = detect_speaker_dialogue_format(original)
     
     # No speaker format in original - no retry needed
@@ -1099,6 +1236,52 @@ def normalize_qa_rerun_policy(policy: str) -> str:
     return "failed_only"
 
 
+def make_encoding_safe_text(text: str) -> str:
+    """Build a conservative ASCII-leaning fallback for legacy encodings.
+
+    Explicit transliteration runs before Unicode normalization so macron vowels
+    can expand to the expected romaji-like sequences instead of collapsing to a
+    single ASCII vowel.
+    """
+    transliterated = text.translate(ENCODING_SAFETY_TRANSLITERATION)
+    normalized = unicodedata.normalize("NFKD", transliterated)
+    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+
+def validate_encoding_safety(text: str, encoding: str) -> EncodingSafetyResult:
+    """Check whether text can be encoded with the requested codec.
+
+    When encoding fails, the result includes the offending character span and a
+    normalized/transliterated full-line suggestion when that suggestion becomes
+    encodable.
+    """
+    normalized_encoding = (encoding or "").strip()
+    if not normalized_encoding:
+        return EncodingSafetyResult(is_safe=True, encoding="")
+
+    try:
+        text.encode(normalized_encoding)
+        return EncodingSafetyResult(is_safe=True, encoding=normalized_encoding)
+    except UnicodeEncodeError as exc:
+        offending_text = text[exc.start:exc.end] or text[exc.start]
+        suggested_text = make_encoding_safe_text(text)
+        if suggested_text == text:
+            suggested_text = ""
+        else:
+            try:
+                suggested_text.encode(normalized_encoding)
+            except UnicodeEncodeError:
+                suggested_text = ""
+        return EncodingSafetyResult(
+            is_safe=False,
+            encoding=normalized_encoding,
+            offending_text=offending_text,
+            position=exc.start,
+            error_message=str(exc),
+            suggested_text=suggested_text,
+        )
+
+
 def validate_qa_line(
     original: str,
     qa_text: str,
@@ -1108,6 +1291,8 @@ def validate_qa_line(
     source_language: str = "Japanese",
     target_language: str = "English",
     code_patterns: Optional[List[Dict[str, Any]]] = None,
+    encoding_check_enabled: bool = False,
+    target_encoding: str = "",
 ) -> List[QAFinding]:
     """Run shared QA checks for a single line.
 
@@ -1237,6 +1422,35 @@ def validate_qa_line(
                 suggestion="Split or shorten the line",
             )
         )
+
+    if encoding_check_enabled and target_encoding.strip():
+        encoding_result = validate_encoding_safety(effective_text, target_encoding)
+        if not encoding_result.is_safe:
+            offending_char = encoding_result.offending_text[:1]
+            char_name = unicodedata.name(offending_char, "UNKNOWN CHARACTER")
+            suggestion = (
+                f"Use normalized/transliterated text for {target_encoding}: "
+                f"{encoding_result.suggested_text}"
+                if encoding_result.suggested_text
+                else (
+                    f"Replace or transliterate the offending character "
+                    f"{encoding_result.offending_text!r} before writing {target_encoding} output"
+                )
+            )
+            findings.append(
+                QAFinding(
+                    issue_type="encoding_unsafe",
+                    severity="error",
+                    message=(
+                        f"Encoding '{target_encoding}' cannot encode "
+                        f"{encoding_result.offending_text!r} at position "
+                        f"{encoding_result.position} ({char_name})"
+                    ),
+                    suggestion=suggestion,
+                    auto_fixable=bool(encoding_result.suggested_text),
+                    replacement_text=encoding_result.suggested_text,
+                )
+            )
 
     return findings
 
@@ -1960,6 +2174,7 @@ class TranslationValidationResult:
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     placeholder_result: Optional[PlaceholderValidationResult] = None
+    discard_batch: bool = False
 
 
 @dataclass
@@ -1972,6 +2187,8 @@ class BatchTranslationValidationResult:
     retry_count: int
     line_results: List[TranslationValidationResult] = field(default_factory=list)
     lines_to_retry: List[int] = field(default_factory=list)  # Indices that need retry
+    discard_response: bool = False
+    batch_errors: List[str] = field(default_factory=list)
     
     @property
     def success_rate(self) -> float:
@@ -2023,6 +2240,7 @@ def validate_translation_comprehensive(
     warnings: List[str] = []
     retry_reasons: List[RetryReason] = []
     placeholder_result: Optional[PlaceholderValidationResult] = None
+    discard_batch = False
     
     # 1. Empty translation check
     if not translated or not translated.strip():
@@ -2046,7 +2264,12 @@ def validate_translation_comprehensive(
     
     # 3. Speaker format preservation
     if check_speaker_format:
-        if should_retry_for_speaker_format(original, translated):
+        delimiter_mismatch = get_speaker_delimiter_mismatch(original, translated)
+        if delimiter_mismatch is not None:
+            errors.append(delimiter_mismatch)
+            retry_reasons.append(RetryReason.SPEAKER_FORMAT_LOST)
+            discard_batch = True
+        elif should_retry_for_speaker_format(original, translated):
             errors.append("Speaker dialogue format lost in translation")
             retry_reasons.append(RetryReason.SPEAKER_FORMAT_LOST)
     
@@ -2112,6 +2335,7 @@ def validate_translation_comprehensive(
         errors=errors,
         warnings=warnings,
         placeholder_result=placeholder_result,
+        discard_batch=discard_batch,
     )
 
 
@@ -2154,6 +2378,11 @@ def validate_batch_comprehensive(
             retry_count=len(originals),
             line_results=[],
             lines_to_retry=list(range(len(originals))),
+            discard_response=True,
+            batch_errors=[
+                "Line count mismatch: "
+                f"expected {len(originals)} line(s), got {len(translations)}"
+            ],
         )
     
     line_results: List[TranslationValidationResult] = []
@@ -2182,6 +2411,23 @@ def validate_batch_comprehensive(
             lines_to_retry.append(i)
     
     is_valid = len(lines_to_retry) == 0
+
+    discard_results = [result for result in line_results if result.discard_batch]
+    if discard_results:
+        return BatchTranslationValidationResult(
+            is_valid=False,
+            total_lines=len(originals),
+            valid_count=0,
+            retry_count=len(originals),
+            line_results=line_results,
+            lines_to_retry=list(range(len(originals))),
+            discard_response=True,
+            batch_errors=[
+                error
+                for result in discard_results
+                for error in result.errors
+            ],
+        )
     
     return BatchTranslationValidationResult(
         is_valid=is_valid,

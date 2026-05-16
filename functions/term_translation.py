@@ -577,18 +577,21 @@ def _translate_llm_batch(
         except Exception:
             pass
 
+    request_kwargs = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        "response_format": _TERM_TRANSLATION_SCHEMA,
+        "temperature": 0.3,
+        "max_tokens": max_tokens,
+    }
+    if provider.lower() == "openai":
+        request_kwargs["store"] = False
+
     try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-            response_format=_TERM_TRANSLATION_SCHEMA,
-            temperature=0.3,
-            max_tokens=max_tokens,
-            store=False,
-        )
+        response = client.chat.completions.create(**request_kwargs)
     except Exception as exc:
         _log_term_translation(
             LogStatus.FAILED,

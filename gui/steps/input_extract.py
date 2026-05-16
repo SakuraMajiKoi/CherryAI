@@ -8,12 +8,14 @@ auto-encoding, format filtering, multi-line preview, and progress dialog.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 import json
 import logging
+import time
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, ContextManager, Dict, List, Optional, Tuple
 import tkinter as tk
 from tkinter import ttk
 
@@ -34,6 +36,10 @@ if TYPE_CHECKING:
     from CherryAI.gui.state.store import SessionState
 
 logger = logging.getLogger(__name__)
+
+
+PROGRESS_RENDER_INTERVAL_FILES = 8
+PROGRESS_RENDER_INTERVAL_SECONDS = 2.0
 
 
 SAME_AS_SOURCE_DESTINATION = "Same as Source"
@@ -94,16 +100,22 @@ class LoadedFile:
         line_count: Number of lines.
         encoding: Detected or assumed encoding.
         tags: Per-line parser tags (dialogue, menu, variable, etc.).
+        source_mappings: Optional precomputed ``ln``/``f`` locator data.
     """
 
     def __init__(
         self,
         path: Path,
         format_id: str,
-        lines: List[str],
+        lines: Optional[List[str]] = None,
         manifest_path: Optional[Path] = None,
         encoding: str = "utf-8",
         tags: Optional[List[str]] = None,
+        source_mappings: Optional[List[Dict[str, int]]] = None,
+        line_count: Optional[int] = None,
+        content_loader: Optional[
+            Callable[[], Tuple[List[str], Optional[List[str]]]]
+        ] = None,
     ) -> None:
         """Initialize LoadedFile.
 
@@ -114,18 +126,64 @@ class LoadedFile:
             manifest_path: Associated manifest path.
             encoding: File encoding.
             tags: Per-line parser tags from extract_tagged.
+            line_count: Preserved line count when content is loaded lazily.
+            content_loader: Optional lazy loader for lines and tags.
         """
         self.path = path
         self.format_id = format_id
-        self.lines = lines
+        self._lines = list(lines) if lines is not None else None
+        self._line_count = len(lines) if lines is not None else max(int(line_count or 0), 0)
         self.manifest_path = manifest_path
         self.encoding = encoding
-        self.tags = tags
+        self._tags = list(tags) if tags is not None else None
+        self.source_mappings = [dict(item) for item in source_mappings] if source_mappings else None
+        self._content_loader = content_loader
+
+    def _ensure_content_loaded(self) -> None:
+        """Load lines and tags on first access when backed by a manifest slice."""
+        if self._lines is not None:
+            return
+        if self._content_loader is None:
+            self._lines = []
+            return
+        lines, tags = self._content_loader()
+        self._lines = list(lines)
+        self._line_count = len(self._lines)
+        self._tags = list(tags) if tags is not None else None
+        self._content_loader = None
+
+    @property
+    def lines(self) -> List[str]:
+        """Get extracted lines, loading them lazily when possible."""
+        self._ensure_content_loaded()
+        assert self._lines is not None
+        return self._lines
+
+    @lines.setter
+    def lines(self, value: List[str]) -> None:
+        """Replace extracted lines and discard any lazy loader."""
+        self._lines = list(value)
+        self._line_count = len(self._lines)
+        self._content_loader = None
+
+    @property
+    def tags(self) -> Optional[List[str]]:
+        """Get parser tags, loading them with the lines when needed."""
+        if self._tags is None and self._content_loader is not None and self._lines is None:
+            self._ensure_content_loaded()
+        return self._tags
+
+    @tags.setter
+    def tags(self, value: Optional[List[str]]) -> None:
+        """Replace parser tags explicitly."""
+        self._tags = list(value) if value is not None else None
 
     @property
     def line_count(self) -> int:
         """Get line count."""
-        return len(self.lines)
+        if self._lines is not None:
+            return len(self._lines)
+        return self._line_count
 
     @property
     def filename(self) -> str:
@@ -141,6 +199,33 @@ class LoadedFile:
             "manifest_path": str(self.manifest_path) if self.manifest_path else None,
             "encoding": self.encoding,
         }
+
+
+def _make_manifest_content_loader(
+    lines_data: List[Any],
+    first_idx: int,
+    last_idx: int,
+) -> Callable[[], Tuple[List[str], Optional[List[str]]]]:
+    """Create a lazy loader for a contiguous manifest line slice."""
+
+    def _load() -> Tuple[List[str], Optional[List[str]]]:
+        file_lines: List[str] = []
+        file_tags: List[str] = []
+        has_tags = False
+        upper_bound = min(last_idx, len(lines_data) - 1)
+        for idx in range(first_idx, upper_bound + 1):
+            line_entry = lines_data[idx]
+            if isinstance(line_entry, dict):
+                file_lines.append(line_entry.get("orig", ""))
+                tag_value = str(line_entry.get("tags", ""))
+                file_tags.append(tag_value)
+                has_tags = has_tags or bool(tag_value)
+            else:
+                file_lines.append(str(line_entry))
+                file_tags.append("")
+        return file_lines, file_tags if has_tags else None
+
+    return _load
 
 # ======================================================================
 # Import Translation Dialog
@@ -284,6 +369,10 @@ class InputExtractionStep(BaseStep):
         self._extraction_validation_batch_depth: int = 0
         self._pending_extraction_validation_issues: List[Dict[str, Any]] = []
         self._last_extraction_validation_log: Optional[Path] = None
+        self._bulk_load_depth: int = 0
+        self._pending_bulk_step_data_sync: bool = False
+        self._bulk_load_state_context: Optional[ContextManager[None]] = None
+        self._manifest_source_text_cache: Optional[Dict[str, str]] = None
 
         # TASK 39.4: Tree item ID to LoadedFile index mapping
         self._tree_item_to_index: Dict[str, int] = {}
@@ -669,6 +758,7 @@ class InputExtractionStep(BaseStep):
             project_name: Project name for new projects (bypasses dialog).
         """
         self._begin_extraction_validation_batch()
+        self._begin_bulk_load_state_updates()
 
         # PHASE 58.12: Store project name for later use
         self._pending_project_name = project_name
@@ -717,6 +807,20 @@ class InputExtractionStep(BaseStep):
                 unique_files.append(f)
         files_to_load = unique_files
 
+        if stage_source_paths and files_to_load:
+            filtered_stage_source_paths: Dict[str, Path] = {}
+            for file_path in files_to_load:
+                if source_base is not None:
+                    try:
+                        rel_path = str(file_path.relative_to(source_base))
+                    except ValueError:
+                        rel_path = file_path.name
+                else:
+                    rel_path = file_path.name
+                filtered_stage_source_paths[rel_path] = file_path
+            stage_source_paths = filtered_stage_source_paths
+            self._pending_stage_source_paths = dict(filtered_stage_source_paths)
+
         # -----------------------------------------------------------
         # Source root validation for adding to existing manifest
         # -----------------------------------------------------------
@@ -756,10 +860,13 @@ class InputExtractionStep(BaseStep):
         loaded_count = 0
         skipped_files: List[str] = []
 
-        # Show progress dialog for multi-file loading
+        # Show one progress dialog for the entire input flow.
         progress: Optional[LoadingProgressDialog] = None
-        if len(files_to_load) > 3:
+        if len(files_to_load) > 3 or len(stage_source_paths) > 3:
             progress = LoadingProgressDialog(self, len(files_to_load))
+            progress.set_phase("Loading selected files")
+
+        last_progress_refresh = 0.0
 
         # Handshake: validate parser once before iterating files
         if format_override != "auto":
@@ -771,27 +878,43 @@ class InputExtractionStep(BaseStep):
         for path in files_to_load:
             if progress is not None and progress.cancelled:
                 break
+            processed_count = loaded_count + len(skipped_files)
             # Format filtering
             if format_override != "auto" and not self._file_matches_format(path, format_override):
                 skipped_files.append(path.name)
                 if progress is not None:
-                    progress.update(path.name)
+                    last_progress_refresh = self._maybe_update_load_progress(
+                        progress=progress,
+                        processed_count=processed_count + 1,
+                        total_files=len(files_to_load),
+                        current_file=path.name,
+                        last_refresh=last_progress_refresh,
+                    )
                 continue
 
             # Skip files already in the manifest when adding
             if is_add_to_existing:
                 if path.name in already_loaded_names:
                     if progress is not None:
-                        progress.update(path.name)
+                        last_progress_refresh = self._maybe_update_load_progress(
+                            progress=progress,
+                            processed_count=processed_count + 1,
+                            total_files=len(files_to_load),
+                            current_file=path.name,
+                            last_refresh=last_progress_refresh,
+                        )
                     continue
 
             if self._load_file(path, encoding, format_override):
                 loaded_count += 1
             if progress is not None:
-                progress.update(path.name)
-
-        if progress is not None:
-            progress.close()
+                last_progress_refresh = self._maybe_update_load_progress(
+                    progress=progress,
+                    processed_count=loaded_count + len(skipped_files),
+                    total_files=len(files_to_load),
+                    current_file=path.name,
+                    last_refresh=last_progress_refresh,
+                )
 
         # Warn about skipped files
         if skipped_files:
@@ -813,6 +936,10 @@ class InputExtractionStep(BaseStep):
                 self.set_status("in-progress")
                 logger.info("Loaded %d file(s)", loaded_count)
 
+                if progress is not None and progress.cancelled:
+                    logger.info("Input load cancelled before manifest sync")
+                    return
+
                 if is_add_to_existing:
                     # Non-destructive addition to existing manifest
                     new_loaded = self._loaded_files[new_files_start:]
@@ -821,14 +948,18 @@ class InputExtractionStep(BaseStep):
                     self._populate_project_info_from_files()
                     mgr = self.manifest_manager
                     if mgr is not None and mgr.is_loaded:
-                        self._sync_lines_to_manifest()
+                        self._sync_lines_to_manifest(progress=progress)
                     else:
-                        self._ensure_project_created()
+                        self._ensure_project_created(progress=progress)
+
+                if progress is not None and progress.cancelled:
+                    logger.info("Input load cancelled after manifest sync")
+                    return
 
                 # Parser Handshake P3: Wire optional components to manifest
                 self._wire_parser_optionals(format_override)
 
-                self._save_manifest_after_file_load()
+                self._save_manifest_after_file_load(progress=progress)
 
                 # Refresh file list after manifest sync to show Type column
                 self._update_file_list()
@@ -837,6 +968,9 @@ class InputExtractionStep(BaseStep):
                 if not is_add_to_existing:
                     self._execute_auto_pipeline()
         finally:
+            if progress is not None:
+                progress.close()
+            self._end_bulk_load_state_updates()
             self._end_extraction_validation_batch()
 
     def _collect_files_for_format(self, folder: Path, format_filter: str) -> List[Path]:
@@ -869,6 +1003,137 @@ class InputExtractionStep(BaseStep):
             suffixes = {".txt", ".csv", ".tsv", ".json", ".xlsx", ".xp3",
                         ".png", ".jpg", ".jpeg", ".bmp"}
         return self._collect_files_from_folder(folder, suffixes)
+
+    def _maybe_update_load_progress(
+        self,
+        *,
+        progress: LoadingProgressDialog,
+        processed_count: int,
+        total_files: int,
+        current_file: str,
+        last_refresh: float,
+    ) -> float:
+        """Refresh the load dialog at coarse checkpoints during Step 0."""
+        now = time.perf_counter()
+        should_refresh = (
+            processed_count >= total_files
+            or processed_count == 1
+            or processed_count % PROGRESS_RENDER_INTERVAL_FILES == 0
+            or now - last_refresh >= PROGRESS_RENDER_INTERVAL_SECONDS
+        )
+        if not should_refresh:
+            return last_refresh
+
+        progress.set_progress(
+            current=processed_count,
+            current_file=current_file,
+            force=processed_count >= total_files,
+        )
+        return now
+
+    def _begin_bulk_load_state_updates(self) -> None:
+        """Defer session-driven UI refreshes while Step 0 is bulk-loading."""
+        if self._bulk_load_depth == 0:
+            if self.session is not None:
+                context: ContextManager[None] = self.session.defer_notifications()
+            else:
+                context = nullcontext()
+            context.__enter__()
+            self._bulk_load_state_context = context
+        self._bulk_load_depth += 1
+
+    def _end_bulk_load_state_updates(self) -> None:
+        """Flush one final Step 0 state update after bulk loading ends."""
+        if self._bulk_load_depth <= 0:
+            return
+
+        self._bulk_load_depth -= 1
+        if self._bulk_load_depth != 0:
+            return
+
+        try:
+            if self._pending_bulk_step_data_sync:
+                self._pending_bulk_step_data_sync = False
+                self._update_step_data(force=True)
+        finally:
+            context = self._bulk_load_state_context
+            self._bulk_load_state_context = None
+            if context is not None:
+                context.__exit__(None, None, None)
+
+    def _begin_manifest_source_text_cache(self) -> None:
+        """Enable a temporary staged-source cache for manifest line building."""
+        if self._manifest_source_text_cache is None:
+            self._manifest_source_text_cache = {}
+
+    def _end_manifest_source_text_cache(self) -> None:
+        """Release the temporary staged-source cache after manifest sync."""
+        self._manifest_source_text_cache = None
+
+    def _prime_manifest_source_text_cache(
+        self,
+        source_paths: Dict[str, Path],
+    ) -> None:
+        """Populate the temporary source-text cache from known rel-path inputs."""
+        cache = self._manifest_source_text_cache
+        if cache is None:
+            return
+
+        loaded_by_path = {
+            str(loaded_file.path): loaded_file
+            for loaded_file in self._loaded_files
+        }
+
+        for rel_path, source_path in source_paths.items():
+            if rel_path in cache:
+                continue
+            try:
+                loaded_file = loaded_by_path.get(str(source_path))
+                encoding = loaded_file.encoding if loaded_file is not None else "utf-8"
+                cache[rel_path] = source_path.read_text(
+                    encoding=encoding,
+                    errors="ignore",
+                )
+            except Exception:
+                continue
+
+    def _get_manifest_source_text_encodings(
+        self,
+        source_paths: Dict[str, Path],
+    ) -> Dict[str, str]:
+        """Return rel-path encodings for staged-source cache population."""
+        loaded_by_path = {
+            str(loaded_file.path): loaded_file.encoding
+            for loaded_file in self._loaded_files
+        }
+        return {
+            rel_path: loaded_by_path.get(str(source_path), "utf-8")
+            for rel_path, source_path in source_paths.items()
+        }
+
+    def _read_manifest_source_text(
+        self,
+        loaded_file: LoadedFile,
+        rel_path: str,
+    ) -> Optional[str]:
+        """Read staged source text once per file during manifest entry construction."""
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded or not loaded_file.lines:
+            return None
+
+        cache = self._manifest_source_text_cache
+        if cache is not None and rel_path in cache:
+            return cache[rel_path]
+
+        staged_path = mgr.resolve_file_path(rel_path)
+        source_path = staged_path if staged_path.exists() else loaded_file.path
+
+        with open(source_path, "r", encoding=loaded_file.encoding, errors="ignore") as fh:
+            source_text = fh.read()
+
+        if cache is not None:
+            cache[rel_path] = source_text
+        return source_text
 
     def _prepare_folder_tree_staging(self, root_folder: Path) -> None:
         """Prepare full-tree staging data for a selected folder."""
@@ -1648,7 +1913,10 @@ class InputExtractionStep(BaseStep):
 
         return loaded_any
 
-    def _save_manifest_after_file_load(self) -> None:
+    def _save_manifest_after_file_load(
+        self,
+        progress: Optional[LoadingProgressDialog] = None,
+    ) -> None:
         """Save manifest after files are loaded (TASK 29.2).
         
         Ensures the manifest is saved to disk after file load operations
@@ -1657,6 +1925,13 @@ class InputExtractionStep(BaseStep):
         mgr = self.manifest_manager
         if mgr is not None and mgr.is_loaded:
             try:
+                if progress is not None:
+                    progress.set_phase("Saving project")
+                    progress.set_progress(
+                        current=progress._total,
+                        current_file=mgr.project_name or "Current project",
+                        detail="Writing manifest to disk",
+                    )
                 if mgr.save():
                     logger.debug("Manifest saved after file load")
             except Exception as e:
@@ -1793,7 +2068,10 @@ class InputExtractionStep(BaseStep):
                     parser.name, tagged_count,
                 )
 
-    def _ensure_project_created(self) -> None:
+    def _ensure_project_created(
+        self,
+        progress: Optional[LoadingProgressDialog] = None,
+    ) -> None:
         """Ensure a project is created for loaded files (TASK 19 Phase 5).
         
         PHASE 58.12: Uses pending project name from unified dialog if available,
@@ -1829,7 +2107,11 @@ class InputExtractionStep(BaseStep):
             if pending_name:
                 # Create project directly without showing dialog
                 try:
-                    manifest_path = mgr.create_new(pending_name, source_files)
+                    manifest_path = mgr.create_new(
+                        pending_name,
+                        source_files,
+                        save_immediately=False,
+                    )
                     if manifest_path:
                         # Update session for legacy compatibility
                         app = self.winfo_toplevel()
@@ -1842,7 +2124,7 @@ class InputExtractionStep(BaseStep):
                         logger.info("Project created directly: %s at %s", pending_name, manifest_path)
                         # Update manifest with lines from loaded files
                         if mgr.is_loaded:
-                            self._sync_lines_to_manifest()
+                            self._sync_lines_to_manifest(progress=progress)
                 except Exception as e:
                     logger.warning("Could not create project directly: %s", e)
                 # Clear pending name
@@ -1854,12 +2136,16 @@ class InputExtractionStep(BaseStep):
                 app = self.winfo_toplevel()
                 create_project_method = getattr(app, "create_new_project", None)
                 if create_project_method is not None:
-                    manifest_path = create_project_method(source_files, suggested_name)
+                    manifest_path = create_project_method(
+                        source_files,
+                        suggested_name,
+                        save_immediately=False,
+                    )
                     if manifest_path:
                         logger.info("Project created: %s", manifest_path)
                         # Update manifest with lines from loaded files
                         if mgr.is_loaded:
-                            self._sync_lines_to_manifest()
+                            self._sync_lines_to_manifest(progress=progress)
                     else:
                         logger.debug("User cancelled project creation")
             except Exception as e:
@@ -1922,7 +2208,12 @@ class InputExtractionStep(BaseStep):
         # extraction sees the same project context during load and inject.
         try:
             if source_paths:
-                mgr.copy_originals_to_project(source_paths=source_paths)
+                self._begin_manifest_source_text_cache()
+                mgr.copy_originals_to_project(
+                    source_paths=source_paths,
+                    source_text_cache=self._manifest_source_text_cache,
+                    source_text_encodings=self._get_manifest_source_text_encodings(source_paths),
+                )
                 self._refresh_loaded_files_from_project_originals(
                     new_loaded,
                     base_path=base,
@@ -1930,27 +2221,31 @@ class InputExtractionStep(BaseStep):
         except Exception as e:
             logger.warning("Failed to stage new originals before sync: %s", e)
 
-        for loaded_file in new_loaded:
-            file_type = ""
-            if typing_enabled:
-                file_type = classify_file_type(loaded_file.lines)
+        self._begin_manifest_source_text_cache()
+        try:
+            for loaded_file in new_loaded:
+                file_type = ""
+                if typing_enabled:
+                    file_type = classify_file_type(loaded_file.lines)
 
-            try:
-                rel_path = str(loaded_file.path.relative_to(base))
-            except ValueError:
-                rel_path = loaded_file.path.name
+                try:
+                    rel_path = str(loaded_file.path.relative_to(base))
+                except ValueError:
+                    rel_path = loaded_file.path.name
 
-            new_file_infos.append({
-                "rel_path": rel_path,
-                "format": loaded_file.format_id,
-                "line_count": loaded_file.line_count,
-                "encoding": loaded_file.encoding,
-                "type": file_type,
-            })
-            new_lines_by_rel[rel_path] = self._build_manifest_line_entries(
-                loaded_file,
-                rel_path,
-            )
+                new_file_infos.append({
+                    "rel_path": rel_path,
+                    "format": loaded_file.format_id,
+                    "line_count": loaded_file.line_count,
+                    "encoding": loaded_file.encoding,
+                    "type": file_type,
+                })
+                new_lines_by_rel[rel_path] = self._build_manifest_line_entries(
+                    loaded_file,
+                    rel_path,
+                )
+        finally:
+            self._end_manifest_source_text_cache()
 
         added = mgr.add_files(new_file_infos, new_lines_by_rel)
         logger.info("Added %d new file(s) to manifest", added)
@@ -1977,7 +2272,10 @@ class InputExtractionStep(BaseStep):
                         set_primary_line_tag(lines_data[m_idx], tag_val)
             mgr.set_lines(lines_data)
 
-    def _sync_lines_to_manifest(self) -> None:
+    def _sync_lines_to_manifest(
+        self,
+        progress: Optional[LoadingProgressDialog] = None,
+    ) -> None:
         """Sync loaded file lines to the manifest (TASK 19 Phase 5).
         
         TASK 35.1: Also populates filedir for input/output decoupling.
@@ -2026,7 +2324,13 @@ class InputExtractionStep(BaseStep):
         else:
             mgr.source_mode = "internal"
             mgr.source_root = source_base.name if source_base is not None else ""
-            if not archive_only and not self._copy_originals_to_project(stage_source_paths, source_handling):
+            self._begin_manifest_source_text_cache()
+            if not archive_only and not self._copy_originals_to_project(
+                stage_source_paths,
+                source_handling,
+                progress=progress,
+            ):
+                self._end_manifest_source_text_cache()
                 return
 
         self._refresh_loaded_files_from_project_originals(base_path=source_base)
@@ -2047,32 +2351,36 @@ class InputExtractionStep(BaseStep):
         else:
             base_path = Path.cwd()
         
-        for loaded_file in self._loaded_files:
-            _file_start_idx = idx
-            try:
-                rel_path = str(loaded_file.path.relative_to(base_path))
-            except ValueError:
-                rel_path = loaded_file.path.name
+        self._begin_manifest_source_text_cache()
+        try:
+            for loaded_file in self._loaded_files:
+                _file_start_idx = idx
+                try:
+                    rel_path = str(loaded_file.path.relative_to(base_path))
+                except ValueError:
+                    rel_path = loaded_file.path.name
 
-            for entry in self._build_manifest_line_entries(loaded_file, rel_path):
-                entry["idx"] = idx
-                lines.append(entry)
-                idx += 1
-            
-            # Classify file type when typing is enabled
-            file_type = ""
-            if typing_enabled:
-                file_type = classify_file_type(loaded_file.lines)
-            
-            # Build file info for filedir
-            file_infos.append({
-                "path": str(loaded_file.path),
-                "rel_path": rel_path,
-                "format": loaded_file.format_id,
-                "line_count": loaded_file.line_count,
-                "encoding": loaded_file.encoding,
-                "type": file_type,
-            })
+                for entry in self._build_manifest_line_entries(loaded_file, rel_path):
+                    entry["idx"] = idx
+                    lines.append(entry)
+                    idx += 1
+                
+                # Classify file type when typing is enabled
+                file_type = ""
+                if typing_enabled:
+                    file_type = classify_file_type(loaded_file.lines)
+                
+                # Build file info for filedir
+                file_infos.append({
+                    "path": str(loaded_file.path),
+                    "rel_path": rel_path,
+                    "format": loaded_file.format_id,
+                    "line_count": loaded_file.line_count,
+                    "encoding": loaded_file.encoding,
+                    "type": file_type,
+                })
+        finally:
+            self._end_manifest_source_text_cache()
         
         # Update manifest with lines
         mgr.set_lines(lines)
@@ -2092,16 +2400,13 @@ class InputExtractionStep(BaseStep):
         rel_path: str,
     ) -> List[Dict[str, Any]]:
         """Build canonical manifest line entries with source ``ln``/``f`` capture."""
-        mgr = self.manifest_manager
         mappings: List[Dict[str, int]] = []
 
-        if mgr is not None and mgr.is_loaded and loaded_file.lines:
-            staged_path = mgr.resolve_file_path(rel_path)
-            source_path = staged_path if staged_path.exists() else loaded_file.path
+        if loaded_file.lines:
             try:
-                with open(source_path, "r", encoding=loaded_file.encoding, errors="ignore") as fh:
-                    source_text = fh.read()
-                mappings = capture_source_line_mappings(source_text, loaded_file.lines)
+                source_text = self._read_manifest_source_text(loaded_file, rel_path)
+                if source_text is not None:
+                    mappings = capture_source_line_mappings(source_text, loaded_file.lines)
             except Exception as exc:
                 logger.warning(
                     "Failed to capture source line mappings for %s: %s",
@@ -2165,6 +2470,8 @@ class InputExtractionStep(BaseStep):
             parser = registry.get(loaded_file.format_id)
             if parser is None:
                 continue
+            if not getattr(parser, "requires_staged_refresh", False):
+                continue
 
             try:
                 rel_path = str(loaded_file.path.relative_to(base_path))
@@ -2180,9 +2487,19 @@ class InputExtractionStep(BaseStep):
                 if tagged is not None:
                     new_lines = [item.text for item in tagged]
                     new_tags = [item.tag for item in tagged]
+                    if all(getattr(item, "ln", 0) > 0 for item in tagged):
+                        new_source_mappings: Optional[List[Dict[str, int]]] = []
+                        for item in tagged:
+                            mapping: Dict[str, int] = {"ln": int(item.ln)}
+                            if getattr(item, "f", 0) > 0:
+                                mapping["f"] = int(item.f)
+                            new_source_mappings.append(mapping)
+                    else:
+                        new_source_mappings = None
                 else:
                     new_lines = parser.extract(staged_path)
                     new_tags = None
+                    new_source_mappings = None
             except Exception as exc:
                 logger.warning(
                     "Failed staged parser refresh for %s: %s",
@@ -2191,7 +2508,11 @@ class InputExtractionStep(BaseStep):
                 )
                 continue
 
-            if loaded_file.lines == new_lines and loaded_file.tags == new_tags:
+            if (
+                loaded_file.lines == new_lines
+                and loaded_file.tags == new_tags
+                and loaded_file.source_mappings == new_source_mappings
+            ):
                 continue
 
             logger.info(
@@ -2202,6 +2523,11 @@ class InputExtractionStep(BaseStep):
             )
             loaded_file.lines = new_lines
             loaded_file.tags = new_tags
+            loaded_file.source_mappings = (
+                [dict(item) for item in new_source_mappings]
+                if new_source_mappings is not None
+                else None
+            )
             refreshed = True
 
         return refreshed
@@ -2288,6 +2614,7 @@ class InputExtractionStep(BaseStep):
         self,
         source_paths: Optional[Dict[str, Path]] = None,
         source_handling: str = "copy",
+        progress: Optional[LoadingProgressDialog] = None,
     ) -> bool:
         """Copy source files to the project's Original/ directory.
         
@@ -2319,10 +2646,18 @@ class InputExtractionStep(BaseStep):
                             stage_source_paths[entry.rel_path] = loaded_file.path
                             break
 
-            progress: Optional[LoadingProgressDialog] = None
-            if len(stage_source_paths) > 3:
+            owned_progress = False
+            if progress is None and len(stage_source_paths) > 3:
                 progress = LoadingProgressDialog(self, len(stage_source_paths))
+                owned_progress = True
+            if progress is not None:
+                progress.set_total(len(stage_source_paths))
                 progress.set_phase("Staging Original tree")
+                progress.set_progress(
+                    current=0,
+                    current_file="Preparing staged source copy",
+                    detail="",
+                )
 
             def _progress_callback(payload: Dict[str, Any]) -> bool:
                 if progress is None:
@@ -2341,8 +2676,10 @@ class InputExtractionStep(BaseStep):
                 force=True,
                 move_files=(source_handling == "move"),
                 progress_callback=_progress_callback if stage_source_paths else None,
+                source_text_cache=self._manifest_source_text_cache,
+                source_text_encodings=self._get_manifest_source_text_encodings(stage_source_paths),
             )
-            if progress is not None:
+            if owned_progress and progress is not None:
                 progress.close()
             if progress is not None and progress.cancelled:
                 return False
@@ -2832,20 +3169,12 @@ class InputExtractionStep(BaseStep):
             if not self._validate_parser_selection(format_id):
                 return False
 
-            # Extract lines using format handler
-            lines = self._extract_lines(path, format_id, encoding)
-
-            # Extract per-line tags when parser supports tagged extraction
-            tags: Optional[List[str]] = None
-            try:
-                from CherryAI.formats import get_parser_registry
-                _parser = get_parser_registry().get(format_id)
-                if _parser is not None and hasattr(_parser, "extract_tagged"):
-                    _tagged = _parser.extract_tagged(path)
-                    if _tagged is not None and len(_tagged) == len(lines):
-                        tags = [t.tag for t in _tagged]
-            except Exception:
-                pass
+            # Extract parser lines/tags in one pass when tagged extraction exists.
+            lines, tags, source_mappings = self._extract_file_content(
+                path,
+                format_id,
+                encoding,
+            )
 
             # Handshake: per-line token validation
             if not self._validate_extracted_lines(lines, path.name):
@@ -2863,6 +3192,7 @@ class InputExtractionStep(BaseStep):
                 manifest_path=manifest_path,
                 encoding=encoding,
                 tags=tags,
+                source_mappings=source_mappings,
             )
 
             self._loaded_files.append(loaded)
@@ -2886,6 +3216,41 @@ class InputExtractionStep(BaseStep):
                 f"Failed to load file:\n{path.name}\n\nError: {e}",
             )
             return False
+
+    def _extract_file_content(
+        self,
+        path: Path,
+        format_id: str,
+        encoding: str,
+    ) -> Tuple[List[str], Optional[List[str]], Optional[List[Dict[str, int]]]]:
+        """Extract lines plus optional parser tags and locator mappings."""
+        try:
+            from CherryAI.formats import get_parser_registry
+
+            parser = get_parser_registry().get(format_id)
+        except Exception:
+            parser = None
+
+        if parser is not None and hasattr(parser, "extract_tagged"):
+            try:
+                tagged = parser.extract_tagged(path)
+            except Exception:
+                tagged = None
+
+            if tagged is not None:
+                lines = [item.text for item in tagged]
+                tags = [item.tag for item in tagged]
+                source_mappings: Optional[List[Dict[str, int]]] = None
+                if all(getattr(item, "ln", 0) > 0 for item in tagged):
+                    source_mappings = []
+                    for item in tagged:
+                        mapping: Dict[str, int] = {"ln": int(item.ln)}
+                        if getattr(item, "f", 0) > 0:
+                            mapping["f"] = int(item.f)
+                        source_mappings.append(mapping)
+                return lines, tags, source_mappings
+
+        return self._extract_lines(path, format_id, encoding), None, None
 
     def _extract_lines(
         self,
@@ -3192,28 +3557,18 @@ class InputExtractionStep(BaseStep):
                 
                 # Check if file was relocated (TASK 32.1)
                 actual_path = Path(relocated.get(rel_path, str(file_path)))
-                
-                # Extract lines for this file from lines_data using index range
-                file_lines = []
-                file_tags: List[str] = []
-                for idx in range(first_idx, last_idx + 1):
-                    if idx < len(lines_data):
-                        line_entry = lines_data[idx]
-                        # Get the original text from the line entry
-                        if isinstance(line_entry, dict):
-                            file_lines.append(line_entry.get("orig", ""))
-                            file_tags.append(str(line_entry.get("tags", "")))
-                        else:
-                            file_lines.append(str(line_entry))
-                            file_tags.append("")
-                
+
                 # Create LoadedFile
                 loaded = LoadedFile(
                     path=actual_path if actual_path.exists() else file_path,
                     format_id=file_format,
-                    lines=file_lines,
+                    line_count=max(last_idx - first_idx + 1, 0),
                     manifest_path=self.session.manifest_path if self.session else None,
-                    tags=file_tags if any(file_tags) else None,
+                    content_loader=_make_manifest_content_loader(
+                        lines_data,
+                        first_idx,
+                        last_idx,
+                    ),
                 )
                 self._loaded_files.append(loaded)
         else:
@@ -3700,7 +4055,7 @@ class InputExtractionStep(BaseStep):
         else:
             self._ready_label.configure(text="")
 
-    def _update_step_data(self) -> None:
+    def _update_step_data(self, *, force: bool = False) -> None:
         """Update step data in session state.
 
         Lines are already stored in the manifest ``lines[].orig`` via
@@ -3711,6 +4066,10 @@ class InputExtractionStep(BaseStep):
         Merges into existing step data to preserve keys set elsewhere
         (e.g. ``manifest_path``, ``suggested_project_name``).
         """
+        if self._bulk_load_depth > 0 and not force:
+            self._pending_bulk_step_data_sync = True
+            return
+
         data = self.get_step_data()
         data["total_lines"] = sum(f.line_count for f in self._loaded_files)
         data["encoding"] = self._encoding_var.get() if self._encoding_var else "utf-8"
@@ -3808,28 +4167,19 @@ class InputExtractionStep(BaseStep):
                         file_path = Path(rel_path)
                     actual_path = Path(relocated.get(rel_path, str(file_path)))
 
-                    # Extract orig lines from the manifest line entries
-                    file_lines: List[str] = []
-                    file_tags: List[str] = []
-                    for idx in range(entry.first_idx, entry.last_idx + 1):
-                        if idx < len(manifest_lines):
-                            ln = manifest_lines[idx]
-                            if isinstance(ln, dict):
-                                file_lines.append(ln.get("orig", ""))
-                                file_tags.append(str(ln.get("tags", "")))
-                            else:
-                                file_lines.append(str(ln))
-                                file_tags.append("")
-
                     loaded = LoadedFile(
                         path=actual_path if actual_path.exists() else file_path,
                         format_id=entry.format,
-                        lines=file_lines,
+                        line_count=max(entry.last_idx - entry.first_idx + 1, 0),
                         manifest_path=(
                             self.session.manifest_path if self.session else None
                         ),
                         encoding=entry.encoding,
-                        tags=file_tags if any(file_tags) else None,
+                        content_loader=_make_manifest_content_loader(
+                            manifest_lines,
+                            entry.first_idx,
+                            entry.last_idx,
+                        ),
                     )
                     self._loaded_files.append(loaded)
 

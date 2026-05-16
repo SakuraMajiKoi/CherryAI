@@ -323,58 +323,66 @@ DEFAULT_CONFIG: Dict[str, Dict[str, Any]] = {
 
 
 def _resolve_config_file() -> Path:
-	"""Attempt to resolve canonical CONFIG_FILE Path from the CherryAI module.
+    """Attempt to resolve canonical CONFIG_FILE Path from the CherryAI module.
 
-	Falls back to a sensible local path if the module cannot be imported.
-	"""
-	try:
-		import sys
-		_P = None
-		for candidate in ("CherryAI.CherryAI", "CherryAI"):
-			try:
-				_P = __import__(candidate, fromlist=["CONFIG_FILE"])
-				break
-			except Exception:
-				pass
-		if _P is not None and hasattr(_P, "CONFIG_FILE"):
-			return _P.CONFIG_FILE  # type: ignore[no-any-return]
-	except Exception:
-		pass
-	# Fallback: place config next to the package root (two levels up from this file)
-	return Path(__file__).resolve().parent.parent / "CherryAI.ini"
+    Falls back to a sensible local path if the module cannot be imported.
+    """
+    try:
+        from . import ini_manager
+
+        return ini_manager.get_ini_path()
+    except Exception:
+        pass
+    try:
+        import sys
+
+        _P = None
+        for candidate in ("CherryAI.CherryAI", "CherryAI"):
+            try:
+                _P = __import__(candidate, fromlist=["CONFIG_FILE"])
+                break
+            except Exception:
+                pass
+        if _P is not None and hasattr(_P, "CONFIG_FILE"):
+            return _P.CONFIG_FILE  # type: ignore[no-any-return]
+    except Exception:
+        pass
+    # Fallback: place config next to the package root (two levels up from this file)
+    return Path(__file__).resolve().parent.parent / "CherryAI.ini"
 
 
 def load_config(config_file: Optional[Path] = None, with_defaults: bool = True) -> Dict[str, Any]:
-	"""Load application configuration from an INI file.
+    """Load application configuration from an INI file.
 
-	Args:
-		config_file: Path to INI config. If None, uses default resolved path.
-		with_defaults: If True, merge loaded config with DEFAULT_CONFIG.
+    Args:
+        config_file: Path to INI config. If None, uses default resolved path.
+        with_defaults: If True, merge loaded config with DEFAULT_CONFIG.
 
-	Returns:
-		Dictionary with config sections and keys. Includes defaults if with_defaults=True.
-	"""
-	if config_file is None:
-		config_file = _resolve_config_file()
+    Returns:
+        Dictionary with config sections and keys. Includes defaults if with_defaults=True.
+    """
+    if config_file is None:
+        config_file = _resolve_config_file()
 
-	config = configparser.ConfigParser()
-	try:
-		if config_file.exists():
-			config.read(config_file, encoding="utf-8")
-	except Exception as exc:
-		logging.warning(f"Failed to read config file {config_file}: {exc}")
-		return dict(DEFAULT_CONFIG) if with_defaults else {}
+    config = configparser.ConfigParser()
+    config.optionxform = str  # type: ignore[method-assign]
+    try:
+        if config_file.exists():
+            config.read(config_file, encoding="utf-8")
+    except Exception as exc:
+        logging.warning(f"Failed to read config file {config_file}: {exc}")
+        return dict(DEFAULT_CONFIG) if with_defaults else {}
 
-	# Convert to plain dict for easier access
-	result: Dict[str, Any] = {}
-	for section in config.sections():
-		result[section] = dict(config[section])
+    # Convert to plain dict for easier access
+    result: Dict[str, Any] = {}
+    for section in config.sections():
+        result[section] = dict(config[section])
 
-	# Merge with defaults if requested
-	if with_defaults:
-		result = _merge_with_defaults(result)
+    # Merge with defaults if requested
+    if with_defaults:
+        result = _merge_with_defaults(result)
 
-	return result
+    return result
 
 
 def _merge_with_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -530,45 +538,66 @@ def set_ui_state(state: Dict[str, Any], config_file: Optional[Path] = None) -> N
 
 
 def get_api_config(config_file: Optional[Path] = None) -> Dict[str, Any]:
-	"""Get API configuration from the [api] section.
+    """Get API configuration from the [api] section.
 
-	Args:
-		config_file: Path to INI config. If None, uses default resolved path.
+    Args:
+        config_file: Path to INI config. If None, uses default resolved path.
 
-	Returns:
-		Dictionary with API settings, including defaults for missing values.
-	"""
-	config = load_config(config_file, with_defaults=True)
-	api_config = config.get("api")
-	if api_config is not None and isinstance(api_config, dict):
-		return dict(api_config)  # Make a copy
-	# Fall back to a copy of the default API config
-	default_api = DEFAULT_CONFIG.get("api")
-	if default_api is not None:
-		return dict(default_api)
-	return {}
+    Returns:
+        Dictionary with API settings, including defaults for missing values.
+    """
+    if config_file is not None:
+        config = load_config(config_file, with_defaults=True)
+        api_config = config.get("api")
+        if api_config is not None and isinstance(api_config, dict):
+            return dict(api_config)
+        default_api = DEFAULT_CONFIG.get("api")
+        if default_api is not None:
+            return dict(default_api)
+        return {}
+
+    from . import api_config as api_store
+
+    default_api = dict(DEFAULT_CONFIG.get("api", {}))
+    stored = {
+        key: api_store.get_api_setting(key, fallback=str(default_api.get(key, "")))
+        for key in default_api
+        if key != "api_key"
+    }
+    provider = str(stored.get("provider", default_api.get("provider", "openai")))
+    stored["api_key"] = api_store.get_api_key_plain(provider, "default") or ""
+    stored["api_url"] = stored.get("base_url", "")
+    return {**default_api, **stored}
 
 
 def set_api_config(api_settings: Dict[str, Any], config_file: Optional[Path] = None) -> None:
-	"""Update API configuration in the [api] section.
+    """Update API configuration in the [api] section.
 
-	Args:
-		api_settings: Dictionary of API settings to update.
-		config_file: Path to INI config. If None, uses default resolved path.
-	"""
-	if config_file is None:
-		config_file = _resolve_config_file()
+    Args:
+        api_settings: Dictionary of API settings to update.
+        config_file: Path to INI config. If None, uses default resolved path.
+    """
+    if config_file is not None:
+        config = load_config(config_file, with_defaults=True)
+        if "api" not in config:
+            config["api"] = dict(DEFAULT_CONFIG["api"])
+        for key, value in api_settings.items():
+            config["api"][key] = value
+        save_config(config, config_file)
+        return
 
-	config = load_config(config_file, with_defaults=True)
-	
-	# Update API section with new values
-	if "api" not in config:
-		config["api"] = dict(DEFAULT_CONFIG["api"])
-	
-	for key, value in api_settings.items():
-		config["api"][key] = value
+    from . import api_config as api_store
 
-	save_config(config, config_file)
+    current = get_api_config()
+    merged = {**current, **api_settings}
+    provider = str(merged.get("provider", current.get("provider", "openai")))
+
+    for key, value in api_settings.items():
+        if key == "api_key":
+            api_store.set_api_key_plain(provider, str(value), "default")
+            continue
+        store_key = "base_url" if key == "api_url" else key
+        api_store.set_api_setting(store_key, str(value))
 
 
 def ensure_config_initialized(config_file: Optional[Path] = None) -> bool:

@@ -188,7 +188,7 @@ class AuthenticationError(ProviderError):
     """API key invalid or expired."""
 
     def __init__(self, message: str = "Authentication failed") -> None:
-        super().__init__(message, is_fatal=True, error_code="AUTH_INVALID")
+        super().__init__(message, is_fatal=False, error_code="AUTH_INVALID")
 
 
 class ModelNotFoundError(ProviderError):
@@ -216,7 +216,7 @@ class ContentFilteredError(ProviderError):
     """Content policy violation."""
 
     def __init__(self, message: str = "Content filtered") -> None:
-        super().__init__(message, is_fatal=True, error_code="CONTENT_FILTERED")
+        super().__init__(message, is_fatal=False, error_code="CONTENT_FILTERED")
 
 
 class ProviderConnectionError(ProviderError):

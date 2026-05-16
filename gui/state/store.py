@@ -4,15 +4,16 @@ Manages session state, per-step save states, and undo/redo stacks.
 Full implementation for Phase 4 with autosave and session restore.
 """
 
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
-from pathlib import Path
+from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import dataclass, field
 from datetime import datetime
 import json
 import logging
+from pathlib import Path
 import threading
 import time
+from typing import Any, Callable, Dict, Iterator, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -234,6 +235,8 @@ class SessionState:
     _change_listeners: List[Callable[[], None]] = field(
         default_factory=list, repr=False, compare=False
     )
+    _notification_suspend_depth: int = field(default=0, repr=False, compare=False)
+    _notification_pending: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         """Initialize step states if empty."""
@@ -271,10 +274,32 @@ class SessionState:
         if dirty:
             self._notify_change()
 
+    @contextmanager
+    def defer_notifications(self) -> Iterator[None]:
+        """Batch change notifications until the context exits."""
+        self._notification_suspend_depth += 1
+        try:
+            yield
+        finally:
+            self._notification_suspend_depth = max(
+                0,
+                self._notification_suspend_depth - 1,
+            )
+            if self._notification_suspend_depth == 0 and self._notification_pending:
+                self._notification_pending = False
+                self._emit_change_notifications()
+
     def _notify_change(self) -> None:
         """Notify all listeners of a state change."""
         self.last_modified = datetime.now()
         self.dirty = True
+        if self._notification_suspend_depth > 0:
+            self._notification_pending = True
+            return
+        self._emit_change_notifications()
+
+    def _emit_change_notifications(self) -> None:
+        """Notify listeners immediately without changing dirty state."""
         for listener in self._change_listeners:
             try:
                 listener()

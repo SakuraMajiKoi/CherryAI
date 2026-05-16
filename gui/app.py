@@ -30,6 +30,7 @@ from CherryAI.gui.dialogs.patch_editor_view import PatchEditorViewDialog
 from CherryAI.gui.dialogs.table_view import FullTableViewDialog
 from CherryAI.gui.dialogs.api_log_view import APILogViewDialog
 from CherryAI.gui.dialogs.ledger_view import LedgerViewDialog
+from CherryAI.gui.dialogs.loading_progress import LoadingProgressDialog
 from CherryAI.gui.dialogs.regex_help_view import RegexHelpDialog
 from CherryAI.gui.theme.colors import THEME, apply_theme, apply_window_preferences, load_theme_from_ini
 from CherryAI.gui.state.store import (
@@ -113,6 +114,8 @@ class App(tk.Tk):
         # Create session for backward compatibility (no autosave - manifest is primary)
         self._session_path: Optional[Path] = None
         self.session = get_session()
+        if getattr(self.session, "global_options", None) is None:
+            self.session.global_options = GlobalOptions.load_from_ini()
         self._api_log_dialog: Optional[APILogViewDialog] = None
         self._ledger_dialog: Optional[LedgerViewDialog] = None
         self._editor_dialog: Optional[PatchEditorViewDialog] = None
@@ -165,6 +168,7 @@ class App(tk.Tk):
         # Step tab references
         self._step_tabs: List[BaseStep] = []
         self._current_tab_index = 0
+        self._suspend_tab_changed = False
 
         # Build UI
         self._build_menu()
@@ -194,7 +198,9 @@ class App(tk.Tk):
     def create_new_project(
         self, 
         source_files: List[Path], 
-        suggested_name: Optional[str] = None
+        suggested_name: Optional[str] = None,
+        *,
+        save_immediately: bool = True,
     ) -> Optional[Path]:
         """Create a new project with the given source files.
         
@@ -213,7 +219,11 @@ class App(tk.Tk):
         def on_create(project_name: str) -> None:
             nonlocal result_path
             # Create new manifest
-            manifest_path = self._manifest_manager.create_new(project_name, source_files)
+            manifest_path = self._manifest_manager.create_new(
+                project_name,
+                source_files,
+                save_immediately=save_immediately,
+            )
             result_path = manifest_path
             
             # Update session for legacy compatibility
@@ -425,8 +435,14 @@ class App(tk.Tk):
         
         TASK 19: Saves manifest on step change for automatic persistence.
         """
+        if getattr(self, "_suspend_tab_changed", False):
+            return
+
         old_index = self._current_tab_index
         new_index = self._notebook.index(self._notebook.select())
+
+        if new_index == old_index:
+            return
 
         # Notify old tab (captures form data to manifest)
         if 0 <= old_index < len(self._step_tabs):
@@ -459,6 +475,25 @@ class App(tk.Tk):
         """
         self._notebook.select(step_id)
 
+    def _run_without_tab_change_events(self, action: Callable[[], None]) -> None:
+        """Run an app-driven tab action without the tab-change handler."""
+        depth = int(getattr(self, "_suspend_tab_changed_depth", 0)) + 1
+        self._suspend_tab_changed_depth = depth
+        self._suspend_tab_changed = True
+        try:
+            action()
+        finally:
+            def _release() -> None:
+                next_depth = max(0, int(getattr(self, "_suspend_tab_changed_depth", 1)) - 1)
+                self._suspend_tab_changed_depth = next_depth
+                self._suspend_tab_changed = next_depth > 0
+
+            self.after_idle(_release)
+
+    def _select_tab_without_events(self, step_id: int) -> None:
+        """Select a notebook tab without running the tab-change handler."""
+        self._run_without_tab_change_events(lambda: self._notebook.select(step_id))
+
     def _show_welcome_dialog(self) -> None:
         """Show welcome dialog on startup when no manifest is loaded.
 
@@ -485,8 +520,12 @@ class App(tk.Tk):
 
         if result == "resume" and last_manifest and last_manifest.exists():
             # Resume last project
-            self._load_manifest_from_path(last_manifest)
-            self._set_status(f"Resumed project: {last_manifest.stem}")
+            self._load_manifest_from_path_async(
+                last_manifest,
+                on_complete=lambda ok: self._set_status(
+                    f"Resumed project: {last_manifest.stem}"
+                ) if ok else None,
+            )
         elif result == WelcomeDialog.RESULT_NEW:
             # User wants to create new project - go to input step
             self._notebook.select(0)
@@ -505,8 +544,54 @@ class App(tk.Tk):
         Returns:
             True if loaded successfully.
         """
-        loaded_manager = ManifestManager()
-        if not loaded_manager.load(manifest_path):
+        progress = LoadingProgressDialog(self, 4, process_events=False)
+        progress.set_phase("Loading manifest")
+        progress.set_progress(
+            current=0,
+            total=4,
+            current_file=manifest_path.name,
+            detail="Reading project data",
+        )
+
+        result: Dict[str, Any] = {"manager": None, "ok": False}
+        done_var = tk.BooleanVar(value=False)
+        done_event = threading.Event()
+
+        def _worker() -> None:
+            loaded_manager = ManifestManager()
+            ok = loaded_manager.load(manifest_path)
+            result["manager"] = loaded_manager
+            result["ok"] = ok
+            done_event.set()
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+        def _poll() -> None:
+            if done_event.is_set():
+                done_var.set(True)
+                return
+            if progress.cancelled:
+                progress.set_phase("Cancelling")
+                progress.set_progress(
+                    current=0,
+                    current_file=manifest_path.name,
+                    detail="Waiting for the current load step to finish safely",
+                )
+            self.after(50, _poll)
+
+        _poll()
+        self.wait_variable(done_var)
+
+        loaded_manager = result.get("manager")
+        if progress.cancelled:
+            if isinstance(loaded_manager, ManifestManager):
+                loaded_manager.close()
+            progress.close()
+            self._set_status("Project load cancelled")
+            return False
+
+        if not isinstance(loaded_manager, ManifestManager) or not result.get("ok"):
+            progress.close()
             logger.error("Failed to load manifest: %s", manifest_path)
             messagebox.showerror(
                 "Load Error",
@@ -514,16 +599,95 @@ class App(tk.Tk):
             )
             return False
 
-        self._activate_loaded_manifest(loaded_manager, manifest_path)
-
-        project_name = self._manifest_manager.project_name or manifest_path.stem
-        logger.info("Loaded project: %s from %s", project_name, manifest_path)
-        
+        self._activate_loaded_manifest(loaded_manager, manifest_path, progress=progress)
+        progress.close()
         return True
+
+    def _load_manifest_from_path_async(
+        self,
+        manifest_path: Path,
+        *,
+        on_complete: Optional[Callable[[bool], None]] = None,
+    ) -> None:
+        """Load a manifest without blocking the live Tk event loop."""
+        progress = LoadingProgressDialog(self, 4, process_events=False)
+        progress.set_phase("Loading manifest")
+        progress.set_progress(
+            current=0,
+            total=4,
+            current_file=manifest_path.name,
+            detail="Reading project data",
+        )
+
+        result: Dict[str, Any] = {"manager": None, "ok": False}
+        done_event = threading.Event()
+        finished = False
+
+        def _finish(success: bool) -> None:
+            nonlocal finished
+            if finished:
+                return
+            finished = True
+            if on_complete is not None:
+                on_complete(success)
+
+        def _worker() -> None:
+            loaded_manager = ManifestManager()
+            ok = loaded_manager.load(manifest_path)
+            result["manager"] = loaded_manager
+            result["ok"] = ok
+            done_event.set()
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+        def _poll() -> None:
+            if progress.cancelled and not done_event.is_set():
+                progress.set_phase("Cancelling")
+                progress.set_progress(
+                    current=0,
+                    current_file=manifest_path.name,
+                    detail="Waiting for the current load step to finish safely",
+                )
+                self.after(50, _poll)
+                return
+
+            if not done_event.is_set():
+                self.after(50, _poll)
+                return
+
+            loaded_manager = result.get("manager")
+            if progress.cancelled:
+                if isinstance(loaded_manager, ManifestManager):
+                    loaded_manager.close()
+                progress.close()
+                self._set_status("Project load cancelled")
+                _finish(False)
+                return
+
+            if not isinstance(loaded_manager, ManifestManager) or not result.get("ok"):
+                progress.close()
+                logger.error("Failed to load manifest: %s", manifest_path)
+                messagebox.showerror(
+                    "Load Error",
+                    f"Failed to load project:\n{manifest_path}",
+                )
+                _finish(False)
+                return
+
+            self._activate_loaded_manifest(loaded_manager, manifest_path, progress=progress)
+            progress.close()
+            _finish(True)
+
+        self.after(0, _poll)
 
     def _reset_runtime_state(self) -> None:
         """Reset session-bound UI state so another project can be activated safely."""
+        current_options = getattr(self.session, "global_options", None)
+        if current_options is None:
+            current_options = GlobalOptions.load_from_ini()
+
         self.session = reset_session()
+        self.session.global_options = current_options
         self._session_path = None
         self._progress_tracker.session = self.session
 
@@ -538,9 +702,17 @@ class App(tk.Tk):
         self,
         loaded_manager: ManifestManager,
         manifest_path: Path,
+        progress: Optional[LoadingProgressDialog] = None,
     ) -> None:
         """Swap the app to a freshly loaded manifest and rebuild tab state."""
         old_manager = self._manifest_manager
+        if progress is not None:
+            progress.set_phase("Applying project")
+            progress.set_progress(
+                current=1,
+                current_file=manifest_path.name,
+                detail="Resetting runtime state",
+            )
         self._manifest_manager = replace_manifest_manager(loaded_manager)
         self._reset_runtime_state()
         self.session.manifest_path = manifest_path
@@ -548,17 +720,32 @@ class App(tk.Tk):
         saved_step = self._manifest_manager.current_step
         self.session.current_step = saved_step
         if 0 <= saved_step < len(self._step_tabs):
-            self._notebook.select(saved_step)
-            self._current_tab_index = saved_step
-            self._step_tabs[saved_step].on_enter()
+            if progress is not None:
+                progress.set_phase("Restoring active step")
+                progress.set_progress(
+                    current=2,
+                    current_file=STEP_DEFINITIONS[saved_step][1],
+                    detail="Rehydrating tab state",
+                )
+            self._run_without_tab_change_events(
+                lambda: self._restore_active_loaded_step(saved_step)
+            )
 
         ini_manager.set_last_manifest(manifest_path)
         ini_manager.add_to_recent_manifests(manifest_path)
 
+        if progress is not None:
+            progress.set_phase("Finalizing")
+            progress.set_progress(
+                current=4,
+                current_file=self._manifest_manager.project_name or manifest_path.stem,
+                detail="Refreshing window state",
+            )
         self._progress_tracker.refresh()
         self._update_window_title()
 
         if old_manager is not loaded_manager:
+            old_manager.save_on_close = False
             old_manager.close()
 
     def _on_new_session(self) -> None:
@@ -586,9 +773,7 @@ class App(tk.Tk):
         ini_manager.set_last_manifest(None)
 
         # Select first tab and refresh its widgets
-        self._notebook.select(0)
-        self._current_tab_index = 0
-        self._step_tabs[0].on_enter()
+        self._run_without_tab_change_events(lambda: self._restore_active_loaded_step(0))
         self._progress_tracker.refresh()
         self._update_window_title()
         self._set_status("New project - load files to begin")
@@ -618,12 +803,13 @@ class App(tk.Tk):
 
         def on_load(manifest_path: Path) -> None:
             """Callback when manifest is selected."""
-            if self._load_manifest_from_path(manifest_path):
-                project_name = (
-                    self._manifest_manager.project_name or manifest_path.stem
-                )
-                self._set_status(f"Loaded project: {project_name}")
-            # Error messaging handled in _load_manifest_from_path
+            self._load_manifest_from_path_async(
+                manifest_path,
+                on_complete=lambda ok: self._set_status(
+                    f"Loaded project: {self._manifest_manager.project_name or manifest_path.stem}"
+                ) if ok else None,
+            )
+            # Error messaging handled in _load_manifest_from_path_async
 
         LoadManifestDialog(self, on_load=on_load)
 
@@ -1153,8 +1339,9 @@ For more information, see the documentation.
         # Navigate to the saved current step
         if self.session.current_step != 0:
             try:
-                self._notebook.select(self.session.current_step)
-                self._current_tab_index = self.session.current_step
+                self._run_without_tab_change_events(
+                    lambda: self._set_current_tab_index(self.session.current_step)
+                )
             except Exception as e:
                 logger.warning("Failed to restore tab position: %s", e)
 
@@ -1186,6 +1373,16 @@ For more information, see the documentation.
     def hide_progress(self) -> None:
         """Hide the progress bar."""
         self._progress_bar.pack_forget()
+
+    def _set_current_tab_index(self, step_id: int) -> None:
+        """Select a tab and update the current index without entering it."""
+        self._notebook.select(step_id)
+        self._current_tab_index = step_id
+
+    def _restore_active_loaded_step(self, step_id: int) -> None:
+        """Select and enter a step during app-driven restore flows."""
+        self._set_current_tab_index(step_id)
+        self._step_tabs[step_id].on_enter()
 
 
 def main() -> None:

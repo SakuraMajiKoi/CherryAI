@@ -77,12 +77,16 @@ class ExtractedLine:
             ``"variable"``).  Empty string when untagged.
         speaker: Speaker name for dialogue lines.  Empty for non-dialogue.
         context: Free-form context hint for the translator (optional).
+        ln: Optional 1-based source line number for manifest locator capture.
+        f: Optional 1-based field discriminator for repeated matches on one line.
     """
 
     text: str
     tag: str = ""
     speaker: str = ""
     context: str = ""
+    ln: int = 0
+    f: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialise to dictionary."""
@@ -93,6 +97,10 @@ class ExtractedLine:
             d["speaker"] = self.speaker
         if self.context:
             d["context"] = self.context
+        if self.ln > 0:
+            d["ln"] = self.ln
+        if self.f > 0:
+            d["f"] = self.f
         return d
 
     @classmethod
@@ -103,6 +111,8 @@ class ExtractedLine:
             tag=str(data.get("tag", "")),
             speaker=str(data.get("speaker", "")),
             context=str(data.get("context", "")),
+            ln=int(data.get("ln", 0) or 0),
+            f=int(data.get("f", 0) or 0),
         )
 
 

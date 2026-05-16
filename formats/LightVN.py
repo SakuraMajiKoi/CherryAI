@@ -97,6 +97,11 @@ class LightVNParser(ParserScript):
         - O8: ``tag_rules``
     """
 
+    @property
+    def requires_staged_refresh(self) -> bool:
+        """LightVN extraction depends on staged project-local context."""
+        return True
+
     # -- Patterns ----------------------------------------------------------
 
     SPEAKER_PATTERN = re.compile(r"^~【(.*?)】\s*$")

@@ -31,12 +31,16 @@ from CherryAI.gui.helpers.manifest_binding import (
     BindingInfo,
     bind_entry_to_field,
     bind_checkbox_to_field,
+    bind_float_spinbox_to_field,
     bind_spinbox_to_field,
     bind_combobox_to_field,
+    _suppress_binding_saves,
 )
 from CherryAI.functions.manifest_fields import (
     get_all_lines_resolved,
+    load_float_field,
     save_nested_text_field,
+    save_float_field,
     load_nested_text_field,
     save_nested_float_field,
     load_nested_float_field,
@@ -45,7 +49,14 @@ from CherryAI.functions.manifest_fields import (
     save_nested_bool_field,
     load_nested_bool_field,
 )
-from CherryAI.functions.validation import SkipReason, ValidationResult, validate_line_pre
+from CherryAI.functions.validation import (
+    ResponseValidationError,
+    get_prompt_context_warning_message,
+    SkipReason,
+    ValidationResult,
+    validate_batch_comprehensive,
+    validate_line_pre,
+)
 
 # Import prompt adapter for prompt building and retry handling
 from CherryAI.gui.helpers.prompt_adapter import (
@@ -63,7 +74,10 @@ from CherryAI.gui.helpers.prompt_adapter import (
     create_retry_config,
     handle_failed_lines,
 )
-from CherryAI.functions.common_errors import TranslationAbortError
+from CherryAI.functions.common_errors import (
+    APIErrorCategory,
+    TranslationAbortError,
+)
 from CherryAI.functions.config import get_model_pricing
 
 # Lazy import targets for concurrent execution; resolved on first use.
@@ -163,13 +177,16 @@ class TranslationOptions:
     # Edit before translation (Task 33.1)
     edit_before_translation: bool = False  # Show edit dialog before API call
     # Skip already translated lines (Task 47.9)
-    skip_already_translated: bool = False  # Skip lines with existing tl field
+    skip_already_translated: bool = True  # Skip lines with existing tl field
     # Request slicing mode: conservative (default) or efficient
     request_slicing: str = "conservative"
     # Request mode: normal, batch, flex, or priority
     request_mode: str = "normal"
     # Maximum concurrent request strings to execute in parallel
     max_concurrent: int = 3
+    # Optional requests-per-second cap for request dispatch pacing
+    requests_per_second_enabled: bool = False
+    requests_per_second: float = 1.0
 
 
 @dataclass
@@ -184,6 +201,18 @@ class TranslatableLine:
     status: LineStatus = LineStatus.PENDING
     error_message: str = ""
     chunk_id: int = -1
+
+
+@dataclass
+class DeferredValidationJob:
+    """Deferred validation retry work queued after the main translation pass."""
+
+    lines: List[TranslatableLine]
+    original_lines: List[str]
+    translations: List[str]
+    failed_indices: List[int]
+    system_prompt: str
+    errors: List[str] = field(default_factory=list)
 
 
 class _TranslationStatusReason:
@@ -237,6 +266,9 @@ class TranslationProgressWindow(tk.Toplevel):
         self._on_open_api_log = on_open_api_log
         self._state = TranslationState.RUNNING
         self._progress = TranslationProgress()
+        self._active_chunk_line = ""
+        self._active_chunk_log_index: str | None = None
+        self._outstanding_requests = 0
 
         self._build_ui()
 
@@ -472,6 +504,33 @@ class TranslationProgressWindow(tk.Toplevel):
         self._log_text.see("end")
         self._log_text.configure(state="disabled")
 
+    def update_chunk_status(self, message: str) -> None:
+        """Replace the current in-flight chunk status line in the log."""
+        if self._active_chunk_line == message:
+            return
+
+        self._log_text.configure(state="normal")
+        if self._active_chunk_log_index is not None:
+            self._log_text.delete(
+                self._active_chunk_log_index,
+                f"{self._active_chunk_log_index} lineend+1c",
+            )
+        self._active_chunk_log_index = self._log_text.index("end-1c")
+        self._log_text.insert("end", message + "\n")
+        self._log_text.see("end")
+        self._log_text.configure(state="disabled")
+        self._active_chunk_line = message
+
+    def complete_chunk_status(self, message: str) -> None:
+        """Finalize the current chunk status line in the log."""
+        self.update_chunk_status(message)
+        self._active_chunk_log_index = None
+        self._active_chunk_line = ""
+
+    def set_outstanding_requests(self, count: int) -> None:
+        """Track how many requests are still in flight."""
+        self._outstanding_requests = max(0, int(count))
+
     def _format_time(self, seconds: float) -> str:
         """Format seconds as human-readable time."""
         if seconds < 60:
@@ -497,6 +556,14 @@ class TranslationProgressWindow(tk.Toplevel):
         if self._state in (TranslationState.COMPLETED, TranslationState.FAILED, TranslationState.CANCELLED):
             self.destroy()
         else:
+            if self._outstanding_requests > 0:
+                noun = "request" if self._outstanding_requests == 1 else "requests"
+                messagebox.showinfo(
+                    "Translation In Progress",
+                    f"{self._outstanding_requests} outstanding {noun} still running. "
+                    "This window stays open until they finish or CherryAI marks the run cancelled.",
+                )
+                return
             if messagebox.askyesno("Cancel Translation", "Are you sure you want to cancel?"):
                 self._on_cancel()
 
@@ -510,6 +577,14 @@ class TranslationProgressWindow(tk.Toplevel):
         if self._state in (TranslationState.COMPLETED, TranslationState.FAILED, TranslationState.CANCELLED):
             self.destroy()
         else:
+            if self._outstanding_requests > 0:
+                noun = "request" if self._outstanding_requests == 1 else "requests"
+                messagebox.showinfo(
+                    "Translation In Progress",
+                    f"{self._outstanding_requests} outstanding {noun} still running. "
+                    "This window stays open until they finish or CherryAI marks the run cancelled.",
+                )
+                return
             if messagebox.askyesno("Cancel Translation", "Translation in progress. Cancel?"):
                 self._on_cancel()
 
@@ -747,6 +822,76 @@ class EditPreviewDialog(tk.Toplevel):
     def edited_data(self) -> Dict[int, str]:
         """Get edited data mapping idx -> edited text."""
         return self._edited_data
+
+
+class PromptContextWarningDialog(tk.Toplevel):
+    """Modal warning dialog shown before translation starts."""
+
+    def __init__(self, parent: tk.Widget, message: str) -> None:
+        super().__init__(parent)
+        self._result = False
+
+        self.title("Content Warning")
+        self.transient(parent)
+        self.grab_set()
+        self.resizable(False, False)
+
+        self._build_ui(message)
+        self.protocol("WM_DELETE_WINDOW", self._on_abort)
+
+        self.update_idletasks()
+        parent_widget = parent.winfo_toplevel()
+        x = parent_widget.winfo_x() + (parent_widget.winfo_width() // 2) - 240
+        y = parent_widget.winfo_y() + (parent_widget.winfo_height() // 2) - 110
+        self.geometry(f"480x220+{max(0, x)}+{max(0, y)}")
+
+    @property
+    def result(self) -> bool:
+        """Return True when the user chose Continue."""
+        return self._result
+
+    def _build_ui(self, message: str) -> None:
+        """Build dialog controls."""
+        frame = ttk.Frame(self, padding=14)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(
+            frame,
+            text="Content Warning",
+            font=("TkDefaultFont", 12, "bold"),
+        ).pack(anchor="w")
+
+        ttk.Label(
+            frame,
+            text=message,
+            wraplength=440,
+            justify="left",
+        ).pack(fill="x", pady=(12, 0))
+
+        button_frame = ttk.Frame(frame)
+        button_frame.pack(side="bottom", fill="x", pady=(16, 0))
+
+        ttk.Button(
+            button_frame,
+            text="Abort",
+            command=self._on_abort,
+        ).pack(side="right", padx=(8, 0))
+
+        ttk.Button(
+            button_frame,
+            text="Continue",
+            command=self._on_continue,
+        ).pack(side="right")
+
+    def _on_continue(self) -> None:
+        """Accept the warning and continue translation."""
+        self._result = True
+        self.destroy()
+
+    def _on_abort(self) -> None:
+        """Abort translation start."""
+        self._result = False
+        self.destroy()
 
 
 # ======================================================================
@@ -1476,6 +1621,19 @@ class TranslationStep(BaseStep):
     _OPTIONAL_SKIP_REASONS = frozenset(
         {SkipReason.NO_JAPANESE, SkipReason.SYMBOL_ONLY},
     )
+    _VALIDATION_ABORT_RATE = 0.5
+    _VALIDATION_ABORT_MIN_CHUNKS = 10
+    _API_FAILURE_ABORT_RATE = 0.5
+    _API_FAILURE_ABORT_MIN_TRIES = 10
+    _FAILURE_RATE_CATEGORIES = frozenset(
+        {
+            "rate_limited",
+            "non_structured_output",
+            "line_count_mismatch",
+            "empty_response",
+        }
+    )
+    _MANIFEST_FLUSH_INTERVAL_SECONDS = 15.0
 
     def __init__(
         self,
@@ -1493,6 +1651,8 @@ class TranslationStep(BaseStep):
         # Initialize instance variables BEFORE super().__init__
         # because base class calls _build_ui() which needs these
         self._lines: List[TranslatableLine] = []
+        self._manifest_translations_by_idx: Dict[int, str] = {}
+        self._manifest_translation_cache_ready = False
         self._translation_options = TranslationOptions()
         self._translation_state = TranslationState.IDLE
         self._progress = TranslationProgress()
@@ -1503,6 +1663,24 @@ class TranslationStep(BaseStep):
         self._pause_requested = False
         self._api_client: Any = None
         self._last_table_update: float = 0.0
+        self._deferred_validation_jobs: List[DeferredValidationJob] = []
+        self._validation_chunks_seen = 0
+        self._validation_chunks_failed = 0
+        self._validation_lines_seen = 0
+        self._validation_lines_failed = 0
+        self._validation_abort_message = ""
+        self._api_failure_tries_seen = 0
+        self._api_failure_tries_failed = 0
+        self._api_failure_abort_message = ""
+        self._unsafe_request_count = 0
+        self._unsafe_abort_message = ""
+        self._status_summary_after_id: str | None = None
+        self._manifest_flush_thread: Optional[threading.Thread] = None
+        self._manifest_flush_stop_event = threading.Event()
+        self._manifest_flush_pending = False
+        self._manifest_flush_lock = threading.Lock()
+        self._active_requests = 0
+        self._active_requests_lock = threading.Lock()
         # TASK 26.2: Track manifest bindings for request options
         self._manifest_bindings: List[BindingInfo] = []
         # Guard: suppress manifest writes during widget construction
@@ -1597,6 +1775,7 @@ class TranslationStep(BaseStep):
             show_checkboxes=False,
             show_count_filter=False,
         )
+        self._lines_table._page_size = 500
         self._lines_table.pack(fill="both", expand=True)
 
     def _build_options_panels(self, parent: ttk.Frame) -> None:
@@ -1755,6 +1934,61 @@ class TranslationStep(BaseStep):
                 parent_key="RequestOptions",
             )
         )
+        rps_frame = ttk.Frame(frame)
+        rps_frame.pack(fill="x", pady=2)
+
+        ttk.Label(rps_frame, text="Requests / Second:").pack(side="left")
+        self._rps_enabled_var = tk.BooleanVar(value=False)
+        self._rps_enabled_check = ttk.Checkbutton(
+            rps_frame,
+            text="Enable",
+            variable=self._rps_enabled_var,
+            command=self._on_rps_toggle,
+        )
+        self._rps_enabled_check.pack(side="right")
+
+        self._rps_var = tk.DoubleVar(value=1.0)
+        self._rps_spin = ttk.Spinbox(
+            rps_frame,
+            from_=0.01,
+            to=999.99,
+            increment=0.01,
+            format="%.2f",
+            textvariable=self._rps_var,
+            width=10,
+        )
+        self._rps_spin.pack(side="right", padx=(0, 8))
+
+        self._manifest_bindings.append(
+            bind_checkbox_to_field(
+                checkbox=self._rps_enabled_check,
+                var=self._rps_enabled_var,
+                manager_getter=lambda: (
+                    None if getattr(self, "_initializing", False)
+                    else self.manifest_manager
+                ),
+                field_key="RequestsPerSecondEnabled",
+                default=False,
+                parent_key="RequestOptions",
+            )
+        )
+        self._manifest_bindings.append(
+            bind_float_spinbox_to_field(
+                spinbox=self._rps_spin,
+                var=self._rps_var,
+                manager_getter=lambda: (
+                    None if getattr(self, "_initializing", False)
+                    else self.manifest_manager
+                ),
+                field_key="RequestsPerSecond",
+                min_val=0.01,
+                max_val=999.99,
+                default=1.0,
+                precision=2,
+                parent_key="RequestOptions",
+            )
+        )
+        self._apply_rps_widget_state()
 
         # Populate keys only after all dependent request widgets exist.
         self._populate_key_dropdown()
@@ -2049,11 +2283,31 @@ class TranslationStep(BaseStep):
         if line.translated and line.translated.strip():
             return line.translated
 
+        cache = getattr(self, "_manifest_translations_by_idx", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._manifest_translations_by_idx = cache
+
+        cached = str(cache.get(line.idx, "") or "")
+        if cached:
+            return cached
+
         mgr = self.manifest_manager
-        if mgr is not None and mgr.is_loaded:
-            manifest_line = mgr.get_line(line.idx)
-            if isinstance(manifest_line, dict):
-                return str(manifest_line.get("tl", "") or "")
+        cache_ready = bool(getattr(self, "_manifest_translation_cache_ready", False))
+        if mgr is not None and mgr.is_loaded and not cache_ready:
+            get_lines = getattr(mgr, "get_lines", None)
+            if callable(get_lines):
+                for manifest_line in get_lines():
+                    if not isinstance(manifest_line, dict):
+                        continue
+                    idx = manifest_line.get("idx")
+                    tl_text = str(manifest_line.get("tl", "") or "")
+                    if idx is not None and tl_text:
+                        cache[idx] = tl_text
+            self._manifest_translation_cache_ready = True
+            cached = str(cache.get(line.idx, "") or "")
+            if cached:
+                return cached
 
         return ""
 
@@ -2232,6 +2486,30 @@ class TranslationStep(BaseStep):
             f"{skipped_total} skipped ({', '.join(parts)})"
         )
 
+    def _cancel_status_summary_refresh(self) -> None:
+        """Cancel any pending deferred status-summary rebuild."""
+        if self._status_summary_after_id is None:
+            return
+        try:
+            self.after_cancel(self._status_summary_after_id)
+        except tk.TclError:
+            pass
+        self._status_summary_after_id = None
+
+    def _schedule_status_summary_refresh(self, prefix: str = "") -> None:
+        """Defer the expensive status-summary rebuild until the UI is idle."""
+        self._cancel_status_summary_refresh()
+
+        def _apply_summary() -> None:
+            self._status_summary_after_id = None
+            summary = TranslationStep._build_translation_status_text(self)
+            if prefix:
+                self._status_label.configure(text=f"{prefix}{summary}")
+            else:
+                self._status_label.configure(text=summary)
+
+        self._status_summary_after_id = self.after_idle(_apply_summary)
+
     def _refresh_lines(self) -> None:
         """Refresh lines from previous steps.
 
@@ -2241,6 +2519,8 @@ class TranslationStep(BaseStep):
         original, preprocessed = self._get_lines_from_previous_steps()
 
         if not original:
+            self._manifest_translations_by_idx = {}
+            self._manifest_translation_cache_ready = True
             self._status_label.configure(text="No lines loaded")
             return
 
@@ -2267,6 +2547,9 @@ class TranslationStep(BaseStep):
                 if idx is not None and tl_val:
                     tl_map[idx] = tl_val
 
+        self._manifest_translations_by_idx = tl_map
+        self._manifest_translation_cache_ready = True
+
         # Create TranslatableLine objects
         self._lines = []
         for idx, (orig, prep) in enumerate(zip(original, preprocessed)):
@@ -2285,9 +2568,8 @@ class TranslationStep(BaseStep):
         self._update_lines_table()
 
         # Update status
-        self._status_label.configure(
-            text=TranslationStep._build_translation_status_text(self),
-        )
+        self._status_label.configure(text=f"Loaded {len(self._lines)} lines...")
+        self._schedule_status_summary_refresh()
 
     def _update_lines_table(self) -> None:
         """Update the lines table with current data.
@@ -2296,9 +2578,10 @@ class TranslationStep(BaseStep):
         edited_prepro → preprocessed → original (first available).
         TASK 43.4: Renders newlines as ↵ symbol for visible line breaks.
         """
-        rows: List[TableRow] = []
+        row_ids = [line.idx for line in self._lines]
 
-        for line in self._lines:
+        def build_row(row_id: int) -> TableRow:
+            line = self._lines[row_id]
             # Status display with icon
             status_display = {
                 LineStatus.PENDING: "○ Pending",
@@ -2321,7 +2604,7 @@ class TranslationStep(BaseStep):
             if len(translated_display) > max_len:
                 translated_display = translated_display[:max_len] + "..."
 
-            row = TableRow(
+            return TableRow(
                 id=line.idx,
                 values={
                     "idx": str(line.idx + 1),
@@ -2330,9 +2613,8 @@ class TranslationStep(BaseStep):
                     "translated": translated_display,
                 },
             )
-            rows.append(row)
 
-        self._lines_table.set_data(rows)
+        self._lines_table.set_lazy_data(row_ids, build_row)
 
     def _get_options_from_ui(self) -> TranslationOptions:
         """Get current options from UI controls.
@@ -2362,6 +2644,8 @@ class TranslationStep(BaseStep):
             request_slicing=self._get_request_slicing_mode(),
             request_mode=self._get_request_mode_key(),
             max_concurrent=max(1, self._threads_var.get()),
+            requests_per_second_enabled=self._rps_enabled_var.get(),
+            requests_per_second=max(0.01, min(999.99, self._rps_var.get())),
         )
 
     def _get_prompt_cache_context(self) -> Tuple[str, str]:
@@ -2525,6 +2809,9 @@ class TranslationStep(BaseStep):
         # Get options
         self._translation_options = self._get_options_from_ui()
 
+        if not self._confirm_prompt_context_warning():
+            return
+
         translatable_lines, skip_counts, validations = (
             TranslationStep._collect_translatable_lines(self)
         )
@@ -2603,6 +2890,7 @@ class TranslationStep(BaseStep):
 
         # TASK 29.2: Save manifest before starting translation
         self._save_manifest_before_translation()
+        self._start_manifest_flush_worker()
 
         # Start translation thread
         self._translation_thread = threading.Thread(
@@ -2610,6 +2898,26 @@ class TranslationStep(BaseStep):
             daemon=True,
         )
         self._translation_thread.start()
+
+    def _get_prompt_context_warning_message(self) -> Optional[str]:
+        """Return a manifest-based prompt-context warning, if any."""
+        mgr = self.manifest_manager
+        if mgr is None or not getattr(mgr, "is_loaded", False):
+            return None
+        return get_prompt_context_warning_message(mgr.get_info_metadata())
+
+    def _show_prompt_context_warning_dialog(self, message: str) -> bool:
+        """Show the one-time prompt-context warning dialog."""
+        dialog = PromptContextWarningDialog(self, message)
+        self.wait_window(dialog)
+        return dialog.result
+
+    def _confirm_prompt_context_warning(self) -> bool:
+        """Return whether translation should continue after prompt warning."""
+        warning_message = self._get_prompt_context_warning_message()
+        if warning_message is None:
+            return True
+        return self._show_prompt_context_warning_dialog(warning_message)
 
     def _show_edit_dialog(self, pending_lines: List[TranslatableLine]) -> bool:
         """Show edit dialog for preprocessed text (Task 33.1).
@@ -2670,10 +2978,246 @@ class TranslationStep(BaseStep):
             except Exception as e:
                 logger.warning("Failed to save manifest before translation: %s", e)
 
+    def _get_target_language(self) -> str:
+        """Return target language from manifest metadata."""
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            target = str(
+                mgr.get_info_metadata_field("target_language", "English"),
+            ).strip()
+            if target:
+                return target
+        return "English"
+
+    def _record_validation_sample(self, total_count: int, failed_count: int) -> None:
+        """Track how many validated lines were queued for deferred retry."""
+        if total_count > 0:
+            self._validation_chunks_seen += 1
+            if failed_count > 0:
+                self._validation_chunks_failed += 1
+        self._validation_lines_seen += max(total_count, 0)
+        self._validation_lines_failed += max(failed_count, 0)
+
+    def _should_abort_for_validation_failure_rate(self) -> bool:
+        """Abort when validation failures indicate the run is broadly broken."""
+        if self._validation_chunks_seen < self._VALIDATION_ABORT_MIN_CHUNKS:
+            return False
+        if self._validation_lines_seen <= 0:
+            return False
+        return (
+            self._validation_lines_failed / self._validation_lines_seen
+        ) >= self._VALIDATION_ABORT_RATE
+
+    def _record_api_failure_sample(self, failed: bool) -> None:
+        """Track exhausted output/rate-limit failures for the auto-stop guard."""
+        self._api_failure_tries_seen += 1
+        if failed:
+            self._api_failure_tries_failed += 1
+
+    def _should_abort_for_api_failure_rate(self) -> bool:
+        """Abort when output/rate failures stay high after enough tries."""
+        if self._api_failure_tries_seen < self._API_FAILURE_ABORT_MIN_TRIES:
+            return False
+        if self._api_failure_tries_seen <= 0:
+            return False
+        return (
+            self._api_failure_tries_failed / self._api_failure_tries_seen
+        ) >= self._API_FAILURE_ABORT_RATE
+
+    def _get_unsafe_abort_limit(self) -> Optional[int]:
+        """Return the active unsafe-request abort threshold, if enabled."""
+        client = getattr(self, "_api_client", None)
+        if client is None:
+            return None
+        if not getattr(client.config, "content_warning_abort_enabled", True):
+            return None
+        try:
+            return max(1, int(getattr(client.config, "unsafe_abort_after", 1)))
+        except (TypeError, ValueError):
+            return 1
+
+    def _record_unsafe_request(self) -> None:
+        """Track a chunk that produced a content-warning refusal."""
+        self._unsafe_request_count += 1
+
+    def _should_abort_for_unsafe_requests(self) -> bool:
+        """Return whether the configured unsafe-request threshold has been hit."""
+        limit = self._get_unsafe_abort_limit()
+        if limit is None:
+            return False
+        return self._unsafe_request_count >= limit
+
+    def _queue_validation_retry(
+        self,
+        lines: List[TranslatableLine],
+        original_lines: List[str],
+        translations: List[str],
+        failed_indices: List[int],
+        system_prompt: str,
+        errors: List[str],
+    ) -> None:
+        """Queue validation failures for the post-pass retry phase."""
+        if not failed_indices:
+            return
+
+        failed_set = set(failed_indices)
+        error_message = "; ".join(errors) if errors else "Validation retry queued"
+        for idx in failed_indices:
+            if 0 <= idx < len(lines):
+                lines[idx].translated = ""
+                lines[idx].status = LineStatus.PENDING
+                lines[idx].error_message = error_message
+
+        self._deferred_validation_jobs.append(
+            DeferredValidationJob(
+                lines=lines,
+                original_lines=original_lines,
+                translations=[
+                    "" if idx in failed_set else translation
+                    for idx, translation in enumerate(translations)
+                ],
+                failed_indices=failed_indices,
+                system_prompt=system_prompt,
+                errors=errors,
+            )
+        )
+
+    def _process_deferred_validation_jobs(
+        self,
+        progress_lock: threading.Lock,
+    ) -> None:
+        """Retry validation failures after the main translation pass finishes."""
+        if not self._deferred_validation_jobs:
+            return
+
+        retry_config, _ = create_retry_config(
+            strategy=self._translation_options.retry_strategy,
+            max_retries=self._translation_options.max_retries,
+            context_lines=2,
+        )
+
+        def translate_fn(lines: List[str], prompt: str | None) -> List[str]:
+            if self._api_client is None:
+                return [f"[Retry] {line}" for line in lines]
+            return self._api_client.translate_batch(
+                lines,
+                system_prompt=prompt or "",
+            )
+
+        self._log_progress(
+            f"Processing {len(self._deferred_validation_jobs)} deferred validation retry job(s)"
+        )
+
+        while self._deferred_validation_jobs and not self._cancel_event.is_set():
+            job = self._deferred_validation_jobs.pop(0)
+            retry_result, method = handle_failed_lines(
+                failed_indices=job.failed_indices,
+                original_lines=job.original_lines,
+                translations=job.translations,
+                translate_fn=translate_fn,
+                config=retry_config,
+                system_prompt=job.system_prompt,
+            )
+
+            for result in retry_result.line_results:
+                if result.line_index < 0 or result.line_index >= len(job.lines):
+                    continue
+                line = job.lines[result.line_index]
+                if result.success:
+                    line.translated = result.translation
+                    line.status = LineStatus.COMPLETED
+                    line.error_message = ""
+                    with progress_lock:
+                        self._progress.translated_lines += 1
+                    if self._manifest_manager is not None:
+                        self._manifest_manager.update_translation(
+                            line.idx,
+                            result.translation,
+                        )
+                else:
+                    line.status = LineStatus.FAILED
+                    line.error_message = result.error_message or "Validation retry failed"
+                    with progress_lock:
+                        self._progress.failed_lines += 1
+
+            self._log_progress(
+                f"Deferred retry complete: {retry_result.successful_count} recovered, "
+                f"{retry_result.failed_count} failed ({method})"
+            )
+            if self._manifest_manager is not None:
+                self._manifest_manager.save()
+
+        self._update_progress_display()
+        self._schedule_table_update()
+
+    def _prepare_chunk_request(
+        self,
+        chunk: List[TranslatableLine],
+        rolling_context_text: str,
+    ) -> Tuple[List[str], List[str], List[int], str, Dict[str, Any]]:
+        """Build request payload pieces for a chunk once and reuse them."""
+        lines_to_translate = [
+            line.edited_prepro if line.edited_prepro else line.preprocessed
+            for line in chunk
+        ]
+        api_positions = [
+            idx for idx, text in enumerate(lines_to_translate)
+            if "__DEDUP__" not in text
+        ]
+        filtered_for_api = [lines_to_translate[idx] for idx in api_positions]
+
+        context_type = ""
+        merge_instruction = ""
+        formation_ctx = getattr(chunk[0], "_formation_ctx", None) if chunk else None
+        if formation_ctx:
+            context_type = formation_ctx.get("context_type", "")
+            boundaries = formation_ctx.get("merge_boundaries", [])
+            if boundaries and len(boundaries) > 1:
+                try:
+                    from CherryAI.functions.conditional_prompts import (
+                        build_merged_request_instruction,
+                    )
+                    merge_instruction = build_merged_request_instruction(boundaries)
+                except ImportError:
+                    pass
+
+        system_prompt = self._build_system_prompt_from_manifest(
+            rolling_context_text=rolling_context_text,
+            chunk_lines=filtered_for_api,
+            merge_instruction=merge_instruction,
+            context_type=context_type,
+        )
+
+        request_params: Dict[str, Any] = {}
+        if self._api_client is not None:
+            try:
+                request_params = self._api_client.get_prompt_cache_params()
+            except Exception:
+                request_params = {}
+
+        return (
+            lines_to_translate,
+            filtered_for_api,
+            api_positions,
+            system_prompt,
+            request_params,
+        )
+
     def _do_translation(self) -> None:
         """Perform translation in background thread."""
         try:
             self._log_progress("Starting translation...")
+            self._deferred_validation_jobs = []
+            self._validation_chunks_seen = 0
+            self._validation_chunks_failed = 0
+            self._validation_lines_seen = 0
+            self._validation_lines_failed = 0
+            self._validation_abort_message = ""
+            self._api_failure_tries_seen = 0
+            self._api_failure_tries_failed = 0
+            self._api_failure_abort_message = ""
+            self._unsafe_request_count = 0
+            self._unsafe_abort_message = ""
 
             # TASK 43.5: Check for Mock Translation before API setup
             is_mock = self._translation_options.model in (
@@ -2719,23 +3263,18 @@ class TranslationStep(BaseStep):
                         )
                         self._api_client = None
                     else:
-                        self._api_client = APIClient(enable_api_log=True)
-
-                        # Inject the resolved key, provider, and base URL
-                        self._api_client.config.api_key = (
-                            resolved_key or "lm-studio"
-                        )
-                        self._api_client.config.provider = key_provider
-                        if is_local:
-                            self._api_client.config.no_api_key = True
                         base_url = PROVIDER_BASE_URLS.get(
                             key_provider, "",
                         )
-                        if base_url:
-                            self._api_client.config.base_url = base_url
-
-                        # Reinitialize the OpenAI client with the real key
-                        self._api_client._init_client()
+                        self._api_client = APIClient(
+                            enable_api_log=True,
+                            initial_config=APIConfig(
+                                provider=key_provider,
+                                api_key=resolved_key or "lm-studio",
+                                base_url=base_url or None,
+                                no_api_key=is_local,
+                            ),
+                        )
 
                         # Apply per-request options
                         self._api_client.config.model = (
@@ -2757,12 +3296,74 @@ class TranslationStep(BaseStep):
                             1,
                             self._translation_options.max_concurrent,
                         )
+                        self._api_client.config.requests_per_second_enabled = (
+                            self._translation_options.requests_per_second_enabled
+                        )
+                        self._api_client.config.requests_per_second = (
+                            self._translation_options.requests_per_second
+                        )
+
+                        go = getattr(self.session, "global_options", None)
+                        limit_settings = getattr(go, "limit", None) if go is not None else None
+                        if limit_settings is not None:
+                            self._api_client.config.content_warning_abort_enabled = bool(
+                                getattr(
+                                    limit_settings,
+                                    "warning_abort_enabled",
+                                    getattr(limit_settings, "warnings", True),
+                                )
+                            )
+                            try:
+                                self._api_client.config.unsafe_abort_after = max(
+                                    1,
+                                    int(getattr(limit_settings, "warning_abort_after", 1)),
+                                )
+                            except (TypeError, ValueError):
+                                self._api_client.config.unsafe_abort_after = 1
+                            self._api_client.config.skip_unsafe_requests = bool(
+                                getattr(
+                                    limit_settings,
+                                    "skip_unsafe_requests",
+                                    getattr(limit_settings, "safe", True),
+                                )
+                            )
 
                         # Apply request mode (normal/batch/flex/priority)
                         mode_key = self._translation_options.request_mode
                         self._api_client.config.request_mode = mode_key
                         if mode_key == "batch":
                             self._api_client.config.batch_mode = True
+
+                        try:
+                            from CherryAI.functions.api_config import get_model_settings
+
+                            model_settings = get_model_settings(
+                                self._translation_options.model,
+                            )
+                        except Exception:
+                            model_settings = {}
+
+                        backoff_mode = str(
+                            model_settings.get("temporary_backoff_mode", ""),
+                        ).strip().lower()
+                        if backoff_mode in {"linear", "exponential"}:
+                            self._api_client.config.temporary_backoff_mode = backoff_mode
+                        if "temporary_backoff_attempts" in model_settings:
+                            try:
+                                self._api_client.config.temporary_backoff_attempts = max(
+                                    0,
+                                    int(model_settings["temporary_backoff_attempts"]),
+                                )
+                            except (TypeError, ValueError):
+                                pass
+                        if "temporary_backoff_total_seconds" in model_settings:
+                            try:
+                                self._api_client.config.temporary_backoff_total_seconds = max(
+                                    0,
+                                    int(model_settings["temporary_backoff_total_seconds"]),
+                                )
+                            except (TypeError, ValueError):
+                                pass
 
                         # Set source/target language from Information metadata
                         info_mgr = self.manifest_manager
@@ -3025,8 +3626,27 @@ class TranslationStep(BaseStep):
                                     futures[future], exc,
                                 )
 
+            if (
+                not self._cancel_requested
+                and not self._cancel_event.is_set()
+                and self._abort_error is None
+                and not self._api_failure_abort_message
+                and not self._validation_abort_message
+                and not self._unsafe_abort_message
+            ):
+                self._process_deferred_validation_jobs(progress_lock)
+
             # Translation complete
-            if self._cancel_requested or self._cancel_event.is_set():
+            if self._api_failure_abort_message:
+                self._translation_state = TranslationState.FAILED
+                self._log_progress(self._api_failure_abort_message)
+            elif self._unsafe_abort_message:
+                self._translation_state = TranslationState.FAILED
+                self._log_progress(self._unsafe_abort_message)
+            elif self._validation_abort_message:
+                self._translation_state = TranslationState.FAILED
+                self._log_progress(self._validation_abort_message)
+            elif self._cancel_requested or self._cancel_event.is_set():
                 self._translation_state = TranslationState.CANCELLED
                 self._log_progress("Translation cancelled by user.")
             elif hasattr(self, "_abort_error") and self._abort_error is not None:
@@ -3548,9 +4168,15 @@ class TranslationStep(BaseStep):
             if self._cancel_event.wait(timeout=0.1):
                 return "cancel"
 
-        self._log_progress(
-            f"Processing chunk {chunk_idx + 1}/{total_chunks}"
-        )
+        chunk_label = f"Processing chunk {chunk_idx + 1}/{total_chunks}"
+        if self._progress_window is not None:
+            self.after(
+                0,
+                lambda msg=chunk_label: self._progress_window.update_chunk_status(msg)
+                if self._progress_window else None,
+            )
+        else:
+            self._log_progress(chunk_label)
 
         # Mark lines as translating
         for line in chunk:
@@ -3612,19 +4238,159 @@ class TranslationStep(BaseStep):
                 context_type="after",
             )
 
+        prepared_request = self._prepare_chunk_request(chunk, full_context_text)
+        (
+            _lines_to_translate,
+            filtered_for_api,
+            api_positions,
+            system_prompt,
+            _request_params,
+        ) = prepared_request
+        line_batch = [chunk[idx] for idx in api_positions]
+
+        if not filtered_for_api:
+            for line in chunk:
+                line.status = LineStatus.SKIPPED
+            return "ok"
+
         # Translate chunk
+        request_started = False
         try:
-            translations = self._translate_chunk(
-                chunk, rolling_context_text=full_context_text,
+            self._mark_request_started()
+            request_started = True
+            batch_result = self._translate_chunk(
+                chunk,
+                rolling_context_text=full_context_text,
+                prepared_request=prepared_request,
             )
+            translations = list(batch_result.translations)
+            exhausted_failures = {
+                failure.index: failure
+                for failure in getattr(batch_result, "failures", [])
+            }
+            exhausted_set = set(exhausted_failures)
+
+            output_failure_hit = any(
+                failure.classified.category.value in self._FAILURE_RATE_CATEGORIES
+                for failure in exhausted_failures.values()
+            )
+            content_warning_hit = any(
+                failure.classified.category == APIErrorCategory.CONTENT_FILTERED
+                for failure in exhausted_failures.values()
+            )
+            with progress_lock:
+                self._record_api_failure_sample(output_failure_hit)
+                if content_warning_hit:
+                    self._record_unsafe_request()
+
+            if exhausted_failures:
+                with progress_lock:
+                    for idx, failure in exhausted_failures.items():
+                        if 0 <= idx < len(line_batch):
+                            failed_line = line_batch[idx]
+                            failed_line.status = LineStatus.FAILED
+                            failed_line.error_message = (
+                                failure.error_message
+                                or failure.classified.raw_message
+                                or failure.classified.user_message
+                            )
+                            self._progress.failed_lines += 1
+
+                if self._should_abort_for_api_failure_rate():
+                    failure_rate = 0.0
+                    if self._api_failure_tries_seen:
+                        failure_rate = (
+                            self._api_failure_tries_failed / self._api_failure_tries_seen
+                        )
+                    self._api_failure_abort_message = (
+                        "Output/rate-limit failure rate too high: "
+                        f"{failure_rate:.0%} after {self._api_failure_tries_seen} chunk(s). "
+                        "Stopping remaining translation requests."
+                    )
+                    self._cancel_requested = True
+                    self._cancel_event.set()
+
+                if content_warning_hit and self._should_abort_for_unsafe_requests():
+                    unsafe_limit = self._get_unsafe_abort_limit() or self._unsafe_request_count
+                    self._unsafe_abort_message = (
+                        "Unsafe request limit reached: "
+                        f"{self._unsafe_request_count}/{unsafe_limit}. "
+                        "Stopping remaining translation requests."
+                    )
+                    self._cancel_requested = True
+                    self._cancel_event.set()
 
             # Apply character whitelist/blacklist filters
-            translations = self._apply_char_filters(
-                translations, line_objects=chunk,
+            filtered_indices = [
+                idx for idx in range(len(translations))
+                if idx not in exhausted_set
+            ]
+            filtered_translations = self._apply_char_filters(
+                [translations[idx] for idx in filtered_indices],
+                line_objects=[line_batch[idx] for idx in filtered_indices],
             )
+            for idx, translation in zip(filtered_indices, filtered_translations):
+                translations[idx] = translation
+
+            validation_result = validate_batch_comprehensive(
+                originals=[filtered_for_api[idx] for idx in filtered_indices],
+                translations=[translations[idx] for idx in filtered_indices],
+                source_language=self._get_source_language(),
+                target_language=self._get_target_language(),
+                code_patterns=(
+                    self._manifest_manager.get_code_patterns()
+                    if self._manifest_manager is not None else None
+                ),
+            )
+            failed_indices = [
+                filtered_indices[idx]
+                for idx in validation_result.lines_to_retry
+                if 0 <= idx < len(filtered_indices)
+            ]
+            failed_set = set(failed_indices)
+
+            with progress_lock:
+                self._record_validation_sample(
+                    len(filtered_for_api),
+                    len(failed_indices),
+                )
+
+            if failed_indices:
+                queue_errors = list(validation_result.batch_errors)
+                if not queue_errors:
+                    for idx in validation_result.lines_to_retry:
+                        if idx < len(validation_result.line_results):
+                            queue_errors.extend(validation_result.line_results[idx].errors)
+                self._queue_validation_retry(
+                    lines=line_batch,
+                    original_lines=filtered_for_api,
+                    translations=translations,
+                    failed_indices=failed_indices,
+                    system_prompt=system_prompt,
+                    errors=queue_errors,
+                )
+                self._log_progress(
+                    "Queued validation retry for chunk "
+                    f"{chunk_idx + 1}/{total_chunks}: {len(failed_indices)} line(s)"
+                )
+                if self._should_abort_for_validation_failure_rate():
+                    failure_rate = 0.0
+                    if self._validation_lines_seen:
+                        failure_rate = (
+                            self._validation_lines_failed / self._validation_lines_seen
+                        )
+                    self._validation_abort_message = (
+                        "Validation failure rate too high: "
+                        f"{failure_rate:.0%} after {self._validation_chunks_seen} chunk(s). "
+                        "Stopping remaining translation requests."
+                    )
+                    self._cancel_requested = True
+                    self._cancel_event.set()
 
             # Apply translations
-            for line, translation in zip(chunk, translations):
+            for idx, (line, translation) in enumerate(zip(line_batch, translations)):
+                if idx in failed_set or idx in exhausted_set:
+                    continue
                 line.translated = translation
                 if line.status not in (
                     LineStatus.NEEDS_REVIEW, LineStatus.PENDING,
@@ -3649,7 +4415,9 @@ class TranslationStep(BaseStep):
                         recover_code_patterns as _rcp,
                         RecoveryAction as _RA,
                     )
-                    for line in chunk:
+                    for idx, line in enumerate(line_batch):
+                        if idx in failed_set or idx in exhausted_set:
+                            continue
                         if not line.translated:
                             continue
                         _orig = (
@@ -3670,9 +4438,10 @@ class TranslationStep(BaseStep):
                         ):
                             line.status = LineStatus.NEEDS_REVIEW
 
-            # Flush to disk immediately so no chunk is lost
+            # Defer manifest persistence so concurrent chunk completions batch
+            # into one periodic full-manifest write.
             if self._manifest_manager is not None:
-                self._manifest_manager.save()
+                self._request_manifest_flush()
 
             # Update rolling context buffer
             provides_context = (
@@ -3681,15 +4450,82 @@ class TranslationStep(BaseStep):
             )
             if provides_context:
                 if use_translated_ctx:
-                    rolling_ctx_buffer.extend(translations)
+                    context_lines: List[str] = []
+                    for idx, line in enumerate(line_batch):
+                        if idx in failed_set or idx in exhausted_set:
+                            context_lines.append(filtered_for_api[idx])
+                        else:
+                            context_lines.append(line.translated or filtered_for_api[idx])
+                    rolling_ctx_buffer.extend(context_lines)
                 else:
-                    rolling_ctx_buffer.extend(
-                        line.edited_prepro or line.preprocessed
-                        for line in chunk
+                    rolling_ctx_buffer.extend(filtered_for_api)
+
+            success_message = (
+                f"Processed chunk {chunk_idx + 1}/{total_chunks} successfully"
+            )
+            if exhausted_failures:
+                success_message = (
+                    f"Processed chunk {chunk_idx + 1}/{total_chunks} with "
+                    f"{len(exhausted_failures)} exhausted line(s)"
+                )
+            if self._progress_window is not None:
+                self.after(
+                    0,
+                    lambda msg=success_message: self._progress_window.complete_chunk_status(msg)
+                    if self._progress_window else None,
+                )
+            else:
+                self._log_progress(success_message)
+
+        except ResponseValidationError as e:
+            with progress_lock:
+                self._record_api_failure_sample(False)
+                self._record_validation_sample(
+                    len(filtered_for_api),
+                    len(filtered_for_api),
+                )
+
+            self._queue_validation_retry(
+                lines=line_batch,
+                original_lines=filtered_for_api,
+                translations=[""] * len(filtered_for_api),
+                failed_indices=list(range(len(filtered_for_api))),
+                system_prompt=system_prompt,
+                errors=[str(e)],
+            )
+            self._log_progress(
+                f"Chunk {chunk_idx + 1}/{total_chunks} failed validation: {e}"
+            )
+            if self._should_abort_for_validation_failure_rate():
+                failure_rate = 0.0
+                if self._validation_lines_seen:
+                    failure_rate = (
+                        self._validation_lines_failed / self._validation_lines_seen
                     )
+                self._validation_abort_message = (
+                    "Validation failure rate too high: "
+                    f"{failure_rate:.0%} after {self._validation_chunks_seen} chunk(s). "
+                    "Stopping remaining translation requests."
+                )
+                self._cancel_requested = True
+                self._cancel_event.set()
+
+            validation_message = (
+                f"Processed chunk {chunk_idx + 1}/{total_chunks} with queued validation retry"
+            )
+            if self._progress_window is not None:
+                self.after(
+                    0,
+                    lambda msg=validation_message: self._progress_window.complete_chunk_status(msg)
+                    if self._progress_window else None,
+                )
+            else:
+                self._log_progress(validation_message)
 
         except TranslationAbortError as abort_err:
             # Fatal API error — mark lines failed, store abort.
+            with progress_lock:
+                self._record_api_failure_sample(False)
             for line in chunk:
                 line.status = LineStatus.FAILED
                 line.error_message = abort_err.user_message
@@ -3697,13 +4533,40 @@ class TranslationStep(BaseStep):
                     self._progress.failed_lines += 1
             self._schedule_table_update()
             self._abort_error = abort_err
+            fail_message = (
+                f"Chunk {chunk_idx + 1}/{total_chunks} aborted: {abort_err.user_message}"
+            )
+            if self._progress_window is not None:
+                self.after(
+                    0,
+                    lambda msg=fail_message: self._progress_window.complete_chunk_status(msg)
+                    if self._progress_window else None,
+                )
+            else:
+                self._log_progress(fail_message)
             return "abort"
 
         except Exception as e:
+            with progress_lock:
+                self._record_api_failure_sample(False)
             self._log_progress(
                 f"Chunk {chunk_idx + 1} failed: {e}"
             )
             self._handle_chunk_retry(chunk, e, progress_lock)
+            retry_message = (
+                f"Processed chunk {chunk_idx + 1}/{total_chunks} with retry handling"
+            )
+            if self._progress_window is not None:
+                self.after(
+                    0,
+                    lambda msg=retry_message: self._progress_window.complete_chunk_status(msg)
+                    if self._progress_window else None,
+                )
+            else:
+                self._log_progress(retry_message)
+        finally:
+            if request_started:
+                self._mark_request_finished()
 
         # Update progress
         self._update_progress_display()
@@ -3778,9 +4641,9 @@ class TranslationStep(BaseStep):
             f"{retry_result.failed_count} failed ({method})"
         )
 
-        # Flush to disk after retry so recovered translations are not lost
+        # Recovered translations join the next batched manifest flush.
         if self._manifest_manager is not None:
-            self._manifest_manager.save()
+            self._request_manifest_flush()
 
     # ------------------------------------------------------------------
     # Sequential String Worker (runs inside a thread)
@@ -3857,7 +4720,8 @@ class TranslationStep(BaseStep):
         self,
         chunk: List[TranslatableLine],
         rolling_context_text: str = "",
-    ) -> List[str]:
+        prepared_request: Optional[Tuple[List[str], List[str], List[int], str, Dict[str, Any]]] = None,
+    ) -> Any:
         """Translate a chunk of lines.
 
         TASK 43.5: Routes to MockTranslator when mock model selected.
@@ -3870,69 +4734,31 @@ class TranslationStep(BaseStep):
         Returns:
             List of translations.
         """
+        from CherryAI.functions.api_client import TranslationBatchResult
+
         # TASK 43.5: Use mock translator if available
         if hasattr(self, "_mock_translator") and self._mock_translator is not None:
             lines_to_translate = [
                 line.edited_prepro if line.edited_prepro else line.preprocessed
                 for line in chunk
             ]
-            return self._mock_translator.translate_batch(lines_to_translate)
+            return TranslationBatchResult(
+                translations=self._mock_translator.translate_batch(lines_to_translate),
+            )
 
         if self._api_client is None:
             # Simulation mode (fallback when no API and not mock)
             time.sleep(0.5)
-            return [
-                f"[Translated] {line.edited_prepro or line.preprocessed}"
-                for line in chunk
-            ]
+            return TranslationBatchResult(
+                translations=[
+                    f"[Translated] {line.edited_prepro or line.preprocessed}"
+                    for line in chunk
+                ]
+            )
 
-        # Build system prompt from manifest (Information step data)
-        # NOTE: System prompt is built AFTER collecting chunk lines
-        # so that selective filtering can be applied.
-
-        # Get text for translation - use edited_prepro if available (Task 33.1)
-        lines_to_translate = [
-            line.edited_prepro if line.edited_prepro else line.preprocessed
-            for line in chunk
-        ]
-
-        # Filter __DEDUP__ lines from request input
-        filtered_for_api = [
-            ln for ln in lines_to_translate if "__DEDUP__" not in ln
-        ]
-
-        # Extract context_type from formation metadata for conditional prompt
-        context_type = ""
-        merge_instruction = ""
-        formation_ctx = getattr(chunk[0], "_formation_ctx", None) if chunk else None
-        if formation_ctx:
-            context_type = formation_ctx.get("context_type", "")
-            boundaries = formation_ctx.get("merge_boundaries", [])
-            if boundaries and len(boundaries) > 1:
-                try:
-                    from CherryAI.functions.conditional_prompts import (
-                        build_merged_request_instruction,
-                    )
-                    merge_instruction = build_merged_request_instruction(
-                        boundaries,
-                    )
-                except ImportError:
-                    pass
-
-        system_prompt = self._build_system_prompt_from_manifest(
-            rolling_context_text=rolling_context_text,
-            chunk_lines=filtered_for_api,
-            merge_instruction=merge_instruction,
-            context_type=context_type,
-        )
-
-        # Log outgoing request when enabled in Global Options
-        request_params = {}
-        if self._api_client is not None:
-            try:
-                request_params = self._api_client.get_prompt_cache_params()
-            except Exception:
-                request_params = {}
+        if prepared_request is None:
+            prepared_request = self._prepare_chunk_request(chunk, rolling_context_text)
+        _lines_to_translate, filtered_for_api, _api_positions, system_prompt, request_params = prepared_request
 
         self._log_request_json(
             system_prompt,
@@ -3941,7 +4767,7 @@ class TranslationStep(BaseStep):
         )
 
         # Call API
-        translations = self._api_client.translate_batch(
+        result = self._api_client.translate_batch_detailed(
             filtered_for_api,
             system_prompt=system_prompt if system_prompt else None,
         )
@@ -3953,7 +4779,7 @@ class TranslationStep(BaseStep):
                 self._api_client._total_completion_tokens
             )
 
-        return translations
+        return result
 
     def _apply_char_filters(
         self,
@@ -4144,6 +4970,32 @@ class TranslationStep(BaseStep):
         if self._progress_window:
             self.after(0, lambda: self._progress_window.log(message) if self._progress_window else None)
 
+    def _set_outstanding_requests(self, count: int) -> None:
+        """Publish the current in-flight request count to the progress window."""
+        if self._progress_window is None:
+            return
+        self.after(
+            0,
+            lambda: self._progress_window.set_outstanding_requests(count)
+            if self._progress_window else None,
+        )
+
+    def _mark_request_started(self) -> int:
+        """Increment and publish the shared outstanding-request counter."""
+        with self._active_requests_lock:
+            self._active_requests += 1
+            current = self._active_requests
+        self._set_outstanding_requests(current)
+        return current
+
+    def _mark_request_finished(self) -> int:
+        """Decrement and publish the shared outstanding-request counter."""
+        with self._active_requests_lock:
+            self._active_requests = max(0, self._active_requests - 1)
+            current = self._active_requests
+        self._set_outstanding_requests(current)
+        return current
+
     def _on_pause(self) -> None:
         """Handle pause request."""
         self._pause_requested = True
@@ -4173,8 +5025,64 @@ class TranslationStep(BaseStep):
         if self._progress_window:
             self._progress_window.set_state(TranslationState.CANCELLED)
 
+    def _start_manifest_flush_worker(self) -> None:
+        """Start periodic manifest flushes for active translation work."""
+        self._stop_manifest_flush_worker(flush=False)
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            return
+
+        self._manifest_flush_pending = False
+        self._manifest_flush_stop_event.clear()
+        self._manifest_flush_thread = threading.Thread(
+            target=self._manifest_flush_loop,
+            name="TranslationManifestFlush",
+            daemon=True,
+        )
+        self._manifest_flush_thread.start()
+
+    def _stop_manifest_flush_worker(self, *, flush: bool) -> None:
+        """Stop periodic manifest flushes and optionally flush one final time."""
+        self._manifest_flush_stop_event.set()
+        thread = self._manifest_flush_thread
+        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=1.0)
+        self._manifest_flush_thread = None
+        if flush:
+            self._flush_manifest_updates(force=True)
+
+    def _manifest_flush_loop(self) -> None:
+        """Flush queued translation updates every configured interval."""
+        while not self._manifest_flush_stop_event.wait(self._MANIFEST_FLUSH_INTERVAL_SECONDS):
+            self._flush_manifest_updates(force=False)
+
+    def _request_manifest_flush(self) -> None:
+        """Mark translation progress for the next batched manifest save."""
+        self._manifest_flush_pending = True
+
+    def _flush_manifest_updates(self, *, force: bool) -> bool:
+        """Persist queued translation updates when a flush is due."""
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            self._manifest_flush_pending = False
+            return False
+
+        with self._manifest_flush_lock:
+            if not force and not self._manifest_flush_pending:
+                return False
+
+            if not mgr.dirty:
+                self._manifest_flush_pending = False
+                return False
+
+            saved = mgr.save()
+            if saved:
+                self._manifest_flush_pending = False
+            return saved
+
     def _on_translation_complete(self) -> None:
         """Called when translation completes."""
+        self._stop_manifest_flush_worker(flush=True)
         self._translate_btn.configure(state="normal")
         self._update_lines_table()
 
@@ -4190,6 +5098,7 @@ class TranslationStep(BaseStep):
 
         # Update progress window state
         if self._progress_window:
+            self._progress_window.set_outstanding_requests(0)
             self._progress_window.set_state(self._translation_state)
 
         # Show abort error dialog if translation was aborted
@@ -4197,6 +5106,12 @@ class TranslationStep(BaseStep):
         if abort_err is not None:
             self._show_abort_error_dialog(abort_err)
             self._abort_error = None
+        elif self._api_failure_abort_message:
+            messagebox.showwarning("Translation Stopped", self._api_failure_abort_message)
+        elif self._unsafe_abort_message:
+            messagebox.showwarning("Translation Stopped", self._unsafe_abort_message)
+        elif self._validation_abort_message:
+            messagebox.showwarning("Translation Stopped", self._validation_abort_message)
 
         # Store results in session
         step_data = self.session.get_step(self.step_id).data
@@ -4226,17 +5141,34 @@ class TranslationStep(BaseStep):
             abort_err: The classified abort error.
         """
         display_text = abort_err.format_for_display()
+        if abort_err.classified.category == APIErrorCategory.QUOTA_EXCEEDED:
+            messagebox.showwarning("Translation Paused", display_text)
+            return
         messagebox.showerror("Translation Aborted", display_text)
 
     def on_new_project(self) -> None:
         """Reset cached state for a fresh project."""
         super().on_new_project()
         self._lines.clear()
+        self._manifest_translations_by_idx.clear()
         self._cancel_requested = False
         self._pause_requested = False
         self._api_client = None
+        self._deferred_validation_jobs.clear()
+        self._validation_chunks_seen = 0
+        self._validation_chunks_failed = 0
+        self._validation_lines_seen = 0
+        self._validation_lines_failed = 0
+        self._validation_abort_message = ""
+        self._api_failure_tries_seen = 0
+        self._api_failure_tries_failed = 0
+        self._api_failure_abort_message = ""
+        self._unsafe_request_count = 0
+        self._unsafe_abort_message = ""
+        self._stop_manifest_flush_worker(flush=False)
         self._manifest_bindings.clear()
         logger.debug("Translation step reset for new project")
+        self._cancel_status_summary_refresh()
 
     def on_enter(self) -> None:
         """Called when step becomes active."""
@@ -4253,8 +5185,9 @@ class TranslationStep(BaseStep):
             if self._lines:
                 self._update_lines_table()
                 self._status_label.configure(
-                    text=TranslationStep._build_translation_status_text(self),
+                    text=f"Loaded {len(self._lines)} lines...",
                 )
+                self._schedule_status_summary_refresh()
             return
 
         # Refresh lines from previous steps
@@ -4315,98 +5248,135 @@ class TranslationStep(BaseStep):
         if mgr is None or not mgr.is_loaded:
             return
 
-        # Load API Key selection
-        key_provider = load_nested_text_field(
-            mgr, "RequestOptions", "ApiKeyProvider", "",
-        )
-        key_name = load_nested_text_field(
-            mgr, "RequestOptions", "ApiKeyName", "",
-        )
-        if key_provider and key_name:
-            combo_val = f"{key_provider}: {key_name}"
-            # Only set if this key still exists in saved keys
-            current_values = list(self._key_combo["values"])
-            if combo_val in current_values:
-                self._key_var.set(combo_val)
-                self._filter_models_by_provider(key_provider)
+        with _suppress_binding_saves(self):
+            request_options = mgr._manifest_data.get("RequestOptions", {})
+            manifest_has_model = (
+                isinstance(request_options, dict)
+                and bool(str(request_options.get("Model", "") or "").strip())
+            )
+            manifest_has_threads = (
+                isinstance(request_options, dict)
+                and "NumberOfThreads" in request_options
+            )
+            manifest_has_rps_enabled = (
+                isinstance(request_options, dict)
+                and "RequestsPerSecondEnabled" in request_options
+            )
+            manifest_has_rps_value = (
+                isinstance(request_options, dict)
+                and "RequestsPerSecond" in request_options
+            ) or "RequestsPerSecond" in mgr._manifest_data
 
-        # Load Model
-        model = load_nested_text_field(mgr, "RequestOptions", "Model", "")
-        if model:
-            self._model_var.set(model)
+            # Load API Key selection
+            key_provider = load_nested_text_field(
+                mgr, "RequestOptions", "ApiKeyProvider", "",
+            )
+            key_name = load_nested_text_field(
+                mgr, "RequestOptions", "ApiKeyName", "",
+            )
+            if key_provider and key_name:
+                combo_val = f"{key_provider}: {key_name}"
+                current_values = list(self._key_combo["values"])
+                if combo_val in current_values:
+                    self._key_var.set(combo_val)
+                    self._filter_models_by_provider(key_provider)
 
-        # Load Temperature
-        temp = load_nested_float_field(
-            mgr, "RequestOptions", "Temperature", 0.2
-        )
-        self._temp_var.set(temp)
+            model = load_nested_text_field(mgr, "RequestOptions", "Model", "")
+            if model:
+                self._model_var.set(model)
 
-        # Load LinesPerChunk
-        chunk_size = load_nested_int_field(
-            mgr, "RequestOptions", "LinesPerChunk", 30
-        )
-        self._chunk_var.set(chunk_size)
+            temp = load_nested_float_field(
+                mgr, "RequestOptions", "Temperature", 0.2
+            )
+            self._temp_var.set(temp)
 
-        # Load NumberOfThreads
-        max_concurrent = load_nested_int_field(
-            mgr, "RequestOptions", "NumberOfThreads", 3, 1, 512
-        )
-        self._threads_var.set(max_concurrent)
+            chunk_size = load_nested_int_field(
+                mgr, "RequestOptions", "LinesPerChunk", 30
+            )
+            self._chunk_var.set(chunk_size)
 
-        # Load RetryStrategy
-        retry = load_nested_text_field(mgr, "RequestOptions", "RetryStrategy", "")
-        if retry:
-            self._retry_var.set(retry)
+            max_concurrent = load_nested_int_field(
+                mgr, "RequestOptions", "NumberOfThreads", 3, 1, 512
+            )
+            self._threads_var.set(max_concurrent)
 
-        # Load MaxRetries
-        max_retries = load_nested_int_field(
-            mgr, "RequestOptions", "MaxRetries", 3
-        )
-        self._retries_var.set(max_retries)
+            requests_per_second_enabled = load_nested_bool_field(
+                mgr,
+                "RequestOptions",
+                "RequestsPerSecondEnabled",
+                False,
+            )
+            self._rps_enabled_var.set(requests_per_second_enabled)
 
-        # Load EnableRequestCaching
-        caching = load_nested_bool_field(
-            mgr, "RequestOptions", "EnableRequestCaching", True
-        )
-        self._cache_var.set(caching)
+            requests_per_second = load_nested_float_field(
+                mgr,
+                "RequestOptions",
+                "RequestsPerSecond",
+                load_float_field(
+                    mgr,
+                    "RequestsPerSecond",
+                    1.0,
+                    0.01,
+                    999.99,
+                ),
+                0.01,
+                999.99,
+            )
+            self._rps_var.set(requests_per_second)
 
-        # Load LineByLineMode
-        line_by_line = load_nested_bool_field(
-            mgr, "RequestOptions", "LineByLineMode", False
-        )
-        self._line_by_line_var.set(line_by_line)
+            retry = load_nested_text_field(mgr, "RequestOptions", "RetryStrategy", "")
+            if retry:
+                self._retry_var.set(retry)
 
-        # Load ContextLines
-        context_lines = load_nested_int_field(
-            mgr, "RequestOptions", "ContextLines", 2
-        )
-        self._context_lines_var.set(context_lines)
+            max_retries = load_nested_int_field(
+                mgr, "RequestOptions", "MaxRetries", 3
+            )
+            self._retries_var.set(max_retries)
 
-        # Load Thinking
-        thinking = load_nested_bool_field(
-            mgr, "RequestOptions", "Thinking", False
-        )
-        self._thinking_var.set(thinking)
+            caching = load_nested_bool_field(
+                mgr, "RequestOptions", "EnableRequestCaching", True
+            )
+            self._cache_var.set(caching)
 
-        # Load ThinkingBudget
-        thinking_budget = load_nested_int_field(
-            mgr, "RequestOptions", "ThinkingBudget", 10000
-        )
-        self._thinking_budget_var.set(thinking_budget)
+            line_by_line = load_nested_bool_field(
+                mgr, "RequestOptions", "LineByLineMode", False
+            )
+            self._line_by_line_var.set(line_by_line)
 
-        # Load ReasoningEffort
-        reasoning_effort = load_nested_text_field(
-            mgr, "RequestOptions", "ReasoningEffort", "medium"
-        )
-        if reasoning_effort not in ("low", "medium", "high"):
-            reasoning_effort = "medium"
-        self._reasoning_effort_var.set(reasoning_effort)
+            context_lines = load_nested_int_field(
+                mgr, "RequestOptions", "ContextLines", 2
+            )
+            self._context_lines_var.set(context_lines)
 
-        # TASK 43.7/43.8/43.9: Override from Global Options when available
-        self._sync_from_global_options()
+            thinking = load_nested_bool_field(
+                mgr, "RequestOptions", "Thinking", False
+            )
+            self._thinking_var.set(thinking)
 
-        # Per-model API.ini settings override Global Options
-        self._load_model_settings()
+            thinking_budget = load_nested_int_field(
+                mgr, "RequestOptions", "ThinkingBudget", 10000
+            )
+            self._thinking_budget_var.set(thinking_budget)
+
+            reasoning_effort = load_nested_text_field(
+                mgr, "RequestOptions", "ReasoningEffort", "medium"
+            )
+            if reasoning_effort not in ("none", "low", "medium", "high"):
+                reasoning_effort = "medium"
+            self._reasoning_effort_var.set(reasoning_effort)
+
+            self._sync_from_global_options()
+            self._load_model_settings()
+
+            if manifest_has_model and model:
+                self._model_var.set(model)
+            if manifest_has_threads:
+                self._threads_var.set(max_concurrent)
+            if manifest_has_rps_enabled:
+                self._rps_enabled_var.set(requests_per_second_enabled)
+            if manifest_has_rps_value:
+                self._rps_var.set(requests_per_second)
+            self._apply_rps_widget_state()
 
     def _sync_from_global_options(self) -> None:
         """Apply Global Options overrides for caching, thinking, context.
@@ -4498,6 +5468,17 @@ class TranslationStep(BaseStep):
         max_concurrent = _int("max_concurrent", 3)
         self._threads_var.set(max(1, min(512, max_concurrent)))
 
+        if "requests_per_second" in saved:
+            self._rps_var.set(
+                max(0.01, min(999.99, _float("requests_per_second", 1.0)))
+            )
+        if "requests_per_second_enabled" in saved:
+            self._rps_enabled_var.set(
+                str(saved["requests_per_second_enabled"]).lower()
+                in ("true", "1", "yes")
+            )
+        self._apply_rps_widget_state()
+
         # Temperature
         if "temperature" in saved:
             temp = _float("temperature", 0.2)
@@ -4516,7 +5497,7 @@ class TranslationStep(BaseStep):
             self._thinking_budget_var.set(_int("thinking_budget", 10000))
         if "reasoning_effort" in saved:
             val = saved["reasoning_effort"]
-            if val in ("low", "medium", "high"):
+            if val in ("none", "low", "medium", "high"):
                 self._reasoning_effort_var.set(val)
 
         if "request_mode" in saved:
@@ -4544,8 +5525,33 @@ class TranslationStep(BaseStep):
             "thinking_budget": self._thinking_budget_var.get(),
             "reasoning_effort": self._reasoning_effort_var.get(),
             "max_concurrent": self._threads_var.get(),
+            "requests_per_second_enabled": self._rps_enabled_var.get(),
+            "requests_per_second": max(0.01, min(999.99, self._rps_var.get())),
             "request_mode": self._get_request_mode_key(),
         }
+
+        mgr = self.manifest_manager
+        if mgr is not None and mgr.is_loaded:
+            save_float_field(
+                mgr,
+                "RequestsPerSecond",
+                max(0.01, min(999.99, self._rps_var.get())),
+                0.01,
+                999.99,
+                2,
+            )
+
+    def _apply_rps_widget_state(self) -> None:
+        """Enable or disable the RPS spinbox from the checkbox state."""
+        state = "normal" if self._rps_enabled_var.get() else "disabled"
+        try:
+            self._rps_spin.configure(state=state)
+        except tk.TclError:
+            pass
+
+    def _on_rps_toggle(self) -> None:
+        """Refresh RPS widget state after the enable toggle changes."""
+        self._apply_rps_widget_state()
 
     def _load_prompt_data(self) -> None:
         """Load prompt data from manifest Information step metadata.
@@ -5236,11 +6242,32 @@ class TranslationStep(BaseStep):
 
         self._model_combo["values"] = values
 
-        # If current model is not in the new list, reset to first real model
+        # If current model is not in the new list, prefer the key default,
+        # then a case-insensitive match of the current value, and only then
+        # fall back to the first real model.
         current = self._model_var.get()
         if current not in values:
-            default_model = values[1] if len(values) > 1 else values[0]
-            self._model_var.set(default_model)
+            preferred_model = ""
+            key_provider, key_name = self._parse_key_selection()
+            if key_provider and key_name:
+                try:
+                    from CherryAI.functions.api_config import get_default_model
+                    candidate = get_default_model(key_provider, key_name)
+                    if candidate in values:
+                        preferred_model = candidate
+                except Exception:
+                    preferred_model = ""
+
+            if not preferred_model:
+                current_lower = current.strip().lower()
+                for value in values:
+                    if value.strip().lower() == current_lower:
+                        preferred_model = value
+                        break
+
+            if not preferred_model:
+                preferred_model = values[1] if len(values) > 1 else values[0]
+            self._model_var.set(preferred_model)
 
         # Refresh request mode availability for the new model set
         self._refresh_request_mode_options()

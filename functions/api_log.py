@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 import datetime as dt
 from dataclasses import dataclass, field, asdict
@@ -43,6 +44,7 @@ class LogStatus(str, Enum):
     """Outcome status of a request/response pair."""
     SUCCESS = "success"       # Green — all good
     RECOVERED = "recovered"   # Yellow — had issues but recovered via retry
+    CONTENT_WARNING = "content_warning"  # Unsafe/refused content handling
     FAILED = "failed"         # Red — not recovered, error persists
     PENDING = "pending"       # Awaiting response
 
@@ -60,6 +62,7 @@ VALIDATION_STATUS_UNKNOWN = "unknown"
 
 FAILURE_KIND_API = "api_failure"
 FAILURE_KIND_INFERENCE = "inference_failure"
+FAILURE_KIND_CONTENT_WARNING = "content_warning"
 
 
 # ============================================================================
@@ -326,6 +329,8 @@ def _infer_failure_kind(entry: LogEntry, received: LogEntryReceived) -> str:
     extra_value = str(received.extra.get("failure_kind", "")).strip().lower()
     if extra_value:
         return extra_value
+    if entry.status == LogStatus.CONTENT_WARNING.value:
+        return FAILURE_KIND_CONTENT_WARNING
     if entry.status != LogStatus.FAILED.value:
         return ""
     if _has_inference_output(received):
@@ -341,6 +346,8 @@ def _infer_validation_status(entry: LogEntry, received: LogEntryReceived) -> str
         return VALIDATION_STATUS_PASSED
     if entry.status == LogStatus.RECOVERED.value:
         return VALIDATION_STATUS_RECOVERED
+    if entry.status == LogStatus.CONTENT_WARNING.value:
+        return VALIDATION_STATUS_FAILED
     if entry.status == LogStatus.FAILED.value and _has_inference_output(received):
         return VALIDATION_STATUS_FAILED
     return VALIDATION_STATUS_UNKNOWN
@@ -519,6 +526,7 @@ class APILogStore:
         self._log_path: Optional[Path] = log_path
         self._listeners: List[Callable[[LogEntry], None]] = []
         self._dirty: bool = False
+        self._io_lock = threading.Lock()
 
     # --- Properties -------------------------------------------------------- #
 
@@ -603,6 +611,7 @@ class APILogStore:
         self._next_id += 1
         self._entries.append(entry)
         self._dirty = True
+        self._append_entry_snapshot(entry)
         self._notify(entry)
         return entry.entry_id
 
@@ -622,6 +631,7 @@ class APILogStore:
         enrich_completed_entry(entry, log_path=self._log_path)
         self._dirty = True
         self._mirror_completed_entry(entry)
+        self._append_entry_snapshot(entry)
         self._notify(entry)
 
     def log_pair(
@@ -654,8 +664,35 @@ class APILogStore:
         self._entries.append(entry)
         self._dirty = True
         self._mirror_completed_entry(entry)
+        self._append_entry_snapshot(entry)
         self._notify(entry)
         return entry.entry_id
+
+    def _append_entry_snapshot(
+        self,
+        entry: LogEntry,
+        *,
+        path: Optional[Path] = None,
+    ) -> bool:
+        """Append one entry snapshot to the JSONL file immediately."""
+        target = path or self._log_path
+        if target is None:
+            return False
+
+        try:
+            enrich_completed_entry(entry, log_path=target)
+            payload = json.dumps(entry.to_dict(), ensure_ascii=False)
+            with self._io_lock:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with open(target, "a", encoding="utf-8") as f:
+                    f.write(payload)
+                    f.write("\n")
+                    f.flush()
+                    os.fsync(f.fileno())
+            return True
+        except Exception:
+            logger.error("Failed to append API log entry to %s", target, exc_info=True)
+            return False
 
     def _find_entry(self, entry_id: int) -> Optional[LogEntry]:
         """Find an entry by its ID."""
@@ -771,16 +808,17 @@ class APILogStore:
         if target is None:
             return False
         try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            tmp = target.with_suffix(".tmp")
-            with open(tmp, "w", encoding="utf-8") as f:
-                for entry in self._entries:
-                    enrich_completed_entry(entry, log_path=target)
-                    f.write(json.dumps(entry.to_dict(), ensure_ascii=False))
-                    f.write("\n")
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(str(tmp), str(target))
+            with self._io_lock:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                tmp = target.with_suffix(".tmp")
+                with open(tmp, "w", encoding="utf-8") as f:
+                    for entry in self._entries:
+                        enrich_completed_entry(entry, log_path=target)
+                        f.write(json.dumps(entry.to_dict(), ensure_ascii=False))
+                        f.write("\n")
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(str(tmp), str(target))
             self._dirty = False
             logger.debug("Saved API log: %s (%d entries)", target, len(self._entries))
             return True
@@ -801,26 +839,30 @@ class APILogStore:
         if target is None or not target.exists():
             return False
         try:
-            entries: List[LogEntry] = []
+            entries_by_id: Dict[int, LogEntry] = {}
+            entry_order: List[int] = []
             max_id = 0
-            with open(target, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        data = json.loads(line)
-                        entry = LogEntry.from_dict(data)
-                        entries.append(entry)
-                        if entry.entry_id > max_id:
-                            max_id = entry.entry_id
-                    except (json.JSONDecodeError, KeyError, TypeError):
-                        logger.debug("Skipping corrupt log line")
-            self._entries = entries
+            with self._io_lock:
+                with open(target, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                            entry = LogEntry.from_dict(data)
+                            if entry.entry_id not in entries_by_id:
+                                entry_order.append(entry.entry_id)
+                            entries_by_id[entry.entry_id] = entry
+                            if entry.entry_id > max_id:
+                                max_id = entry.entry_id
+                        except (json.JSONDecodeError, KeyError, TypeError):
+                            logger.debug("Skipping corrupt log line")
+            self._entries = [entries_by_id[entry_id] for entry_id in entry_order]
             self._next_id = max_id + 1
             self._dirty = False
             self._log_path = target
-            logger.debug("Loaded API log: %s (%d entries)", target, len(entries))
+            logger.debug("Loaded API log: %s (%d entries)", target, len(self._entries))
             return True
         except Exception:
             logger.error("Failed to load API log from %s", target, exc_info=True)

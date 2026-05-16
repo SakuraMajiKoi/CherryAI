@@ -1562,6 +1562,8 @@ def _detect_provider_from_url(url: str) -> Optional[str]:
         return "openai"
     if "generativelanguage.googleapis.com" in url_lower:
         return "gemini"
+    if "mistral.ai" in url_lower:
+        return "mistral"
     if "anthropic.com" in url_lower:
         return "anthropic"
     if "localhost" in url_lower:

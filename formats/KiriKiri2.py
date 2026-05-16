@@ -9,6 +9,8 @@ Supports:
 from __future__ import annotations
 
 import codecs
+import csv
+import io
 import json
 import re
 import struct
@@ -16,7 +18,7 @@ import zlib
 from enum import IntEnum
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .handshake import ExtractedLine, SpeakerInfo
 from .parser_base import ParserScript, WordwrapConfig
@@ -24,23 +26,49 @@ from .parser_base import ParserScript, WordwrapConfig
 
 KS_ENCODING_CANDIDATES: Tuple[str, ...] = ("cp932", "shift_jis", "utf-8")
 MENU_ENCODING_CANDIDATES: Tuple[str, ...] = ("utf-8-sig", "utf-8", "cp932", "shift_jis")
+CSV_ENCODING_CANDIDATES: Tuple[str, ...] = ("utf-8-sig", "utf-8", "cp932", "shift_jis")
 JAPANESE_RE = re.compile(
     r"[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF々〆ヵヶ"
     r"\u3041-\u3096\u309D-\u309F"
     r"\u30A1-\u30FA\u30FD-\u30FF\u31F0-\u31FF\uFF66-\uFF9Fー]"
 )
-COMMENT_RE = re.compile(r"^\s*;")
+COMMENT_RE = re.compile(r"^\s*(?:;|//)")
 LABEL_RE = re.compile(r"^\s*\*")
 AT_COMMAND_RE = re.compile(r"^\s*@")
 TAG_RE = re.compile(r"^\s*\[[^\]]*\]\s*$")
 MULTI_TAG_RE = re.compile(r"^\s*(?:\[[^\]]*\]\s*)+$")
 BRACE_COMMAND_RE = re.compile(r"^\s*\{[^{}]*\}\s*$")
 SPEAKER_RE = re.compile(r"^\s*【(?P<speaker>[^】]+)】(?:\[(?P<voice_id>[^\]]+)\])?\s*$")
+TALK_COMMAND_RE = re.compile(r"^\s*@talk(?:\s+(?P<args>.*?))?\s*$", re.IGNORECASE)
+TALK_NAME_ARG_RE = re.compile(
+    r"\bname\s*=\s*(?P<speaker>\[[^\]]+\]|\"[^\"]+\"|[^\s]+)",
+    re.IGNORECASE,
+)
 NAME_TAG_RE = re.compile(r'\[name\s+text\s*=\s*"([^"]+)"\]')
 STRING_LITERAL_RE = re.compile(r'"((?:\\.|[^"\\])*)"')
 SPEAKER_DIALOGUE_RE = re.compile(r"^(.+?)(?:：|: )(.+)$", re.DOTALL)
 NEW_KAG_MENU_ITEM_RE = re.compile(r"new\s+KAGMenuItem\s*\(", re.IGNORECASE)
 NEW_MENU_ITEM_RE = re.compile(r"new\s+MenuItem\s*\(", re.IGNORECASE)
+SELADD_TEXT_RE = re.compile(r'(\[seladd\b[^\]]*\btext\s*=\s*")((?:\\.|[^"\\])*)(")', re.IGNORECASE)
+LABEL_TITLE_RE = re.compile(r'^(\*[^|\r\n]+\|)([^\r\n]*)(\r?\n?)$')
+CAPTION_LITERAL_RE = re.compile(r'(caption\s*:\s*")((?:\\.|[^"\\])*)(")', re.IGNORECASE)
+TJS_DIALOG_LITERAL_RE = re.compile(
+    r'((?:[A-Za-z_][A-Za-z0-9_]*\.)*(?:SetYesNo|SetOK|SetMessage|SetError)\s*\(\s*")'
+    r'((?:\\.|[^"\\])*)'
+    r'(")'
+)
+KS_UI_FIELD_LITERAL_RE = re.compile(
+    r'((?:\.\s*|[%\[{,]\s*)(?:caption|title)\s*(?::|=)\s*")'
+    r'((?:\\.|[^"\\])*)'
+    r'(")',
+    re.IGNORECASE,
+)
+KS_DRAWTEXT_LITERAL_RE = re.compile(
+    r'((?:[A-Za-z_][A-Za-z0-9_]*\.)?drawText(?:Ex)?\s*\(\s*[^,\r\n]+,\s*[^,\r\n]+,\s*")'
+    r'((?:\\.|[^"\\])*)'
+    r'(")',
+    re.IGNORECASE,
+)
 PROCESS_CH_RE = re.compile(r"if\s*\(\s*current\.processCh\(\s*text\s*\)\s*\)\s*\{")
 XP3_MAGIC = b"XP3\r\n \n\x1a\x8bg\x01"
 XP3_SCAN_LIMIT = 4 * 1024 * 1024
@@ -75,6 +103,72 @@ SAFE_BRIDGE_TAG_TOKENS = {
     "wm",
 }
 TAG_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
+KS_CODE_KEYWORD_RE = re.compile(
+    r"^(?:"
+    r"function|var|const|let|if|else|for|while|switch|case|break|continue|return|"
+    r"try|catch|with|class|enum|debugger"
+    r")\b",
+    re.IGNORECASE,
+)
+KS_CODE_CALL_RE = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_]*|\.[A-Za-z_][A-Za-z0-9_]*)\s*\(")
+KS_CODE_ASSIGN_RE = re.compile(r"(?:^|\s)(?:[A-Za-z_][A-Za-z0-9_]*|\.[A-Za-z_][A-Za-z0-9_]*|\[[^\]]+\])\s*=")
+KS_CODE_MEMBER_RE = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_]*|\])\.[A-Za-z_][A-Za-z0-9_]*")
+KS_CODE_INDEX_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\[[^\]]+\]")
+CSV_ALLOWED_HEADER_TAGS: Dict[str, str] = {
+    "タイトル": "title",
+    "概要テキスト": "summary",
+    "発生条件テキスト": "condition",
+    "デート場所(ゲームには無関係)": "place",
+    "デートタイトル(20文字)": "title",
+    "内容文章(72文字)": "body",
+    "実行条件文章(72文字)": "condition",
+    "施設効果文章(72文字)": "effect",
+    "パーツ名": "part_name",
+    "文章": "body",
+    "スキル名": "skill_name",
+    "カテゴリ": "category",
+    "説明文": "description",
+    "称号": "title",
+}
+CSV_HEADER_ALLOW_PATTERNS: Tuple[re.Pattern[str], ...] = (
+    re.compile(r"段目"),
+)
+CSV_HEADER_EXCLUDE_PATTERNS: Tuple[re.Pattern[str], ...] = (
+    re.compile(r"(^|[\s])ID$", re.IGNORECASE),
+    re.compile(r"ＩＤ$"),
+    re.compile(r"ファイル"),
+    re.compile(r"画像"),
+    re.compile(r"条件式"),
+    re.compile(r"ジャンプ"),
+    re.compile(r"確認する"),
+    re.compile(r"^Lv\d+$", re.IGNORECASE),
+    re.compile(r"倍率"),
+    re.compile(r"ポイント"),
+    re.compile(r"経験値"),
+    re.compile(r"消費"),
+    re.compile(r"最低Lv"),
+    re.compile(r"ボディ"),
+    re.compile(r"初期"),
+)
+KIRIKIRI_CSV_MARKERS = {
+    "デートタイトル(20文字)",
+    "概要テキスト",
+    "パーツ名",
+    "文章",
+    "スキル名",
+    "称号",
+    "ボイスファイル",
+    "画像ファイル名",
+    "パーツタイプID",
+    "HSLGジャンプ",
+    "デート場所(ゲームには無関係)",
+    "必要建物ID",
+    "※Mボディのみ",
+}
+CSV_NUMERIC_SYMBOL_RE = re.compile(
+    r"^[\d\s○×△▲▼▽■□◆◇★☆※◎◯・,./:;!?+\-_=|&()\[\]{}<>％%０-９]*$"
+)
+CSV_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./\\-]*$")
 
 _WRAP_VARS_SNIPPET = """
 \tvar wrapNum = 0; // wordwrapping word counter
@@ -85,19 +179,349 @@ _WRAP_VARS_SNIPPET = """
 \tvar newPage = 0; // wrapping flag for new page
 """
 
-_WRAP_BLOCK_SNIPPET = r"""
-\t\t/* Wordwrapping code (auto line breaks)
-\t\t   Simplified port, measures tokens and inserts line breaks when needed. */
-\t\tif(oldLine != conductor.curLineStr) {
-\t\t\tvar tempStr = "";
-\t\t\toldLine = conductor.curLineStr;
-\t\t\twrapNum = 0;
-\t\t\twrapPos = 0;
-\t\t\tbreakWrap = 0;
-\t\t\tnewPage = 0;
+_WRAP_BLOCK_SNIPPET = """
+        /* Wordwrapping code (auto line breaks)
+           Simplified port, measures tokens and inserts line breaks when needed. */
+        if(oldLine != conductor.curLineStr) {
+            var tempStr = "";
+            oldLine = conductor.curLineStr;
+            wrapNum = 0;
+            breakWrap = 0;
+            // Remove bracketed tags [ ... ] for width measurement
+            var i=0; while(i<oldLine.length) {
+                var ch = oldLine[i];
+                if(ch == '[') {
+                    var depth = 1; i++;
+                    while(i<oldLine.length && depth>0) {
+                        if(oldLine[i] == '[') depth++;
+                        else if(oldLine[i] == ']') depth--;
+                        i++;
+                    }
+                    continue;
+                }
+                if(ch != '\\\\') tempStr += ch; // ignore escape leader
+                i++;
+            }
+            if(tempStr.length < 1) {
+                breakWrap = 1;
+            } else {
+                // Tokenize on consecutive non-whitespace sequences so contractions
+                // (e.g., I'm) and attached punctuation (e.g., word”) stay together.
+                // Avoid String.match() because some TJS runtimes do not implement it.
+                splitLine = [];
+                var _tok = "";
+                for(var ti=0; ti<tempStr.length; ti++) {
+                    var tch = tempStr[ti];
+                    if(tch !== ' ' && tch !== '\\t' && tch !== '\\n' && tch !== '\\r') {
+                        _tok += tch;
+                    } else {
+                        if(_tok.length > 0) { splitLine.push(_tok); _tok = ""; }
+                    }
+                }
+                if(_tok.length > 0) { splitLine.push(_tok); }
+                // Attach standalone opening quotes to the following token.
+                var j = 0;
+                while (j < splitLine.length) {
+                    var tt = splitLine[j];
+                    if (tt.length === 1 && (tt === '“' || tt === '「' || tt === '『' || tt === '（' || tt === '(' || tt === '"')) {
+                        if (j + 1 < splitLine.length) {
+                            splitLine[j+1] = tt + splitLine[j+1];
+                            splitLine.splice(j, 1);
+                            continue;
+                        }
+                    }
+                    j++;
+                }
+                // Attach standalone closing quotes/apostrophes to the previous token.
+                j = 1;
+                while (j < splitLine.length) {
+                    var tt2 = splitLine[j];
+                    if (tt2.length === 1 && (tt2 === '”' || tt2 === '』' || tt2 === '」' || tt2 === '）' || tt2 === ')' || tt2 === '"' || tt2 === '’' || tt2 === "'")) {
+                        splitLine[j-1] = splitLine[j-1] + tt2;
+                        splitLine.splice(j, 1);
+                        continue;
+                    }
+                    j++;
+                }
+            }
+            wrapPos = current.vertical ? current.y + current.lineLayer.font.getTextWidth(" ") : current.x;
+        }
+        if(!breakWrap) {
+            if(text == " ") {
+                wrapNum++;
+                wrapPos = current.vertical ? current.y + current.lineLayer.font.getTextWidth(" ") : current.x;
+            }
+            var word = splitLine[wrapNum];
+            if(word !== void) {
+                var word_sz = current.lineLayer.font.getTextWidth(" "+word) + current.pitch * (word.length);
+                if(wrapPos + word_sz >= current.relinexpos) {
+                    if(current.marginL + word_sz <= current.relinexpos) {
+                        if(text == " ") text = "";
+                        if(historyLayer !== void) historyLayer.reline();
+                        if(currentWithBack) current.comp.processReturn();
+                        if(current.processReturn()) { return showPageBreakAndClear(); }
+                    }
+                    wrapPos = current.vertical ? current.y + current.lineLayer.font.getTextWidth(" ") : current.x;
+                }
+            }
 \t\t}
+        // end: wordwrapping code
 """
 
+_CHOICE_FONT_SIZE_DEFAULT = 18
+_CHOICE_TEXT_PADDING = 10
+_CHOICE_VERTICAL_GAP = 8
+
+_SELECT_BUTTON_HELPERS_SNIPPET = f"""
+    var renderedMessage = "";
+    var renderedFontHeight = 0;
+    var renderedLineHeight = 0;
+    var renderedStartY = 0;
+
+    function _getChoiceAvailableWidth(buttonWidth) {{
+        return buttonWidth - owner.choiceTextPadding * 2;
+    }}
+
+    function _getChoiceAvailableHeight(buttonHeight) {{
+        return buttonHeight - owner.choiceTextPadding * 2;
+    }}
+
+    function _splitChoiceLines(message) {{
+        var lines = [];
+        var currentLine = "";
+        for (var i = 0; i < message.length; i++) {{
+            var ch = message[i];
+            if (ch == '\\r') continue;
+            if (ch == '\\n') {{
+                lines.push(currentLine);
+                currentLine = "";
+                continue;
+            }}
+            currentLine += ch;
+        }}
+        lines.push(currentLine);
+        return lines;
+    }}
+
+    function _wrapChoiceMessageByWord(message, maxWidth) {{
+        if (!owner.choiceWordWrap || maxWidth <= 0 || message == "") return message;
+        var _segments = [];
+        var _segment = "";
+        for (var si = 0; si < message.length; si++) {{
+            var sch = message[si];
+            if (sch == '\\r') continue;
+            if (sch == '\\n') {{
+                _segments.push(_segment);
+                _segment = "";
+                continue;
+            }}
+            _segment += sch;
+        }}
+        _segments.push(_segment);
+
+        var _wrapped = [];
+        for (var li = 0; li < _segments.length; li++) {{
+            var segment = _segments[li];
+            if (segment == "") {{
+                _wrapped.push("");
+                continue;
+            }}
+
+            var hasWhitespace = false;
+            for (var wi = 0; wi < segment.length; wi++) {{
+                var wch = segment[wi];
+                if (wch == ' ' || wch == '\\t') {{
+                    hasWhitespace = true;
+                    break;
+                }}
+            }}
+            if (!hasWhitespace) {{
+                _wrapped.push(segment);
+                continue;
+            }}
+
+            var currentLine = "";
+            var currentWord = "";
+            for (var ci = 0; ci <= segment.length; ci++) {{
+                var ch = ci < segment.length ? segment[ci] : ' ';
+                if (ch != ' ' && ch != '\\t') {{
+                    currentWord += ch;
+                    continue;
+                }}
+                if (currentWord == "") continue;
+                var candidate = currentLine == "" ? currentWord : currentLine + " " + currentWord;
+                if (currentLine != "" && font.getTextWidth(candidate) > maxWidth) {{
+                    _wrapped.push(currentLine);
+                    currentLine = currentWord;
+                }} else {{
+                    currentLine = candidate;
+                }}
+                currentWord = "";
+            }}
+            if (currentLine != "") _wrapped.push(currentLine);
+        }}
+        return _wrapped.join("\\n");
+    }}
+
+    function _resolveWrappedChoiceMessage(buttonWidth) {{
+        var wrapWidth = _getChoiceAvailableWidth(buttonWidth);
+        if (wrapWidth <= 0) return message;
+        return _wrapChoiceMessageByWord(message, wrapWidth);
+    }}
+
+    function _resolveChoiceButtonHeight(wrappedMessage) {{
+        var measuredHeight = font.getTextHeight(wrappedMessage) + owner.choiceTextPadding * 2;
+        return measuredHeight > owner.selectHeight ? measuredHeight : owner.selectHeight;
+    }}
+
+    function _resolveChoiceTextLayout(buttonWidth, buttonHeight) {{
+        var minFontHeight = 12;
+        var fitFontHeight = owner.fontSize;
+        var fitMessage = message;
+        var fitLineHeight = owner.fontSize;
+        var fitStartY = owner.choiceTextPadding;
+        var availableWidth = _getChoiceAvailableWidth(buttonWidth);
+        var availableHeight = _getChoiceAvailableHeight(buttonHeight);
+        availableWidth = 1 if (availableWidth < 1);
+        availableHeight = 1 if (availableHeight < 1);
+
+        for (var tryFontHeight = owner.fontSize; tryFontHeight >= minFontHeight; tryFontHeight--) {{
+            font.height = tryFontHeight;
+            var tryMessage = _resolveWrappedChoiceMessage(buttonWidth);
+            var lines = _splitChoiceLines(tryMessage);
+            var lineHeight = font.getTextHeight("Ay");
+            lineHeight = tryFontHeight if (lineHeight < tryFontHeight);
+            lineHeight += 2;
+            var totalHeight = lineHeight * lines.count;
+            var maxWidth = 0;
+            for (var li = 0; li < lines.count; li++) {{
+                var lineWidth = font.getTextWidth(lines[li]);
+                maxWidth = lineWidth if (lineWidth > maxWidth);
+            }}
+            fitFontHeight = tryFontHeight;
+            fitMessage = tryMessage;
+            fitLineHeight = lineHeight;
+            fitStartY = (buttonHeight - totalHeight) >> 1;
+            fitStartY = owner.choiceTextPadding if (fitStartY < owner.choiceTextPadding);
+            if (totalHeight <= availableHeight && maxWidth <= availableWidth) break;
+        }}
+
+        return %[
+            message: fitMessage,
+            fontHeight: fitFontHeight,
+            lineHeight: fitLineHeight,
+            startY: fitStartY,
+        ];
+    }}
+
+    function _drawWrappedChoiceMessage(message) {{
+        if (message === void || message == "") return;
+        font.height = renderedFontHeight if (renderedFontHeight > 0);
+        var lines = _splitChoiceLines(message);
+        var lineHeight = renderedLineHeight > 0 ? renderedLineHeight : owner.fontSize;
+        var startY = renderedStartY;
+        var cnt = Butt_imageLoaded ? (Butt_showFocusImage ? 4 : 3) : 1;
+        for (var li = 0; li < lines.count; li++) {{
+            var line = lines[li];
+            var tw = font.getTextWidth(line);
+            var dx = (width - tw) >> 1;
+            for (var i = 0; i < cnt; i++) {{
+                var x = (Butt_imageLoaded ? i * width : 0) + dx;
+                owner.drawTextToLayer(this, x, startY + li * lineHeight, line, i, drawopt);
+            }}
+        }}
+    }}
+
+    function onPaint() {{
+        super.onPaint(...);
+        _drawWrappedChoiceMessage(renderedMessage);
+    }}
+"""
+
+_SELECT_DEFAULTS_SNIPPET = f"""
+    var selectWidth  = 400;
+    var selectHeight = 50;
+    var selectColor  = 0xffffff;
+    var selectBaseColor = 0x888888;
+    var choiceTextPadding = {_CHOICE_TEXT_PADDING};
+    var choiceVerticalGap = {_CHOICE_VERTICAL_GAP};
+    var choiceWordWrap = true;
+    var fontSize     = {_CHOICE_FONT_SIZE_DEFAULT};
+"""
+
+_SELECT_REDRAW_SNIPPET = """
+    function redraw() {
+        // reset choice font state
+        font.face   = owner.fontFace !== void ? owner.fontFace : owner.window.chDefaultFace;
+        font.bold   = owner.fontBold;
+        font.italic = owner.fontItalic;
+        font.height = owner.fontSize;
+
+        var hasimg = true;
+        var wrappedMessage = message;
+        with (owner) {
+            // load button visuals when present
+            if (.normalImage   != "") loadButtons(.normalImage, .overImage, .onImage, .focusImage);
+            else if (.graphic  != "") loadImages(.graphic, .graphickey);
+            else if (ui     !== void) loadUIInfo(ui);
+            else hasimg = false;
+
+            var buttonWidth = hasimg ? width : .selectWidth;
+            var buttonHeight = hasimg ? height : .selectHeight;
+            var layout = _resolveChoiceTextLayout(buttonWidth, buttonHeight);
+            renderedMessage = layout.message;
+            renderedFontHeight = layout.fontHeight;
+            renderedLineHeight = layout.lineHeight;
+            renderedStartY = layout.startY;
+            if (hasimg) {
+                modifyOpacity(.frameOpacity);
+            } else {
+                font.height = renderedFontHeight;
+                buttonHeight = _resolveChoiceButtonHeight(renderedMessage);
+                width        = .selectWidth;
+                height       = buttonHeight;
+                captionColor = .selectColor;
+                color        = .selectBaseColor;
+                caption      = "";
+                var plainLayout = _resolveChoiceTextLayout(width, height);
+                renderedMessage = plainLayout.message;
+                renderedFontHeight = plainLayout.fontHeight;
+                renderedLineHeight = plainLayout.lineHeight;
+                renderedStartY = plainLayout.startY;
+            }
+        }
+        update();
+    }
+"""
+
+_SELECT_POSITIONS_SNIPPET = """
+    function getSelectPositions(count) {
+        var ret = [];
+        if (uibutton !== void) {
+            // prefer explicit UI layout positions when they exist
+            for (var i=0; i<count; i++) {
+                var info = uibutton[getUIName(i, count)];
+                if (info === void) break;
+                with (info) ret.add([ .x + .width/2, .y + .height/2 ]);
+            }
+            if (ret.count == count) return ret;
+            ret.clear();
+        }
+        var x = left + width / 2;
+        var totalHeight = 0;
+        for (var i=0; i<count; i++) totalHeight += selects[i].height;
+        totalHeight += choiceVerticalGap * (count - 1) if (count > 1);
+        var y = top + (height - totalHeight) / 2;
+        y = top if (y < top);
+        for (var i=0; i<count; i++) {
+            var selectHeight = selects[i].height;
+            y += selectHeight / 2;
+            ret.add([ x, y ]);
+            y += selectHeight / 2 + choiceVerticalGap;
+        }
+        return ret;
+    }
+"""
 
 def _read_text(path: Path, candidates: Sequence[str]) -> Tuple[str, str]:
     data = path.read_bytes()
@@ -138,6 +562,8 @@ class ClassifiedLine:
     kind: str
     speaker: str = ""
     voice_id: str = ""
+    speaker_style: str = ""
+    raw_speaker_line: str = ""
 
 
 @dataclass(slots=True)
@@ -145,6 +571,8 @@ class PendingSpeaker:
     speaker: str
     voice_id: str = ""
     line_number: int = 0
+    speaker_style: str = ""
+    raw_speaker_line: str = ""
     bridge_code_lines: List[Tuple[int, str, str]] = field(default_factory=list)
 
 
@@ -156,6 +584,8 @@ class KsBlock:
     speaker: str
     voice_id: str
     speaker_line_number: int
+    speaker_style: str
+    speaker_raw_line: str
     start_line: int
     end_line: int
     text_line_numbers: List[int] = field(default_factory=list)
@@ -186,6 +616,45 @@ class MenuEntry:
     text: str
     line_index: int
     literal_index: int
+
+
+@dataclass(slots=True)
+class KsLiteralEntry:
+    text: str
+    line_number: int
+    tag: str
+    entry_kind: str
+    literal_index: int = 0
+
+
+@dataclass(slots=True)
+class CaptionEntry:
+    text: str
+    line_index: int
+    literal_index: int
+
+
+@dataclass(slots=True)
+class DialogLiteralEntry:
+    text: str
+    line_index: int
+    literal_index: int
+
+
+@dataclass(slots=True)
+class CsvEntry:
+    text: str
+    row_index: int
+    col_index: int
+    header: str
+    tag: str
+
+
+@dataclass(slots=True)
+class _CachedTaggedExtraction:
+    mtime_ns: int
+    size: int
+    tagged: Tuple[ExtractedLine, ...]
 
 
 @dataclass(slots=True)
@@ -282,6 +751,25 @@ class _CxOpcode(IntEnum):
     SUB_EAX_IMMED = 0x106
 
 
+def _annotate_extracted_line_locators(
+    extracted: List[ExtractedLine],
+    line_numbers: Sequence[int],
+) -> List[ExtractedLine]:
+    line_counts: Dict[int, int] = {}
+    for line_number in line_numbers:
+        line_counts[line_number] = line_counts.get(line_number, 0) + 1
+
+    line_offsets: Dict[int, int] = {}
+    for extracted_line, line_number in zip(extracted, line_numbers):
+        extracted_line.ln = line_number
+        if line_counts.get(line_number, 0) <= 1:
+            continue
+        next_offset = line_offsets.get(line_number, 0) + 1
+        line_offsets[line_number] = next_offset
+        extracted_line.f = next_offset
+    return extracted
+
+
 def _u32(value: int) -> int:
     return value & 0xFFFFFFFF
 
@@ -367,7 +855,6 @@ def _parse_cxdec_key(key: str, archive_path: Optional[Path] = None) -> Optional[
         control_block=control_block,
         tpm=tpm_name,
     )
-
 
 class _CxProgram:
     LENGTH_LIMIT = 0x80
@@ -1175,6 +1662,7 @@ def _classify_line(number: int, raw_line: str) -> ClassifiedLine:
     text, newline = _split_line_ending(raw_line)
     stripped = text.strip()
     speaker_match = SPEAKER_RE.match(stripped)
+    talk_match = TALK_COMMAND_RE.match(stripped)
     if not stripped:
         return ClassifiedLine(number=number, text=text, newline=newline, kind="blank")
     if speaker_match:
@@ -1185,6 +1673,23 @@ def _classify_line(number: int, raw_line: str) -> ClassifiedLine:
             kind="speaker",
             speaker=speaker_match.group("speaker") or "",
             voice_id=speaker_match.group("voice_id") or "",
+            speaker_style="bracket",
+            raw_speaker_line=text,
+        )
+    if talk_match:
+        args = talk_match.group("args") or ""
+        name_match = TALK_NAME_ARG_RE.search(args)
+        speaker = name_match.group("speaker") if name_match else ""
+        if len(speaker) >= 2 and speaker.startswith('"') and speaker.endswith('"'):
+            speaker = speaker[1:-1]
+        return ClassifiedLine(
+            number=number,
+            text=text,
+            newline=newline,
+            kind="speaker" if speaker else "talk_command",
+            speaker=speaker,
+            speaker_style="talk",
+            raw_speaker_line=text,
         )
     if COMMENT_RE.match(stripped):
         kind = "comment"
@@ -1198,9 +1703,41 @@ def _classify_line(number: int, raw_line: str) -> ClassifiedLine:
         kind = "tag"
     elif BRACE_COMMAND_RE.match(stripped):
         kind = "brace_command"
+    elif _looks_like_ks_code_text(stripped):
+        kind = "code"
     else:
         kind = "text"
     return ClassifiedLine(number=number, text=text, newline=newline, kind=kind)
+
+
+def _looks_like_ks_code_text(stripped: str) -> bool:
+    if not stripped:
+        return False
+    if stripped in {"{", "}", "};", "};", "]", "["}:
+        return True
+    if KS_CODE_KEYWORD_RE.match(stripped):
+        return True
+    if KS_CODE_CALL_RE.match(stripped):
+        return True
+    if stripped.startswith("."):
+        return True
+
+    code_signals = 0
+    if KS_CODE_ASSIGN_RE.search(stripped):
+        code_signals += 1
+    if KS_CODE_MEMBER_RE.search(stripped):
+        code_signals += 1
+    if KS_CODE_INDEX_RE.search(stripped):
+        code_signals += 1
+    if any(token in stripped for token in ("==", "!=", ">=", "<=", "&&", "||", "?", "%=", "%[")):
+        code_signals += 1
+    if any(char in stripped for char in (";", "{", "}")):
+        code_signals += 1
+    if re.search(r"\b(?:true|false|void|new|typeof)\b", stripped):
+        code_signals += 1
+    if stripped.endswith(")") and "(" in stripped:
+        code_signals += 1
+    return code_signals >= 2
 
 
 def _format_extracted_text(text: str, speaker: str) -> str:
@@ -1257,10 +1794,13 @@ def _should_keep_as_bridge(
     return _next_significant_kind(lines, index + 1) == "text"
 
 
-def _extract_ks_blocks(path: Path) -> List[KsBlock]:
+def _read_classified_ks_lines(path: Path) -> List[ClassifiedLine]:
     text, _ = _read_text(path, KS_ENCODING_CANDIDATES)
     raw_lines = text.splitlines(keepends=True)
-    lines = [_classify_line(index + 1, raw_line) for index, raw_line in enumerate(raw_lines)]
+    return [_classify_line(index + 1, raw_line) for index, raw_line in enumerate(raw_lines)]
+
+
+def _extract_ks_blocks_from_lines(path: Path, lines: Sequence[ClassifiedLine]) -> List[KsBlock]:
     blocks: List[KsBlock] = []
     current: Optional[KsBlock] = None
     pending_speaker: Optional[PendingSpeaker] = None
@@ -1268,11 +1808,17 @@ def _extract_ks_blocks(path: Path) -> List[KsBlock]:
     rel_name = path.as_posix()
 
     for index, line in enumerate(lines):
-        if line.kind == "speaker":
+        if line.kind in {"speaker", "talk_command"}:
             if current is not None and current.joined_text:
                 blocks.append(current)
             current = None
-            pending_speaker = PendingSpeaker(line.speaker, line.voice_id, line.number)
+            pending_speaker = PendingSpeaker(
+                line.speaker,
+                line.voice_id,
+                line.number,
+                speaker_style=line.speaker_style,
+                raw_speaker_line=line.raw_speaker_line,
+            )
             continue
 
         if line.kind == "text":
@@ -1288,6 +1834,8 @@ def _extract_ks_blocks(path: Path) -> List[KsBlock]:
                     speaker=speaker,
                     voice_id=voice_id,
                     speaker_line_number=(pending_speaker.line_number if pending_speaker else 0),
+                    speaker_style=(pending_speaker.speaker_style if pending_speaker else ""),
+                    speaker_raw_line=(pending_speaker.raw_speaker_line if pending_speaker else ""),
                     start_line=line.number,
                     end_line=line.number,
                     bridge_code_lines=bridges,
@@ -1328,6 +1876,21 @@ def _extract_ks_blocks(path: Path) -> List[KsBlock]:
         blocks.append(current)
 
     return [block for block in blocks if JAPANESE_RE.search(block.joined_text)]
+
+
+def _extract_ks_blocks(path: Path) -> List[KsBlock]:
+    return _extract_ks_blocks_from_lines(path, _read_classified_ks_lines(path))
+
+
+def _extract_ks_units(path: Path) -> List[tuple[int, int, str, KsBlock | KsLiteralEntry]]:
+    lines = _read_classified_ks_lines(path)
+    units: List[tuple[int, int, str, KsBlock | KsLiteralEntry]] = []
+    for block in _extract_ks_blocks_from_lines(path, lines):
+        units.append((block.start_line, 1, "block", block))
+    for entry in _extract_ks_literal_entries_from_lines(lines):
+        units.append((entry.line_number, 0, entry.entry_kind, entry))
+    units.sort(key=lambda item: (item[0], item[1]))
+    return units
 
 
 def _iter_string_literals(segment: str, base_offset: int = 0) -> Iterable[Tuple[str, int, int]]:
@@ -1443,6 +2006,140 @@ def _extract_menu_literals(path: Path) -> List[MenuEntry]:
     return entries
 
 
+def _extract_ks_literal_entries_from_lines(
+    lines: Sequence[ClassifiedLine],
+) -> List[KsLiteralEntry]:
+    entries: List[KsLiteralEntry] = []
+
+    for line in lines:
+        line_number = line.number
+        raw_line = line.text + line.newline
+        choice_match = SELADD_TEXT_RE.search(raw_line)
+        if choice_match:
+            choice_text = choice_match.group(2)
+            if choice_text.strip():
+                entries.append(
+                    KsLiteralEntry(
+                        text=choice_text,
+                        line_number=line_number,
+                        tag="choice",
+                        entry_kind="seladd",
+                        literal_index=0,
+                    )
+                )
+
+        label_match = LABEL_TITLE_RE.match(raw_line)
+        if label_match:
+            title = label_match.group(2)
+            if title.strip():
+                entries.append(
+                    KsLiteralEntry(
+                        text=title,
+                        line_number=line_number,
+                        tag="SaveLocation",
+                        entry_kind="label_title",
+                        literal_index=0,
+                    )
+                )
+
+        for entry in _extract_ks_code_literal_entries(raw_line, line_number):
+            entries.append(entry)
+
+    return entries
+
+
+def _extract_ks_literal_entries(path: Path) -> List[KsLiteralEntry]:
+    return _extract_ks_literal_entries_from_lines(_read_classified_ks_lines(path))
+
+
+def _extract_ks_code_literal_entries(raw_line: str, line_number: int) -> List[KsLiteralEntry]:
+    classified = _classify_line(line_number, raw_line)
+    if classified.kind != "code":
+        return []
+
+    entries: List[KsLiteralEntry] = []
+    for literal_index, match in enumerate(TJS_DIALOG_LITERAL_RE.finditer(raw_line)):
+        content = match.group(2)
+        if content.strip():
+            entries.append(
+                KsLiteralEntry(
+                    text=content,
+                    line_number=line_number,
+                    tag="dialog",
+                    entry_kind="dialog_call",
+                    literal_index=literal_index,
+                )
+            )
+
+    for literal_index, match in enumerate(KS_UI_FIELD_LITERAL_RE.finditer(raw_line)):
+        content = match.group(2)
+        if content.strip() and JAPANESE_RE.search(content):
+            entries.append(
+                KsLiteralEntry(
+                    text=content,
+                    line_number=line_number,
+                    tag="menu",
+                    entry_kind="ui_field",
+                    literal_index=literal_index,
+                )
+            )
+
+    for literal_index, match in enumerate(KS_DRAWTEXT_LITERAL_RE.finditer(raw_line)):
+        content = match.group(2)
+        if content.strip() and JAPANESE_RE.search(content):
+            entries.append(
+                KsLiteralEntry(
+                    text=content,
+                    line_number=line_number,
+                    tag="menu",
+                    entry_kind="drawtext",
+                    literal_index=literal_index,
+                )
+            )
+
+    return entries
+
+
+def _extract_tjs_caption_entries(path: Path) -> List[CaptionEntry]:
+    text, _ = _read_text(path, MENU_ENCODING_CANDIDATES)
+    entries: List[CaptionEntry] = []
+
+    for line_index, line in enumerate(text.splitlines(keepends=True)):
+        literal_index = 0
+        for match in CAPTION_LITERAL_RE.finditer(line):
+            content = match.group(2)
+            if content == "-" or not content.strip():
+                continue
+            entries.append(
+                CaptionEntry(text=content, line_index=line_index, literal_index=literal_index)
+            )
+            literal_index += 1
+
+    return entries
+
+
+def _extract_tjs_dialog_entries(path: Path) -> List[DialogLiteralEntry]:
+    text, _ = _read_text(path, MENU_ENCODING_CANDIDATES)
+    entries: List[DialogLiteralEntry] = []
+
+    for line_index, line in enumerate(text.splitlines(keepends=True)):
+        literal_index = 0
+        for match in TJS_DIALOG_LITERAL_RE.finditer(line):
+            content = match.group(2)
+            if not content.strip():
+                continue
+            entries.append(
+                DialogLiteralEntry(
+                    text=content,
+                    line_index=line_index,
+                    literal_index=literal_index,
+                )
+            )
+            literal_index += 1
+
+    return entries
+
+
 def _replace_menu_literals(line: str, translated_texts: Sequence[str]) -> str:
     lowered = line.lower()
     if "kagmenuitem" not in lowered and "menuitem" not in lowered:
@@ -1485,8 +2182,197 @@ def _replace_menu_literals(line: str, translated_texts: Sequence[str]) -> str:
     return line[:open_idx + 1] + rebuilt_args + line[close_idx:]
 
 
+def _replace_seladd_text(line: str, translated_text: str) -> Optional[str]:
+    match = SELADD_TEXT_RE.search(line)
+    if match is None:
+        return None
+    escaped = _escape_menu_content(translated_text)
+    return line[:match.start(2)] + escaped + line[match.end(2):]
+
+
+def _replace_label_title(line: str, translated_text: str) -> Optional[str]:
+    match = LABEL_TITLE_RE.match(line)
+    if match is None or not match.group(2).strip():
+        return None
+    return match.group(1) + translated_text + match.group(3)
+
+
+def _replace_caption_literals(line: str, translated_texts: Sequence[str]) -> str:
+    pieces: List[str] = []
+    cursor = 0
+    replacement_index = 0
+    for match in CAPTION_LITERAL_RE.finditer(line):
+        pieces.append(line[cursor:match.start(2)])
+        content = match.group(2)
+        if content == "-" or not content.strip() or not JAPANESE_RE.search(content):
+            pieces.append(content)
+        else:
+            translated = (
+                translated_texts[replacement_index]
+                if replacement_index < len(translated_texts)
+                else content
+            )
+            pieces.append(_escape_menu_content(translated))
+            replacement_index += 1
+        cursor = match.end(2)
+    pieces.append(line[cursor:])
+    return "".join(pieces)
+
+
+def _replace_tjs_dialog_literals(line: str, translated_texts: Sequence[str]) -> str:
+    pieces: List[str] = []
+    cursor = 0
+    replacement_index = 0
+    for match in TJS_DIALOG_LITERAL_RE.finditer(line):
+        pieces.append(line[cursor:match.start(2)])
+        content = match.group(2)
+        translated = (
+            translated_texts[replacement_index]
+            if replacement_index < len(translated_texts)
+            else content
+        )
+        pieces.append(_escape_menu_content(translated))
+        replacement_index += 1
+        cursor = match.end(2)
+    pieces.append(line[cursor:])
+    return "".join(pieces)
+
+
+def _replace_pattern_literal_by_index(
+    line: str,
+    pattern: re.Pattern[str],
+    translated_text: str,
+    literal_index: int,
+) -> Optional[str]:
+    pieces: List[str] = []
+    cursor = 0
+    current_index = 0
+    replaced = False
+    escaped = _escape_menu_content(translated_text)
+    for match in pattern.finditer(line):
+        pieces.append(line[cursor:match.start(2)])
+        content = match.group(2)
+        if current_index == literal_index:
+            pieces.append(escaped)
+            replaced = True
+        else:
+            pieces.append(content)
+        cursor = match.end(2)
+        current_index += 1
+    if not replaced:
+        return None
+    pieces.append(line[cursor:])
+    return "".join(pieces)
+
+
 def _escape_menu_content(text: str) -> str:
     return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _detect_csv_newline(text: str) -> str:
+    return "\r\n" if "\r\n" in text else "\n"
+
+
+def _read_csv_rows(path: Path) -> Tuple[List[List[str]], str, str]:
+    text, encoding = _read_text(path, CSV_ENCODING_CANDIDATES)
+    rows = list(csv.reader(io.StringIO(text, newline="")))
+    return rows, encoding, _detect_csv_newline(text)
+
+
+def _write_csv_rows(
+    path: Path,
+    rows: Sequence[Sequence[str]],
+    encoding: str,
+    newline: str,
+) -> None:
+    buffer = io.StringIO(newline="")
+    writer = csv.writer(buffer, lineterminator=newline)
+    writer.writerows(rows)
+    _write_text(path, buffer.getvalue(), encoding)
+
+
+def _looks_like_kirikiri_csv(path: Path) -> bool:
+    try:
+        rows, _encoding, _newline = _read_csv_rows(path)
+    except Exception:
+        return False
+    if not rows:
+        return False
+    headers = {header.strip() for header in rows[0] if header.strip()}
+    return bool(headers.intersection(KIRIKIRI_CSV_MARKERS))
+
+
+def _csv_header_to_tag(header: str) -> str:
+    alias = CSV_ALLOWED_HEADER_TAGS.get(header, "text")
+    return f"csv_{alias}"
+
+
+def _is_filename_like_csv_value(value: str) -> bool:
+    stripped = value.strip()
+    if not stripped or JAPANESE_RE.search(stripped):
+        return False
+    if not CSV_FILENAME_RE.fullmatch(stripped):
+        return False
+    return "_" in stripped or "." in stripped or stripped.isupper()
+
+
+def _csv_column_looks_translatable(values: Sequence[str]) -> bool:
+    content = [value.strip() for value in values if value.strip()]
+    if not content:
+        return False
+    japanese_hits = sum(1 for value in content if JAPANESE_RE.search(value))
+    numeric_hits = sum(1 for value in content if CSV_NUMERIC_SYMBOL_RE.fullmatch(value))
+    filename_hits = sum(1 for value in content if _is_filename_like_csv_value(value))
+    return japanese_hits > 0 and numeric_hits < len(content) and filename_hits < len(content)
+
+
+def _is_translatable_csv_header(header: str) -> bool:
+    stripped = header.strip()
+    if not stripped:
+        return False
+    if stripped in CSV_ALLOWED_HEADER_TAGS:
+        return True
+    if any(pattern.search(stripped) for pattern in CSV_HEADER_EXCLUDE_PATTERNS):
+        return False
+    return any(pattern.search(stripped) for pattern in CSV_HEADER_ALLOW_PATTERNS)
+
+
+def _extract_csv_entries(path: Path) -> List[CsvEntry]:
+    rows, _encoding, _newline = _read_csv_rows(path)
+    if not rows:
+        return []
+
+    headers = rows[0]
+    entries: List[CsvEntry] = []
+    for col_index, raw_header in enumerate(headers):
+        header = raw_header.strip()
+        if not _is_translatable_csv_header(header):
+            continue
+        values = [
+            row[col_index]
+            for row in rows[1:]
+            if col_index < len(row) and row[col_index].strip()
+        ]
+        if not _csv_column_looks_translatable(values):
+            continue
+        tag = _csv_header_to_tag(header)
+        for row_index in range(1, len(rows)):
+            row = rows[row_index]
+            if col_index >= len(row):
+                continue
+            value = row[col_index].strip()
+            if not value:
+                continue
+            entries.append(
+                CsvEntry(
+                    text=row[col_index],
+                    row_index=row_index,
+                    col_index=col_index,
+                    header=header,
+                    tag=tag,
+                )
+            )
+    return entries
 
 
 def _serialize_ks_block(block: KsBlock, translated_text: str, line_endings: Dict[int, str]) -> Dict[int, str]:
@@ -1505,9 +2391,16 @@ def _serialize_speaker_line(
 ) -> Dict[int, str]:
     if not translated_speaker or not block.speaker_line_number:
         return {}
-    line = f"【{translated_speaker}】"
-    if block.voice_id:
-        line += f"[{block.voice_id}]"
+    if block.speaker_style == "talk":
+        raw_line = block.speaker_raw_line or "@talk"
+        if TALK_NAME_ARG_RE.search(raw_line):
+            line = TALK_NAME_ARG_RE.sub(rf"name={translated_speaker}", raw_line, count=1)
+        else:
+            line = f"{raw_line} name={translated_speaker}"
+    else:
+        line = f"【{translated_speaker}】"
+        if block.voice_id:
+            line += f"[{block.voice_id}]"
     return {block.speaker_line_number: line + line_endings.get(block.speaker_line_number, "")}
 
 
@@ -1534,33 +2427,202 @@ def _write_text_with_bom(path: Path, text: str, encoding: str, bom: bytes) -> No
     path.write_bytes(payload)
 
 
+def _replace_first(text: str, pattern: str, replacement: str) -> str:
+    return re.sub(pattern, lambda _match: replacement, text, count=1, flags=re.DOTALL)
+
+
+def _replace_between(text: str, start_marker: str, end_marker: str, replacement: str) -> str:
+    start = text.find(start_marker)
+    if start == -1:
+        return text
+    end = text.find(end_marker, start)
+    if end == -1:
+        return text
+    return text[:start] + replacement + text[end:]
+
+
 def _already_has_wrap_vars(text: str) -> bool:
     return "var wrapNum" in text and "var wrapPos" in text and "var oldLine" in text
 
 
 def _already_has_wrap_block(text: str) -> bool:
+    if "\\t\\t/* Wordwrapping code" in text:
+        return False
     return "Wordwrapping code" in text or "oldLine != conductor.curLineStr" in text
 
 
 def _patch_add_wrap_vars(text: str) -> str:
     if _already_has_wrap_vars(text):
         return text
-    anchor = re.search(r"var\s+newPage\s*=\s*0\s*;", text)
-    if anchor:
-        return text
-    insert_after = re.search(r"(ch\s*:\s*function\s*\(\s*elm\s*\)\s*\{)", text)
+    insert_after = re.search(r"(class\s+KAGWindow\s+extends\s+Window\s*\{\s*)", text)
+    if not insert_after:
+        insert_after = re.search(r"(ch\s*:\s*function\s*\(\s*elm\s*\)\s*\{)", text)
     if not insert_after:
         return text
     return text[:insert_after.end()] + _WRAP_VARS_SNIPPET + text[insert_after.end():]
 
 
 def _patch_add_wrap_block(text: str) -> str:
+    escaped_block = re.compile(
+        r"\\t\\t/\* Wordwrapping code.*?// end: wordwrapping code\s*",
+        re.DOTALL,
+    )
+    if escaped_block.search(text):
+        return escaped_block.sub(lambda _match: _WRAP_BLOCK_SNIPPET, text, count=1)
+    existing_block = re.compile(
+        r"[ \t]*/\* Wordwrapping code.*?// end: wordwrapping code\s*",
+        re.DOTALL,
+    )
+    match = existing_block.search(text)
+    if match:
+        existing = match.group(0)
+        if existing != _WRAP_BLOCK_SNIPPET:
+            return existing_block.sub(lambda _match: _WRAP_BLOCK_SNIPPET, text, count=1)
+        return text
     if _already_has_wrap_block(text):
         return text
-    match = PROCESS_CH_RE.search(text)
-    if not match:
+    ch_start = re.search(r"(ch\s*:\s*function\s*\(\s*elm\s*\)\s*\{)", text)
+    if not ch_start:
         return text
-    return text[:match.start()] + _WRAP_BLOCK_SNIPPET + text[match.start():]
+    start_idx = ch_start.end()
+    ch_end_match = re.search(r"\}\s*incontextof\s+this", text[start_idx:])
+    end_idx = start_idx + ch_end_match.start() if ch_end_match else len(text)
+
+    region = text[start_idx:end_idx]
+    insert_at: Optional[int] = None
+
+    var_text = re.search(
+        r"var\s+text\s*=\s*elm\.text(?:\s*,\s*repage\s*=\s*void)?\s*;",
+        region,
+    )
+    if var_text:
+        base = start_idx + var_text.end()
+        current_with_back = re.search(
+            r"if\s*\(\s*currentWithBack\s*\)\s*"
+            r"(?:\{[^\}]*?\}|[^\n\r\{]*)?"
+            r"current\.comp\.processCh\(\s*text\s*\)\s*;",
+            text[base:end_idx],
+            re.DOTALL,
+        )
+        if current_with_back:
+            insert_at = base + current_with_back.end()
+        else:
+            insert_at = base
+    else:
+        process_call = re.search(
+            r"(?:repage\s*=\s*)?current\.processCh\(\s*text(?:\s*,[^\)]*)?\)\s*;",
+            region,
+        )
+        if process_call:
+            insert_at = start_idx + process_call.start()
+        else:
+            legacy_if = PROCESS_CH_RE.search(region)
+            if legacy_if:
+                insert_at = start_idx + legacy_if.start()
+
+    if insert_at is None:
+        return text
+    return text[:insert_at] + _WRAP_BLOCK_SNIPPET + text[insert_at:]
+
+
+def _patch_select_layer(text: str) -> str:
+    patched = text
+
+    defaults_pattern = (
+        r"\s*var\s+selectWidth\s*=\s*400;\s*\n"
+        r"\s*var\s+selectHeight\s*=\s*50;\s*\n"
+        r"\s*var\s+selectColor\s*=\s*0xffffff;\s*\n"
+        r"\s*var\s+selectBaseColor\s*=\s*0x888888;\s*\n"
+        r"\s*(?:var\s+choiceTextPadding\s*=.*?\n)?"
+        r"\s*(?:var\s+choiceVerticalGap\s*=.*?\n)?"
+        r"\s*(?:var\s+choiceWordWrap\s*=.*?\n)?"
+        r"\s*var\s+fontSize\s*=\s*\d+;"
+    )
+    if re.search(defaults_pattern, patched, re.DOTALL):
+        patched = _replace_first(patched, defaults_pattern, _SELECT_DEFAULTS_SNIPPET.rstrip("\n"))
+
+    if 'var renderedMessage = "";' in patched:
+        patched = _replace_between(
+            patched,
+            'var renderedMessage = "";',
+            "function redraw() {",
+            _SELECT_BUTTON_HELPERS_SNIPPET.rstrip("\n") + "\n\n    ",
+        )
+    else:
+        patched = _replace_between(
+            patched,
+            "function _wrapChoiceMessageByWord(message, maxWidth) {",
+            "function redraw() {",
+            _SELECT_BUTTON_HELPERS_SNIPPET.rstrip("\n") + "\n\n    ",
+        )
+
+    helper_marker = "function _wrapChoiceMessageByWord(message, maxWidth)"
+    if helper_marker not in patched:
+        patched = patched.replace(
+            "\tfunction redraw() {",
+            _SELECT_BUTTON_HELPERS_SNIPPET + "\n\tfunction redraw() {",
+            1,
+        )
+
+    patched = _replace_between(
+        patched,
+        "function redraw() {",
+        "function finalize() {",
+        _SELECT_REDRAW_SNIPPET.rstrip("\n") + "\n\n    ",
+    )
+
+    patched = _replace_between(
+        patched,
+        "function getSelectPositions(count) {",
+        "function start(parent, absolute) {",
+        _SELECT_POSITIONS_SNIPPET.rstrip("\n") + "\n\n    ",
+    )
+
+    return patched
+
+
+def _stage_or_resolve_project_file(
+    project_root: Path,
+    input_root: Optional[Path],
+    candidates: Sequence[Path],
+) -> Optional[Path]:
+    for relative in candidates:
+        candidate = project_root / relative
+        if candidate.exists():
+            return candidate
+    if input_root is None:
+        return None
+    for relative in candidates:
+        source_candidate = input_root / relative
+        if source_candidate.exists():
+            target = project_root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source_candidate.read_bytes())
+            return target
+    return None
+
+
+def _patch_project_script(
+    project_root: Path,
+    input_root: Optional[Path],
+    candidates: Sequence[Path],
+    patcher: Callable[[str], str],
+) -> None:
+    target = _stage_or_resolve_project_file(project_root, input_root, candidates)
+    if target is None:
+        return
+
+    text, encoding, bom = _read_text_with_bom(target)
+    patched = patcher(text)
+    if patched == text:
+        return
+    if not _is_balanced(patched):
+        return
+
+    backup = target.with_suffix(target.suffix + ".bak")
+    if not backup.exists():
+        _write_text_with_bom(backup, text, encoding, bom)
+    _write_text_with_bom(target, patched, encoding, bom)
 
 
 def _is_balanced(text: str) -> bool:
@@ -1619,7 +2681,10 @@ def _is_balanced(text: str) -> bool:
 
 
 class KiriKiri2Parser(ParserScript):
-    """Parser for KiriKiri2/KAG `.ks` scripts and `Menus.tjs` captions."""
+    """Parser for KiriKiri2/KAG `.ks`, `.tjs`, and schema-based `.csv` files."""
+
+    def __init__(self) -> None:
+        self._tagged_cache: Dict[str, _CachedTaggedExtraction] = {}
 
     @property
     def name(self) -> str:
@@ -1634,7 +2699,7 @@ class KiriKiri2Parser(ParserScript):
         return WordwrapConfig(max_line_length=42, max_line_number=3, wordwrap_command="\n")
 
     def wordwrap_for_tag(self, tag: str) -> Optional[WordwrapConfig]:
-        if tag == "menu":
+        if tag in {"menu", "choice", "SaveLocation", "dialog"}:
             return WordwrapConfig(max_line_length=32, max_line_number=2, wordwrap_command="\n")
         return self.wordwrap_config
 
@@ -1642,8 +2707,11 @@ class KiriKiri2Parser(ParserScript):
         if file_path.suffix.lower() == ".ks":
             _, encoding = _read_text(file_path, KS_ENCODING_CANDIDATES)
             return encoding
-        if file_path.name.lower() == "menus.tjs":
+        if file_path.suffix.lower() == ".tjs":
             _, encoding = _read_text(file_path, MENU_ENCODING_CANDIDATES)
+            return encoding
+        if file_path.suffix.lower() == ".csv":
+            _, encoding = _read_text(file_path, CSV_ENCODING_CANDIDATES)
             return encoding
         return None
 
@@ -1671,14 +2739,27 @@ class KiriKiri2Parser(ParserScript):
                 if AT_COMMAND_RE.match(stripped):
                     return True
             return False
-        if name == "menus.tjs":
+        if suffix == ".tjs":
             if not path.exists():
-                return True
+                return name == "menus.tjs"
             try:
                 text, _ = _read_text(path, MENU_ENCODING_CANDIDATES)
             except Exception:
                 return False
-            return "KAGMenuItem" in text or "MenuItem" in text
+            lowered = text.lower()
+            if name == "menus.tjs":
+                return "kagmenuitem" in lowered or "menuitem" in lowered
+            return (
+                "caption:" in lowered
+                or "setyesno(" in lowered
+                or "setok(" in lowered
+                or "setmessage(" in lowered
+                or "seterror(" in lowered
+            )
+        if suffix == ".csv":
+            if not path.exists():
+                return False
+            return _looks_like_kirikiri_csv(path)
         return False
 
     def extract(self, file_path: Path) -> List[str]:
@@ -1686,25 +2767,128 @@ class KiriKiri2Parser(ParserScript):
         return [line.text for line in tagged] if tagged else []
 
     def extract_tagged(self, file_path: Path) -> Optional[List[ExtractedLine]]:
+        cached = self._get_cached_tagged(file_path)
+        if cached is not None:
+            return cached
+
+        tagged = self._build_tagged(file_path)
+        if tagged is None:
+            return None
+
+        self._store_cached_tagged(file_path, tagged)
+        return list(tagged)
+
+    def _build_tagged(self, file_path: Path) -> Optional[List[ExtractedLine]]:
         path = Path(file_path)
         if path.suffix.lower() == ".ks":
-            blocks = _extract_ks_blocks(path)
-            return [
-                ExtractedLine(
-                    text=block.extracted_text,
-                    tag=block.tag,
-                    speaker=block.speaker,
-                    context=f"{path.name}:{block.start_line}",
+            extracted: List[ExtractedLine] = []
+            line_numbers: List[int] = []
+            for line_number, _priority, unit_kind, unit in _extract_ks_units(path):
+                if unit_kind == "block":
+                    block = unit
+                    assert isinstance(block, KsBlock)
+                    extracted.append(
+                        ExtractedLine(
+                            text=block.extracted_text,
+                            tag=block.tag,
+                            speaker=block.speaker,
+                            context=f"{path.name}:{block.start_line}",
+                        )
+                    )
+                    line_numbers.append(block.start_line)
+                    continue
+                entry = unit
+                assert isinstance(entry, KsLiteralEntry)
+                extracted.append(
+                    ExtractedLine(
+                        text=entry.text,
+                        tag=entry.tag,
+                        context=f"{path.name}:{line_number}",
+                    )
                 )
-                for block in blocks
-            ]
+                line_numbers.append(entry.line_number)
+            return _annotate_extracted_line_locators(extracted, line_numbers)
+
         if path.name.lower() == "menus.tjs":
             entries = _extract_menu_literals(path)
-            return [
+            extracted = [
                 ExtractedLine(text=entry.text, tag="menu", context=f"{path.name}:{entry.line_index + 1}")
                 for entry in entries
             ]
+            return _annotate_extracted_line_locators(
+                extracted,
+                [entry.line_index + 1 for entry in entries],
+            )
+        if path.suffix.lower() == ".tjs":
+            extracted: List[ExtractedLine] = []
+            line_numbers: List[int] = []
+            for entry in _extract_tjs_caption_entries(path):
+                extracted.append(
+                    ExtractedLine(
+                        text=entry.text,
+                        tag="menu",
+                        context=f"{path.name}:{entry.line_index + 1}",
+                    )
+                )
+                line_numbers.append(entry.line_index + 1)
+            for entry in _extract_tjs_dialog_entries(path):
+                extracted.append(
+                    ExtractedLine(
+                        text=entry.text,
+                        tag="dialog",
+                        context=f"{path.name}:{entry.line_index + 1}",
+                    )
+                )
+                line_numbers.append(entry.line_index + 1)
+            return _annotate_extracted_line_locators(extracted, line_numbers)
+        if path.suffix.lower() == ".csv":
+            entries = _extract_csv_entries(path)
+            extracted = [
+                ExtractedLine(
+                    text=entry.text,
+                    tag=entry.tag,
+                    context=f"{path.name}:{entry.row_index + 1}:{entry.header}",
+                )
+                for entry in entries
+            ]
+            return _annotate_extracted_line_locators(
+                extracted,
+                [entry.row_index + 1 for entry in entries],
+            )
         return None
+
+    def _get_cached_tagged(self, file_path: Path) -> Optional[List[ExtractedLine]]:
+        path = Path(file_path)
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+
+        resolved = str(path.resolve())
+        cached = self._tagged_cache.get(resolved)
+        if cached is None:
+            return None
+        if cached.mtime_ns != stat.st_mtime_ns or cached.size != stat.st_size:
+            self._tagged_cache.pop(resolved, None)
+            return None
+        return list(cached.tagged)
+
+    def _store_cached_tagged(
+        self,
+        file_path: Path,
+        tagged: Sequence[ExtractedLine],
+    ) -> None:
+        path = Path(file_path)
+        try:
+            stat = path.stat()
+        except OSError:
+            return
+
+        self._tagged_cache[str(path.resolve())] = _CachedTaggedExtraction(
+            mtime_ns=stat.st_mtime_ns,
+            size=stat.st_size,
+            tagged=tuple(tagged),
+        )
 
     def detect_speakers(self, lines: List[str]) -> Optional[List[SpeakerInfo]]:
         speakers: List[SpeakerInfo] = []
@@ -1753,11 +2937,14 @@ class KiriKiri2Parser(ParserScript):
         if path.suffix.lower() == ".ks":
             text, encoding = _read_text(path, KS_ENCODING_CANDIDATES)
             raw_lines = text.splitlines(keepends=True)
-            blocks = _extract_ks_blocks(path)
+            units = _extract_ks_units(path)
             search_keys = (
                 orig_lines
                 if orig_lines is not None
-                else [block.extracted_text for block in blocks]
+                else [
+                    unit.extracted_text if unit_kind == "block" else unit.text
+                    for _line, _priority, unit_kind, unit in units
+                ]
             )
             line_endings = {
                 index + 1: _split_line_ending(raw_line)[1]
@@ -1766,27 +2953,71 @@ class KiriKiri2Parser(ParserScript):
             replacements: Dict[int, str] = {}
             failures: List[int] = []
             for index, translated in enumerate(lines):
-                if index >= len(blocks):
+                if index >= len(units):
                     failures.append(index)
                     continue
-                block = blocks[index]
-                search = search_keys[index] if index < len(search_keys) else block.joined_text
+                _line_number, _priority, unit_kind, unit = units[index]
+                search = (
+                    search_keys[index]
+                    if index < len(search_keys)
+                    else unit.extracted_text if unit_kind == "block" else unit.text
+                )
                 if translated == search:
                     continue
-                search_speaker, search_dialogue = _split_extracted_text(search)
-                translated_speaker, translated_dialogue = _split_extracted_text(translated)
-                if block.speaker:
-                    if not search_dialogue:
-                        search_dialogue = block.joined_text
-                    if translated_speaker and translated_speaker != (search_speaker or block.speaker):
+                if unit_kind == "block":
+                    block = unit
+                    assert isinstance(block, KsBlock)
+                    search_speaker, search_dialogue = _split_extracted_text(search)
+                    translated_speaker, translated_dialogue = _split_extracted_text(translated)
+                    if block.speaker:
+                        if not search_dialogue:
+                            search_dialogue = block.joined_text
+                        if translated_speaker and translated_speaker != (search_speaker or block.speaker):
+                            replacements.update(
+                                _serialize_speaker_line(block, translated_speaker, line_endings)
+                            )
                         replacements.update(
-                            _serialize_speaker_line(block, translated_speaker, line_endings)
+                            _serialize_ks_block(block, translated_dialogue, line_endings)
                         )
-                    replacements.update(
-                        _serialize_ks_block(block, translated_dialogue, line_endings)
+                    else:
+                        replacements.update(_serialize_ks_block(block, translated, line_endings))
+                    continue
+
+                entry = unit
+                assert isinstance(entry, KsLiteralEntry)
+                line_index = entry.line_number - 1
+                if line_index < 0 or line_index >= len(raw_lines):
+                    failures.append(index)
+                    continue
+                if entry.entry_kind == "seladd":
+                    replaced = _replace_seladd_text(raw_lines[line_index], translated)
+                elif entry.entry_kind == "label_title":
+                    replaced = _replace_label_title(raw_lines[line_index], translated)
+                elif entry.entry_kind == "dialog_call":
+                    replaced = _replace_pattern_literal_by_index(
+                        raw_lines[line_index],
+                        TJS_DIALOG_LITERAL_RE,
+                        translated,
+                        entry.literal_index,
+                    )
+                elif entry.entry_kind == "ui_field":
+                    replaced = _replace_pattern_literal_by_index(
+                        raw_lines[line_index],
+                        KS_UI_FIELD_LITERAL_RE,
+                        translated,
+                        entry.literal_index,
                     )
                 else:
-                    replacements.update(_serialize_ks_block(block, translated, line_endings))
+                    replaced = _replace_pattern_literal_by_index(
+                        raw_lines[line_index],
+                        KS_DRAWTEXT_LITERAL_RE,
+                        translated,
+                        entry.literal_index,
+                    )
+                if replaced is None:
+                    failures.append(index)
+                    continue
+                raw_lines[line_index] = replaced
             for line_number, replacement in replacements.items():
                 raw_lines[line_number - 1] = replacement
             _write_text(output_path, "".join(raw_lines), encoding)
@@ -1813,39 +3044,82 @@ class KiriKiri2Parser(ParserScript):
             _write_text(output_path, "".join(raw_lines), encoding)
             return failures
 
+        if path.suffix.lower() == ".tjs":
+            text, encoding = _read_text(path, MENU_ENCODING_CANDIDATES)
+            raw_lines = text.splitlines(keepends=True)
+            entries = _extract_tjs_caption_entries(path)
+            dialog_entries = _extract_tjs_dialog_entries(path)
+            grouped: Dict[int, List[str]] = {}
+            dialog_grouped: Dict[int, List[str]] = {}
+            failures: List[int] = []
+            combined_entries: List[CaptionEntry | DialogLiteralEntry] = [*entries, *dialog_entries]
+            search_keys = (
+                orig_lines
+                if orig_lines is not None
+                else [entry.text for entry in combined_entries]
+            )
+            for index, translated in enumerate(lines):
+                if index >= len(combined_entries):
+                    failures.append(index)
+                    continue
+                entry = combined_entries[index]
+                search = search_keys[index] if index < len(search_keys) else entry.text
+                if translated == search:
+                    continue
+                if isinstance(entry, CaptionEntry):
+                    grouped.setdefault(entry.line_index, []).append(translated)
+                else:
+                    dialog_grouped.setdefault(entry.line_index, []).append(translated)
+            for line_index, translated_texts in grouped.items():
+                raw_lines[line_index] = _replace_caption_literals(raw_lines[line_index], translated_texts)
+            for line_index, translated_texts in dialog_grouped.items():
+                raw_lines[line_index] = _replace_tjs_dialog_literals(
+                    raw_lines[line_index],
+                    translated_texts,
+                )
+            _write_text(output_path, "".join(raw_lines), encoding)
+            return failures
+
+        if path.suffix.lower() == ".csv":
+            rows, encoding, newline = _read_csv_rows(path)
+            entries = _extract_csv_entries(path)
+            failures: List[int] = []
+            search_keys = orig_lines if orig_lines is not None else [entry.text for entry in entries]
+            for index, translated in enumerate(lines):
+                if index >= len(entries):
+                    failures.append(index)
+                    continue
+                entry = entries[index]
+                search = search_keys[index] if index < len(search_keys) else entry.text
+                if translated == search:
+                    continue
+                row = rows[entry.row_index]
+                if entry.col_index >= len(row):
+                    row.extend([""] * (entry.col_index + 1 - len(row)))
+                row[entry.col_index] = translated
+            _write_csv_rows(output_path, rows, encoding, newline)
+            return failures
+
         text, encoding = _read_text(path, ("utf-8", "cp932", "shift_jis"))
         _write_text(output_path, text, encoding)
         return list(range(len(lines)))
 
     def post_inject_project(self, project_root: Path, *, input_root: Optional[Path] = None) -> None:
-        candidates = [
-            Path("data") / "system" / "MainWindow.tjs",
-            Path("system") / "MainWindow.tjs",
-        ]
-        target: Optional[Path] = None
-        for relative in candidates:
-            candidate = project_root / relative
-            if candidate.exists():
-                target = candidate
-                break
-        if target is None and input_root is not None:
-            for relative in candidates:
-                source_candidate = input_root / relative
-                if source_candidate.exists():
-                    target = project_root / relative
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(source_candidate.read_bytes())
-                    break
-        if target is None:
-            return
-
-        text, encoding, bom = _read_text_with_bom(target)
-        patched = _patch_add_wrap_block(_patch_add_wrap_vars(text))
-        if patched == text:
-            return
-        if not _is_balanced(patched):
-            return
-        backup = target.with_suffix(target.suffix + ".bak")
-        if not backup.exists():
-            _write_text_with_bom(backup, text, encoding, bom)
-        _write_text_with_bom(target, patched, encoding, bom)
+        _patch_project_script(
+            project_root,
+            input_root,
+            [
+                Path("data") / "system" / "MainWindow.tjs",
+                Path("system") / "MainWindow.tjs",
+            ],
+            lambda text: _patch_add_wrap_block(_patch_add_wrap_vars(text)),
+        )
+        _patch_project_script(
+            project_root,
+            input_root,
+            [
+                Path("data") / "system" / "SelectLayer.tjs",
+                Path("system") / "SelectLayer.tjs",
+            ],
+            _patch_select_layer,
+        )

@@ -43,6 +43,7 @@ COLOR_BORDER = "#C5DCF0"
 COLOR_ACCENT = "#5BA4D9"
 COLOR_SUCCESS = "#6BBF8E"          # Green — All Green
 COLOR_RECOVERED = "#F0C94B"        # Yellow — Recovered
+COLOR_CONTENT_WARNING = "#D68B4C"  # Amber — Unsafe/refused content
 COLOR_FAILED = "#E07070"           # Red — Not Recovered
 COLOR_HEADER = "#34495E"           # Dark header text
 COLOR_META = "#4A6A8C"            # Meta information
@@ -58,6 +59,15 @@ CATEGORY_LABELS: Dict[str, str] = {
     LogCategory.TERM_TRANSLATION: "Term Translation",
     LogCategory.GENDER_INFERENCE: "Gender Inference",
     LogCategory.OTHER: "Other",
+}
+
+STATUS_LABELS: Dict[str, str] = {
+    "all": "All Statuses",
+    LogStatus.CONTENT_WARNING.value: "Content Warning Only",
+    LogStatus.FAILED.value: "Failed Only",
+    LogStatus.RECOVERED.value: "Recovered Only",
+    LogStatus.SUCCESS.value: "Successful Only",
+    LogStatus.PENDING.value: "Pending Only",
 }
 
 VIEW_MODES = ["Both", "Sent", "Received"]
@@ -83,6 +93,17 @@ def parse_api_log_display_limit(value: str) -> Optional[int]:
     if canonical == "Nothing":
         return 0
     return int(canonical)
+
+
+def resolve_status_filter(label: str) -> Optional[LogStatus]:
+    """Map a status dropdown label to the corresponding log status."""
+    for key, value in STATUS_LABELS.items():
+        if value != label:
+            continue
+        if key == "all":
+            return None
+        return LogStatus(key)
+    return None
 
 
 class APILogViewDialog(tk.Toplevel):
@@ -145,6 +166,7 @@ class APILogViewDialog(tk.Toplevel):
 
         # Filter state
         self._category_filter: Optional[str] = None  # None = all
+        self._status_filter: Optional[LogStatus] = None
         self._view_mode: str = "Both"
         self._search_text: str = ""
         self._request_refs: Optional[set[str]] = None
@@ -210,6 +232,9 @@ class APILogViewDialog(tk.Toplevel):
             )
             self._text.tag_configure(
                 "header_recovered", foreground=theme.accent_warning,
+            )
+            self._text.tag_configure(
+                "header_content_warning", foreground=theme.accent_warning,
             )
             self._text.tag_configure(
                 "header_failed", foreground=theme.accent_error,
@@ -309,6 +334,22 @@ class APILogViewDialog(tk.Toplevel):
         category_combo.pack(side="left", padx=(0, 12))
         category_combo.bind("<<ComboboxSelected>>", self._on_category_changed)
 
+        tk.Label(
+            toolbar, text="Status:", bg=COLOR_PANEL, fg=COLOR_TEXT,
+            font=("Segoe UI", 9),
+        ).pack(side="left", padx=(0, 4))
+
+        self._status_var = tk.StringVar(value="All Statuses")
+        status_combo = ttk.Combobox(
+            toolbar,
+            textvariable=self._status_var,
+            values=list(STATUS_LABELS.values()),
+            state="readonly",
+            width=16,
+        )
+        status_combo.pack(side="left", padx=(0, 12))
+        status_combo.bind("<<ComboboxSelected>>", self._on_status_changed)
+
         # View mode switch
         tk.Label(
             toolbar, text="View:", bg=COLOR_PANEL, fg=COLOR_TEXT,
@@ -391,6 +432,10 @@ class APILogViewDialog(tk.Toplevel):
             font=("Segoe UI", 10, "bold"),
         )
         self._text.tag_configure(
+            "header_content_warning", foreground=COLOR_CONTENT_WARNING,
+            font=("Segoe UI", 10, "bold"),
+        )
+        self._text.tag_configure(
             "header_failed", foreground=COLOR_FAILED,
             font=("Segoe UI", 10, "bold"),
         )
@@ -457,6 +502,7 @@ class APILogViewDialog(tk.Toplevel):
         """Get entries matching current filter/search settings."""
         entries = self._store.get_filtered(
             category=self._category_filter,
+            status=self._status_filter,
             search_text=self._search_text or None,
             view_mode=self._view_mode.lower(),
         )
@@ -497,6 +543,7 @@ class APILogViewDialog(tk.Toplevel):
         status_tag = {
             LogStatus.SUCCESS: "header_success",
             LogStatus.RECOVERED: "header_recovered",
+            LogStatus.CONTENT_WARNING: "header_content_warning",
             LogStatus.FAILED: "header_failed",
             LogStatus.PENDING: "header_pending",
         }.get(entry.status, "header_pending")
@@ -505,6 +552,7 @@ class APILogViewDialog(tk.Toplevel):
         status_icon = {
             LogStatus.SUCCESS: "\u2714",    # ✔
             LogStatus.RECOVERED: "\u26A0",  # ⚠
+            LogStatus.CONTENT_WARNING: "\u26A0",  # ⚠
             LogStatus.FAILED: "\u2718",     # ✘
             LogStatus.PENDING: "\u2022",    # •
         }.get(entry.status, "\u2022")
@@ -714,6 +762,11 @@ class APILogViewDialog(tk.Toplevel):
                 break
         self._render_all()
 
+    def _on_status_changed(self, _event: Any = None) -> None:
+        """Handle status filter change."""
+        self._status_filter = resolve_status_filter(self._status_var.get())
+        self._render_all()
+
     def _on_view_mode_changed(self) -> None:
         """Handle view mode switch change."""
         self._view_mode = self._view_var.get()
@@ -748,6 +801,10 @@ class APILogViewDialog(tk.Toplevel):
         """Append a new entry if it matches current filters."""
         # Check category filter
         if self._category_filter and entry.category != self._category_filter:
+            self._update_status()
+            return
+
+        if self._status_filter and entry.status != self._status_filter.value:
             self._update_status()
             return
 
