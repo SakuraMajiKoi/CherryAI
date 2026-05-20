@@ -95,7 +95,8 @@ SELADD_TEXT_RE = re.compile(r'(\[seladd\b[^\]]*\btext\s*=\s*")((?:\\.|[^"\\])*)(
 LABEL_TITLE_RE = re.compile(r'^(\*[^|\r\n]+\|)([^\r\n]*)(\r?\n?)$')
 CAPTION_LITERAL_RE = re.compile(r'(caption\s*:\s*")((?:\\.|[^"\\])*)(")', re.IGNORECASE)
 DIALOG_MGR_LITERAL_RE = re.compile(
-    r'((?:[A-Za-z_][A-Za-z0-9_]*\.)*DialogMGR\.(?:SetYesNo|SetOK|SetMessage|SetError)'
+    r'((?:(?:[A-Za-z_][A-Za-z0-9_]*\.)*DialogMGR\.)?'
+    r'(?:SetYesNo|SetOK|SetMessage|SetError)'
     r'\s*\(\s*(?:[^"\r\n,]+?\+\s*)*")'
     r'((?:\\.|[^"\\])*)'
     r'(")'
@@ -117,6 +118,13 @@ XP3_MAGIC = b"XP3\r\n \n\x1a\x8bg\x01"
 XP3_SCAN_LIMIT = 4 * 1024 * 1024
 XP3_FILE_PROTECTED = 1 << 31
 CXDEC_CONTROL_BLOCK_SIGNATURE = b" Encryption control block"
+DLC_CHECK_GUARD_RE = re.compile(
+    r"Storages\.isExistentStorage\(\s*\"(?P<storage>[^\"]+)\"\s*\)"
+    r"\s*&&\s*"
+    r"Scripts\.CheckCompChunk\(\s*"
+    r"Scripts\.readFileOctet\(\s*\"(?P<chunk>[^\"]+)\"\s*\)\s*"
+    r"\)",
+)
 
 SOFT_BRIDGE_KINDS = {"tag", "brace_command", "at_command"}
 HARD_BREAK_KINDS = {"blank", "comment", "label"}
@@ -164,6 +172,19 @@ PATCH_SPECIAL_CONTAINER_RE = re.compile(
     r"^patch[_-](?P<name>[A-Za-z0-9_]+?)(?P<num>\d*)$",
     re.IGNORECASE,
 )
+KIRIKIRI2_SIZE_WHITELIST_FILENAMES: Tuple[str, ...] = (
+    "menus.tjs",
+)
+KIRIKIRI2_SIZE_WHITELIST_FILENAME_PATTERNS: Tuple[re.Pattern[str], ...] = (
+    re.compile(r"^scenario.*\.ks$", re.IGNORECASE),
+)
+KIRIKIRI2_SIZE_WHITELIST_SUFFIXES: Tuple[str, ...] = (
+    ".ks",
+    ".tjs",
+    ".csv",
+    ".mdat",
+    ".xp3",
+)
 CSV_ALLOWED_HEADER_TAGS: Dict[str, str] = {
     "タイトル": "title",
     "概要テキスト": "summary",
@@ -185,45 +206,9 @@ MDAT_ALLOWED_KEYS: Dict[str, str] = {
     "マップ名": "map_name",
     "グレード名": "grade_name",
 }
-CSV_HEADER_ALLOW_PATTERNS: Tuple[re.Pattern[str], ...] = (
-    re.compile(r"段目"),
-)
-CSV_HEADER_EXCLUDE_PATTERNS: Tuple[re.Pattern[str], ...] = (
-    re.compile(r"(^|[\s])ID$", re.IGNORECASE),
-    re.compile(r"ＩＤ$"),
-    re.compile(r"ファイル"),
-    re.compile(r"画像"),
-    re.compile(r"条件式"),
-    re.compile(r"ジャンプ"),
-    re.compile(r"確認する"),
-    re.compile(r"^Lv\d+$", re.IGNORECASE),
-    re.compile(r"倍率"),
-    re.compile(r"ポイント"),
-    re.compile(r"経験値"),
-    re.compile(r"消費"),
-    re.compile(r"最低Lv"),
-    re.compile(r"ボディ"),
-    re.compile(r"初期"),
-)
-KIRIKIRI_CSV_MARKERS = {
-    "デートタイトル(20文字)",
-    "概要テキスト",
-    "パーツ名",
-    "文章",
-    "スキル名",
-    "称号",
-    "ボイスファイル",
-    "画像ファイル名",
-    "パーツタイプID",
-    "HSLGジャンプ",
-    "デート場所(ゲームには無関係)",
-    "必要建物ID",
-    "※Mボディのみ",
-}
 CSV_NUMERIC_SYMBOL_RE = re.compile(
     r"^[\d\s○×△▲▼▽■□◆◇★☆※◎◯・,./:;!?+\-_=|&()\[\]{}<>％%０-９]*$"
 )
-CSV_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./\\-]*$")
 MDAT_KEY_VALUE_RE = re.compile(r'("(?P<key>[^"]+)"=>(?P<spacing>\s*)")(?P<value>[^"]+)(")')
 
 _WRAP_VARS_SNIPPET = """
@@ -2032,8 +2017,6 @@ def _extract_ks_blocks_from_lines(path: Path, lines: Sequence[ClassifiedLine]) -
             if current is not None and current.joined_text:
                 blocks.append(current)
             current = None
-            if line.kind in HARD_BREAK_KINDS:
-                pending_speaker = None
             continue
 
         if current is not None and current.joined_text:
@@ -2467,7 +2450,7 @@ def _looks_like_kirikiri_csv(path: Path) -> bool:
     if not rows:
         return False
     headers = {header.strip() for header in rows[0] if header.strip()}
-    return bool(headers.intersection(KIRIKIRI_CSV_MARKERS))
+    return any(header in CSV_ALLOWED_HEADER_TAGS for header in headers)
 
 
 def _csv_header_to_tag(header: str) -> str:
@@ -2475,34 +2458,19 @@ def _csv_header_to_tag(header: str) -> str:
     return f"csv_{alias}"
 
 
-def _is_filename_like_csv_value(value: str) -> bool:
-    stripped = value.strip()
-    if not stripped or JAPANESE_RE.search(stripped):
-        return False
-    if not CSV_FILENAME_RE.fullmatch(stripped):
-        return False
-    return "_" in stripped or "." in stripped or stripped.isupper()
-
-
-def _csv_column_looks_translatable(values: Sequence[str]) -> bool:
-    content = [value.strip() for value in values if value.strip()]
-    if not content:
-        return False
-    japanese_hits = sum(1 for value in content if JAPANESE_RE.search(value))
-    numeric_hits = sum(1 for value in content if CSV_NUMERIC_SYMBOL_RE.fullmatch(value))
-    filename_hits = sum(1 for value in content if _is_filename_like_csv_value(value))
-    return japanese_hits > 0 and numeric_hits < len(content) and filename_hits < len(content)
-
-
 def _is_translatable_csv_header(header: str) -> bool:
     stripped = header.strip()
     if not stripped:
         return False
-    if stripped in CSV_ALLOWED_HEADER_TAGS:
-        return True
-    if any(pattern.search(stripped) for pattern in CSV_HEADER_EXCLUDE_PATTERNS):
+    return stripped in CSV_ALLOWED_HEADER_TAGS
+
+
+def _is_translatable_csv_value(value: str) -> bool:
+    stripped = value.strip()
+    if not stripped:
         return False
-    return any(pattern.search(stripped) for pattern in CSV_HEADER_ALLOW_PATTERNS)
+    # Keep whitelist-only column targeting, but skip pure symbol/number payloads.
+    return not CSV_NUMERIC_SYMBOL_RE.fullmatch(stripped)
 
 
 def _extract_csv_entries(path: Path) -> List[CsvEntry]:
@@ -2516,20 +2484,13 @@ def _extract_csv_entries(path: Path) -> List[CsvEntry]:
         header = raw_header.strip()
         if not _is_translatable_csv_header(header):
             continue
-        values = [
-            row[col_index]
-            for row in rows[1:]
-            if col_index < len(row) and row[col_index].strip()
-        ]
-        if not _csv_column_looks_translatable(values):
-            continue
         tag = _csv_header_to_tag(header)
         for row_index in range(1, len(rows)):
             row = rows[row_index]
             if col_index >= len(row):
                 continue
-            value = row[col_index].strip()
-            if not value:
+            value = row[col_index]
+            if not _is_translatable_csv_value(value):
                 continue
             entries.append(
                 CsvEntry(
@@ -2936,6 +2897,23 @@ def _apply_selectlayer_choice_wrap_target(
     return _apply_script_patch_target(target, _patch_select_layer, log)
 
 
+def _patch_fix_dlc_checks(text: str) -> str:
+    """Relax brittle DLC gates that fail on loose override file chunk checks."""
+
+    def _replace(match: re.Match[str]) -> str:
+        storage_name = match.group("storage")
+        return f'Storages.isExistentStorage("{storage_name}")'
+
+    return DLC_CHECK_GUARD_RE.sub(_replace, text)
+
+
+def _apply_fix_dlc_checks_target(
+    target: Path,
+    log: Callable[[str], None],
+) -> PatchApplicationResult:
+    return _apply_script_patch_target(target, _patch_fix_dlc_checks, log)
+
+
 def _is_balanced(text: str) -> bool:
     pairs = {")": "(", "]": "[", "}": "{"}
     stack: List[str] = []
@@ -3062,6 +3040,18 @@ class KiriKiri2Parser(ParserScript):
         return "KiriKiri2/KAG scenario and menu parser"
 
     @property
+    def size_whitelist_filenames(self) -> Sequence[str]:
+        return KIRIKIRI2_SIZE_WHITELIST_FILENAMES
+
+    @property
+    def size_whitelist_filename_patterns(self) -> Sequence[re.Pattern[str]]:
+        return KIRIKIRI2_SIZE_WHITELIST_FILENAME_PATTERNS
+
+    @property
+    def size_whitelist_suffixes(self) -> Sequence[str]:
+        return KIRIKIRI2_SIZE_WHITELIST_SUFFIXES
+
+    @property
     def wordwrap_config(self) -> Optional[WordwrapConfig]:
         return WordwrapConfig(max_line_length=42, max_line_number=3, wordwrap_command="\n")
 
@@ -3100,6 +3090,23 @@ class KiriKiri2Parser(ParserScript):
                     Path("system") / "SelectLayer.tjs",
                 ),
                 apply_to_target=_apply_selectlayer_choice_wrap_target,
+            ),
+            ParserProjectPatch(
+                patch_id="fix_dlc_checks",
+                name="Fix DLC checks",
+                description=(
+                    "Patch brittle isExistentStorage + CheckCompChunk DLC gates "
+                    "in ImportantData.tjs so loose overrides do not disable DLC "
+                    "detection."
+                ),
+                file_label="ImportantData.tjs",
+                relative_candidates=(
+                    Path("ImportantData.tjs"),
+                    Path("data") / "system" / "ImportantData.tjs",
+                    Path("system") / "ImportantData.tjs",
+                    Path("patch") / "ImportantData.tjs",
+                ),
+                apply_to_target=_apply_fix_dlc_checks_target,
             ),
             ParserProjectPatch(
                 patch_id="standard_ui_translation",

@@ -16,7 +16,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog
-from typing import TYPE_CHECKING, Any, Callable, ContextManager, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, ContextManager, Dict, List, Optional, Set, Tuple
 import tkinter as tk
 from tkinter import ttk
 
@@ -90,6 +90,26 @@ FORMAT_EXTENSIONS = {
     "KiriKiri2": {".ks", ".tjs", ".xp3"},
     "rpgmaker": {".json", ".js"},
     "image": {".png", ".jpg", ".jpeg", ".bmp"},
+}
+
+INPUT_MAX_FILE_SIZE_BYTES = 1 * 1024 * 1024
+INPUT_BLACKLIST_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".bmp",
+    ".gif",
+    ".webp",
+    ".tif",
+    ".tiff",
+    ".mp3",
+    ".ogg",
+    ".wav",
+    ".flac",
+    ".aac",
+    ".m4a",
+    ".wma",
+    ".opus",
 }
 
 
@@ -879,7 +899,10 @@ class InputExtractionStep(BaseStep):
         new_files_start = len(self._loaded_files)
 
         loaded_count = 0
+        blacklisted_files: List[str] = []
         skipped_files: List[str] = []
+        blacklisted_files: List[str] = []
+        blacklisted_files: List[str] = []
 
         # Show one progress dialog for the entire input flow.
         progress: Optional[LoadingProgressDialog] = None
@@ -899,7 +922,19 @@ class InputExtractionStep(BaseStep):
         for path in files_to_load:
             if progress is not None and progress.cancelled:
                 break
-            processed_count = loaded_count + len(skipped_files)
+            processed_count = loaded_count + len(skipped_files) + len(blacklisted_files)
+            blacklist_reason = self._get_shared_input_blacklist_reason(path, format_override)
+            if blacklist_reason is not None:
+                blacklisted_files.append(f"{path.name} ({blacklist_reason})")
+                if progress is not None:
+                    last_progress_refresh = self._maybe_update_load_progress(
+                        progress=progress,
+                        processed_count=processed_count + 1,
+                        total_files=len(files_to_load),
+                        current_file=path.name,
+                        last_refresh=last_progress_refresh,
+                    )
+                continue
             # Format filtering
             if format_override != "auto" and not self._file_matches_format(path, format_override):
                 skipped_files.append(path.name)
@@ -931,7 +966,7 @@ class InputExtractionStep(BaseStep):
             if progress is not None:
                 last_progress_refresh = self._maybe_update_load_progress(
                     progress=progress,
-                    processed_count=loaded_count + len(skipped_files),
+                    processed_count=loaded_count + len(skipped_files) + len(blacklisted_files),
                     total_files=len(files_to_load),
                     current_file=path.name,
                     last_refresh=last_progress_refresh,
@@ -946,6 +981,17 @@ class InputExtractionStep(BaseStep):
                 "Files Skipped",
                 f"The following files were skipped because they don't match "
                 f"the '{format_override}' format filter:\n\n{names}",
+            )
+
+        if blacklisted_files:
+            names = "\n".join(blacklisted_files[:10])
+            if len(blacklisted_files) > 10:
+                names += f"\n...and {len(blacklisted_files) - 10} more"
+            messagebox.showwarning(
+                "Files Blocked",
+                "The following files were blocked by Step 0 input blacklist "
+                "(extension/size):\n\n"
+                f"{names}",
             )
 
         try:
@@ -1287,6 +1333,12 @@ class InputExtractionStep(BaseStep):
             for path in paths_to_load:
                 if progress is not None and progress.cancelled:
                     break
+                blacklist_reason = self._get_shared_input_blacklist_reason(path, format_override)
+                if blacklist_reason is not None:
+                    blacklisted_files.append(f"{path.name} ({blacklist_reason})")
+                    if progress is not None:
+                        progress.update(path.name)
+                    continue
                 # TASK 39.3: Format filtering - skip files that don't match forced format
                 if format_override != "auto" and not self._file_matches_format(path, format_override):
                     skipped_files.append(path.name)
@@ -1310,6 +1362,17 @@ class InputExtractionStep(BaseStep):
                     "Files Skipped",
                     f"The following files were skipped because they don't match "
                     f"the '{format_override}' format filter:\n\n{names}",
+                )
+
+            if blacklisted_files:
+                names = "\n".join(blacklisted_files[:10])
+                if len(blacklisted_files) > 10:
+                    names += f"\n...and {len(blacklisted_files) - 10} more"
+                messagebox.showwarning(
+                    "Files Blocked",
+                    "The following files were blocked by Step 0 input blacklist "
+                    "(extension/size):\n\n"
+                    f"{names}",
                 )
 
             if loaded_count > 0:
@@ -1396,6 +1459,15 @@ class InputExtractionStep(BaseStep):
             for filepath in file_paths:
                 if progress is not None and progress.cancelled:
                     break
+                blacklist_reason = self._get_shared_input_blacklist_reason(
+                    filepath,
+                    format_override,
+                )
+                if blacklist_reason is not None:
+                    blacklisted_files.append(f"{filepath.name} ({blacklist_reason})")
+                    if progress is not None:
+                        progress.update(filepath.name)
+                    continue
                 if self._load_file(filepath, encoding, format_override):
                     loaded_count += 1
                 if progress is not None:
@@ -1403,6 +1475,17 @@ class InputExtractionStep(BaseStep):
 
             if progress is not None:
                 progress.close()
+
+            if blacklisted_files:
+                names = "\n".join(blacklisted_files[:10])
+                if len(blacklisted_files) > 10:
+                    names += f"\n...and {len(blacklisted_files) - 10} more"
+                messagebox.showwarning(
+                    "Files Blocked",
+                    "The following files were blocked by Step 0 input blacklist "
+                    "(extension/size):\n\n"
+                    f"{names}",
+                )
 
             if loaded_count > 0:
                 self._update_summary()
@@ -1536,6 +1619,47 @@ class InputExtractionStep(BaseStep):
                 logger.error("Error scanning folder %s: %s", path, exc)
 
         return staged, base_path
+
+    def _resolve_parser_for_input_blacklist(
+        self,
+        path: Path,
+        format_override: str,
+    ) -> Optional[Any]:
+        """Resolve parser context used by shared Step 0 blacklist checks."""
+        try:
+            from CherryAI.formats import detect_parser, get_parser_registry
+
+            if format_override != "auto":
+                return get_parser_registry().get(format_override)
+            return detect_parser(path)
+        except Exception:
+            return None
+
+    def _get_shared_input_blacklist_reason(
+        self,
+        path: Path,
+        format_override: str = "auto",
+    ) -> Optional[str]:
+        """Return a reason when shared Step 0 blacklist blocks a path."""
+        suffix = path.suffix.lower()
+        if suffix in INPUT_BLACKLIST_EXTENSIONS:
+            return f"blocked extension '{suffix}'"
+
+        try:
+            size_bytes = int(path.stat().st_size)
+        except OSError:
+            return None
+
+        if size_bytes <= INPUT_MAX_FILE_SIZE_BYTES:
+            return None
+
+        parser = self._resolve_parser_for_input_blacklist(path, format_override)
+        if parser is not None:
+            allows_large = getattr(parser, "allows_large_input_file", None)
+            if callable(allows_large) and allows_large(path):
+                return None
+
+        return f"size {size_bytes / (1024 * 1024):.2f} MB exceeds 1.00 MB"
 
     def _file_matches_format(self, path: Path, format_id: str) -> bool:
         """Check if a file matches the specified format filter.
@@ -2012,6 +2136,14 @@ class InputExtractionStep(BaseStep):
 
         loaded_any = False
         for extracted_path in load_candidates:
+            blacklist_reason = self._get_shared_input_blacklist_reason(extracted_path, "auto")
+            if blacklist_reason is not None:
+                logger.info(
+                    "Skipping package member blocked by input blacklist: %s (%s)",
+                    extracted_path,
+                    blacklist_reason,
+                )
+                continue
             loaded_any = self._load_file(extracted_path, "auto", "auto") or loaded_any
 
         self._apply_kirikiri2_package_precedence(package_root)
@@ -3326,6 +3458,15 @@ class InputExtractionStep(BaseStep):
             True if loaded successfully.
         """
         try:
+            blacklist_reason = self._get_shared_input_blacklist_reason(path, format_override)
+            if blacklist_reason is not None:
+                logger.info(
+                    "Input file blocked by shared blacklist: %s (%s)",
+                    path,
+                    blacklist_reason,
+                )
+                return False
+
             if path.suffix.lower() == ".xp3":
                 return self._load_archive_file(path)
 

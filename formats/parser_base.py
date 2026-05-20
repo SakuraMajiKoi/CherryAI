@@ -350,6 +350,50 @@ class ParserScript(ABC):
         """
         return False
 
+    @property
+    def size_whitelist_filenames(self) -> Sequence[str]:
+        """Exact filenames that may bypass Step 0 size blocking.
+
+        Paths are compared case-insensitively against :attr:`Path.name`.
+        """
+        return ()
+
+    @property
+    def size_whitelist_filename_patterns(self) -> Sequence[re.Pattern[str]]:
+        """Regex patterns for filenames that bypass Step 0 size blocking."""
+        return ()
+
+    @property
+    def size_whitelist_suffixes(self) -> Sequence[str]:
+        """Suffixes (including ``.``) that may bypass Step 0 size blocking."""
+        return ()
+
+    def allows_large_input_file(self, file_path: Path) -> bool:
+        """Return whether *file_path* is size-whitelisted by this parser."""
+        name = file_path.name.lower()
+        suffix = file_path.suffix.lower()
+
+        allowed_names = {
+            str(item).strip().lower()
+            for item in self.size_whitelist_filenames
+            if str(item).strip()
+        }
+        if name in allowed_names:
+            return True
+
+        for pattern in self.size_whitelist_filename_patterns:
+            if pattern.search(file_path.name):
+                return True
+
+        allowed_suffixes = {
+            str(item).strip().lower()
+            for item in self.size_whitelist_suffixes
+            if str(item).strip()
+        }
+        if suffix in allowed_suffixes:
+            return True
+        return False
+
     # ------------------------------------------------------------------
     # Optional — tagged extraction (Parser Handshake O4/O8 extensions)
     # ------------------------------------------------------------------

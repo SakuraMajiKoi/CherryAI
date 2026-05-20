@@ -13,6 +13,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from CherryAI.formats.parser_base import _split_speaker_dialogue
 from .manifest_fields import resolve_line_field_with_source
 
 logger = logging.getLogger(__name__)
@@ -45,18 +46,16 @@ def sanitize_output_text(text: Any) -> str:
 
 
 def normalize_whitespace_for_comparison(text: str) -> str:
-    """Normalize leading/trailing whitespace for injection verification.
-    
-    Converts all leading/trailing tab/space sequences to single spaces
-    for lenient comparison during orig mismatch checks, since leading
-    whitespace preservation depends on manifest indent: and trail: tags
-    which may not be populated in all projects.
-    
-    Interior whitespace is preserved as-is.
+    """Normalize speaker-aware whitespace for injection verification.
+
+    If the text uses the shared ``Speaker: dialogue`` contract, keep the
+    speaker exactly as-is and trim only the dialogue segment. Otherwise trim
+    leading and trailing whitespace from the full string.
     """
-    # Strip all leading and trailing whitespace (spaces, tabs, etc.)
-    text = text.strip()
-    return text
+    speaker, dialogue = _split_speaker_dialogue(text)
+    if speaker:
+        return f"{speaker}: {dialogue.strip()}"
+    return text.strip()
 
 
 def _find_highest_numbered_field(

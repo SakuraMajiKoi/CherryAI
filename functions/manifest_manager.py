@@ -3719,8 +3719,8 @@ class ManifestManager:
                         continue
 
                 orig = sanitize_output_text(matched.get("orig", ""))
-                # For injection verification, normalize leading/trailing whitespace
-                # since indent: and trail: tags may not be populated in all projects
+                # For injection verification, normalize speaker dialogue spacing so
+                # indented payloads compare cleanly even when indent metadata is absent.
                 from .output import normalize_whitespace_for_comparison
                 clean_key_normalized = normalize_whitespace_for_comparison(clean_key)
                 orig_normalized = normalize_whitespace_for_comparison(orig)

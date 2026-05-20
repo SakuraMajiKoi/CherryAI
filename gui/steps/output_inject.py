@@ -124,6 +124,7 @@ class ExportStatus(Enum):
     IDLE = "idle"
     RUNNING = "running"
     COMPLETED = "completed"
+    PARTIAL = "partial"
     FAILED = "failed"
     CANCELLED = "cancelled"
 
@@ -201,6 +202,7 @@ class ExportStats:
 
     total_files: int = 0
     files_written: int = 0
+    files_partial: int = 0
     files_failed: int = 0
     files_skipped: int = 0
     total_lines: int = 0
@@ -415,6 +417,7 @@ class OutputInjectStep(BaseStep):
         filter_options = [
             ("All", "all"),
             ("Pending", "pending"),
+            ("Partial", "partial"),
             ("Written", "written"),
             ("Failed", "failed"),
         ]
@@ -962,6 +965,7 @@ class OutputInjectStep(BaseStep):
         stats = [
             ("total", "Files:"),
             ("written", "Written:"),
+            ("partial", "Partial:"),
             ("failed", "Failed:"),
             ("lines", "Lines:"),
             ("time", "Time:"),
@@ -1360,7 +1364,14 @@ class OutputInjectStep(BaseStep):
             try:
                 self._process_export(files)
                 self._stats.end_time = time.time()
-                self._status = ExportStatus.COMPLETED
+                if self._cancel_requested:
+                    self._status = ExportStatus.CANCELLED
+                elif self._stats.files_written == 0 and self._stats.files_failed > 0:
+                    self._status = ExportStatus.FAILED
+                elif self._stats.files_failed > 0:
+                    self._status = ExportStatus.PARTIAL
+                else:
+                    self._status = ExportStatus.COMPLETED
                 # Phase 48: Footer
                 try:
                     if _out_log:
@@ -1431,14 +1442,16 @@ class OutputInjectStep(BaseStep):
             )
 
             try:
-                self._write_file(
+                write_status = self._write_file(
                     output_file,
                     dest_base,
                     mark_stage_dirty=mark_stage_dirty,
                 )
-                output_file.status = "written"
-                output_file.written = True
+                output_file.status = write_status
+                output_file.written = write_status in {"written", "partial"}
                 self._stats.files_written += 1
+                if write_status == "partial":
+                    self._stats.files_partial += 1
                 written_file_indices.append(output_file.idx)
                 if mark_stage_dirty:
                     deferred_stage_writes = 0
@@ -1497,7 +1510,8 @@ class OutputInjectStep(BaseStep):
         progress = (processed_files / total_files) * 100.0
         status_text = (
             f"Exporting... {processed_files}/{total_files} "
-            f"(Written: {self._stats.files_written}, Failed: {self._stats.files_failed})"
+            f"(Written: {self._stats.files_written}, Partial: {self._stats.files_partial}, "
+            f"Failed: {self._stats.files_failed})"
         )
         filter_value = self._filter_var.get() if hasattr(self, "_filter_var") else "all"
 
@@ -1511,7 +1525,7 @@ class OutputInjectStep(BaseStep):
         dest_base: Path,
         *,
         mark_stage_dirty: bool = True,
-    ) -> None:
+    ) -> str:
         """Write a single output file.
 
         Always reads fresh data from the manifest manager to avoid stale
@@ -1537,7 +1551,7 @@ class OutputInjectStep(BaseStep):
             if mgr is None or not mgr.is_loaded:
                 raise ValueError("Archive output requires a loaded manifest")
             self._write_archive_file(output_file, output_path, mgr)
-            return
+            return "written"
 
         raw_format = self._format_var.get().strip()
         parser = get_parser_registry().get(raw_format) if raw_format else None
@@ -1545,14 +1559,20 @@ class OutputInjectStep(BaseStep):
         # --- Injection mode (standardized manifest-orchestrated handshake) ---
         if raw_format.lower() == OutputFormat.INJECTION.value:
             if mgr is not None and mgr.is_loaded:
-                OutputInjectStep._write_injection(self, output_file, output_path, mgr)
+                render_result = OutputInjectStep._write_injection(
+                    self,
+                    output_file,
+                    output_path,
+                    mgr,
+                )
+                write_status = OutputInjectStep._classify_write_status(render_result)
                 self._stage_written_output(
                     output_file,
                     output_path,
                     mgr,
                     mark_dirty=mark_stage_dirty,
                 )
-                return
+                return write_status
             raise ValueError("Injection format requires a loaded manifest with filedir.")
 
         # --- Direct parser mode (legacy per-file parser routing) ---
@@ -1570,7 +1590,7 @@ class OutputInjectStep(BaseStep):
             output_file.line_count = int(render_result.get("line_count", 0))
             self._stats.total_lines += output_file.line_count
             self._stage_written_output(output_file, output_path, mgr)
-            return
+            return OutputInjectStep._classify_write_status(render_result)
 
         format_val = _safe_output_format(raw_format)
 
@@ -1599,6 +1619,18 @@ class OutputInjectStep(BaseStep):
                 mgr,
                 mark_dirty=mark_stage_dirty,
             )
+        return "written"
+
+    @staticmethod
+    def _classify_write_status(render_result: Dict[str, Any]) -> str:
+        """Classify a write result as fully written or partial."""
+        failures = render_result.get("failures", [])
+        inject_failures = render_result.get("inject_failures", [])
+        if isinstance(failures, list) and failures:
+            return "partial"
+        if isinstance(inject_failures, list) and inject_failures:
+            return "partial"
+        return "written"
 
     def _resolve_output_encoding_for_file(self, output_file: OutputFile) -> str:
         """Resolve the output encoding for one file.
@@ -1691,7 +1723,7 @@ class OutputInjectStep(BaseStep):
         output_file: OutputFile,
         output_path: Path,
         mgr: "ManifestManager",
-    ) -> None:
+    ) -> Dict[str, Any]:
         """Standard injection handshake for parser-based files.
 
         0. Load ``\\Original`` into memory.
@@ -1725,6 +1757,7 @@ class OutputInjectStep(BaseStep):
                     entry.rel_path,
                     idx,
                 )
+        return render_result
 
     def _write_parser_file(
         self,
@@ -1949,18 +1982,48 @@ class OutputInjectStep(BaseStep):
 
     def _on_export_complete(self) -> None:
         """Handle export completion."""
-        self._status_label.configure(text="Completed")
+        cancelled = False
+        if self._status == ExportStatus.PARTIAL:
+            self._status_label.configure(text="Partial")
+            self.set_status("partial")
+        elif self._status == ExportStatus.FAILED:
+            self._status_label.configure(text="Failed")
+            self.set_status("failed")
+        elif self._status == ExportStatus.CANCELLED:
+            self._status_label.configure(text="Cancelled")
+            cancelled = True
+        else:
+            self._status_label.configure(text="Completed")
+            self.set_status("completed")
         self._export_btn.configure(state="normal")
         self._cancel_btn.configure(state="disabled")
         self._refresh_table()
         self._update_summary()
 
+        if cancelled:
+            return
+
+        if self._status == ExportStatus.FAILED:
+            messagebox.showerror(
+                "Export Failed",
+                "Export failed with no successful writes.\n\n"
+                f"Files written: {self._stats.files_written}\n"
+                f"Files partial: {self._stats.files_partial}\n"
+                f"Files failed: {self._stats.files_failed}\n"
+                f"Time: {self._stats.duration:.2f}s",
+            )
+            return
+
         # Show completion message
-        msg = f"Export complete!\n\n"
+        msg = f"Export {'partial' if self._status == ExportStatus.PARTIAL else 'complete'}!\n\n"
         msg += f"Files written: {self._stats.files_written}\n"
+        msg += f"Files partial: {self._stats.files_partial}\n"
         msg += f"Files failed: {self._stats.files_failed}\n"
         msg += f"Time: {self._stats.duration:.2f}s"
-        messagebox.showinfo("Export Complete", msg)
+        if self._status == ExportStatus.PARTIAL:
+            messagebox.showwarning("Export Partial", msg)
+        else:
+            messagebox.showinfo("Export Complete", msg)
 
     def _on_export_error(self, error: str) -> None:
         """Handle export error."""
@@ -2180,13 +2243,17 @@ class OutputInjectStep(BaseStep):
             # Apply filter
             if filter_val == "pending" and output_file.status != "pending":
                 continue
-            elif filter_val == "written" and not output_file.written:
+            elif filter_val == "partial" and output_file.status != "partial":
+                continue
+            elif filter_val == "written" and output_file.status != "written":
                 continue
             elif filter_val == "failed" and output_file.status != "failed":
                 continue
 
             # Status icon
-            if output_file.written:
+            if output_file.status == "partial":
+                status = "◐ Partial"
+            elif output_file.status == "written":
                 status = "✓ Written"
             elif output_file.status == "failed":
                 status = "✗ Failed"
@@ -2212,6 +2279,7 @@ class OutputInjectStep(BaseStep):
         """Update summary display."""
         self._stats_labels["total"].configure(text=str(self._stats.total_files))
         self._stats_labels["written"].configure(text=str(self._stats.files_written))
+        self._stats_labels["partial"].configure(text=str(self._stats.files_partial))
         self._stats_labels["failed"].configure(text=str(self._stats.files_failed))
         self._stats_labels["lines"].configure(text=str(self._stats.total_lines))
         self._stats_labels["time"].configure(text=f"{self._stats.duration:.1f}s")

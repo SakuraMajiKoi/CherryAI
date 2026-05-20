@@ -355,6 +355,7 @@ class StepRow(ttk.Frame):
             return "⊘"  # Skipped
         icons = {
             "completed": "✓",
+            "partial": "◐",
             "in-progress": "–",
             "not-started": "✗",
         }
@@ -370,6 +371,7 @@ class StepRow(ttk.Frame):
             return THEME.text_disabled
         colors = {
             "completed": THEME.accent_success,
+            "partial": THEME.accent_warning,
             "in-progress": THEME.accent_info,
             "not-started": THEME.text_disabled,
         }
@@ -384,14 +386,14 @@ class StepRow(ttk.Frame):
         menu = tk.Menu(self, tearoff=0)
 
         # Skip option (only for not-completed steps)
-        if self.step_state.status != "completed":
+        if self.step_state.status not in {"completed", "partial"}:
             menu.add_command(
                 label="Skip Step",
                 command=lambda: self.on_skip(self.step_state.step_id),
             )
 
         # Rollback option (only for completed steps)
-        if self.step_state.status == "completed":
+        if self.step_state.status in {"completed", "partial"}:
             menu.add_command(
                 label="Rollback Step",
                 command=lambda: self.on_rollback(self.step_state.step_id),
