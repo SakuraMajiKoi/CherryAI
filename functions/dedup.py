@@ -693,7 +693,7 @@ def aggressive_normalize_line(line: str) -> str:
     - Remove simple HTML tags like <br> (non-greedy tag removal)
     - Replace parenthesized numbers like (1) or （１） with AGGR_NUM_TOKEN
     - Replace remaining ASCII/fullwidth digits with AGGR_NUM_TOKEN
-    - Collapse whitespace to a single space and trim
+    - Preserve original whitespace (including indentation)
     """
     if not line:
         return ""
@@ -707,12 +707,10 @@ def aggressive_normalize_line(line: str) -> str:
         total = len(matches)
         for index, match in enumerate(matches):
             parts.append(s[last:match.start()])
-            parts.append(f" {_aggressive_token_for_index(index, total)} ")
+            parts.append(_aggressive_token_for_index(index, total))
             last = match.end()
         parts.append(s[last:])
         s = "".join(parts)
-    # Collapse whitespace
-    s = _re.sub(r"\s+", " ", s).strip()
     return s
 
 

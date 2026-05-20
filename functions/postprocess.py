@@ -21,6 +21,11 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .modehelper import ANCHOR_EQUIVS, get_equivs
 
+try:
+    from CherryAI.formats.parser_base import _split_speaker_dialogue
+except ImportError:  # pragma: no cover
+    from formats.parser_base import _split_speaker_dialogue
+
 
 # ============================================================================
 # Enums and Data Classes
@@ -151,6 +156,102 @@ KNOWN_PLACEHOLDERS = {"PROT", "NAME", "CODE", "VAR", "ITEM", "SKILL", "NUM"}
 
 CUSTOM_PLACEHOLDER_TAG_PREFIX = "custom_placeholder"
 GENERIC_PLACEHOLDER_TAG_PREFIX = "generic_placeholder"
+EDGE_WHITESPACE_TAG_RE = re.compile(
+    r"^(?P<kind>indent|trail):u\+(?P<code>[0-9a-fA-F]{4,6})x(?P<count>[1-9][0-9]*)$"
+)
+
+
+def _collect_edge_whitespace(text: str, from_start: bool) -> List[str]:
+    """Collect leading or trailing whitespace characters in source order."""
+    chars: List[str] = []
+    iterator = text if from_start else reversed(text)
+    for ch in iterator:
+        if not ch.isspace():
+            break
+        chars.append(ch)
+    if not from_start:
+        chars.reverse()
+    return chars
+
+
+def _encode_edge_whitespace(kind: str, chars: List[str]) -> List[str]:
+    """Encode whitespace runs as canonical manifest tags."""
+    if not chars:
+        return []
+
+    tags: List[str] = []
+    current = chars[0]
+    count = 1
+    for ch in chars[1:]:
+        if ch == current:
+            count += 1
+            continue
+        tags.append(f"{kind}:u+{ord(current):04X}x{count}")
+        current = ch
+        count = 1
+    tags.append(f"{kind}:u+{ord(current):04X}x{count}")
+    return tags
+
+
+def _decode_edge_whitespace_tags(
+    line_tags: List[str] | Tuple[str, ...] | Set[str],
+) -> Tuple[str, str]:
+    """Decode canonical edge-whitespace tags into indent and trail text."""
+    indent_parts: List[str] = []
+    trail_parts: List[str] = []
+    for raw_tag in line_tags:
+        tag = str(raw_tag).strip()
+        match = EDGE_WHITESPACE_TAG_RE.match(tag)
+        if match is None:
+            continue
+        piece = chr(int(match.group("code"), 16)) * int(match.group("count"))
+        if match.group("kind") == "indent":
+            indent_parts.append(piece)
+        else:
+            trail_parts.append(piece)
+    return "".join(indent_parts), "".join(trail_parts)
+
+
+def capture_dialogue_edge_whitespace(
+    text: str,
+    primary_tag: str = "",
+) -> Tuple[str, List[str]]:
+    """Strip dialogue-edge whitespace and encode it as manifest tags.
+
+    Any tagged line (non-empty primary_tag) is processed, not just lines
+    tagged "dialogue".  Lines with a speaker prefix are always processed
+    regardless of tag.  Only completely untagged, speakerless lines are
+    skipped so plain text files without parser tags are left unchanged.
+    """
+    speaker, dialogue = _split_speaker_dialogue(text)
+    clean_tag = str(primary_tag).strip()
+    if not clean_tag and not speaker:
+        return text, []
+
+    target = dialogue if speaker else text
+    leading = _collect_edge_whitespace(target, from_start=True)
+    trailing = _collect_edge_whitespace(target, from_start=False)
+    stripped = target.strip()
+    normalized = f"{speaker}: {stripped}" if speaker else stripped
+
+    tags = _encode_edge_whitespace("indent", leading)
+    tags.extend(_encode_edge_whitespace("trail", trailing))
+    return normalized, tags
+
+
+def restore_dialogue_edge_whitespace(
+    text: str,
+    line_tags: List[str] | Tuple[str, ...] | Set[str],
+) -> str:
+    """Restore tagged dialogue-edge whitespace to final output text."""
+    indent, trail = _decode_edge_whitespace_tags(line_tags)
+    if not indent and not trail:
+        return text
+
+    speaker, dialogue = _split_speaker_dialogue(text)
+    if speaker:
+        return f"{speaker}: {indent}{dialogue.strip()}{trail}"
+    return f"{indent}{text.strip()}{trail}"
 
 
 def _placeholder_tag_index(tag: str, prefix: str) -> Optional[int]:
@@ -659,45 +760,6 @@ def recover_missing_placeholders(
                 action=RecoveryAction.NEEDS_RETRY,
             )
             issues.append(issue)
-    
-    return result, issues
-
-
-def normalize_placeholder_whitespace(text: str) -> Tuple[str, List[RecoveryIssue]]:
-    """Fix errant spacing around placeholders.
-    
-    Args:
-        text: The text to fix.
-        
-    Returns:
-        Tuple of (fixed_text, list of issues found).
-    """
-    issues: List[RecoveryIssue] = []
-    result = text
-    
-    # Pattern for placeholders with extra internal whitespace
-    pattern = re.compile(r"__\s+([A-Za-z][A-Za-z0-9_]*)\s*(?:_\s*(\d+))?\s+__")
-    
-    offset = 0
-    for match in pattern.finditer(text):
-        found = match.group(0)
-        normalized = normalize_placeholder(found)
-        
-        if found != normalized:
-            issue = RecoveryIssue(
-                type=RecoveryType.WHITESPACE_NORMALIZATION,
-                description=f"Whitespace normalized in placeholder: {found} -> {normalized}",
-                position=match.start() + offset,
-                original_text=found,
-                recovered_text=normalized,
-                action=RecoveryAction.RECOVERED,
-            )
-            issues.append(issue)
-            
-            start = match.start() + offset
-            end = match.end() + offset
-            result = result[:start] + normalized + result[end:]
-            offset += len(normalized) - len(found)
     
     return result, issues
 
@@ -1560,7 +1622,7 @@ def recover_line(
         enable_placeholder_recovery: Enable placeholder-related recovery.
         enable_bracket_recovery: Enable bracket balancing.
         enable_quote_recovery: Enable quote balancing.
-        enable_whitespace_normalization: Enable whitespace fixes.
+        enable_whitespace_normalization: Deprecated compatibility flag.
         code_patterns: Code pattern dicts for preserve-action recovery.
         
     Returns:
@@ -1582,12 +1644,7 @@ def recover_line(
         current_text, issues = recover_mangled_placeholders(current_text, original_placeholders)
         all_issues.extend(issues)
         
-        # 3. Normalize whitespace in placeholders
-        if enable_whitespace_normalization:
-            current_text, issues = normalize_placeholder_whitespace(current_text)
-            all_issues.extend(issues)
-        
-        # 4. Attempt to recover missing placeholders
+        # 3. Attempt to recover missing placeholders
         current_text, issues = recover_missing_placeholders(
             current_text, original, original_placeholders
         )
@@ -1603,7 +1660,7 @@ def recover_line(
         extra_issues = detect_extra_tokens(current_text, original_placeholders)
         all_issues.extend(extra_issues)
 
-    # 4b. Recover preserve-action code patterns translated by the LLM
+    # 3b. Recover preserve-action code patterns translated by the LLM
     if code_patterns:
         current_text, issues = recover_code_patterns(
             current_text, original, code_patterns,
@@ -1611,12 +1668,12 @@ def recover_line(
         all_issues.extend(issues)
     
     if enable_bracket_recovery:
-        # 5. Fix bracket balance
+        # 4. Fix bracket balance
         current_text, issues = recover_bracket_balance(current_text, original)
         all_issues.extend(issues)
     
     if enable_quote_recovery:
-        # 6. Fix quote balance
+        # 5. Fix quote balance
         current_text, issues = recover_quote_balance(current_text, original)
         all_issues.extend(issues)
     
@@ -1646,7 +1703,7 @@ def recover_batch(
         enable_placeholder_recovery: Enable placeholder-related recovery.
         enable_bracket_recovery: Enable bracket balancing.
         enable_quote_recovery: Enable quote balancing.
-        enable_whitespace_normalization: Enable whitespace fixes.
+        enable_whitespace_normalization: Deprecated compatibility flag.
         code_patterns: Code pattern dicts for preserve-action recovery.
         
     Returns:
@@ -1698,7 +1755,7 @@ class PostProcessManager:
             enable_placeholder_recovery: Enable placeholder-related recovery.
             enable_bracket_recovery: Enable bracket balancing.
             enable_quote_recovery: Enable quote balancing.
-            enable_whitespace_normalization: Enable whitespace fixes.
+            enable_whitespace_normalization: Deprecated compatibility flag.
             auto_retry_on_failure: Automatically flag unrecoverable issues for retry.
             code_patterns: Code pattern dicts for preserve-action recovery.
         """
@@ -1831,7 +1888,7 @@ def create_postprocess_manager(
         enable_placeholder_recovery: Enable placeholder-related recovery.
         enable_bracket_recovery: Enable bracket balancing.
         enable_quote_recovery: Enable quote balancing.
-        enable_whitespace_normalization: Enable whitespace fixes.
+        enable_whitespace_normalization: Deprecated compatibility flag.
         auto_retry_on_failure: Automatically flag unrecoverable issues for retry.
         code_patterns: Code pattern dicts for preserve-action recovery.
         

@@ -1232,28 +1232,14 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
       Normal.  Availability determined by `get_model_pricing()` checking for
       batch_input/flex_input/priority_input rates.  Selection stored in
       `TranslationOptions.request_mode` and passed to `APIConfig.request_mode`.
-    - **Number of Threads spinbox**: 1-32 concurrent request strings
-      (default 3), shown directly below Request Mode. Saved to
-      `RequestOptions.NumberOfThreads`, restored from manifest and per-model
-      `API.ini` `max_concurrent`, and applied to `APIConfig.max_concurrent` at
-      translation start. Once a project has an explicit manifest value, that
-      saved thread count stays authoritative on Translation-tab re-entry and is
-      no longer overwritten by the per-model default.
-    - **Requests / Second control**: optional Step 5 pacing gate shown directly
-      below Number of Threads as `Requests / Second` plus an `Enable` tickbox.
-      Stored in `RequestOptions.RequestsPerSecondEnabled` and
-      `RequestOptions.RequestsPerSecond` (float range `0.01`-`999.99`). When
-      enabled, CherryAI now gates provider request starts through a shared
-      API-client RPS scheduler so concurrent Translation workers still respect
-      one project-level cap.
-    - **Project restore precedence**: when a manifest already stores an explicit
-      Step 5 model, thread count, or Requests / Second value, Translation-tab
-      re-entry now reapplies those project values after Global Options and
-      per-model `API.ini` defaults are loaded, so provider filtering no longer
-      drops the selection back to `Mock Translation` or `1.00 RPS`.
-    - **Legacy RPS reopen compatibility**: older manifests that still store the
-      numeric pacing value at the top-level `RequestsPerSecond` key now reopen
-      with the saved project value instead of defaulting to `1.00`.
+    - **Number of Threads** and **Requests / Second** moved out of Step 5.
+      Translation now reads both values from per-model `API.ini`
+      `[model_settings]` entries (`max_concurrent`,
+      `requests_per_second_enabled`, `requests_per_second`) and applies them to
+      `APIConfig` at translation start.
+    - **Project restore precedence**: Step 5 still preserves the manifest model
+      selection on tab re-entry, but legacy manifest thread/RPS fields are now
+      ignored. Old manifests simply stop contributing those values.
     - **Adaptive RPS fallback**: retryable provider 429/rate-limit responses now
       let `functions/api_client.py` derive a slower active RPS cap from the
       error text when possible (`0.42 requests per second`, `0.42 RPS`, etc.).
@@ -1484,12 +1470,13 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - RecoveryStats: lines processed, issues recovered, recovery rate
   - **Manifest Integration (Phase 27):**
     - PostProcessing nested structure with all recovery settings:
-      - 8 boolean toggles: PlaceholderRecovery, BracketBalanceRecovery,
-        QuoteBalanceRecovery, WhitespaceNormalization, RestoreCodeCharacters,
+      - 7 boolean settings: PlaceholderRecovery, BracketBalanceRecovery,
+        QuoteBalanceRecovery, RestoreCodeCharacters,
         RestoreLinebreaks, EnableSymbolConversion, FullwidthToHalfwidth
       - FailureHandling enum: "skip", "flag", "retry"
       - Legacy enum mapping via `_FAILURE_POLICY_MAP` (e.g., "FlagForReview" → "flag")
     - All options persist to manifest and load on step enter
+    - Dialogue edge whitespace is now stored at Input as canonical `indent:` / `trail:` tags and restored automatically at the final postprocess stage after dedup reversal
     - `postpro` is only stored when the recovered output differs from `tl → prepro → orig`; unchanged rows are cleared from the manifest
     - 35 tests in dev/test_postprocess_manifest.py
 - **Wordwrap Tab (Phase 10):**
@@ -2088,8 +2075,14 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Max Input Tokens (0–128000, increment 500; 0 = no limit, input lines only)
     - Timeout in seconds
     - Max retries
+    - Number of Threads (per-model concurrent request strings)
     - Rate limit (requests per minute)
-    - Temperature slider (0.0-2.0, moved from API section)
+    - Rate limit (requests per second, optional enable toggle)
+    - Model Tuning group: Temperature, Top P, Frequency Penalty, Presence Penalty,
+      and Thinking controls
+    - Model-tuning rows stay visible and grey out when a provider reports that
+      the current model does not support that parameter
+    - Warning labels appear for aggressive tuning values
   - **Translation Section (restructured):**
     - OptionSection.TRANSLATION in CONNECTION category
     - Overwrite Translation checkbox (replaces Edit Before + Skip Translated)
@@ -2551,19 +2544,21 @@ PARSER SCRIPTS (Implemented)
 - **Base interface** (`formats/parser_base.py`): `ParserScript` ABC with mandatory `name`, `extract`, `inject` methods and default `inject_to(source, output, lines, *, orig_lines=None) → List[int]` implementing standardized 4-step Speaker:Dialogue-aware surgical injection handshake (load original → extract keys via `extract_tagged()` with speaker metadata → split speaker/dialogue via `_split_speaker_dialogue()` and replace independently, speaker only on first occurrence for consecutive same-speaker lines → save; returns failed indices)
 - **Configuration dataclasses:** `WordwrapConfig`, `ForbiddenChars`, `TagRules`
 - **RPG Maker MV/MZ** (`formats/parser_rpgmaker.py`): Full implementations with wordwrap defaults, forbidden chars, context markers
-- **KiriKiri2** (`formats/KiriKiri2.py`): Handles `.ks` scripts, `Menus.tjs`, generic caption-driven or dialog-call `.tjs` files, schema-based KiriKiri2 `.csv` files, and XP3 archives. Scenario extraction now covers dialogue/narration blocks, `@talk name=[SF]`-style speaker variables with brackets preserved in `Speaker: Dialogue` output, `[seladd text="..."]` choices (`choice` tag), and `*label|title` save-location titles (`SaveLocation` tag). System/menu extraction also covers dictionary-style `caption:"..."` literals in files such as `Override.tjs` (`menu` tag) plus dialog-manager calls such as `SetYesNo("...")` and `SetOK("...")` (`dialog` tag). CSV extraction uses header-based whitelists and processes approved text columns one column at a time, so visible fields such as `タイトル`, `概要テキスト`, `内容文章(72文字)`, `施設効果文章(72文字)`, `文章`, `スキル名`, and `パーツ名` are translated while IDs, file references, jump targets, flags, and numeric-only columns remain untouched. Injection rewrites only those payloads while preserving surrounding KAG/TJS/CSV structure and Shift-JIS-safe encoding behavior. After output staging it can also patch `MainWindow.tjs` so the stock `ch : function(elm)` handler wraps by word instead of per character, and patch `SelectLayer.tjs` so choice captions wrap by word, default to a smaller hidden font size (`18`), grow button height to fit multiline text, and reflow stacked choice positions to avoid overlap, all while preserving the file's original `cp932` / Shift-JIS encoding and BOM state. The patcher also repairs older malformed injected blocks, replaces stale wordwrap blocks with the canonical block, and preserves literal TJS escapes such as `\\`, `\t`, `\n`, and `\r` so launch-time syntax errors are not reintroduced
+- **KiriKiri2** (`formats/KiriKiri2.py`): Handles `.ks` scripts, `Menus.tjs`, generic caption-driven or dialog-call `.tjs` files, whitelist-driven `.mdat` files, schema-based KiriKiri2 `.csv` files, and XP3 archives. Scenario extraction now covers dialogue/narration blocks, `@talk name=[SF]`-style speaker variables with brackets preserved in `Speaker: Dialogue` output, `[seladd text="..."]` choices (`choice` tag), `*label|title` save-location titles (`SaveLocation` tag), and code-heavy `.ks` `window.DialogMGR` / `global.win.DialogMGR` calls whose visible quoted payloads remain parser-owned `dialog` rows even when the surrounding line is mostly logic. System/menu extraction also covers dictionary-style `caption:"..."` literals in files such as `Override.tjs` (`menu` tag) plus dialog-manager calls such as `SetYesNo("...")` and `SetOK("...")` (`dialog` tag), including concatenated first arguments like `tmp_str+"||この名前でよろしいですか？"`. CSV extraction uses header-based whitelists and processes approved text columns one column at a time, while `.mdat` extraction uses parser-owned key whitelists so approved keys such as `マップ名` and `グレード名` are translated in source order and control fields such as numeric stats remain untouched. Injection rewrites only those payloads while preserving surrounding KAG/TJS/MDAT/CSV structure and Shift-JIS-safe encoding behavior. After output staging it can also patch `MainWindow.tjs` so the stock `ch : function(elm)` handler wraps by word instead of per character, and patch `SelectLayer.tjs` so choice captions wrap by word, default to a smaller hidden font size (`18`), grow button height to fit multiline text, and reflow stacked choice positions to avoid overlap, all while preserving the file's original `cp932` / Shift-JIS encoding and BOM state. The patcher also repairs older malformed injected blocks, replaces stale wordwrap blocks with the canonical block, and preserves literal TJS escapes such as `\\`, `\t`, `\n`, and `\r` so launch-time syntax errors are not reintroduced
 - **WOLF RPG JSON/Text** (`formats/wolf_rpg.py`): Adds two Dazed-aligned parser formats for exported or unpacked WOLF RPG content. `WolfRPGJsonParser` auto-detects JSON exports containing `events`, `types`, or `commands`, extracts/injects visible payloads with Dazed-mirroring tags (`CODE101`, `CODE102`, `CODE122`, `CODE150`, `CODE210`, `CODE250`, `CODE300`, `SCENARIOFLAG`, `OPTIONSFLAG`, `NPCFLAG`, `DBNAMEFLAG`, `DBVALUEFLAG`, `ITEMFLAG`, `STATEFLAG`, `ENEMYFLAG`, `ARMORFLAG`, `WEAPONFLAG`, `SKILLFLAG`), preserves speaker-aware event/scenario text, and rewrites the original JSON structure surgically instead of flattening it. `WolfRPGTextParser` handles line-based WOLF script text with cp932 / Shift-JIS detection, speaker-aware dialogue grouping, `//選択肢` choice extraction, explicit per-block injection, and parser wordwrap defaults for dialogue while leaving menu/choice tags unwrapped. Both parsers expose O1/O2 decrypt/encrypt hooks as transparent pass-throughs for already exported or unpacked content; native `.wolf` archive cryptography remains outside CherryAI's current parser scope.
 - **Parser Registry** (`formats/__init__.py`): `ParserRegistry` with register, get, detect, list_parsers
 - Auto-detection via `can_handle()` probes file structure (e.g. www/data/*.json, null-first arrays)
 - **Wordwrap Integration** (`gui/steps/wordwrap_overwrite.py`): Parser wordwrap configs pre-populate editable per-tag settings; the step resolves wrap targets through the user-selected `Target:` strategy and preserves rows unchanged when no target resolves. KiriKiri2 additionally uses a parser-owned post-inject hook to patch real `MainWindow.tjs` variants that call `repage = current.processCh(text, chUserMode ? acs : 0);` and to patch `SelectLayer.tjs` so translated choice text wraps by word with multiline height/layout updates in the staged output tree.
 - **Forbidden Characters:** Merged into logit bias via `merge_parser_forbidden_chars()`; auto-replaced or flagged via `replace_forbidden_chars()`
 - **API Integration** (`functions/api_client.py`): `apply_parser_forbidden_chars()` method on ApiClient
+- **Step 9 Apply Patches Window** (`functions/apply_patches.py` + `gui/steps/output_inject.py`): Output now exposes an `Apply Patches` button beside `Refresh Preview`. The window discovers parser-advertised project patches from the manifest `filedir[].format` values, lists each patch with parser name and description, provides per-patch Apply buttons, shows checkboxes when multiple patches exist, includes a shared log box, and offers `Cancel` plus `Apply All Patches` for checked rows. Patches may either resolve a staged target file through the shared search/copy flow or launch a parser-owned shared dialog workflow through a custom runner path.
+- **Patch File Search + Persistence**: Manual parser patches resolve targets from staged `Translated/` first, then staged `Original/`, then a saved external lookup folder, and finally a folder prompt when the file is not in the project tree. Files found outside the project are copied into `Translated/` before patching, and the selected lookup folder is persisted in the manifest for later runs.
 
 PARSER HANDSHAKE — UNIFIED I/O PARSER INTERFACE (Implemented)
-- Formal contract that every parser must satisfy: Mandatory (M1-M3) and Optional (O1-O10) components
+- Formal contract that every parser must satisfy: Mandatory (M1-M3) and Optional (O1-O11) components
 - **Handshake module** (`formats/handshake.py`): `SpeakerInfo`, `ExtractedLine`, `ParserError`, `validate_parser()`
 - **Mandatory contract:** M1=Extract, M2=Inject, M3=Identity (format_id+extensions or can_handle)
-- **Optional components:** O1=Decrypt, O2=Encrypt, O3=Encoding, O4=Speaker Detection, O5=Wordwrap Config, O6=Custom Wordwrap, O7=Forbidden Chars, O8=Context Markers, O9=Injection Rewrite Hook, O10=Pretty Wrap Hook
+- **Optional components:** O1=Decrypt, O2=Encrypt, O3=Encoding, O4=Speaker Detection, O5=Wordwrap Config, O6=Custom Wordwrap, O7=Forbidden Chars, O8=Context Markers, O9=Injection Rewrite Hook, O10=Pretty Wrap Hook, O11=Manual Project Patches
 - **Default O1/O2 behavior:** `ParserScript` now exposes no-op `decrypt(path)` / `encrypt(path)` hooks so parser capability metadata can report whether a format owns pre/post file transforms without forcing binary-archive behavior onto plain-text formats.
 - **Handler retrofit (P4):** All registered FormatHandlers and ParserScripts verified against M1-M3 via `validate_parser()`. RPG Maker handler stubs raise `ParserError` with metadata instead of silent no-ops.
 - **Tagged extraction** (`parser_base.py`): `extract_tagged()` returns `List[ExtractedLine]` with per-line tag, speaker, context
@@ -2586,6 +2581,7 @@ PIPELINE WIRING OF OPTIONAL COMPONENTS (Implemented — P3)
 - **O7 Forbidden Chars:** Serialises `forbidden_chars.to_dict()` to `Options.ParserForbiddenChars`; translation step calls `api_client.apply_parser_forbidden_chars()` to merge into logit bias
 - **O8 Tags:** Compiles `tag_rules`, applies regex patterns to extracted lines, writes `tag` tags; `detect_tags()` accepts optional `parser_rules` parameter to override built-in heuristics
 - **Output Injection:** Output step supports both parser paths: explicit `injection` format uses the manifest-verified `_write_injection()` handshake, while direct parser IDs from the format dropdown/filedir keep the per-file sliced `parser.inject_to(source, output, lines)` path for surgical injection that preserves script structure.
+- **Manual Project Patch Actions:** Parsers may also advertise manual Step 9 project patches. KiriKiri2 now exposes `MainWindow Wordwrap Patch`, `SelectLayer Choice Wrap Patch`, `Standard UI Translation Patch`, and `Font Patch` through the Apply Patches window. The Standard UI Translation Patch uses a library-owned replacement spec at `libraries/KiriKiriInjection/StandardUiTranslations/CherryAI.KiriKiriStandardUiPatch.json`, loads the real source files from staged `Translated/`, staged `Original/`, or a saved/prompted external lookup root, preserves the source encoding/BOM, and stages translated overlay copies under `patch/data/system/` and `patch/data/program/` for stock menu/help/folder/cache/version UI strings including regex-driven `Auto Select [...]` captions. The Font Patch opens a shared dialog, previews the currently staged and chosen family when Tk can resolve it locally, stages `version.dll` at the translated root, writes `patch/CherryAI.KiriKiriFontPatch.json`, copies the packaged `AffineLayer.tjs`, `ButtonLayer.tjs`, and `MessageLayer.tjs` spacing overrides into `patch/data/system/`, and copies only the selected bundled font files into a sibling `fonts/` folder. The packaged runtime source lives under `libraries/KiriKiriInjection`, bundled redistributable families live under `libraries/Fonts`, and the shipped build helper `libraries/KiriKiriInjection/build_version_dll.py` rebuilds `version.dll` through Visual Studio when needed. The KiriKiri runtime log was verified against `dev/kanotsuku2/xx2.exe`, and the same sample now has staged UTF-16 overlay files at `dev/kanotsuku2/patch/data/system/MenuItemManager.tjs`, `dev/kanotsuku2/patch/data/program/CacheWindow.tjs`, and `dev/kanotsuku2/patch/data/system/VersionWindow.tjs` for manual UI testing. Because the loose override runtime recursively indexes files under active `patch*` folders, live patch trees must be flattened: nested mirrors such as `patch/patch/...` and temporary stash folders must be moved outside the active patch tree or they remain loadable shadow overrides.
 - **Manifest Options written:** `ParserName`, `ParserHandlesSpeakers`, `ParserHandlesWordwrap`, `ParserForbiddenChars` (dict), `ParserHandlesContextMarkers`
 
 LIGHT VN PARSER (Implemented)
@@ -3992,22 +3988,25 @@ classes registered in a global registry.
 - `ProviderResponse` — content + usage + finish_reason + raw
 - `ThinkingConfig` — available/mode/mandatory/effort_levels/effort_default/budget with `build_params()` helper; modes: ""(unavail), "builtin"(o-series), "explicit"(Claude), "optional"(GPT-4.1), "mandatory"(GPT-5)
 - `TemperatureConfig` — supported/min/max/default
+- `TuningParamConfig` — supported/min/max/default for `top_p`,
+  `frequency_penalty`, and `presence_penalty`
 - `CachedInputConfig` — factory methods for OpenAI standard and extended 24h
 - `BatchConfig` — batch/flex/priority ratios
 - Error hierarchy: `ProviderError` → Auth, ModelNotFound, RateLimited, Quota, ContentFiltered, Connection, Timeout
 
 ### Integration Points
 
-- **`api_client.py`** — resolves `self._provider` from ProviderRegistry; delegates `requires_api_key`, `get_response_format()`, `get_temperature_config()`, `get_thinking_config()`, `classify_error()` to provider; `get_thinking_params()` uses provider ThinkingConfig.build_params() for all thinking modes; Chat Completions API: `reasoning_effort` sent as top-level param (OpenAI), `thinking` sent via `extra_body` (Claude)
+- **`api_client.py`** — resolves `self._provider` from ProviderRegistry; delegates `requires_api_key`, `get_response_format()`, `get_temperature_config()`, `get_top_p_config()`, `get_frequency_penalty_config()`, `get_presence_penalty_config()`, `get_thinking_config()`, and `classify_error()` to provider; `get_thinking_params()` uses provider ThinkingConfig.build_params() for all thinking modes; Chat Completions API sends supported `temperature`, `top_p`, `frequency_penalty`, `presence_penalty`, and `reasoning_effort` as top-level params, while Anthropic explicit thinking still goes through `extra_body`
 - **`options.py`** — `_build_api_providers()` and `get_provider_display_name()` check ProviderRegistry first, then fall back to legacy dict
 - **Global Options UI** — provider constraints applied dynamically:
-  - Temperature slider hidden when `get_temperature_config().supported` is False (e.g. GPT-5 family)
-  - Thinking frame: checkbox + budget slider for "explicit" mode (Claude), effort dropdown for "optional"/"mandatory" (GPT-4.1/5), hidden for unavailable
+  - Temperature, Top P, Frequency Penalty, and Presence Penalty controls grey out when unsupported
+  - Thinking frame: checkbox + budget slider for "explicit" mode (Claude), effort dropdown for "optional"/"mandatory" (GPT-4.1/5), disabled when unavailable
   - Mandatory thinking models (GPT-5): checkbox forced on, effort dropdown shown
   - Optional thinking models (GPT-4.1): checkbox toggleable, effort dropdown shown
   - Reasoning effort dropdown: low/medium/high, saved per model in API.ini
   - Warning for models without structured output support
-  - Per-model settings (temperature, thinking, reasoning_effort) saved/loaded from INI
+  - Available Models table includes Temp/Top P/Freq Pen/Pres Pen capability columns and refreshes them via the Update button
+  - Per-model settings (temperature, top_p, penalties, thinking, reasoning_effort, max_concurrent, req/sec) save/load through API.ini
   - Model selection combo in Request Settings section
 
 ### Adding a New Provider

@@ -44,6 +44,21 @@ def sanitize_output_text(text: Any) -> str:
     return text.rstrip("\r\n")
 
 
+def normalize_whitespace_for_comparison(text: str) -> str:
+    """Normalize leading/trailing whitespace for injection verification.
+    
+    Converts all leading/trailing tab/space sequences to single spaces
+    for lenient comparison during orig mismatch checks, since leading
+    whitespace preservation depends on manifest indent: and trail: tags
+    which may not be populated in all projects.
+    
+    Interior whitespace is preserved as-is.
+    """
+    # Strip all leading and trailing whitespace (spaces, tabs, etc.)
+    text = text.strip()
+    return text
+
+
 def _find_highest_numbered_field(
     line_entry: Dict[str, Any],
     prefix: str,

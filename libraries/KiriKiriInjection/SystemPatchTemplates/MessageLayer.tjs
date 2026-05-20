@@ -1,0 +1,1978 @@
+// CherryAI encoding note:
+// - Author/edit this template in UTF-8.
+// - Do not edit the live patch copy directly when avoiding mojibake.
+// - Stage/recompile to game patch by re-encoding this file as CP932 (Shift-JIS).
+var __CherryAILineSpacingConfigLoaded = false;
+var __CherryAILineSpacingOffsetPixels = 0;
+var __CherryAILatinFace = "Inter";
+var __CherryAIWrapRightPaddingPixels = 220;
+var __CherryAIMessageLayerProbeWritten = false;
+
+function LoadCherryAIFontPatchRuntimeConfig()
+{
+	if(!__CherryAILineSpacingConfigLoaded)
+	{
+		__CherryAILineSpacingConfigLoaded = true;
+		var ConfigPath = System.exePath + "patch/CherryAI.KiriKiriFontPatch.runtime.tjs";
+		if(Storages.isExistentStorage(ConfigPath))
+		{
+			var Config = Scripts.evalStorage(ConfigPath);
+			if(Config !== void && Config.line_spacing_offset_pixels !== void)
+				__CherryAILineSpacingOffsetPixels = Config.line_spacing_offset_pixels;
+			if(Config !== void && Config.latin_face !== void)
+				__CherryAILatinFace = "" + Config.latin_face;
+			if(Config !== void && Config.wrap_right_padding_pixels !== void)
+				__CherryAIWrapRightPaddingPixels = int(Config.wrap_right_padding_pixels);
+		}
+	}
+}
+
+function GetCherryAILineSpacingOffsetPixels()
+{
+	LoadCherryAIFontPatchRuntimeConfig();
+	return __CherryAILineSpacingOffsetPixels;
+}
+
+function GetCherryAILatinFace()
+{
+	LoadCherryAIFontPatchRuntimeConfig();
+	return __CherryAILatinFace;
+}
+
+function GetCherryAIWrapRightPaddingPixels()
+{
+	LoadCherryAIFontPatchRuntimeConfig();
+	return __CherryAIWrapRightPaddingPixels;
+}
+
+function ShouldWriteCherryAIMessageLayerProbe(f_Text)
+{
+	if(__CherryAIMessageLayerProbeWritten)
+		return false;
+	if(f_Text === void || f_Text == "")
+		return false;
+	return f_Text.indexOf("an outsider saw it") != -1;
+}
+
+function WriteCherryAIMessageLayerProbe(f_Lay,f_Text,f_AdvanceArray,f_WrapStarts)
+{
+	if(!ShouldWriteCherryAIMessageLayerProbe(f_Text))
+		return;
+	__CherryAIMessageLayerProbeWritten = true;
+
+	var Probe = %[];
+	Probe.text = f_Text;
+	Probe.font_face = f_Lay.font.face;
+	Probe.font_height = f_Lay.font.height;
+	Probe.font_shadowwidth = f_Lay.font.type_shadowwidth;
+	Probe.line_spacing_offset = GetCherryAILineSpacingOffsetPixels();
+	Probe.advances = f_AdvanceArray.join(",");
+	var WrapArray = [];
+	for(var i=0; i < f_Text.length;i++)
+		WrapArray.add(f_WrapStarts[i] ? "1" : "0");
+	Probe.wrap_starts = WrapArray.join("");
+	var CharArray = [];
+	for(var Pos = 0; Pos < f_Text.length; Pos++)
+	{
+		var Ch = f_Text[Pos];
+		CharArray.add("%d:%s".sprintf(Pos, Ch == " " ? "<space>" : Ch));
+	}
+	Probe.characters = CharArray.join("|");
+
+	try
+	{
+		(Dictionary.saveStruct incontextof Probe)(System.exePath + "patch/CherryAI.MessageLayerProbe.ksd", "w");
+	}
+	catch(e)
+	{
+	}
+}
+
+class MessageManager
+{
+	var Text = "";
+	var Name = "";
+	var Voice = "";
+	var VoiceName = "";
+	var window;
+
+	var LayerTextBase;
+	var PreventLayer;
+	var LayerMessSet_top;
+	var LayerMessSet_back;
+	var ClickAnimeLayer;
+	var timer;
+	var tiemrFade;
+
+	var TextSpeed_Init = 20; // 初期値
+
+	var _TextSpeed= TextSpeed_Init;	// テキスト速度
+	var _drawenabled=false;
+	var _ClickAnimeEnabled;
+	var PageArray = [];
+	var CurrentPageIndex = 0;
+
+	var OpacityArray=new Array();
+
+	// 描画中かどうか
+	property drawenabled
+	{
+        getter()
+		{
+			// 試験的に導入(ラストの文字列が半分以上の透明度で表示されていた場合、描画終了と見なす)
+			if(_drawenabled)
+				if(0 < Text.length && 255>>1 <= OpacityArray[Text.length-1])
+				{
+					_MomentDraw();
+					onDrawEnd();
+				}
+			if(CurrentPageIndex+1 < PageArray.count)
+				return true;
+			return _drawenabled;
+		}
+	}
+	// フェード中かどうか
+	property fadeenabled{ getter(){ return tiemrFade.enabled;} }
+
+	// クリックアニメーション
+	property clickAnimeEnabled
+	{
+		setter(v)
+		{
+			_ClickAnimeEnabled = v;
+			if(v)
+			{
+				ClickAnimeLayer.visible=true;
+				ClickAnimeLayer.Start();
+			}
+			else
+			{
+				ClickAnimeLayer.visible=false;
+				ClickAnimeLayer.Stop();
+			}
+		}
+        getter(){
+			return _ClickAnimeEnabled;
+		}
+	}
+
+	property TextSpeed
+	{
+		setter(v){ _TextSpeed=v; timer.TextSpeed=v;}
+		getter(){ return _TextSpeed; }
+	}
+	property Shadow
+	{
+		setter(v)
+		{
+			LayerTextBase.Shadow=v;
+			ReDraw();
+		}
+		getter(){ return LayerTextBase.Shadow;}
+	}
+	property Edge
+	{
+		setter(v)
+		{
+			LayerTextBase.Edge=v;
+			ReDraw();
+		}
+		getter(){ return LayerTextBase.Edge;}
+	}
+
+	property imageBlend
+	{
+		setter(v){ LayerMessSet_top.imageBlend = LayerMessSet_back.imageBlend = v; }
+		getter(){ return LayerMessSet_top.imageBlend; }
+	}
+
+	property Font
+	{
+		setter(v)
+		{
+			LayerTextBase.Font=v;
+			ReDraw();
+		}
+		getter(){ return LayerTextBase.Font;}
+	}
+
+	property FontColor
+	{
+		setter(v){ LayerTextBase.FontColor=v; ReDraw();}
+		getter(){ return LayerTextBase.FontColor; }
+	}
+	property DefaultFontColor
+	{
+		getter(){ return LayerTextBase._DFontColor; }
+	}
+	property FontSize
+	{
+		setter(v){ LayerTextBase.FontSize=v; ReDraw();}
+		getter(){ return LayerTextBase.FontSize; }
+	}
+	property DefaultFontSize
+	{
+		getter(){ return LayerTextBase._DFontSize; }
+	}
+
+	property opacity{ setter(v){ this.blend=v;} getter(){ return this.blend;} }
+	property blend
+	{
+		setter(v)
+		{
+			LayerMessSet_top.blend = LayerMessSet_back.blend = ClickAnimeLayer.blend =v;
+			onBlendChange(v);
+		}
+		getter(){ return LayerMessSet_top.blend;}
+	}
+
+	property absolute
+	{
+		setter(v){ LayerMessSet_top.absolute = LayerMessSet_back.absolute = v; PreventLayer.absolute=v+5000;}
+		getter(){ return LayerMessSet_top.absolute;}
+	}
+
+	function onBlendChange(v){}
+
+	function finalize()
+	{
+		invalidate LayerTextBase;
+		invalidate PreventLayer;
+		invalidate ClickAnimeLayer;
+		invalidate LayerMessSet_top;
+		invalidate LayerMessSet_back;
+		invalidate timer;
+		invalidate tiemrFade;
+	}
+
+	property left
+	{
+		setter(v)
+		{
+			LayerMessSet_top.left = LayerMessSet_back.left = v;
+		}
+		getter(){ return LayerMessSet_top.left; }
+	}
+	property top
+	{
+		setter(v)
+		{
+			LayerMessSet_top.top = LayerMessSet_back.top = v;
+		}
+		getter(){ return LayerMessSet_top.top; }
+	}
+
+	function setPos(f_left=0,f_top=0)
+	{
+		LayerMessSet_top.setPos(f_left,f_top);
+		LayerMessSet_back.setPos(f_left,f_top);
+	}
+
+	function MessageManager(f_win,f_par_fore,f_par_back)
+	{
+		window = f_win;
+
+		// 元
+		LayerTextBase = new MessageBaseLayer(window,window.primaryLayer2nd);
+
+		LayerMessSet_top = new MessageLayer2(window,f_par_fore);
+		with(LayerMessSet_top)
+		{
+			.name="メッセージレイヤー基底";
+			.loadImagesMessageBack("xx2_mwベース");
+			.loadImagesNameBack("xx2_mw_名前欄ON","xx2_mw_名前欄OFF");
+			.blend=0;
+		}
+
+		LayerMessSet_back = new MessageLayer2(window,f_par_back);
+		with(LayerMessSet_back)
+		{
+			.name="メッセージレイヤー基底";
+			.loadImagesMessageBack("xx2_mwベース");
+			.loadImagesNameBack("xx2_mw_名前欄ON","xx2_mw_名前欄OFF");
+			.blend=0;
+		}
+
+		ClickAnimeLayer = new AnimeLayer(window,window.primaryLayer);
+		with(ClickAnimeLayer)
+		{
+			.absolute = window.fore.top.absolute+1;
+			.name = "クリックアニメーション";
+			.loadImages("pagenextanime");
+			.visible=false;
+			.setPos(1087,665);
+			.hitThreshold=256;
+		}
+		clickAnimeEnabled=false;
+
+		// 初期不透明度
+		LayerMessSet_top.imageBlend = LayerMessSet_back.imageBlend = 220;
+
+		// 名前テキストの位置調整
+		LayerMessSet_top.setPosToNameLayer(18,105);
+		LayerMessSet_back.setPosToNameLayer(LayerMessSet_top.NameLayer.left,LayerMessSet_top.NameLayer.top);
+
+		// テキストの位置調整
+		LayerMessSet_top.setPosToTextLayer(272,94);
+		LayerMessSet_back.setPosToTextLayer(LayerMessSet_top.TextLayer.left,LayerMessSet_top.TextLayer.top);
+
+		// バック画像の位置調整
+		LayerMessSet_top.setPosToImageBack(0,85);
+		LayerMessSet_back.setPosToImageBack(LayerMessSet_top.MessBack.left,LayerMessSet_top.MessBack.top);
+		var CherryAIWrapRightEdgePx = LayerMessSet_top.MessBack.left + LayerMessSet_top.MessBack.imageWidth - 12;
+		var CherryAIWrapWidthPx = CherryAIWrapRightEdgePx - LayerMessSet_top.TextLayer.left;
+		if(CherryAIWrapWidthPx < 1)
+			CherryAIWrapWidthPx = LayerTextBase.GetWrapMaxWidth();
+		LayerTextBase.SetWrapMaxWidth(CherryAIWrapWidthPx);
+		// ネーム画像の位置調整
+		LayerMessSet_top.setPosToImageName(12,106);
+		LayerMessSet_back.setPosToImageName(LayerMessSet_top.NameBackON.left,LayerMessSet_top.NameBackON.top);
+
+		// ネーム文字描画レイヤーのサイズ調整
+		LayerMessSet_top.NameLayer.setSize(LayerTextBase.NameLayer.width,LayerTextBase.NameLayer.height);
+		LayerMessSet_back.NameLayer.setSize(LayerMessSet_top.NameLayer.width,LayerMessSet_top.NameLayer.height);
+
+		// クリック防止用レイヤ
+		PreventLayer = new MaskLayer(window,window.primaryLayer);
+		PreventLayer.name="メッセージ用クリック防止レイヤ";
+		PreventLayer.visible=false;
+
+		// 文字描画用
+		timer = new TimerMessEx(onTimer,TextSpeed);
+		timer.enabled = false;
+
+		// メッセージフレームのフェード用
+		tiemrFade = new TimerToContinuous(onTimerFade);
+		tiemrFade.enabled = false;
+		tiemrFade.fadename="out";
+
+		for(var i=0; i < 110;i++) OpacityArray.add(0);
+	}
+
+	function onTimerFade()
+	{
+		var End = false;
+		var f_blend=0;
+
+		if( tiemrFade.fadename == "in" )
+		{
+			f_blend = (int)(255*(tiemrFade.count/tiemrFade.flame));
+			f_blend = 0 if (f_blend < 0);
+
+			if ( 255 <= f_blend)
+			{
+				f_blend = 255;
+				End = true;
+				tiemrFade.fadename="out";
+				onBlendReturn(); // 不透明度0から復帰した時に発生するイベント
+			}
+		}
+		else if( tiemrFade.fadename == "out" )
+		{
+			f_blend = (int)(255-255*(tiemrFade.count/tiemrFade.flame));
+			f_blend = 255 if (255 < f_blend);
+
+			if( f_blend <= 0 )
+			{
+				tiemrFade.fadename="in";
+				End = true;
+				f_blend = 0;
+			}
+		}
+
+		// 適用
+		this.blend = f_blend;
+
+		tiemrFade.count++;
+		if(End)
+		{
+			PreventLayer.visible=false;
+			tiemrFade.enabled=false;
+			tiemrFade.count=0;
+		}
+	}
+
+	function Fade(flame=10)
+	{
+		if(tiemrFade.enabled)
+		{
+			tiemrFade.count += 9999999;
+			onTimerFade();
+			return false;
+		}
+		var Flag=false;
+		if( tiemrFade.fadename == "in" && this.blend == 0 && !PreventLayer.visible)
+		{
+			if(0 < flame )
+				Flag=true;
+			else
+				this.blend=255;
+		}
+		else if( tiemrFade.fadename == "out" && this.blend == 255 && !PreventLayer.visible)
+		{
+			if(0 < flame )
+				Flag=true;
+			else
+				this.blend=0;
+		}
+		// バグ回避用
+		else if(tiemrFade.fadename == "in" && this.blend != 0)
+		{
+			tiemrFade.fadename = "out";
+			this.blend=255;
+			PreventLayer.visible=false;
+		}
+		else if(tiemrFade.fadename == "out" && this.blend != 255)
+		{
+			tiemrFade.fadename = "in";
+			this.blend=0;
+			PreventLayer.visible=false;
+		}
+
+		if(Flag)
+		{
+			PreventLayer.visible=true;
+			tiemrFade.enabled=true;
+			tiemrFade.count=0;
+			tiemrFade.flame=flame;
+		}
+
+		return Flag;
+	}
+
+	var _storedata_MessageMGR = new Dictionary();
+	function gamestore()
+	{
+		_storedata_MessageMGR.blend = this.blend;
+		_storedata_MessageMGR.fadename = tiemrFade.fadename;
+		_storedata_MessageMGR.FontSize = FontSize;
+		_storedata_MessageMGR.FontColor = FontColor;
+		return _storedata_MessageMGR;
+	}
+
+	function gamerestore(data)
+	{
+		// 初期化
+		clear();
+		PreventLayer.visible=false;
+		tiemrFade.enabled=false;
+		this.blend = data.blend;
+		tiemrFade.fadename = data.fadename;
+		clickAnimeEnabled=false;
+		FontSize=data.FontSize;
+		FontColor = data.FontColor;
+		LayerMessSet_top.ResetPos();
+		LayerMessSet_back.ResetPos();
+	}
+
+	function systemStore()
+	{
+		var data = %[];
+		data.imageBlend = imageBlend;
+		data.TextSpeed = TextSpeed;
+		data.Base = LayerTextBase.store();
+		data.PageArray = PageArray;
+		data.CurrentPageIndex = CurrentPageIndex;
+		return data;
+	}
+
+	function systemRestore(data)
+	{
+		imageBlend = data.imageBlend;
+		TextSpeed = data.TextSpeed;
+		PageArray = data.PageArray !== void ? data.PageArray : [];
+		CurrentPageIndex = data.CurrentPageIndex !== void ? data.CurrentPageIndex : 0;
+		LayerTextBase.restore(data.Base);
+		this.Font = LayerTextBase.Font; // フォント
+	}
+
+	function StartCurrentPage()
+	{
+		this.Text = LayerTextBase.Text;
+
+		var cnt = OpacityArray.count;
+		for(var i=0; i < cnt;i++) OpacityArray[i] = 0;
+		if(0 < this.Text.length)
+			OpacityArray[0] = 20;
+
+		LayerMessSet_top.clear();
+		LayerMessSet_back.clear();
+		DrawName();
+		clickAnimeEnabled = false;
+
+		_drawenabled = true;
+		if(TextSpeed < 1)
+			MomentDraw();
+		else
+			timer.enabled=true;
+	}
+
+	function LoadPage(f_PageIndex)
+	{
+		if(f_PageIndex < 0 || PageArray.count <= f_PageIndex)
+			return false;
+
+		CurrentPageIndex = f_PageIndex;
+		var Page = PageArray[f_PageIndex];
+		LayerTextBase.SetPreparedText(Page.text,Page.ruby);
+		StartCurrentPage();
+		return true;
+	}
+
+	function SetVoice(f_Voice="",f_VoiceName="")
+	{
+		this.Voice = f_Voice;
+		this.VoiceName = f_VoiceName;
+	}
+
+	function SetName(f_name="")
+	{
+		this.Name = f_name;
+		LayerTextBase.SetName(f_name);
+
+		if(f_name != "")
+		{
+			LayerMessSet_top.SetNameON();
+			LayerMessSet_back.SetNameON();
+		}
+		else
+		{
+			LayerMessSet_top.SetNameOFF();
+			LayerMessSet_back.SetNameOFF();
+		}
+	}
+
+	// テキストの描画
+	function DrawText(f_str)
+	//function SetText(f_str,f_name)
+	{
+		if(_drawenabled){dm("■■警告■■ 前の文章を描画中です"); MomentDraw();return;}
+
+		// テキストセット
+		LayerTextBase.SetText(f_str);
+		PageArray = LayerTextBase.BuildPageTextArray(LayerMessSet_top.TextLayer.height);
+		CurrentPageIndex = 0;
+		LoadPage(CurrentPageIndex);
+	}
+	function clear(){ClearStr();}
+	function ClearStr()
+	{
+		Text = Name = Voice = VoiceName = "";
+		PageArray.clear();
+		CurrentPageIndex = 0;
+		LayerTextBase.clear();
+		LayerMessSet_top.clear();
+		LayerMessSet_back.clear();
+		timer.enabled = false;
+		_drawenabled=false;
+		clickAnimeEnabled=false;
+	}
+
+	// ネーム描画
+	function DrawName()
+	{
+		LayerMessSet_top.NameLayer.clear();
+		LayerMessSet_top.NameLayer.assignImages(LayerTextBase.NameLayer);
+
+		LayerMessSet_back.NameLayer.clear();
+		LayerMessSet_back.NameLayer.assignImages(LayerMessSet_top.NameLayer);
+	}
+
+	// onTimerから呼ばれる描画関数
+	function Draw()
+	{
+		var cnt = LayerTextBase.Text.length;
+		var VisibleCount = 0;
+		for(; VisibleCount < cnt; VisibleCount++)
+			if(OpacityArray[VisibleCount] < 20) break;
+
+		LayerTextBase.DrawVisibleText(VisibleCount);
+		LayerMessSet_top.TextLayer.clear();
+		LayerMessSet_top.TextLayer.assignImages(LayerTextBase);
+		LayerMessSet_back.TextLayer.clear();
+		LayerMessSet_back.TextLayer.assignImages(LayerTextBase);
+	}
+	// プロパティで更新があった時用の再描画関数
+	function ReDraw()
+	{
+		LayerMessSet_top.clear();
+		LayerMessSet_back.clear();
+
+		// テキストクリア
+		DrawName();
+
+		if(timer.enabled)
+			Draw();
+		else
+			_MomentDraw();
+	}
+
+	function onDrawEnd()
+	{
+		// クリックアニメーション有効
+		if(!clickAnimeEnabled)
+			clickAnimeEnabled=true;
+
+		onDrawEndEx();
+	}
+	function onDrawEndEx(){/*描画完了時の終了イベント*/}
+
+	function _MomentDraw()
+	{
+		timer.enabled=false;
+		_drawenabled = false;
+
+		var cnt = Text.length;
+		for(var i=0; i < cnt;i++)	OpacityArray[i] = 255;
+		LayerMessSet_top.clear();
+		LayerMessSet_back.clear();
+
+		Draw();
+		DrawName();
+	}
+
+	// 描画中の内容を一瞬で描画する
+	function MomentDraw()
+	{
+		if(_drawenabled)
+		{
+			_MomentDraw();
+			onDrawEnd();
+			return;
+		}
+		if(CurrentPageIndex+1 < PageArray.count)
+		{
+			LoadPage(CurrentPageIndex+1);
+			return;
+		}
+		_MomentDraw();
+		onDrawEnd();
+	}
+
+	function onTimer()
+	{
+		if(TextSpeed < 1)
+		{
+			MomentDraw();
+			return;
+		}
+
+		if( timer.loopcnt <= 0) return;
+
+		for(var i=0; i < timer.loopcnt;i++)
+		{
+			// 不透明度の計算
+			if( OpacityCalculate() )
+			{
+				_drawenabled = timer.enabled = false;
+				i = timer.loopcnt+1;
+			}
+		}
+
+		Draw();
+
+		if(!timer.enabled)
+			onDrawEnd(); // 終了イベント
+	}
+
+	// 不透明度の計算
+	function OpacityCalculate()
+	{
+		var cnt = Text.length;
+		var i;
+
+		if(OpacityArray[cnt]==255) return true;
+
+		for(i=0; i < cnt;i++)
+			if(OpacityArray[i] < 255) break;
+
+		OpacityArray[i] = 255;
+		if(i+1==cnt)	return true; // 最後まで行ってたら終わり
+		return false;
+	}
+}
+
+// メッセージマネージャーで使う専用のタイマー
+class TimerMessEx
+{
+	var timer;
+	var CallFuncPoint;
+	var TextSpeed;
+	var loopcnt;
+
+	function finalize()
+	{
+		invalidate timer;
+	}
+
+	property enabled
+	{
+		setter(v)
+		{
+			if(v)
+			{
+				if(!timer.enabled)
+				{
+					timer.callTime=System.getTime();
+					loopcnt=0;
+					timer.enabled = v;
+				}
+			}
+			else
+			{
+				timer.enabled = v if (timer.enabled);
+			}
+		}
+		getter(){ return timer.enabled; }
+	}
+
+	function TimerMessEx(f_func,f_TextSpeed)
+	{
+		CallFuncPoint = f_func;
+		TextSpeed = f_TextSpeed;
+
+		timer = new Timer(onTimer,'');
+		timer.mode = atmExclusive;
+		timer.interval = 5;
+		timer.enabled = false;
+		timer.capacity=1;
+		timer.callTime=0;
+	}
+
+	function onTimer()
+	{
+		var functime = System.getTime();
+		if(TextSpeed < 1)
+			loopcnt = 1;
+		else
+			loopcnt = (functime-timer.callTime)\TextSpeed;
+		if(loopcnt > 1)
+			loopcnt = 1;
+		if( loopcnt > 0)
+			timer.callTime = functime;
+
+		CallFuncPoint();
+	}
+}
+
+// メッセージレイヤー
+class MessageLayer2 extends WF_Layer
+{
+
+	var TopLayer;
+		var MessBack; // メッセージ画像用
+		var NameBackON; // ネーム画像用
+		var NameBackOFF; // ネーム画像用
+		var TextLayer; // テキスト描画用
+		var NameLayer; // 名前描画用
+
+	var BaseTop; // 一番最初に設定されたtop値
+	var BaseLeft;
+
+	function finalize()
+	{
+		invalidate TopLayer;
+		invalidate MessBack;
+		invalidate NameBackON;
+		invalidate NameBackOFF;
+		invalidate TextLayer;
+		invalidate NameLayer;
+	}
+
+	// メッセージウィンドウの不透明度
+	property imageBlend
+	{
+		setter(v){ MessBack.blend = NameBackON.blend = NameBackOFF.blend = v; }
+		getter(){ return MessBack.blend; }
+	}
+
+	function setPosToTextLayer(f_Px,f_Py)
+	{
+		TextLayer.setPos(f_Px,f_Py);
+
+	}
+	function setPosToNameLayer(f_Px,f_Py)
+	{
+		NameLayer.setPos(f_Px,f_Py);
+	}
+
+	function setPosToImageBack(f_Px,f_Py)
+	{
+		MessBack.setPos(f_Px,f_Py);
+	}
+	function setPosToImageName(f_Px,f_Py)
+	{
+		NameBackON.setPos(f_Px,f_Py);
+		NameBackOFF.setPos(f_Px,f_Py);
+	}
+
+	function SetNameON(){ NameBackON.setVisible(); }
+	function SetNameOFF(){ NameBackOFF.setVisible(); }
+
+	// 初期位置に戻す
+	function ResetPos()
+	{
+		setPos(BaseLeft,BaseTop);
+	}
+
+	function MessageLayer2(f_win,f_Par)
+	{
+		super.WF_Layer(...);
+
+		setSize(f_Par.width,f_Par.height/3);
+		this.top = f_Par.height-this.height;
+		BaseTop = this.top;
+		BaseLeft = this.left;
+		visible=true;
+		this.hitThreshold=256;
+
+		TopLayer = new global.WF_Layer(f_win,this);
+		with(TopLayer)
+		{
+			.setSize();
+			.visible=true;
+			.hitThreshold=256;
+		}
+
+		MessBack = new global.WF_Layer(f_win,TopLayer);
+		with(MessBack)
+		{
+			.visible=true;
+			.hitThreshold=256;
+		}
+
+		NameBackON = new global.WF_Layer(f_win,TopLayer);
+		with(NameBackON)
+		{
+			.visible=false;
+			.hitThreshold=256;
+			.m_this = this;
+			.setVisible = function()
+			{
+				m_this.NameBackOFF.visible = false if m_this.NameBackOFF.visible;
+				visible=true;
+			}incontextof NameBackON;
+		}
+		NameBackOFF = new global.WF_Layer(f_win,TopLayer);
+		with(NameBackOFF)
+		{
+			.visible=true;
+			.hitThreshold=256;
+			.m_this = this;
+			.setVisible = function()
+			{
+				m_this.NameBackON.visible = false if m_this.NameBackON.visible;
+				visible=true;
+			}incontextof NameBackOFF;
+		}
+		TextLayer = new global.WF_Layer(f_win,TopLayer);
+		with(TextLayer)
+		{
+			.setSize(.parent.width,(.parent.height>>1)+20);
+			.visible=true;
+			.hitThreshold=256;
+			.clear = function()
+			{
+				fullRect(0x00000000);
+			}incontextof TextLayer;
+		}
+		NameLayer = new global.WF_Layer(f_win,TopLayer);
+		with(NameLayer)
+		{
+			.visible=true;
+			.hitThreshold=256;
+			.clear = function()
+			{
+				fullRect(0x00000000);
+			}incontextof NameLayer;
+		}
+	}
+
+	function clear()
+	{
+		TextLayer.clear();
+		NameLayer.clear();
+	}
+
+	// メッセージ画像の読み込み
+	function loadImagesMessageBack(f_file)
+	{
+		MessBack.loadImages(f_file);
+		MessBack.setSizeToImageSize();
+	}
+
+	// ネームプレートの画像読み込み
+	function loadImagesNameBack(f_ONfile,f_OFFfile)
+	{
+		NameBackON.loadImages(f_ONfile);
+		NameBackON.setSizeToImageSize();
+		NameBackOFF.loadImages(f_OFFfile);
+		NameBackOFF.setSizeToImageSize();
+	}
+
+	function store()
+	{
+		// 現時点で使ってない
+		/*
+		var data = %[];
+
+		data.BackImageFile = MessBack.ImageFileName;
+		data.NameONImageFile = NameBackON.ImageFileName;
+		data.NameOFFImageFile = NameBackOFF.ImageFileName;
+		//data.Px = this.left;
+		//data.Py = this.top;
+		data.visible = this.visible;
+		return data;
+		*/
+	}
+
+	function restore(data)
+	{
+		/*
+		loadImagesMessageBack(data.BackImageFile) if (data.BackImageFile !== void) && (MessBack.ImageFileName != data.BackImageFile);
+		loadImagesNameBack(data.NameONImageFile,data.NameOFFImageFile) if (data.NameONImageFile !== void) && (NameBackON.ImageFileName != data.NameONImageFile);
+		this.visible = data.visible;
+		*/
+	}
+}
+
+// メッセージ表示用の基本レイヤー
+// SetText後、DrawChで一文字づつ描画していく事が可能
+class MessageBaseLayer extends Layer
+{
+	var LublArray = []; // ルビ用配列
+	var charRectArray = []; // 1文字分の範囲Rect
+	var NameLayer;
+	var MAX_DRAW_WIDTH=0; // 描画最大横幅
+	var MAX_DRAW_HEIGHT=0; // 描画最大縦幅
+	var AnimatedPosByVisibleIndex = [];
+	var AnimatedDrawX = [];
+	var AnimatedDrawY = [];
+	var AnimatedRubyLayout = [];
+	var AnimatedVisibleCount = 0;
+
+	var Text=""; // 描画文字列
+	var Name=""; // 描画名前
+
+	var MaxNameLength = 9; // 名前の最大文字数
+	var TextLineMargin = 7; // 改行した時の追加余白
+	var NewLinech = "|"; // 改行判別文字列
+	var stProhibition = "、。，．・？！゛゜ヽヾゝゞ々ー）］｝」』!),.:;?]}｡｣､･ｰﾟ　";	// 禁則文字
+	var inCheckProhibition = 2; // 禁則文字表示用の文字数
+	var NumberOfCharacters = 30; // 一列の文字数禁則文字含まず
+
+	// プロパティ //
+	var _Font = "メイリオ";//"ＭＳ ゴシック";	// フォント名
+	var _FontSize = 25;			// サイズ
+	var _FontColor= 0x000000;	// 色
+	var _FontBold = false;		// 太字
+	var _Shadow=false;			// 影
+	var _Edge=true;				// 縁
+	// ========= //
+	// ネームプレート用 今は固定値
+	var NameFontSize = 25;
+	var EdgeColor = 0xFFFFFF;
+	var ShadowColor = 0xFFFFFF;
+
+	var _DFontSize = _FontSize; // 定数用の標準フォントサイズ
+	var _DFontColor = _FontColor; // 定数用の標準フォントカラー
+	var _WrapMaxWidthPx = 0;
+
+	function SetWrapMaxWidth(f_Width)
+	{
+		var WidthPx = f_Width;
+		if(WidthPx === void)
+			WidthPx = 0;
+		WidthPx = int(WidthPx);
+		if(WidthPx < 1)
+			WidthPx = 0;
+		_WrapMaxWidthPx = WidthPx;
+		if(0 < WidthPx)
+		{
+			var LayerWidth = WidthPx + 6;
+			if(LayerWidth < 1)
+				LayerWidth = 1;
+			if(width != LayerWidth)
+				width = LayerWidth;
+		}
+	}
+
+	function GetWrapMaxWidth()
+	{
+		if(0 < _WrapMaxWidthPx)
+			return _WrapMaxWidthPx;
+		return width - 6;
+	}
+
+	function GetSourceLineStep(f_FontSize)
+	{
+		var fontsizeHalf = (f_FontSize>>1)-5;
+		return f_FontSize+TextLineMargin+fontsizeHalf+20+GetCherryAILineSpacingOffsetPixels();
+	}
+
+	function GetDisplayLineStep(f_FontSize)
+	{
+		var fontsizeHalf = (f_FontSize>>1)-5;
+		return (f_FontSize+TextLineMargin+fontsizeHalf+20-5)-20+GetCherryAILineSpacingOffsetPixels();
+	}
+
+	function GetCharRectHeight(f_FontSize)
+	{
+		var DescenderPad = 14;
+		var fontsizeHalf = (f_FontSize>>1);
+		var Height = f_FontSize+TextLineMargin+fontsizeHalf+DescenderPad+GetCherryAILineSpacingOffsetPixels();
+		if(Height < 1)
+			Height = 1;
+		return Height;
+	}
+
+	property Font
+	{
+		setter(v){ _Font =v; this.font.face=v;NameLayer.setFont(v);_TextUpdate();}
+		getter(){ return _Font;}
+	}
+	property FontSize
+	{
+		setter(v){ _FontSize=v; this.font.height=v;setSizeEx(); _TextUpdate();}
+		getter(){ return _FontSize; }
+	}
+	property FontColor
+	{
+		setter(v){ _FontColor=v; _TextUpdate();}
+		getter(){ return _FontColor; }
+	}
+	property FontBold
+	{
+		setter(v){ _FontBold=v; this.font.bold=v; _TextUpdate();}
+		getter(){ return _FontBold; }
+	}
+	property Shadow
+	{
+		setter(v)
+		{
+			_Shadow = v;
+			_TextUpdate();
+		}
+		getter()
+		{
+			return _Shadow;
+		}
+	}
+
+	property Edge
+	{
+		setter(v)
+		{
+			_Edge = v;
+			with(this.font)
+			{
+				.type_shadowlevel = v ? 2048 : 0;
+				.type_shadowcolor = EdgeColor;
+				.type_shadowwidth = v ? 2 : 0;
+				.type_shadowofsx = 0;
+				.type_shadowofsy = 0;
+			}
+			_TextUpdate();
+		}
+		getter()
+		{
+			return _Edge;
+		}
+	}
+
+	property length
+	{
+		getter()
+		{
+			if(typeof(Text) == 'String' && Text != "")
+				return Text.length;
+			else
+				return 0;
+		}
+	}
+
+	function finalize()
+	{
+		invalidate NameLayer;
+		super.finalize(...);
+	}
+
+	function MessageBaseLayer(f_win,f_par)
+	{
+		super.Layer(...);
+
+		NameLayer = new global.Layer(f_win,this);
+		with(NameLayer)
+		{
+			.visible=true;
+			.m_this=this;
+			.setFont = function(f_fontname)
+			{
+				font.face = f_fontname;
+			}incontextof NameLayer;
+			.setFontSize = function(f_size)
+			{
+				font.height = f_size;
+				setSize(f_size*m_this.MaxNameLength+(f_size>>1), f_size+(f_size>>1));
+			}incontextof NameLayer;
+			.clear = function()
+			{
+				fillRect(0,0,imageWidth,imageHeight,0x00000000);
+			}incontextof NameLayer;
+			.drawName = function(NameStr="",f_Center=true)
+			{
+				clear();
+				var setPx,Px,setPy;
+				var cnt=NameStr.length;
+				var fontsize = font.height;
+				// 中心点計算
+				if(f_Center)
+				{
+					setPx = (width>>1)-(font.getTextWidth(NameStr)>>1);
+					setPy = (height>>1)-(fontsize>>1);
+					for(var Pos=0; Pos < cnt;Pos++)
+					{
+						var CharWidth = font.getEscWidthX(NameStr[Pos]);
+						var UseFixedCell = m_this.UseFixedCellForChar(this,NameStr[Pos],CharWidth);
+						Px = 0;
+						if(UseFixedCell)
+							Px = (fontsize-CharWidth)>>1;
+						// 影描画
+						drawText(setPx+Px+1,setPy,NameStr[Pos],m_this.ShadowColor,255,true) if (m_this.Shadow);
+						// 縁有効 フォントの色はデフォルトを使用
+						drawText(setPx+Px,setPy,NameStr[Pos],m_this._DFontColor,255,true,
+							m_this.font.type_shadowlevel,m_this.font.type_shadowcolor,m_this.font.type_shadowwidth,m_this.font.type_shadowofsx,m_this.font.type_shadowofsy);
+						if(UseFixedCell)
+							setPx += fontsize;
+						else
+							setPx += CharWidth;
+					}
+				}
+				else
+				{
+					for(var Pos=0; Pos < cnt;Pos++)
+					{
+						var CharWidth = font.getEscWidthX(NameStr[Pos]);
+						var UseFixedCell = m_this.UseFixedCellForChar(this,NameStr[Pos],CharWidth);
+						Px = 0;
+						if(UseFixedCell)
+							Px = (fontsize-CharWidth)>>1;
+						// 影描画
+						drawText(4+1+setPx+Px,setPy,NameStr[Pos],m_this.ShadowColor,255,true) if (m_this.Shadow);
+						// 縁有効 フォントの色はデフォルトを使用
+						drawText(4+setPx+Px,setPy,NameStr[Pos],m_this._DFontColor,255,true,
+							m_this.font.type_shadowlevel,m_this.font.type_shadowcolor,m_this.font.type_shadowwidth,m_this.font.type_shadowofsx,m_this.font.type_shadowofsy);
+						if(UseFixedCell)
+							setPx += fontsize;
+						else
+							setPx += CharWidth;
+					}
+				}
+			}incontextof NameLayer;
+		}
+
+		// 定数代入
+		NameLayer.setFontSize(NameFontSize);
+
+		this.height = window.primaryLayer.height>>1;
+		this.setSizeEx = function()
+		{
+			var num = (NumberOfCharacters+inCheckProhibition+1)*font.height+(font.height>>1);
+			this.width = num if (this.width != num);
+		}incontextof this;
+		setSizeEx();
+		FontSize = FontSize;
+		Font = Font;
+		visible=false;
+		fillRect(0,0,width,height,0x00000000);
+		with(this.font)
+		{
+			.type_shadowlevel = 2048;
+			.type_shadowcolor = EdgeColor;
+			.type_shadowwidth = 1;
+			.type_shadowofsx = 0;
+			.type_shadowofsy = 0;
+		}
+	}
+
+	function assign(f_Lay)
+	{
+		f_Lay.clear();
+		f_Lay.Font = Font;
+		f_Lay.FontSize = FontSize;
+		f_Lay.FontBold = FontBold;
+		f_Lay.FontColor = FontColor;
+		f_Lay.Shadow = Shadow;
+		f_Lay.Edge = Edge;
+	}
+
+	function clear()
+	{
+		fillRect(0,0,imageWidth,imageHeight,0x00000000);
+		Text=Name="";
+		LublArray.clear();
+		charRectArray.clear();
+		AnimatedPosByVisibleIndex.clear();
+		AnimatedDrawX.clear();
+		AnimatedDrawY.clear();
+		AnimatedRubyLayout.clear();
+		AnimatedVisibleCount = 0;
+		NameLayer.clear();
+		MAX_DRAW_WIDTH=MAX_DRAW_HEIGHT=0;
+	}
+
+	function _TextUpdate()
+	{
+		if(typeof(Text) == 'String' && Text != "")
+		{
+			PrepareAnimatedTextLayout();
+		}
+		if(typeof(Name) == 'String' && Name != "")
+		{
+			NameLayer.drawName(this.Name);
+		}
+	}
+
+	function NormalizeCherryAITextNewlines(f_Text)
+	{
+		if(typeof(f_Text) != 'String' || f_Text == "")
+			return f_Text;
+		var Result = "";
+		for(var Pos = 0; Pos < f_Text.length; Pos++)
+		{
+			var Ch = f_Text[Pos];
+			if(Ch == "\r")
+			{
+				Result += NewLinech;
+				if(Pos + 1 < f_Text.length && f_Text[Pos + 1] == "\n")
+					Pos++;
+				continue;
+			}
+			if(Ch == "\n")
+			{
+				Result += NewLinech;
+				continue;
+			}
+			Result += Ch;
+		}
+		return Result;
+	}
+
+	function SetText(f_Text)
+	{
+		Text = NormalizeCherryAITextNewlines(f_Text);
+		Text = LublCheck(Text);
+		PrepareAnimatedTextLayout();
+	}
+
+	function SetPreparedText(f_Text,f_LublSource=void)
+	{
+		Text = NormalizeCherryAITextNewlines(f_Text);
+		LublArray.clear();
+		if(f_LublSource !== void)
+			for(var i=0; i < f_LublSource.count;i++)
+			{
+				var addIndex = LublArray.add(%[]);
+				LublArray[addIndex].lubPosStrNum = f_LublSource[i].lubPosStrNum;
+				LublArray[addIndex].strlength = f_LublSource[i].strlength;
+				LublArray[addIndex].lubString = f_LublSource[i].lubString;
+				LublArray[addIndex].srcString = f_LublSource[i].srcString;
+			}
+		PrepareAnimatedTextLayout();
+	}
+
+	function PrepareAnimatedTextLayout()
+	{
+		ApplyCherryAITextFace(Text);
+		TextTempDraw(this,Text); // 文字全部描画
+		SetArrayCharaRect(this,Text); // 1文字のRectを代入
+		BuildAnimatedLayout();
+		fillRect(0,0,imageWidth,imageHeight,0x00000000);
+		AnimatedVisibleCount = 0;
+	}
+
+	function BuildAnimatedLayout()
+	{
+		AnimatedPosByVisibleIndex.clear();
+		AnimatedDrawX.clear();
+		AnimatedDrawY.clear();
+		AnimatedRubyLayout.clear();
+		AnimatedVisibleCount = 0;
+
+		var InitPxMargin=3;
+		var setPx=InitPxMargin;
+		var DrawY=5;
+		var fontsize = this.font.height;
+		var strCount=0;
+		var LineStep = GetDisplayLineStep(fontsize);
+		var linecnt = 0;
+		var VisibleIndex = 0;
+		var cnt = Text.length;
+		var CharAdvanceArray = BuildCharAdvanceArray(this,Text);
+		var WrapStarts = BuildWrapStarts(this,Text,CharAdvanceArray);
+
+		for(var Pos =0; Pos < cnt;Pos++)
+		{
+			if(Text[Pos] != NewLinech)
+			{
+				if(WrapStarts[Pos])
+				{
+					DrawY += LineStep;
+					setPx=InitPxMargin;
+					linecnt+=strCount;
+					strCount=0;
+				}
+
+				var CharWidth = CharAdvanceArray[Pos];
+				var UseFixedCell = UseFixedCellForChar(this,Text[Pos],CharWidth);
+				var Px = 0;
+				if(UseFixedCell)
+					Px = (fontsize-CharWidth)>>1;
+
+				AnimatedPosByVisibleIndex[VisibleIndex] = Pos;
+				AnimatedDrawX[Pos] = setPx + Px;
+				AnimatedDrawY[Pos] = DrawY + (fontsize>>1);
+
+				for(var i=0; i < LublArray.count;i++)
+				if( LublArray[i].lubPosStrNum == strCount+linecnt )
+				{
+					var RubyWidth = font.getTextWidth(LublArray[i].lubString);
+					var xleng = (fontsize)*(LublArray[i].strlength);
+					var Px2 = ((xleng>>1)-(RubyWidth>>1) );
+					AnimatedRubyLayout[Pos] = %[
+						x: setPx + Px2,
+						y: DrawY - (fontsize>>1) + 1,
+						text: LublArray[i].lubString,
+					];
+					break;
+				}
+
+				VisibleIndex++;
+				strCount++;
+
+				if(UseFixedCell)
+					setPx += fontsize;
+				else
+					setPx += CharWidth;
+			}
+			else
+			{
+				DrawY += LineStep;
+				setPx=InitPxMargin;
+				linecnt+=strCount+1;
+				strCount=0;
+			}
+		}
+	}
+
+	function AppendPageRange(f_Pages,f_Start,f_End)
+	{
+		var PageRuby = [];
+		for(var i=0; i < LublArray.count;i++)
+			if(f_Start <= LublArray[i].lubPosStrNum && LublArray[i].lubPosStrNum < f_End)
+			{
+				var addIndex = PageRuby.add(%[]);
+				PageRuby[addIndex].lubPosStrNum = LublArray[i].lubPosStrNum - f_Start;
+				PageRuby[addIndex].strlength = LublArray[i].strlength;
+				PageRuby[addIndex].lubString = LublArray[i].lubString;
+				PageRuby[addIndex].srcString = LublArray[i].srcString;
+			}
+		f_Pages.add(%[
+			text: Text.substring(f_Start,f_End-f_Start),
+			ruby: PageRuby,
+		]);
+	}
+
+	function BuildPageTextArray(f_MaxHeight)
+	{
+		var Pages = [];
+		var cnt = Text.length;
+		if(cnt < 1)
+		{
+			AppendPageRange(Pages,0,0);
+			return Pages;
+		}
+
+		var fontsize = this.font.height;
+		var DescenderPad = 14;
+		var LineStep = GetDisplayLineStep(fontsize);
+		var DrawY = 5;
+		var PageStart = 0;
+		var CharAdvanceArray = BuildCharAdvanceArray(this,Text);
+		var WrapStarts = BuildWrapStarts(this,Text,CharAdvanceArray);
+
+		for(var Pos =0; Pos < cnt;Pos++)
+		{
+			if(Text[Pos] == NewLinech)
+			{
+				var NextLineStart = Pos+1;
+				if(NextLineStart < cnt)
+				{
+					var NextBottom = DrawY + LineStep + (fontsize>>1) + 2 + fontsize + DescenderPad;
+					if(PageStart < NextLineStart && f_MaxHeight < NextBottom)
+					{
+						AppendPageRange(Pages,PageStart,NextLineStart);
+						PageStart = NextLineStart;
+						DrawY = 5;
+					}
+					else
+						DrawY += LineStep;
+				}
+				continue;
+			}
+
+			if(WrapStarts[Pos])
+			{
+				var WrappedBottom = DrawY + LineStep + (fontsize>>1) + 2 + fontsize + DescenderPad;
+				if(PageStart < Pos && f_MaxHeight < WrappedBottom)
+				{
+					AppendPageRange(Pages,PageStart,Pos);
+					PageStart = Pos;
+					DrawY = 5;
+				}
+				else
+					DrawY += LineStep;
+			}
+		}
+
+		if(PageStart < cnt || Pages.count == 0)
+			AppendPageRange(Pages,PageStart,cnt);
+		return Pages;
+	}
+
+	function SetName(f_Name,f_Center=true)
+	{
+		Name = f_Name;
+		NameLayer.drawName(this.Name,f_Center);
+	}
+
+	// 描画予定範囲を初期化
+	function fillClearToText(f_Lay)
+	{
+		f_Lay.fillRect(charRectArray[0],charRectArray[1],MAX_DRAW_WIDTH,MAX_DRAW_HEIGHT,0x00000000);
+	}
+
+	function DrawCh(f_Lay,f_No,f_blend=255)
+	{
+		var No = f_No*6;
+		if(charRectArray.count < No) return false;
+		if(f_blend < 20) return false;
+
+		var DstX = charRectArray[No];
+		var DstY = charRectArray[No+1];
+		var SrcX = charRectArray[No+2];
+		var SrcY = charRectArray[No+3];
+		var RectWidth = charRectArray[No+4];
+		var RectHeight = charRectArray[No+5];
+		var NextNo = No + 6;
+		if(NextNo + 5 < charRectArray.count)
+		{
+			var NextSrcX = charRectArray[NextNo+2];
+			var NextSrcY = charRectArray[NextNo+3];
+			if(NextSrcY == SrcY && SrcX < NextSrcX)
+			{
+				var MaxWidth = NextSrcX - SrcX;
+				if(MaxWidth < RectWidth)
+					RectWidth = MaxWidth;
+			}
+			else if(SrcY < NextSrcY)
+			{
+				var MaxHeight = NextSrcY - SrcY;
+				if(MaxHeight < RectHeight)
+					RectHeight = MaxHeight;
+			}
+		}
+		if(RectWidth < 1 || RectHeight < 1) return false;
+
+		f_Lay.operateRect(DstX,DstY, this, 
+			SrcX, SrcY, RectWidth,RectHeight,omAlpha, f_blend);
+		return true;
+	}
+
+	// ルビチェック
+	function LublCheck(f_Text)
+	{
+		LublArray.clear();
+
+		// ルビチェック
+		while(1)
+		{
+			var lubstart = f_Text.indexOf("{");
+
+			if(lubstart == -1) break;
+
+			var start = f_Text.indexOf("/",lubstart)+1;
+			var end = f_Text.indexOf("\}",start);
+
+			// ルビ探索
+			var i = LublArray.add(%[]);
+			LublArray[i].lubPosStrNum = lubstart;// 今回のルビの開始文字数 (テキストの何番目の文字からルビを開始するか)
+			LublArray[i].strlength = end-start;// 今回のルビ描画文字数(何文字の上にルビを描画するか)
+			LublArray[i].lubString = f_Text.substring(lubstart+1,start-lubstart-2); // 描画予定のルビ文字
+			LublArray[i].srcString = "";
+			for(var t=start; t < end;t++)
+				LublArray[i].srcString += f_Text[t];
+
+			var tmpstr = f_Text.substring(0,lubstart);
+			tmpstr += f_Text.substring(start,end-start);
+			tmpstr += f_Text.substring(end+1);
+			f_Text = tmpstr;
+		}
+
+		return f_Text;
+	}
+
+	function IsWrapWhitespace(f_Char)
+	{
+		return f_Char == " " || f_Char == "\t";
+	}
+
+	function ShouldDrawCharGlyph(f_Char)
+	{
+		if(f_Char === void || f_Char == "" || f_Char == NewLinech)
+			return false;
+		return !IsWrapWhitespace(f_Char);
+	}
+
+	function IsAsciiMetricsChar(f_Char)
+	{
+		if(f_Char === void || f_Char == "")
+			return false;
+		return " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~".indexOf(f_Char) != -1;
+	}
+
+	function IsAsciiDialogueText(f_Text)
+	{
+		if(f_Text === void || f_Text == "")
+			return false;
+
+		var HasAsciiGlyph = false;
+		for(var Pos = 0; Pos < f_Text.length; Pos++)
+		{
+			var Ch = f_Text[Pos];
+			if(Ch == NewLinech || Ch == " " || Ch == "\t")
+				continue;
+			if(IsAsciiMetricsChar(Ch))
+			{
+				HasAsciiGlyph = true;
+				continue;
+			}
+			return false;
+		}
+
+		return HasAsciiGlyph;
+	}
+
+	function GetCherryAIResolvedTextFace(f_DefaultFace,f_Text)
+	{
+		if(IsAsciiDialogueText(f_Text) && GetCherryAILatinFace() != "")
+			return GetCherryAILatinFace();
+		return f_DefaultFace;
+	}
+
+	function GetCharAdvance(f_Lay,f_Char)
+	{
+		if(IsWrapWhitespace(f_Char))
+			return GetWhitespaceAdvance(f_Lay,f_Char);
+
+		var fontsize = f_Lay.font.height;
+		var CharWidth = f_Lay.font.getEscWidthX(f_Char);
+		var TextWidth = f_Lay.font.getTextWidth(f_Char);
+		if(0 < TextWidth && TextWidth < CharWidth)
+			CharWidth = TextWidth;
+		if(CharWidth < 1)
+			CharWidth = 1;
+		if(CharWidth * 4 >= fontsize * 3)
+			return fontsize;
+		return CharWidth;
+	}
+
+	function GetWhitespaceAdvance(f_Lay,f_Char,f_Prefix="",f_NextChar=void)
+	{
+		var SpaceWidth = 0;
+		var MinimumSpaceWidth = (f_Lay.font.height * 3) >> 3;
+		if(0 < f_Lay.font.type_shadowwidth)
+			MinimumSpaceWidth += f_Lay.font.type_shadowwidth;
+		if(f_NextChar !== void && f_NextChar != "" && f_NextChar != NewLinech)
+		{
+			var WithSpace = f_Lay.font.getTextWidth(f_Prefix + f_Char + f_NextChar);
+			var WithoutSpace = f_Lay.font.getTextWidth(f_Prefix + f_NextChar);
+			SpaceWidth = WithSpace - WithoutSpace;
+		}
+		if(SpaceWidth < 1)
+			SpaceWidth = f_Lay.font.getTextWidth("A A") - f_Lay.font.getTextWidth("AA");
+		if(SpaceWidth < 1)
+			SpaceWidth = f_Lay.font.getTextWidth("m m") - f_Lay.font.getTextWidth("mm");
+		if(SpaceWidth < 1)
+			SpaceWidth = MinimumSpaceWidth;
+		if(SpaceWidth < MinimumSpaceWidth)
+			SpaceWidth = MinimumSpaceWidth;
+		if(SpaceWidth < 1)
+			SpaceWidth = 1;
+		if(f_Char == "\t")
+			return SpaceWidth * 4;
+		return SpaceWidth;
+	}
+
+	function GetAdvanceOutlinePadding(f_Lay,f_Char,f_UseFixedCell=false)
+	{
+		if(f_UseFixedCell)
+			return 0;
+		if(IsWrapWhitespace(f_Char) || !IsAsciiMetricsChar(f_Char))
+			return 0;
+		if(f_Lay.font.type_shadowwidth < 1)
+			return 0;
+		return f_Lay.font.type_shadowwidth;
+	}
+
+	function UseFixedCellForChar(f_Lay,f_Char,f_CharWidth=void)
+	{
+		if(IsAsciiMetricsChar(f_Char))
+			return false;
+		if(f_CharWidth === void)
+			f_CharWidth = GetCharAdvance(f_Lay,f_Char);
+		return f_CharWidth * 4 >= f_Lay.font.height * 3;
+	}
+
+	function GetCharRectWidth(f_Lay,f_Char,f_CharAdvance=void,f_UseFixedCell=void)
+	{
+		if(f_CharAdvance === void)
+			f_CharAdvance = GetCharAdvance(f_Lay,f_Char);
+		if(f_UseFixedCell === void)
+			f_UseFixedCell = UseFixedCellForChar(f_Lay,f_Char,f_CharAdvance);
+		if(f_UseFixedCell)
+			return f_Lay.font.height;
+
+		var GlyphWidth = f_Lay.font.getTextWidth(f_Char);
+		if(GlyphWidth < 1)
+			GlyphWidth = f_Lay.font.getEscWidthX(f_Char);
+		if(GlyphWidth < 1)
+			GlyphWidth = f_CharAdvance;
+		if(GlyphWidth < 1)
+			GlyphWidth = 1;
+		return GlyphWidth;
+	}
+
+	function ApplyCherryAITextFace(f_Text)
+	{
+		var TargetFace = GetCherryAIResolvedTextFace(_Font,f_Text);
+		if(this.font.face != TargetFace)
+			this.font.face = TargetFace;
+	}
+
+	function BuildCharAdvanceArray(f_Lay,f_Text)
+	{
+		var Advances = [];
+		var LineText = "";
+		var PreviousWidth = 0;
+		var fontsize = f_Lay.font.height;
+		var cnt = f_Text.length;
+		for(var Pos =0; Pos < cnt;Pos++)
+		{
+			var Ch = f_Text[Pos];
+			var NextChar = void;
+			if(Pos + 1 < cnt)
+				NextChar = f_Text[Pos+1];
+			if(Ch == NewLinech)
+			{
+				Advances[Pos] = 0;
+				LineText = "";
+				PreviousWidth = 0;
+				continue;
+			}
+
+			LineText += Ch;
+			var TotalWidth = f_Lay.font.getTextWidth(LineText);
+			var CharAdvance = TotalWidth - PreviousWidth;
+			if(IsWrapWhitespace(Ch))
+				CharAdvance = GetWhitespaceAdvance(f_Lay,Ch,LineText.substring(0,LineText.length-1),NextChar);
+			if(CharAdvance < 1)
+				CharAdvance = GetCharAdvance(f_Lay,Ch);
+			var UseFixedCell = UseFixedCellForChar(f_Lay,Ch,CharAdvance);
+			if(UseFixedCell)
+				CharAdvance = fontsize;
+			Advances[Pos] = CharAdvance;
+			PreviousWidth = TotalWidth;
+		}
+		WriteCherryAIMessageLayerProbe(f_Lay,f_Text,Advances,BuildWrapStarts(f_Lay,f_Text,Advances));
+
+		return Advances;
+	}
+
+	function BuildWrapStarts(f_Lay,f_Text,f_AdvanceArray=void)
+	{
+		var WrapStarts = [];
+		var InitPxMargin=3;
+		var MaxWidth = f_Lay.width-(InitPxMargin<<1);
+		if(f_Lay.GetWrapMaxWidth !== void)
+		{
+			var WrapWidthPx = f_Lay.GetWrapMaxWidth();
+			if(0 < WrapWidthPx)
+				MaxWidth = WrapWidthPx;
+		}
+		var WrapRightPaddingPx = GetCherryAIWrapRightPaddingPixels();
+		if(0 < WrapRightPaddingPx)
+			MaxWidth -= WrapRightPaddingPx;
+		if(MaxWidth < 1)
+			return WrapStarts;
+
+		var LineText="";
+		var LastSpacePos=-1;
+		var cnt = f_Text.length;
+		for(var Pos =0; Pos < cnt;Pos++)
+		{
+			var Ch = f_Text[Pos];
+			if(Ch == NewLinech)
+			{
+				LineText="";
+				LastSpacePos=-1;
+				continue;
+			}
+
+			var CandidateLineText = LineText + Ch;
+			var CandidateWidth = f_Lay.font.getTextWidth(CandidateLineText);
+			if(0 < LineText.length && MaxWidth < CandidateWidth)
+			{
+				if(0 <= LastSpacePos)
+				{
+					WrapStarts[LastSpacePos+1] = true;
+					Pos = LastSpacePos;
+				}
+				else
+				{
+					WrapStarts[Pos] = true;
+					Pos--;
+				}
+				LineText="";
+				LastSpacePos=-1;
+				continue;
+			}
+
+			LineText = CandidateLineText;
+			if(IsWrapWhitespace(Ch))
+				LastSpacePos = Pos;
+		}
+
+		return WrapStarts;
+	}
+
+	// 最初にテキストを用意しておく
+	function TextTempDraw(f_Lay)
+	{
+		var TextColor = FontColor;
+		var Pos = 0;
+		var InitPxMargin=3;
+		var setPx=InitPxMargin;
+		var Py=0;
+		var fontsize = f_Lay.font.height;
+		var strCount=0;
+		var DescenderPad = 14;
+		var linecnt = 0;
+		var cnt = Text.length;
+		var CharAdvanceArray = BuildCharAdvanceArray(f_Lay,Text);
+		var WrapStarts = BuildWrapStarts(f_Lay,Text,CharAdvanceArray);
+		var LineStep = f_Lay.GetSourceLineStep(fontsize);
+
+		f_Lay.fillRect(0,0,f_Lay.width,f_Lay.height,0x00000000);
+
+		for(var Pos =0; Pos < cnt;Pos++)
+		{
+			if(Text[Pos] != NewLinech)
+			{
+				if(WrapStarts[Pos])
+				{
+					Py+= LineStep;
+					setPx=InitPxMargin;
+					linecnt+=strCount;
+					strCount=0;
+				}
+
+				var CharWidth = CharAdvanceArray[Pos];
+				var UseFixedCell = UseFixedCellForChar(f_Lay,Text[Pos],CharWidth);
+				var Px = 0;
+				if(UseFixedCell)
+					Px = (fontsize-CharWidth)>>1;
+
+				if(f_Lay.imageHeight < Py+(fontsize>>1)+2+fontsize+DescenderPad)
+				{ // Py超過していた場合レイヤーの方を伸ばす処理
+					f_Lay.imageHeight =Py+(fontsize>>1)+2+fontsize+DescenderPad;
+				}
+
+				if(ShouldDrawCharGlyph(Text[Pos]))
+				{
+					// 影描画
+					if(this.Shadow)
+						f_Lay.drawText(setPx+Px+1,Py+(fontsize>>1)+1,Text[Pos],ShadowColor,255,true);
+
+					f_Lay.drawText(setPx+Px,Py+(fontsize>>1),Text[Pos],TextColor,255,true,
+						f_Lay.font.type_shadowlevel,f_Lay.font.type_shadowcolor,f_Lay.font.type_shadowwidth,f_Lay.font.type_shadowofsx,f_Lay.font.type_shadowofsy);
+				}
+
+				// ルビを描画する
+				if( 0 < LublArray.count)
+				for(var i=0; i < LublArray.count;i++)
+				if( LublArray[i].lubPosStrNum == strCount+linecnt )
+				{
+						var size = f_Lay.font.height;
+						f_Lay.font.height = (size>>1);
+						var xleng = (fontsize)*(LublArray[i].strlength);
+						var Px2 = ((xleng>>1)-(f_Lay.font.getTextWidth(LublArray[i].lubString)>>1) );
+
+						f_Lay.drawText(setPx+Px2,Py+1,LublArray[i].lubString,TextColor,255,true,
+							f_Lay.font.type_shadowlevel,f_Lay.font.type_shadowcolor,
+								f_Lay.font.type_shadowwidth,f_Lay.font.type_shadowofsx,f_Lay.font.type_shadowofsy);
+						f_Lay.font.height=size;
+				}
+				strCount++;
+
+				if(UseFixedCell)
+					setPx += fontsize;
+				else
+					setPx += CharWidth;
+			}
+			else
+			{
+				Py+= LineStep;
+				setPx=InitPxMargin;
+				linecnt+=strCount+1; // 改行文字も1文字と扱われているため+1
+				strCount=0;
+			}
+		}
+	}
+
+	function DrawVisibleText(f_VisibleCount)
+	{
+		if(f_VisibleCount < AnimatedVisibleCount)
+		{
+			fillRect(0,0,width,height,0x00000000);
+			AnimatedVisibleCount = 0;
+		}
+
+		for(var VisibleIndex = AnimatedVisibleCount; VisibleIndex < f_VisibleCount; VisibleIndex++)
+		{
+			var Pos = AnimatedPosByVisibleIndex[VisibleIndex];
+			if(Pos === void)
+				break;
+			if(ShouldDrawCharGlyph(Text[Pos]))
+			{
+				if(this.Shadow)
+					drawText(AnimatedDrawX[Pos]+1,AnimatedDrawY[Pos]+1,Text[Pos],ShadowColor,255,true);
+
+				drawText(AnimatedDrawX[Pos],AnimatedDrawY[Pos],Text[Pos],FontColor,255,true,
+					font.type_shadowlevel,font.type_shadowcolor,font.type_shadowwidth,font.type_shadowofsx,font.type_shadowofsy);
+			}
+
+			var RubyLayout = AnimatedRubyLayout[Pos];
+			if(RubyLayout !== void)
+			{
+				var size = font.height;
+				font.height = (size>>1);
+				drawText(RubyLayout.x,RubyLayout.y,RubyLayout.text,FontColor,255,true,
+					font.type_shadowlevel,font.type_shadowcolor,font.type_shadowwidth,font.type_shadowofsx,font.type_shadowofsy);
+				font.height=size;
+			}
+		}
+		AnimatedVisibleCount = f_VisibleCount;
+	}
+
+	// 各文字のRect情報を配列に格納
+	function SetArrayCharaRect(f_Lay,f_Text)
+	{
+		charRectArray.clear();
+
+		var Lay = f_Lay;
+		var Pos = 0;
+		var InitPxMargin=3;
+		var setPx=InitPxMargin;
+		var Py=0;
+		var Dy=0;
+		var strCount=0;
+		var fontsize = Lay.font.height;
+		var DescenderPad = 14;
+		var SourceLineStep = Lay.GetSourceLineStep(fontsize)-5;
+		var DisplayLineStep = Lay.GetDisplayLineStep(fontsize);
+
+		var cnt = f_Text.length;
+		var CharAdvanceArray = BuildCharAdvanceArray(Lay,f_Text);
+		var WrapStarts = BuildWrapStarts(Lay,f_Text,CharAdvanceArray);
+		for(var Pos =0; Pos < cnt;Pos++)
+		{
+			if(f_Text[Pos] != NewLinech)
+			{
+				if(WrapStarts[Pos])
+				{
+					Py+= SourceLineStep;
+					Dy += DisplayLineStep;
+					setPx=InitPxMargin;
+					strCount=0;
+				}
+
+				// 最終文字補正(縁等の端が切れてしまう現象を防ぐ)
+				// 改行指定とラスト文字判定をする
+				var adjuxtX=0;
+				if( cnt == Pos+1)
+					adjuxtX=3;
+				else if( Pos+1 < cnt && (f_Text[Pos+1] == NewLinech || WrapStarts[Pos+1]))
+					adjuxtX=3;
+
+				charRectArray.add(3+setPx); // Px
+				charRectArray.add(3+2+Dy);	// Py
+				var tmp_left = setPx - InitPxMargin;
+				charRectArray.add(tmp_left); // left
+				charRectArray.add(Py); // top
+				var CharWidth = CharAdvanceArray[Pos];
+				var UseFixedCell = UseFixedCellForChar(Lay,f_Text[Pos],CharWidth);
+				var RectWidth = GetCharRectWidth(Lay,f_Text[Pos],CharWidth,UseFixedCell);
+				charRectArray.add(RectWidth+InitPxMargin+adjuxtX); // width
+				charRectArray.add(GetCharRectHeight(fontsize)); // height
+
+				strCount++;
+				if(UseFixedCell)
+					setPx += fontsize;
+				else
+					setPx += CharWidth;
+			}
+			else
+			{
+				Py+= SourceLineStep;
+				Dy += DisplayLineStep;
+				setPx=InitPxMargin;
+				strCount=0;
+			}
+		}
+
+		// 描画範囲の最大横幅と最大縦幅を算出する
+		var N;
+		for(var i=0; i < cnt;i++)
+		{
+			N = i*6;
+			if( MAX_DRAW_WIDTH < charRectArray[N+2]+charRectArray[N+4])
+				MAX_DRAW_WIDTH = charRectArray[N+2]+charRectArray[N+4];
+			if( MAX_DRAW_HEIGHT < charRectArray[N+3]+charRectArray[N+5])
+				MAX_DRAW_HEIGHT = charRectArray[N+3]+charRectArray[N+5];
+		}
+
+		return true;
+	}
+
+	function store()
+	{
+		var data = %[];
+
+		data.Font = Font;
+		data.FontBold = FontBold;
+		data.Shadow = Shadow;
+		data.Edge = Edge;
+
+		return data;
+	}
+
+	function restore(data)
+	{
+		clear();
+		Font = data.Font;
+		FontBold = data.FontBold;
+		Shadow = data.Shadow;
+		Edge = data.Edge;
+	}
+}

@@ -9,6 +9,7 @@ auto-encoding, format filtering, multi-line preview, and progress dialog.
 from __future__ import annotations
 
 from contextlib import nullcontext
+import codecs
 import json
 import logging
 import time
@@ -27,8 +28,10 @@ from CherryAI.functions.ini_manager import get_default
 from CherryAI.functions.manifest_manager import (
     capture_source_line_mappings,
     get_primary_line_tag,
+    merge_line_tags,
     set_primary_line_tag,
 )
+from CherryAI.functions.postprocess import capture_dialogue_edge_whitespace
 from CherryAI.gui.steps.base import BaseStep
 from CherryAI.gui.theme.colors import THEME
 
@@ -43,6 +46,7 @@ PROGRESS_RENDER_INTERVAL_SECONDS = 2.0
 
 
 SAME_AS_SOURCE_DESTINATION = "Same as Source"
+SAME_AS_INPUT_ENCODING = "Same as Input"
 DEFAULT_OUTPUT_PAIR_MODE = "custom"
 DEFAULT_OUTPUT_NAMING = "subfolder"
 DEFAULT_OUTPUT_TEXT_OPTION = "translated"
@@ -116,6 +120,7 @@ class LoadedFile:
         content_loader: Optional[
             Callable[[], Tuple[List[str], Optional[List[str]]]]
         ] = None,
+        detection_source: str = "",
     ) -> None:
         """Initialize LoadedFile.
 
@@ -128,6 +133,7 @@ class LoadedFile:
             tags: Per-line parser tags from extract_tagged.
             line_count: Preserved line count when content is loaded lazily.
             content_loader: Optional lazy loader for lines and tags.
+            detection_source: Encoding detection source metadata.
         """
         self.path = path
         self.format_id = format_id
@@ -138,6 +144,7 @@ class LoadedFile:
         self._tags = list(tags) if tags is not None else None
         self.source_mappings = [dict(item) for item in source_mappings] if source_mappings else None
         self._content_loader = content_loader
+        self.detection_source = detection_source
 
     def _ensure_content_loaded(self) -> None:
         """Load lines and tags on first access when backed by a manifest slice."""
@@ -280,11 +287,25 @@ class _ImportTranslationDialog(tk.Toplevel):
             "Do not overwrite lines that already have translations",
             False, **pad,
         )
+
+        # --- Settings Sections ---
+        sf = ttk.LabelFrame(self, text="Settings Sections")
+        sf.pack(fill="x", padx=10, pady=(4, 4))
+
+        self._add_check(sf, "import_analysis", "Analysis", False, **pad)
+        self._add_check(
+            sf,
+            "import_information",
+            "Information (metadata, glossary, code DB)",
+            True,
+            **pad,
+        )
         self._add_check(sf, "import_preprocessing", "Preprocessing Settings", False, **pad)
         self._add_check(sf, "import_costs", "Costs / Request Settings", False, **pad)
         self._add_check(sf, "import_translation", "Translation Step State", False, **pad)
         self._add_check(sf, "import_postprocessing", "Postprocessing", False, **pad)
         self._add_check(sf, "import_wordwrap_settings", "Wordwrap Settings", False, **pad)
+        self._add_check(sf, "import_qa_settings", "QA / Validation Rules", False, **pad)
         self._add_check(sf, "import_file_settings", "File / Output Settings", False, **pad)
 
         # --- Source info ---
@@ -993,7 +1014,11 @@ class InputExtractionStep(BaseStep):
                 # Collect all files so parser-owned package targets such as
                 # `.xp3` are not filtered out before `can_handle()` runs.
                 all_files = self._collect_all_files_from_folder(folder)
-                return [f for f in all_files if parser.can_handle(f)]
+                matched = [f for f in all_files if parser.can_handle(f)]
+                dedup_fn = getattr(parser, "deduplicate_input_paths", None)
+                if callable(dedup_fn):
+                    return dedup_fn(matched, root=folder)
+                return matched
         except Exception:
             pass
 
@@ -1730,50 +1755,113 @@ class InputExtractionStep(BaseStep):
         return True
 
     @staticmethod
-    def _detect_encoding(path: Path) -> str:
-        """Detect file encoding using an 8 KB probe with fallback chain.
-
-        Priority: BOM → parser detect_encoding → utf-8 → shift_jis →
-        cp932 → latin-1 fallback.
-
-        Args:
-            path: File path.
-
-        Returns:
-            Detected encoding string.
-        """
+    def _decode_roundtrip_matches(
+        raw: bytes,
+        encoding: str,
+        bom: bytes = b"",
+    ) -> bool:
+        """Return True when strict decode/encode reproduces the original bytes."""
         try:
-            with open(path, "rb") as f:
-                raw = f.read(8192)
-            # Check BOM markers
-            if raw[:3] == b"\xef\xbb\xbf":
-                return "utf-8-sig"
-            if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
-                return "utf-16"
+            if bom:
+                payload = raw[len(bom):]
+                text = payload.decode(encoding)
+                return text.encode(encoding) == payload
+            text = raw.decode(encoding)
+            return text.encode(encoding) == raw
+        except (UnicodeDecodeError, LookupError):
+            return False
 
-            # Try parser-specific encoding if available
-            try:
-                from CherryAI.formats import detect_parser as _detect_parser
-                parser = _detect_parser(path)
-                if parser is not None:
-                    detect_fn = getattr(parser, "detect_encoding", None)
-                    if detect_fn is not None:
-                        enc = detect_fn(path)
-                        if enc:
-                            return enc
-            except Exception:
-                pass
+    @staticmethod
+    def _detect_encoding_info(
+        path: Path,
+        *,
+        parser_encoding: Optional[str] = None,
+        manual_encoding: Optional[str] = None,
+    ) -> Tuple[str, str]:
+        """Detect encoding and source metadata for a file.
 
-            # Fallback chain: utf-8 → shift_jis → cp932 → latin-1
-            for enc in ("utf-8", "shift_jis", "cp932"):
-                try:
-                    raw.decode(enc)
-                    return enc
-                except (UnicodeDecodeError, LookupError):
-                    continue
-            return "latin-1"  # Always succeeds
-        except Exception:
-            return "utf-8"
+        Priority: BOM (authoritative) → parser/manual hints → heuristic.
+        UTF-16 LE BOM is treated as authoritative when present.
+        """
+        raw = path.read_bytes()
+
+        if raw.startswith(codecs.BOM_UTF16_LE):
+            if InputExtractionStep._decode_roundtrip_matches(
+                raw,
+                "utf-16-le",
+                bom=codecs.BOM_UTF16_LE,
+            ):
+                return "utf-16", "bom:utf-16-le"
+            logger.warning(
+                "Encoding detection failed strict roundtrip for UTF-16 LE BOM: %s",
+                path,
+            )
+            raise UnicodeDecodeError("utf-16-le", raw, 0, 1, "BOM-decode roundtrip failed")
+
+        if raw.startswith(codecs.BOM_UTF16_BE):
+            if InputExtractionStep._decode_roundtrip_matches(
+                raw,
+                "utf-16-be",
+                bom=codecs.BOM_UTF16_BE,
+            ):
+                return "utf-16", "bom:utf-16-be"
+            logger.warning(
+                "Encoding detection failed strict roundtrip for UTF-16 BE BOM: %s",
+                path,
+            )
+            raise UnicodeDecodeError("utf-16-be", raw, 0, 1, "BOM-decode roundtrip failed")
+
+        if raw.startswith(codecs.BOM_UTF8):
+            if InputExtractionStep._decode_roundtrip_matches(raw, "utf-8", bom=codecs.BOM_UTF8):
+                return "utf-8-sig", "bom:utf-8"
+            logger.warning(
+                "Encoding detection failed strict roundtrip for UTF-8 BOM: %s",
+                path,
+            )
+            raise UnicodeDecodeError("utf-8", raw, 0, 1, "BOM-decode roundtrip failed")
+
+        candidate_chain: List[Tuple[str, str]] = []
+        if parser_encoding:
+            candidate_chain.append((parser_encoding, "parser"))
+        if manual_encoding:
+            candidate_chain.append((manual_encoding, "manual"))
+
+        # CP932 must win over Shift-JIS when both decode successfully.
+        candidate_chain.extend(
+            [
+                ("utf-8", "heuristic"),
+                ("cp932", "heuristic"),
+                ("shift_jis", "heuristic"),
+                ("utf-16-le", "heuristic"),
+                ("utf-16-be", "heuristic"),
+            ]
+        )
+
+        attempted: Set[Tuple[str, str]] = set()
+        failed_attempts: List[str] = []
+        for candidate, source in candidate_chain:
+            key = (candidate.lower(), source)
+            if key in attempted:
+                continue
+            attempted.add(key)
+            if InputExtractionStep._decode_roundtrip_matches(raw, candidate):
+                return candidate, source
+            failed_attempts.append(f"{candidate} ({source})")
+            logger.warning(
+                "Encoding failed decode roundtrip for %s using %s from %s",
+                path,
+                candidate,
+                source,
+            )
+
+        detail = ", ".join(failed_attempts) if failed_attempts else "no candidates"
+        raise UnicodeDecodeError("unknown", raw, 0, 1, f"no strict encoding match: {detail}")
+
+    @staticmethod
+    def _detect_encoding(path: Path) -> str:
+        """Backward-compatible wrapper returning only the detected encoding string."""
+        detected, _source = InputExtractionStep._detect_encoding_info(path)
+        return detected
 
     def _suggest_project_name_for_path(self, path: Path) -> str:
         """Return a stable fallback project name for a selected input path."""
@@ -1900,11 +1988,33 @@ class InputExtractionStep(BaseStep):
         mgr.set_archive_setting(path.name, settings)
 
         staged = mgr.stage_package_original_archive(path, settings=settings)
+
+        loadable_members = [
+            extracted_path
+            for extracted_path in staged.values()
+            if self._can_load_archive_member(extracted_path)
+        ]
+        if not loadable_members:
+            return False
+
+        try:
+            from CherryAI.formats import get_parser_registry
+
+            parser = get_parser_registry().get("KiriKiri2")
+        except Exception:
+            parser = None
+
+        package_root = mgr.get_package_original_dir()
+        if parser is not None and hasattr(parser, "deduplicate_input_paths"):
+            load_candidates = parser.deduplicate_input_paths(loadable_members, root=package_root)
+        else:
+            load_candidates = sorted(loadable_members)
+
         loaded_any = False
-        for extracted_path in sorted(staged.values()):
-            if not self._can_load_archive_member(extracted_path):
-                continue
+        for extracted_path in load_candidates:
             loaded_any = self._load_file(extracted_path, "auto", "auto") or loaded_any
+
+        self._apply_kirikiri2_package_precedence(package_root)
 
         if loaded_any:
             self._sync_lines_to_manifest()
@@ -1912,6 +2022,71 @@ class InputExtractionStep(BaseStep):
             self._save_manifest_after_file_load()
 
         return loaded_any
+
+    def _apply_kirikiri2_package_precedence(self, package_root: Path) -> None:
+        """Prune loaded package members using KiriKiri2 patch/xp3 precedence."""
+        try:
+            from CherryAI.formats import get_parser_registry
+
+            parser = get_parser_registry().get("KiriKiri2")
+        except Exception:
+            parser = None
+        if parser is None or not hasattr(parser, "deduplicate_input_paths"):
+            return
+
+        package_files: List[LoadedFile] = []
+        for loaded in self._loaded_files:
+            if str(loaded.format_id).lower() != "kirikiri2":
+                continue
+            try:
+                loaded.path.relative_to(package_root)
+            except ValueError:
+                continue
+            package_files.append(loaded)
+
+        if not package_files:
+            return
+
+        keep_paths = {
+            str(path_obj)
+            for path_obj in parser.deduplicate_input_paths(
+                [loaded.path for loaded in package_files],
+                root=package_root,
+            )
+        }
+
+        changed = False
+        filtered_loaded: List[LoadedFile] = []
+        for loaded in self._loaded_files:
+            if str(loaded.format_id).lower() != "kirikiri2":
+                filtered_loaded.append(loaded)
+                continue
+            try:
+                loaded.path.relative_to(package_root)
+            except ValueError:
+                filtered_loaded.append(loaded)
+                continue
+            if str(loaded.path) in keep_paths:
+                filtered_loaded.append(loaded)
+            else:
+                changed = True
+
+        if not changed:
+            return
+
+        self._loaded_files = filtered_loaded
+        if self.session is not None and self.session.loaded_files:
+            keep_loaded_paths = {str(loaded.path) for loaded in self._loaded_files}
+            self.session.loaded_files = [
+                path_obj for path_obj in self.session.loaded_files
+                if str(path_obj) in keep_loaded_paths
+            ]
+        update_fn = getattr(self, "_update_step_data", None)
+        if callable(update_fn):
+            try:
+                update_fn(force=True)
+            except Exception:
+                logger.debug("Deferred step-data refresh after KiriKiri2 pruning failed", exc_info=True)
 
     def _save_manifest_after_file_load(
         self,
@@ -2415,21 +2590,32 @@ class InputExtractionStep(BaseStep):
                 )
 
         if len(mappings) < len(loaded_file.lines):
+            start_ln = len(mappings)
             mappings.extend(
-                {"ln": len(mappings) + i + 1}
+                {"ln": start_ln + i + 1}
                 for i in range(len(loaded_file.lines) - len(mappings))
             )
 
         entries: List[Dict[str, Any]] = []
         for j, line_text in enumerate(loaded_file.lines):
+            primary_tag = ""
+            if loaded_file.tags and j < len(loaded_file.tags):
+                primary_tag = str(loaded_file.tags[j] or "").strip()
+            normalized_text, whitespace_tags = capture_dialogue_edge_whitespace(
+                line_text,
+                primary_tag,
+            )
             entry: Dict[str, Any] = {
-                "orig": line_text,
+                "orig": normalized_text,
                 "ln": mappings[j].get("ln", j + 1),
             }
             if "f" in mappings[j]:
                 entry["f"] = mappings[j]["f"]
-            if loaded_file.tags and j < len(loaded_file.tags):
-                set_primary_line_tag(entry, loaded_file.tags[j])
+            if primary_tag:
+                set_primary_line_tag(entry, primary_tag)
+            merged_tags = merge_line_tags(entry.get("tags"), whitespace_tags)
+            if merged_tags:
+                entry["tags"] = merged_tags
             entries.append(entry)
         return entries
 
@@ -2550,8 +2736,19 @@ class InputExtractionStep(BaseStep):
             output_options["Format"] = first_file.format_id
             changed = True
 
-        if not str(output_options.get("Encoding", "")).strip():
-            output_options["Encoding"] = first_file.encoding
+        output_encoding = str(output_options.get("Encoding", "")).strip()
+        valid_output_encodings = {
+            SAME_AS_INPUT_ENCODING,
+            "utf-8",
+            "utf-8-sig",
+            "utf-16",
+            "utf-16-le",
+            "utf-16-be",
+            "shift_jis",
+            "cp932",
+        }
+        if not output_encoding or output_encoding.lower() == "auto" or output_encoding not in valid_output_encodings:
+            output_options["Encoding"] = SAME_AS_INPUT_ENCODING
             changed = True
 
         if not isinstance(output_options.get("PreserveFolderStructure"), bool):
@@ -3147,7 +3344,7 @@ class InputExtractionStep(BaseStep):
                 except Exception:
                     format_id = FORMAT_MAP.get(path.suffix.lower(), "txt")
 
-            # TASK 39.3: Auto-detect encoding if set to "auto"
+            parser_detected_encoding: Optional[str] = None
             if encoding == "auto":
                 try:
                     from CherryAI.formats import get_parser_registry
@@ -3158,12 +3355,24 @@ class InputExtractionStep(BaseStep):
                 if parser is not None:
                     detect_fn = getattr(parser, "detect_encoding", None)
                     if callable(detect_fn):
-                        detected_encoding = detect_fn(path)
-                        if detected_encoding:
-                            encoding = detected_encoding
+                        parser_detected_encoding = detect_fn(path) or None
 
-                if encoding == "auto":
-                    encoding = self._detect_encoding(path)
+                encoding, detection_source = self._detect_encoding_info(
+                    path,
+                    parser_encoding=parser_detected_encoding,
+                )
+            else:
+                encoding, detection_source = self._detect_encoding_info(
+                    path,
+                    manual_encoding=encoding,
+                )
+
+            logger.info(
+                "Detected encoding for %s: %s (source=%s)",
+                path,
+                encoding,
+                detection_source,
+            )
 
             # Handshake: validate parser selection (M1-M3 check)
             if not self._validate_parser_selection(format_id):
@@ -3193,6 +3402,7 @@ class InputExtractionStep(BaseStep):
                 encoding=encoding,
                 tags=tags,
                 source_mappings=source_mappings,
+                detection_source=detection_source,
             )
 
             self._loaded_files.append(loaded)

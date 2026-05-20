@@ -208,21 +208,21 @@ python -m pytest CherryAI/dev/test_manifest_fields.py CherryAI/dev/test_qa_manif
 
 The Mistral parity pass is covered by focused unit tests plus live CherryAI verification against the Experimental plan key:
 
-- `dev/test_api_client.py` verifies provider-driven prompt-cache support for Mistral, clamps invalid reasoning effort values to provider-declared levels, parses actionable RPS limits from 429 text, and applies the new adaptive Requests / Second fallback math.
+- `dev/test_api_client.py` verifies provider-driven prompt-cache support for Mistral, clamps invalid reasoning effort values to provider-declared levels, parses actionable RPS limits from 429 text, applies the adaptive Requests / Second fallback math, and forwards `top_p` / penalty params only when the selected provider reports support.
 - `dev/test_api_client.py` also verifies that `_wait_for_requests_per_second()` strictly spaces concurrent request starts when multiple workers hit the shared Step 5 RPS gate at the same time.
 - `dev/test_api_providers.py` verifies CLI provider detection recognizes `https://api.mistral.ai/v1` and keeps the current OpenAI provider expectations aligned with the dynamic registry.
 - `dev/test_model_registry.py` verifies Mistral refresh keeps curated pricing for known live IDs, preserves structured-output filtering, keeps unknown live chat-capable models visible with unknown prices, and now prefers the curated `mistral-medium-2505` fallback pricing over stale persisted unknown-pricing entries.
-- `dev/test_translate_manifest.py` verifies the new Step 5 manifest fields `RequestOptions.RequestsPerSecondEnabled` and `RequestOptions.RequestsPerSecond` round-trip with the existing nested bool/float helpers.
-- `dev/test_translation_status_cache.py` verifies Step 5 now re-applies manifest-authoritative model/thread/RPS values after Global Options and per-model defaults, restores older top-level `RequestsPerSecond` manifests on reopen, and keeps the progress window open while outstanding requests remain.
+- `dev/test_pricing_and_reasoning.py` verifies `TuningParamConfig` plus OpenAI/Mistral capability reporting for `top_p`, `frequency_penalty`, and `presence_penalty`.
+- `dev/test_translation_status_cache.py` verifies Step 5 now keeps the manifest-selected model while taking thread/RPS/tuning values from per-model settings instead of legacy manifest fields, and keeps the progress window open while outstanding requests remain.
 - `dev/test_term_translation.py` verifies the utility LLM paths omit `store=False` for Mistral so strict request validation does not reject term translation or gender inference.
 - Live verification used CherryAI-native code paths: `fetch_mistral_models()`, `APIClient.translate_batch()`, `api_config.test_model_translation()`, `translate_terms(..., mode="LLM")`, `infer_gender_llm()`, and `dev/test_mistral_rps.py` for the new Translation Step Requests / Second gate.
 
 Verified commands:
 
 ```bash
-python -m pytest dev/test_api_client.py dev/test_api_providers.py dev/test_model_registry.py dev/test_translate_manifest.py -q --timeout=20
+python -m pytest dev/test_api_client.py dev/test_api_providers.py dev/test_model_registry.py -q --timeout=20
 python -m pytest dev/test_term_translation.py -q --timeout=20
-python -m pytest dev/test_translation_status_cache.py dev/test_api_client.py dev/test_translate_manifest.py -q --timeout=20
+python -m pytest dev/test_translation_status_cache.py dev/test_pricing_and_reasoning.py dev/test_api_client.py -q --timeout=20
 python dev/test_mistral_rps.py --model mistral-medium-2505 --burst 8 --under-rps 0.40 --under-requests 2
 ```
 
@@ -271,7 +271,7 @@ The large-project Step 5 Translation tab-entry fix is covered by one focused reg
 - `dev/test_translation_status_cache.py` also verifies that an already-hydrated empty cache stays empty without rescanning the manifest and that cache hydration runs at most once per refresh even when no translated rows exist.
 - `dev/test_translation_status_cache.py` also verifies that passive `on_enter()` and `_refresh_lines()` restore the table first and defer the expensive grouped status-summary rebuild instead of computing it inline during tab entry.
 - `dev/test_translation_status_cache.py` also verifies that multiple Step 5 flush requests coalesce into one manifest save and that `_on_translation_complete()` forces a final flush before the UI reports completion.
-- `dev/test_api_log.py` verifies that completed API log entries append a JSONL snapshot to disk immediately, that append-only duplicate `entry_id` snapshots compact back to the latest state on `load()`, and that main-translation invalid JSON, discarded line-count mismatches, API-call failures, and dedicated `Content Warning` refusal entries are all written to the structured API Log with the expected status metadata.
+- `dev/test_api_log.py` verifies that completed API log entries append a JSONL snapshot to disk immediately, that append-only duplicate `entry_id` snapshots compact back to the latest state on `load()`, and that main-translation invalid JSON, discarded line-count mismatches, and API-call failures are all written as failed API Log entries.
 - `dev/benchmark_translation_tab_entry.py` loads a real manifest under a withdrawn Tk root, times `TranslationStep.on_enter()`, prints JSON timing data, and prints a verbal `TIMEOUT:` message with a non-zero exit code when tab entry exceeds the requested threshold.
 
 Use the 60-second hard-timeout wrapper above for the benchmark command; the raw Python invocation below is the underlying argument reference.
@@ -408,12 +408,39 @@ python -m pytest dev/test_patch_editor_view.py dev/test_output_injection.py -k "
 
 Latest verified results: manifest slice 6 passed; output slice 4 passed; adjacent editor/output slice 6 passed.
 
+### Focused Step 9 Apply Patches Regression
+
+The manual parser project patch flow behind the new Output-step `Apply Patches` button is covered by a focused regression set:
+
+- `dev/test_apply_patches.py` verifies parser patch discovery from manifest `filedir[].format`, including the custom shared runner paths used by the KiriKiri2 Standard UI Translation Patch and Font Patch, staged search order (`Translated/` then `Original/`), saved lookup-folder reuse without reopening the folder picker, and cancel semantics when the folder chooser is dismissed.
+- `dev/test_kirikiri_font_patch.py` verifies both shared KiriKiri Step 9 workflows: bundled-family discovery plus staged Font Patch layout, and UTF-16-preserving Standard UI Translation Patch staging that rewrites `MenuItemManager.tjs` and `CacheWindow.tjs` into `patch/data/...` with literal plus regex replacements.
+- `dev/test_output_injection.py` verifies that `OutputInjectStep._open_apply_patches_dialog()` delegates to the shared Step 9 launcher instead of embedding parser-patch logic in the GUI step.
+- `dev/test_source_root.py` continues to verify the adjacent legacy KiriKiri2 post-inject project hook for output-staging compatibility.
+- Live script validation used `Projects/HyperKano.CherryAI.json`: first pass failed with `Could not find MainWindow.tjs.`, second pass resolved `dev/ws2`, copied `data/system/MainWindow.tjs` into `Projects/HyperKano/Translated/data/system/MainWindow.tjs`, created `.bak`, patched the HyperKano-style `SetMesText` call, and persisted the saved lookup folder as `C:\CherryAI\CherryAI\dev\ws2` in `OutputFormat.PatchLookupFolders`.
+- Live font validation used `dev/kanotsuku2/xx2.exe`: built `libraries/KiriKiriInjection/KirikiriUnencryptedArchive/Release/version.dll`, staged it plus `patch/CherryAI.KiriKiriFontPatch.json` and sibling `fonts/Inter-*.ttf` into `dev/kanotsuku2`, launched the sample, and confirmed runtime log entries for private font registration plus concrete `Segoe UI -> Inter` substitutions.
+- Live standard-UI staging used `dev/kanotsuku2/ws2`: `stage_kirikiri_standard_ui_translation_patch(...)` generated `dev/kanotsuku2/patch/data/system/MenuItemManager.tjs`, `dev/kanotsuku2/patch/data/program/CacheWindow.tjs`, and `dev/kanotsuku2/patch/data/system/VersionWindow.tjs`, and spot checks confirmed translated menu/help/cache/version strings in the UTF-16 outputs.
+- Live patch-tree cleanup validation used `dev/kanotsuku2/xx2.exe`: flattened the accidental active `dev/kanotsuku2/patch/patch/...` mirror into `dev/kanotsuku2/patch/`, moved conflicting leftovers and probe files to `dev/kanotsuku2/_inactive_patch_backups/failed_request_cleanup_20260519/`, staged `dev/kanotsuku2/ws2/patch/map_base_lv1.mdatb` and `map_base_lv2.mdatb` at the active patch root, and confirmed the game still remained running after 15 seconds of startup.
+
+Verified command:
+
+```bash
+python -m pytest dev/test_output_injection.py dev/test_apply_patches.py dev/test_kirikiri_font_patch.py dev/test_source_root.py -k "open_apply_patches_dialog_calls_shared_launcher or discovers_kirikiri_project_patches or custom_patch_without_target_lookup or stages_only_selected_fonts or uses_saved_lookup_folder_before_prompt or cancelled_folder_selection_cancels_one_patch or kirikiri_hook_patches_mainwindow" -q --timeout=20
+```
+
+Additional focused verification:
+
+```bash
+python -m pytest dev/test_kirikiri_font_patch.py dev/test_apply_patches.py -q --timeout=20
+```
+
+Latest verified result: `12 passed` on the focused Step 9 / KiriKiri shared-patch slice.
+
 ### Focused Cost Tracking + Editor Surface Regression
 
 The currently implemented building blocks behind the planned Lifetime Cost Tracking window and Translation Workbench are covered by a focused regression set:
 
 - `dev/test_usage_tracker.py` verifies persistent usage aggregation in `user/usage.db`
-- `dev/test_api_log.py` verifies structured API log persistence, status/category filtering, content-warning status mapping, failure classification metadata, and API Log viewer label mapping
+- `dev/test_api_log.py` verifies structured API log persistence, status/category filtering, failure classification metadata, and API Log viewer label mapping
 - `dev/test_patch_editor_view.py` verifies staged full-file editing, diffs, and manifest-backed editor history
 - `dev/test_table_view.py` verifies the line-level editing and search/replace surface that the planned workbench will continue to reuse
 
@@ -462,9 +489,7 @@ The affected workflow surfaces are covered by focused regression sets around the
 - `dev/test_table_view.py` verifies Full Table View deletion tracking plus save/reset semantics after edits.
 - `dev/test_edit_before_translate.py`, `dev/test_postprocess_manifest.py`, `dev/test_qa_manifest.py`, and `dev/test_wordwrap_manifest.py` provide adjacent regression coverage for the workflow steps touched during this rollback.
 - `dev/test_request_preview.py` and `dev/test_estimation_skip.py` provide adjacent regression coverage so shared skip planning stays aligned across Preview Requests, Translation planning, and Estimation; `dev/test_request_preview.py` also guards the overwrite-off fallback default used before session Global Options are attached.
-- `dev/test_api_validation.py`, `dev/test_first_request_gate.py`, and `dev/test_translation_phase43.py` cover the deferred validation retry path: colon/fullwidth-colon speaker delimiter mismatches, full-response discard on structural mismatch, line-count validation bypassing inline API retries, exact-length OpenAI translation schemas, exhausted non-fatal API failures staying local to Step 5, deferred retry queue bookkeeping, and the 10-chunk validation/API-failure-rate stop gates.
-
-- `dev/test_api_client.py` now also covers `compute_backoff_schedule()` plus the strict `translate_batch()` exhausted-failure contract used by retry-aware callers.
+- `dev/test_api_validation.py`, `dev/test_first_request_gate.py`, and `dev/test_translation_phase43.py` cover the deferred validation retry path: colon/fullwidth-colon speaker delimiter mismatches, full-response discard on structural mismatch, line-count validation bypassing inline API retries, exact-length OpenAI translation schemas, deferred retry queue bookkeeping in Step 5, and the 10-chunk validation-failure-rate gate.
 
 Verified commands:
 
@@ -536,16 +561,17 @@ Latest verified result for the focused KiriKiri2 system-script set: 5 passed.
 The Kano2-driven KiriKiri2 extraction and injection extensions are covered by a second focused parser slice:
 
 - `dev/test_parser_scripts.py` verifies that `.ks` files using `@talk name=[SF]` extract bracketed speaker variables as real speakers in `Speaker: Dialogue` format and inject back into the original `@talk` command style instead of rewriting them into `【speaker】` rows.
-- `dev/test_parser_scripts.py` also verifies that dialog-manager `.tjs` calls such as `SetYesNo("...")` and `SetOK("...")` are auto-detected, extracted as `dialog` literals, and injected back into the original function-call structure.
+- `dev/test_parser_scripts.py` also verifies that dialog-manager calls are captured on both parser-owned paths: `.tjs` calls such as `SetYesNo("...")` / `SetOK("...")` are auto-detected and injected back into the original function-call structure, while code-heavy `.ks` lines such as `window.DialogMGR.SetOK("名前が空欄です",...)` and `window.DialogMGR.SetYesNo(tmp_str+"||この名前でよろしいですか？",...)` expose only the visible quoted payloads and still leave non-literal calls such as `SetOK(res.msg,...)` untouched.
 - `dev/test_parser_scripts.py` also verifies that KiriKiri-style `.csv` sheets are auto-detected, process approved text headers one column at a time, and inject only those whitelisted cells while leaving IDs, file references, and control columns untouched.
+- `dev/test_parser_scripts.py` also verifies that `.mdat` files are auto-detected, extract only parser-whitelisted quoted keys such as `マップ名` and `グレード名` in source order, and inject only those whitelisted values while leaving stat/control keys untouched.
 
 Verified command:
 
 ```bash
-python -m pytest dev/test_parser_scripts.py -k "parses_talk_name_variable_speakers or preserves_talk_name_variable_speaker_lines or detect_parser_for_tjs_dialog_calls or extract_and_inject_tjs_dialog_literals or detect_parser_for_kirikiri_csv or reads_whitelisted_csv_columns_in_column_order or updates_whitelisted_csv_cells_only" -q --timeout=20
+python -m pytest dev/test_parser_scripts.py -k "detect_parser_for_tjs_dialog_calls or extract_and_inject_tjs_dialog_literals or detect_parser_for_kirikiri_csv or extract_tagged_reads_whitelisted_csv_columns_in_column_order or inject_to_updates_whitelisted_csv_cells_only or extract_tagged_parses_talk_name_variable_speakers or inject_to_preserves_talk_name_variable_speaker_lines or extract_tagged_reads_only_ui_literals_from_code_heavy_ks_lines or extract_and_inject_dialog_manager_literals_from_code_heavy_ks_lines or detect_extract_and_inject_whitelisted_mdat_keys" -q --timeout=20
 ```
 
-Latest verified result for the focused KiriKiri2 extraction set: 7 passed.
+Latest verified result for the focused KiriKiri2 extraction set: 10 passed.
 
 ### Focused WOLF RPG Parser Regression
 
@@ -1544,7 +1570,6 @@ Settings helper methods for processing function integration (Task 21.3).
 | `test_contains_placeholder_recovery` | PlaceholderRecovery (bool) |
 | `test_contains_bracket_recovery` | BracketBalanceRecovery key |
 | `test_contains_quote_recovery` | QuoteBalanceRecovery key |
-| `test_contains_whitespace_normalization` | WhitespaceNormalization key |
 | `test_contains_restore_code` | RestoreCodeCharacters key |
 | `test_contains_restore_linebreaks` | RestoreLinebreaks key |
 | `test_contains_symbol_conversion` | EnableSymbolConversion key |
@@ -3736,7 +3761,7 @@ Thank you.
 | test_code_pattern_actions.py | 46 | Code pattern action overhaul: normalization, actions, sync, validation, prompts |
 | test_information_step_phase41.py | 57 | Information step Phase 41 UI enhancements |
 | test_preprocess_phase42.py | 80 | Preprocessing & Postprocessing Phase 42 |
-| test_translation_phase43.py | 50 | Translation Tab Overhaul Phase 43 plus unsafe-request abort threshold and limit-settings serialization coverage |
+| test_translation_phase43.py | 48 | Translation Tab Overhaul Phase 43 |
 | test_validation_shared.py | 24 | Shared Validation Phase 44 |
 | test_postprocess_phase45.py | 54 | Postprocessing Tab Overhaul Phase 45 + stage-bounded translated input + flagged-case/dedup/search regressions |
 | test_wordwrap_phase46.py | 47 | Wordwrap Tab Overhaul Phase 46 + stage-bounded Latest input |
@@ -3767,8 +3792,8 @@ Thank you.
 | smoke_test/*.py | 5+ | Smoke tests |
 | test_provider_handshake.py | 188 | Provider Handshake: ABC, registry, validation, OpenAI/Google/Mistral/Anthropic/Local providers, APIClient integration, options.py migration, UI constraints, structured output |
 | test_provider_live_api.py | 11 | Live API tests: GPT-5-nano (no temp, reasoning) + GPT-4.1-nano (temp 0-2, no reasoning) |
-| test_pricing_and_reasoning.py | 108 | Pricing + Reasoning: GPT 4.1 no flex/priority, GPT 5 all tiers, ThinkingConfig 5 modes (builtin/explicit/optional/mandatory/""), build_params Chat Completions format, reasoning_effort persistence (RequestSettings/APIConfig/TranslationOptions/INI), provider-based get_thinking_params, THINKING_MODELS, is_openai_reasoning_model |
-| test_api_log.py | 56 | API Log: LogEntry serialization, APILogStore CRUD/filtering/subscription/persistence, singleton management, enum values, dataclass defaults, prompt-cache metadata preservation, status string compatibility (5), manifest save thread safety (2), structured log full-content guardrails (7), dedicated content-warning status filtering, and main-translation failed/discarded attempt logging (3) |
+| test_pricing_and_reasoning.py | 108 | Pricing + Reasoning: GPT 4.1 no flex/priority, GPT 5 all tiers, ThinkingConfig 5 modes (builtin/explicit/optional/mandatory/""), TuningParamConfig and OpenAI/Mistral sampling capability reporting, build_params Chat Completions format, reasoning_effort persistence (RequestSettings/APIConfig/TranslationOptions/INI), provider-based get_thinking_params, THINKING_MODELS, is_openai_reasoning_model |
+| test_api_log.py | 55 | API Log: LogEntry serialization, APILogStore CRUD/filtering/subscription/persistence, singleton management, enum values, dataclass defaults, prompt-cache metadata preservation, status string compatibility (5), manifest save thread safety (2), structured log full-content guardrails (7), and main-translation failed/discarded attempt logging (3) |
 | test_patch_editor_view.py | 3 | Patch Editor manifest helpers: staged Patch-vs-Original resolution, parser-backed translated/edit history rows, and manifest-backed save history persistence |
 | test_bugfix_batch_79.py | 33 | Bugfix Batch 79: API Log visibility (lift/non-modal), global glossary merge (4), ellipsis-only detection (14), ellipsis compression order (5), dedup/skip progress (3), cached/reasoning tokens (5) |
 | test_unified_request_builder.py | 28 | Unified Request Builder: gather_prompt_data (importable, keys, None/unloaded mgr, sample_lines, metadata read, fallback field merging), build_request_prompt (importable, tuple return, language prompt, style/tone/summary/genre enabled/disabled, rolling context, chunk_lines), unified call sites (costs 3 methods, translate 2 methods, no direct build_full_system_prompt), API Log full prompt (no truncation, line-by-line system_prompt), identical prompt output (deterministic, same data same prompt) |
@@ -10608,12 +10633,14 @@ fields (8 boolean toggles + 1 failure handling enum) are properly bound.
 | `test_quote_balance_save_to_manifest` | Saves QuoteBalanceRecovery |
 | `test_quote_balance_load_from_manifest` | Loads QuoteBalanceRecovery |
 
-#### TestPostProcessingWhitespaceNormalization (2 tests) - TASK 27.1
+#### Dialogue Edge Whitespace Tests
 
 | Test | Purpose |
 |------|---------|
-| `test_whitespace_save_to_manifest` | Saves WhitespaceNormalization |
-| `test_whitespace_load_from_manifest` | Loads WhitespaceNormalization |
+| `test_build_manifest_line_entries_tags_dialogue_edge_whitespace` | Input strips dialogue edge whitespace into canonical tags |
+| `test_capture_dialogue_only_line` | Dialogue-only lines preserve whitespace runs as tags |
+| `test_capture_speaker_dialogue_without_tag` | Speaker lines store extra dialogue whitespace beyond the canonical `Speaker: ` separator |
+| `test_restore_restrips_before_applying_tags` | Final restoration re-strips dialogue edges before reapplying stored tags |
 
 #### TestPostProcessingRestoreCodeCharacters (2 tests) - TASK 27.1
 

@@ -1441,7 +1441,6 @@ class ManifestManager:
                 "PlaceholderRecovery": defaults.get("post_placeholder_recovery", True),
                 "BracketBalanceRecovery": defaults.get("post_bracket_balance_recovery", True),
                 "QuoteBalanceRecovery": defaults.get("post_quote_balance_recovery", True),
-                "WhitespaceNormalization": defaults.get("post_whitespace_normalization", True),
                 "RestoreCodeCharacters": defaults.get("post_restore_code_characters", True),
                 "RestoreLinebreaks": defaults.get("post_restore_linebreaks", True),
                 "EnableSymbolConversion": defaults.get("post_enable_symbol_conversion", True),
@@ -1473,7 +1472,7 @@ class ManifestManager:
                 "PreserveFolderStructure": defaults.get("output_preserve_folder_structure", True),
                 "Format": "",  # Auto-detect from input
                 "PairMode": defaults.get("output_pair_mode", "custom"),
-                "Encoding": "",  # Auto-detect
+                "Encoding": defaults.get("output_encoding", "Same as Input"),
                 "FileNaming": defaults.get("output_file_naming", "subfolder"),
                 "TextOption": defaults.get("output_text_option", "translated"),
                 "OverwriteExistingFiles": defaults.get("output_overwrite_existing_files", True),
@@ -1544,7 +1543,6 @@ class ManifestManager:
             "post_placeholder_recovery": True,
             "post_bracket_balance_recovery": True,
             "post_quote_balance_recovery": True,
-            "post_whitespace_normalization": True,
             "post_restore_code_characters": True,
             "post_restore_linebreaks": True,
             "post_enable_symbol_conversion": True,
@@ -3721,7 +3719,13 @@ class ManifestManager:
                         continue
 
                 orig = sanitize_output_text(matched.get("orig", ""))
-                if orig != clean_key:
+                # For injection verification, normalize leading/trailing whitespace
+                # since indent: and trail: tags may not be populated in all projects
+                from .output import normalize_whitespace_for_comparison
+                clean_key_normalized = normalize_whitespace_for_comparison(clean_key)
+                orig_normalized = normalize_whitespace_for_comparison(orig)
+                
+                if orig_normalized != clean_key_normalized:
                     failures.append(
                         f"Position {offset} (ln={matched.get('ln')}, f={matched.get('f')}): "
                         f"orig mismatch — extracted {clean_key!r}, manifest {orig!r}"
@@ -3831,6 +3835,7 @@ class ManifestManager:
         source: str = "output",
         max_history: int = 10,
         synthesize_patch_if_missing: bool = False,
+        mark_dirty: bool = True,
     ) -> Dict[str, Any]:
         """Mirror a written output file into CherryAI's staged translated layout."""
         previous_view = self.get_editor_file_view(entry.rel_path)
@@ -3847,6 +3852,7 @@ class ManifestManager:
             source=source,
             max_history=max_history,
             synthesize_patch_if_missing=synthesize_patch_if_missing,
+            mark_dirty=mark_dirty,
             previous_view=previous_view,
         )
 
@@ -3860,6 +3866,7 @@ class ManifestManager:
         source: str,
         max_history: int,
         synthesize_patch_if_missing: bool,
+        mark_dirty: bool,
         previous_view: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Persist translated bytes and update manifest-backed editor state."""
@@ -3934,7 +3941,8 @@ class ManifestManager:
             "patch_translated_path": None if source == "step9" else patch_rel_path,
             "history": history,
         }
-        self._mark_dirty()
+        if mark_dirty:
+            self._mark_dirty()
 
         result = {
             "rel_path": entry.rel_path,
@@ -3953,6 +3961,10 @@ class ManifestManager:
         if decoded_text is not None:
             result["text"] = decoded_text
         return result
+
+    def mark_dirty(self) -> None:
+        """Public dirty marker for callers that batch manifest updates."""
+        self._mark_dirty()
 
     def _display_stage_path(self, path: Path) -> str:
         """Return a stable staged display path for diffs."""
@@ -5775,7 +5787,6 @@ class ManifestManager:
         - PlaceholderRecovery: Recover lost placeholders
         - BracketBalanceRecovery: Fix bracket balance
         - QuoteBalanceRecovery: Fix quote balance
-        - WhitespaceNormalization: Normalize whitespace
         - RestoreCodeCharacters: Restore code characters
         - RestoreLinebreaks: Restore linebreaks
         - EnableSymbolConversion: Convert symbols back
@@ -5786,7 +5797,6 @@ class ManifestManager:
             "PlaceholderRecovery": True,
             "BracketBalanceRecovery": True,
             "QuoteBalanceRecovery": True,
-            "WhitespaceNormalization": True,
             "RestoreCodeCharacters": True,
             "RestoreLinebreaks": True,
             "EnableSymbolConversion": True,
@@ -5889,7 +5899,7 @@ class ManifestManager:
             "PreserveFolderStructure": True,
             "Format": "",
             "PairMode": "custom",
-            "Encoding": "",
+            "Encoding": "Same as Input",
             "FileNaming": "subfolder",
             "TextOption": "translated",
             "OverwriteExistingFiles": True,
@@ -5904,6 +5914,23 @@ class ManifestManager:
         """Set output options."""
         self._manifest_data["OutputFormat"] = options
         self._mark_dirty()
+
+    def get_output_patch_lookup_folders(self) -> Dict[str, str]:
+        """Return saved lookup folders for manual parser project patches."""
+        options = self.get_output_options()
+        raw = options.get("PatchLookupFolders", {})
+        return dict(raw) if isinstance(raw, dict) else {}
+
+    def set_output_patch_lookup_folder(self, patch_key: str, folder: str) -> None:
+        """Persist one manual parser patch lookup folder."""
+        options = self.get_output_options()
+        raw = options.get("PatchLookupFolders", {})
+        folders = dict(raw) if isinstance(raw, dict) else {}
+        if folders.get(patch_key) == folder:
+            return
+        folders[patch_key] = folder
+        options["PatchLookupFolders"] = folders
+        self.set_output_options(options)
 
     def get_dirty_flags(self) -> Dict[str, bool]:
         """Get pipeline dirty flags.

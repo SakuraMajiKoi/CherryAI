@@ -73,6 +73,9 @@ class APIConfig:
     base_url: Optional[str] = None
     model: str = "gpt-3.5-turbo"
     temperature: float = 0.3
+    top_p: float = 1.0
+    frequency_penalty: float = 0.2
+    presence_penalty: float = 0.0
     timeout: int = 60
     retries: int = 3
     rate_limit_requests: int = 60  # Requests per minute
@@ -133,6 +136,16 @@ class APIConfig:
         # Type conversion for numeric fields
         if "temperature" in filtered_data:
             filtered_data["temperature"] = float(filtered_data["temperature"])
+        if "top_p" in filtered_data:
+            filtered_data["top_p"] = float(filtered_data["top_p"])
+        if "frequency_penalty" in filtered_data:
+            filtered_data["frequency_penalty"] = float(
+                filtered_data["frequency_penalty"]
+            )
+        if "presence_penalty" in filtered_data:
+            filtered_data["presence_penalty"] = float(
+                filtered_data["presence_penalty"]
+            )
         if "timeout" in filtered_data:
             filtered_data["timeout"] = int(filtered_data["timeout"])
         if "retries" in filtered_data:
@@ -2943,8 +2956,27 @@ class APIClient:
             temp_cfg = self._provider.get_temperature_config(self.config.model)
             if temp_cfg.supported:
                 api_params["temperature"] = self.config.temperature
+
+            top_p_cfg = self._provider.get_top_p_config(self.config.model)
+            if top_p_cfg.supported:
+                api_params["top_p"] = self.config.top_p
+
+            frequency_penalty_cfg = self._provider.get_frequency_penalty_config(
+                self.config.model
+            )
+            if frequency_penalty_cfg.supported:
+                api_params["frequency_penalty"] = self.config.frequency_penalty
+
+            presence_penalty_cfg = self._provider.get_presence_penalty_config(
+                self.config.model
+            )
+            if presence_penalty_cfg.supported:
+                api_params["presence_penalty"] = self.config.presence_penalty
         else:
             api_params["temperature"] = self.config.temperature
+            api_params["top_p"] = self.config.top_p
+            api_params["frequency_penalty"] = self.config.frequency_penalty
+            api_params["presence_penalty"] = self.config.presence_penalty
         
         # Add thinking mode parameters if enabled
         thinking_params = self.get_thinking_params()

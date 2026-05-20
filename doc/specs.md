@@ -103,7 +103,7 @@ The GUI is organized as:
 - **Full Table View** (`_on_full_table_view`): Opens FullTableViewDialog — spreadsheet-like view and editor for all manifest line entries. Requires a loaded project. Features: named columns (Line #, Original, Preprocessed, Translated, Postprocessed, Quality Assurance, Overwrite, Wordwrap, Final, Overwrite (Legacy), Log, Tags), column filter dropdown with Show All/Show Visible/Show Latest presets, all columns hideable, column selection bar for search/replace scoping, sort indicators (▲/▼) in headers, read-only Original with copy support, two-row search/replace toolbar, Results Only mode, file filter, RegEx search/replace, pagination, save/reset/diff, and a Clear Columns workflow for `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, and `final`. Clearing `tl` must require a second destructive confirmation because it removes the base translation stage. `final` is Full Table View only for now: empty cells remain sparse until edited, double-click editing seeds the editor from the first non-empty lower stage, and if the edited text matches that source value again the table clears `final` back to empty. Show Latest follows the active pipeline `orig → prepro → tl → postpro → qa → wordwr → final`.
 - **Patch Editor / Editor Host** (`_on_editor`): Opens PatchEditorViewDialog — a non-modal staged full-file editor for `Original/` and `Patch/` project files, currently surfaced from the live `Editor` menu entry. Requires a loaded project. Features: file tree rooted in manifest `filedir`, large undo-enabled text editor, in-file search/replace with optional regex mode, unified diff against staged original and prior patch content, line-history view filtered as `all` / `edited` / `translated`, and save/reload prompts. Saving must write the exact text into the staged translated layout and persist only compact editor metadata under `EditorState.files[rel_path]` (`saved_at`, staged artifact paths, bounded history). Patch diff text is now rebuilt from the staged translated artifact instead of being serialized into the manifest. Live line history, current text, and locator metadata are rebuilt on open instead of being serialized into the manifest. Reopening the Editor host must reuse the existing window and bring it to the foreground instead of opening duplicates. Its instance state must not shadow Tkinter internals such as `_root()`, because theme refresh and widget/event lookup rely on that helper.
 - **Planned merge note**: The current Full Table View and Patch Editor surfaces are expected to merge into a future non-modal `Editor` window with `Full Files` and `Lines Only` modes. Until that migration lands, the separate windows remain the implemented behavior.
-- **API Log** (`_on_api_log`): Opens APILogViewDialog — non-blocking viewer for structured API log entries. Requires a loaded project. Features: search bar, category filter (Main Translation/Term Translation/Gender Inference/Other), status filter (All/Content Warning/Failed/Recovered/Successful/Pending), view mode switch (Sent/Received/Both), display-limit spinbox (All/1000/2500/5000/Nothing), color-coded entries (green=success, yellow=recovered, amber=content warning, red=failed), live updates via subscription, token statistics, per-project JSONL persistence alongside manifest. Sent entries must show actual request metadata from the stored log, including OpenAI `prompt_cache_key` / `prompt_cache_retention` when present. Reopening API Log must reuse the existing window and bring it to the foreground instead of opening duplicates.
+- **API Log** (`_on_api_log`): Opens APILogViewDialog — non-blocking viewer for structured API log entries. Requires a loaded project. Features: search bar, category filter (Main Translation/Term Translation/Gender Inference/Other), status filter (All/Failed/Recovered/Successful/Pending), view mode switch (Sent/Received/Both), display-limit spinbox (All/1000/2500/5000/Nothing), color-coded entries (green=success, yellow=recovered, red=failed), live updates via subscription, token statistics, per-project JSONL persistence alongside manifest. Sent entries must show actual request metadata from the stored log, including OpenAI `prompt_cache_key` / `prompt_cache_retention` when present. Reopening API Log must reuse the existing window and bring it to the foreground instead of opening duplicates.
   - Runtime durability rule: completed requests must append their latest structured snapshot to disk immediately so API history can be salvaged after a crash even when manifest persistence is intentionally batched for throughput.
   - Failure visibility rule: main-translation API-call failures, invalid/non-JSON structured-output responses, invalid `translations` payloads, and discarded full-response validation failures must still be recorded as failed log entries with their available raw response/error text plus validation metadata before retry or abort handling continues.
 - **Ledger** (planned): A separate non-modal analytics window should aggregate actual usage across projects and task types. It should reuse `functions/usage_tracker.py` logic where practical, migrate persistent aggregation to `user/ledger.tsv`, keep `functions/api_log.py` as the request-detail source, and stay separate from Step 4 estimation.
@@ -332,7 +332,7 @@ Global Options are application-wide settings accessed via Tools → Options. The
 - **Efficient**: `min_lines = max(5, chunk_size // 2)` — merges small requests more aggressively across file boundaries (Step 5), reducing total API calls. Invokes slot 8b Merged-Request Instruction for combined requests.
 
 **Per-Model Settings Priority (Translation & Preview):**
-- `_load_model_settings()` loads chunk_size, temperature, rolling_context_before/between/after, thinking from per-model API.ini `[model_settings]` via `get_model_settings(model_id)`, falling back to Global Options when no per-model entry exists. Called on tab entry after `_sync_from_global_options()`.
+- `_load_model_settings()` loads chunk_size, temperature, `top_p`, `frequency_penalty`, `presence_penalty`, rolling_context_before/between/after, thinking, `max_concurrent`, and optional req/sec pacing from per-model API.ini `[model_settings]` via `get_model_settings(model_id)`, falling back to Global Options when no per-model entry exists. Called on tab entry after `_sync_from_global_options()`.
 - `_build_preview_requests()` syncs `_translation_options` from current UI values before calling `_build_chunks()`, ensuring Preview Requests uses live settings.
 - `_build_chunks()` reads rolling_context_between, rolling_context_after, and chunk_max_tokens from per-model API.ini via `get_model_settings()`, falling back to Global Options `go.request.*`.
 - Rolling context "before" in Preview reads per-model `rolling_context_before` from API.ini, falling back to Global Options.
@@ -371,8 +371,7 @@ This skip condition is a downstream validation/request-building rule, not a pars
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | Banned Tokens | list | [em_dash, smart_quotes] | Tokens to ban via logit bias |
-| Abort After Unsafe Request | bool + int | enabled, 1 | Stop the run after N refused unsafe requests |
-| Skip Unsafe Requests | bool | true | Skip refused chunks instead of recursive halving |
+| Content Warning | bool | true | Warn on explicit content |
 | Max Output Tokens | int | 4096 | Maximum output token limit |
 
 #### File I/O Settings
@@ -749,7 +748,7 @@ Code Spacing Rules (processed in both Pre and Post steps) apply these extended p
 
 **Purpose**: Parser Scripts are game-engine-specific or format-specific scripts that handle extraction, injection, and optionally provide wordwrap settings and context markers. They extend the base format handlers in `formats/` with engine-aware logic.
 
-**Status**: Implemented (Phase 53 + Parser Handshake) — `formats/parser_base.py` defines the `ParserScript` ABC with `WordwrapConfig`, `ForbiddenChars`, and `TagRules` dataclasses plus optional handshake methods (`decrypt`, `encrypt`, `extract_tagged`, `detect_speakers`, `wordwrap_for_tag`, `wordwrap`, `detect_encoding`). `formats/handshake.py` defines the handshake protocol types (`ExtractedLine`, `SpeakerInfo`, `ParserError`) and `validate_parser()`. RPG Maker MV/MZ parsers live in `formats/parser_rpgmaker.py`. The Light VN parser lives in `formats/LightVN.py` and is the reference handshake-compliant implementation. `formats/KiriKiri2.py` adds KiriKiri2/KAG support for `.ks`, `Menus.tjs`, XP3 archives, and optional post-inject patches for both `MainWindow.tjs` and `SelectLayer.tjs`, upgrading stock dialogue wrapping to word-based wrapping and stock choice rendering to multiline word-based choice layout while preserving the source file encoding. `formats/wolf_rpg.py` adds Dazed-aligned WOLF JSON and line-based text parsers for exported or unpacked WOLF content. A `ParserRegistry` in `formats/__init__.py` handles discovery and auto-detection. Wordwrap step auto-populates settings from detected parsers; forbidden characters integrate with logit bias and postprocessing.
+**Status**: Implemented (Phase 53 + Parser Handshake) — `formats/parser_base.py` defines the `ParserScript` ABC with `WordwrapConfig`, `ForbiddenChars`, and `TagRules` dataclasses plus optional handshake methods (`decrypt`, `encrypt`, `extract_tagged`, `detect_speakers`, `wordwrap_for_tag`, `wordwrap`, `detect_encoding`, `pretty_wrap`) and manual `project_patches` actions for Step 9. `formats/handshake.py` defines the handshake protocol types (`ExtractedLine`, `SpeakerInfo`, `ParserError`) and `validate_parser()`. RPG Maker MV/MZ parsers live in `formats/parser_rpgmaker.py`. The Light VN parser lives in `formats/LightVN.py` and is the reference handshake-compliant implementation. `formats/KiriKiri2.py` adds KiriKiri2/KAG support for `.ks`, `Menus.tjs`, XP3 archives, and optional post-inject patches for both `MainWindow.tjs` and `SelectLayer.tjs`, including a HyperKano-style `SetMesText` fallback for projects that do not expose the stock `processCh` handler. `formats/wolf_rpg.py` adds Dazed-aligned WOLF JSON and line-based text parsers for exported or unpacked WOLF content. A `ParserRegistry` in `formats/__init__.py` handles discovery and auto-detection. Wordwrap step auto-populates settings from detected parsers; forbidden characters integrate with logit bias and postprocessing.
 
 **Input Routing Rule**: Step 0 resolves the effective parser format before auto-encoding. When the user keeps Encoding on `auto` but explicitly selects a parser format such as `lightvn`, that parser's `detect_encoding()` result is used before generic BOM or fallback detection. The first successfully loaded file also seeds missing Output defaults for Destination, Format, and Encoding.
 
@@ -770,7 +769,7 @@ The Parser Handshake (`formats/handshake.py`) formalizes what every parser must 
 | M2: Inject | `inject(file_path, lines)` — write translations into adjacent copy; `inject_to(source_path, output_path, lines)` — surgical injection reading source, writing to output path |
 | M3: Identity | Either `format_id + extensions` (FormatHandler) or `can_handle(file_path)` (ParserScript) |
 
-**Optional Components** (O1–O10):
+**Optional Components** (O1–O11):
 | Component | Method / Attribute | Description |
 |-----------|--------------------|-------------|
 | O1 | `decrypt(file_path)` | Decrypt before extraction |
@@ -783,10 +782,13 @@ The Parser Handshake (`formats/handshake.py`) formalizes what every parser must 
 | O8 | `tag_rules` | Engine-specific context marker definitions |
 | O9 | `rewrite_injected_content(...)` | Optional parser-side structural rewrite pass after normal injection |
 | O10 | `pretty_wrap(text, width, break_char, max_lines)` | Custom core-wrap replacement (lighter than O6) |
+| O11 | `project_patches` | Manual Step 9 project patch actions listed in the Apply Patches window |
 
 **Surgical Injection** (extends M2): `inject_to(source_path, output_path, lines, *, orig_lines=None) → List[int]` reads the original script from *source_path*, surgically replaces only translatable text with entries from *lines*, and writes the complete script to *output_path*. The default implementation follows a standardized 4-step Speaker:Dialogue-aware handshake: (0) Load `\Original` into memory, (1) Extract keys via `extract_tagged()` (preferred) or `extract()` to get real line positions and speaker metadata, (2) Sequential search-and-replace with speaker awareness — lines with a non-empty speaker are split into a **speaker part** and a **dialogue part** via `_split_speaker_dialogue()` (recognises half-width `: ` and fullwidth `：`); the speaker name is replaced only on its first occurrence for consecutive same-speaker lines, the dialogue part is replaced separately; lines without a speaker use plain find-and-replace, (3) Save the result to *output_path*. Returns a list of failed indices (empty on full success). When *orig_lines* is provided they are used as search strings; when ``None`` the extracted keys are used directly (legacy compatibility). If a parser does not provide tagged speaker metadata and the handshake cannot match any extracted key at all, the base implementation may fall back to the older adjacent `_translated` file contract for compatibility. Parsers override this for engine-specific surgical injection (e.g. LightVN uses its own key extraction since extracted text is cleaned and does not appear verbatim in raw files). The Output step (Step 9) calls `inject_to` either through the explicit INJECTION format or through the legacy direct parser-ID route described in Step 9.
 
 **Post-Injection Rewrite Hook** (extends O9): `rewrite_injected_content(source_path, original_content, injected_content, *, search_keys, translated_lines, orig_lines=None, tagged_lines=None) → Optional[str]` runs after the parser's normal injection pass when a format needs safe structural rewrites instead of direct literal replacement. This is intended for cases where translated display text must be separated from machine keys or where translated output requires companion code inserted alongside the replaced text.
+
+**Manual Project Patches** (extends O11): Step 9 exposes an `Apply Patches` window that discovers parser-owned `project_patches` from the manifest's `filedir[].format` values. Each patch supplies a name, description, and either expected file candidates plus an apply callback or a custom shared runner path for dialog-driven workflows. Target resolution for file-based patches must search the project's staged `Translated/` tree first, then `Original/`, then a saved external lookup folder, and finally a user-selected folder prompt. External hits are copied into `Translated/` before patching, and the selected lookup folder is persisted in `OutputFormat.PatchLookupFolders` for later reuse. Custom shared workflows may also stage new overlay files directly from library-owned specs instead of modifying a single resolved target in place, as long as they still obey the same staged-root and saved-lookup search order.
 
 **Tagged Extraction** (extends M1): `extract_tagged(file_path) → List[ExtractedLine]` returns lines with tag, speaker, and context metadata. Each `ExtractedLine.text` value must preserve the extracted quoted payload verbatim. When provided, `extract()` delegates to it for backward compatibility.
 
@@ -908,9 +910,9 @@ When a Parser Script provides wordwrap settings, these auto-populate the Wordwra
 
 **Parser Wrap Role**: Parser wordwrap metadata currently seeds Step 8 defaults and output behavior rather than replacing the shared Step 8 wrapping pass. Step 8 also preserves explicit non-RPG break commands such as `\n`, keeps speaker prefixes in wrapped output even when speaker width is ignored, and may write parser-provided textbox separator strings directly into `wordwr`. Engine-specific textbox realization still happens in parser injection, which is where formats such as LightVN turn multiline `wordwr` output into engine syntax.
 
-**KiriKiri2 System-Script Patch Role**: KiriKiri2 also exposes a post-inject project hook for `MainWindow.tjs` and `SelectLayer.tjs`. That hook is outside the normal Step 8 text pipeline: it patches engine scripts after output staging so the stock `ch : function(elm)` handler measures whole-word tokens instead of wrapping after individual characters, and so stock choice buttons wrap translated choice captions by word, expand to multiline height, and reposition vertically from their real heights instead of a fixed evenly divided grid. The `MainWindow.tjs` patch must support both the simple `if(current.processCh(text))` form and the stock KAG `repage = current.processCh(text, chUserMode ? acs : 0);` form. The `SelectLayer.tjs` patch must lower the hidden default choice font size to `18` unless the script overrides it, preserve explicit `elm.size` overrides, and keep existing UI-position metadata precedence when `uibutton` layout data is present. Both patches must rewrite files using the original detected codec/BOM (`cp932` / Shift-JIS on the verified fixtures), create first-write backups, and preserve literal TJS escape source such as `\\`, `\t`, `\n`, and `\r`.
+**KiriKiri2 System-Script Patch Role**: KiriKiri2 exposes both a compatibility post-inject hook and manual Step 9 `Apply Patches` actions for `MainWindow.tjs`, `SelectLayer.tjs`, a shared `Standard UI Translation Patch`, and a shared `Font Patch` workflow. These patches stay outside the normal Step 8 text pipeline: they patch engine scripts after output staging so the stock `ch : function(elm)` handler measures whole-word tokens instead of wrapping after individual characters, stock choice buttons wrap translated choice captions by word, and stock menu/help/folder/cache/version UI scripts can be translated by staged overlay files without requiring those strings to enter the line-based translation pipeline. The `MainWindow.tjs` patch must support the simple `if(current.processCh(text))` form, the stock KAG `repage = current.processCh(text, chUserMode ? acs : 0);` form, and HyperKano-style `function SetMesText(text) { MesLayer.DrawText(text); }` variants by rewriting the staged draw call to use `__CherryAIWrapMessageText(text)`. The `SelectLayer.tjs` patch must lower the hidden default choice font size to `18` unless the script overrides it, preserve explicit `elm.size` overrides, and keep existing UI-position metadata precedence when `uibutton` layout data is present. The Standard UI Translation Patch must load a library-owned JSON replacement spec, resolve source files from staged roots or a saved lookup folder, apply literal plus regex substitutions, preserve source BOM/encoding on writeback, and stage translated copies under `patch/data/system/` and `patch/data/program/`. The `Font Patch` workflow must stage a packaged `version.dll`, a human-readable JSON config, the packaged `AffineLayer.tjs` / `ButtonLayer.tjs` / `MessageLayer.tjs` spacing overrides under `patch/data/system/`, and only the selected bundled font files, with the font folder placed next to the patch folder rather than inside it. Active KiriKiri loose patch trees must stay flat: nested mirrors such as `patch/patch/...` and temporary stash folders inside `patch/` remain live because the runtime recursively indexes active `patch*` roots, so archival material must be moved outside the active patch tree. The packaged runtime source must remain auditable under `libraries/KiriKiriInjection`, the bundled families must remain redistributable under `libraries/Fonts`, and the runtime log must stay developer-only while still being able to confirm concrete substitutions such as `Segoe UI -> Inter` during validation.
 
-**KiriKiri2 Literal Extraction And Injection**: KiriKiri2 `.ks` parsing now emits four visible content classes in source order: dialogue/narration blocks, `@talk name=[SF]`-style speaker-variable blocks whose bracketed token must stay intact in `Speaker: Dialogue` output, `[seladd text="..."]` choice payloads (`choice`), and non-empty `*label|title` save-location titles (`SaveLocation`). The same parser path injects those translated payloads back into the original `.ks` source without disturbing surrounding KAG commands, and command-style speaker rows such as `@talk name=[SF]` must stay command-style on writeback instead of being rewritten into `【speaker】` syntax. For menu-like system files, KiriKiri2 keeps the dedicated `Menus.tjs` `MenuItem`/`KAGMenuItem` literal path, extracts/injects visible dictionary-style `caption:"..."` payloads from `.tjs` files such as `data/sysscn/Override.tjs` as `menu` rows, and also treats dialog-manager calls such as `SetYesNo("...")` / `SetOK("...")` as parser-owned `dialog` literals even when those strings are embedded inside larger function bodies. KiriKiri2 also supports schema-based `.csv` extraction for KiriKiri-style data sheets: approved text headers are translated one column at a time for stable ordering and speed, while IDs, file references, jump fields, flags, and numeric-only columns remain excluded by header-level whitelist rules. These TJS and CSV rewrites must preserve the original file encoding, including Shift-JIS / `cp932` fixtures.
+**KiriKiri2 Literal Extraction And Injection**: KiriKiri2 `.ks` parsing now emits visible content classes in source order for dialogue/narration blocks, `@talk name=[SF]`-style speaker-variable blocks whose bracketed token must stay intact in `Speaker: Dialogue` output, `[seladd text="..."]` choice payloads (`choice`), non-empty `*label|title` save-location titles (`SaveLocation`), and code-heavy `window.DialogMGR` / `global.win.DialogMGR` calls whose quoted string arguments stay parser-visible as `dialog` rows. The same parser path injects those translated payloads back into the original `.ks` source without disturbing surrounding KAG commands, and command-style speaker rows such as `@talk name=[SF]` must stay command-style on writeback instead of being rewritten into `【speaker】` syntax. For menu-like system files, KiriKiri2 keeps the dedicated `Menus.tjs` `MenuItem`/`KAGMenuItem` literal path, extracts/injects visible dictionary-style `caption:"..."` payloads from `.tjs` files such as `data/sysscn/Override.tjs` as `menu` rows, and also treats dialog-manager calls such as `SetYesNo("...")` / `SetOK("...")` as parser-owned `dialog` literals even when those strings are embedded inside larger function bodies or the first visible payload is a concatenated quoted suffix such as `tmp_str+"||この名前でよろしいですか？"`. KiriKiri2 also supports schema-based `.csv` extraction for KiriKiri-style data sheets plus whitelist-based `.mdat` extraction for approved quoted keys such as `マップ名` and `グレード名`: approved text payloads are translated in source order for stable injection, while IDs, file references, jump fields, flags, numeric-only columns, and non-whitelisted keys remain excluded by parser-owned rules. These KAG, TJS, CSV, and MDAT rewrites must preserve the original file encoding, including Shift-JIS / `cp932` fixtures.
 
 **Stored vs Injected Textbox Markers**: For LightVN dialogue, Step 8 stores textbox separators only between wrapped chunks in `lines[].wordwr`. Parser injection must restore the final engine-required terminal `\\w` exactly once when materializing dialogue output, including single-box dialogue that stays on one textbox.
 
@@ -1191,7 +1193,7 @@ Each step is a tab in the main notebook. Steps can be navigated freely but follo
 #### Options Panel Details
 
 **Encoding Dropdown**:
-- Values: `auto`, `utf-8`, `utf-8-sig`, `shift_jis`, `cp932`, `latin-1`, `utf-16`
+- Values: `auto`, `utf-8`, `utf-8-sig`, `shift_jis`, `cp932`, `latin-1`, `utf-16`, `utf-16-le`, `utf-16-be`
 - Default: `auto` (CherryAI detects encoding per file)
 - Behavior: When forced, applies encoding to all loaded files. Does NOT refuse to load files on encoding mismatch.
 
@@ -3122,21 +3124,18 @@ The Translation tab contains four widget sections:
 
 #### Widget: Request Options
 
-**Purpose**: Configure per-project translation request parameters.
+**Purpose**: Configure Translation-step model selection and open the model-scoped settings owned by Global Options.
 
 | Widget | Type | Default | Function |
 |--------|------|---------|----------|
 | Key | Dropdown | (first saved key) | Select API key from saved keys in API.ini |
 | Model | Dropdown | (default for key) | Select LLM model, filtered by selected key's provider. If the manifest already stores an explicit project model, tab re-entry must preserve that value after provider/default refresh instead of resetting to the first available option. |
 | Request Mode | Combobox | Normal | Normal / Batch / Flex / Priority. Unavailable modes have "(Unavailable)" suffix. Selection stored in TranslationOptions.request_mode, passed to APIConfig.request_mode. |
-| Number of Threads | Spinbox | 3 | Max concurrent request strings for the concurrent executor. Range 1-32. Stored in `RequestOptions.NumberOfThreads`, restored from per-model `max_concurrent`, and passed to `APIConfig.max_concurrent`. If the manifest already contains an explicit saved value, that project value remains authoritative on tab entry. |
-| Requests / Second | Checkbox + Spinbox | Off / 1.00 | Optional per-project request-start pacing gate shown below Number of Threads. Stored in `RequestOptions.RequestsPerSecondEnabled` and `RequestOptions.RequestsPerSecond`. Float range `0.01`-`999.99`. When enabled, all concurrent Translation workers must share one project-level RPS cap. Older manifests that only have top-level `RequestsPerSecond` must still restore that saved value on reopen. |
 | Model Settings | Label + Button | — | Opens Global Options at Model Settings section; reuses the existing Global Options dialog if already open |
 | Translation Options | Label + Button | — | Opens Global Options at Translation Options section; reuses the existing Global Options dialog if already open |
 | Lines/Chunk | Spinbox | 30 | Lines per API request (5-200). Must sync with Estimation step |
 | Retry Strategy | Dropdown | Batch | How failures are retried (Batch, Contextual) |
 | Max Retries | Spinbox | 3 | Round trips of retries (0 = none) |
-| Temporary Backoff | Global Options model setting | Exponential / 5 / 120s | Per-model temporary-failure backoff used only for timeout/server/connection retries; invalid JSON, empty-response, and line-count failures must use recursive split recovery instead of this backoff schedule. |
 | Skip Non-Source Language | Checkbox | ✗ | Skip lines not detected as source language |
 | Skip Already Translated | Checkbox | ✗ | Skip lines that already have a translation |
 | Ban Tokens | Preset + Entry | — | Configure banned output tokens |
@@ -3160,7 +3159,7 @@ The Translation tab contains four widget sections:
 | Batch | Retry failed lines together | Adds instruction: "These lines are unrelated; translate each independently" | Disabled (no rolling context) |
 | Contextual | Retry failed lines with surrounding context | Uses different rolling context: lines before AND after the failed segment | Enabled (before + after context) |
 
-**Note**: "Isolated" and "Skip" strategies exist in code but are **hidden** from the UI for now. They will be exposed once further refined. Retries are done after the first round of translation. API/transport failures stay on the inline retry path, while validation failures are queued and retried only after the main pass. Fatal authorization/permission/model-not-found/quota errors must abort immediately; invalid JSON, empty-response, and line-count mismatches must split recursively and may fail only the affected lines instead of aborting the whole run. Step 5 must also stop submitting new work when exhausted output/rate-limit failures remain above 50% after at least 10 attempted chunks.
+**Note**: "Isolated" and "Skip" strategies exist in code but are **hidden** from the UI for now. They will be exposed once further refined. Retries are done after the first round of translation. API/transport failures stay on the inline retry path, while validation failures are queued and retried only after the main pass.
 
 **Skip Non-Source Language**:
 - NEW option. Uses language detection (`functions/analysis.py`) to identify lines not in the configured source language.
@@ -3322,18 +3321,18 @@ Deselecting a filter hides that section from the Formatted/Plain views and omits
 4. Chunk lines by configured Lines/Chunk size
 5. Group chunks into request strings via `_group_chunks_into_strings()`, sort by content type priority (dialogue > choice > mixed/unknown > menu) via `sort_requests_by_type()`
 6. **First-request validation gate**: send the first chunk of the first string alone. Only billing/quota exhaustion and concrete not-found failures should abort immediately before spending tokens on the full batch; other API failures stay on the retry path and only stop after retries are exhausted
-7. Execute string groups concurrently via `ThreadPoolExecutor(max_workers=max_concurrent)` where `max_concurrent` comes from Request Options → Number of Threads (default 3, minimum 1):
+7. Execute string groups concurrently via `ThreadPoolExecutor(max_workers=max_concurrent)` where `max_concurrent` comes from Global Options → Model Settings → Number of Threads (default 3, minimum 1):
    - Strings execute in **parallel** across threads
    - Chunks within each string execute **sequentially** (preserving rolling context)
    - Falls back to sequential execution when `max_concurrent ≤ 1`
    - For each chunk:
      a. Check line cache for existing translations (if caching enabled)
-    b. Apply rate limiting (Global Options RPM plus the optional Step 5 Requests / Second gate). The Step 5 gate is a strict shared request-start scheduler across all concurrent workers, so request bursts cannot exceed the configured project RPS even when multiple threads are active.
+    b. Apply rate limiting (Global Options RPM plus the optional Global Options model-scoped req/sec gate). The req/sec gate is a strict shared request-start scheduler across all concurrent workers, so request bursts cannot exceed the configured model RPS even when multiple threads are active.
      c. Build chunk-specific prompt (include rolling context if enabled)
      d. Send to LLM API with JSON response format (or Mock Translation)
      e. Parse response, map translated lines back to source indices
     f. Classify any API errors via `classify_api_error()` — only billing/quota exhaustion and concrete not-found failures are fatal on the first hit; auth, permission, content-filter, generic bad-request, unknown, non-structured-output, timeout, server, and connection-style failures use exponential backoff and may lower the active Requests / Second cap from provider-stated 429 text (`0.42 requests per second`, `0.42 RPS`) or, when unstated, from the fallback reduction rule (`current × 0.9` below `1 RPS`, `current × 0.75` above `1 RPS`, unlimited treated as `50 RPS` before reducing). Transient proxy messages such as `upstream connect error`, `disconnect/reset before headers`, and `reset reason: overflow` are treated as retryable connection failures
-    g. Run shared post-response validation before accepting the chunk; line-count mismatch or speaker-delimiter count mismatch can discard the whole response, and when structured output is missing the raw text must also be checked for provider-agnostic refusal wording before it is treated as ordinary malformed output. Discarded validation failures must still be written to the structured API Log, while unsafe refusals must use Status `Content Warning`.
+     g. Run shared post-response validation before accepting the chunk; line-count mismatch or speaker-delimiter count mismatch can discard the whole response, but that discarded response must still be written to the structured API Log as a failed attempt with validation metadata
      h. Queue validation-only failures for deferred retry after the main translation pass; rolling context for queued lines must use untranslated/preprocessed text until recovery succeeds
      i. Handle transport/API failures per retry strategy (Batch or Contextual)
      j. Update progress display and API Usage widget (thread-safe via `threading.Lock`)
@@ -3420,12 +3419,15 @@ Local providers (LM Studio, Ollama, local):
 > the appropriate format automatically.
 >
 > **Provider Handshake:** Since the Provider Handshake migration, the response
-> format, temperature handling, and thinking mode parameters are determined by
-> each provider's `get_response_format()`, `get_temperature_config()`, and
-> `get_thinking_config()` methods.  The `api_client.py` delegates to the resolved
-> provider rather than using if/elif branches.  Temperature is omitted for
-> GPT-5 family and o-series models.  Thinking parameters are injected only
-> for Anthropic's explicit mode.
+> format, temperature handling, sampling/penalty tuning, and thinking mode
+> parameters are determined by each provider's `get_response_format()`,
+> `get_temperature_config()`, `get_top_p_config()`,
+> `get_frequency_penalty_config()`, `get_presence_penalty_config()`, and
+> `get_thinking_config()` methods. The `api_client.py` delegates to the
+> resolved provider rather than using if/elif branches. Unsupported tuning
+> parameters are omitted automatically. Temperature and the other sampling
+> controls are omitted for GPT-5 family and o-series models. Thinking
+> parameters are injected only for Anthropic's explicit mode.
 
 ---
 
@@ -3541,7 +3543,7 @@ The QA tab exposes the following widgets:
 
 **QAOptions additions**:
 - `EncodingSafetyEnabled` (bool, default `false`) enables the optional legacy-output compatibility check.
-- `EncodingCheckEncoding` (text, default `shift_jis`) selects the codec tested by the QA pass; the UI exposes this as a spinbox with `shift_jis` first, followed by `cp932`, `utf-8`, `utf-8-sig`, and `utf-16`.
+- `EncodingCheckEncoding` (text, default `shift_jis`) selects the codec tested by the QA pass; the UI exposes this as a spinbox with `shift_jis` first, followed by `cp932`, `utf-8`, `utf-8-sig`, `utf-16`, `utf-16-le`, and `utf-16-be`.
 - Suggested encoding-safe auto-fixes use explicit transliteration first (including macron vowels and EM/EN dash variants), then `unicodedata.normalize('NFKD', ...)`, then combining-mark removal; only suggestions that encode cleanly are marked auto-fixable.
 
 **Stored In**:
@@ -3698,7 +3700,7 @@ The Postprocessing tab is organized into four sections:
 - Matches indentation of translated lines to their originals
 - Detects speaker indent patterns (e.g., `　太郎：` uses fullwidth space indent)
 - Preserves leading whitespace count and type (spaces vs tabs vs fullwidth spaces)
-- Normalizes errant spacing around placeholders (`__ PROTECTED __` → `__PROTECTED__`)
+- Stores dialogue-edge whitespace at Input as canonical `indent:` / `trail:` tags and restores it automatically after dedup reversal during Postprocessing
 - Does NOT alter intentional whitespace within dialogue text
 
 **Removed from GUI** (automatic from manifest — no user toggle):
@@ -3706,7 +3708,7 @@ The Postprocessing tab is organized into four sections:
 - ~~Restore Code Characters~~ — Always runs automatically as part of the Protect Code Patterns restoration
 - ~~Restore `<br>` Tags~~ — Always runs automatically as part of line break restoration from manifest `prepro_ops`
 
-**Manifest Keys**: `PostProcessing.BracketBalanceRecovery`, `PostProcessing.QuoteBalanceRecovery`, `PostProcessing.WhitespaceNormalization`
+**Manifest Keys**: `PostProcessing.BracketBalanceRecovery`, `PostProcessing.QuoteBalanceRecovery`
 
 ---
 
@@ -4300,6 +4302,7 @@ Before exporting, Output checks dirty flags to warn the user if upstream steps h
 |--------|------|----------|
 | Export All Button | Button | Write all output files |
 | Cancel Button | Button | Stop export |
+| Apply Patches Button | Button | Open parser project patch window for staged `Translated/` files |
 | Refresh Preview Button | Button | Recalculate output files |
 | Filter Radios | RadioGroup | all / pending / written / failed |
 | Files Table | SharedTable | Source → output mapping with status |
@@ -4309,6 +4312,17 @@ Before exporting, Output checks dirty flags to warn the user if upstream steps h
 | Browse Button | Button | Select output directory |
 | **Format Options** | | |
 | Format Dropdown | Combobox | txt / csv / tsv / json / xlsx / injection (default: same as Input) |
+
+#### Apply Patches Window
+
+The Output step also exposes a modal `Apply Patches` window for parser-owned staged-file patches that should not run silently during normal text export.
+
+- Patch discovery is manifest-driven: Step 9 reads `filedir[].format`, resolves the corresponding parser from `ParserRegistry`, and lists every parser-advertised `project_patches` action in parser order.
+- When multiple patches are available, each row includes a checkbox, parser-qualified name, description, and single-patch Apply button; the footer always includes `Cancel` and adds `Apply All Patches` for the checked rows.
+- The window includes a shared log box between the patch list and the footer buttons. Search/copy decisions, success, failure, cancel, and skipped actions must all be written there.
+- Missing-file resolution order is fixed: staged `Translated/` first, staged `Original/` second, saved lookup folder third, prompted folder selection fourth. Files found outside the project are copied into `Translated/` before patching so later runs operate on the staged project tree.
+- Cancelling the folder prompt cancels only that patch. `Apply All Patches` must continue with the next checked patch after a cancelled or failed patch.
+- Parsers may also attach a custom shared workflow instead of a staged target file. KiriKiri2 uses this path for both the Step 9 `Standard UI Translation Patch`, which stages translated UTF-16-aware overlay copies of `MenuItemManager.tjs`, `CacheWindow.tjs`, and `VersionWindow.tjs` from a library-owned replacement spec, and the Step 9 `Font Patch`, which opens a shared font-selection dialog, stages `version.dll` at the translated root, writes `patch/CherryAI.KiriKiriFontPatch.json`, copies the packaged `AffineLayer.tjs`, `ButtonLayer.tjs`, and `MessageLayer.tjs` spacing overrides into `patch/data/system/`, and copies only the selected bundled font files into a sibling `fonts/` folder. These workflows must not leave nested live mirrors such as `patch/patch/...` behind; any archive, probe, or conflict-preservation folders belong outside the active `patch/` tree.
 | Encoding Dropdown | Combobox | utf-8 / utf-8-sig / shift_jis / etc. (default: same as Input) |
 | Pair Mode Dropdown | Combobox | custom / translated_only / side_by_side / interleaved / separate_files |
 | **Naming Options** | | |
@@ -5060,7 +5074,8 @@ All log files are plain UTF-8 text. They follow a common structure: **Header →
 | `recover_placeholder_case()` | `postprocess.py` | Fix case mismatches | Log recovery type + detail |
 | `recover_mangled_placeholders()` | `postprocess.py` | Fix split/mangled tokens | Log recovery type + detail |
 | `recover_missing_placeholders()` | `postprocess.py` | Restore missing placeholders | Log recovery type + detail |
-| `normalize_placeholder_whitespace()` | `postprocess.py` | Fix placeholder spacing | Log recovery type + detail |
+| `capture_dialogue_edge_whitespace()` | `postprocess.py` | Strip and tag dialogue edge whitespace at Input | Log tag extraction detail |
+| `restore_dialogue_edge_whitespace()` | `postprocess.py` | Reapply tagged dialogue edge whitespace after dedup restoration | Log restoration detail |
 | `check_bracket_balance()` | `postprocess.py` | Detect bracket issues | Log detection result |
 | `recover_bracket_balance()` | `postprocess.py` | Fix bracket issues | Log recovery type + detail |
 | `check_quote_balance()` | `postprocess.py` | Detect quote issues | Log detection result |
@@ -5235,7 +5250,7 @@ The step-level status is derived from the worst per-line status:
 | `WHITESPACE` | Postprocessing | Indentation/spacing normalized to match original |
 | `LINE_COUNT_MISMATCH` | Translation | API returned wrong number of lines, remapped |
 | `JSON_PARSE` | Translation | API response JSON repaired |
-| `CONTENT_WARNING` | Translation | Unsafe content refusal detected and handled as a dedicated translation outcome |
+| `CONTENT_WARNING` | Translation | Content warning detected and handled |
 
 #### RetryStrategy Reference
 
@@ -5331,7 +5346,7 @@ This catalog lists every existing function that participates in recovery, valida
 | Function | Purpose |
 |----------|---------|
 | `_translate_chunk_with_retry()` | Orchestrates chunk translation with retry loop |
-| `check_content_warning()` | Stub preflight scan for risky prompt wording before request dispatch |
+| `check_content_warning()` | Detects and handles API content warnings |
 | `write_log_header()` | Writes session log header |
 | `write_log_footer()` | Writes session log summary |
 | `_log_api_call()` | Logs individual API request/response |
@@ -5436,7 +5451,8 @@ TPM admission rule:
 | `recover_placeholder_case()` | Fix `__PROTECTED__` → `__PROTECTED__` |
 | `recover_mangled_placeholders()` | Reconstruct split/corrupted tokens |
 | `recover_missing_placeholders()` | Restore missing placeholders from original |
-| `normalize_placeholder_whitespace()` | Fix `__ PROTECTED __` → `__PROTECTED__` |
+| `capture_dialogue_edge_whitespace()` | Strip dialogue-edge whitespace and store it as canonical tags |
+| `restore_dialogue_edge_whitespace()` | Reapply canonical whitespace tags after final postprocess restoration |
 | `check_bracket_balance()` | Detect unmatched brackets |
 | `recover_bracket_balance()` | Fix brackets using original as reference |
 | `check_quote_balance()` | Detect unmatched quotes |

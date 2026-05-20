@@ -29,6 +29,7 @@ from CherryAI.gui.helpers.manifest_binding import (
     bind_combobox_to_field,
 )
 from CherryAI.functions.manifest_fields import (
+    clear_line_fields,
     get_all_lines_for_stage,
     save_nested_bool_field,
     load_nested_bool_field,
@@ -678,7 +679,7 @@ class QAStep(BaseStep):
         )
         self._manifest_bindings.append(binding)
 
-        encoding_values = ("shift_jis", "cp932", "utf-8", "utf-8-sig", "utf-16")
+        encoding_values = ("shift_jis", "cp932", "utf-8", "utf-8-sig", "utf-16", "utf-16-le", "utf-16-be")
 
         encoding_enable_frame = ttk.Frame(frame)
         encoding_enable_frame.pack(fill="x", pady=(8, 2))
@@ -807,6 +808,14 @@ class QAStep(BaseStep):
             foreground=THEME.accent_warning,
         )
         self._rejected_label.grid(row=0, column=7, sticky="w", padx=(10, 0))
+
+        summary_grid.columnconfigure(8, weight=1)
+        ttk.Button(
+            summary_grid,
+            text="🗑 Clear QA",
+            style="Danger.TButton",
+            command=self._clear_qa_results,
+        ).grid(row=0, column=8, sticky="e")
 
     def _get_lines_from_previous_steps(self) -> Tuple[List[str], List[str], List[str]]:
         """Get QA stage input plus persisted QA and overwrite lines.
@@ -1130,6 +1139,32 @@ class QAStep(BaseStep):
             daemon=True,
         )
         self._check_thread.start()
+
+    def _clear_qa_results(self) -> None:
+        """Clear QA and overwrite values from the manifest."""
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            messagebox.showwarning(
+                "QA",
+                "Load a project before clearing QA results.",
+            )
+            return
+
+        if self._qa_status == QAStatus.RUNNING:
+            messagebox.showwarning(
+                "QA",
+                "Wait until QA checks finish before clearing QA results.",
+            )
+            return
+
+        if not messagebox.askyesno(
+            "Clear QA",
+            "Remove all Quality Assurance and Overwrite values from the manifest?",
+        ):
+            return
+
+        clear_line_fields(mgr, ("qa", "qa_overwrite"))
+        self._refresh_lines()
 
     def _do_qa_checks(self, lines: List[QALine]) -> None:
         """Perform QA checks in background thread.

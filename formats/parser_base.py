@@ -28,7 +28,9 @@ import shutil
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from CherryAI.functions.apply_patches import ParserProjectPatch
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +231,7 @@ class ParserScript(ABC):
     - :attr:`forbidden_chars`: characters to ban during translation.
     - :attr:`tag_rules`: patterns for tag detection.
     - :meth:`can_handle`: probe whether a file belongs to this engine.
+    - :attr:`project_patches`: manual Step 9 project patch actions.
     """
 
     # ------------------------------------------------------------------
@@ -327,6 +330,11 @@ class ParserScript(ABC):
         Defaults to an empty string.  Override to provide parser info.
         """
         return ""
+
+    @property
+    def project_patches(self) -> Sequence[ParserProjectPatch]:
+        """Project patch actions exposed by the parser."""
+        return ()
 
     def can_handle(self, file_path: Path) -> bool:
         """Probe whether *file_path* is handled by this parser.
@@ -677,4 +685,5 @@ class ParserScript(ABC):
                 type(self).rewrite_injected_content
                 is not ParserScript.rewrite_injected_content
             ),
+            "project_patch_count": len(self.project_patches),
         }

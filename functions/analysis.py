@@ -773,11 +773,10 @@ def _normalize_for_dedup(line: str) -> str:
         for index, match in enumerate(matches):
             token = "<NUM>" if total == 1 else f"<NUM{index + 1}>"
             parts.append(s[last:match.start()])
-            parts.append(f" {token} ")
+            parts.append(token)
             last = match.end()
         parts.append(s[last:])
         s = "".join(parts)
-    s = re.sub(r"\s+", " ", s).strip()
     return s
 
 

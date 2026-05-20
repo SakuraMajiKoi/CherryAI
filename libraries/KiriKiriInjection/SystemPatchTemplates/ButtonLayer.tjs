@@ -1,0 +1,1261 @@
+
+/*
+// プルダウンメニュー使い方
+global.testPull = new WF_PullDownLayer(win,win.primaryLayer,"pullbtn");
+global.testPull.setPos(10,100);
+global.testPull.Add("pullselectbtn","てすと1"); // メニュー追加(画像名と名前)
+global.testPull.Add("pullselectbtn","てすと2");
+
+global.testPull.drawTextSelectBtn("てすと1",10,0,"テスト1",0xFFFFFF); // てすと1という名前がついてるメニューに文字描画
+global.testPull.drawTextSelectBtn("てすと2",10,0,"テスト2",0xFFFFFF);
+// てすと2を初期セレクト
+global.testPull.SelectUpdate("てすと2");
+
+global.testPull.onClickEvent = function(layerPoint,name)
+{
+	//dminfo(name);
+};
+*/
+// プルダウンメニュー拡張
+class WF_PullDownLayer extends WF_Layer
+{
+	var SelectBtn; // 選択中ボタンの上に乗せる画像
+	var SelectBtnBG = void; // 選択中ボタン
+
+	var ListBG=void;
+	var ListBGMask=void;
+	var Slid=void;
+
+	var BGLayer=void;
+	var MenuLayerArray = new Array();
+	var BGReleaseTA;
+
+	var _backColor = 0x440033ff;
+	var _LineColor = 0xFFFFFF;
+	var _ItemMAX = 0;
+	property backColor
+	{
+		setter(v){ _backColor=v; }
+		getter(){ return _backColor; }
+	}
+	property LineColor
+	{
+		setter(v){ _LineColor=v; if( 0xFFFFFF < v){dminfo("0xFFFFFF以内で指定してください");}}
+		getter(){ return _LineColor; }
+	}
+	property itemMAX
+	{
+		setter(v){ _ItemMAX=v; }
+		getter(){ return _ItemMAX; }
+	}
+
+	function finalaize()
+	{
+		release(SelectBtn);
+		release(SelectBtnBG);
+
+		release(ListBG);
+		release(ListBGMask);
+		release(BGLayer);
+		release(MenuLayerArray);
+		release(BGReleaseTA);
+		release(Slid);
+		super.finalaize();
+	}
+
+	function onRClickFuncSet(x)
+	{
+		SelectBtn.RClickFunc = x;
+	}
+
+	function WF_PullDownLayer(f_win,f_par,f_loadFile=void)
+	{
+		super.WF_Layer(f_win,f_par);
+		visible=true;
+
+		BGReleaseTA = new AsyncTrigger(_ReleseBG,'');
+		BGReleaseTA.cached = false;
+		BGReleaseTA.mode = atmExclusive;
+
+		SelectBtn = new global.WF_ButtonLayer(window,this);
+		with(SelectBtn)
+		{
+			if( f_loadFile !== void && f_loadFile != "" )
+				.loadImages("pullbtn");
+
+			.visible=true;
+			.onMouseUpEx = function(x, y, button, shift)
+			{
+				onMouseUpEx2(...);
+			}incontextof this;
+			.onDrawState = function(s)
+			{
+				return;
+				if( SelectBtnBG !== void )
+				{
+					if( SelectBtnBG.ImageFileName !== void ) // 画像があったら
+						SelectBtnBG.imageLeft = -s * SelectBtnBG.width;
+					SelectBtnBG.hitThreshold = 256;
+				}
+
+			}incontextof this;
+		}
+		super.setSize(SelectBtn.width,SelectBtn.height);
+	}
+
+	// 整数だったら整数番目メニューを
+	// 文字列だったらネームからそのメニューを選択
+	function SelectUpdate(No=0)
+	{
+		if( (typeof No) == 'String' )
+		{
+			for(var i=0; i < MenuLayerArray.count;i++)
+			{
+				if( MenuLayerArray[i].name == No )
+				{
+					No = i;
+					break;
+				}
+			}
+		}
+
+		if( SelectBtnBG === void )
+		{
+			SelectBtnBG = new global.WF_ButtonLayer(window,this);
+			with(SelectBtnBG)
+			{
+				.assignComp(MenuLayerArray[No]);
+				.visible=true;
+				.hitThreshold = 256;
+				.onMouseUpEx = function(x, y, button, shift)
+				{
+					onMouseUpEx2(...);
+				}incontextof this;
+			}
+		}
+		else
+		{
+			SelectBtnBG.assignComp(MenuLayerArray[No]);
+		}
+
+		if( SelectBtn.ImageFileName !== void )
+			SelectBtnBG.hitThreshold = 256;
+		else
+			SelectBtnBG.hitThreshold = 0;
+
+		if( SelectBtn.ImageFileName === void )
+		if( this.width < SelectBtnBG.width || this.height < SelectBtnBG.height )
+		{
+			SelectBtn.setSize(SelectBtnBG.width,SelectBtnBG.height);
+			super.setSize(SelectBtn.width,SelectBtn.height);
+		}
+	}
+
+	function _ReleseBG()
+	{
+		if( BGLayer !== void )
+		{
+			release(BGLayer);
+			BGLayer = void;
+			release(ListBG);
+			ListBG = void;
+			release(Slid);
+			Slid = void;
+			release(ListBGMask);
+			ListBGMask = void;
+		}
+	}
+
+	// 指定名のメニューに文字を描画
+	function drawTextSelectBtn(f_name,x,y,f_Text="",f_color=0xFFFFFF,f_size=17,f_centerY=true)
+	{
+		for(var i=0; i < MenuLayerArray.count;i++)
+		{
+			if( MenuLayerArray[i].name == f_name )
+			{
+				if( f_centerY ) MenuLayerArray[i].texttypeY = "center";
+				MenuLayerArray[i].font.height = f_size;
+				MenuLayerArray[i].drawTextEx(x,y,f_Text,f_color);
+				break;
+			}
+		}
+	}
+	// メニューアイテムに対して一括setSize
+	function setSizeMenuItem(w,h)
+	{
+		for(var i=0; i < MenuLayerArray.count;i++)
+		{
+			MenuLayerArray[i].setSize(w,h);
+		}
+	}
+
+	function Clear()
+	{
+		release(MenuLayerArray);
+		MenuLayerArray.clear();
+	}
+
+	function Erase(No=0)
+	{
+		if( (typeof No) == 'String' )
+		{
+			for(var i=0; i < MenuLayerArray.count;i++)
+			{
+				if( MenuLayerArray[i].name == No )
+				{
+					No = i;
+					break;
+				}
+			}
+		}
+
+		MenuLayerArray.erase(No);
+	}
+
+	// メニューボタン作成
+	function Add(f_imageFile=void,f_name="")
+	{
+		var t = MenuLayerArray.add( new global.WF_ButtonLayer(window,this) );
+		with(MenuLayerArray[t])
+		{
+			if( f_name === void || f_name == "" )	f_name = ""+t;
+			.name = f_name;
+			.visible=false;
+			.No = t;
+			.m_this = this;
+			if( f_imageFile !== void && f_imageFile != "" )
+				.loadImages(f_imageFile);
+			.onMouseUpEx = function(x, y, button, shift)
+			{
+				if( m_this.BGLayer === void ) return;
+				if( button == mbLeft )
+				{
+					m_this.SelectUpdate(No);
+					m_this.onClickEvent(this,this.name);
+				}
+				m_this.BGLayer.onMouseUp(...);
+			};
+		}
+
+		return MenuLayerArray[t];
+	}
+
+	// メニューがクリックされた時のイベント
+	function onClickEvent(layerPoint,name){}
+
+	function onMouseUpEx2(x, y, button, shift)
+	{
+		BGLayer = new global.WF_Layer(window,parent);
+		with(BGLayer)
+		{
+			.visible=true;
+			.setSize();
+			//.fullRect(0x6600FFFF);
+			.hitThreshold = 0;
+			.m_this = this;
+			.onMouseUp = function(x, y, button, shift)
+			{
+				m_this.BGReleaseTA.trigger();
+			};
+		}
+
+		ListBGMask = new global.WF_Layer(window,BGLayer);
+		with(ListBGMask)
+		{
+			.visible=true;
+			.hitThreshold = 256;
+			.m_this = this;
+			.setPos(this.left-1,this.top+this.height);
+			.onMouseUp = function(x, y, button, shift)
+			{
+				m_this.BGReleaseTA.trigger();
+			};
+		}
+
+		ListBG = new global.WF_Layer(window,ListBGMask);
+		with(ListBG)
+		{
+			.visible=true;
+			.hitThreshold = 0;
+			.m_this = this;
+			.setPos(0,0);
+			.onMouseUp = function(x, y, button, shift)
+			{
+				m_this.BGReleaseTA.trigger();
+			};
+		}
+
+		var arrya_height=1;
+		for( var i=0; i < MenuLayerArray.count; i++ )
+		{
+			MenuLayerArray[i].parent=ListBG;
+			MenuLayerArray[i].top = arrya_height;
+			MenuLayerArray[i].left = 1;
+
+			MenuLayerArray[i].visible=true;
+
+			arrya_height += MenuLayerArray[i].height; // height加算
+		}
+
+		ListBGMask.setSize(this.width+2,arrya_height);
+		ListBG.setSize(this.width+2,arrya_height);
+		ListBG.fullRect(backColor);
+
+		var overItem=false;
+		if( 0 < MenuLayerArray.count && 0 < itemMAX )
+		{
+			if( MenuLayerArray[0].height*itemMAX+1 < ListBGMask.height )
+			{ // アイテム限界超えている
+				ListBGMask.height = MenuLayerArray[0].height*itemMAX+1;
+				overItem = true;
+			}
+		}
+
+		DrawCircle(ListBG,3,LineColor);
+
+		if( overItem )
+		{
+			Slid = new SliderLayer(window, ListBGMask, ListBGMask.height, "縦", "xx2_backlog_スライダーつまみ");
+			with(Slid)
+			{
+				.setPos(ListBG.width-20, 0);
+				.min=0;
+				.max=ListBGMask.height-ListBG.height;
+				.pos = 0;
+				.visible = true;
+				.mastar = this;
+				//.RClickFunc=RCliclEvent;
+				.PlaySe = function(file){};
+				.onMovement = function(s_pos,value)
+				{
+					ListBG.top = value;
+
+					/*btnUp.enabled = btnUpNext.enabled = btnDown.enabled = btnDownNext.enabled = true;
+
+					if(value == Slid.min)
+						btnUp.enabled = btnUpNext.enabled = false;
+					else if(value == Slid.max)
+						btnDown.enabled = btnDownNext.enabled = false;*/
+				}incontextof this;
+			}
+		}
+	}
+}
+
+class WF_ButtonLayerSwitch extends WF_ButtonLayer
+{
+	var _select = false;
+
+	property select
+	{
+		setter(v)
+		{
+			_select = v;
+			drawState(0);
+		}
+		getter
+		{
+			return _select;
+		}
+	}
+
+	function WF_ButtonLayerSwitch(f_window,f_parent,f_Segment=6,f_SEFlag=true)
+	{
+		super.WF_ButtonLayer(f_window,f_parent,f_Segment,f_SEFlag);
+	}
+
+	function onMouseUp(x, y, button, shift)
+	{
+		if( button == mbLeft )
+		{
+			select = !select;
+		}
+
+		super.onMouseUp(...);
+	}
+
+	function drawState(s)
+	{
+		if(!enabled)
+		{
+			if(Segment == 4 || Segment == 5)
+				s = 3; // 無効状態
+			else
+				s = 2;
+		}
+		else if(_select)
+		{
+			if(Segment == 6) // 6連ボタンだった場合
+			{
+				if(s == 2)
+					s=5;
+				else if(s != 1)
+					s=4;
+			}
+			else if(Segment == 5)
+			{
+				s = 4;
+			}
+			else
+			{
+				s = 3;
+			}
+		}
+
+		imageLeft = -s * width if ImageFileName !== void;
+	}
+}
+
+class WF_ButtonLayer extends ButtonLayer
+{
+	var ImageFileName = void;
+	var Segment = 5;
+	var window;
+	var _isSelecting = false;
+	var seEnterFilename = "SE_001";
+	var seCancelFilename = "";//"SE_002";
+	var seSelectFilename = "SE_003";
+
+	var SoundPlayFlag = false;
+
+	var CursorType_Default = crDefault;
+	var CursorType_Point = crDefault;//crHandPoint;
+
+	// 固定幅で文字を描画するかどうか
+	var TextFix=false;
+	// 改行に用いる文字
+	var LineChara = '|';
+	var _RegLineChara = /\|/g; // 正規表現用
+	// 改行文字列\nを有効にするかどうか。無効にした場合\nは取り除かれる
+	var LineCode=false;
+
+	// テキストの形式 left or center or right
+	var texttypeX = "left";
+	// テキストの形式 top or center
+	var texttypeY = "top";
+	// テキスト描画領域の幅を指定する
+	var TR_height=0;
+	var TR_width=0;
+
+	// 改行時のオフセットY軸
+	var newlineoffset_y=0;
+
+	var Font="メイリオ";
+
+	// クリックが有効か無効か
+	// falseならonMouseEnterExとonMouseLeaveEx,RClickEventのみ発生
+	// カーソル合わさった時のSE再生はされないので注意
+	var _clickEnabled=true;
+	var selectSEPlayFlag=true;
+
+	property clickEnabled
+	{
+		setter(v)
+		{
+			_clickEnabled = selectSEPlayFlag = v;
+		}
+		getter()
+		{
+			return _clickEnabled;
+		}
+	}
+
+
+	function finalize(){ super.finalize(...); }
+
+	function WF_ButtonLayer(f_window,f_parent,f_Segment=5,f_SEFlag=true)
+	{
+		super.ButtonLayer(f_window,f_parent);
+		this.window = f_window;
+		Segment = f_Segment;
+		if( (typeof this.window.SoundMGR) == 'undefined')
+			SoundPlayFlag = false;
+		else
+			SoundPlayFlag = f_SEFlag;
+	}
+
+	// SEの再生
+	function PlaySe(file)
+	{
+		if(file == "" && file !== void) return;
+		if( SoundPlayFlag )
+			this.window.SoundMGR.PlaySYSTEMSE(file);
+	}
+
+	function drawState(s)
+	{
+		if( ImageFileName === void ) return;
+
+		if( !enabled || !clickEnabled )
+		{
+			if(Segment == 4 || Segment == 5)
+				s = 3; // 無効状態
+			else
+				s = 2;
+			if(isSelecting)
+				s=4;
+		}
+		else if(isSelecting)
+		{
+			if(Segment == 5)
+				s = 4;
+			else
+				s = 3;
+		}
+
+		imageLeft = -s * width;
+		onDrawState(s);
+	}
+
+	// イベント
+	function onDrawState(s){}
+
+	function assignComp(src)
+	{
+		super.assign(src);
+		ImageFileName = src.ImageFileName;
+		callOnPaint = true;
+	}
+
+	function loadImages(storage, key)
+	{
+		// 画像を読み込む
+		global.Layer.loadImages(storage, key);
+		global.Layer.width = imageWidth \ Segment;
+		global.Layer.height = imageHeight;
+		ImageFileName = storage;
+		callOnPaint = true;
+		Butt_imageLoaded = true;
+	}
+
+	function onMouseDown(x, y, button, shift)
+	{
+		if( !_checkallenabled() )
+		{
+			onDownReset();
+			return;
+		}
+
+		if( clickEnabled == true )
+		{
+			super.onMouseDown(...);
+
+			// 選択だったら
+			if(isSelecting)	cursor = CursorType_Default;
+		}
+		else
+		{
+			// RClickイベントだけ発生させる
+			if( !Butt_mouseDownLFlag ) return;
+			onDownReset();
+			if(button == mbRight)
+			{
+				if(RClickFunc !== void )
+				{
+					onCallRFunc(RClickFuncArgs);
+					return;
+				}
+			}
+		}
+	}
+
+	function onMouseEnter()
+	{
+		if( enabled == true )
+		{
+			if(isSelecting)
+				cursor = CursorType_Default;
+			else
+				cursor = CursorType_Point;
+
+			if(selectSEPlayFlag)
+				PlaySe(seSelectFilename);
+
+			super.onMouseEnter();
+		}
+	}
+
+	function onMouseLeave()
+	{
+		cursor = CursorType_Default;
+		super.onMouseLeave();
+	}
+
+	function onMouseUpExPrev()
+	{
+		PlaySe(seEnterFilename);
+	}
+	function RClickFuncPrev()
+	{
+		PlaySe(seCancelFilename);
+	}
+
+	function drawTextEx(x,y,str,color=0x000000,opa=255, aa=true, shadowlevel=0, shadowcolor=0x000000, shadowwidth=0, shadowofsx=0, shadowofsy=0)
+	{
+		if(ImageFileName == void || ImageFileName == "")
+		{
+			_drawTextEx(...);
+		}
+		else
+		{
+			for(var i=0; i < Segment;i++)
+				_drawTextEx(x+i*imageWidth\Segment,y,str,color,opa, aa, shadowlevel, shadowcolor, shadowwidth, shadowofsx, shadowofsy);
+		}
+	}
+
+	function _drawTextEx(x,y,str,color=0x000000,opa=255, aa=true, shadowlevel=0, shadowcolor=0x000000, shadowwidth=0, shadowofsx=0, shadowofsy=0)
+	{
+		if( str === void || str== "" ) return;
+		TR_height = this.height if TR_height == 0;
+		TR_width = this.width if TR_width == 0;
+
+		var StrRectArray = new Array();
+
+		while(1)
+		{
+			if(str.indexOf("\n") != -1)
+			{
+				if(LineCode)
+					str = str.replace(/\n/g,LineChara);
+				else
+					str = str.replace(/\n/g,'');
+			}
+			else
+			{
+				break;
+			}
+		}
+
+		var tmpPx=0;
+		var tmpLine=0;
+		var cnt = str.length;
+		var tfontheight = font.height;
+
+		if( tfontheight <= 0 )
+			tfontheight = font.getEscHeightY(" ");
+
+		for(var i=0; i < cnt;i++)
+		{
+			var drawPx = tmpPx;
+			var drawPy = tmpLine*tfontheight;
+
+			var charfontSize;
+			var charWidth = font.getEscWidthX(str[i]);
+			var useFixedCell = TextFix && (charWidth * 4 >= tfontheight * 3);
+
+			// 文字幅固定
+			if(useFixedCell)
+				charfontSize = tfontheight;
+			else
+				charfontSize = charWidth;
+
+			// 次のライン判定
+			if(TR_width<drawPx+charfontSize || str[i] == LineChara)
+			{
+				tmpLine++;
+				tmpPx = 0;
+				drawPx = 0;
+				drawPy += tfontheight;
+				if(str[i] == LineChara)
+					continue;
+			}
+
+			var margin=0;
+			if(useFixedCell)
+				margin = (tfontheight-charWidth)>>1;
+
+			// 遅いから辞書配列やめた
+			//StrRectArray.add(%[left:drawPx,top:drawPy,width:charfontSize,height:tfontheight,margin:margin,line:tmpLine]);
+			StrRectArray.add(drawPx); 		// left		i*6+0
+			StrRectArray.add(drawPy); 		// top		i*6+1
+			StrRectArray.add(charfontSize); // width	i*6+2
+			StrRectArray.add(tfontheight); 	// height	i*6+3
+			StrRectArray.add(margin); 		// margin	i*6+4
+			StrRectArray.add(tmpLine); 		// line		i*6+5
+
+			tmpPx += charfontSize;
+		}
+
+		// 改行文字取り除き
+		while(1)
+		{
+			if(str.indexOf(LineChara) != -1)
+			{
+				str = str.replace(_RegLineChara,'');
+			}
+			else
+			{
+				cnt = str.length;
+				break;
+			}
+		}
+
+		var mPy=0;
+		if(texttypeY == "center" )
+		{
+			// ライン*文字の高さで文字列の全体高さを求める
+			var strheight = (StrRectArray[StrRectArray.count-1]+1)*StrRectArray[0+3]; // 最後の要素 "Line" - 最初の要素 "height"
+			mPy = (TR_height>>1)-(strheight>>1); // 中心に合わせる
+		}
+
+		if(texttypeX == "center" )
+		{
+			var LineWidth=0;
+
+			var LineNum = (StrRectArray[StrRectArray.count-1]+1); // 最後の要素 "Line"
+			for(var l=0; l < LineNum;l++)
+			{
+				for(var i=0; i < cnt;i++)
+				{
+					if( StrRectArray[i*6+5] == l ) // Line
+						LineWidth+=StrRectArray[i*6+2]; // Width
+				}
+				for(var i=0; i < cnt;i++)
+				{
+					if( StrRectArray[i*6+5] == l ) // Line
+						StrRectArray[i*6+4] += (TR_width>>1)-(LineWidth>>1); // 中心に合わせる // margin
+				}
+				LineWidth=0;
+			}
+		}
+		else if( texttypeX == "right" )
+		{
+			var LineWidth=0;
+
+			var LineNum = (StrRectArray[StrRectArray.count-1]+1); // 最後の要素 "Line"
+			for(var l=0; l < LineNum;l++)
+			{
+				for(var i=0; i < cnt;i++)
+				{
+					if( StrRectArray[i*6+5] == l ) // Line
+						LineWidth+=StrRectArray[i*6+2]; // Width
+				}
+				for(var i=0; i < cnt;i++)
+				{
+					if( StrRectArray[i*6+5] == l ) // Line
+						StrRectArray[i*6+4] += (TR_width)-(LineWidth); // 中心に合わせる // margin
+				}
+				LineWidth=0;
+			}
+		}
+
+		for(var i=0; i < cnt;i++)
+			drawText( StrRectArray[i*6+0]+StrRectArray[i*6+4]+x, StrRectArray[i*6+1]+mPy+y+StrRectArray[i*6+5]*newlineoffset_y, str[i],color
+						,opa, aa, shadowlevel, shadowcolor, shadowwidth, shadowofsx, shadowofsy);
+	}
+
+
+	property isSelecting
+	{
+		setter(x)
+		{
+			_isSelecting = x;
+			cursor = CursorType_Default;
+			drawState(0);
+		}
+		getter
+		{
+			return _isSelecting;
+		}
+	}
+
+	property enabled
+	{
+		setter(v)
+		{
+			super.enabled = v;
+			hitThreshold = v ? 0 : 256;
+			cursor = CursorType_Default if !v;
+
+			if(!v)
+			{
+				Butt_mouseDown = false;
+				Butt_mouseDownRFlag = Butt_mouseDownLFlag =false;
+			}
+
+			drawState(0);
+		}
+		getter
+		{
+			return super.enabled;
+		}
+	}
+
+
+}
+
+// WF_Layer対応版
+class ButtonLayer extends WF_Layer
+{
+	var Butt_imageLoaded = false; // 画像が読み込まれたか
+	var Butt_mouseOn = false; // レイヤ内にマウスがあるか
+	var Butt_mouseDown = false; // マウスボタンが押されているか
+	var Butt_color = clNone;
+	var Butt_caption = ''; // ボタンのキャプション
+	var Butt_captionColor = 0x000000; // キャプションの色
+	var Butt_keyPressed = false;
+	var Butt_showFocusImage = false;
+
+	var Butt_mouseDownRFlag = false;
+	var Butt_mouseDownLFlag = false;
+
+	function ButtonLayer(win, par)
+	{
+		super.WF_Layer(win, par);
+
+		hitType = htMask;
+		hitThreshold = 0;
+		//focusable = true; // フォーカスを得られる
+	}
+
+	function finalize()
+	{
+		super.finalize(...);
+	}
+
+	function assign(src)
+	{
+		// src の情報をこのボタンレイヤにコピー
+		assignImages(src);
+		Butt_imageLoaded = src.Butt_imageLoaded;
+		Butt_color = src.Butt_color;
+		Butt_caption = src.Butt_caption;
+		Butt_captionColor = src.Butt_captionColor;
+		hitThreshold = src.hitThreshold;
+		super.width = src.width;
+		super.height = src.height;
+		imageWidth = src.imageWidth;
+		imageHeight = src.imageHeight;
+		update();
+	}
+
+	function drawState(s)
+	{
+		// 状態 s に対応する画像を描画
+		// s :  0 : 普通の状態
+		//      1 : ボタンが押された状態
+		//      2 : ボタンの上にマウスカーソルがある状態
+		//     (3): フォーカスがある場合
+		if(!enabled)
+		{
+			s = 0; // 無効状態
+		}
+
+		if(Butt_imageLoaded)
+		{
+			// ボタンイメージが読み込まれている
+			// TODO: keyboard focus
+			imageLeft = -s * width;
+		}
+		else
+		{
+			if(Butt_keyPressed) s = 1; // 押されている
+
+			// 枠とキャプションを描画
+			// クリア
+			face = dfAlpha;
+			colorRect(0, 0, width, height, 0, -255);
+			// 下地を塗る
+			if(Butt_color != clNone)
+				colorRect(0, 0, width, height, Butt_color, 128);
+			// 文字のサイズを得る
+			var tw, th;
+			tw = font.getTextWidth(Butt_caption);
+			th = font.getTextHeight(Butt_caption);
+			if(s == 0 || s == 2)
+			{
+				// 通常あるいはマウスが上にある
+				colorRect(0, 0, width, 1, 0xffffff, 128);
+				colorRect(0, 1, 1, height-2, 0xffffff, 128);
+				colorRect(width-1, 1, 1, height-1, 0x000000, 128);
+				colorRect(1, height-1, width-2, 1, 0x000000, 128);
+				drawText((width-tw)>>1, (height-th)>>1, 
+					Butt_caption, Butt_captionColor, nodeEnabled?255:128);
+			}
+			else
+			{
+				// 押されている
+				colorRect(0, 0, width, 1, 0x000000, 128);
+				colorRect(0, 1, 1, height-2, 0x000000, 128);
+				colorRect(width-1, 1, 1, height-1, 0xffffff, 128);
+				colorRect(1, height-1, width-2, 1, 0xffffff, 128);
+				drawText(((width-tw)>>1) +1, ((height-th)>>1) +1, 
+					Butt_caption, Butt_captionColor, nodeEnabled?255:128);
+			}
+
+			if(s != 0)
+				colorRect(2, 2, width-4, height-4, clHighlight, 64); // ハイライトする
+
+			if(focused)
+			{
+				// フォーカスがあるのでハイライトする
+				colorRect(2, 2, width-4, 1, clHighlight, 128);
+				colorRect(2, 3, 1, height-5, clHighlight, 128);
+				colorRect(3, height-3, width-5, 1, clHighlight, 128);
+				colorRect(width-3, 3, 1, height-6, clHighlight, 128);
+			}
+		}
+	}
+
+	function loadImages(storage, key)
+	{
+		// 画像を読み込む
+		super.loadImages(storage, key);
+		super.width = imageWidth \ (Butt_showFocusImage ? 4 : 3);
+		super.height = imageHeight;
+		callOnPaint = true;
+		Butt_imageLoaded = true;
+	}
+
+	function discardImage()
+	{
+		// 画像を破棄し、文字ボタンレイヤとして動作するようにする
+		Butt_imageLoaded = false;
+		imageLeft = imageTop = 0;
+		update();
+	}
+
+	function onExecute(x, y, button, shift)
+	{
+		// マウスボタンが押されて、放されたときに呼ばれる
+		// 何かこのボタンが押されたことによりコマンドなどを実装したい場合は
+		// onMouseUp や onClick をオーバーライドするよりも
+		// このメソッドをオーバーライドすることを推奨する
+	}
+
+	function onDownReset()
+	{
+		releaseCapture();
+		Butt_mouseDown = false;
+		Butt_mouseDownRFlag = Butt_mouseDownLFlag =false;
+		//focus();
+		update();
+		cursor = crDefault;
+	}
+
+	function onMouseDown(x, y, button, shift)
+	{
+		if( !_checkallenabled() )
+		{
+			onDownReset();
+			return;
+		}
+
+		// onMouseDown イベントハンドラ
+		if( Butt_mouseDownLFlag || Butt_mouseDownRFlag )
+		{
+			onDownReset();
+			return;
+		}
+		else
+		{
+			if( button == mbLeft && getKeyState(VK_RBUTTON))
+			{
+				onDownReset();
+				return;
+			}
+			else if(button == mbRight && getKeyState(VK_LBUTTON) )
+			{
+				onDownReset();
+				return;
+			}
+		}
+
+		Butt_mouseDownLFlag = Butt_mouseDownRFlag = false;
+
+		if( button == mbLeft)
+		{
+			// onMouseDown イベントハンドラ
+			Butt_mouseDownLFlag = true;
+			Butt_mouseDown = true;
+			if(!Butt_mouseDownRFlag)
+			{
+				onMouseDownExPrev();
+				onMouseDownEx(...);
+			}
+			focus();
+			update();
+		}
+		else if(button == mbRight)
+		{
+			if(RClickFunc !== void )
+			{
+				onCallRFunc();
+				return;
+			}
+
+			Butt_mouseDownRFlag = true;
+			if(!Butt_mouseDownLFlag)
+				onMouseDownEx(...);
+			focus();
+			update();
+		}
+		//super.onMouseDown(...);
+	}
+
+	function onMouseUp(x, y, button, shift)
+	{
+		if( !_checkallenabled() )
+		{
+			onDownReset();
+			return;
+		}
+
+		if( button == mbLeft )
+		{
+			// onMouseUp イベントハンドラ
+			if(Butt_mouseDown)
+			{
+				onExecute(...);
+			}
+			// 追加のイベント
+			if(Butt_mouseDownLFlag && !Butt_mouseDownRFlag && Butt_mouseDown)
+			{
+				if(enabled)
+				{
+					onMouseUpExPrev();
+					onMouseUpEx(...);
+				}
+			}
+			Butt_mouseDownLFlag = false;
+			Butt_mouseDown = false;
+		}
+		else if( button == mbRight )
+		{
+			// 追加のイベント
+			if(Butt_mouseDownRFlag && !Butt_mouseDownLFlag)
+			{
+				if(enabled)
+					onMouseUpEx(...);
+			}
+			Butt_mouseDownRFlag = false;
+		}
+
+		update();
+		//super.onMouseUp(...);
+	}
+
+	function onClick()
+	{
+		// onClick イベントハンドラ
+		super.onClick(...);
+	}
+
+	function draw()
+	{
+		// 現在の状態にあわせて描画を行う
+		if(Butt_mouseDown) drawState(1);
+		else if(Butt_mouseOn) drawState(2);
+		else if(Butt_showFocusImage && focused) drawState(3);
+		else drawState(0);
+	}
+
+	function onPaint()
+	{
+		// 描画の直前に呼ばれる
+		super.onPaint(...);
+		draw();
+	}
+
+	// onMouseDownEx or Downが呼ばれる寸前に呼ばれるイベント
+	function onMouseUpExPrev(){}
+	function onMouseDownExPrev(){}
+	function RClickFuncPrev(){} // RClickFunc前に呼ばれるイベント
+
+	function onMouseEnter()
+	{
+		// マウスがレイヤ領域内に入った
+		update();
+		Butt_mouseOn = true;
+
+		if( Butt_mouseDownLFlag || Butt_mouseDownRFlag )
+		{
+			Butt_mouseDownLFlag = Butt_mouseDownRFlag = false;
+		}
+
+		super.onMouseEnter(...);
+	}
+
+	function onMouseLeave()
+	{
+		// マウスがレイヤ領域から出ていった
+		update();
+		Butt_mouseOn = false;
+		Butt_mouseDown = false;
+		super.onMouseLeave(...);
+	}
+
+	function onNodeDisabled()
+	{
+		// レイヤのノードが不可になった
+		super.onNodeDisabled(...);
+		Butt_mouseDown = false;
+		update();
+	}
+
+	function onNodeEnabled()
+	{
+		// レイヤのノードが有効になった
+		super.onNodeEnabled(...);
+		update();
+	}
+
+	function onFocus()
+	{
+		// フォーカスを得た
+		super.onFocus(...);
+		update();
+	}
+
+	function onBlur()
+	{
+		// フォーカスを失った
+		super.onBlur(...);
+		Butt_mouseDown = false;
+		update();
+	}
+
+	function onKeyDown(key, shift, process)
+	{
+		if( !_checkallenabled() )
+			return;
+		// キーが押された
+		if(process)
+		{
+			if(key == VK_RETURN || key == VK_SPACE)
+			{
+				// スペースキーまたはエンターキー
+				Butt_keyPressed = true;
+				update();
+				super.onKeyDown(key, shift, false); // 処理をしたのでprocessにfalseを渡す
+			}
+			else
+			{
+				super.onKeyDown(...);
+			}
+		}
+		else
+		{
+			// process が false の場合は処理は行わない
+			super.onKeyDown(...);
+		}
+	}
+
+	function onKeyUp(key, shift, process)
+	{
+		if( !_checkallenabled() )
+			return;
+		// キーが離された
+		if(process)
+		{
+			if(key == VK_RETURN || key == VK_SPACE)
+			{
+				// スペースキーまたはエンターキー
+				var flag = Butt_keyPressed;
+				Butt_keyPressed = false;
+				update();
+				super.onKeyUp(key, shift, false);
+				if(flag) onClick(width \ 2, height \ 2); // クリック動作
+			}
+			else
+			{
+				super.onKeyUp(...);
+			}
+		}
+		else
+		{
+			super.onKeyUp(...);
+		}
+	}
+
+	function onKeyPress(key, shift)
+	{
+		super.onKeyPress(...);
+	}
+
+
+	property width
+	{
+		setter(x)
+		{
+			super.width = x;
+			imageWidth = x;
+			Butt_imageLoaded = false;
+			update();
+		}
+		getter
+		{
+			return super.width;
+		}
+	}
+
+	property height
+	{
+		setter(x)
+		{
+			super.height = x;
+			imageHeight = x;
+			Butt_imageLoaded = false;
+			update();
+		}
+		getter
+		{
+			return super.height;
+		}
+	}
+
+	function setSize(w, h)
+	{
+		super.setSize(w, h);
+		w = this.width;
+		h = this.height;
+		setImageSize(w, h);
+		Butt_imageLoaded = false;
+		update();
+	}
+
+	property caption
+	{
+		setter(x)
+		{
+			Butt_caption = x;
+			update();
+		}
+		getter
+		{
+			return Butt_caption;
+		}
+	}
+
+	property color
+	{
+		setter(x)
+		{
+			Butt_color = int x;
+			update();
+		}
+		getter
+		{
+			return Butt_color;
+		}
+	}
+
+	property captionColor
+	{
+		setter(x)
+		{
+			Butt_captionColor = int x;
+			update();
+		}
+		getter
+		{
+			return Butt_captionColor;
+		}
+	}
+
+	property showFocusImage
+	{
+		setter(x) { Butt_showFocusImage = x; }
+		getter { return Butt_showFocusImage; }
+	}
+}

@@ -505,6 +505,23 @@ def get_ttk_style_map(theme: ColorPalette | None = None) -> Dict[str, Dict[str, 
                 ],
             },
         },
+        "Danger.TButton": {
+            "configure": {
+                "background": "#C62828",
+                "foreground": theme.text_inverse,
+                "padding": [12, 6],
+                "font": ("Segoe UI", 10, "bold"),
+            },
+            "map": {
+                "background": [
+                    ("active", "#A61B1B"),
+                    ("disabled", theme.btn_disabled_bg),
+                ],
+                "foreground": [
+                    ("disabled", theme.btn_disabled_fg),
+                ],
+            },
+        },
         "TEntry": {
             "configure": {
                 "fieldbackground": theme.bg_input,

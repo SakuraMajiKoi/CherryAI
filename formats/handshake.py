@@ -16,7 +16,7 @@ Extraction contract:
         - Deduplication, code stripping, placeholder protection, and code recovery
             belong to downstream preprocessing/postprocessing stages, not the parser.
 
-Optional components (O1-O9):
+Optional components (O1-O11):
     - O1: decrypt(path) → path
     - O2: encrypt(path) → path
     - O3: detect_encoding(path) → str  OR  encoding: str
@@ -26,6 +26,8 @@ Optional components (O1-O9):
     - O7: forbidden_chars: ForbiddenChars
     - O8: tag_rules: TagRules
     - O9: rewrite_injected_content(...) → str | None
+    - O10: pretty_wrap(text, width, break_char, max_lines) → str | None
+    - O11: project_patches: Sequence[ParserProjectPatch]
 """
 
 from __future__ import annotations

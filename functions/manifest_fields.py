@@ -200,6 +200,38 @@ def get_all_lines_for_stage(
     return [resolve_line_field_for_stage(ln, stage) for ln in manager.get_lines()]
 
 
+def clear_line_fields(
+    manager: "ManifestManager",
+    field_names: Sequence[str],
+) -> int:
+    """Clear a set of line fields from every manifest line.
+
+    Args:
+        manager: ManifestManager instance.
+        field_names: Manifest line field names to remove.
+
+    Returns:
+        Number of manifest lines visited.
+    """
+    field_names = tuple(field_names)
+    if not field_names:
+        return 0
+
+    cleared_lines = 0
+    for line in manager.get_lines():
+        idx = line.get("idx")
+        if idx is None:
+            continue
+        try:
+            line_idx = int(idx)
+        except (TypeError, ValueError):
+            continue
+        for field_name in field_names:
+            manager.clear_line_field(line_idx, field_name)
+        cleared_lines += 1
+    return cleared_lines
+
+
 # ========================== Text Field Helpers ========================== #
 
 def save_text_field(manager: "ManifestManager", key: str, value: str) -> None:

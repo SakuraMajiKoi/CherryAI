@@ -232,6 +232,27 @@ Goal: Extend `formats/KiriKiri2.py` so the Kano2 sample in `dev/ws/` parses real
 - `python dev/analyze_kirikiri2_csv.py dev/ws/data/csv > temp/kirikiri2_csv_analysis.json` — completed
 - `python dev/group_kirikiri2_csv_headers.py dev/ws/data/csv > temp/kirikiri2_csv_headers.json` — completed
 
+### FEATURE: KiriKiri2 DialogMGR `.ks` Literals + `.mdat` Key Whitelist
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Extend `formats/KiriKiri2.py` so code-heavy `.ks` `window.DialogMGR` calls expose visible quoted UI text, including concatenated `SetYesNo(...)` suffixes, and so `.mdat` files can extract/inject only parser-whitelisted quoted keys such as `マップ名` and `グレード名`.
+
+**Root Causes:**
+1. The existing dialog-manager literal path only covered `.tjs` calls whose first argument started with a string literal, so code-heavy `.ks` lines such as `window.DialogMGR.SetOK("名前が空欄です",false)` and concatenated payloads such as `tmp_str+"||この名前でよろしいですか？"` stayed invisible.
+2. KiriKiri2 had no parser-owned `.mdat` path, so quoted map metadata like `"マップ名"=>"歓楽街"` and `"グレード名"=>"歓楽街"` could not be extracted or injected selectively.
+3. The new `.mdat` slice needed the same explicit whitelist model as `CSV_ALLOWED_HEADER_TAGS`, because non-text keys vastly outnumber the visible ones.
+
+**Changes:**
+1. **`formats/KiriKiri2.py`** — Added a parser-owned `DialogMGR` literal regex that now covers code-heavy `.ks` lines plus `.tjs` calls when the visible payload is a quoted suffix after concatenation, while still skipping non-literal calls such as `SetOK(res.msg, ...)`.
+2. **`formats/KiriKiri2.py`** — Routed those `.ks` dialog-manager payloads through the existing `dialog_call` injection path so replacements preserve the original surrounding KAG/TJS code.
+3. **`formats/KiriKiri2.py`** — Added `.mdat` detection, encoding support, whitelist-based extraction/injection, and the new `MDAT_ALLOWED_KEYS` mapping so approved keys are easy to expand without broad parser guessing.
+4. **`dev/test_parser_scripts.py`** — Added focused regressions for `.ks` dialog-manager payload extraction/injection and `.mdat` whitelist detection, extraction, source-order preservation, and injection.
+5. **Real sample probe** — Verified the live Kano2 files with the parser bootstrap: `WF_S_EditMain.ks` now surfaces the expected empty-name dialog rows and `map_init_data1.mdat` extracts four whitelisted values.
+
+**Tests:**
+- `python -m pytest dev/test_parser_scripts.py -k "detect_parser_for_tjs_dialog_calls or extract_and_inject_tjs_dialog_literals or detect_parser_for_kirikiri_csv or extract_tagged_reads_whitelisted_csv_columns_in_column_order or inject_to_updates_whitelisted_csv_cells_only or extract_tagged_parses_talk_name_variable_speakers or inject_to_preserves_talk_name_variable_speaker_lines or extract_tagged_reads_only_ui_literals_from_code_heavy_ks_lines or extract_and_inject_dialog_manager_literals_from_code_heavy_ks_lines or detect_extract_and_inject_whitelisted_mdat_keys" -q --timeout=20` — 10 passed
+- Real-file parser probe against `dev/kanotsuku2/ws2/data/scene/WF_S_EditMain.ks` and `dev/kanotsuku2/ws2/data/mapd/map_init_data1.mdat` — extracted the expected dialog-name warnings plus 4 whitelisted `.mdat` values
+
 ### BUG FIX: KiriKiri2 SelectLayer Choice Overflow Patch
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 1 hour
 
@@ -251,6 +272,76 @@ Goal: Make `formats/KiriKiri2.py` patch real stock `SelectLayer.tjs` files so tr
 
 **Tests:**
 - `python -m pytest dev/test_parser_scripts.py -k "selectlayer_patch_handles_real_shift_jis_variant or post_inject_project_patches_selectlayer_and_creates_backup or mainwindow_patch" -q --timeout=20` — 5 passed
+
+### FEATURE: Step 9 Manual Parser Apply Patches Window
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: Surface parser-owned project patch actions from Step 9 through a dedicated `Apply Patches` window instead of relying only on parser-specific hidden hooks, while keeping patch target resolution manifest-backed and reusable across sessions.
+
+**Root Causes:**
+1. Step 9 had no manual surface for parser-specific staged-file patches, so users could not selectively apply or reapply parser-owned fixes such as `MainWindow.tjs` or `SelectLayer.tjs` patches.
+2. Parser patch metadata (name, description, target file candidates) was not part of the shared parser handshake, so GUI code had nothing canonical to list.
+3. Missing staged files had no reusable search flow: if a required file was absent from `Translated/` and `Original/`, CherryAI could not prompt for an external lookup root and remember it.
+4. HyperKano-style `MainWindow.tjs` files use `function SetMesText(text) { MesLayer.DrawText(text); }` instead of the stock `processCh` handler, so the earlier KiriKiri2 wordwrap patch could leave those projects unchanged even after the correct file was found.
+
+**Changes:**
+1. **`functions/apply_patches.py`** — Added shared Step 9 parser-patch discovery, file search/copy helpers, manifest-backed lookup-folder persistence, per-patch/logged execution, and the modal `Apply Patches` window with `Cancel`, per-patch Apply buttons, and `Apply All Patches` for checked rows.
+2. **`formats/parser_base.py` / `formats/handshake.py`** — Extended the parser handshake with manual `project_patches` actions so parsers can advertise name, description, candidate paths, and apply callbacks to Step 9.
+3. **`gui/steps/output_inject.py`** — Added the `Apply Patches` button beside `Refresh Preview` and delegated the window launch to the shared Step 9 helper instead of embedding parser-patch logic in the GUI step.
+4. **`formats/KiriKiri2.py`** — Advertised `MainWindow Wordwrap Patch` and `SelectLayer Choice Wrap Patch` as parser-owned Step 9 actions, and extended the MainWindow patch with a HyperKano `SetMesText` fallback that injects `__CherryAIWrapMessageText(text)` and rewrites `MesLayer.DrawText(text);` when no stock `processCh` anchor exists.
+5. **`dev/test_apply_patches.py` / `dev/test_output_injection.py`** — Added focused regressions for manifest-driven patch discovery, saved lookup-folder reuse, cancel semantics, and the Step 9 launcher entry point.
+6. **Live verification** — Applied the KiriKiri2 MainWindow patch against `Projects/HyperKano.CherryAI.json`, confirmed the first pass fails cleanly when the file is absent from staged roots, confirmed the lookup search resolves `dev/ws2`, copied the file into `Projects/HyperKano/Translated/data/system/MainWindow.tjs`, created `.bak`, rewrote the HyperKano `SetMesText` call, and persisted the lookup folder in the manifest.
+
+**Tests:**
+- `python -m pytest dev/test_output_injection.py dev/test_apply_patches.py dev/test_source_root.py -k "open_apply_patches_dialog_calls_shared_launcher or discovers_kirikiri_project_patches or copies_from_original_into_translated_before_patching or uses_saved_lookup_folder_before_prompt or cancelled_folder_selection_cancels_one_patch or kirikiri_hook_patches_mainwindow" -q --timeout=20` — 6 passed
+
+### FEATURE: KiriKiri2 Step 9 Font Patch Workflow
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 1 session
+
+Goal: Add a parser-owned Step 9 `Font Patch` for KiriKiri2 that stages a reusable `version.dll` runtime, bundled redistributable fonts, and a shared configuration dialog instead of relying on title-specific manual DLL work.
+
+**Root Causes:**
+1. The original `Apply Patches` seam only knew how to resolve one staged target file and call `apply_to_target(...)`, so a dialog-driven font/runtime workflow had nowhere canonical to attach.
+2. The reusable proxy DLL source existed in the workspace (`KiriKiriTools/KirikiriUnencryptedArchive`) but was not packaged into CherryAI's own `libraries/` tree.
+3. Step 9 had no shared way to choose a bundled font family, preview it, write a config, and place the resulting `fonts/` folder next to the patch folder.
+4. The sample KiriKiri2 game requested `Segoe UI` at runtime, so the default face aliases had to include that real request before the developer log could prove a concrete substitution.
+
+**Changes:**
+1. **`functions/apply_patches.py`** — Extended parser project patches with an optional custom `apply_with_context(...)` runner so dialog-driven workflows can live beside file-target patches.
+2. **`functions/kirikiri_font_patch.py`** — Added shared bundled-font discovery, staged layout/config generation, existing-config reload, and the KiriKiri2 Font Patch runner used by Step 9.
+3. **`gui/dialogs/kirikiri_font_patch_dialog.py`** — Added the shared modal font patch dialog with family selection, preview labels, height/charset/quality controls, and developer logging toggle.
+4. **`formats/KiriKiri2.py`** — Advertised the new parser-owned `Font Patch` action alongside the existing MainWindow and SelectLayer script patches.
+5. **`libraries/KiriKiriInjection/`** — Packaged the reusable proxy DLL source tree plus a Python `build_version_dll.py` helper that finds the Visual Studio C++ environment and rebuilds `Release/version.dll` locally.
+6. **`libraries/KiriKiriInjection/KirikiriUnencryptedArchive/FontPatch.cpp` / `.h`** — Added a config-driven private font loader + `CreateFontA/W` / `CreateFontIndirectA/W` import hook that logs developer-only runtime diagnostics and rewrites matching requests to the staged replacement face.
+7. **`libraries/Fonts/`** — Added recommended redistributable bundles for Inter, Noto Sans, Liberation Sans, and Open Sans with the regular/bold-or-semibold files used by the shared dialog plus the upstream OFL license text.
+8. **Live verification** — Built the packaged `version.dll`, staged the Font Patch into `dev/kanotsuku2`, launched `dev/kanotsuku2/xx2.exe`, and confirmed runtime log entries for private font registration and concrete `Segoe UI -> Inter` substitutions.
+
+**Tests:**
+- `python -m pytest dev/test_apply_patches.py dev/test_kirikiri_font_patch.py -q --timeout=20` — 7 focused Step 9 / font patch tests passed after parser wiring
+- `python libraries/KiriKiriInjection/build_version_dll.py` — packaged `version.dll` build succeeded under Visual Studio 2022
+
+### FEATURE: KiriKiri2 Step 9 Standard UI Translation Patch
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 1 session
+
+Goal: Add a shared Step 9 patch for KiriKiri2 that stages translated stock menu/help/folder/cache/version UI overlays from real game system files, without bloating the parser surface or requiring a title-specific module.
+
+**Root Causes:**
+1. The existing KiriKiri2 parser patches only handled wordwrap/layout/runtime fixes, so stock menu and utility UI strings remained outside the reusable Step 9 patch surface.
+2. These strings live in system scripts such as `MenuItemManager.tjs`, `CacheWindow.tjs`, and `VersionWindow.tjs`, often in UTF-16, so naive text rewriting risked mojibake or BOM loss.
+3. Standard KiriKiri UI labels include dynamic captions such as `自動選択 [4スレッド]`, so a literal-only replacement table would miss part of the menu tree.
+4. The repo instructions for this slice explicitly required keeping parser glue small and reusing `libraries/` rather than introducing a new helper module.
+
+**Changes:**
+1. **`functions/kirikiri_font_patch.py`** — Added the shared `stage_kirikiri_standard_ui_translation_patch(...)` workflow plus BOM-preserving read/write helpers, staged-root/external-lookup source resolution, and literal+regex replacement support.
+2. **`libraries/KiriKiriInjection/StandardUiTranslations/CherryAI.KiriKiriStandardUiPatch.json`** — Added the library-owned replacement spec for `data/system/MenuItemManager.tjs`, `data/program/CacheWindow.tjs`, and `data/system/VersionWindow.tjs`.
+3. **`formats/KiriKiri2.py`** — Advertised `Standard UI Translation Patch` as a parser-owned Step 9 shared workflow through `project_patches`.
+4. **`dev/test_kirikiri_font_patch.py` / `dev/test_apply_patches.py`** — Added focused regressions for UTF-16-preserving staged overlays and parser patch discovery including the new patch id.
+5. **Local verification artifact** — Ran the shared staging helper against `dev/kanotsuku2/ws2`, producing `dev/kanotsuku2/patch/data/system/MenuItemManager.tjs`, `dev/kanotsuku2/patch/data/program/CacheWindow.tjs`, and `dev/kanotsuku2/patch/data/system/VersionWindow.tjs` for manual game testing.
+
+**Tests:**
+- `python -m pytest dev/test_kirikiri_font_patch.py dev/test_apply_patches.py -q --timeout=20` — 12 passed
+- Spot check: `Get-Content -Encoding Unicode` confirmed translated `System(&S)`, `View(&V)`, `Image Cache Settings`, `Select Font`, and `Version Info` strings in the staged Kanotsuku2 patch outputs
+- Live cleanup follow-up: flattened the accidental active `dev/kanotsuku2/patch/patch/...` mirror into `dev/kanotsuku2/patch/`, archived same-hash/conflicting leftovers plus probe files under `dev/kanotsuku2/_inactive_patch_backups/failed_request_cleanup_20260519/`, staged `map_base_lv1.mdatb` and `map_base_lv2.mdatb` from `dev/kanotsuku2/ws2/patch/`, and confirmed `dev/kanotsuku2/xx2.exe` still stayed up after startup.
 
 ### BUG FIX: Editor Theme Refresh `_root()` Collision
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 30 minutes
@@ -866,20 +957,6 @@ Goal: Separate API retry handling from translation-validation failures, enforce 
 4. **Tests** — Added focused regressions in `dev/test_api_validation.py`, `dev/test_first_request_gate.py`, and `dev/test_translation_phase43.py`.
 
 **Tests:** Focused pytest run passed: `dev/test_api_validation.py`, `dev/test_first_request_gate.py`, `dev/test_translation_phase43.py` — 120 passed, 2 skipped.
-
-### BUG FIX: Content Warning Refusal Group + Unsafe-Request Policy
-**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
-
-Goal: Treat model refusals as a dedicated Step 5 outcome instead of generic malformed output, make them filterable in API Log, and connect the behavior to explicit Limits settings.
-
-**Changes:**
-1. **`functions/api_client.py`** — Added provider-agnostic refusal detection after structured-output failure, routed unsafe refusals through `APIErrorCategory.CONTENT_FILTERED`, skipped-or-split chunks according to `skip_unsafe_requests`, and downgraded the old preflight content warning to a prompt-context stub.
-2. **`functions/api_log.py` / `gui/dialogs/api_log_view.py`** — Added Status `CONTENT_WARNING` / `Content Warning` so refused requests can be filtered separately from ordinary failed attempts.
-3. **`gui/dialogs/global_options.py`** — Replaced the old content-warning toggle with `Abort after [N] Unsafe Request` plus `Skip unsafe requests`, while keeping legacy aliases for saved settings.
-4. **`gui/steps/translate.py`** — Applied the new limit settings to each live API client and added a run-level unsafe-request abort counter.
-5. **Tests** — Added focused regressions in `dev/test_first_request_gate.py`, `dev/test_api_log.py`, and `dev/test_translation_phase43.py`.
-
-**Tests:** Focused pytest runs passed: `dev/test_first_request_gate.py`, `dev/test_api_log.py`, and targeted `dev/test_translation_phase43.py` cases.
 
 ### BUG FIX: Exact-Length OpenAI Structured Output + API Log Failure Filter
 **Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours

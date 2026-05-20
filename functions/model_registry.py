@@ -131,6 +131,18 @@ class ModelInfo:
     logit_bias: bool = False             # supports logit_bias parameter
     temperature_min: float = 0.0
     temperature_max: float = 2.0
+    top_p_supported: bool = False
+    top_p_min: float = 0.0
+    top_p_max: float = 1.0
+    top_p_default: float = 1.0
+    frequency_penalty_supported: bool = False
+    frequency_penalty_min: float = -2.0
+    frequency_penalty_max: float = 2.0
+    frequency_penalty_default: float = 0.2
+    presence_penalty_supported: bool = False
+    presence_penalty_min: float = -2.0
+    presence_penalty_max: float = 2.0
+    presence_penalty_default: float = 0.0
     context_window: Optional[int] = None # max context window in tokens
 
     # Misc
@@ -192,6 +204,18 @@ class ModelInfo:
             "logit_bias": self.logit_bias,
             "temperature_min": self.temperature_min,
             "temperature_max": self.temperature_max,
+            "top_p_supported": self.top_p_supported,
+            "top_p_min": self.top_p_min,
+            "top_p_max": self.top_p_max,
+            "top_p_default": self.top_p_default,
+            "frequency_penalty_supported": self.frequency_penalty_supported,
+            "frequency_penalty_min": self.frequency_penalty_min,
+            "frequency_penalty_max": self.frequency_penalty_max,
+            "frequency_penalty_default": self.frequency_penalty_default,
+            "presence_penalty_supported": self.presence_penalty_supported,
+            "presence_penalty_min": self.presence_penalty_min,
+            "presence_penalty_max": self.presence_penalty_max,
+            "presence_penalty_default": self.presence_penalty_default,
             "context_window": self.context_window,
             "provider": self.provider,
             "url": self.url,

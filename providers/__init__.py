@@ -165,6 +165,16 @@ class TemperatureConfig:
     default: float = 0.3
 
 
+@dataclass
+class TuningParamConfig:
+    """Generic model-tuning parameter configuration for a model."""
+
+    supported: bool = False
+    min_value: float = 0.0
+    max_value: float = 1.0
+    default: float = 0.0
+
+
 # ---------------------------------------------------------------------------
 # Provider error hierarchy
 # ---------------------------------------------------------------------------
@@ -347,6 +357,24 @@ class ProviderBase(ABC):
         """OM1: Temperature parameter support and range."""
         return TemperatureConfig()
 
+    def get_top_p_config(self, model_id: str) -> TuningParamConfig:
+        """OM3: top_p parameter support and range."""
+        return TuningParamConfig()
+
+    def get_frequency_penalty_config(self, model_id: str) -> TuningParamConfig:
+        """OM4: frequency_penalty parameter support and range."""
+        return TuningParamConfig(
+            min_value=-2.0,
+            max_value=2.0,
+        )
+
+    def get_presence_penalty_config(self, model_id: str) -> TuningParamConfig:
+        """OM5: presence_penalty parameter support and range."""
+        return TuningParamConfig(
+            min_value=-2.0,
+            max_value=2.0,
+        )
+
     def get_context_window(self, model_id: str) -> int:
         """OM2: Maximum context window in tokens."""
         return 128000
@@ -504,6 +532,7 @@ __all__ = [
     "CachedInputConfig",
     "BatchConfig",
     "TemperatureConfig",
+    "TuningParamConfig",
     # Errors
     "ProviderError",
     "AuthenticationError",

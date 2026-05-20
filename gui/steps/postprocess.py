@@ -25,6 +25,7 @@ from CherryAI.gui.helpers.manifest_binding import (
     bind_checkbox_to_field,
 )
 from CherryAI.functions.manifest_fields import (
+    clear_line_fields,
     get_all_lines_for_stage,
     resolve_line_field_from,
     save_nested_text_field,
@@ -38,6 +39,7 @@ try:
         capture_ellipsis_counts,
         capture_generic_placeholder_values,
         recover_line,
+        restore_dialogue_edge_whitespace,
         RecoveryResult,
         RecoveryType as FuncRecoveryType,
         RecoveryAction as FuncRecoveryAction,
@@ -68,6 +70,12 @@ except ImportError:  # pragma: no cover
 
     def capture_ellipsis_counts(text: str) -> List[int]:
         return []
+
+    def restore_dialogue_edge_whitespace(
+        text: str,
+        line_tags: List[str] | Tuple[str, ...],
+    ) -> str:
+        return text
 
 try:
     from CherryAI.functions.dedup import (
@@ -122,6 +130,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+SUMMARY_UPDATE_BATCH_LINES = 500
+LIVE_SUMMARY_UPDATES_ENABLED = False
+
+
 def _persist_sparse_postpro(
     manager: "ManifestManager",
     idx: int,
@@ -133,6 +145,55 @@ def _persist_sparse_postpro(
         manager.set_line_field(idx, "postpro", postprocessed_text)
         return
     manager.clear_line_field(idx, "postpro")
+
+
+def _persist_sparse_postpro_batch(
+    manager: "ManifestManager",
+    lines: List["PostprocessLine"],
+) -> None:
+    """Persist sparse ``postpro`` updates in one manifest write.
+
+    This avoids per-line ``set_line_field``/``clear_line_field`` calls that trigger
+    repeated dirty notifications and expensive canonicalization cycles.
+    """
+    existing_lines = manager.get_lines()
+    if not existing_lines:
+        return
+
+    by_idx = {line.idx: line for line in lines}
+    updated_lines = [dict(raw_line) for raw_line in existing_lines]
+    changed = False
+
+    for raw_line in updated_lines:
+        raw_idx = raw_line.get("idx")
+        if not isinstance(raw_idx, int):
+            continue
+        post_line = by_idx.get(raw_idx)
+        if post_line is None:
+            continue
+
+        desired = (
+            post_line.postprocessed
+            if post_line.postprocessed
+            and post_line.postprocessed != post_line.translated
+            else ""
+        )
+        current = raw_line.get("postpro", "")
+
+        if desired:
+            if current != desired:
+                raw_line["postpro"] = desired
+                changed = True
+            continue
+
+        if "postpro" in raw_line:
+            del raw_line["postpro"]
+            changed = True
+
+    if not changed:
+        return
+
+    manager.set_lines(updated_lines)
 
 
 def _parse_line_tags(raw_tags: Any) -> Tuple[str, ...]:
@@ -249,7 +310,6 @@ class PostprocessOptions:
     enable_placeholder_recovery: bool = True
     enable_bracket_recovery: bool = True
     enable_quote_recovery: bool = True
-    enable_whitespace_normalization: bool = True
     enable_symbol_conversion: bool = True
     failure_policy: FailurePolicy = FailurePolicy.WRITE
     convert_fullwidth_to_halfwidth: bool = False
@@ -269,6 +329,8 @@ class RecoveryStats:
     issues_recovered: int = 0
     issues_retry: int = 0
     issues_skipped: int = 0
+    lines_written: int = 0
+    lines_flagged: int = 0
 
     @property
     def recovery_rate(self) -> float:
@@ -611,27 +673,6 @@ class PostprocessingStep(BaseStep):
                 var=self._quote_var,
                 manager_getter=lambda: self.manifest_manager,
                 field_key="QuoteBalanceRecovery",
-                default=True,
-                parent_key="PostProcessing",
-            )
-        )
-
-        self._whitespace_var = tk.BooleanVar(
-            value=self._pp_options.enable_whitespace_normalization
-        )
-        whitespace_cb = ttk.Checkbutton(
-            frame,
-            text="Whitespace Normalization",
-            variable=self._whitespace_var,
-        )
-        whitespace_cb.pack(anchor="w", pady=2)
-
-        self._manifest_bindings.append(
-            bind_checkbox_to_field(
-                checkbox=whitespace_cb,
-                var=self._whitespace_var,
-                manager_getter=lambda: self.manifest_manager,
-                field_key="WhitespaceNormalization",
                 default=True,
                 parent_key="PostProcessing",
             )
@@ -1155,6 +1196,14 @@ class PostprocessingStep(BaseStep):
         )
         self._rate_label.grid(row=0, column=11, sticky="w", padx=(10, 0))
 
+        summary_grid.columnconfigure(12, weight=1)
+        ttk.Button(
+            summary_grid,
+            text="🗑 Clear Postprocessing",
+            style="Danger.TButton",
+            command=self._clear_postprocessing_results,
+        ).grid(row=0, column=12, sticky="e")
+
     def _get_lines_from_previous_steps(self) -> Tuple[List[str], List[str]]:
         """Get translated and original lines from manifest.
 
@@ -1334,13 +1383,19 @@ class PostprocessingStep(BaseStep):
 
         self._lines_table.set_lazy_data(row_ids, build_row)
 
-    def _update_summary(self) -> None:
+    def _update_summary(self, use_running_stats: bool = False) -> None:
         """Update the summary panel (TASK 45.8: live updates)."""
         total = len(self._lines)
-        changed = sum(1 for l in self._lines if l.has_changes)
-        recovered = sum(l.recovered_count for l in self._lines)
-        written = sum(1 for l in self._lines if l.written)
-        flagged = sum(1 for l in self._lines if l.flagged)
+        if use_running_stats:
+            changed = self._stats.lines_with_changes
+            recovered = self._stats.issues_recovered
+            written = self._stats.lines_written
+            flagged = self._stats.lines_flagged
+        else:
+            changed = sum(1 for l in self._lines if l.has_changes)
+            recovered = sum(l.recovered_count for l in self._lines)
+            written = sum(1 for l in self._lines if l.written)
+            flagged = sum(1 for l in self._lines if l.flagged)
 
         total_issues = self._stats.total_issues if self._stats.total_issues > 0 else 1
         rate = (self._stats.issues_recovered / total_issues) * 100
@@ -1579,7 +1634,6 @@ class PostprocessingStep(BaseStep):
         # User-configurable options
         self._pp_options.enable_bracket_recovery = self._bracket_var.get()
         self._pp_options.enable_quote_recovery = self._quote_var.get()
-        self._pp_options.enable_whitespace_normalization = self._whitespace_var.get()
         self._pp_options.enable_symbol_conversion = self._symbol_var.get()
         self._pp_options.convert_fullwidth_to_halfwidth = self._fullwidth_var.get()
         self._pp_options.convert_halfwidth_to_fullwidth = self._halfwidth_var.get()
@@ -1860,7 +1914,6 @@ class PostprocessingStep(BaseStep):
                         enable_placeholder_recovery=False,
                         enable_bracket_recovery=self._pp_options.enable_bracket_recovery,
                         enable_quote_recovery=self._pp_options.enable_quote_recovery,
-                        enable_whitespace_normalization=self._pp_options.enable_whitespace_normalization,
                         code_patterns=code_patterns,
                     )
 
@@ -1926,18 +1979,24 @@ class PostprocessingStep(BaseStep):
                 ):
                     if self._pp_options.failure_policy == FailurePolicy.WRITE:
                         line.written = True
+                        self._stats.lines_written += 1
                     elif self._pp_options.failure_policy == FailurePolicy.FLAG:
                         line.flagged = True
+                        self._stats.lines_flagged += 1
 
-                # TASK 45.8: Schedule live summary update every 10 lines
-                if self._stats.lines_processed % 10 == 0:
-                    self.after(0, self._update_summary)
+                # Keep heavy UI refreshes off the hot path for large projects.
+                if (
+                    LIVE_SUMMARY_UPDATES_ENABLED
+                    and self._stats.lines_processed % SUMMARY_UPDATE_BATCH_LINES == 0
+                ):
+                    self.after(0, self._update_summary, True)
 
             # ── Deduplication restoration ──────────────────────────────
             # After all normal lines are post-processed, restore dedup
             # lines by copying the postprocessed text from their source
             # line (accessed in RAM for latest state).
             self._restore_dedup_lines()
+            self._restore_tagged_dialogue_edge_whitespace()
             self._status = PostprocessStatus.COMPLETED
             # Phase 48: Write postprocess step log footer
             try:
@@ -1986,12 +2045,6 @@ class PostprocessingStep(BaseStep):
             # Fix lowercase placeholders
             pattern = re.compile(r"__([a-z][a-z0-9]*)(?:_(\d+))?__", re.IGNORECASE)
             text = pattern.sub(lambda m: m.group(0).upper(), text)
-
-        # Basic whitespace normalization
-        if self._pp_options.enable_whitespace_normalization:
-            # Fix placeholders with internal spaces
-            text = re.sub(r"__\s+", "__", text)
-            text = re.sub(r"\s+__", "__", text)
 
         return text
 
@@ -2085,6 +2138,18 @@ class PostprocessingStep(BaseStep):
         if restored:
             self._stats.lines_with_changes += restored
             logger.info("Restored %d deduplicated lines", restored)
+
+    def _restore_tagged_dialogue_edge_whitespace(self) -> None:
+        """Restore tagged dialogue-edge whitespace after dedup reversal."""
+        for line in self._lines:
+            restored = restore_dialogue_edge_whitespace(
+                line.postprocessed,
+                line.tags,
+            )
+            if restored == line.postprocessed:
+                continue
+            line.postprocessed = restored
+            line.has_changes = line.translated != restored
 
     def _resolve_dedup_text(
         self,
@@ -2424,16 +2489,10 @@ class PostprocessingStep(BaseStep):
             "recovery_rate": self._stats.recovery_rate,
         }
 
-        # Persist each postprocessed line to the manifest
+        # Persist all postprocessed updates in one manifest pass
         mgr = self.manifest_manager
         if mgr is not None:
-            for line in self._lines:
-                _persist_sparse_postpro(
-                    mgr,
-                    line.idx,
-                    line.translated,
-                    line.postprocessed,
-                )
+            _persist_sparse_postpro_batch(mgr, self._lines)
 
         # TASK 45.8: Completion popup
         messagebox.showinfo(
@@ -2502,6 +2561,32 @@ class PostprocessingStep(BaseStep):
         self._update_summary()
         self._status_label.configure(text="All changes reverted")
 
+    def _clear_postprocessing_results(self) -> None:
+        """Clear all postprocessed values from the manifest."""
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            messagebox.showwarning(
+                "Postprocessing",
+                "Load a project before clearing postprocessing results.",
+            )
+            return
+
+        if self._status == PostprocessStatus.RUNNING:
+            messagebox.showwarning(
+                "Postprocessing",
+                "Wait until postprocessing finishes before clearing results.",
+            )
+            return
+
+        if not messagebox.askyesno(
+            "Clear Postprocessing",
+            "Remove all Postprocessed values from the manifest?",
+        ):
+            return
+
+        clear_line_fields(mgr, ("postpro",))
+        self._refresh_lines()
+
     def _retry_selected(self) -> None:
         """Queue selected lines for retry."""
         selected = self._lines_table.get_selected_ids()
@@ -2546,7 +2631,6 @@ class PostprocessingStep(BaseStep):
             "enable_placeholder_recovery": True,
             "enable_bracket_recovery": self._bracket_var.get(),
             "enable_quote_recovery": self._quote_var.get(),
-            "enable_whitespace_normalization": self._whitespace_var.get(),
             "enable_symbol_conversion": self._symbol_var.get(),
             "convert_fullwidth_to_halfwidth": self._fullwidth_var.get(),
             "convert_halfwidth_to_fullwidth": self._halfwidth_var.get(),

@@ -26,6 +26,7 @@ from CherryAI.gui.helpers.manifest_binding import (
     bind_combobox_to_field,
 )
 from CherryAI.functions.manifest_fields import (
+    clear_line_fields,
     get_all_lines_for_stage,
     save_nested_text_field,
     load_nested_text_field,
@@ -1405,6 +1406,12 @@ class WordwrapOverwriteStep(BaseStep):
 
         # Progress bar
         self._progress_var = tk.DoubleVar(value=0)
+        ttk.Button(
+            frame,
+            text="🗑 Clear Wordwrap",
+            style="Danger.TButton",
+            command=self._clear_wordwrap_results,
+        ).pack(side="right", padx=(5, 0))
         self._progress_bar = ttk.Progressbar(
             frame,
             variable=self._progress_var,
@@ -1933,6 +1940,32 @@ class WordwrapOverwriteStep(BaseStep):
                 line.wrapped = line.original
             self._refresh_table()
             self._update_summary()
+
+    def _clear_wordwrap_results(self) -> None:
+        """Clear all wordwrap values from the manifest."""
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            messagebox.showwarning(
+                "Wordwrap",
+                "Load a project before clearing wordwrap results.",
+            )
+            return
+
+        if self._status == WrapStatus.RUNNING:
+            messagebox.showwarning(
+                "Wordwrap",
+                "Wait until wordwrap finishes before clearing wordwrap results.",
+            )
+            return
+
+        if not messagebox.askyesno(
+            "Clear Wordwrap",
+            "Remove all Wordwrap values from the manifest?",
+        ):
+            return
+
+        clear_line_fields(mgr, ("wordwr",))
+        self._refresh_preview()
 
     def _accept_selected(self) -> None:
         """Accept selected lines as final."""

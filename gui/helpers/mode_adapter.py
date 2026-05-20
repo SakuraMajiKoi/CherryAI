@@ -511,11 +511,11 @@ except ImportError:
             total = len(matches)
             for index, match in enumerate(matches):
                 parts.append(s[last:match.start()])
-                parts.append(f" {_aggressive_token_for_index(index, total)} ")
+                parts.append(_aggressive_token_for_index(index, total))
                 last = match.end()
             parts.append(s[last:])
             s = "".join(parts)
-        return re.sub(r"\s+", " ", s).strip()
+        return s
 
     def aggressive_mask_line(line: str) -> Tuple[str, List[str] | Dict[str, str]]:  # type: ignore[misc]
         """Fallback masker with indexed placeholders for multi-number lines."""

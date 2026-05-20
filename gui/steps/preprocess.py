@@ -43,6 +43,7 @@ from CherryAI.gui.helpers.manifest_binding import (
 
 # TASK 24.2/24.3: Import special format helpers for pattern lists
 from CherryAI.functions.manifest_fields import (
+    clear_line_fields,
     save_protect_code_patterns,
     load_protect_code_patterns,
     save_custom_placeholders,
@@ -268,6 +269,13 @@ class PreprocessingStep(BaseStep):
             header,
             text="💡 Auto-Suggest",
             command=self._auto_suggest,
+        ).pack(side="right", padx=5)
+
+        ttk.Button(
+            header,
+            text="🗑 Clear Preprocessing",
+            style="Danger.TButton",
+            command=self._clear_preprocessing_results,
         ).pack(side="right", padx=5)
 
     def _build_content(self) -> None:
@@ -1496,6 +1504,28 @@ class PreprocessingStep(BaseStep):
                 "Applied",
                 f"Applied {len(applied)} suggestion(s):\n• " + "\n• ".join(applied[:10]),
             )
+
+    def _clear_preprocessing_results(self) -> None:
+        """Clear all preprocessed values from the manifest."""
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            messagebox.showwarning(
+                "Preprocessing",
+                "Load a project before clearing preprocessing results.",
+            )
+            return
+
+        if not messagebox.askyesno(
+            "Clear Preprocessing",
+            "Remove all Preprocessed values from the manifest?",
+        ):
+            return
+
+        clear_line_fields(mgr, ("prepro",))
+
+        original_lines = self._get_loaded_lines()
+        self._preview_lines = [(line, line, "", []) for line in original_lines]
+        self._update_preview()
 
     def _add_placeholder_rule(self) -> None:
         """Add a new custom placeholder rule.

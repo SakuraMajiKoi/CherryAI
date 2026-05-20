@@ -1,0 +1,2497 @@
+
+class cAnimeTimer
+{
+	var layer=void;
+	var dataFile=void;
+	var contimer=void;
+
+	var AnimeData=void;
+	var FrameName="";
+	var SegmentPx=void;
+	var SegmentPy=void;
+
+	function finalize()
+	{
+		invalidate contimer;
+	}
+
+	function cAnimeTimer(f_layer)
+	{
+		layer = f_layer;
+		contimer = new Continuous(onTimer);
+		contimer.interval = 1;
+		contimer.capacity = 1;
+		contimer.enabled = false;
+		contimer.calltime = void;
+		contimer.waittime = 0;
+	}
+
+	function clear()
+	{
+		dataFile = void;
+		FrameName = "first";
+		contimer.enabled = false;
+		AnimeData = void;
+		layer.setImagePos(0,0);
+	}
+
+	// Setが呼ばれている事が前提
+	function Init()
+	{
+		if( dataFile === void ) return;
+
+		Set(dataFile);
+	}
+
+	function Set(f_file=void)
+	{
+		if( f_file === void || f_file == "" ) return;
+
+		if( f_file.indexOf(".") == -1 )
+			dataFile = f_file+".txt";
+		else
+			dataFile = f_file;
+
+		AnimeData = Scripts.evalStorage(dataFile);
+		SegmentPx = AnimeData["SizeX"];
+		SegmentPy = AnimeData["SizeY"];
+		AnimeData = AnimeData["Data"];
+
+		layer.setSize(SegmentPx,SegmentPy);
+		layer.setImagePos(0,0);
+
+		FrameName = "first";
+		contimer.enabled = false;
+	}
+
+	function Start()
+	{
+		if( dataFile === void ) return;
+
+		setImage();
+		contimer.enabled = true;
+		contimer.waittime = AnimeData[FrameName]["WaitTime"];
+		contimer.calltime = System.getTime();
+	}
+
+	function Stop()
+	{
+		if( dataFile === void ) return;
+		contimer.enabled = false;
+		setImage();
+		FrameName = "first";
+	}
+
+	function assignComp(src)
+	{
+		dataFile = src.dataFile;
+
+		if( dataFile !== void )
+		{
+			if(AnimeData === void)
+				AnimeData = %[];
+			(Dictionary.assignStruct incontextof AnimeData)(src.AnimeData);
+			SegmentPx = src.SegmentPx;
+			SegmentPy = src.SegmentPy;
+			FrameName = src.FrameName;
+			contimer.enabled = src.contimer.enabled;
+			contimer.calltime = src.contimer.calltime;
+			contimer.waittime = src.contimer.waittime;
+		}
+	}
+
+	function onTimer()
+	{
+		if( dataFile === void ) return;
+		var tmp_taime = System.getTime();
+		if( (tmp_taime - contimer.calltime) >= contimer.waittime)
+		{
+			contimer.waittime = AnimeData[FrameName]["WaitTime"];
+			contimer.calltime = tmp_taime;
+			setImage();
+			onNextFrame();
+			FrameName = AnimeData[FrameName]["Next"];
+		}
+	}
+
+	function onNextFrame()
+	{
+	}
+
+	function setImage(f_lay=void)
+	{
+		if( AnimeData === void || dataFile === void) return;
+
+		if( f_lay === void )
+			f_lay = this.layer;
+
+		var Px = 0;
+		var Py = 0;
+		if( AnimeData[FrameName]["PosX"] !== void )
+			Px = (SegmentPx*AnimeData[FrameName]["PosX"])*-1;
+		if( AnimeData[FrameName]["PosY"] !== void )
+			Py = (SegmentPy*AnimeData[FrameName]["PosY"])*-1;
+		f_lay.setImagePos( Px, Py );
+	}
+
+	var _storedata_AnimeTime = new Dictionary();
+	function store()
+	{
+		_storedata_AnimeTime["dataFile"] = dataFile;
+
+		if( dataFile !== void )
+		{
+			_storedata_AnimeTime["FrameName"] = FrameName;
+			_storedata_AnimeTime["StartFlag"] = contimer.enabled;
+			_storedata_AnimeTime["SegmentPx"] = SegmentPx;
+			_storedata_AnimeTime["SegmentPy"] = SegmentPy;
+		}
+		else
+		{
+			_storedata_AnimeTime["FrameName"] = _storedata_AnimeTime["StartFlag"] = _storedata_AnimeTime["SegmentPx"] = _storedata_AnimeTime["SegmentPy"] = void;
+		}
+
+		return _storedata_AnimeTime;
+	}
+
+	function restore(data)
+	{
+		clear();
+		dataFile = data["dataFile"];
+		if( dataFile !== void )
+		{
+			AnimeData = Scripts.evalStorage(dataFile);
+			AnimeData = AnimeData["Data"];
+			SegmentPx = data["SegmentPx"];
+			SegmentPy = data["SegmentPy"];
+
+			FrameName = data["FrameName"];
+			if( data["StartFlag"] )
+				Start();
+		}
+	}
+}
+
+class AnimeLayer extends WF_Layer
+{
+
+	var AnimeTimer;
+
+	function finalize()
+	{
+		invalidate AnimeTimer;
+		super.finalize();
+	}
+
+	function AnimeLayer(win,par)
+	{
+		super.WF_Layer(win,par);
+
+		AnimeTimer = new cAnimeTimer(this);
+	}
+
+	function Start(){ AnimeTimer.Start(); }
+	function Stop(){ AnimeTimer.Stop(); }
+
+	function loadImages(image)
+	{
+		super.loadImages(image);
+
+		AnimeTimer.Set(image);
+	}
+}
+
+// プライマリー用のレイヤー
+// widthとheightのgetterが一番最初に設定した大きさに固定されている
+// 4:3モード等でプライマリーのサイズが変わった場合、
+// プラグインの呼び出し等でいつもと違うサイズで作られる場合があったりするので
+class WF_LayerPrimary extends WF_Layer
+{
+	var FirstWidth=void;
+	var FirstHeight=void;
+	var s_width = &width;
+	var s_height = &height;
+
+	property _width
+	{
+		setter(v)
+		{
+			FirstWidth = width if FirstWidth === void;
+			s_width = v;
+		}
+		getter
+		{
+			return FirstWidth;
+		}
+	}
+
+	property _height
+	{
+		setter(v)
+		{
+			FirstHeight = height if FirstHeight === void;
+			s_height = v;
+		}
+		getter
+		{
+			return FirstHeight;
+		}
+	}
+
+	function WF_LayerPrimary(win,par)
+	{
+		&width = &_width;
+		&height = &_height;
+		super.WF_Layer(win,par);
+	}
+
+	function finalize()
+	{
+		super.finalize();
+	}
+
+	function setSize(width, height)
+	{
+		FirstWidth = width if FirstWidth === void;
+		FirstHeight = height if FirstHeight === void;
+		super.setSize(width, height);
+	}
+}
+
+// メモ : 夜っぽくなる
+// fillOperateRect(0xff400080,omPsSoftLight);
+// light(-20,-30);
+Layer.fillOperateRect = function(color, mode,target=void)
+{
+    var tw = 128;
+    var th = 64;
+	target = this if target === void;
+    var fillLayer = new global.Layer(window, this);
+    // 元々吉里吉里のものなら、不透明の一色レイヤーを、不透明度を指定して描画。
+    // PhotoShop準拠のものなら、半透明の一色レイヤーを、透明度を指定せず(tmp_opacity=255)に描画。
+    fillLayer.setSize(tw, th);
+    var tmp_opacity	= 255;
+    var lastface = face, lastha = holdAlpha;
+	if(mode == ltOpaque || mode == ltAlpha || mode == ltAddAlpha || mode == ltAdditive || mode == ltSubtractive || 
+		mode == ltMultiplicative || mode == ltDodge || mode == ltLighten || mode == ltDarken || mode == ltScreen)
+    {
+		fillLayer.fillRect(0, 0, tw, th, color | 0xFF000000);
+		tmp_opacity = (color >> 24) & 0xFF;
+		target.face	= dfOpaque;
+    }
+    else
+        fillLayer.fillRect(0, 0, tw, th, color);
+	target.holdAlpha	= true if !target.isPrimary;
+    var x = 0;
+    var y = 0;
+
+	var l_height;
+	var l_width;
+
+	//if(l_height == 0 && l_width == 0)
+	{
+		l_height = target.imageHeight;
+		l_width = target.imageWidth;
+	}
+
+
+    while (y < l_height) {
+        var x2 = x;
+        while (x2 < l_width) {
+            target.operateRect(x2, y, fillLayer, 0, 0, tw, th, mode, tmp_opacity);
+            x2 += tw;
+        }
+        y += th;
+    }
+    target.face = lastface, target.holdAlpha = lastha;
+
+    // 後片付け
+    invalidate fillLayer;
+};
+
+class WF_Layer extends Layer
+{
+	var ImageFileName = void; // イメージのファイル名
+	var _RClickFunc = void;
+	var _RClickFuncArgs = void; // RClickFuncを呼ぶ時に渡される引数配列
+
+	var R_ClickFlag;
+	var L_ClickFlag;
+
+	// 固定幅で文字を描画するかどうか
+	var TextFix=false;
+	// 改行に用いる文字
+	var LineChara = '|';
+	var _RegLineChara = /\|/g; // 正規表現用
+	// 改行文字列\nを有効にするかどうか。無効にした場合\nは取り除かれる
+	var LineCode=false;
+
+	// テキストの形式 left or center or right
+	var texttypeX = "left";
+	// テキストの形式 top or center
+	var texttypeY = "top";
+	// テキスト描画領域の幅を指定する
+	var TR_height=0;
+	var TR_width=0;
+
+	// 改行時のオフセットY軸
+	var newlineoffset_y=0;
+
+	var Font="メイリオ";
+
+	property RClickFunc
+	{
+		setter(x)
+		{
+			_RClickFunc = x;
+			onRClickFuncSet(x);
+		}
+		getter{ return _RClickFunc; }
+	}
+
+	property RClickFuncArgs
+	{
+		setter(x)
+		{
+			if(x instanceof 'Array')
+			{
+				if( _RClickFuncArgs === void )
+					_RClickFuncArgs = new Array();
+				else
+					_RClickFuncArgs.clear();
+
+				_RClickFuncArgs.assignStruct(x);
+			}
+		}
+		getter{ return _RClickFuncArgs; }
+	}
+
+	function WF_Layer(win,par)
+	{
+		super.Layer(win,par);
+		R_ClickFlag = L_ClickFlag = false;
+		font.face=Font;
+	}
+
+	// イベント
+	function onfinalize(){}
+
+	function finalize()
+	{
+		onfinalize();
+
+		if(_RClickFuncArgs !== void)
+			invalidate _RClickFuncArgs;
+
+		super.finalize();
+	}
+
+	function SetFont(f_fontname)
+	{
+		font.face = f_fontname;
+	}
+
+	function clear()
+	{
+		ImageFileName = void;
+		fullRect(0x00000000);
+	}
+
+	function loadImages(image)
+	{
+		ImageFileName = image;
+		super.loadImages(ImageFileName,clNone);
+	}
+	// トランジション
+	function beginTransition(name, withchildren=true, transsrc=null, options=%[])
+	{
+		window.TransitionCount++;
+		super.beginTransition(...);
+	}
+	function onTransitionCompleted(dest, src)
+	{
+		window.TransitionCount--;
+		onTransitionCompletedEx(...);
+	}
+	function onTransitionCompletedEx(dest, src)
+	{
+		// イベント
+	}
+
+	function onDownReset(x, y, button, shift)
+	{
+		releaseCapture();
+		R_ClickFlag = L_ClickFlag = false;
+		focus(false);
+		update();
+	}
+
+	// 有効か無効かチェック
+	function _checkallenabled()
+	{
+		if( !enabled || !visible || opacity <= 0)
+			return false;
+		else
+			return true;
+	}
+
+	function onMouseDownExPrev(){}
+	function onMouseUpExPrev(){}
+	function onMouseDownEx(x, y, button, shift){}
+	function onMouseUpEx(x, y, button, shift){}
+	function onMouseEnterEx(){}
+	function onMouseLeaveEx(){}
+	function onCallRFunc(args=void){RClickFuncPrev(args);if(args !== void){_RClickFunc(args*);}else{_RClickFunc();} }
+	function onRClickFuncSet(x){/*RClickFuncが設定された時に呼び出されるイベント*/}
+
+	// RClickFuncが実行される直前に実行されるイベント
+	function RClickFuncPrev(args){}
+
+	function onMouseEnter()
+	{
+		onMouseEnterEx();
+		super.onMouseEnter();
+	}
+	function onMouseLeave()
+	{
+		onMouseLeaveEx();
+		super.onMouseLeave();
+	}
+
+	function onMouseDown(x, y, button, shift)
+	{
+		if( !_checkallenabled() )
+		{
+			onDownReset();
+			return;
+		}
+
+		if( R_ClickFlag || L_ClickFlag )
+		{
+			onDownReset(x, y, button, shift);
+			return;
+		}
+		else if( button == mbRight && getKeyState(VK_LBUTTON) )
+		{
+			onDownReset(x, y, button, shift);
+			return;
+		}
+		else if( button == mbLeft && getKeyState(VK_RBUTTON) )
+		{
+			onDownReset(x, y, button, shift);
+			return;
+		}
+
+		if(button == mbRight)
+		{
+			if(_RClickFunc !== void)
+			{
+				onCallRFunc(RClickFuncArgs);
+				return;
+			}
+			R_ClickFlag = true;
+			L_ClickFlag = false;
+			onMouseDownExPrev();
+			onMouseDownEx(x, y, button, shift);
+		}
+		else if(button == mbLeft)
+		{
+			R_ClickFlag = false;
+			L_ClickFlag = true;
+			onMouseDownExPrev();
+			onMouseDownEx(x, y, button, shift);
+
+		}
+		super.onMouseDown(...);
+	}
+
+	function onMouseUp(x, y, button, shift)
+	{
+		if( !_checkallenabled() )
+		{
+			onDownReset();
+			return;
+		}
+		else if(getLayerAt(x,y)!=this)
+		{
+			onDownReset();
+			super.onMouseUp(...);
+			return;
+		}
+
+		var callFlag=false;
+
+		if( button == mbRight && !L_ClickFlag && R_ClickFlag)
+		{
+			callFlag=true;
+			R_ClickFlag = false;
+		}
+		else if( button == mbLeft && !R_ClickFlag && L_ClickFlag)
+		{
+			callFlag=true;
+			L_ClickFlag = false;
+		}
+		super.onMouseUp(...);
+
+		if( !callFlag ) return;
+
+		onMouseUpExPrev();
+		onMouseUpEx(x, y, button, shift);
+	}
+
+	function fullRect(color=0x00000000)
+	{
+		fillRect(0,0,imageWidth,imageHeight,color);
+	}
+
+	function setSize(f_x=void,f_y=void)
+	{
+		if( f_x === void )	f_x = this.parent.width;
+		if( f_y === void )	f_y = this.parent.height;
+
+		super.setSize(f_x,f_y);
+	}
+
+	function drawTextEx(x,y,str,color=0x000000,opa=255, aa=true, shadowlevel=0, shadowcolor=0x000000, shadowwidth=0, shadowofsx=0, shadowofsy=0)
+	{
+		if( str === void || str== "" ) return;
+		else if( ( typeof str ) != "String" ){ throw new Exception("drawTextEx String Onley"); return;}
+
+		TR_height = this.height if TR_height == 0;
+		TR_width = this.width if TR_width == 0;
+
+		var StrRectArray = new Array();
+
+		while(1)
+		{
+			if(str.indexOf("\n") != -1)
+			{
+				if(LineCode)
+					str = str.replace(/\n/g,LineChara);
+				else
+					str = str.replace(/\n/g,'');
+			}
+			else
+			{
+				break;
+			}
+		}
+
+		var tmpPx=0;
+		var tmpLine=0;
+		var cnt = str.length;
+		var tfontheight = font.height;
+
+		if( tfontheight <= 0 )
+			tfontheight = font.getEscHeightY(" ");
+
+		for(var i=0; i < cnt;i++)
+		{
+			var drawPx = tmpPx;
+			var drawPy = tmpLine*tfontheight;
+
+			var charfontSize;
+			var charWidth = font.getEscWidthX(str[i]);
+			var useFixedCell = TextFix && (charWidth * 4 >= tfontheight * 3);
+
+			// 文字幅固定
+			if(useFixedCell)
+				charfontSize = tfontheight;
+			else
+				charfontSize = charWidth;
+
+			// 次のライン判定
+			if(TR_width<drawPx+charfontSize+x || str[i] == LineChara)
+			{
+				tmpLine++;
+				tmpPx = 0;
+				drawPx = 0;
+				drawPy += tfontheight;
+				if(str[i] == LineChara)
+					continue;
+			}
+
+			var margin=0;
+			if(useFixedCell)
+				margin = (tfontheight-charWidth)>>1;
+
+			// 遅いから辞書配列やめた
+			//StrRectArray.add(%[left:drawPx,top:drawPy,width:charfontSize,height:tfontheight,margin:margin,line:tmpLine]);
+			StrRectArray.add(drawPx); 		// left		i*6+0
+			StrRectArray.add(drawPy); 		// top		i*6+1
+			StrRectArray.add(charfontSize); // width	i*6+2
+			StrRectArray.add(tfontheight); 	// height	i*6+3
+			StrRectArray.add(margin); 		// margin	i*6+4
+			StrRectArray.add(tmpLine); 		// line		i*6+5
+
+			tmpPx += charfontSize;
+		}
+
+		// 改行文字取り除き
+		while(1)
+		{
+			if(str.indexOf(LineChara) != -1)
+			{
+				str = str.replace(_RegLineChara,'');
+			}
+			else
+			{
+				cnt = str.length;
+				break;
+			}
+		}
+
+		var mPy=0;
+		if(texttypeY == "center" )
+		{
+			// ライン*文字の高さで文字列の全体高さを求める
+			var strheight = (StrRectArray[StrRectArray.count-1]+1)*StrRectArray[0+3]; // 最後の要素 "Line" - 最初の要素 "height"
+			mPy = (TR_height>>1)-(strheight>>1); // 中心に合わせる
+		}
+
+		if(texttypeX == "center" )
+		{
+			var LineWidth=0;
+
+			var LineNum = (StrRectArray[StrRectArray.count-1]+1); // 最後の要素 "Line"
+			for(var l=0; l < LineNum;l++)
+			{
+				for(var i=0; i < cnt;i++)
+				{
+					if( StrRectArray[i*6+5] == l ) // Line
+						LineWidth+=StrRectArray[i*6+2]; // Width
+				}
+				for(var i=0; i < cnt;i++)
+				{
+					if( StrRectArray[i*6+5] == l ) // Line
+						StrRectArray[i*6+4] += (TR_width>>1)-(LineWidth>>1); // 中心に合わせる // margin
+				}
+				LineWidth=0;
+			}
+		}
+		else if( texttypeX == "right" )
+		{
+			var LineWidth=0;
+
+			var LineNum = (StrRectArray[StrRectArray.count-1]+1); // 最後の要素 "Line"
+			for(var l=0; l < LineNum;l++)
+			{
+				for(var i=0; i < cnt;i++)
+				{
+					if( StrRectArray[i*6+5] == l ) // Line
+						LineWidth+=StrRectArray[i*6+2]; // Width
+				}
+				for(var i=0; i < cnt;i++)
+				{
+					if( StrRectArray[i*6+5] == l ) // Line
+						StrRectArray[i*6+4] += (TR_width)-(LineWidth); // 中心に合わせる // margin
+				}
+				LineWidth=0;
+			}
+		}
+
+		for(var i=0; i < cnt;i++)
+			drawText( StrRectArray[i*6+0]+StrRectArray[i*6+4]+x, StrRectArray[i*6+1]+mPy+y+StrRectArray[i*6+5]*newlineoffset_y, str[i],color
+						,opa, aa, shadowlevel, shadowcolor, shadowwidth, shadowofsx, shadowofsy);
+	}
+}
+
+// クリック防止用等のレイヤー
+class MaskLayer extends WF_Layer
+{
+	var window;
+	function MaskLayer(win,par)
+	{
+		this.window = win;
+		super.WF_Layer(win,par);
+		hasImage = false;
+		visible = false;
+		setSize(window.primaryLayer.width,window.primaryLayer.height);
+	}
+
+	property visible
+	{
+		setter(v)
+		{
+			if(v)
+			{
+				hitThreshold = 0;
+				super.visible = true;
+				(window.focusedLayer).releaseCapture() if (window.focusedLayer) !== null;
+			}
+			else
+			{
+				hitThreshold = 256;
+				super.visible = false;
+			}
+		}
+
+		getter(){ return super.visible;}
+	}
+}
+
+class cAffineManager
+{
+// private : 
+
+	var window;
+	var parent;
+
+	var AffineData = %[
+		rotate	: 0,	// 回転角度
+		zoomx 	: 100,	// X方向ズーム値
+		zoomy	: 100,	// Y方向ズーム値
+		centerx	: 0,	// 中心点X
+		centery : 0,		// 中心点Y
+		sizefixity:true // レイヤーサイズ固定式のアフィン変換かどうか
+		];
+
+// public : 
+
+	property sizefixity
+	{
+		setter(v){ AffineData["sizefixity"]=v;}
+		getter(){ return AffineData["sizefixity"];}
+	}
+
+	property rotate
+	{
+		setter(v){ AffineData["rotate"] = v; }
+		getter(){ return AffineData["rotate"]; }
+	}
+
+	property zoomx
+	{
+		setter(v){ AffineData["zoomx"] = v; }
+		getter(){ return AffineData["zoomx"]; }
+	}
+	property zoomy
+	{
+		setter(v){ AffineData["zoomy"] = v; }
+		getter(){ return AffineData["zoomy"]; }
+	}
+	property zoom
+	{
+		setter(v){ zoomx = zoomy = v; }
+		getter(){ return zoomx; }
+	}
+
+	property centerx
+	{
+		setter(v){ AffineData["centerx"] = v; }
+		getter(){ return AffineData["centerx"]; }
+	}
+	property centery
+	{
+		setter(v){ AffineData["centery"] = v; }
+		getter(){ return AffineData["centery"]; }
+	}
+
+	function finalize()
+	{
+		invalidate AffineData;
+	}
+	function cAffineManager(f_win,f_par)
+	{
+		this.window = f_win;
+		this.parent = f_par;
+	}
+
+	// 初期化
+	function clear()
+	{
+		AffineData["rotate"] = 0;
+		AffineData["zoomx"] = 100;
+		AffineData["zoomy"] = 100;
+		AffineData["centerx"] = 0;
+		AffineData["centery"] = 0;
+	}
+
+	// アフィン描画が必要かどうか
+	function GetDrawFlag()
+	{
+		if( AffineData["rotate"] == 0 &&
+			AffineData["zoomx"] == 100 &&
+			AffineData["zoomy"] == 100) /*&&
+			AffineData["centerx"] == 0 &&
+			AffineData["centery"] == 0 )*/
+		{
+			return false;
+		}
+
+		return true;
+	}
+
+	// アフィン描画
+	function Draw(drawLay,targetLay,f_x=0,f_y=0)
+	{
+		// まずはラジアンを計算
+		var rad = rotate * 0.0174532925199433;
+		// サインとコサインだすよ
+		var sinv_t = Math.sin(rad);
+		var cosv_t = Math.cos(rad);
+
+		var cx = AffineData["centerx"];
+		var cy = AffineData["centery"];
+
+		var a,b,c,d,e,f,g,h;
+		var Afx,Afy;
+		var adx,ady;
+		var t_imwidth = *(&(global.Layer.imageWidth incontextof targetLay));
+		var t_imheight = *(&(global.Layer.imageHeight incontextof targetLay));
+
+		var _zoomx = AffineData["zoomx"]/100;
+		var _zoomy = AffineData["zoomy"]/100;
+
+		// 1点目- x,y
+		a = b= 0;
+		// 2点目- x
+		c = (t_imwidth * cosv_t)*_zoomx;
+		// 2点目- y
+		d = (t_imwidth * sinv_t)*_zoomy;
+		// 3点目- x
+		e = -(t_imheight * sinv_t)*_zoomx;
+		// 3点目- y
+		f = (t_imheight * cosv_t)*_zoomy;
+		// 自動のはずだけど4点目もだす
+		// 4点目- x
+		g = c + e;
+		// 4点目- y
+		h = d + f;
+
+		//a,c,e,g
+		adx = (a < c)	? a   : c;
+		adx = (adx < e)	? adx : e;
+		adx = (adx < g)	? adx : g;
+		adx = -adx;
+
+		//b,d,f,h
+		ady = (b < d)	? b   : d;
+		ady = (ady < f)	? ady : f;
+		ady = (ady < h)	? ady : h;
+		ady = -ady;
+
+		a += adx;
+		b += ady;
+
+		c += adx;
+		d += ady;
+
+		e += adx;
+		f += ady;
+
+		// オフセット用座標位置算出
+		Afx = (cx*cosv_t - cy*sinv_t)*_zoomx;
+		Afy = (cx*sinv_t + cy*cosv_t)*_zoomy;
+
+		var PosX = cx-Afx-adx;
+		var PosY = cy-Afy-ady;
+
+		if( AffineData["sizefixity"] )
+		{
+			// まわしてみるよ
+			drawLay.affineCopy(targetLay, 0, 0, t_imwidth, t_imheight,
+			false,
+			a-0.5+PosX,b-0.5+PosY,
+			c-0.5+PosX,d-0.5+PosY,
+			e-0.5+PosX,f-0.5+PosY,
+			stFastLinear|stRefNoClip, true);
+		}
+		else
+		{
+			// 今のサイズに入りきらなかったらでかくする
+			// 予備として*magin分でかく
+			var w = Math.ceil( Math.abs(c) + Math.abs(e) );
+			var h = Math.ceil( Math.abs(d) + Math.abs(f) );
+
+			(global.Layer.setImageSize incontextof drawLay)( (w == 0) ? 1 : w,(h == 0) ? 1 : h);
+			(global.Layer.setSize incontextof drawLay)(w,h);
+
+			// 位置セット
+			(global.Layer.setPos incontextof drawLay)(PosX+f_x,PosY+f_y);
+
+			drawLay.affineCopy(targetLay, 0, 0, t_imwidth, t_imheight,
+			false,
+			a-0.5,b-0.5,
+			c-0.5,d-0.5,
+			e-0.5,f-0.5,
+			stFastLinear|stRefNoClip, true);
+		}
+	}
+
+	function assignStruct(src_cAffineMGR)
+	{
+		(Dictionary.assignStruct incontextof AffineData)(src_cAffineMGR.AffineData);
+	}
+
+	// assignStructに処理とばす
+	function assign(src_cAffineMGR)
+	{
+		assignStruct(src_cAffineMGR);
+	}
+
+	function restore(data)
+	{
+		(Dictionary.assignStruct incontextof AffineData)(data);
+	}
+
+	var _storedata_Affine = new Dictionary();
+	function store()
+	{
+		(Dictionary.assignStruct incontextof _storedata_Affine)(AffineData);
+		return _storedata_Affine;
+	}
+}
+
+// エフェクト管理マネジメント
+class cEffectManager
+{
+// private
+	var EffectArray = new Array();
+	var CashLayer=void; // キャッシュ用レイヤー
+	var window;
+	var parent;
+
+// public
+
+	function finalize()
+	{
+		invalidate EffectArray;
+		clearCash();
+	}
+	function cEffectManager(f_win,f_par)
+	{
+		this.window = f_win;
+		this.parent = f_par;
+	}
+
+	function dmdraw()
+	{
+		if(EffectArray.count <= 0){ dm("Effectなし"); return; }
+		dmlist(EffectArray);
+	}
+
+	// 添字のエフェクト名を得る
+	function GetName(f_No)
+	{
+		var cnt = EffectArray.count;
+		if( cnt < f_No )
+			return void;
+
+		return EffectArray[f_No]["name"];
+	}
+	// 添字のエフェクトデータを得る
+	function GetData(f_No)
+	{
+		var cnt = EffectArray.count;
+		if( cnt < f_No )
+			return void;
+
+		return EffectArray[f_No]["data"];
+	}
+
+	// 要素の削除
+	function erase(f_effectname)
+	{
+		var cnt = EffectArray.count;
+		for(var i =0; i < cnt; i++)
+		{
+			if( EffectArray[i]["name"] == f_effectname )
+			{
+				EffectArray.erase(i);
+				break;
+			}
+		}
+	}
+
+	// 要素の全削除
+	function clear()
+	{
+		EffectArray.clear();
+		clearCash();
+	}
+
+	// 要素の追加
+	// 登録エフェクト名と要素
+	function add(f_effectname,args*)
+	{
+		var cnt = EffectArray.count;
+		for(var i=0; i < cnt; i++)
+		{
+			if( EffectArray[i]["name"] == f_effectname )
+			{
+				// 名前は同じだったのでデータ内容を比較してみる
+				if( args.count == EffectArray[i]["data"].count )
+				{
+					var tmp_Differ= false;
+					for(var t=0; t < EffectArray[i]["data"].count;t++)
+					{
+						if( args[t] != EffectArray[i]["data"][t] )
+						{
+							tmp_Differ = true; // 違いがあった
+							break;
+						}
+					}
+					if( !tmp_Differ ) return;
+				}
+				erase(f_effectname);
+				break;
+			}
+		}
+
+		var j = EffectArray.add(new Dictionary());
+		EffectArray[j]["name"] = f_effectname;
+		EffectArray[j]["data"] = new Array();
+		EffectArray[j]["data"].assignStruct(args);
+	}
+
+	function restore(data)
+	{
+		// コピーします
+		EffectArray.assignStruct(data);
+	}
+
+	var _storedata_Effect = new Array();
+	function store()
+	{
+		( Array.assignStruct incontextof _storedata_Effect)(EffectArray);
+		return _storedata_Effect;
+	}
+
+	// assignStructに処理とばす
+	function assign(src_cEffectMGR)
+	{
+		assignStruct(src_cEffectMGR);
+	}
+
+	function clearCash()
+	{
+		if( CashLayer !== void )
+		{
+			invalidate CashLayer;
+			CashLayer = void;
+		}
+	}
+
+	function assignStruct(src_cEffectMGR)
+	{
+		// コピーします
+		EffectArray.assignStruct(src_cEffectMGR.EffectArray);
+
+		if( src_cEffectMGR.CashLayer !== void )
+		{
+			if( CashLayer === void )
+			{
+				CashLayer = new Layer(window,parent);
+				CashLayer.visible=false;
+				CashLayer.name="Effect Cash";
+				CashLayer.EffectData = new Array();
+			}
+			CashLayer.assignImages(src_cEffectMGR.CashLayer);
+			(Array.assignStruct incontextof CashLayer.EffectData)(src_cEffectMGR.CashLayer.EffectData);
+		}
+		else
+		{
+			if( CashLayer !== void )
+			{
+				invalidate CashLayer;
+				CashLayer = void;
+			}
+		}
+	}
+
+	// 渡された名前のエフェクトが有効かどうかを調べる
+	function CheckEnabled(f_effectname="")
+	{
+		var cnt=EffectArray.count;
+		while(cnt--)
+		{
+			if( EffectArray[cnt]["name"] == f_effectname )
+				return true;
+		}
+
+		return false;
+	}
+
+	function Draw(drawLay)
+	{
+		if( EffectArray.count == 0 ) return; // 処理する必要なし！
+
+		if( CashLayer === void )
+		{
+			CashLayer = new Layer(window,parent);
+			CashLayer.visible=false;
+			CashLayer.name="Effect Cash";
+			CashLayer.EffectData = new Array();
+		}
+
+		// キャッシュと今回のデータ配列を比較
+		if( !Scripts.equalStructNumericLoose(EffectArray,CashLayer.EffectData) )
+		{ // 新しい
+			var func_args;
+			var funcpoint;
+			var cnt = this.EffectArray.count;
+			for(var i=0; i < cnt; i++)
+			{
+				funcpoint = void; // 関数ポインタ
+				func_args = GetData(i); // 引数配列
+				switch( GetName(i) )
+				{
+					case "fillOperateRect":
+						funcpoint = drawLay.fillOperateRect;
+						break;
+					case "boxBlur":
+						funcpoint = drawLay.doBoxBlur;
+						break;
+					case "adjustGamma":
+					case "invert":
+						funcpoint = drawLay.adjustGamma;
+						break;
+					case "sepia":
+						drawLay.doGrayScale(); // セピアにするにはまずグレイに！
+						funcpoint = drawLay.adjustGamma;
+						break;
+					case "light":
+						funcpoint = drawLay.light;
+						break;
+					case "gray":
+						funcpoint = drawLay.doGrayScale;
+						break;
+					case "noise":
+						funcpoint = drawLay.noise;
+						break;
+				}
+
+				if( funcpoint !== void )
+				{
+					if( func_args !== void )
+						funcpoint(func_args*); // 実行
+					else
+						funcpoint();
+				}
+			}
+			// キャッシュ登録
+			CashLayer.assignImages(drawLay);
+			(Array.assignStruct incontextof CashLayer.EffectData)(EffectArray);
+		}
+		else
+		{ // キャッシュと内容が同じ
+			drawLay.assignImages(CashLayer);
+		}
+	}
+}
+
+// カメラ管理マネジメント
+class cCameraManager
+{
+// private
+	var sLayer=void;
+	var CameraData = %[
+		_left	: 0,	// 基準座標x
+		_top 	: 0,	// 基準座標y
+		Px		: 0,	// カメラ位置x
+		Py		: 0,	// カメラ位置y
+		CalcPx	: 0,	// 強度も計算に入れたカメラ位置x
+		CalcPy	: 0,	// 強度も計算に入れたカメラ位置y
+		offsetPx: 0,	// アフィン等による誤差値
+		offsetPy: 0,
+		zoom	: 100,	// カメラ拡大率
+		rotate	: 0,	// カメラ回転率
+		strength : 1	// 移動強度(1で1倍)
+		];
+
+// public
+
+	property strength
+	{
+		getter(){ return CameraData["strength"]; }
+	}
+
+	property rotate
+	{
+		setter(v){ CameraData["rotate"] = v; }
+		getter(){ return CameraData["rotate"]; }
+	}
+
+	property zoom
+	{
+		setter(v){ CameraData["zoom"] = v; }
+		getter(){ return CameraData["zoom"]; }
+	}
+
+	property offsetPx
+	{
+		setter(v){ CameraData["offsetPx"] = (int)v; }
+		getter(){ return CameraData["offsetPx"]; }
+	}
+	property offsetPy
+	{
+		setter(v){ CameraData["offsetPy"] = (int)v; }
+		getter(){ return CameraData["offsetPy"]; }
+	}
+
+	property left
+	{
+		setter(v){ CameraData["_left"] = (int)v; UpdatePosition(); }
+		getter(){ return CameraData["_left"]; }
+	}
+	property top
+	{
+		setter(v){ CameraData["_top"] = (int)v; UpdatePosition(); }
+		getter(){ return CameraData["_top"]; }
+	}
+
+	property px
+	{
+		setter(v)
+		{
+			CameraData["Px"] = v;
+			CameraData["CalcPx"] = (CameraData["Px"]*CameraData["strength"]);
+			UpdatePosition();
+		}
+		getter(){ return CameraData["Px"]; }
+	}
+	property py
+	{
+		setter(v)
+		{
+			CameraData["Py"] = v;
+			CameraData["CalcPy"] = (CameraData["Py"]*CameraData["strength"]);
+			UpdatePosition();
+		}
+		getter(){ return CameraData["Py"]; }
+	}
+
+	property cpx
+	{
+		getter(){ return CameraData["CalcPx"]; }
+	}
+	property cpy
+	{
+		getter(){ return CameraData["CalcPy"]; }
+	}
+
+	function finalize()
+	{
+		sLayer = void;
+		invalidate CameraData;
+	}
+	function cCameraManager(f_Layer)
+	{
+		// コンストラクタなし
+		sLayer = f_Layer;
+	}
+
+	function setPos(f_left,f_top)
+	{
+		CameraData["_left"] = (int)f_left;
+		CameraData["_top"] = (int)f_top;
+		UpdatePosition();
+	}
+
+	// カメラ位置を指定する
+	function setPosition(x,y)
+	{
+		CameraData["Px"] = x;
+		CameraData["Py"] = y;
+		CameraData["CalcPx"] = (CameraData["Px"]*CameraData["strength"]);
+		CameraData["CalcPy"] = (CameraData["Py"]*CameraData["strength"]);
+
+		UpdatePosition();
+	}
+
+	// 移動補正強度
+	function setCameraInfluence(f_str)
+	{
+		CameraData["strength"] = f_str;
+		CameraData["CalcPx"] = (CameraData["Px"]*CameraData["strength"]);
+		CameraData["CalcPy"] = (CameraData["Py"]*CameraData["strength"]);
+	}
+
+	// 位置更新
+	function UpdatePosition()
+	{
+		if( sLayer === void ) return;
+
+		var Px = CameraData["_left"]+CameraData["offsetPx"]-cpx;
+		var Py = CameraData["_top"]+CameraData["offsetPy"]-cpy;
+
+		(global.Layer.setPos incontextof sLayer)(Px,Py);
+	}
+
+	function GetUpdate()
+	{
+		if(CameraData["zoom"] != 100 || CameraData["rotate"] != 0)
+			return true;
+		else
+			return false;
+	}
+
+	function clear()
+	{
+		if( sLayer === void ) return;
+		CameraData["Px"]=0;
+		CameraData["Py"]=0;
+		CameraData["CalcPx"]=0;
+		CameraData["CalcPy"]=0;
+		CameraData["zoom"]=100;
+		CameraData["rotate"]=0;
+		//CameraData["strength"]=1; // 補正強度はクリアされないので注意
+		UpdatePosition();
+	}
+
+	// assignStructに処理とばす
+	function assign(src_cCameraMGR)
+	{
+		assignStruct(src_cCameraMGR);
+	}
+
+	function assignStruct(src_cCameraMGR)
+	{
+		// コピーします
+		(Dictionary.assignStruct incontextof CameraData)(src_cCameraMGR.CameraData);
+		UpdatePosition();
+	}
+
+	var _storedata_CameraData = new Dictionary();
+	function store()
+	{
+		(Dictionary.assignStruct incontextof _storedata_CameraData)(CameraData);
+		return _storedata_CameraData;
+	}
+	function restore(data)
+	{
+		(Dictionary.assignStruct incontextof CameraData)(data);
+		UpdatePosition();
+	}
+}
+
+class ExLayer extends WF_Layer
+{
+	var EffectMGR;	// エフェクト管理用
+	var AffineMGR;	// アフィン変換管理用
+	var CameraMGR;	// カメラ管理用
+	var BaseLayer;	// 基本の画像データ保持用レイヤー
+	var tmpLayer;	// 一時利用用レイヤー(現在はwindowの一時レイヤーを使うようにしている)
+	var _debugrect = false;
+
+	// サイズ固定式アフィン変換かどうか
+	property sizefixity
+	{
+		setter(v){ AffineMGR.sizefixity=v;}
+		getter(){ return AffineMGR.sizefixity;}
+	}
+
+	property rotate
+	{
+		setter(v){ AffineMGR.rotate = v; update(0,0,1,1); }
+		getter(){ return AffineMGR.rotate; }
+	}
+	property zoomx
+	{
+		setter(v){ AffineMGR.zoomx = v; update(0,0,1,1); }
+		getter(){ return AffineMGR.zoomx; }
+	}
+	property zoomy
+	{
+		setter(v){ AffineMGR.zoomy = v; update(0,0,1,1); }
+		getter(){ return AffineMGR.zoomy; }
+	}
+	property zoom
+	{
+		setter(v){ AffineMGR.zoom = v; update(0,0,1,1); }
+		getter(){ return AffineMGR.zoom; }
+	}
+	property centerx
+	{
+		setter(v){ AffineMGR.centerx = v; update(0,0,1,1); }
+		getter(){ return AffineMGR.centerx; }
+	}
+	property centery
+	{
+		setter(v){ AffineMGR.centery = v; update(0,0,1,1); }
+		getter(){ return AffineMGR.centery; }
+	}
+
+	property s_left
+	{
+		setter(v){ super.left=v;}
+		getter(){ return super.left;}
+	}
+	property s_top
+	{
+		setter(v){super.top=v;}
+		getter(){ return super.top;}
+	}
+
+	property left
+	{
+		setter(v)
+		{
+			CameraMGR.left = v;
+			if(CameraMGR.GetUpdate())update(0,0,1,1);
+		}
+		getter(){ return CameraMGR.left; }
+	}
+	property top
+	{
+		setter(v)
+		{
+			CameraMGR.top = v;
+			if(CameraMGR.GetUpdate())update(0,0,1,1);
+		}
+		getter(){ return CameraMGR.top; }
+	}
+
+	property cameraZoom
+	{
+		setter(v){ CameraMGR.zoom = v; update(0,0,1,1); }
+		getter(){ return CameraMGR.zoom; }
+	}
+	property cameraRotate
+	{
+		setter(v){ CameraMGR.rotate = v; update(0,0,1,1); }
+		getter(){ return CameraMGR.rotate; }
+	}
+
+	property cameraLeft
+	{
+		setter(v){ CameraMGR.px = v; if(CameraMGR.GetUpdate())update(0,0,1,1); }
+		getter(){ return CameraMGR.px; }
+	}
+	property cameraTop
+	{
+		setter(v){ CameraMGR.py = v; if(CameraMGR.GetUpdate())update(0,0,1,1); }
+		getter(){ return CameraMGR.py; }
+	}
+
+	function finalize()
+	{
+		invalidate EffectMGR;
+		invalidate AffineMGR;
+		invalidate CameraMGR;
+		invalidate BaseLayer;
+		super.finalize();
+	}
+
+	function ExLayer(f_win,f_par)
+	{
+		super.WF_Layer(f_win,f_par);
+		EffectMGR = new cEffectManager(window,this);
+		AffineMGR = new cAffineManager(window,this);
+		CameraMGR = new cCameraManager(this);
+
+		BaseLayer = new global.Layer(f_win,this);
+		BaseLayer.visible=false;
+		BaseLayer.name = "画像名[なし]";
+
+		tmpLayer = f_win.tmpLayer;
+	}
+
+	// ベース画像が変わった時に呼び出されるイベント
+	function onChangeBaseImage()
+	{
+		EffectMGR.clearCash();
+	}
+
+	function loadImages(f_filename)
+	{
+		if( f_filename === void || f_filename == "" ) return;
+		ImageFileName = f_filename;
+		BaseLayer.loadImages(f_filename);
+		BaseLayer.name = "画像名[ "+ImageFileName+" ]";
+		onChangeBaseImage();
+		update(0,0,1,1);
+	}
+
+	function setSizeToImageSize()
+	{
+		this.setSize(BaseLayer.imageWidth,BaseLayer.imageHeight);
+	}
+	function setCenterToImage()
+	{
+		this.centerx = BaseLayer.imageWidth>>1;
+		this.centery = BaseLayer.imageHeight>>1;
+	}
+
+	function setPos(f_left, f_top, f_width=void, f_height=void)
+	{
+		f_left = (int)f_left;
+		f_top = (int)f_top;
+
+		super.setPos(...);
+		CameraMGR.setPos(f_left,f_top);
+
+		if(CameraMGR.GetUpdate())
+			update(0,0,1,1);
+	}
+	// カメラポジションを設定
+	function setPosCamera(x,y)
+	{
+		CameraMGR.setPosition(x,y);
+		update(0,0,1,1);
+	}
+	// カメラの移動強度を設定
+	function setCameraInfluence(f_str)
+	{
+		CameraMGR.setCameraInfluence(f_str);
+	}
+
+	function clear()
+	{
+		EffectMGR.clear();
+		AffineMGR.clear();
+		CameraMGR.offsetPx=0;
+		CameraMGR.offsetPy=0;
+		//CameraMGR.clear(); // カメラは全体に対してなので1つのレイヤーのみクリアすると他とずれる。クリアするなら設定レイヤ全部一気にね
+		this.setSize(0,0);
+		this.fillRect(0,0,this.imageWidth,this.imageHeight,0x00000000);
+		ImageFileName = void;
+		BaseLayer.fillRect(0,0,BaseLayer.imageWidth,BaseLayer.imageHeight,0x00000000);
+		BaseLayer.name = "画像名[なし]";
+		onChangeBaseImage();
+
+		this.assignImages(BaseLayer);
+	}
+
+	function assignComp(src)
+	{
+		absolute = src.absolute;
+		visible = src.visible;
+		opacity = src.opacity;
+		enabled = src.enabled;
+
+		assignImages(src);
+		setSize(src.width, src.height);
+		setImageSize(src.imageWidth,src.imageHeight);
+		setImagePos(src.imageLeft,src.imageTop);
+
+		BaseLayer.assignImages(src.BaseLayer);
+		BaseLayer.setSize(src.BaseLayer.width,src.BaseLayer.height);
+		BaseLayer.setImageSize(src.BaseLayer.imageWidth,src.BaseLayer.imageHeight);
+		BaseLayer.setImagePos(src.BaseLayer.imageLeft,src.BaseLayer.imageTop);
+		BaseLayer.name = src.BaseLayer.name;
+		ImageFileName = src.ImageFileName;
+
+		EffectMGR.assign(src.EffectMGR);
+		AffineMGR.assign(src.AffineMGR);
+		CameraMGR.assign(src.CameraMGR); // ここでPos更新
+
+		update(0,0,1,1);
+	}
+
+	function onPaint()
+	{
+		if( ImageFileName === void ) return;
+
+		tmpLayer.hasImage=true;
+
+		// コピー
+		tmpLayer.assignImages(BaseLayer);
+		setSize(tmpLayer.imageWidth,tmpLayer.imageHeight);
+
+		// エフェクト適用
+		EffectMGR.Draw(tmpLayer);
+
+		if( AffineMGR.GetDrawFlag() )
+		{ // アフィン変換必要
+			var tmpPx = super.left;
+			var tmpPy = super.top;
+
+			if(CameraMGR.zoom != 100 || CameraMGR.rotate != 0)
+			{ // カメラ変換が必要
+
+				// まずはアフィン変換
+				AffineMGR.Draw(this,tmpLayer,left-CameraMGR.cpx,top-CameraMGR.cpy);
+				tmpLayer.assignImages(this);
+
+				// 現在の値を保存しとく
+				var tmpx = centerx;
+				var tmpy = centery;
+				var tmpz = zoom;
+				var tmpr = rotate;
+
+				// カメラ処理に必要な各パラーメータ演算
+				AffineMGR.centerx = (global.WINDOW_SIZE_WIDTH>>1)-super.left; // ローカル中心点計算
+				AffineMGR.centery = (global.WINDOW_SIZE_HEIGHT>>1)-super.top;
+				AffineMGR.zoom=100+((CameraMGR.zoom-100)*(CameraMGR.strength/2));
+				AffineMGR.rotate =CameraMGR.rotate;
+
+				// カメラ変換
+				AffineMGR.Draw(this,tmpLayer,super.left,super.top);
+
+				// 元の値に戻す
+				AffineMGR.centerx=tmpx;
+				AffineMGR.centery=tmpy;
+				AffineMGR.zoom=tmpz;
+				AffineMGR.rotate=tmpr;
+			}
+			else
+			{
+				AffineMGR.Draw(this,tmpLayer,left-CameraMGR.cpx,top-CameraMGR.cpy);
+			}
+
+			// カメラのオフセット値更新
+			CameraMGR.offsetPx += super.left-tmpPx;
+			CameraMGR.offsetPy += super.top-tmpPy;
+
+			CameraMGR.UpdatePosition();
+		}
+		else
+		{
+			// レイヤー移動式のアフィンをかけた後にアフィン無効にするとPosがズレてる対策
+			CameraMGR.offsetPx=CameraMGR.offsetPy=0;
+			CameraMGR.UpdatePosition(); // カメラ更新
+			if(CameraMGR.zoom != 100 || CameraMGR.rotate != 0)
+			{ // カメラ変換
+				var tmpPx = super.left;
+				var tmpPy = super.top;
+
+				super.left = left - CameraMGR.cpx;
+				super.top = top - CameraMGR.cpy;
+
+				var tmpx = centerx;
+				var tmpy = centery;
+				var tmpz = zoom;
+				var tmpr = rotate;
+
+				AffineMGR.centerx = (global.WINDOW_SIZE_WIDTH>>1)-super.left;
+				AffineMGR.centery = (global.WINDOW_SIZE_HEIGHT>>1)-super.top;
+				AffineMGR.zoom=100+((CameraMGR.zoom-100)*(CameraMGR.strength/2));//CameraMGR.zoom;//
+				AffineMGR.rotate =CameraMGR.rotate;
+
+				AffineMGR.Draw(this,tmpLayer,super.left,super.top);
+
+				AffineMGR.centerx=tmpx;
+				AffineMGR.centery=tmpy;
+				AffineMGR.zoom=tmpz;
+				AffineMGR.rotate=tmpr;
+
+				// カメラのオフセット値更新
+				CameraMGR.offsetPx += super.left-tmpPx;
+				CameraMGR.offsetPy += super.top-tmpPy;
+
+				CameraMGR.UpdatePosition(); // カメラ更新
+			}
+			else
+			{
+				// 変換不必要なのでコピー
+				this.assignImages(tmpLayer);
+			}
+		}
+
+		tmpLayer.hasImage=false;
+
+		// デバッグ用のれくと
+		//if(_debugrect)
+		/*{
+			this.fillRect(0,0,2,this.height,0xFF00FF00);
+			this.fillRect(0,0,this.width,2,0xFF00FF00);
+			this.fillRect(0,this.height-2,this.width,2,0xFF00FF00);
+			this.fillRect(this.width-2,0,2,this.height,0xFF00FF00);
+		}*/
+	}
+
+	function clearEffect()
+	{
+		EffectMGR.clear();
+		update(0,0,1,1); // 更新
+	}
+	function clearAffine()
+	{
+		AffineMGR.clear();
+		CameraMGR.offsetPx=CameraMGR.offsetPy=0;
+		CameraMGR.UpdatePosition(); // カメラ更新
+		update(0,0,1,1); // 更新
+	}
+	function clearCamera()
+	{
+		CameraMGR.clear();
+		CameraMGR.offsetPx=CameraMGR.offsetPy=0;
+		super.left = left; // カメラPos無効化
+		super.top = top;
+		update(0,0,1,1); // 更新
+	}
+
+	function fillOperateRect(color, mode)
+	{
+		// エフェクトマネージャーへの登録
+		EffectMGR.add("fillOperateRect",color,mode);
+		update(0,0,1,1); // 更新
+	}
+
+	function adjustGamma(rgamma=1.0, rfloor=0, rceil=255, ggamma=1.0, gfloor=0, gceil=255, bgamma=1.0, bfloor=0, bceil=255)
+	{
+		// エフェクトマネージャーへの登録
+		EffectMGR.add("adjustGamma",rgamma, rfloor, rceil, ggamma, gfloor, gceil, bgamma, bfloor, bceil);
+		update(0,0,1,1); // 更新
+	}
+
+	function doBoxBlur(xblur=1,yblur=1)
+	{
+		// エフェクトマネージャーへの登録
+		EffectMGR.add("boxBlur",xblur,yblur);
+		update(0,0,1,1); // 更新
+	}
+
+	function light(brightness, contrast)
+	{
+		// エフェクトマネージャーへの登録
+		EffectMGR.add("light",brightness,contrast);
+		update(0,0,1,1); // 更新
+	}
+
+	// 色の反転
+	function doInvert()
+	{
+		// エフェクトマネージャーへの登録
+		EffectMGR.add("invert",1.0, 255, 0, 1.0, 255, 0, 1.0, 255, 0);
+		update(0,0,1,1); // 更新
+	}
+
+	// セピア調に変更
+	function doSepia()
+	{
+		// エフェクトマネージャーへの登録
+		//EffectMGR.add("sepia",1.75, 0, 255, 1.25, 0, 255, 0.65, 0, 255);
+		//EffectMGR.add("sepia",1.55, 0, 255, 1.15, 0, 255, 0.55, 0, 255);
+		EffectMGR.add("sepia",1.45, 0, 255, 1.1, 0, 255, 0.68, 0, 255);
+		update(0,0,1,1); // 更新
+	}
+
+	// グレースケール変換
+	function doGray()
+	{
+		// エフェクトマネージャーへの登録
+		EffectMGR.add("gray");
+		update(0,0,1,1); // 更新
+	}
+
+	// ノイズ
+	function noise(level)
+	{
+		// エフェクトマネージャーへの登録
+		EffectMGR.add("noise",level);
+		update(0,0,1,1); // 更新
+	}
+
+	var _storedataEx = new Dictionary();
+	// レイヤーの情報を辞書配列にして返す
+	function store()
+	{
+		// ソースレイヤー情報
+		_storedataEx.imgLay_imagename = ImageFileName;
+
+		_storedataEx.effect_data = EffectMGR.store();
+		_storedataEx.affine_data = AffineMGR.store();
+		_storedataEx.camera_data = CameraMGR.store();
+
+		_storedataEx.absolute = absolute;
+		_storedataEx.opacity = opacity;
+		_storedataEx.enabled = enabled;
+		_storedataEx.hitThreshold = hitThreshold;
+		_storedataEx.name = name;
+		_storedataEx.visible = visible;
+		_storedataEx.left = super.left;
+		_storedataEx.top = super.top;
+
+		_storedataEx.width = width;
+		_storedataEx.height = height;
+
+		return _storedataEx;
+	}
+
+	// restoreしてonPaintが呼ばれる前に呼ばれるイベント
+	function onPaintToRestore(data){}
+
+	function restore(data)
+	{
+		clear();
+		clearCamera();
+		loadImages(data.imgLay_imagename);
+
+		absolute = data.absolute;
+		opacity = data.opacity;
+		enabled = data.enabled;
+		hitThreshold = data.hitThreshold;
+		name = data.name;
+		visible = data.visible;
+
+		setSize(data.width,data.height);
+
+		EffectMGR.restore(data.effect_data);
+		AffineMGR.restore(data.affine_data);
+		CameraMGR.restore(data.camera_data);
+
+		super.left = data.left;
+		super.top = data.top;
+
+		onPaintToRestore(data);
+
+		onPaint();
+	}
+}
+
+// チェインレイヤー対応
+// ADV使用レイヤーのベース
+class ADVBaseLayer extends ExLayer
+{
+	var _chainlayer = void;
+	var DrawChangeFlag = false;
+
+	property rotate
+	{
+		setter(v){ super.rotate = v; if(chainlayer!==void) chainlayer.rotate = v; }
+		getter(){ return super.rotate; }
+	}
+	property zoomx
+	{
+		setter(v){ super.zoomx = v; if(chainlayer!==void) chainlayer.zoomx = v; }
+		getter(){ return super.zoomx; }
+	}
+	property zoomy
+	{
+		setter(v){ super.zoomy = v; if(chainlayer!==void) chainlayer.zoomy = v; }
+		getter(){ return super.zoomy; }
+	}
+	property zoom
+	{
+		setter(v){ super.zoom = v; if(chainlayer!==void) chainlayer.zoom = v; }
+		getter(){ return super.zoom; }
+	}
+	property centerx
+	{
+		setter(v){ super.centerx = v; if(chainlayer!==void) chainlayer.centerx = v; }
+		getter(){ return super.centerx; }
+	}
+	property centery
+	{
+		setter(v){ super.centery = v; if(chainlayer!==void) chainlayer.centery = v; }
+		getter(){ return super.centery; }
+	}
+	property left
+	{
+		setter(v){ super.left = v; if(chainlayer!==void) chainlayer.left=v; }
+		getter(){ return super.left; }
+	}
+	property top
+	{
+		setter(v){ super.top = v; if(chainlayer!==void) chainlayer.top=v; }
+		getter(){ return super.top; }
+	}
+	property cameraZoom
+	{
+		setter(v){ super.cameraZoom = v; if(camerachainlayer!==void) camerachainlayer.cameraZoom=v; }
+		getter(){ return super.cameraZoom; }
+	}
+	property cameraRotate
+	{
+		setter(v){ super.cameraRotate = v; if(camerachainlayer!==void) camerachainlayer.cameraRotate=v; }
+		getter(){ return super.cameraRotate; }
+	}
+
+	property cameraLeft
+	{
+		setter(v){ super.cameraLeft = v; if(camerachainlayer!==void) camerachainlayer.cameraLeft=v; }
+		getter(){ return super.cameraLeft; }
+	}
+	property cameraTop
+	{
+		setter(v){ super.cameraTop = v; if(camerachainlayer!==void) camerachainlayer.cameraTop=v; }
+		getter(){ return super.cameraTop; }
+	}
+
+	var _camerachainlayer=void;
+	property camerachainlayer
+	{
+		setter(v)
+		{
+			_camerachainlayer = v;
+			if( v === void ) return;
+			v.setPosCamera(this.cameraLeft,this.cameraTop);
+			v.cameraZoom = this.cameraZoom;
+			v.cameraRotate = this.cameraRotate;
+		}
+        getter(){ return _camerachainlayer; }
+	}
+
+	// チェインレイヤー
+	property chainlayer
+	{
+		setter(v)
+		{
+			_chainlayer=v;
+			if(v === void) return;
+			v.setPos(this.left,this.top);
+			v.rotate = this.rotate;
+			v.zoomx = this.zoomx;
+			v.zoomy = this.zoomy;
+			v.blend = this.blend;
+		}
+        getter(){ return _chainlayer; }
+	}
+
+	function ADVBaseLayer(win,par)
+	{
+		super.ExLayer(...);
+	}
+
+	function setPos(left, top, width=void, height=void)
+	{
+		super.setPos(...);
+		if(chainlayer!==void)
+			chainlayer.setPos(...);
+	}
+	// カメラポジションを設定
+	function setPosCamera(x,y)
+	{
+		super.setPosCamera(x,y);
+
+		if(camerachainlayer!==void)
+			camerachainlayer.setPosCamera(x,y);
+	}
+
+	function clear()
+	{
+		chainlayer = camerachainlayer =void;
+		super.clear();
+	}
+
+	// ターゲットレイヤーとの描画内容比較
+	// 描画内容が同じならtrue,違うならfalse
+	function DrawingCompare(targetLay)
+	{
+		return ( targetLay.DrawChangeFlag == DrawChangeFlag );
+	}
+
+	// 複製
+	function assignComp(src)
+	{
+		src.DrawChangeFlag = DrawChangeFlag = false;
+
+		chainlayer = camerachainlayer = void;
+		super.assignComp(src);
+	}
+
+}
+
+
+class CHLayer extends ADVBaseLayer
+{
+	var CHData=void;
+	var CHLay=void;
+	var tmpLay=void;
+
+	function finalize()
+	{
+		invalidate CHLay if CHLay !== void;
+		invalidate tmpLay if tmpLay !== void;
+		super.finalize();
+	}
+
+	function CHLayer(win,par)
+	{
+		super.ADVBaseLayer(...);
+		CHLay = new global.WF_Layer(win,this);
+	}
+
+	function DrawSelect(f_AfiinFlag)
+	{
+		if(!f_AfiinFlag)
+		{
+			Draw(IMGLayer);	// アフィン関係に変更なし
+			// 差分の合成
+			if(CHData !== void)
+				this.copyRect(CHData["PosX"],CHData["PosY"],CHLay,0,0,CHLay.imageWidth,CHLay.imageHeight);
+		}
+		else
+		{
+			if(CHData !== void)
+			{
+				if(tmpLay === void)
+				{
+					tmpLay = new global.Layer(window,this);
+					tmpLay.name="一時作業用レイヤ";
+					tmpLay.visible=false;
+				}
+				tmpLay.assignImages(IMGLayer);
+				// 差分の合成
+				tmpLay.copyRect(CHData["PosX"],CHData["PosY"],CHLay,0,0,CHLay.imageWidth,CHLay.imageHeight);
+				AffineDraw(tmpLay);
+			}
+			else
+			{
+				AffineDraw(IMGLayer);
+			}
+		}
+	}
+
+	// 現在の画像を再度読み込む
+	// ブラー等の画像効果を無効にしたい場合に有効
+	function reload()
+	{
+		if( ImageFileName === void )
+			return;
+
+		if(CHData !== void)
+		{
+			CHLay.loadImages(CHData["this"],clNone);
+		}
+
+		super.reload();
+	}
+
+	function loadImages(image)
+	{
+		if( Storages.isExistentStorage(Storages.chopStorageExt(image)+".txt") )
+		{
+			CHData = Scripts.evalStorage(image+".txt");
+			CHData["this"] = image;
+			CHLay.loadImages(image,clNone);
+
+			if(ImageFileName === void || ImageFileName != CHData["basefile"])
+			{
+				ImageFileName = CHData["basefile"];
+				IMGLayer.loadImages(ImageFileName,clNone);
+			}
+		}
+		else
+		{
+			CHData = void;
+			if(ImageFileName === void || ImageFileName != image)
+			{
+				ImageFileName = image;
+				IMGLayer.loadImages(ImageFileName,clNone);
+			}
+		}
+
+		IMGLayer.useImage=true;
+
+		IMGLayer.loadImages(ImageFileName,clNone);
+
+		//_centerx = IMGLayer.imageWidth>>1;
+		//_centery = IMGLayer.imageHeight>>1;
+		IMGLayer.name = "画像名[ "+ImageFileName+" ]";
+		this.setSize(IMGLayer.imageWidth,IMGLayer.imageHeight);
+
+		update(0,0,1,1); // 更新
+	}
+
+	function clear()
+	{
+		super.clear();
+		CHLay.fillRect(0,0,CHLay.imageWidth,CHLay.imageHeight,0x00000000) if CHLay !== void;
+		CHData = void;
+	}
+
+	// ターゲットレイヤーとの描画内容比較
+	// 描画内容が同じならtrue,違うならfalse
+	function DrawingCompare(targetLay)
+	{
+		if(IMGLayer.useImage != targetLay.IMGLayer.useImage) return false;
+
+		if(ImageFileName != targetLay.ImageFileName) return false;
+
+		if(CHData === void)
+		{
+			if(targetLay.CHData !== void) return false;
+		}
+		else
+		{
+			if(targetLay.CHData === void) return false;
+			else if(CHData["this"] != targetLay.CHData["this"]) return false;
+			else if(CHData["basefile"] != targetLay.CHData["basefile"]) return false;
+		}
+
+		return true;
+	}
+
+	function assignComp(src)
+	{
+		if(src.CHData !== void)
+		{
+			this.CHData = %[];
+			this.CHData["this"] = src.CHData["this"];
+			this.CHData["basefile"] = src.CHData["basefile"];
+			this.CHData["PosX"] = src.CHData["PosX"];
+			this.CHData["PosY"] = src.CHData["PosY"];
+			CHLay.loadImages(src.CHData["this"],clNone);
+		}
+
+		super.assignComp(src);
+	}
+
+	// レイヤーの情報を辞書配列にして返す
+	var _storedata_CHData = new Dictionary();
+	function store()
+	{
+		var data = super.store();
+		data.CHData = void;
+		if(CHData !== void)
+		{
+			_storedata_CHData["this"] = CHData["this"];
+			_storedata_CHData["basefile"] = CHData["basefile"];
+			_storedata_CHData["PosX"] = CHData["PosX"];
+			_storedata_CHData["PosY"] = CHData["PosY"];
+			data.CHData = _storedata_CHData;
+		}
+
+		return data;
+	}
+
+	// storeで吐き出した辞書配列からレイヤーを復元する
+	function restore(data)
+	{
+		super.restore(data);
+
+		this.CHData = void;
+		if(data.CHData !== void)
+		{
+			this.CHData = %[];
+			this.CHData["this"] = data.CHData["this"];
+			this.CHData["basefile"] = data.CHData["basefile"];
+			this.CHData["PosX"] = data.CHData["PosX"];
+			this.CHData["PosY"] = data.CHData["PosY"];
+			CHLay.loadImages(data.CHData["this"],clNone);
+		}
+	}
+
+	function fillOperateRect(color, mode,target=void)
+	{
+		if(CHData !== void)
+			CHLay.fillOperateRect(color, mode,CHLay);
+
+		super.fillOperateRect(color, mode,target);
+	}
+
+	function adjustGamma(rgamma=1.0, rfloor=0, rceil=255, ggamma=1.0, gfloor=0, gceil=255, bgamma=1.0, bfloor=0, bceil=255)
+	{
+		if(CHData !== void)
+			CHLay.adjustGamma(...);
+
+		super.adjustGamma(...);
+	}
+
+	function doBoxBlur(xblur=1,yblur=1)
+	{
+		if(CHData !== void)
+			CHLay.doBoxBlur(...);
+
+		super.doBoxBlur(...);
+	}
+
+	function light(brightness, contrast)
+	{
+		if(CHData !== void)
+			CHLay.light(...);
+
+		super.light(...);
+	}
+}
+//============================================================================================
+
+class ExAnimeLayer extends ADVBaseLayer
+{
+	var AnimeTimer;
+
+	function finalize()
+	{
+		invalidate AnimeTimer;
+		super.finalize();
+	}
+
+	function ExAnimeLayer(win,par)
+	{
+		super.ADVBaseLayer(...);
+		AnimeTimer = new cAnimeTimer(BaseLayer);
+		AnimeTimer.onNextFrame = this.onNextFrame;
+	}
+
+	function loadImages(image)
+	{
+		super.loadImages(image);
+		AnimeTimer.Set(image);
+		AnimeTimer.Start();
+		this.setImagePos(BaseLayer.imageLeft,BaseLayer.imageTop);
+		this.setSize(BaseLayer.width,BaseLayer.height);
+	}
+
+	function onNextFrame()
+	{
+		AnimeTimer.setImage(this);
+	}
+
+	function onPaint()
+	{
+		super.onPaint();
+		if( AnimeTimer.AnimeData !== void )
+		{
+			this.setSize(AnimeTimer.SegmentPx,AnimeTimer.SegmentPy);
+			AnimeTimer.setImage(this);
+		}
+	}
+
+	function assignComp(src)
+	{
+		super.assignComp(src);
+		AnimeTimer.assignComp(src.AnimeTimer);
+	}
+
+	function clear()
+	{
+		AnimeTimer.clear();
+		super.clear();
+	}
+
+	function Start(){ AnimeTimer.Start(); }
+	function Stop(){ AnimeTimer.Stop(); }
+
+	function store()
+	{
+		var data = super.store();
+		data["Anime"] = AnimeTimer.store();
+
+		return data;
+	}
+
+	function onPaintToRestore(data)
+	{
+		AnimeTimer.restore(data["Anime"]);
+	}
+}
+
+// タグデータ(辞書配列)の保存に対応
+class ExBasicLayer extends ADVBaseLayer
+{
+	var tagdata = void; // タグデータ
+
+	function ExBasicLayer(win,par)
+	{
+		super.ADVBaseLayer(...);
+	}
+
+	function clear()
+	{
+		super.clear();
+		tagdata = void;
+	}
+
+	function assignComp(src)
+	{
+		super.assignComp(src);
+
+		tagdata=void;
+		if( src.tagdata !== void )
+		{
+			tagdata = new Dictionary();
+			(Dictionary.assignStruct incontextof tagdata)(src.tagdata);
+		}
+	}
+
+	// レイヤーの情報を辞書配列にして返す
+	var _storedata_tagdata = new Dictionary();
+	function store()
+	{
+		var data = super.store();
+
+		data.tagdata=void;
+		if(tagdata !== void)
+		{
+			(Dictionary.assignStruct incontextof _storedata_tagdata)(tagdata);
+			data.tagdata  = _storedata_tagdata;
+		}
+		return data;
+	}
+
+	// storeで吐き出した辞書配列からレイヤーを復元する
+	function onPaintToRestore(data)
+	{
+		if(data.tagdata !== void)
+		{
+			tagdata = new Dictionary();
+			(Dictionary.assignStruct incontextof tagdata)(data.tagdata);
+		}
+		else
+		{
+			tagdata=void;
+		}
+	}
+}
+
+
+
+// ■■■■■■■■■■■■カメラデバッグ用
+
+/*
+function testleft(v)
+{
+	var i;
+	for(i=0; i < LAYER_MAX_BG;i++)
+		win.fore["BG"][i].cameraLeft=v;
+	for(i=0; i < LAYER_MAX_CHARA;i++)
+		win.fore["CHARA"][i].cameraLeft=v;
+	for(i=0; i < LAYER_MAX_EV;i++)
+		win.fore["EV"][i].cameraLeft=v;
+	//for(i=0; i < LAYER_MAX_ANIME;i++)
+	//	win.back["AN"][i].cameraLeft = win.fore["AN"][i].cameraLeft=v;
+}
+function testtop(v)
+{
+	var i;
+	for(i=0; i < LAYER_MAX_BG;i++)
+		win.fore["BG"][i].cameraTop=v;
+	for(i=0; i < LAYER_MAX_CHARA;i++)
+		win.fore["CHARA"][i].cameraTop=v;
+	for(i=0; i < LAYER_MAX_EV;i++)
+		win.fore["EV"][i].cameraTop=v;
+	//for(i=0; i < LAYER_MAX_ANIME;i++)
+	//	win.back["AN"][i].cameraTop = win.fore["AN"][i].cameraTop=v;
+}
+function testzoom(v)
+{
+	var i;
+	for(i=0; i < LAYER_MAX_BG;i++)
+		win.fore["BG"][i].cameraZoom=v;
+	for(i=0; i < LAYER_MAX_CHARA;i++)
+		win.fore["CHARA"][i].cameraZoom=v;
+	//for(i=0; i < LAYER_MAX_EV;i++)
+	//	win.fore["EV"][i].cameraZoom=v;
+	//for(i=0; i < LAYER_MAX_ANIME;i++)
+	//	win.back["AN"][i].cameraZoom = win.fore["AN"][i].cameraZoom=v;
+}
+function testrotate(v)
+{
+	var i;
+	for(i=0; i < LAYER_MAX_BG;i++)
+		win.back["BG"][i].cameraRotate = win.fore["BG"][i].cameraRotate=v;
+	for(i=0; i < LAYER_MAX_CHARA;i++)
+		win.fore["CHARA"][i].cameraRotate=v;
+	//for(i=0; i < LAYER_MAX_EV;i++)
+	//	win.fore["EV"][i].cameraRotate=v;
+	//for(i=0; i < LAYER_MAX_ANIME;i++)
+	//	win.back["AN"][i].cameraRotate = win.fore["AN"][i].cameraRotate=v;
+}
+
+global.win2 = new MainWindow2(300,200,WINDOW_STYLE,GAME_NAME,0) if typeof global.win2 == "undefined";
+global.win2.slid1 = new SliderLayer( win2, win2.primaryLayer, 300, "横", "xx2_backlog_スライダーつまみ" );
+with(global.win2.slid1)
+{
+	.min=-200;
+	.max=200;
+	.pos = 0;
+	.visible = true;
+	.setPos(0, 0);
+	.onMovement = function(s_pos,value)
+	{
+		testleft(value);
+	};
+}
+global.win2.slid2 = new SliderLayer( win2, win2.primaryLayer, 300, "横", "xx2_backlog_スライダーつまみ" );
+with(global.win2.slid2)
+{
+	.min=-200;
+	.max=200;
+	.pos = 0;
+	.visible = true;
+	.setPos(0, 30);
+	.onMovement = function(s_pos,value)
+	{
+		testtop(value);
+	};
+}
+
+global.win2.slid3 = new SliderLayer( win2, win2.primaryLayer, 300, "横", "xx2_backlog_スライダーつまみ" );
+with(global.win2.slid3)
+{
+	.min=50;
+	.max=150;
+	.pos = 100;
+	.visible = true;
+	.setPos(0, 60);
+	.onMovement = function(s_pos,value)
+	{
+		testzoom(value);
+	};
+}
+global.win2.slid4 = new SliderLayer( win2, win2.primaryLayer, 300, "横", "xx2_backlog_スライダーつまみ" );
+with(global.win2.slid4)
+{
+	.min=0;
+	.max=360;
+	.pos = 0;
+	.visible = true;
+	.setPos(0, 90);
+	.onMovement = function(s_pos,value)
+	{
+		testrotate(value);
+	};
+}
+// Windowクラス
+class MainWindow2 extends Window
+{
+
+	var SoundMGR;
+
+	function finalize()
+	{
+		super.finalize();
+	}
+
+	function MainWindow2(f_width,f_height,f_style,f_titlename,MainFlag=false)
+	{
+		super.Window();
+
+		stayOnTop=true;
+
+		// ウィンドウ外見の調整
+		borderStyle = f_style;
+		innerSunken = false;
+		showScrollBars = false;
+
+		caption = System.title = f_titlename;
+
+		// プライマリーレイヤーの作成
+		add(new Layer(this,null));
+		with(primaryLayer)
+		{
+			.name = "Window基底レイヤー";
+			.setSize(f_width,f_height);
+			.visible = true;
+			.fillRect(0,0,1280,720,0x66FF00FF);
+			.font.height=35;
+			.drawText(0,0,"基底レイヤー",0xFFFFFF);
+			.onMouseEnter = function()
+			{
+				SoundMGR = win.SoundMGR;
+				//dminfo("プライマリー");
+			}incontextof this;
+		}
+		setInnerSize(f_width,f_height);
+
+		// ウィンドウを中心に持ってくる
+		this.setPos((System.screenWidth - this.width)\2,(System.screenHeight - this.height)\2);
+		// ウィンドウの表示
+		this.visible = true;
+	}
+
+	var tTestArray = new Array();
+
+	// ファイルドロップイベント
+	function onFileDrop(files)
+	{
+		if( files.count > 4 ){ dminfo("ファイルが5つ以上指定されています"); return; }
+
+		for(var i=0; i < files.count; i++)
+		{
+			var t = tTestArray.add(new Layer(this,primaryLayer));
+			with(tTestArray[t])
+			{
+				.visible = true;
+				.loadImages(files[i]);
+				.setSizeToImageSize();
+				.left = i*300;
+			}
+		}
+	}
+}
+*/

@@ -1432,12 +1432,18 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.model_var = tk.StringVar(value=self.options.api.model)
         self.model_var.trace_add("write", self._on_model_change)
         self.temperature_var = tk.DoubleVar(value=self.options.api.temperature)
+        self.top_p_var = tk.DoubleVar(value=1.0)
+        self.frequency_penalty_var = tk.DoubleVar(value=0.2)
+        self.presence_penalty_var = tk.DoubleVar(value=0.0)
         self.cost_cap_var = tk.DoubleVar(value=self.options.api.cost_cap)
 
         # Request settings
         self.timeout_var = tk.IntVar(value=self.options.request.timeout)
         self.retries_var = tk.IntVar(value=self.options.request.retries)
         self.rate_limit_var = tk.IntVar(value=self.options.request.rate_limit)
+        self.max_concurrent_var = tk.IntVar(value=3)
+        self.requests_per_second_enabled_var = tk.BooleanVar(value=False)
+        self.requests_per_second_var = tk.DoubleVar(value=1.0)
         self.temporary_backoff_mode_var = tk.StringVar(value="exponential")
         self.temporary_backoff_attempts_var = tk.IntVar(value=5)
         self.temporary_backoff_total_seconds_var = tk.IntVar(value=120)
@@ -2032,6 +2038,24 @@ class GlobalOptionsDialog(tk.Toplevel):
             foreground="gray",
         ).pack(side=tk.LEFT, padx=5)
 
+        # Number of Threads
+        threads_row = ttk.Frame(settings_frame)
+        threads_row.pack(fill=tk.X, pady=5)
+
+        ttk.Label(threads_row, text="Number of Threads:", width=18).pack(side=tk.LEFT)
+        ttk.Spinbox(
+            threads_row,
+            from_=1,
+            to=512,
+            textvariable=self.max_concurrent_var,
+            width=10,
+        ).pack(side=tk.LEFT, padx=5)
+        ttk.Label(
+            threads_row,
+            text="(parallel request strings per model, default: 3)",
+            foreground="gray",
+        ).pack(side=tk.LEFT, padx=5)
+
         # Rate limit
         rate_row = ttk.Frame(settings_frame)
         rate_row.pack(fill=tk.X, pady=5)
@@ -2040,10 +2064,40 @@ class GlobalOptionsDialog(tk.Toplevel):
         ttk.Spinbox(rate_row, from_=1, to=1000, textvariable=self.rate_limit_var, width=10).pack(side=tk.LEFT, padx=5)
         ttk.Label(rate_row, text="(1-1000, default: 60)", foreground="gray").pack(side=tk.LEFT, padx=5)
 
-        # Temperature (moved from API Provider section)
-        temp_row = ttk.Frame(settings_frame)
+        rps_row = ttk.Frame(settings_frame)
+        rps_row.pack(fill=tk.X, pady=5)
+
+        ttk.Label(rps_row, text="Rate Limit (req/sec):", width=18).pack(side=tk.LEFT)
+        ttk.Checkbutton(
+            rps_row,
+            text="Enable",
+            variable=self.requests_per_second_enabled_var,
+            command=self._update_rps_widget_state,
+        ).pack(side=tk.LEFT, padx=(0, 8))
+        self._rps_spin = ttk.Spinbox(
+            rps_row,
+            from_=0.01,
+            to=999.99,
+            increment=0.01,
+            textvariable=self.requests_per_second_var,
+            width=10,
+            format="%.2f",
+        )
+        self._rps_spin.pack(side=tk.LEFT, padx=5)
+        ttk.Label(
+            rps_row,
+            text="(optional dispatch cap, default: off)",
+            foreground="gray",
+        ).pack(side=tk.LEFT, padx=5)
+
+        # Model Tuning
+        think_frame = ttk.LabelFrame(panel, text="Model Tuning", padding=10)
+        think_frame.pack(fill=tk.X, pady=(0, 10))
+        self._think_frame = think_frame
+
+        temp_row = ttk.Frame(think_frame)
         temp_row.pack(fill=tk.X, pady=5)
-        self._temp_row = temp_row  # V8: stored for show/hide
+        self._temp_row = temp_row
 
         ttk.Label(temp_row, text="Temperature:", width=18).pack(side=tk.LEFT)
         self._temp_scale = ttk.Scale(
@@ -2060,16 +2114,109 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.temperature_var.trace_add("write", self._update_temp_label)
 
         self._temp_hint_label = ttk.Label(
-            settings_frame,
+            think_frame,
             text="Lower = more deterministic, Higher = more creative (0.0-2.0)",
             foreground="gray",
         )
         self._temp_hint_label.pack(anchor=tk.W, pady=(0, 5))
+        self._temp_warning_label = ttk.Label(think_frame, text="", foreground="#cc6600")
+        self._temp_warning_label.pack(anchor=tk.W, pady=(0, 5))
 
-        # Thinking Mode (Task 43.8)
-        think_frame = ttk.LabelFrame(panel, text="Thinking Mode", padding=10)
-        think_frame.pack(fill=tk.X, pady=(0, 10))
-        self._think_frame = think_frame  # V8: stored for show/hide
+        top_p_row = ttk.Frame(think_frame)
+        top_p_row.pack(fill=tk.X, pady=5)
+        self._top_p_row = top_p_row
+
+        ttk.Label(top_p_row, text="Top P:", width=18).pack(side=tk.LEFT)
+        self._top_p_scale = ttk.Scale(
+            top_p_row,
+            from_=0.0,
+            to=1.0,
+            variable=self.top_p_var,
+            orient=tk.HORIZONTAL,
+            length=200,
+        )
+        self._top_p_scale.pack(side=tk.LEFT, padx=5)
+        self._top_p_label = ttk.Label(top_p_row, text=f"{self.top_p_var.get():.2f}")
+        self._top_p_label.pack(side=tk.LEFT, padx=5)
+        self.top_p_var.trace_add("write", self._update_top_p_label)
+        self._top_p_hint_label = ttk.Label(
+            think_frame,
+            text="Lower narrows token sampling; keep near 1.0 unless you need tighter output.",
+            foreground="gray",
+        )
+        self._top_p_hint_label.pack(anchor=tk.W, pady=(0, 5))
+        self._top_p_warning_label = ttk.Label(think_frame, text="", foreground="#cc6600")
+        self._top_p_warning_label.pack(anchor=tk.W, pady=(0, 5))
+
+        freq_row = ttk.Frame(think_frame)
+        freq_row.pack(fill=tk.X, pady=5)
+        self._frequency_penalty_row = freq_row
+
+        ttk.Label(freq_row, text="Frequency Penalty:", width=18).pack(side=tk.LEFT)
+        self._frequency_penalty_scale = ttk.Scale(
+            freq_row,
+            from_=-2.0,
+            to=2.0,
+            variable=self.frequency_penalty_var,
+            orient=tk.HORIZONTAL,
+            length=200,
+        )
+        self._frequency_penalty_scale.pack(side=tk.LEFT, padx=5)
+        self._frequency_penalty_label = ttk.Label(
+            freq_row,
+            text=f"{self.frequency_penalty_var.get():.2f}",
+        )
+        self._frequency_penalty_label.pack(side=tk.LEFT, padx=5)
+        self.frequency_penalty_var.trace_add(
+            "write", self._update_frequency_penalty_label,
+        )
+        self._frequency_penalty_hint_label = ttk.Label(
+            think_frame,
+            text="Positive values discourage repetition; negatives boost recurrence.",
+            foreground="gray",
+        )
+        self._frequency_penalty_hint_label.pack(anchor=tk.W, pady=(0, 5))
+        self._frequency_penalty_warning_label = ttk.Label(
+            think_frame,
+            text="",
+            foreground="#cc6600",
+        )
+        self._frequency_penalty_warning_label.pack(anchor=tk.W, pady=(0, 5))
+
+        presence_row = ttk.Frame(think_frame)
+        presence_row.pack(fill=tk.X, pady=5)
+        self._presence_penalty_row = presence_row
+
+        ttk.Label(presence_row, text="Presence Penalty:", width=18).pack(side=tk.LEFT)
+        self._presence_penalty_scale = ttk.Scale(
+            presence_row,
+            from_=-2.0,
+            to=2.0,
+            variable=self.presence_penalty_var,
+            orient=tk.HORIZONTAL,
+            length=200,
+        )
+        self._presence_penalty_scale.pack(side=tk.LEFT, padx=5)
+        self._presence_penalty_label = ttk.Label(
+            presence_row,
+            text=f"{self.presence_penalty_var.get():.2f}",
+        )
+        self._presence_penalty_label.pack(side=tk.LEFT, padx=5)
+        self.presence_penalty_var.trace_add(
+            "write", self._update_presence_penalty_label,
+        )
+        self._presence_penalty_hint_label = ttk.Label(
+            think_frame,
+            text="Positive values encourage new tokens; negatives reinforce existing patterns.",
+            foreground="gray",
+        )
+        self._presence_penalty_hint_label.pack(anchor=tk.W, pady=(0, 5))
+        self._presence_penalty_warning_label = ttk.Label(
+            think_frame,
+            text="",
+            foreground="#cc6600",
+        )
+        self._presence_penalty_warning_label.pack(anchor=tk.W, pady=(0, 5))
 
         think_check = ttk.Checkbutton(
             think_frame, text="Enable Thinking Mode",
@@ -2121,6 +2268,9 @@ class GlobalOptionsDialog(tk.Toplevel):
             wraplength=450,
         )
         think_warn.pack(anchor=tk.W, pady=(0, 5))
+
+        self._update_rps_widget_state()
+        self._refresh_tuning_warnings()
 
     def _build_translation_section(self) -> None:
         """Build the Translation Options section.
@@ -3746,26 +3896,56 @@ class GlobalOptionsDialog(tk.Toplevel):
 
         # --- Temperature constraints ---
         temp_cfg = provider.get_temperature_config(model_id)
-        if temp_cfg.supported:
-            self._temp_row.pack(fill=tk.X, pady=5)
-            self._temp_hint_label.pack(anchor=tk.W, pady=(0, 5))
-            self._temp_scale.configure(
-                from_=temp_cfg.min_value, to=temp_cfg.max_value,
-            )
-            hint = (
-                f"Range {temp_cfg.min_value:.1f}–{temp_cfg.max_value:.1f}"
+        self._apply_tuning_control(
+            config=temp_cfg,
+            variable=self.temperature_var,
+            scale=self._temp_scale,
+            hint_label=self._temp_hint_label,
+            supported_hint=(
+                f"Range {temp_cfg.min_value:.1f}-{temp_cfg.max_value:.1f}"
                 f"  (default {temp_cfg.default:.1f})"
-            )
-            self._temp_hint_label.configure(text=hint)
-            # Clamp current value to valid range
-            cur = self.temperature_var.get()
-            if cur < temp_cfg.min_value:
-                self.temperature_var.set(temp_cfg.min_value)
-            elif cur > temp_cfg.max_value:
-                self.temperature_var.set(temp_cfg.max_value)
-        else:
-            self._temp_row.pack_forget()
-            self._temp_hint_label.pack_forget()
+            ),
+            unsupported_hint="Temperature is not available for this model.",
+        )
+
+        top_p_cfg = provider.get_top_p_config(model_id)
+        self._apply_tuning_control(
+            config=top_p_cfg,
+            variable=self.top_p_var,
+            scale=self._top_p_scale,
+            hint_label=self._top_p_hint_label,
+            supported_hint=(
+                f"Range {top_p_cfg.min_value:.2f}-{top_p_cfg.max_value:.2f}"
+                f"  (default {top_p_cfg.default:.2f})"
+            ),
+            unsupported_hint="Top P is not available for this model.",
+        )
+
+        frequency_penalty_cfg = provider.get_frequency_penalty_config(model_id)
+        self._apply_tuning_control(
+            config=frequency_penalty_cfg,
+            variable=self.frequency_penalty_var,
+            scale=self._frequency_penalty_scale,
+            hint_label=self._frequency_penalty_hint_label,
+            supported_hint=(
+                f"Range {frequency_penalty_cfg.min_value:.2f}-{frequency_penalty_cfg.max_value:.2f}"
+                f"  (default {frequency_penalty_cfg.default:.2f})"
+            ),
+            unsupported_hint="Frequency penalty is not available for this model.",
+        )
+
+        presence_penalty_cfg = provider.get_presence_penalty_config(model_id)
+        self._apply_tuning_control(
+            config=presence_penalty_cfg,
+            variable=self.presence_penalty_var,
+            scale=self._presence_penalty_scale,
+            hint_label=self._presence_penalty_hint_label,
+            supported_hint=(
+                f"Range {presence_penalty_cfg.min_value:.2f}-{presence_penalty_cfg.max_value:.2f}"
+                f"  (default {presence_penalty_cfg.default:.2f})"
+            ),
+            unsupported_hint="Presence penalty is not available for this model.",
+        )
 
         # --- Thinking constraints ---
         think_cfg = provider.get_thinking_config(model_id)
@@ -3805,8 +3985,15 @@ class GlobalOptionsDialog(tk.Toplevel):
                 if hasattr(self, "_reasoning_effort_row"):
                     self._reasoning_effort_row.pack_forget()
         else:
-            self._think_frame.pack_forget()
             self.thinking_enabled_var.set(False)
+            if hasattr(self, "_thinking_cb"):
+                self._thinking_cb.configure(state="disabled")
+            if hasattr(self, "_thinking_budget_row"):
+                self._thinking_budget_row.pack_forget()
+            if hasattr(self, "_reasoning_effort_row"):
+                self._reasoning_effort_row.pack_forget()
+
+        self._refresh_tuning_warnings()
 
         # --- Structured output warning (only on user action) ---
         if getattr(self, "_constraints_initialized", False):
@@ -3903,7 +4090,12 @@ class GlobalOptionsDialog(tk.Toplevel):
 
         # Temperature
         temp_key = f"{prefix}temperature"
-        if temp_key in saved:
+        if "temperature" in api_saved:
+            try:
+                self.temperature_var.set(float(api_saved["temperature"]))
+            except (ValueError, tk.TclError, TypeError):
+                self._apply_provider_temp_default(model_id)
+        elif temp_key in saved:
             try:
                 self.temperature_var.set(float(saved[temp_key]))
             except (ValueError, tk.TclError):
@@ -3912,9 +4104,46 @@ class GlobalOptionsDialog(tk.Toplevel):
             # Use provider default if available
             self._apply_provider_temp_default(model_id)
 
+        def _apply_saved_float(
+            key: str,
+            var: tk.DoubleVar,
+            fallback: float,
+            minimum: float,
+            maximum: float,
+        ) -> None:
+            if key not in api_saved:
+                var.set(fallback)
+                return
+            try:
+                value = float(api_saved[key])
+            except (ValueError, tk.TclError, TypeError):
+                value = fallback
+            var.set(max(minimum, min(maximum, value)))
+
+        _apply_saved_float("top_p", self.top_p_var, 1.0, 0.0, 1.0)
+        _apply_saved_float(
+            "frequency_penalty",
+            self.frequency_penalty_var,
+            0.2,
+            -2.0,
+            2.0,
+        )
+        _apply_saved_float(
+            "presence_penalty",
+            self.presence_penalty_var,
+            0.0,
+            -2.0,
+            2.0,
+        )
+
         # Thinking enabled
         think_key = f"{prefix}thinking_enabled"
-        if think_key in saved:
+        if "thinking_enabled" in api_saved:
+            self.thinking_enabled_var.set(
+                str(api_saved["thinking_enabled"]).lower()
+                in ("true", "1", "yes"),
+            )
+        elif think_key in saved:
             self.thinking_enabled_var.set(
                 saved[think_key].lower() in ("true", "1", "yes"),
             )
@@ -3923,7 +4152,12 @@ class GlobalOptionsDialog(tk.Toplevel):
 
         # Thinking budget
         budget_key = f"{prefix}thinking_budget"
-        if budget_key in saved:
+        if "thinking_budget" in api_saved:
+            try:
+                self.thinking_budget_var.set(int(api_saved["thinking_budget"]))
+            except (ValueError, tk.TclError, TypeError):
+                pass
+        elif budget_key in saved:
             try:
                 self.thinking_budget_var.set(int(saved[budget_key]))
             except (ValueError, tk.TclError):
@@ -3931,7 +4165,13 @@ class GlobalOptionsDialog(tk.Toplevel):
 
         # Reasoning effort
         effort_key = f"{prefix}reasoning_effort"
-        if effort_key in saved:
+        if "reasoning_effort" in api_saved:
+            val = str(api_saved["reasoning_effort"]).strip().lower()
+            if val in allowed_efforts:
+                self.reasoning_effort_var.set(val)
+            else:
+                self.reasoning_effort_var.set(default_effort)
+        elif effort_key in saved:
             val = saved[effort_key].strip().lower()
             if val in allowed_efforts:
                 self.reasoning_effort_var.set(val)
@@ -3939,6 +4179,24 @@ class GlobalOptionsDialog(tk.Toplevel):
                 self.reasoning_effort_var.set(default_effort)
         else:
             self.reasoning_effort_var.set(default_effort)
+
+        try:
+            self.max_concurrent_var.set(
+                max(1, min(512, int(api_saved.get("max_concurrent", 3)))),
+            )
+        except (ValueError, tk.TclError, TypeError):
+            self.max_concurrent_var.set(3)
+
+        self.requests_per_second_enabled_var.set(
+            str(api_saved.get("requests_per_second_enabled", "false")).lower()
+            in ("true", "1", "yes"),
+        )
+        try:
+            self.requests_per_second_var.set(
+                max(0.01, min(999.99, float(api_saved.get("requests_per_second", 1.0)))),
+            )
+        except (ValueError, tk.TclError, TypeError):
+            self.requests_per_second_var.set(1.0)
 
         backoff_mode = str(
             api_saved.get("temporary_backoff_mode", "exponential"),
@@ -3960,6 +4218,9 @@ class GlobalOptionsDialog(tk.Toplevel):
             )
         except (ValueError, tk.TclError, TypeError):
             self.temporary_backoff_total_seconds_var.set(120)
+
+        self._update_rps_widget_state()
+        self._refresh_tuning_warnings()
 
     def _apply_provider_temp_default(self, model_id: str) -> None:
         """Set temperature to the provider's default for this model."""
@@ -3997,6 +4258,18 @@ class GlobalOptionsDialog(tk.Toplevel):
         set_model_settings(
             model_id,
             {
+                "temperature": str(self.temperature_var.get()),
+                "top_p": str(self.top_p_var.get()),
+                "frequency_penalty": str(self.frequency_penalty_var.get()),
+                "presence_penalty": str(self.presence_penalty_var.get()),
+                "thinking_enabled": str(self.thinking_enabled_var.get()).lower(),
+                "thinking_budget": str(self.thinking_budget_var.get()),
+                "reasoning_effort": self.reasoning_effort_var.get(),
+                "max_concurrent": str(self.max_concurrent_var.get()),
+                "requests_per_second_enabled": str(
+                    self.requests_per_second_enabled_var.get(),
+                ).lower(),
+                "requests_per_second": str(self.requests_per_second_var.get()),
                 "temporary_backoff_mode": self.temporary_backoff_mode_var.get(),
                 "temporary_backoff_attempts": str(
                     self.temporary_backoff_attempts_var.get(),
@@ -4064,6 +4337,136 @@ class GlobalOptionsDialog(tk.Toplevel):
         """Update temperature label when value changes."""
         try:
             self._temp_label.config(text=f"{self.temperature_var.get():.1f}")
+        except tk.TclError:
+            pass
+        self._refresh_tuning_warnings()
+
+    def _update_top_p_label(self, *args: Any) -> None:
+        """Update top-p label when value changes."""
+        try:
+            self._top_p_label.config(text=f"{self.top_p_var.get():.2f}")
+        except tk.TclError:
+            pass
+        self._refresh_tuning_warnings()
+
+    def _update_frequency_penalty_label(self, *args: Any) -> None:
+        """Update frequency penalty label when value changes."""
+        try:
+            self._frequency_penalty_label.config(
+                text=f"{self.frequency_penalty_var.get():.2f}",
+            )
+        except tk.TclError:
+            pass
+        self._refresh_tuning_warnings()
+
+    def _update_presence_penalty_label(self, *args: Any) -> None:
+        """Update presence penalty label when value changes."""
+        try:
+            self._presence_penalty_label.config(
+                text=f"{self.presence_penalty_var.get():.2f}",
+            )
+        except tk.TclError:
+            pass
+        self._refresh_tuning_warnings()
+
+    def _update_rps_widget_state(self) -> None:
+        """Enable or disable the req/sec spinbox based on its checkbox."""
+        if not hasattr(self, "_rps_spin"):
+            return
+        try:
+            self._rps_spin.configure(
+                state=(
+                    "normal"
+                    if self.requests_per_second_enabled_var.get()
+                    else "disabled"
+                ),
+            )
+        except tk.TclError:
+            pass
+
+    def _apply_tuning_control(
+        self,
+        *,
+        config: Any,
+        variable: tk.DoubleVar,
+        scale: ttk.Scale,
+        hint_label: ttk.Label,
+        supported_hint: str,
+        unsupported_hint: str,
+    ) -> None:
+        """Clamp and enable/disable a tuning control from provider config."""
+        try:
+            scale.configure(from_=config.min_value, to=config.max_value)
+            if config.supported:
+                hint_label.configure(text=supported_hint, foreground="gray")
+                scale.state(["!disabled"])
+                current = variable.get()
+                if current < config.min_value:
+                    variable.set(config.min_value)
+                elif current > config.max_value:
+                    variable.set(config.max_value)
+            else:
+                hint_label.configure(text=unsupported_hint, foreground="gray")
+                variable.set(config.default)
+                scale.state(["disabled"])
+        except tk.TclError:
+            pass
+
+    def _refresh_tuning_warnings(self) -> None:
+        """Update warning labels for model tuning controls."""
+        self._set_tuning_warning(
+            getattr(self, "_temp_warning_label", None),
+            self.temperature_var.get(),
+            warn_if=lambda value: value > 0.4,
+            red_if=lambda value: value > 0.8,
+            orange_text="Warning: values above 0.4 can reduce translation stability.",
+            red_text="Warning: values above 0.8 are high-risk for unstable translation output.",
+        )
+        self._set_tuning_warning(
+            getattr(self, "_top_p_warning_label", None),
+            self.top_p_var.get(),
+            warn_if=lambda value: value < 0.9,
+            red_if=lambda value: value < 0.8,
+            orange_text="Warning: values below 0.9 can noticeably narrow output variety.",
+            red_text="Warning: values below 0.8 strongly constrain sampling and may degrade translations.",
+        )
+        self._set_tuning_warning(
+            getattr(self, "_frequency_penalty_warning_label", None),
+            self.frequency_penalty_var.get(),
+            warn_if=lambda value: value > 0.2,
+            red_if=lambda value: value < 0.0 or value > 0.4,
+            orange_text="Warning: values above 0.2 can over-penalize repetition in translations.",
+            red_text="Warning: negative values or values above 0.4 are high-risk for unstable wording.",
+        )
+        self._set_tuning_warning(
+            getattr(self, "_presence_penalty_warning_label", None),
+            self.presence_penalty_var.get(),
+            warn_if=lambda value: value > 0.1,
+            red_if=lambda value: value < 0.0 or value > 0.2,
+            orange_text="Warning: values above 0.1 can push the model toward unnecessary novelty.",
+            red_text="Warning: negative values or values above 0.2 are high-risk for unstable translations.",
+        )
+
+    def _set_tuning_warning(
+        self,
+        label: Optional[ttk.Label],
+        value: float,
+        *,
+        warn_if: Any,
+        red_if: Any,
+        orange_text: str,
+        red_text: str,
+    ) -> None:
+        """Render a warning label for a tuning value."""
+        if label is None:
+            return
+        try:
+            if red_if(value):
+                label.configure(text=red_text, foreground="#cc3333")
+            elif warn_if(value):
+                label.configure(text=orange_text, foreground="#cc6600")
+            else:
+                label.configure(text="")
         except tk.TclError:
             pass
 
@@ -4231,8 +4634,8 @@ class GlobalOptionsDialog(tk.Toplevel):
         idx_structured = 1
         idx_batch = 2
         idx_thinking = 3
-        idx_cached_input = 4
-        idx_status = 7
+        idx_cached_input = 8
+        idx_status = 11
 
         def _apply_filter() -> None:
             """Rebuild the Treeview based on current filter checkboxes."""
@@ -4303,13 +4706,21 @@ class GlobalOptionsDialog(tk.Toplevel):
         ).pack(side=tk.LEFT, padx=(0, 10))
 
         # Treeview columns
+        try:
+            from CherryAI.providers import ProviderRegistry
+            provider_impl = ProviderRegistry.get(registry_id)
+        except Exception:
+            provider_impl = None
+
         cols = (
-            "model", "structured", "batch", "thinking",
-            "cached_input", "input_price", "output_price", "status", "context",
+            "model", "structured", "batch", "thinking", "temperature",
+            "top_p", "freq_pen", "pres_pen", "cached_input",
+            "input_price", "output_price", "status", "context",
         )
         col_widths = {
             "model": 250, "structured": 90, "batch": 60,
-            "thinking": 70, "cached_input": 90,
+            "thinking": 70, "temperature": 70, "top_p": 70,
+            "freq_pen": 70, "pres_pen": 70, "cached_input": 90,
             "input_price": 100, "output_price": 100,
             "status": 120,
             "context": 100,
@@ -4317,6 +4728,8 @@ class GlobalOptionsDialog(tk.Toplevel):
         col_headings = {
             "model": "Model", "structured": "Structured",
             "batch": "Batch", "thinking": "Thinking",
+            "temperature": "Temp", "top_p": "Top P",
+            "freq_pen": "Freq Pen", "pres_pen": "Pres Pen",
             "cached_input": "Cached $/1M",
             "input_price": "Input $/1M", "output_price": "Output $/1M",
             "status": "Status",
@@ -4348,6 +4761,30 @@ class GlobalOptionsDialog(tk.Toplevel):
                     return unknown
                 return f"${value:.2f}"
 
+            def _format_support(supported: bool) -> str:
+                return "✓" if supported else "—"
+
+            temp_display = "?"
+            top_p_display = "?"
+            freq_display = "?"
+            pres_display = "?"
+            if provider_impl is not None:
+                try:
+                    temp_display = _format_support(
+                        provider_impl.get_temperature_config(mid).supported,
+                    )
+                    top_p_display = _format_support(
+                        provider_impl.get_top_p_config(mid).supported,
+                    )
+                    freq_display = _format_support(
+                        provider_impl.get_frequency_penalty_config(mid).supported,
+                    )
+                    pres_display = _format_support(
+                        provider_impl.get_presence_penalty_config(mid).supported,
+                    )
+                except Exception:
+                    pass
+
             if info:
                 cost_status = model_registry.get_model_cost_status(
                     info,
@@ -4373,6 +4810,10 @@ class GlobalOptionsDialog(tk.Toplevel):
                     "✓" if info.structured_output else "—",
                     "✓" if info.batch_mode else "—",
                     thinking_display,
+                    temp_display,
+                    top_p_display,
+                    freq_display,
+                    pres_display,
                     _format_price(info.cached_input_price, unknown="—"),
                     _format_price(info.input_price),
                     _format_price(info.output_price),
@@ -4388,7 +4829,21 @@ class GlobalOptionsDialog(tk.Toplevel):
                 if unknown_status.above_cost_cap
                 else "Unknown Price"
             )
-            return (mid, "?", "?", "?", "—", "Unknown", "Unknown", status_display, "?")
+            return (
+                mid,
+                "?",
+                "?",
+                "?",
+                temp_display,
+                top_p_display,
+                freq_display,
+                pres_display,
+                "—",
+                "Unknown",
+                "Unknown",
+                status_display,
+                "?",
+            )
 
         # Populate table (respects current filter state)
         _apply_filter()

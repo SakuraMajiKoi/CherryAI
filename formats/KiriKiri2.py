@@ -12,27 +12,69 @@ import codecs
 import csv
 import io
 import json
+import logging
 import re
 import struct
+import unicodedata
 import zlib
 from enum import IntEnum
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from CherryAI.functions.apply_patches import (
+    ParserProjectPatch,
+    PatchApplicationResult,
+)
+from CherryAI.functions.kirikiri_font_patch import (
+    run_kirikiri_font_patch_workflow,
+    run_kirikiri_standard_ui_translation_patch_workflow,
+)
+
 from .handshake import ExtractedLine, SpeakerInfo
 from .parser_base import ParserScript, WordwrapConfig
+
+logger = logging.getLogger(__name__)
 
 
 KS_ENCODING_CANDIDATES: Tuple[str, ...] = ("cp932", "shift_jis", "utf-8")
 MENU_ENCODING_CANDIDATES: Tuple[str, ...] = ("utf-8-sig", "utf-8", "cp932", "shift_jis")
 CSV_ENCODING_CANDIDATES: Tuple[str, ...] = ("utf-8-sig", "utf-8", "cp932", "shift_jis")
+MDAT_ENCODING_CANDIDATES: Tuple[str, ...] = (
+    "utf-16",
+    "utf-16-le",
+    "utf-16-be",
+    "utf-8-sig",
+    "utf-8",
+    "cp932",
+    "shift_jis",
+)
 JAPANESE_RE = re.compile(
     r"[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF々〆ヵヶ"
     r"\u3041-\u3096\u309D-\u309F"
     r"\u30A1-\u30FA\u30FD-\u30FF\u31F0-\u31FF\uFF66-\uFF9Fー]"
 )
 COMMENT_RE = re.compile(r"^\s*(?:;|//)")
+
+# Encoding-safe transliteration for legacy encodings like cp932/shift_jis
+ENCODING_SAFETY_TRANSLITERATION = str.maketrans(
+    {
+        "ō": "ou",
+        "Ō": "Ou",
+        "ū": "uu",
+        "Ū": "Uu",
+        "ē": "ee",
+        "Ē": "Ee",
+        "ī": "ii",
+        "Ī": "Ii",
+        "ā": "aa",
+        "Ā": "Aa",
+        "—": "-",  # em-dash
+        "–": "-",  # en-dash
+        "―": "-",  # horizontal bar
+        "−": "-",  # minus sign
+    }
+)
 LABEL_RE = re.compile(r"^\s*\*")
 AT_COMMAND_RE = re.compile(r"^\s*@")
 TAG_RE = re.compile(r"^\s*\[[^\]]*\]\s*$")
@@ -52,8 +94,9 @@ NEW_MENU_ITEM_RE = re.compile(r"new\s+MenuItem\s*\(", re.IGNORECASE)
 SELADD_TEXT_RE = re.compile(r'(\[seladd\b[^\]]*\btext\s*=\s*")((?:\\.|[^"\\])*)(")', re.IGNORECASE)
 LABEL_TITLE_RE = re.compile(r'^(\*[^|\r\n]+\|)([^\r\n]*)(\r?\n?)$')
 CAPTION_LITERAL_RE = re.compile(r'(caption\s*:\s*")((?:\\.|[^"\\])*)(")', re.IGNORECASE)
-TJS_DIALOG_LITERAL_RE = re.compile(
-    r'((?:[A-Za-z_][A-Za-z0-9_]*\.)*(?:SetYesNo|SetOK|SetMessage|SetError)\s*\(\s*")'
+DIALOG_MGR_LITERAL_RE = re.compile(
+    r'((?:[A-Za-z_][A-Za-z0-9_]*\.)*DialogMGR\.(?:SetYesNo|SetOK|SetMessage|SetError)'
+    r'\s*\(\s*(?:[^"\r\n,]+?\+\s*)*")'
     r'((?:\\.|[^"\\])*)'
     r'(")'
 )
@@ -114,6 +157,13 @@ KS_CODE_CALL_RE = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_]*|\.[A-Za-z_][A-Za-z0-9_
 KS_CODE_ASSIGN_RE = re.compile(r"(?:^|\s)(?:[A-Za-z_][A-Za-z0-9_]*|\.[A-Za-z_][A-Za-z0-9_]*|\[[^\]]+\])\s*=")
 KS_CODE_MEMBER_RE = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_]*|\])\.[A-Za-z_][A-Za-z0-9_]*")
 KS_CODE_INDEX_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\[[^\]]+\]")
+KS_CODE_STRING_LINE_RE = re.compile(r'^"(?:\\.|[^"\\])*"\s*;\s*(?://.*)?$')
+KS_SWITCH_LABEL_COMMENT_RE = re.compile(r"^(?:case\b[^:]*|default)\s*:\s*(?://.*)?$", re.IGNORECASE)
+PATCH_NORMAL_CONTAINER_RE = re.compile(r"^patch(?P<num>\d*)$", re.IGNORECASE)
+PATCH_SPECIAL_CONTAINER_RE = re.compile(
+    r"^patch[_-](?P<name>[A-Za-z0-9_]+?)(?P<num>\d*)$",
+    re.IGNORECASE,
+)
 CSV_ALLOWED_HEADER_TAGS: Dict[str, str] = {
     "タイトル": "title",
     "概要テキスト": "summary",
@@ -129,6 +179,11 @@ CSV_ALLOWED_HEADER_TAGS: Dict[str, str] = {
     "カテゴリ": "category",
     "説明文": "description",
     "称号": "title",
+    "街の名称": "place_name",
+}
+MDAT_ALLOWED_KEYS: Dict[str, str] = {
+    "マップ名": "map_name",
+    "グレード名": "grade_name",
 }
 CSV_HEADER_ALLOW_PATTERNS: Tuple[re.Pattern[str], ...] = (
     re.compile(r"段目"),
@@ -169,6 +224,7 @@ CSV_NUMERIC_SYMBOL_RE = re.compile(
     r"^[\d\s○×△▲▼▽■□◆◇★☆※◎◯・,./:;!?+\-_=|&()\[\]{}<>％%０-９]*$"
 )
 CSV_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./\\-]*$")
+MDAT_KEY_VALUE_RE = re.compile(r'("(?P<key>[^"]+)"=>(?P<spacing>\s*)")(?P<value>[^"]+)(")')
 
 _WRAP_VARS_SNIPPET = """
 \tvar wrapNum = 0; // wordwrapping word counter
@@ -267,6 +323,70 @@ _WRAP_BLOCK_SNIPPET = """
 \t\t}
         // end: wordwrapping code
 """
+
+_WRAP_SETMESTEXT_HELPER_SNIPPET = """
+        function __CherryAIWrapMessageText(text)
+        {
+            if(text === void || text === null)
+                return text;
+            var normalized = "" + text;
+            if(normalized == "")
+                return normalized;
+            var wrapLimit = 42;
+            var sourceLines = normalized.split("\\n");
+            var wrapped = [];
+            for(var i = 0; i < sourceLines.count; i++)
+            {
+                var sourceLine = sourceLines[i];
+                if(sourceLine == "")
+                {
+                    wrapped.push("");
+                    continue;
+                }
+                var words = sourceLine.split(" ");
+                var buffer = "";
+                if(1 < words.count)
+                {
+                    for(var j = 0; j < words.count; j++)
+                    {
+                        var word = words[j];
+                        if(word == "")
+                            continue;
+                        var candidate = (buffer == "") ? word : (buffer + " " + word);
+                        if(buffer != "" && wrapLimit < candidate.length)
+                        {
+                            wrapped.push(buffer);
+                            buffer = word;
+                            continue;
+                        }
+                        if(buffer == "" && wrapLimit < word.length)
+                        {
+                            var rest = word;
+                            while(wrapLimit < rest.length)
+                            {
+                                wrapped.push(rest.substr(0, wrapLimit));
+                                rest = rest.substr(wrapLimit);
+                            }
+                            buffer = rest;
+                            continue;
+                        }
+                        buffer = candidate;
+                    }
+                    if(buffer != "")
+                        wrapped.push(buffer);
+                    continue;
+                }
+                var restLine = sourceLine;
+                while(wrapLimit < restLine.length)
+                {
+                    wrapped.push(restLine.substr(0, wrapLimit));
+                    restLine = restLine.substr(wrapLimit);
+                }
+                wrapped.push(restLine);
+            }
+            return wrapped.join("\\n");
+        }
+    """
 
 _CHOICE_FONT_SIZE_DEFAULT = 18
 _CHOICE_TEXT_PADDING = 10
@@ -539,11 +659,43 @@ def _read_text(path: Path, candidates: Sequence[str]) -> Tuple[str, str]:
     return data.decode(candidates[0], errors="replace"), candidates[0]
 
 
+def _make_encoding_safe_text(text: str) -> str:
+    """Convert text to be safe for legacy encodings like cp932 using transliteration.
+    
+    Applies explicit transliteration first (including macron vowels and dash variants),
+    then Unicode normalization (NFKD), then removes combining marks.
+    """
+    transliterated = text.translate(ENCODING_SAFETY_TRANSLITERATION)
+    normalized = unicodedata.normalize("NFKD", transliterated)
+    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+
 def _write_text(path: Path, text: str, encoding: str) -> None:
+    """Write text to file, applying encoding-safe transliteration if needed.
+    
+    For encodings like cp932/shift_jis, applies transliteration to convert
+    incompatible characters (em-dashes, macron vowels, etc.) to ASCII equivalents.
+    """
     if encoding == "utf-8-sig":
         path.write_bytes(codecs.BOM_UTF8 + text.encode("utf-8"))
         return
-    path.write_text(text, encoding=encoding, newline="")
+    
+    try:
+        path.write_text(text, encoding=encoding, newline="")
+    except UnicodeEncodeError as exc:
+        # For legacy encodings, try encoding-safe transliteration
+        if encoding.lower() in ("cp932", "shift_jis"):
+            safe_text = _make_encoding_safe_text(text)
+            if safe_text != text:
+                logger.warning(
+                    f"Applied encoding-safe transliteration for {encoding} in {path.name} "
+                    f"(converted {len(text)} → {len(safe_text)} chars)"
+                )
+                path.write_text(safe_text, encoding=encoding, newline="")
+            else:
+                raise
+        else:
+            raise
 
 
 def _split_line_ending(line: str) -> Tuple[str, str]:
@@ -647,6 +799,14 @@ class CsvEntry:
     row_index: int
     col_index: int
     header: str
+    tag: str
+
+
+@dataclass(slots=True)
+class MdatEntry:
+    text: str
+    line_index: int
+    key: str
     tag: str
 
 
@@ -1715,6 +1875,14 @@ def _looks_like_ks_code_text(stripped: str) -> bool:
         return False
     if stripped in {"{", "}", "};", "};", "]", "["}:
         return True
+    if stripped.startswith("{//") or stripped.startswith("}//"):
+        return True
+    if KS_SWITCH_LABEL_COMMENT_RE.match(stripped):
+        return True
+    if stripped.startswith('"') and '";' in stripped:
+        return True
+    if KS_CODE_STRING_LINE_RE.match(stripped):
+        return True
     if KS_CODE_KEYWORD_RE.match(stripped):
         return True
     if KS_CODE_CALL_RE.match(stripped):
@@ -2058,19 +2226,6 @@ def _extract_ks_code_literal_entries(raw_line: str, line_number: int) -> List[Ks
         return []
 
     entries: List[KsLiteralEntry] = []
-    for literal_index, match in enumerate(TJS_DIALOG_LITERAL_RE.finditer(raw_line)):
-        content = match.group(2)
-        if content.strip():
-            entries.append(
-                KsLiteralEntry(
-                    text=content,
-                    line_number=line_number,
-                    tag="dialog",
-                    entry_kind="dialog_call",
-                    literal_index=literal_index,
-                )
-            )
-
     for literal_index, match in enumerate(KS_UI_FIELD_LITERAL_RE.finditer(raw_line)):
         content = match.group(2)
         if content.strip() and JAPANESE_RE.search(content):
@@ -2093,6 +2248,19 @@ def _extract_ks_code_literal_entries(raw_line: str, line_number: int) -> List[Ks
                     line_number=line_number,
                     tag="menu",
                     entry_kind="drawtext",
+                    literal_index=literal_index,
+                )
+            )
+
+    for literal_index, match in enumerate(DIALOG_MGR_LITERAL_RE.finditer(raw_line)):
+        content = match.group(2)
+        if content.strip():
+            entries.append(
+                KsLiteralEntry(
+                    text=content,
+                    line_number=line_number,
+                    tag="dialog",
+                    entry_kind="dialog_call",
                     literal_index=literal_index,
                 )
             )
@@ -2124,7 +2292,7 @@ def _extract_tjs_dialog_entries(path: Path) -> List[DialogLiteralEntry]:
 
     for line_index, line in enumerate(text.splitlines(keepends=True)):
         literal_index = 0
-        for match in TJS_DIALOG_LITERAL_RE.finditer(line):
+        for match in DIALOG_MGR_LITERAL_RE.finditer(line):
             content = match.group(2)
             if not content.strip():
                 continue
@@ -2223,7 +2391,7 @@ def _replace_tjs_dialog_literals(line: str, translated_texts: Sequence[str]) -> 
     pieces: List[str] = []
     cursor = 0
     replacement_index = 0
-    for match in TJS_DIALOG_LITERAL_RE.finditer(line):
+    for match in DIALOG_MGR_LITERAL_RE.finditer(line):
         pieces.append(line[cursor:match.start(2)])
         content = match.group(2)
         translated = (
@@ -2375,6 +2543,62 @@ def _extract_csv_entries(path: Path) -> List[CsvEntry]:
     return entries
 
 
+def _looks_like_kirikiri_mdat(path: Path) -> bool:
+    try:
+        text, _encoding = _read_text(path, MDAT_ENCODING_CANDIDATES)
+    except Exception:
+        return False
+    for match in MDAT_KEY_VALUE_RE.finditer(text):
+        key = match.group("key")
+        value = match.group("value")
+        if key in MDAT_ALLOWED_KEYS and value.strip():
+            return True
+    return False
+
+
+def _mdat_key_to_tag(key: str) -> str:
+    alias = MDAT_ALLOWED_KEYS.get(key, "text")
+    return f"mdat_{alias}"
+
+
+def _extract_mdat_entries(path: Path) -> List[MdatEntry]:
+    text, _encoding = _read_text(path, MDAT_ENCODING_CANDIDATES)
+    entries: List[MdatEntry] = []
+    for line_index, line in enumerate(text.splitlines(keepends=True)):
+        for match in MDAT_KEY_VALUE_RE.finditer(line):
+            key = match.group("key")
+            value = match.group("value")
+            if key not in MDAT_ALLOWED_KEYS or not value.strip():
+                continue
+            entries.append(
+                MdatEntry(
+                    text=value,
+                    line_index=line_index,
+                    key=key,
+                    tag=_mdat_key_to_tag(key),
+                )
+            )
+    return entries
+
+
+def _replace_mdat_literals(line: str, translated_texts: Sequence[str]) -> str:
+    pieces: List[str] = []
+    cursor = 0
+    replacement_index = 0
+    for match in MDAT_KEY_VALUE_RE.finditer(line):
+        pieces.append(line[cursor:match.start("value")])
+        key = match.group("key")
+        value = match.group("value")
+        if key in MDAT_ALLOWED_KEYS and replacement_index < len(translated_texts):
+            pieces.append(_escape_menu_content(translated_texts[replacement_index]))
+            replacement_index += 1
+        else:
+            pieces.append(value)
+        cursor = match.end("value")
+    pieces.append(line[cursor:])
+    return "".join(pieces)
+
+
 def _serialize_ks_block(block: KsBlock, translated_text: str, line_endings: Dict[int, str]) -> Dict[int, str]:
     translated_lines = translated_text.split("\n") if translated_text else [""]
     replacements: Dict[int, str] = {}
@@ -2442,13 +2666,19 @@ def _replace_between(text: str, start_marker: str, end_marker: str, replacement:
 
 
 def _already_has_wrap_vars(text: str) -> bool:
+    if "__CherryAIWrapMessageText(" in text:
+        return True
     return "var wrapNum" in text and "var wrapPos" in text and "var oldLine" in text
 
 
 def _already_has_wrap_block(text: str) -> bool:
     if "\\t\\t/* Wordwrapping code" in text:
         return False
-    return "Wordwrapping code" in text or "oldLine != conductor.curLineStr" in text
+    return (
+        "Wordwrapping code" in text
+        or "oldLine != conductor.curLineStr" in text
+        or "MesLayer.DrawText(__CherryAIWrapMessageText(text));" in text
+    )
 
 
 def _patch_add_wrap_vars(text: str) -> str:
@@ -2458,11 +2688,27 @@ def _patch_add_wrap_vars(text: str) -> str:
     if not insert_after:
         insert_after = re.search(r"(ch\s*:\s*function\s*\(\s*elm\s*\)\s*\{)", text)
     if not insert_after:
+        set_mes_text = re.search(r"(function\s+SetMesText\s*\(\s*text\s*\)\s*\{\s*)", text)
+        if set_mes_text:
+            return text[:set_mes_text.start()] + _WRAP_SETMESTEXT_HELPER_SNIPPET + text[set_mes_text.start():]
+    if not insert_after:
         return text
     return text[:insert_after.end()] + _WRAP_VARS_SNIPPET + text[insert_after.end():]
 
 
 def _patch_add_wrap_block(text: str) -> str:
+    set_mes_text_call = re.search(r"MesLayer\.DrawText\(\s*text\s*\)\s*;", text)
+    if (
+        "__CherryAIWrapMessageText(" in text
+        and "MesLayer.DrawText(__CherryAIWrapMessageText(text));" not in text
+        and set_mes_text_call is not None
+    ):
+        return (
+            text[:set_mes_text_call.start()]
+            + "MesLayer.DrawText(__CherryAIWrapMessageText(text));"
+            + text[set_mes_text_call.end():]
+        )
+
     escaped_block = re.compile(
         r"\\t\\t/\* Wordwrapping code.*?// end: wordwrapping code\s*",
         re.DOTALL,
@@ -2521,6 +2767,12 @@ def _patch_add_wrap_block(text: str) -> str:
                 insert_at = start_idx + legacy_if.start()
 
     if insert_at is None:
+        if set_mes_text_call:
+            return (
+                text[:set_mes_text_call.start()]
+                + "MesLayer.DrawText(__CherryAIWrapMessageText(text));"
+                + text[set_mes_text_call.end():]
+            )
         return text
     return text[:insert_at] + _WRAP_BLOCK_SNIPPET + text[insert_at:]
 
@@ -2625,6 +2877,65 @@ def _patch_project_script(
     _write_text_with_bom(target, patched, encoding, bom)
 
 
+def _apply_script_patch_target(
+    target: Path,
+    patcher: Callable[[str], str],
+    log: Callable[[str], None],
+) -> PatchApplicationResult:
+    try:
+        text, encoding, bom = _read_text_with_bom(target)
+    except (OSError, UnicodeDecodeError) as exc:
+        return PatchApplicationResult(
+            status="failed",
+            message=f"Failed to read {target}: {exc}",
+            target_path=target,
+        )
+
+    patched = patcher(text)
+    if patched == text:
+        return PatchApplicationResult(
+            status="unchanged",
+            message=f"No changes were needed for {target.name}.",
+            target_path=target,
+        )
+    if not _is_balanced(patched):
+        return PatchApplicationResult(
+            status="failed",
+            message=f"Patch generated unbalanced script content for {target.name}.",
+            target_path=target,
+        )
+
+    backup = target.with_suffix(target.suffix + ".bak")
+    if not backup.exists():
+        _write_text_with_bom(backup, text, encoding, bom)
+        log(f"Created backup {backup}")
+
+    _write_text_with_bom(target, patched, encoding, bom)
+    return PatchApplicationResult(
+        status="applied",
+        message=f"Patched {target}",
+        target_path=target,
+    )
+
+
+def _apply_mainwindow_wordwrap_target(
+    target: Path,
+    log: Callable[[str], None],
+) -> PatchApplicationResult:
+    return _apply_script_patch_target(
+        target,
+        lambda text: _patch_add_wrap_block(_patch_add_wrap_vars(text)),
+        log,
+    )
+
+
+def _apply_selectlayer_choice_wrap_target(
+    target: Path,
+    log: Callable[[str], None],
+) -> PatchApplicationResult:
+    return _apply_script_patch_target(target, _patch_select_layer, log)
+
+
 def _is_balanced(text: str) -> bool:
     pairs = {")": "(", "]": "[", "}": "{"}
     stack: List[str] = []
@@ -2680,6 +2991,62 @@ def _is_balanced(text: str) -> bool:
     return not stack
 
 
+def _parse_patch_container_priority(name: str) -> Tuple[int, str, int]:
+    """Return ``(category, special_name, number)`` for a root path segment."""
+    normalized = name.strip().lower()
+    normal_match = PATCH_NORMAL_CONTAINER_RE.match(normalized)
+    if normal_match is not None:
+        num_raw = normal_match.group("num") or ""
+        return 1, "", int(num_raw) if num_raw else 0
+
+    special_match = PATCH_SPECIAL_CONTAINER_RE.match(normalized)
+    if special_match is not None:
+        special_name = (special_match.group("name") or "").lower()
+        num_raw = special_match.group("num") or ""
+        return 2, special_name, int(num_raw) if num_raw else 0
+
+    return 0, "", 0
+
+
+def _build_kirikiri_overlay_key(relative_path: Path) -> str:
+    """Build case-insensitive overlay key for KiriKiri2 input precedence.
+
+    Matching is filename-only so duplicate filenames are treated as one target
+    regardless of folder depth.
+    """
+    parts = relative_path.parts
+    if not parts:
+        return ""
+
+    first = parts[0]
+    base_name = first[:-4] if first.lower().endswith(".xp3") else first
+    patch_category, _special_name, _number = _parse_patch_container_priority(base_name)
+
+    if first.lower().endswith(".xp3") or patch_category != 0:
+        payload_parts = parts[1:]
+    else:
+        payload_parts = parts
+
+    if payload_parts:
+        leaf_name = str(payload_parts[-1])
+    else:
+        leaf_name = Path(first).name
+
+    return Path(leaf_name).name.lower()
+
+
+def _build_kirikiri_priority_key(relative_path: Path) -> Tuple[int, str, int, str]:
+    """Build deterministic sort key for KiriKiri2 patch/container precedence."""
+    parts = relative_path.parts
+    if not parts:
+        return 0, "", 0, ""
+
+    first = parts[0]
+    base_name = first[:-4] if first.lower().endswith(".xp3") else first
+    category, special_name, number = _parse_patch_container_priority(base_name)
+    return category, special_name, number, relative_path.as_posix().lower()
+
+
 class KiriKiri2Parser(ParserScript):
     """Parser for KiriKiri2/KAG `.ks`, `.tjs`, and schema-based `.csv` files."""
 
@@ -2703,6 +3070,72 @@ class KiriKiri2Parser(ParserScript):
             return WordwrapConfig(max_line_length=32, max_line_number=2, wordwrap_command="\n")
         return self.wordwrap_config
 
+    @property
+    def project_patches(self) -> Sequence[ParserProjectPatch]:
+        return (
+            ParserProjectPatch(
+                patch_id="mainwindow_wordwrap",
+                name="MainWindow Wordwrap Patch",
+                description=(
+                    "Patch MainWindow.tjs so KAG dialogue wraps by word rather "
+                    "than per character."
+                ),
+                file_label="MainWindow.tjs",
+                relative_candidates=(
+                    Path("data") / "system" / "MainWindow.tjs",
+                    Path("system") / "MainWindow.tjs",
+                ),
+                apply_to_target=_apply_mainwindow_wordwrap_target,
+            ),
+            ParserProjectPatch(
+                patch_id="selectlayer_choice_wrap",
+                name="SelectLayer Choice Wrap Patch",
+                description=(
+                    "Patch SelectLayer.tjs so choice buttons wrap and size text "
+                    "more safely."
+                ),
+                file_label="SelectLayer.tjs",
+                relative_candidates=(
+                    Path("data") / "system" / "SelectLayer.tjs",
+                    Path("system") / "SelectLayer.tjs",
+                ),
+                apply_to_target=_apply_selectlayer_choice_wrap_target,
+            ),
+            ParserProjectPatch(
+                patch_id="standard_ui_translation",
+                name="Standard UI Translation Patch",
+                description=(
+                    "Stage translated KiriKiri menu, folder, help, cache, and "
+                    "version UI overlays under patch/data/."
+                ),
+                file_label="MenuItemManager.tjs",
+                relative_candidates=(),
+                apply_to_target=lambda _target, _log: PatchApplicationResult(
+                    status="failed",
+                    message=(
+                        "Standard UI Translation Patch must run through its "
+                        "shared workflow."
+                    ),
+                ),
+                apply_with_context=run_kirikiri_standard_ui_translation_patch_workflow,
+            ),
+            ParserProjectPatch(
+                patch_id="font_patch",
+                name="Font Patch",
+                description=(
+                    "Stage a private-font version.dll patch, config, and bundled "
+                    "fonts for KiriKiri projects."
+                ),
+                file_label="version.dll",
+                relative_candidates=(),
+                apply_to_target=lambda _target, _log: PatchApplicationResult(
+                    status="failed",
+                    message="Font Patch must run through its shared dialog workflow.",
+                ),
+                apply_with_context=run_kirikiri_font_patch_workflow,
+            ),
+        )
+
     def detect_encoding(self, file_path: Path) -> Optional[str]:
         if file_path.suffix.lower() == ".ks":
             _, encoding = _read_text(file_path, KS_ENCODING_CANDIDATES)
@@ -2712,6 +3145,9 @@ class KiriKiri2Parser(ParserScript):
             return encoding
         if file_path.suffix.lower() == ".csv":
             _, encoding = _read_text(file_path, CSV_ENCODING_CANDIDATES)
+            return encoding
+        if file_path.suffix.lower() == ".mdat":
+            _, encoding = _read_text(file_path, MDAT_ENCODING_CANDIDATES)
             return encoding
         return None
 
@@ -2760,7 +3196,53 @@ class KiriKiri2Parser(ParserScript):
             if not path.exists():
                 return False
             return _looks_like_kirikiri_csv(path)
+        if suffix == ".mdat":
+            if not path.exists():
+                return False
+            return _looks_like_kirikiri_mdat(path)
         return False
+
+    def deduplicate_input_paths(
+        self,
+        paths: Sequence[Path],
+        *,
+        root: Optional[Path] = None,
+    ) -> List[Path]:
+        """Resolve KiriKiri2 file precedence across normal/patch/special containers.
+
+        Load-order semantics:
+        1. Non-patch containers
+        2. ``patch``, ``patch2``, ...
+        3. ``patch_<name>``, ``patch_<name>2``, ... sorted by ``<name>`` then number
+
+        For matching overlay keys, later precedence wins. Returned paths are the
+        surviving candidates sorted in precedence order.
+        """
+        if not paths:
+            return []
+
+        root_path = Path(root) if root is not None else None
+        candidates: List[Tuple[Tuple[int, str, int, str], str, Path]] = []
+        for raw_path in paths:
+            candidate_path = Path(raw_path)
+            relative_path = candidate_path
+            if root_path is not None:
+                try:
+                    relative_path = candidate_path.relative_to(root_path)
+                except ValueError:
+                    relative_path = candidate_path
+
+            priority_key = _build_kirikiri_priority_key(relative_path)
+            overlay_key = _build_kirikiri_overlay_key(relative_path)
+            candidates.append((priority_key, overlay_key, candidate_path))
+
+        candidates.sort(key=lambda item: item[0])
+        winner_by_overlay: Dict[str, Tuple[Tuple[int, str, int, str], str, Path]] = {}
+        for candidate in candidates:
+            winner_by_overlay[candidate[1]] = candidate
+
+        winners = sorted(winner_by_overlay.values(), key=lambda item: item[0])
+        return [item[2] for item in winners]
 
     def extract(self, file_path: Path) -> List[str]:
         tagged = self.extract_tagged(file_path)
@@ -2854,6 +3336,20 @@ class KiriKiri2Parser(ParserScript):
             return _annotate_extracted_line_locators(
                 extracted,
                 [entry.row_index + 1 for entry in entries],
+            )
+        if path.suffix.lower() == ".mdat":
+            entries = _extract_mdat_entries(path)
+            extracted = [
+                ExtractedLine(
+                    text=entry.text,
+                    tag=entry.tag,
+                    context=f"{path.name}:{entry.line_index + 1}:{entry.key}",
+                )
+                for entry in entries
+            ]
+            return _annotate_extracted_line_locators(
+                extracted,
+                [entry.line_index + 1 for entry in entries],
             )
         return None
 
@@ -2996,7 +3492,7 @@ class KiriKiri2Parser(ParserScript):
                 elif entry.entry_kind == "dialog_call":
                     replaced = _replace_pattern_literal_by_index(
                         raw_lines[line_index],
-                        TJS_DIALOG_LITERAL_RE,
+                        DIALOG_MGR_LITERAL_RE,
                         translated,
                         entry.literal_index,
                     )
@@ -3098,6 +3594,27 @@ class KiriKiri2Parser(ParserScript):
                     row.extend([""] * (entry.col_index + 1 - len(row)))
                 row[entry.col_index] = translated
             _write_csv_rows(output_path, rows, encoding, newline)
+            return failures
+
+        if path.suffix.lower() == ".mdat":
+            text, encoding = _read_text(path, MDAT_ENCODING_CANDIDATES)
+            raw_lines = text.splitlines(keepends=True)
+            entries = _extract_mdat_entries(path)
+            grouped: Dict[int, List[str]] = {}
+            failures: List[int] = []
+            search_keys = orig_lines if orig_lines is not None else [entry.text for entry in entries]
+            for index, translated in enumerate(lines):
+                if index >= len(entries):
+                    failures.append(index)
+                    continue
+                entry = entries[index]
+                search = search_keys[index] if index < len(search_keys) else entry.text
+                if translated == search:
+                    continue
+                grouped.setdefault(entry.line_index, []).append(translated)
+            for line_index, translated_texts in grouped.items():
+                raw_lines[line_index] = _replace_mdat_literals(raw_lines[line_index], translated_texts)
+            _write_text(output_path, "".join(raw_lines), encoding)
             return failures
 
         text, encoding = _read_text(path, ("utf-8", "cp932", "shift_jis"))

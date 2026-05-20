@@ -10,6 +10,7 @@ from . import (
     ProviderRegistry,
     TemperatureConfig,
     ThinkingConfig,
+    TuningParamConfig,
 )
 from .openai_provider import OpenAICompatProvider
 
@@ -97,6 +98,54 @@ class MistralProvider(OpenAICompatProvider):
                 max_value=info.temperature_max,
             )
         return TemperatureConfig(supported=True, max_value=1.0)
+
+    def get_top_p_config(self, model_id: str) -> TuningParamConfig:
+        info = self._get_model_info(model_id)
+        if info:
+            return TuningParamConfig(
+                supported=True,
+                min_value=info.top_p_min,
+                max_value=info.top_p_max,
+                default=info.top_p_default,
+            )
+        return TuningParamConfig(
+            supported=True,
+            min_value=0.0,
+            max_value=1.0,
+            default=1.0,
+        )
+
+    def get_frequency_penalty_config(self, model_id: str) -> TuningParamConfig:
+        info = self._get_model_info(model_id)
+        if info:
+            return TuningParamConfig(
+                supported=True,
+                min_value=info.frequency_penalty_min,
+                max_value=info.frequency_penalty_max,
+                default=info.frequency_penalty_default,
+            )
+        return TuningParamConfig(
+            supported=True,
+            min_value=-2.0,
+            max_value=2.0,
+            default=0.2,
+        )
+
+    def get_presence_penalty_config(self, model_id: str) -> TuningParamConfig:
+        info = self._get_model_info(model_id)
+        if info:
+            return TuningParamConfig(
+                supported=True,
+                min_value=info.presence_penalty_min,
+                max_value=info.presence_penalty_max,
+                default=info.presence_penalty_default,
+            )
+        return TuningParamConfig(
+            supported=True,
+            min_value=-2.0,
+            max_value=2.0,
+            default=0.0,
+        )
 
     # ---- Model fetching ----
 

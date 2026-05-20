@@ -42,11 +42,15 @@ logger = logging.getLogger(__name__)
 
 
 SAME_AS_SOURCE_DESTINATION = "Same as Source"
+SAME_AS_INPUT_ENCODING = "Same as Input"
 DEFAULT_OUTPUT_PAIR_MODE = "custom"
 DEFAULT_OUTPUT_NAMING = "subfolder"
 DEFAULT_OUTPUT_TEXT_OPTION = "translated"
 DEFAULT_OUTPUT_BACKUP = "timestamp"
 DEFAULT_OUTPUT_BACKUP_EXTENSION = ".bk"
+DEFAULT_OUTPUT_ENCODING = SAME_AS_INPUT_ENCODING
+EXPORT_UI_UPDATE_BATCH_FILES = 10
+EXPORT_MANIFEST_DIRTY_BATCH_FILES = 10
 
 
 # ============================================================================
@@ -188,7 +192,7 @@ class OutputOptions:
     pair_mode: PairMode = PairMode.CUSTOM
     preserve_structure: bool = True
     overwrite: bool = True
-    encoding: str = "utf-8"
+    encoding: str = DEFAULT_OUTPUT_ENCODING
 
 
 @dataclass
@@ -367,6 +371,12 @@ class OutputInjectStep(BaseStep):
             state="disabled",
         )
         self._cancel_btn.pack(side="right", padx=(0, 5))
+
+        ttk.Button(
+            right_frame,
+            text="Apply Patches",
+            command=self._open_apply_patches_dialog,
+        ).pack(side="right", padx=(0, 5))
 
         ttk.Button(
             right_frame,
@@ -656,8 +666,17 @@ class OutputInjectStep(BaseStep):
 
         ttk.Label(enc_frame, text="Encoding:").pack(side="left")
 
-        encoding_options = ["utf-8", "utf-8-sig", "utf-16", "shift_jis", "cp932"]
-        self._encoding_var = tk.StringVar(value="utf-8")
+        encoding_options = [
+            SAME_AS_INPUT_ENCODING,
+            "utf-8",
+            "utf-8-sig",
+            "utf-16",
+            "utf-16-le",
+            "utf-16-be",
+            "shift_jis",
+            "cp932",
+        ]
+        self._encoding_var = tk.StringVar(value=DEFAULT_OUTPUT_ENCODING)
         enc_combo = ttk.Combobox(
             enc_frame,
             textvariable=self._encoding_var,
@@ -665,6 +684,15 @@ class OutputInjectStep(BaseStep):
             width=12,
         )
         enc_combo.pack(side="left", padx=5)
+
+        ttk.Label(
+            frame,
+            text="Same as Input uses filedir per-file encoding and preserves BOM automatically.",
+            foreground=THEME.text_secondary,
+            font=("TkDefaultFont", 8),
+            wraplength=260,
+            justify="left",
+        ).pack(anchor="w", padx=5, pady=(0, 3))
 
         # TASK 28.2: Bind Encoding to manifest
         if self._manifest_manager:
@@ -675,7 +703,7 @@ class OutputInjectStep(BaseStep):
                     manager_getter=lambda: self.manifest_manager,
                     field_key="Encoding",
                     options=encoding_options,
-                    default="utf-8",
+                    default=DEFAULT_OUTPUT_ENCODING,
                     parent_key="OutputFormat",
                 )
             )
@@ -1070,8 +1098,23 @@ class OutputInjectStep(BaseStep):
         if current_pair_mode not in valid_pair_modes:
             self._pair_var.set(DEFAULT_OUTPUT_PAIR_MODE)
 
-        if not self._encoding_var.get().strip():
-            self._encoding_var.set(default_encoding or "utf-8")
+        current_encoding = self._encoding_var.get().strip()
+        valid_encodings = {
+            SAME_AS_INPUT_ENCODING,
+            "utf-8",
+            "utf-8-sig",
+            "utf-16",
+            "utf-16-le",
+            "utf-16-be",
+            "shift_jis",
+            "cp932",
+        }
+        if (
+            not current_encoding
+            or current_encoding.lower() == "auto"
+            or current_encoding not in valid_encodings
+        ):
+            self._encoding_var.set(DEFAULT_OUTPUT_ENCODING)
 
         if not self._naming_var.get().strip():
             self._naming_var.set(DEFAULT_OUTPUT_NAMING)
@@ -1145,6 +1188,17 @@ class OutputInjectStep(BaseStep):
         if folder:
             self._dest_var.set(folder)
             self._refresh_preview()
+
+    def _open_apply_patches_dialog(self) -> None:
+        """Open the parser project patch window for the active manifest."""
+        mgr = self.manifest_manager
+        if mgr is None or not mgr.is_loaded:
+            messagebox.showinfo("Apply Patches", "Load a project first.")
+            return
+
+        from CherryAI.functions.apply_patches import open_apply_patches_dialog
+
+        open_apply_patches_dialog(self, mgr)
 
     def _use_source_dir(self) -> None:
         """Set destination to source directory."""
@@ -1364,17 +1418,32 @@ class OutputInjectStep(BaseStep):
         dest_base = self._resolve_destination_dir()
         dest_base.mkdir(parents=True, exist_ok=True)
         written_file_indices: List[int] = []
+        deferred_stage_writes = 0
 
         for i, output_file in enumerate(files):
             if self._cancel_requested:
                 break
 
+            processed_files = i + 1
+            mark_stage_dirty = (
+                processed_files % EXPORT_MANIFEST_DIRTY_BATCH_FILES == 0
+                or processed_files >= len(files)
+            )
+
             try:
-                self._write_file(output_file, dest_base)
+                self._write_file(
+                    output_file,
+                    dest_base,
+                    mark_stage_dirty=mark_stage_dirty,
+                )
                 output_file.status = "written"
                 output_file.written = True
                 self._stats.files_written += 1
                 written_file_indices.append(output_file.idx)
+                if mark_stage_dirty:
+                    deferred_stage_writes = 0
+                else:
+                    deferred_stage_writes += 1
             except Exception as e:
                 output_file.status = "failed"
                 output_file.error = str(e)
@@ -1386,12 +1455,12 @@ class OutputInjectStep(BaseStep):
                 })
                 logger.error(f"Failed to write {output_file.output_path}: {e}")
 
-            # Update progress
-            progress = ((i + 1) / len(files)) * 100
-            self.after(0, lambda p=progress: self._progress_var.set(p))  # type: ignore[misc]
-            self.after(0, self._refresh_table)
+            self._schedule_export_ui_update(processed_files, len(files))
 
         mgr = self.manifest_manager
+        if mgr is not None and deferred_stage_writes > 0:
+            mgr.mark_dirty()
+
         if (
             mgr is not None
             and mgr.is_loaded
@@ -1408,7 +1477,41 @@ class OutputInjectStep(BaseStep):
         if self._export_logs_var.get() and not self._cancel_requested:
             self._export_logs(dest_base)
 
-    def _write_file(self, output_file: OutputFile, dest_base: Path) -> None:
+    def _schedule_export_ui_update(self, processed_files: int, total_files: int) -> None:
+        """Schedule throttled UI updates during export.
+
+        Progress bar and status text are refreshed every
+        ``EXPORT_UI_UPDATE_BATCH_FILES`` files and at the final file.
+        """
+        if total_files <= 0:
+            return
+
+        should_update = (
+            processed_files % EXPORT_UI_UPDATE_BATCH_FILES == 0
+            or processed_files >= total_files
+            or self._cancel_requested
+        )
+        if not should_update:
+            return
+
+        progress = (processed_files / total_files) * 100.0
+        status_text = (
+            f"Exporting... {processed_files}/{total_files} "
+            f"(Written: {self._stats.files_written}, Failed: {self._stats.files_failed})"
+        )
+        filter_value = self._filter_var.get() if hasattr(self, "_filter_var") else "all"
+
+        self.after(0, lambda p=progress: self._progress_var.set(p))  # type: ignore[misc]
+        self.after(0, lambda text=status_text: self._status_label.configure(text=text))
+        self.after(0, self._refresh_table, filter_value)
+
+    def _write_file(
+        self,
+        output_file: OutputFile,
+        dest_base: Path,
+        *,
+        mark_stage_dirty: bool = True,
+    ) -> None:
         """Write a single output file.
 
         Always reads fresh data from the manifest manager to avoid stale
@@ -1443,7 +1546,12 @@ class OutputInjectStep(BaseStep):
         if raw_format.lower() == OutputFormat.INJECTION.value:
             if mgr is not None and mgr.is_loaded:
                 OutputInjectStep._write_injection(self, output_file, output_path, mgr)
-                self._stage_written_output(output_file, output_path, mgr)
+                self._stage_written_output(
+                    output_file,
+                    output_path,
+                    mgr,
+                    mark_dirty=mark_stage_dirty,
+                )
                 return
             raise ValueError("Injection format requires a loaded manifest with filedir.")
 
@@ -1469,7 +1577,7 @@ class OutputInjectStep(BaseStep):
         # --- Generic format writing (TXT/CSV/TSV/JSON/XLSX) ---
         # Always read fresh lines from manifest to avoid stale data
         all_lines = self._get_fresh_lines_for_file(output_file)
-        encoding = self._encoding_var.get()
+        encoding = self._resolve_output_encoding_for_file(output_file)
 
         if format_val == OutputFormat.TXT:
             self._write_txt(output_path, all_lines, encoding)
@@ -1485,24 +1593,69 @@ class OutputInjectStep(BaseStep):
         output_file.line_count = len(all_lines)
         self._stats.total_lines += len(all_lines)
         if mgr is not None and mgr.is_loaded:
-            self._stage_written_output(output_file, output_path, mgr)
+            self._stage_written_output(
+                output_file,
+                output_path,
+                mgr,
+                mark_dirty=mark_stage_dirty,
+            )
+
+    def _resolve_output_encoding_for_file(self, output_file: OutputFile) -> str:
+        """Resolve the output encoding for one file.
+
+        Uses per-file manifest metadata when the UI is set to
+        ``Same as Input`` and otherwise uses the explicit UI encoding.
+        """
+        selected_encoding = self._encoding_var.get().strip()
+        use_input_encoding = (
+            not selected_encoding
+            or selected_encoding == SAME_AS_INPUT_ENCODING
+            or selected_encoding.lower() == "auto"
+        )
+
+        mgr = self.manifest_manager
+        if use_input_encoding:
+            if mgr is not None and mgr.is_loaded:
+                filedir = mgr.get_filedir()
+                if 0 <= output_file.idx < len(filedir):
+                    entry_encoding = (filedir[output_file.idx].encoding or "").strip()
+                    if entry_encoding:
+                        return entry_encoding
+
+            _default_format, default_encoding = self._get_first_input_file_meta()
+            if default_encoding:
+                return default_encoding
+        elif selected_encoding:
+            return selected_encoding
+
+        return "utf-8"
 
     def _stage_written_output(
         self,
         output_file: OutputFile,
         output_path: Path,
         mgr: "ManifestManager",
+        *,
+        mark_dirty: bool = True,
     ) -> None:
         """Mirror a successful Step 9 write into the staged translated tree."""
         filedir = mgr.get_filedir()
         if output_file.idx >= len(filedir):
             return
         entry = filedir[output_file.idx]
-        mgr.stage_translated_output_file(
-            entry,
-            output_path,
-            source="step9",
-        )
+        if mark_dirty:
+            mgr.stage_translated_output_file(
+                entry,
+                output_path,
+                source="step9",
+            )
+        else:
+            mgr.stage_translated_output_file(
+                entry,
+                output_path,
+                source="step9",
+                mark_dirty=False,
+            )
 
     def _get_fresh_lines_for_file(self, output_file: OutputFile) -> List[str]:
         """Get fresh resolved lines for a single file from manifest.
@@ -1606,7 +1759,7 @@ class OutputInjectStep(BaseStep):
 
     def _write_txt(self, path: Path, lines: List[str], encoding: str) -> None:
         """Write lines as plain text."""
-        with open(path, "w", encoding=encoding) as f:
+        with open(path, "w", encoding=encoding, newline="") as f:
             f.write("\n".join(lines))
 
     def _write_archive_file(
@@ -1660,7 +1813,7 @@ class OutputInjectStep(BaseStep):
 
     def _write_tsv(self, path: Path, lines: List[str], encoding: str) -> None:
         """Write lines as TSV."""
-        with open(path, "w", encoding=encoding) as f:
+        with open(path, "w", encoding=encoding, newline="") as f:
             for line in lines:
                 f.write(f"{line}\n")
 
@@ -2221,7 +2374,7 @@ class OutputInjectStep(BaseStep):
         if "output_options" in step_data and not self._manifest_manager:
             opts = step_data["output_options"]
             self._format_var.set(opts.get("format", "txt"))
-            self._encoding_var.set(opts.get("encoding", "utf-8"))
+            self._encoding_var.set(opts.get("encoding", DEFAULT_OUTPUT_ENCODING))
             self._naming_var.set(opts.get("naming", "suffix"))
             self._naming_value_var.set(opts.get("naming_value", "_translated"))
 

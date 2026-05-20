@@ -492,9 +492,11 @@ def get_current_selection() -> str:
 # Keys that can be stored per-model
 _MODEL_SETTING_KEYS = (
     "temperature", "timeout", "chunk_size", "chunk_max_tokens",
+    "top_p", "frequency_penalty", "presence_penalty",
     "retries", "rate_limit_requests", "thinking_enabled",
     "thinking_budget", "reasoning_effort", "logit_bias_enabled",
-    "max_concurrent", "request_mode", "rolling_context_before",
+    "max_concurrent", "requests_per_second_enabled",
+    "requests_per_second", "request_mode", "rolling_context_before",
     "rolling_context_between", "rolling_context_after",
     "use_translated_context", "optimal_cache_size",
     "temporary_backoff_mode", "temporary_backoff_attempts",

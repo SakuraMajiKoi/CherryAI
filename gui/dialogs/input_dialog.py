@@ -331,7 +331,7 @@ class UnifiedInputDialog(tk.Toplevel):
         encoding_cb = ttk.Combobox(
             options_frame,
             textvariable=self._encoding_var,
-            values=["auto", "utf-8", "utf-8-sig", "shift_jis", "cp932", "latin-1", "utf-16"],
+            values=["auto", "utf-8", "utf-8-sig", "shift_jis", "cp932", "latin-1", "utf-16", "utf-16-le", "utf-16-be"],
             width=10,
             state="readonly",
         )

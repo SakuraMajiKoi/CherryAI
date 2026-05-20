@@ -91,7 +91,6 @@ request_thinking_budget = 1000
 post_placeholder_recovery = true
 post_bracket_balance_recovery = true
 post_quote_balance_recovery = true
-post_whitespace_normalization = true
 post_restore_code_characters = true
 post_restore_linebreaks = true
 post_enable_symbol_conversion = true
@@ -1125,7 +1124,6 @@ def get_all_manifest_defaults() -> Dict[str, Any]:
         "post_placeholder_recovery",
         "post_bracket_balance_recovery",
         "post_quote_balance_recovery",
-        "post_whitespace_normalization",
         "post_restore_code_characters",
         "post_restore_linebreaks",
         "post_enable_symbol_conversion",
@@ -1223,7 +1221,6 @@ def _get_builtin_manifest_defaults() -> Dict[str, Any]:
         "post_placeholder_recovery": True,
         "post_bracket_balance_recovery": True,
         "post_quote_balance_recovery": True,
-        "post_whitespace_normalization": True,
         "post_restore_code_characters": True,
         "post_restore_linebreaks": True,
         "post_enable_symbol_conversion": True,
