@@ -34,6 +34,11 @@ dist/
 wheels/
 pip-wheel-metadata/
 
+# Native build output (KiriKiri)
+KiriKiriTools/
+libraries/KiriKiriInjection/KirikiriUnencryptedArchive/Release/
+libraries/KiriKiriInjection/KirikiriUnencryptedArchive/Kirikiri.68FD9BD1/Release/
+
 # Virtual environments
 venv/
 .venv/
