@@ -38,6 +38,7 @@ pip-wheel-metadata/
 KiriKiriTools/
 libraries/KiriKiriInjection/KirikiriUnencryptedArchive/Release/
 libraries/KiriKiriInjection/KirikiriUnencryptedArchive/Kirikiri.68FD9BD1/Release/
+*.pch
 
 # Virtual environments
 venv/
