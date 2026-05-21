@@ -1,5 +1,7 @@
 #include "stdafx.h"
 
+#pragma comment(lib, "bcrypt.lib")
+
 using namespace std;
 
 namespace
@@ -143,6 +145,22 @@ namespace
         return path;
     }
 
+    std::wstring FilePathToStorageUrl(const std::wstring& filePath)
+    {
+        std::wstring normalized = Path::GetFullPath(filePath);
+        normalized = StringUtil::Replace(normalized, L'\\', L'/');
+
+        if (normalized.size() >= 2 && normalized[1] == L':')
+        {
+            std::wstring url = L"file://./";
+            url.push_back(static_cast<wchar_t>(towlower(normalized[0])));
+            url.append(normalized.substr(2));
+            return url;
+        }
+
+        return L"file://./" + normalized;
+    }
+
     std::wstring ReadTextFileForLogging(const std::wstring& filePath)
     {
         FILE* pFile = _wfopen(filePath.c_str(), L"rb");
@@ -186,6 +204,25 @@ namespace
         return data;
     }
 
+    std::wstring FormatWin32ErrorMessage(DWORD error)
+    {
+        if (error == ERROR_SUCCESS)
+            return L"success";
+
+        wchar_t* pMessage = nullptr;
+        const DWORD flags = FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS;
+        DWORD length = FormatMessageW(flags, nullptr, error, 0, reinterpret_cast<wchar_t*>(&pMessage), 0, nullptr);
+        std::wstring message;
+        if (length != 0 && pMessage != nullptr)
+        {
+            message.assign(pMessage, pMessage + length);
+            LocalFree(pMessage);
+            return TrimAsciiWhitespace(message);
+        }
+
+        return StringUtil::Format(L"Win32 error %u", error);
+    }
+
     bool StartsWithBytes(const std::vector<BYTE>& data, const char* text)
     {
         size_t length = strlen(text);
@@ -211,32 +248,98 @@ namespace
         return zeroCount >= samplePairs * 3 / 4;
     }
 
-    bool TryDecodeLooseMdatEditText(const std::vector<BYTE>& data, std::wstring& text)
+    bool TryDecodeLooseTextBytes(const std::vector<BYTE>& data, std::wstring& text)
     {
-        if (LooksLikeUtf16LeText(data))
+        text.clear();
+        if (data.empty())
+            return false;
+
+        if (data.size() >= 2 && data[0] == 0xFF && data[1] == 0xFE)
         {
-            size_t start = data.size() >= 2 && data[0] == 0xFF && data[1] == 0xFE ? 2 : 0;
-            text.assign(reinterpret_cast<const wchar_t*>(data.data() + start), (data.size() - start) / sizeof(wchar_t));
+            text.assign(reinterpret_cast<const wchar_t*>(data.data() + 2), (data.size() - 2) / sizeof(wchar_t));
         }
-        else if (StartsWithBytes(data, "(const)") || StartsWithBytes(data, "<<<KANO2_EMBEDDED_WARC") || StartsWithBytes(data, "<%"))
+        else if (data.size() >= 2 && data[0] == 0xFE && data[1] == 0xFF)
+        {
+            text.reserve((data.size() - 2) / 2);
+            for (size_t index = 2; index + 1 < data.size(); index += 2)
+                text.push_back(static_cast<wchar_t>((data[index] << 8) | data[index + 1]));
+        }
+        else if (LooksLikeUtf16LeText(data))
+        {
+            text.assign(reinterpret_cast<const wchar_t*>(data.data()), data.size() / sizeof(wchar_t));
+        }
+        else
         {
             std::string utf8(reinterpret_cast<const char*>(data.data()), data.size());
             if (utf8.size() >= 3 && (BYTE)utf8[0] == 0xEF && (BYTE)utf8[1] == 0xBB && (BYTE)utf8[2] == 0xBF)
                 utf8.erase(0, 3);
-            text = StringUtil::ToUTF16(utf8);
-        }
-        else
-        {
-            return false;
+
+            int utf8Length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.c_str(), static_cast<int>(utf8.size()), nullptr, 0);
+            if (utf8Length > 0)
+            {
+                text.resize(utf8Length);
+                MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), text.data(), utf8Length);
+            }
+            else
+            {
+                int cp932Length = MultiByteToWideChar(932, 0, reinterpret_cast<const char*>(data.data()), static_cast<int>(data.size()), nullptr, 0);
+                if (cp932Length <= 0)
+                    return false;
+
+                text.resize(cp932Length);
+                MultiByteToWideChar(932, 0, reinterpret_cast<const char*>(data.data()), static_cast<int>(data.size()), text.data(), cp932Length);
+            }
         }
 
         if (!text.empty() && text[0] == 0xFEFF)
             text.erase(text.begin());
 
+        return !text.empty();
+    }
+
+    bool TryDecodeLooseMdatEditText(const std::vector<BYTE>& data, std::wstring& text)
+    {
+        if (!TryDecodeLooseTextBytes(data, text))
+            return false;
+
         return text.find(L"(const)") != std::wstring::npos ||
             text.find(kEmbeddedWarcStart) != std::wstring::npos ||
             text.find(L"マップ名") != std::wstring::npos ||
             text.find(L"グレード名") != std::wstring::npos;
+    }
+
+    bool TryDecodeLooseCsvEditText(const std::vector<BYTE>& data, std::wstring& text)
+    {
+        return TryDecodeLooseTextBytes(data, text);
+    }
+
+    std::wstring NormalizeCsvLineEndings(const std::wstring& text)
+    {
+        std::wstring out;
+        out.reserve(text.size() + 8);
+
+        for (size_t index = 0; index < text.size(); index++)
+        {
+            wchar_t ch = text[index];
+            if (ch == L'\r')
+            {
+                out.push_back(L'\r');
+                out.push_back(L'\n');
+                if (index + 1 < text.size() && text[index + 1] == L'\n')
+                    index++;
+            }
+            else if (ch == L'\n')
+            {
+                out.push_back(L'\r');
+                out.push_back(L'\n');
+            }
+            else
+            {
+                out.push_back(ch);
+            }
+        }
+
+        return out;
     }
 
     std::vector<BYTE> Utf16LeBytes(const std::wstring& text)
@@ -460,6 +563,149 @@ namespace
         return foundAny || text.find(kEmbeddedWarcStart) == std::wstring::npos;
     }
 
+    constexpr BYTE kNeiIv[16] = {
+        0x03, 0x20, 0xD3, 0x92, 0x5F, 0x85, 0xFB, 0xDF,
+        0x3A, 0xB7, 0xA2, 0x44, 0x82, 0x6B, 0x11, 0xBF,
+    };
+
+    DWORD NeiCrc32(const std::vector<BYTE>& data)
+    {
+        DWORD crc = 0xFFFFFFFFu;
+        for (BYTE value : data)
+        {
+            crc ^= value;
+            for (int bit = 0; bit < 8; bit++)
+                crc = (crc & 1) ? (0xEDB88320u ^ (crc >> 1)) : (crc >> 1);
+        }
+
+        return ~crc;
+    }
+
+    std::vector<BYTE> NeiDeriveKey(const std::wstring& archivePath)
+    {
+        std::vector<BYTE> key(16, 0x40);
+        std::wstring fileName = archivePath;
+        size_t slashPos = fileName.find_last_of(L"/\\");
+        if (slashPos != std::wstring::npos)
+            fileName.erase(0, slashPos + 1);
+
+        size_t dotPos = fileName.find_last_of(L'.');
+        if (dotPos != std::wstring::npos)
+            fileName.erase(dotPos);
+
+        std::string stemUtf8 = StringUtil::ToUTF8(StringUtil::ToLower(fileName));
+        for (size_t index = 0; index < stemUtf8.size(); index++)
+            key[index & 15] ^= static_cast<BYTE>(stemUtf8[index]);
+
+        return key;
+    }
+
+    bool NeiCtrXor(std::vector<BYTE>& data, const BYTE keyBytes[16])
+    {
+        BCRYPT_ALG_HANDLE algorithm = nullptr;
+        BCRYPT_KEY_HANDLE key = nullptr;
+        std::vector<BYTE> keyObject;
+        DWORD objectLength = 0;
+        DWORD bytesReturned = 0;
+        NTSTATUS status = BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_AES_ALGORITHM, nullptr, 0);
+        if (status < 0)
+            return false;
+
+        status = BCryptSetProperty(
+            algorithm,
+            BCRYPT_CHAINING_MODE,
+            reinterpret_cast<PUCHAR>(const_cast<wchar_t*>(BCRYPT_CHAIN_MODE_ECB)),
+            static_cast<ULONG>(sizeof(BCRYPT_CHAIN_MODE_ECB)),
+            0);
+        if (status < 0)
+            goto cleanup;
+
+        status = BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectLength), sizeof(objectLength), &bytesReturned, 0);
+        if (status < 0 || objectLength == 0)
+            goto cleanup;
+
+        keyObject.resize(objectLength);
+        status = BCryptGenerateSymmetricKey(algorithm, &key, keyObject.data(), static_cast<ULONG>(keyObject.size()), const_cast<PUCHAR>(keyBytes), 16, 0);
+        if (status < 0)
+            goto cleanup;
+
+        BYTE counter[16];
+        memcpy(counter, kNeiIv, sizeof(counter));
+        BYTE input[16];
+        BYTE output[16];
+
+        for (size_t offset = 0; offset < data.size(); offset += 16)
+        {
+            size_t chunkSize = min<size_t>(16, data.size() - offset);
+            memcpy(input, counter, sizeof(input));
+            ULONG bytesWritten = 0;
+            status = BCryptEncrypt(key, input, sizeof(input), nullptr, nullptr, 0, output, sizeof(output), &bytesWritten, 0);
+            if (status < 0 || bytesWritten != sizeof(output))
+                goto cleanup;
+
+            for (size_t index = 0; index < chunkSize; index++)
+                data[offset + index] ^= output[index];
+
+            for (int counterIndex = 15; counterIndex >= 0; counterIndex--)
+            {
+                counter[counterIndex] = static_cast<BYTE>(counter[counterIndex] + 1);
+                if (counter[counterIndex] != 0)
+                    break;
+            }
+        }
+
+        status = 0;
+
+    cleanup:
+        if (key != nullptr)
+            BCryptDestroyKey(key);
+        if (algorithm != nullptr)
+            BCryptCloseAlgorithmProvider(algorithm, 0);
+        return status >= 0;
+    }
+
+    bool EncodeNeiCsvText(const std::wstring& editText, const std::wstring& archivePath, const std::vector<BYTE>& subheaderBytes, std::vector<BYTE>& encoded)
+    {
+        std::wstring text = editText;
+        if (!text.empty() && text[0] == 0xFEFF)
+            text.erase(text.begin());
+
+        text = NormalizeCsvLineEndings(text);
+
+        int bodyLength = WideCharToMultiByte(932, 0, text.c_str(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+        if (bodyLength <= 0 && !text.empty())
+            return false;
+
+        std::vector<BYTE> body;
+        body.resize(bodyLength);
+        BOOL usedDefaultChar = FALSE;
+        WideCharToMultiByte(932, 0, text.c_str(), static_cast<int>(text.size()), reinterpret_cast<char*>(body.data()), bodyLength, nullptr, &usedDefaultChar);
+        if (usedDefaultChar)
+        {
+            Debugger::Log(
+                L"warning: %s: edited CSV contains characters not representable in Shift-JIS; they were replaced.",
+                archivePath.c_str());
+        }
+
+        encoded.assign(20, 0);
+        const BYTE defaultSubheader[10] = { '.', 'c', 's', 'v', 0, 0, 0, 0, 0, 0 };
+        if (subheaderBytes.size() == sizeof(defaultSubheader))
+            memcpy(encoded.data() + 10, subheaderBytes.data(), subheaderBytes.size());
+        else
+            memcpy(encoded.data() + 10, defaultSubheader, sizeof(defaultSubheader));
+        encoded.insert(encoded.end(), body.begin(), body.end());
+
+        DWORD crc = NeiCrc32(std::vector<BYTE>(encoded.begin() + 10, encoded.end()));
+        char crcHex[9] = {};
+        sprintf_s(crcHex, "%08x", crc);
+        memcpy(encoded.data(), crcHex, 8);
+        encoded[8] = 0;
+        encoded[9] = 0;
+
+        std::vector<BYTE> key = NeiDeriveKey(archivePath);
+        return NeiCtrXor(encoded, key.data());
+    }
+
     std::wstring GetArchiveMemberExtension(const wchar_t* pArchivePath)
     {
         return StringUtil::ToLower(Path::GetExtension(pArchivePath));
@@ -593,30 +839,42 @@ namespace
     void AddPatchFolderOverrideUrls(vector<wstring>& urls, const wstring& patchFolderPath, const wchar_t* pInArchivePath)
     {
         wstring relativePath = StringUtil::Replace<wchar_t>(pInArchivePath, L'/', L'\\');
-        wstring relativeFilePath = Path::Combine(patchFolderPath, relativePath);
-        AddFileOverrideUrl(urls, relativeFilePath);
-        AddStemMatchedFileOverrideUrls(urls, relativeFilePath);
 
-        wstring dataRelativeFilePath = Path::Combine(Path::Combine(patchFolderPath, L"data"), relativePath);
-        AddFileOverrideUrl(urls, dataRelativeFilePath);
-        AddStemMatchedFileOverrideUrls(urls, dataRelativeFilePath);
+        const wstring patchSubfolderPath = Path::Combine(patchFolderPath, L"patch");
+        const wstring patchDataPath = Path::Combine(patchFolderPath, L"data");
+        const wstring patchDataCsvPath = Path::Combine(patchDataPath, L"csv");
+
+        const std::vector<wstring> prioritizedRoots =
+        {
+            patchSubfolderPath,
+            patchDataCsvPath,
+            patchDataPath,
+            patchFolderPath,
+        };
+
+        for (const wstring& root : prioritizedRoots)
+        {
+            wstring relativeFilePath = Path::Combine(root, relativePath);
+            AddFileOverrideUrl(urls, relativeFilePath);
+            AddStemMatchedFileOverrideUrls(urls, relativeFilePath);
+        }
 
         const wchar_t* pFileName = wcsrchr(pInArchivePath, L'/');
         if (pFileName != nullptr && *(pFileName + 1) != 0)
         {
-            wstring fileNamePath = Path::Combine(patchFolderPath, pFileName + 1);
-            AddFileOverrideUrl(urls, fileNamePath);
-
-            wstring dataFileNamePath = Path::Combine(Path::Combine(patchFolderPath, L"data"), pFileName + 1);
-            AddFileOverrideUrl(urls, dataFileNamePath);
+            for (const wstring& root : prioritizedRoots)
+            {
+                wstring fileNamePath = Path::Combine(root, pFileName + 1);
+                AddFileOverrideUrl(urls, fileNamePath);
+            }
         }
 
         const wstring requestedFileName = Path::GetFileName(relativePath);
         const bool matchStem = Path::GetExtension(requestedFileName).empty();
-        AddRecursiveFileNameOverrideUrls(urls, patchFolderPath, requestedFileName, matchStem);
-
-        const wstring patchDataPath = Path::Combine(patchFolderPath, L"data");
+        AddRecursiveFileNameOverrideUrls(urls, patchSubfolderPath, requestedFileName, matchStem);
+        AddRecursiveFileNameOverrideUrls(urls, patchDataCsvPath, requestedFileName, matchStem);
         AddRecursiveFileNameOverrideUrls(urls, patchDataPath, requestedFileName, matchStem);
+        AddRecursiveFileNameOverrideUrls(urls, patchFolderPath, requestedFileName, matchStem);
     }
 
     void AddArchiveOverrideUrls(vector<wstring>& urls, const wstring& archivePath, const wchar_t* pInArchivePath)
@@ -662,6 +920,32 @@ namespace
     }
 }
 
+bool Patcher::TryReadOriginalNeiSubheader(const std::wstring& archivePath, std::vector<BYTE>& subheader)
+{
+    subheader.clear();
+
+    void* pComStream = OriginalTVPCreateIStream(ttstr(archivePath.c_str()), 0);
+    if (pComStream == nullptr)
+        return false;
+
+    tTJSBinaryStream* pStream = Kirikiri::TVPCreateBinaryStreamAdapter(pComStream);
+    if (pStream == nullptr)
+        return false;
+
+    const tjs_uint64 size = pStream->GetSize();
+    if (size < 20)
+        return false;
+
+    std::vector<BYTE> data;
+    data.resize(20);
+    pStream->Seek(0, SEEK_SET);
+    if (pStream->Read(data.data(), static_cast<tjs_uint>(data.size())) != data.size())
+        return false;
+
+    subheader.assign(data.begin() + 10, data.begin() + 20);
+    return true;
+}
+
 tTJSBinaryStream* Patcher::CreateLooseEncodedMdatStream(const std::wstring& url, const std::vector<BYTE>& originalHeader)
 {
     try
@@ -698,6 +982,72 @@ tTJSBinaryStream* Patcher::CreateLooseEncodedMdatStream(const std::wstring& url,
         Debugger::Log(L"Loose MDAT encode failed for %s: unknown exception", url.c_str());
         return nullptr;
     }
+}
+
+tTJSBinaryStream* Patcher::CreateLooseEncodedNeiStream(const std::wstring& url, const std::wstring& archivePath)
+{
+    try
+    {
+        std::vector<BYTE> encoded;
+        if (!TryBuildLooseEncodedNeiBytes(url, archivePath, encoded))
+            return nullptr;
+
+        Debugger::Log(L"Encoding loose NEI CSV override %s", UrlToFilePath(url).c_str());
+        auto* pStream = new VectorBinaryStream(std::move(encoded));
+        tTJSBinaryStream::ApplyWrappedVTable(pStream);
+        return pStream;
+    }
+    catch (const std::exception& ex)
+    {
+        Debugger::Log(L"Loose NEI CSV encode failed for %s: %hs", url.c_str(), ex.what());
+        return nullptr;
+    }
+    catch (...)
+    {
+        Debugger::Log(L"Loose NEI CSV encode failed for %s: unknown exception", url.c_str());
+        return nullptr;
+    }
+}
+
+bool Patcher::TryBuildLooseEncodedNeiBytes(const std::wstring& url, const std::wstring& archivePath, std::vector<BYTE>& encoded)
+{
+    encoded.clear();
+
+    const std::wstring filePath = UrlToFilePath(url);
+    if (filePath.empty())
+    {
+        Debugger::Log(L"Loose NEI CSV path decode failed for %s", url.c_str());
+        return false;
+    }
+
+    if (GetFileAttributes(filePath.c_str()) == INVALID_FILE_ATTRIBUTES)
+    {
+        Debugger::Log(L"Loose NEI CSV missing for %s => %s", url.c_str(), filePath.c_str());
+        return false;
+    }
+
+    std::vector<BYTE> fileBytes = ReadFileBytes(filePath);
+    std::wstring decodedText;
+    if (!TryDecodeLooseCsvEditText(fileBytes, decodedText))
+    {
+        Debugger::Log(L"Loose NEI CSV decode failed for %s", filePath.c_str());
+        return false;
+    }
+
+    std::vector<BYTE> subheaderBytes;
+    if (!TryReadOriginalNeiSubheader(archivePath, subheaderBytes))
+    {
+        Debugger::Log(L"Loose NEI CSV subheader READ FAILED for %s, using fallback", archivePath.c_str());
+        subheaderBytes = { '.', 'c', 's', 'v', 0, 0, 0, 0, 0, 0 };
+    }
+
+    if (!EncodeNeiCsvText(decodedText, archivePath, subheaderBytes, encoded))
+    {
+        Debugger::Log(L"Loose NEI CSV encode frame failed for %s", filePath.c_str());
+        return false;
+    }
+
+    return true;
 }
 
 bool Patcher::PatchSignatureCheck(HMODULE hModule)
@@ -777,6 +1127,14 @@ vector<wstring> Patcher::BuildOverrideUrlsForPath(const wchar_t* pInArchivePath)
     return BuildOverrideUrls(folderPath, pInArchivePath);
 }
 
+wstring Patcher::GetLooseCsvSearchPath(const wstring& archiveMemberPath)
+{
+    if (StringUtil::ToLower(Path::GetExtension(archiveMemberPath)) == L"nei")
+        return Path::ChangeExtension(archiveMemberPath, L"csv");
+
+    return archiveMemberPath;
+}
+
 bool Patcher::WouldRedirectToSelf(const std::wstring& candidateUrl, const std::wstring& currentTarget)
 {
     if (candidateUrl.empty() || currentTarget.empty())
@@ -808,7 +1166,7 @@ ttstr Patcher::CustomTVPGetPlacedPath(const ttstr& name)
     pInArchivePath++;
 
     const std::wstring extension = GetArchiveMemberExtension(pInArchivePath);
-    if (extension == L"mdat" || extension == L"mdatb")
+    if (extension == L"mdat" || extension == L"mdatb" || extension == L"nei")
         return placedPath;
 
     static wstring folderPath = Path::GetModuleFolderPath(nullptr);
@@ -863,7 +1221,9 @@ void* Patcher::CustomTVPCreateIStream(const ttstr& name, tjs_uint32 flags)
             return OriginalTVPCreateIStream(name, flags);
 
         static wstring folderPath = Path::GetModuleFolderPath(nullptr);
-        vector<wstring> urls = BuildOverrideUrls(folderPath, pInArchivePath);
+        const bool isNei = extension == L"nei";
+        const std::wstring csvSearchPath = isNei ? GetLooseCsvSearchPath(pInArchivePath) : pInArchivePath;
+        vector<wstring> urls = BuildOverrideUrls(folderPath, csvSearchPath.c_str());
 
         for (const wstring& url : urls)
         {
@@ -871,8 +1231,97 @@ void* Patcher::CustomTVPCreateIStream(const ttstr& name, tjs_uint32 flags)
             if (shouldLog)
                 Debugger::Log(L"Checked istream override candidate %s => %s", url.c_str(), exists ? L"found" : L"missing");
 
-            if (exists)
+            if (!exists)
+                continue;
+
+            if (WouldRedirectToSelf(url, placedPath.c_str()) || WouldRedirectToSelf(url, name.c_str()))
             {
+                if (shouldLog)
+                    Debugger::Log(L"Skipping istream self-redirect %s", url.c_str());
+                continue;
+            }
+
+            Debugger::Log(L"Redirecting istream %s to %s", name.c_str(), url.c_str());
+            if (isNei)
+            {
+                if (shouldLog)
+                    Debugger::Log(L"Attempting loose NEI CSV encode for %s", url.c_str());
+
+                std::vector<BYTE> encoded;
+                if (TryBuildLooseEncodedNeiBytes(url, pInArchivePath, encoded))
+                {
+                    const std::wstring moduleDir = Path::GetModuleFolderPath(nullptr);
+                    const std::wstring tempFolder = Path::Combine(moduleDir, L"patch/__cherryai_nei_tmp");
+                    const std::wstring tempFilePath = Path::Combine(tempFolder, Path::GetFileName(pInArchivePath));
+
+                    Directory::Create(tempFolder);
+
+                    try
+                    {
+                        {
+                            FileStream stream(tempFilePath, L"wb");
+                            if (!encoded.empty())
+                                stream.Write(encoded.data(), static_cast<int>(encoded.size()));
+                        }
+
+                        const std::wstring tempUrl = FilePathToStorageUrl(tempFilePath);
+                        if (void* pComStream = OriginalTVPCreateIStream(ttstr(tempUrl.c_str()), flags))
+                        {
+                            if (shouldLog)
+                                Debugger::Log(L"Loose NEI CSV encode returned temp-file IStream for %s", url.c_str());
+                            return pComStream;
+                        }
+
+                        DWORD error = GetLastError();
+                        Debugger::Log(
+                            L"OriginalTVPCreateIStream failed for temp NEI %s (error=%u: %s)",
+                            tempUrl.c_str(),
+                            error,
+                            FormatWin32ErrorMessage(error).c_str());
+                    }
+                    catch (const std::exception& ex)
+                    {
+                        Debugger::Log(L"Failed to write temp NEI file %s: %hs", tempFilePath.c_str(), ex.what());
+                    }
+                }
+
+                if (tTJSBinaryStream* pEncodedStream = CreateLooseEncodedNeiStream(url, pInArchivePath))
+                {
+                    if (shouldLog)
+                        Debugger::Log(L"Loose NEI CSV encode returned binary stream fallback for %s", url.c_str());
+                    return pEncodedStream;
+                }
+
+                if (shouldLog)
+                    Debugger::Log(L"NEI encode failed for %s, trying raw NEI fallback", url.c_str());
+                continue;
+            }
+
+            if (void* pComStream = OriginalTVPCreateIStream(url.c_str(), flags))
+                return pComStream;
+
+            DWORD error = GetLastError();
+            Debugger::Log(
+                L"OriginalTVPCreateIStream failed for %s (error=%u: %s)",
+                url.c_str(),
+                error,
+                FormatWin32ErrorMessage(error).c_str());
+            continue;
+        }
+
+        if (isNei)
+        {
+            vector<wstring> rawNeiUrls = BuildOverrideUrls(folderPath, pInArchivePath);
+
+            for (const wstring& url : rawNeiUrls)
+            {
+                bool exists = Kirikiri::TVPIsExistentStorageNoSearchNoNormalize(url.c_str());
+                if (shouldLog)
+                    Debugger::Log(L"Checked istream override candidate %s => %s", url.c_str(), exists ? L"found" : L"missing");
+
+                if (!exists)
+                    continue;
+
                 if (WouldRedirectToSelf(url, placedPath.c_str()) || WouldRedirectToSelf(url, name.c_str()))
                 {
                     if (shouldLog)
@@ -881,7 +1330,15 @@ void* Patcher::CustomTVPCreateIStream(const ttstr& name, tjs_uint32 flags)
                 }
 
                 Debugger::Log(L"Redirecting istream %s to %s", name.c_str(), url.c_str());
-                return OriginalTVPCreateIStream(url.c_str(), flags);
+                if (void* pComStream = OriginalTVPCreateIStream(url.c_str(), flags))
+                    return pComStream;
+
+                DWORD error = GetLastError();
+                Debugger::Log(
+                    L"OriginalTVPCreateIStream failed for %s (error=%u: %s)",
+                    url.c_str(),
+                    error,
+                    FormatWin32ErrorMessage(error).c_str());
             }
         }
     }
@@ -920,7 +1377,9 @@ void* Patcher::CustomTVPCreateTextStreamForRead(const ttstr& name, const ttstr& 
         return OriginalTVPCreateTextStreamForRead(name, mode);
 
     static wstring folderPath = Path::GetModuleFolderPath(nullptr);
-    vector<wstring> urls = BuildOverrideUrls(folderPath, pInArchivePath);
+    const bool isNei = extension == L"nei";
+    const std::wstring csvSearchPath = isNei ? GetLooseCsvSearchPath(pInArchivePath) : pInArchivePath;
+    vector<wstring> urls = BuildOverrideUrls(folderPath, csvSearchPath.c_str());
 
     for (const wstring& url : urls)
     {
@@ -928,8 +1387,43 @@ void* Patcher::CustomTVPCreateTextStreamForRead(const ttstr& name, const ttstr& 
         if (shouldLog)
             Debugger::Log(L"Checked text-stream override candidate %s => %s", url.c_str(), exists ? L"found" : L"missing");
 
-        if (exists)
+        if (!exists)
+            continue;
+
+        if (WouldRedirectToSelf(url, placedPath.c_str()) || WouldRedirectToSelf(url, name.c_str()))
         {
+            if (shouldLog)
+                Debugger::Log(L"Skipping text-stream self-redirect %s", url.c_str());
+            continue;
+        }
+
+        TryLogFirstLooseScenarioLine(name.c_str(), url);
+        Debugger::Log(L"Redirecting text stream %s to %s", name.c_str(), url.c_str());
+        if (void* pTextStream = OriginalTVPCreateTextStreamForRead(url.c_str(), mode))
+            return pTextStream;
+
+        DWORD error = GetLastError();
+        Debugger::Log(
+            L"OriginalTVPCreateTextStreamForRead failed for %s (error=%u: %s)",
+            url.c_str(),
+            error,
+            FormatWin32ErrorMessage(error).c_str());
+        continue;
+    }
+
+    if (isNei)
+    {
+        vector<wstring> rawNeiUrls = BuildOverrideUrls(folderPath, pInArchivePath);
+
+        for (const wstring& url : rawNeiUrls)
+        {
+            bool exists = Kirikiri::TVPIsExistentStorageNoSearchNoNormalize(url.c_str());
+            if (shouldLog)
+                Debugger::Log(L"Checked text-stream override candidate %s => %s", url.c_str(), exists ? L"found" : L"missing");
+
+            if (!exists)
+                continue;
+
             if (WouldRedirectToSelf(url, placedPath.c_str()) || WouldRedirectToSelf(url, name.c_str()))
             {
                 if (shouldLog)
@@ -937,9 +1431,17 @@ void* Patcher::CustomTVPCreateTextStreamForRead(const ttstr& name, const ttstr& 
                 continue;
             }
 
-                TryLogFirstLooseScenarioLine(name.c_str(), url);
+            TryLogFirstLooseScenarioLine(name.c_str(), url);
             Debugger::Log(L"Redirecting text stream %s to %s", name.c_str(), url.c_str());
-            return OriginalTVPCreateTextStreamForRead(url.c_str(), mode);
+            if (void* pTextStream = OriginalTVPCreateTextStreamForRead(url.c_str(), mode))
+                return pTextStream;
+
+            DWORD error = GetLastError();
+            Debugger::Log(
+                L"OriginalTVPCreateTextStreamForRead failed for %s (error=%u: %s)",
+                url.c_str(),
+                error,
+                FormatWin32ErrorMessage(error).c_str());
         }
     }
 
@@ -1034,7 +1536,7 @@ tTJSBinaryStream* Patcher::CustomStorageMediaOpen(iTVPStorageMedia* pMedia, cons
 
     const wchar_t* pFilePath = wcschr(name.c_str(), L'/') + 1;
     const std::wstring extension = GetArchiveMemberExtension(pFilePath);
-    if (extension == L"mdat" || extension == L"mdatb")
+    if (extension == L"mdat" || extension == L"mdatb" || extension == L"nei")
         return OriginalStorageMediaOpen[pMedia](pMedia, name, flags);
 
     wstring looseFilePath = Path::Combine(Path::Combine(folderPath, L"unencrypted"), StringUtil::Replace<wchar_t>(pFilePath, L'/', L'\\'));

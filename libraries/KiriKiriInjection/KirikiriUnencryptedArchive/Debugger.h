@@ -22,6 +22,7 @@ public:
     static void             RemoveMemoryBreakpoint          (void* address);
     static void             ClearMemoryBreakpoints          ();
     static void             SetMemoryBreakpointHandler      (const std::function<void (CONTEXT*)>& handler);
+    static void             PatchMessageBoxHooks            ();
 
     static void             AddHardwareBreakpoint           (void* address, HWBreakpointSize size, HWBreakpointMode mode, const std::function<void (CONTEXT*)>& handler);
     static void             RemoveHardwareBreakpoint        (void* address);
@@ -88,6 +89,8 @@ private:
     static void             ExecuteBreakpointHandler        ();
 
     static BOOL WINAPI      VirtualProtectHook              (LPVOID lpAddress, SIZE_T dwSize, DWORD flNewProtect, PDWORD lpflOldProtect);
+    static int WINAPI       MessageBoxAHook                 (HWND hWnd, LPCSTR lpText, LPCSTR lpCaption, UINT uType);
+    static int WINAPI       MessageBoxWHook                 (HWND hWnd, LPCWSTR lpText, LPCWSTR lpCaption, UINT uType);
 
     static HMODULE WINAPI   LoadLibraryAHook                (LPCSTR  lpLibFileName);
     static HMODULE WINAPI   LoadLibraryWHook                (LPCWSTR lpLibFileName);
@@ -104,6 +107,8 @@ private:
 
     static inline std::vector<std::function<void (const wchar_t*, HMODULE)>> DllLoadHandlers{};
     static inline decltype(VirtualProtect)* OriginalVirtualProtect{};
+    static inline decltype(MessageBoxA)* OriginalMessageBoxA{};
+    static inline decltype(MessageBoxW)* OriginalMessageBoxW{};
     static inline decltype(LoadLibraryA)* OriginalLoadLibraryA{};
     static inline decltype(LoadLibraryW)* OriginalLoadLibraryW{};
     static inline decltype(LoadLibraryExA)* OriginalLoadLibraryExA{};

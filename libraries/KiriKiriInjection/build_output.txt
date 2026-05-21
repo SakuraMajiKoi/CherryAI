@@ -1,0 +1,85 @@
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.11.5
+** Copyright (c) 2022 Microsoft Corporation
+**********************************************************************
+MSBuild version 17.11.9+a69bbaaf5 for .NET Framework
+Build started 5/21/2026 4:22:51 AM.
+
+     1>Project "C:\CherryAI\CherryAI\libraries\KiriKiriInjection\KirikiriUnencryptedArchive\KirikiriUnencryptedArchive.vcxproj" on node 1 (default targets).
+     1>Project "C:\CherryAI\CherryAI\libraries\KiriKiriInjection\KirikiriUnencryptedArchive\KirikiriUnencryptedArchive.vcxproj" (1) is building "C:\CherryAI\CherryAI\libraries\KiriKiriInjection\Detours\Detours.vcxproj" (2) on node 1 (default targets).
+     2>InitializeBuildStatus:
+         Creating "Detours\Release\Detours.tlog\unsuccessfulbuild" because "AlwaysCreate" was specified.
+         Touching "Detours\Release\Detours.tlog\unsuccessfulbuild".
+       ClCompile:
+         All outputs are up-to-date.
+       Lib:
+         All outputs are up-to-date.
+         Detours.vcxproj -> C:\CherryAI\CherryAI\libraries\KiriKiriInjection\Detours\Release\Detours.lib
+       FinalizeBuildStatus:
+         Deleting file "Detours\Release\Detours.tlog\unsuccessfulbuild".
+         Touching "Detours\Release\Detours.tlog\Detours.lastbuildstate".
+     2>Done Building Project "C:\CherryAI\CherryAI\libraries\KiriKiriInjection\Detours\Detours.vcxproj" (default targets).
+     1>InitializeBuildStatus:
+         Creating "Kirikiri.68FD9BD1\Release\Kirikiri.68FD9BD1.tlog\unsuccessfulbuild" because "AlwaysCreate" was specified.
+         Touching "Kirikiri.68FD9BD1\Release\Kirikiri.68FD9BD1.tlog\unsuccessfulbuild".
+       ClCompile:
+         All outputs are up-to-date.
+         C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.34.31933\bin\HostX64\x86\CL.exe /c /I. /IC:\CherryAI\CherryAI\libraries\KiriKiriInjection\Common\ /Zi /nologo /W3 /WX- /diagnostics:column /sdl /O2 /Oi /Oy- /GL /D _CRT_SECURE_NO_DEPRECATE /D _WINDLL /D _UNICODE /D UNICODE /Gm- /EHsc /MD /GS /Gy /fp:precise /Zc:wchar_t /Zc:forScope /Zc:inline /std:c++latest /Yu"stdafx.h" /Fp"Kirikiri.68FD9BD1\Release\version.pch" /Fo"Kirikiri.68FD9BD1\Release\\" /Fd"Kirikiri.68FD9BD1\Release\vc143.pdb" /external:W3 /Gd /TP /analyze- /FC /errorReport:queue Patcher.cpp
+         Patcher.cpp
+     1>C:\CherryAI\CherryAI\libraries\KiriKiriInjection\KirikiriUnencryptedArchive\Patcher.cpp(185,32): warning C4244: "Argument": Konvertierung von "__int64" in "const unsigned int", moglicher Datenverlust [C:\CherryAI\CherryAI\libraries\KiriKiriInjection\KirikiriUnencryptedArchive\KirikiriUnencryptedArchive.vcxproj]
+     1>C:\CherryAI\CherryAI\libraries\KiriKiriInjection\KirikiriUnencryptedArchive\Patcher.cpp(1506,33): warning C4244: "Argument": Konvertierung von "tjs_uint64" in "const unsigned int", moglicher Datenverlust [C:\CherryAI\CherryAI\libraries\KiriKiriInjection\KirikiriUnencryptedArchive\KirikiriUnencryptedArchive.vcxproj]
+     1>C:\CherryAI\CherryAI\libraries\KiriKiriInjection\Common\StringUtil.h(98,22): warning C4018: "<": Konflikt zwischen "signed" und "unsigned" [C:\CherryAI\CherryAI\libraries\KiriKiriInjection\KirikiriUnencryptedArchive\KirikiriUnencryptedArchive.vcxproj]
+       C:\CherryAI\CherryAI\libraries\KiriKiriInjection\KirikiriUnencryptedArchive\Patcher.cpp(718,86): message : Siehe Verweis auf die gerade kompilierte Instanziierung "std::vector<std::wstring,std::allocator<std::wstring>> StringUtil::Split<wchar_t>(const std::basic_string<wchar_t,std::char_traits<wchar_t>,std::allocator<wchar_t>> &,const std::basic_string<wchar_t,std::char_traits<wchar_t>,std::allocator<wchar_t>> &)" der Funktions-Vorlage. [C:\CherryAI\CherryAI\libraries\KiriKiriInjection\KirikiriUnencryptedArchive\KirikiriUnencryptedArchive.vcxproj]
+       Link:
+         C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.34.31933\bin\HostX64\x86\link.exe /ERRORREPORT:QUEUE /OUT:"Release\version.dll" /NOLOGO Imagehlp.lib kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib /DEF:"exports.def" /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG:FULL /PDB:"Release\version.pdb" /OPT:REF /OPT:ICF /LTCG:incremental /LTCGOUT:"Kirikiri.68FD9BD1\Release\version.iobj" /TLBID:1 /DYNAMICBASE /NXCOMPAT /IMPLIB:"Release\version.lib" /MACHINE:X86 /SAFESEH /DLL Kirikiri.68FD9BD1\Release\Directory.obj
+         Kirikiri.68FD9BD1\Release\FileStream.obj
+         Kirikiri.68FD9BD1\Release\MemoryUtil.obj
+         Kirikiri.68FD9BD1\Release\PageUnprotector.obj
+         Kirikiri.68FD9BD1\Release\Path.obj
+         Kirikiri.68FD9BD1\Release\Stream.obj
+         Kirikiri.68FD9BD1\Release\StringUtil.obj
+         Kirikiri.68FD9BD1\Release\CompilerHelper.obj
+         Kirikiri.68FD9BD1\Release\CustomTVPXP3ArchiveStream.obj
+         Kirikiri.68FD9BD1\Release\FontPatch.obj
+         Kirikiri.68FD9BD1\Release\ImportHooker.obj
+         Kirikiri.68FD9BD1\Release\ProxyFunctionExporter.obj
+         Kirikiri.68FD9BD1\Release\Patcher.obj
+         Kirikiri.68FD9BD1\Release\PE.obj
+         Kirikiri.68FD9BD1\Release\Proxy.obj
+         Kirikiri.68FD9BD1\Release\Debugger.obj
+         Kirikiri.68FD9BD1\Release\Kirikiri.obj
+         Kirikiri.68FD9BD1\Release\tTJSString.obj
+         Kirikiri.68FD9BD1\Release\tTJSVariant.obj
+         Kirikiri.68FD9BD1\Release\main.obj
+         Kirikiri.68FD9BD1\Release\stdafx.obj
+         Kirikiri.68FD9BD1\Release\CxdecHelper.obj
+         C:\CherryAI\CherryAI\libraries\KiriKiriInjection\Detours\Release\Detours.lib
+            Bibliothek "Release\version.lib" und Objekt "Release\version.exp" werden erstellt.
+         Code wird generiert.
+         0 of 3103 functions ( 0.0%) were compiled, the rest were copied from previous compilation.
+           0 functions were new in current compilation
+           0 functions had inline decision re-evaluated but remain unchanged
+         Codegenerierung ist abgeschlossen.
+         KirikiriUnencryptedArchive.vcxproj -> C:\CherryAI\CherryAI\libraries\KiriKiriInjection\KirikiriUnencryptedArchive\Release\version.dll
+       PostBuildEvent:
+         Deploying version.dll to the game folder
+         if exist "D:\Translations\Taisho\大正メビウスライン\大正メビウスライン\" copy /Y "C:\CherryAI\CherryAI\libraries\KiriKiriInjection\KirikiriUnencryptedArchive\Release\version.dll" "D:\Translations\Taisho\大正メビウスライン\大正メビウスライン\version.dll" >nul
+         :VCEnd
+       FinalizeBuildStatus:
+         Deleting file "Kirikiri.68FD9BD1\Release\Kirikiri.68FD9BD1.tlog\unsuccessfulbuild".
+         Touching "Kirikiri.68FD9BD1\Release\Kirikiri.68FD9BD1.tlog\KirikiriUnencryptedArchive.lastbuildstate".
+     1>Done Building Project "C:\CherryAI\CherryAI\libraries\KiriKiriInjection\KirikiriUnencryptedArchive\KirikiriUnencryptedArchive.vcxproj" (default targets).
+
+Build succeeded.
+
+       "C:\CherryAI\CherryAI\libraries\KiriKiriInjection\KirikiriUnencryptedArchive\KirikiriUnencryptedArchive.vcxproj" (default target) (1) ->
+       (ClCompile target) -> 
+         C:\CherryAI\CherryAI\libraries\KiriKiriInjection\KirikiriUnencryptedArchive\Patcher.cpp(185,32): warning C4244: "Argument": Konvertierung von "__int64" in "const unsigned int", moglicher Datenverlust [C:\CherryAI\CherryAI\libraries\KiriKiriInjection\KirikiriUnencryptedArchive\KirikiriUnencryptedArchive.vcxproj]
+         C:\CherryAI\CherryAI\libraries\KiriKiriInjection\KirikiriUnencryptedArchive\Patcher.cpp(1506,33): warning C4244: "Argument": Konvertierung von "tjs_uint64" in "const unsigned int", moglicher Datenverlust [C:\CherryAI\CherryAI\libraries\KiriKiriInjection\KirikiriUnencryptedArchive\KirikiriUnencryptedArchive.vcxproj]
+         C:\CherryAI\CherryAI\libraries\KiriKiriInjection\Common\StringUtil.h(98,22): warning C4018: "<": Konflikt zwischen "signed" und "unsigned" [C:\CherryAI\CherryAI\libraries\KiriKiriInjection\KirikiriUnencryptedArchive\KirikiriUnencryptedArchive.vcxproj]
+
+    3 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:01.50
+Built C:\CherryAI\CherryAI\libraries\KiriKiriInjection\KirikiriUnencryptedArchive\Release\version.dll

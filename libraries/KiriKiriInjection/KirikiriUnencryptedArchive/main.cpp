@@ -11,10 +11,19 @@ BOOL WINAPI DllMain(HINSTANCE hInstance, DWORD reason, LPVOID reserved)
         Debugger::RegisterDllLoadHandler(
             [](const wchar_t* pwszDllPath, HMODULE hDll)
             {
+                if (pwszDllPath != nullptr)
+                {
+                    std::wstring dllName = StringUtil::ToLower(Path::GetFileName(pwszDllPath));
+                    if (dllName == L"user32.dll")
+                        Debugger::PatchMessageBoxHooks();
+                }
+
                 if (Debugger::FindExport(hDll, "V2Link") != nullptr)
                     Patcher::PatchSignatureCheck(hDll);
             }
         );
+
+        Debugger::PatchMessageBoxHooks();
 
         Kirikiri::Init(
             []

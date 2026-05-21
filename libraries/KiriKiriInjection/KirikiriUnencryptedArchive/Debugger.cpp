@@ -49,6 +49,24 @@ namespace
         return StringUtil::ToUTF16(text);
     }
 
+    std::wstring DecodeAnsiForLog(const char* text)
+    {
+        if (text == nullptr)
+            return L"<null>";
+
+        int length = static_cast<int>(strlen(text));
+        if (length == 0)
+            return L"";
+
+        int wideLength = MultiByteToWideChar(CP_ACP, 0, text, length, nullptr, 0);
+        if (wideLength <= 0)
+            return StringUtil::ToUTF16(text);
+
+        std::wstring result(wideLength, L'\0');
+        MultiByteToWideChar(CP_ACP, 0, text, length, result.data(), wideLength);
+        return result;
+    }
+
     void EnsureLogConfigLoaded()
     {
         if (g_logConfig.loaded)
@@ -206,12 +224,67 @@ void Debugger::RegisterDllLoadHandler(const function<void (const wchar_t*, HMODU
     }
 }
 
+void Debugger::PatchMessageBoxHooks()
+{
+    static bool patched = false;
+    if (patched)
+        return;
+
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (user32 == nullptr)
+    {
+        Debugger::Log(L"MessageBox hook install skipped: user32.dll not loaded yet");
+        return;
+    }
+
+    OriginalMessageBoxA = reinterpret_cast<decltype(OriginalMessageBoxA)>(GetProcAddress(user32, "MessageBoxA"));
+    OriginalMessageBoxW = reinterpret_cast<decltype(OriginalMessageBoxW)>(GetProcAddress(user32, "MessageBoxW"));
+    if (OriginalMessageBoxA == nullptr || OriginalMessageBoxW == nullptr)
+    {
+        Debugger::Log(L"MessageBox hook install failed: exports missing in user32.dll");
+        return;
+    }
+
+    DetourTransactionBegin();
+    DetourAttach((void**)&OriginalMessageBoxA, MessageBoxAHook);
+    DetourAttach((void**)&OriginalMessageBoxW, MessageBoxWHook);
+    if (DetourTransactionCommit() == NO_ERROR)
+    {
+        patched = true;
+        Debugger::Log(L"MessageBox hooks installed");
+    }
+    else
+    {
+        Debugger::Log(L"MessageBox hook install failed during DetourTransactionCommit");
+    }
+}
+
 void* Debugger::FindExport(HMODULE hModule, const char* pszName)
 {
     FindExportContext context{};
     context.pszName = pszName;
     DetourEnumerateExports(hModule, &context, CheckExport);
     return context.pFunction;
+}
+
+int WINAPI Debugger::MessageBoxAHook(HWND hWnd, LPCSTR lpText, LPCSTR lpCaption, UINT uType)
+{
+    Debugger::Log(
+        L"MessageBoxA caption=%ls text=%ls type=%08X",
+        DecodeAnsiForLog(lpCaption).c_str(),
+        DecodeAnsiForLog(lpText).c_str(),
+        uType);
+    return OriginalMessageBoxA(hWnd, lpText, lpCaption, uType);
+}
+
+int WINAPI Debugger::MessageBoxWHook(HWND hWnd, LPCWSTR lpText, LPCWSTR lpCaption, UINT uType)
+{
+    Debugger::Log(
+        L"MessageBoxW caption=%ls text=%ls type=%08X",
+        lpCaption != nullptr ? lpCaption : L"<null>",
+        lpText != nullptr ? lpText : L"<null>",
+        uType);
+    return OriginalMessageBoxW(hWnd, lpText, lpCaption, uType);
 }
 
 BOOL Debugger::CheckExport(PVOID pContext, ULONG nOrdinal, LPCSTR pszName, PVOID pCode)
@@ -346,6 +419,15 @@ long Debugger::HandleException(EXCEPTION_POINTERS* pException)
 		case STATUS_SINGLE_STEP:
             handled = HandleHardwareBreakpoint(pException->ContextRecord);
             break;
+    }
+
+    if (!handled)
+    {
+        Debugger::Log(
+            L"Unhandled SEH exception code=%08X flags=%08X address=%p",
+            pException->ExceptionRecord->ExceptionCode,
+            pException->ExceptionRecord->ExceptionFlags,
+            pException->ExceptionRecord->ExceptionAddress);
     }
 
     return handled ? EXCEPTION_CONTINUE_EXECUTION : EXCEPTION_CONTINUE_SEARCH;
