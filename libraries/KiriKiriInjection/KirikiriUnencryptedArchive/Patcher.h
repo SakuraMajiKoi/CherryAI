@@ -19,8 +19,11 @@ private:
     static tTJSBinaryStream*    CreateLooseEncodedNeiStream            (const std::wstring& url, const std::wstring& archivePath);
     static bool                 TryBuildLooseEncodedNeiBytes           (const std::wstring& url, const std::wstring& archivePath, std::vector<BYTE>& encoded);
     static bool                 TryReadOriginalNeiSubheader            (const std::wstring& archivePath, std::vector<BYTE>& subheader);
+    static bool                 IsRawPngStorageUrl                      (const std::wstring& url);
+    static bool                 TryResolveTlgOverrideUrl                (const std::wstring& candidateUrl, const std::wstring& archiveMemberPath, std::wstring& resolvedUrl);
     static bool                 WouldRedirectToSelf                    (const std::wstring& candidateUrl, const std::wstring& currentTarget);
     static std::wstring         GetLooseCsvSearchPath                  (const std::wstring& archiveMemberPath);
+    static std::vector<std::wstring> GetLooseImageSearchPaths          (const std::wstring& archiveMemberPath);
     static ttstr __stdcall      CustomTVPGetPlacedPath                  (const ttstr& name);
     static void* __stdcall      CustomTVPCreateIStream                  (const ttstr& name, tjs_uint32 flags);
     static void* __stdcall      CustomTVPCreateTextStreamForRead        (const ttstr& name, const ttstr& mode);
@@ -47,6 +50,7 @@ private:
             {
                 const std::wstring extension = StringUtil::ToLower(Path::GetExtension(pItem->Name.c_str()));
                 const bool isNei = extension == L"nei";
+                const bool isTlg = extension == L"tlg";
                 
                 // NEI files should be handled by CustomTVPCreateIStream instead
                 if (isNei)
@@ -57,9 +61,23 @@ private:
                 const bool shouldLog =
                     wcsstr(pItem->Name.c_str(), L"uipsd/") != nullptr ||
                     wcsstr(pItem->Name.c_str(), L"window@") != nullptr ||
-                    wcsstr(pItem->Name.c_str(), L".png") != nullptr;
+                    wcsstr(pItem->Name.c_str(), L".png") != nullptr ||
+                    wcsstr(pItem->Name.c_str(), L".tlg") != nullptr;
 
-                std::vector<std::wstring> urls = BuildOverrideUrlsForPath(csvSearchPath.c_str());
+                std::vector<std::wstring> urls;
+                if (isTlg)
+                {
+                    const std::vector<std::wstring> imageSearchPaths = GetLooseImageSearchPaths(pItem->Name.c_str());
+                    for (const std::wstring& searchPath : imageSearchPaths)
+                    {
+                        std::vector<std::wstring> imageUrls = BuildOverrideUrlsForPath(searchPath.c_str());
+                        urls.insert(urls.end(), imageUrls.begin(), imageUrls.end());
+                    }
+                }
+                else
+                {
+                    urls = BuildOverrideUrlsForPath(csvSearchPath.c_str());
+                }
                 for (const std::wstring& url : urls)
                 {
                     bool exists = Kirikiri::TVPIsExistentStorageNoSearchNoNormalize(url.c_str());
@@ -77,12 +95,20 @@ private:
                         continue;
                     }
 
-                    Debugger::Log(L"Redirecting archive stream %s to %s ext=%s", pItem->Name.c_str(), url.c_str(), extension.c_str());
+                    std::wstring finalUrl = url;
+                    if (isTlg && !TryResolveTlgOverrideUrl(url, pItem->Name.c_str(), finalUrl))
+                    {
+                        if (shouldLog)
+                            Debugger::Log(L"Skipping unresolved TLG archive-stream override %s -> %s", pItem->Name.c_str(), url.c_str());
+                        continue;
+                    }
+
+                    Debugger::Log(L"Redirecting archive stream %s to %s ext=%s", pItem->Name.c_str(), finalUrl.c_str(), extension.c_str());
                     if (extension == L"mdat" || extension == L"mdatb")
                     {
                         std::vector<BYTE> originalHeader = { 'w', 'a', 'r', 'c', 'f', 0xe0, 0x23, 0x00, 0x00, 0x00, 0x00 };
 
-                        if (tTJSBinaryStream* pEncodedStream = CreateLooseEncodedMdatStream(url, originalHeader))
+                        if (tTJSBinaryStream* pEncodedStream = CreateLooseEncodedMdatStream(finalUrl, originalHeader))
                             return pEncodedStream;
                     }
 
@@ -97,7 +123,7 @@ private:
                         continue;
                     }
 
-                    void* pComStream = Kirikiri::TVPCreateIStream(url.c_str(), 0);
+                    void* pComStream = Kirikiri::TVPCreateIStream(finalUrl.c_str(), 0);
                     return Kirikiri::TVPCreateBinaryStreamAdapter(pComStream);
                 }
 
