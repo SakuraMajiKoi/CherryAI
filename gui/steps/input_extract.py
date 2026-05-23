@@ -16,7 +16,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog
-from typing import TYPE_CHECKING, Any, Callable, ContextManager, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Callable, ContextManager, Dict, List, Optional, Sequence, Set, Tuple
 import tkinter as tk
 from tkinter import ttk
 
@@ -859,6 +859,15 @@ class InputExtractionStep(BaseStep):
                 else:
                     rel_path = file_path.name
                 filtered_stage_source_paths[rel_path] = file_path
+
+            supplemental_stage_paths = self._collect_supplemental_stage_paths(
+                files_to_load,
+                stage_source_paths,
+                format_override,
+            )
+            for rel_path, source_path in supplemental_stage_paths.items():
+                filtered_stage_source_paths.setdefault(rel_path, source_path)
+
             stage_source_paths = filtered_stage_source_paths
             self._pending_stage_source_paths = dict(filtered_stage_source_paths)
 
@@ -1634,6 +1643,79 @@ class InputExtractionStep(BaseStep):
             return detect_parser(path)
         except Exception:
             return None
+
+    def _resolve_parsers_for_stage_supplements(
+        self,
+        files_to_load: Sequence[Path],
+        format_override: str,
+    ) -> List[Any]:
+        """Resolve parsers that declare supplemental files to stage into Original/."""
+        try:
+            from CherryAI.formats import detect_parser, get_parser_registry
+        except Exception:
+            return []
+
+        parsers: List[Any] = []
+        seen: Set[str] = set()
+
+        if format_override != "auto":
+            parser = get_parser_registry().get(format_override)
+            if parser is not None:
+                parser_name = str(getattr(parser, "name", format_override)).lower()
+                if parser_name not in seen:
+                    seen.add(parser_name)
+                    parsers.append(parser)
+            return parsers
+
+        for path in files_to_load:
+            parser = detect_parser(path)
+            if parser is None:
+                continue
+            parser_name = str(getattr(parser, "name", "")).lower()
+            if parser_name in seen:
+                continue
+            seen.add(parser_name)
+            parsers.append(parser)
+
+        return parsers
+
+    def _collect_supplemental_stage_paths(
+        self,
+        files_to_load: Sequence[Path],
+        stage_source_paths: Dict[str, Path],
+        format_override: str,
+    ) -> Dict[str, Path]:
+        """Collect parser-declared companion paths that should remain staged."""
+        parsers = self._resolve_parsers_for_stage_supplements(files_to_load, format_override)
+        if not parsers:
+            return {}
+
+        required_names: Set[str] = set()
+        required_rel_paths: Set[str] = set()
+        for parser in parsers:
+            names = getattr(parser, "supplemental_stage_filenames", ())
+            rel_paths = getattr(parser, "supplemental_stage_relative_paths", ())
+            for name in names:
+                text = str(name).strip()
+                if text:
+                    required_names.add(Path(text).name.lower())
+            for rel_path in rel_paths:
+                text = str(rel_path).strip()
+                if text:
+                    required_rel_paths.add(Path(text).as_posix().lower())
+
+        if not required_names and not required_rel_paths:
+            return {}
+
+        supplemental: Dict[str, Path] = {}
+        for rel_path, source_path in stage_source_paths.items():
+            rel_posix = Path(rel_path).as_posix()
+            rel_lower = rel_posix.lower()
+            name_lower = Path(rel_path).name.lower()
+            if rel_lower in required_rel_paths or name_lower in required_names:
+                supplemental[rel_path] = source_path
+
+        return supplemental
 
     def _get_shared_input_blacklist_reason(
         self,
@@ -3485,27 +3567,75 @@ class InputExtractionStep(BaseStep):
                 except Exception:
                     format_id = FORMAT_MAP.get(path.suffix.lower(), "txt")
 
+            try:
+                from CherryAI.formats import get_parser_registry
+
+                parser = get_parser_registry().get(format_id)
+            except Exception:
+                parser = None
+
             parser_detected_encoding: Optional[str] = None
-            if encoding == "auto":
+            if parser is not None:
+                detect_fn = getattr(parser, "detect_encoding", None)
+                if callable(detect_fn):
+                    parser_detected_encoding = detect_fn(path) or None
+
+            # Handshake: validate parser selection (M1-M3 check)
+            if not self._validate_parser_selection(format_id):
+                return False
+
+            lines: List[str]
+            tags: Optional[List[str]]
+            source_mappings: Optional[List[Dict[str, int]]]
+
+            # Parser-first path: if tagged extraction succeeds, skip strict text
+            # decode probing for binary parser formats (for example Eushully .BIN).
+            if parser is not None and hasattr(parser, "extract_tagged"):
                 try:
-                    from CherryAI.formats import get_parser_registry
-                    parser = get_parser_registry().get(format_id)
+                    tagged = parser.extract_tagged(path)
                 except Exception:
-                    parser = None
+                    tagged = None
 
-                if parser is not None:
-                    detect_fn = getattr(parser, "detect_encoding", None)
-                    if callable(detect_fn):
-                        parser_detected_encoding = detect_fn(path) or None
+                if tagged is not None:
+                    lines, tags, source_mappings = self._materialize_tagged_lines(tagged)
+                    if encoding == "auto":
+                        encoding = parser_detected_encoding or "cp932"
+                        detection_source = "parser-tagged"
+                    else:
+                        detection_source = "manual"
+                else:
+                    if encoding == "auto":
+                        encoding, detection_source = self._detect_encoding_info(
+                            path,
+                            parser_encoding=parser_detected_encoding,
+                        )
+                    else:
+                        encoding, detection_source = self._detect_encoding_info(
+                            path,
+                            manual_encoding=encoding,
+                        )
 
-                encoding, detection_source = self._detect_encoding_info(
-                    path,
-                    parser_encoding=parser_detected_encoding,
-                )
+                    lines, tags, source_mappings = self._extract_file_content(
+                        path,
+                        format_id,
+                        encoding,
+                    )
             else:
-                encoding, detection_source = self._detect_encoding_info(
+                if encoding == "auto":
+                    encoding, detection_source = self._detect_encoding_info(
+                        path,
+                        parser_encoding=parser_detected_encoding,
+                    )
+                else:
+                    encoding, detection_source = self._detect_encoding_info(
+                        path,
+                        manual_encoding=encoding,
+                    )
+
+                lines, tags, source_mappings = self._extract_file_content(
                     path,
-                    manual_encoding=encoding,
+                    format_id,
+                    encoding,
                 )
 
             logger.info(
@@ -3513,17 +3643,6 @@ class InputExtractionStep(BaseStep):
                 path,
                 encoding,
                 detection_source,
-            )
-
-            # Handshake: validate parser selection (M1-M3 check)
-            if not self._validate_parser_selection(format_id):
-                return False
-
-            # Extract parser lines/tags in one pass when tagged extraction exists.
-            lines, tags, source_mappings = self._extract_file_content(
-                path,
-                format_id,
-                encoding,
             )
 
             # Handshake: per-line token validation
@@ -3589,19 +3708,26 @@ class InputExtractionStep(BaseStep):
                 tagged = None
 
             if tagged is not None:
-                lines = [item.text for item in tagged]
-                tags = [item.tag for item in tagged]
-                source_mappings: Optional[List[Dict[str, int]]] = None
-                if all(getattr(item, "ln", 0) > 0 for item in tagged):
-                    source_mappings = []
-                    for item in tagged:
-                        mapping: Dict[str, int] = {"ln": int(item.ln)}
-                        if getattr(item, "f", 0) > 0:
-                            mapping["f"] = int(item.f)
-                        source_mappings.append(mapping)
-                return lines, tags, source_mappings
+                return self._materialize_tagged_lines(tagged)
 
         return self._extract_lines(path, format_id, encoding), None, None
+
+    @staticmethod
+    def _materialize_tagged_lines(
+        tagged: List[Any],
+    ) -> Tuple[List[str], List[str], Optional[List[Dict[str, int]]]]:
+        """Convert parser tagged extraction results into loader line structures."""
+        lines = [item.text for item in tagged]
+        tags = [item.tag for item in tagged]
+        source_mappings: Optional[List[Dict[str, int]]] = None
+        if all(getattr(item, "ln", 0) > 0 for item in tagged):
+            source_mappings = []
+            for item in tagged:
+                mapping: Dict[str, int] = {"ln": int(item.ln)}
+                if getattr(item, "f", 0) > 0:
+                    mapping["f"] = int(item.f)
+                source_mappings.append(mapping)
+        return lines, tags, source_mappings
 
     def _extract_lines(
         self,

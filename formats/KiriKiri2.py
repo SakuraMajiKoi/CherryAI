@@ -25,10 +25,12 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from CherryAI.functions.apply_patches import (
     ParserProjectPatch,
     PatchApplicationResult,
+    PatchTestResult,
 )
 from CherryAI.functions.kirikiri_font_patch import (
     run_kirikiri_font_patch_workflow,
     run_kirikiri_standard_ui_translation_patch_workflow,
+    stage_kirikiri_message_layer_template,
 )
 
 from .handshake import ExtractedLine, SpeakerInfo
@@ -92,6 +94,13 @@ SPEAKER_DIALOGUE_RE = re.compile(r"^(.+?)(?:：|: )(.+)$", re.DOTALL)
 NEW_KAG_MENU_ITEM_RE = re.compile(r"new\s+KAGMenuItem\s*\(", re.IGNORECASE)
 NEW_MENU_ITEM_RE = re.compile(r"new\s+MenuItem\s*\(", re.IGNORECASE)
 SELADD_TEXT_RE = re.compile(r'(\[seladd\b[^\]]*\btext\s*=\s*")((?:\\.|[^"\\])*)(")', re.IGNORECASE)
+CHOICE_TEXT_ATTR_RE = re.compile(
+    r'((?:\[[^\]\r\n]*?\bchoic\w*[^\]\r\n]*?\btext\s*=\s*")|'
+    r'(?:@[^\r\n]*?\bchoic\w*[^\r\n]*?\btext\s*=\s*"))'
+    r'((?:\\.|[^"\\])*)'
+    r'(")',
+    re.IGNORECASE,
+)
 LABEL_TITLE_RE = re.compile(r'^(\*[^|\r\n]+\|)([^\r\n]*)(\r?\n?)$')
 CAPTION_LITERAL_RE = re.compile(r'(caption\s*:\s*")((?:\\.|[^"\\])*)(")', re.IGNORECASE)
 DIALOG_MGR_LITERAL_RE = re.compile(
@@ -184,6 +193,40 @@ KIRIKIRI2_SIZE_WHITELIST_SUFFIXES: Tuple[str, ...] = (
     ".csv",
     ".mdat",
     ".xp3",
+)
+KIRIKIRI2_SUPPLEMENTAL_STAGE_FILENAMES: Tuple[str, ...] = (
+    "MainWindow.tjs",
+    "MessageLayer.tjs",
+    "SelectLayer.tjs",
+    "ImportantData.tjs",
+    "MenuItemManager.tjs",
+    "CacheWindow.tjs",
+    "VersionWindow.tjs",
+    "AffineLayer.tjs",
+    "ButtonLayer.tjs",
+    "version.dll",
+    "CherryAI.KiriKiriPatch.json",
+    "CherryAI.KiriKiriFontPatch.json",
+)
+KIRIKIRI2_SUPPLEMENTAL_STAGE_RELATIVE_PATHS: Tuple[str, ...] = (
+    "data/system/MainWindow.tjs",
+    "system/MainWindow.tjs",
+    "data/system/MessageLayer.tjs",
+    "system/MessageLayer.tjs",
+    "data/system/SelectLayer.tjs",
+    "system/SelectLayer.tjs",
+    "data/system/ImportantData.tjs",
+    "system/ImportantData.tjs",
+    "data/system/MenuItemManager.tjs",
+    "system/MenuItemManager.tjs",
+    "data/program/CacheWindow.tjs",
+    "program/CacheWindow.tjs",
+    "data/system/VersionWindow.tjs",
+    "system/VersionWindow.tjs",
+    "data/system/AffineLayer.tjs",
+    "system/AffineLayer.tjs",
+    "data/system/ButtonLayer.tjs",
+    "system/ButtonLayer.tjs",
 )
 CSV_ALLOWED_HEADER_TAGS: Dict[str, str] = {
     "タイトル": "title",
@@ -2179,6 +2222,20 @@ def _extract_ks_literal_entries_from_lines(
                     )
                 )
 
+        for literal_index, choice_match in enumerate(CHOICE_TEXT_ATTR_RE.finditer(raw_line)):
+            choice_text = choice_match.group(2)
+            if not choice_text.strip():
+                continue
+            entries.append(
+                KsLiteralEntry(
+                    text=choice_text,
+                    line_number=line_number,
+                    tag="choice",
+                    entry_kind="choice_text_attr",
+                    literal_index=literal_index,
+                )
+            )
+
         label_match = LABEL_TITLE_RE.match(raw_line)
         if label_match:
             title = label_match.group(2)
@@ -2914,6 +2971,125 @@ def _apply_fix_dlc_checks_target(
     return _apply_script_patch_target(target, _patch_fix_dlc_checks, log)
 
 
+# ---------------------------------------------------------------------------
+# Patch test callbacks
+# ---------------------------------------------------------------------------
+
+def _test_mainwindow_wordwrap_target(
+    target: Path,
+    log: Callable[[str], None],
+) -> PatchTestResult:
+    """Check whether the MainWindow wordwrap patch can be applied."""
+    try:
+        text, _enc, _bom = _read_text_with_bom(target)
+    except (OSError, UnicodeDecodeError) as exc:
+        return PatchTestResult(status="error", message=f"Cannot read {target.name}: {exc}")
+
+    if _already_has_wrap_vars(text) or _already_has_wrap_block(text):
+        return PatchTestResult(status="already_applied", message="Wordwrap patch is already applied.")
+
+    # Look for patchable anchors
+    has_ch = bool(re.search(r"ch\s*:\s*function\s*\(\s*elm\s*\)", text))
+    has_set_mes = bool(re.search(r"function\s+SetMesText\s*\(\s*text\s*\)", text))
+    has_mes_draw = bool(re.search(r"MesLayer\.DrawText\(\s*text\s*\)\s*;", text))
+
+    if has_ch or has_set_mes or has_mes_draw:
+        return PatchTestResult(status="ok", message="Patch can be applied.")
+    return PatchTestResult(
+        status="cannot_apply",
+        message=(
+            "No patchable anchor found (ch: function, SetMesText, or MesLayer.DrawText)."
+        ),
+    )
+
+
+def _test_selectlayer_choice_wrap_target(
+    target: Path,
+    log: Callable[[str], None],
+) -> PatchTestResult:
+    """Check whether the SelectLayer choice-wrap patch can be applied."""
+    try:
+        text, _enc, _bom = _read_text_with_bom(target)
+    except (OSError, UnicodeDecodeError) as exc:
+        return PatchTestResult(status="error", message=f"Cannot read {target.name}: {exc}")
+
+    patched = _patch_select_layer(text)
+    if patched == text:
+        # No change — either already applied or unsupported structure
+        if "multiline" in text.lower() and "__CherryAI" in text:
+            return PatchTestResult(status="already_applied", message="SelectLayer patch is already applied.")
+        return PatchTestResult(
+            status="cannot_apply",
+            message="No patchable SelectLayer patterns found in this file.",
+        )
+    return PatchTestResult(status="ok", message="Patch can be applied.")
+
+
+def _test_fix_dlc_checks_target(
+    target: Path,
+    log: Callable[[str], None],
+) -> PatchTestResult:
+    """Check whether the DLC check fix can be applied."""
+    try:
+        text, _enc, _bom = _read_text_with_bom(target)
+    except (OSError, UnicodeDecodeError) as exc:
+        return PatchTestResult(status="error", message=f"Cannot read {target.name}: {exc}")
+
+    if DLC_CHECK_GUARD_RE.search(text):
+        return PatchTestResult(status="ok", message="DLC check pattern found; patch can be applied.")
+    return PatchTestResult(
+        status="cannot_apply",
+        message="No brittle DLC check pattern found; patch is not needed or already applied.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# MessageLayer wordwrap workflow (alternative to MainWindow approach)
+# ---------------------------------------------------------------------------
+
+def _run_messagelayer_wordwrap_workflow(
+    mgr: object,
+    patch_info: object,
+    parent: object,
+    log: Callable[[str], None],
+) -> PatchApplicationResult:
+    """Deploy the bundled CherryAI MessageLayer.tjs for pixel-based wordwrap.
+
+    This is the kanotsuku2-style alternative to the KAG ``ch: function``
+    wordwrap approach.  It copies the pre-built template from the library into
+    ``patch/data/system/`` under the project's staged Translated tree.
+    """
+    try:
+        project_dir = mgr.get_project_dir()  # type: ignore[union-attr]
+        translated_dir = mgr.get_translated_dir()  # type: ignore[union-attr]
+    except Exception as exc:
+        return PatchApplicationResult(
+            status="failed",
+            message=f"Cannot resolve project staging directories: {exc}",
+        )
+
+    try:
+        dest = stage_kirikiri_message_layer_template(project_dir, translated_dir)
+    except FileNotFoundError as exc:
+        return PatchApplicationResult(status="failed", message=str(exc))
+    except Exception as exc:
+        return PatchApplicationResult(
+            status="failed",
+            message=f"Failed to stage MessageLayer.tjs: {exc}",
+        )
+
+    log(f"Staged MessageLayer.tjs with current font config values → {dest}")
+
+    return PatchApplicationResult(
+        status="applied",
+        message=(
+            f"Deployed pixel-based wordwrap MessageLayer.tjs to {dest}. "
+            "This approach wraps text by pixel width instead of character count."
+        ),
+        target_path=dest,
+    )
+
+
 def _is_balanced(text: str) -> bool:
     pairs = {")": "(", "]": "[", "}": "{"}
     stack: List[str] = []
@@ -3052,6 +3228,14 @@ class KiriKiri2Parser(ParserScript):
         return KIRIKIRI2_SIZE_WHITELIST_SUFFIXES
 
     @property
+    def supplemental_stage_filenames(self) -> Sequence[str]:
+        return KIRIKIRI2_SUPPLEMENTAL_STAGE_FILENAMES
+
+    @property
+    def supplemental_stage_relative_paths(self) -> Sequence[str]:
+        return KIRIKIRI2_SUPPLEMENTAL_STAGE_RELATIVE_PATHS
+
+    @property
     def wordwrap_config(self) -> Optional[WordwrapConfig]:
         return WordwrapConfig(max_line_length=42, max_line_number=3, wordwrap_command="\n")
 
@@ -3063,12 +3247,13 @@ class KiriKiri2Parser(ParserScript):
     @property
     def project_patches(self) -> Sequence[ParserProjectPatch]:
         return (
+            # ---- Dialogue wordwrap: mutually exclusive alternatives ----
             ParserProjectPatch(
                 patch_id="mainwindow_wordwrap",
                 name="MainWindow Wordwrap Patch",
                 description=(
                     "Patch MainWindow.tjs so KAG dialogue wraps by word rather "
-                    "than per character."
+                    "than per character.  Suitable for standard KiriKiri2/KAG games."
                 ),
                 file_label="MainWindow.tjs",
                 relative_candidates=(
@@ -3076,7 +3261,34 @@ class KiriKiri2Parser(ParserScript):
                     Path("system") / "MainWindow.tjs",
                 ),
                 apply_to_target=_apply_mainwindow_wordwrap_target,
+                alternative_group="wordwrap",
+                alternative_group_label="Text Wordwrap Method",
+                test_target=_test_mainwindow_wordwrap_target,
             ),
+            ParserProjectPatch(
+                patch_id="messagelayer_wordwrap",
+                name="MessageLayer Wordwrap Patch",
+                description=(
+                    "Deploy the CherryAI MessageLayer.tjs template which wraps "
+                    "dialogue by pixel line-width instead of character count.  "
+                    "Recommended for kanotsuku2-style games whose engine measures "
+                    "text in pixels."
+                ),
+                file_label="MessageLayer.tjs",
+                # No relative_candidates — file is deployed from the library, not patched
+                relative_candidates=(),
+                apply_to_target=lambda _target, _log: PatchApplicationResult(
+                    status="failed",
+                    message=(
+                        "MessageLayer Wordwrap Patch must run through its "
+                        "shared workflow."
+                    ),
+                ),
+                apply_with_context=_run_messagelayer_wordwrap_workflow,
+                alternative_group="wordwrap",
+                alternative_group_label="Text Wordwrap Method",
+            ),
+            # ---- Choice / select layer ----
             ParserProjectPatch(
                 patch_id="selectlayer_choice_wrap",
                 name="SelectLayer Choice Wrap Patch",
@@ -3090,7 +3302,9 @@ class KiriKiri2Parser(ParserScript):
                     Path("system") / "SelectLayer.tjs",
                 ),
                 apply_to_target=_apply_selectlayer_choice_wrap_target,
+                test_target=_test_selectlayer_choice_wrap_target,
             ),
+            # ---- DLC compatibility ----
             ParserProjectPatch(
                 patch_id="fix_dlc_checks",
                 name="Fix DLC checks",
@@ -3107,7 +3321,9 @@ class KiriKiri2Parser(ParserScript):
                     Path("patch") / "ImportantData.tjs",
                 ),
                 apply_to_target=_apply_fix_dlc_checks_target,
+                test_target=_test_fix_dlc_checks_target,
             ),
+            # ---- UI translation (multiple required files) ----
             ParserProjectPatch(
                 patch_id="standard_ui_translation",
                 name="Standard UI Translation Patch",
@@ -3125,7 +3341,19 @@ class KiriKiri2Parser(ParserScript):
                     ),
                 ),
                 apply_with_context=run_kirikiri_standard_ui_translation_patch_workflow,
+                # Demonstrates multi-file requirement (informational)
+                required_companions=(
+                    ("CacheWindow.tjs", (
+                        Path("data") / "program" / "CacheWindow.tjs",
+                        Path("program") / "CacheWindow.tjs",
+                    )),
+                    ("VersionWindow.tjs", (
+                        Path("data") / "system" / "VersionWindow.tjs",
+                        Path("system") / "VersionWindow.tjs",
+                    )),
+                ),
             ),
+            # ---- Font patch (multi-file) ----
             ParserProjectPatch(
                 patch_id="font_patch",
                 name="Font Patch",
@@ -3140,6 +3368,21 @@ class KiriKiri2Parser(ParserScript):
                     message="Font Patch must run through its shared dialog workflow.",
                 ),
                 apply_with_context=run_kirikiri_font_patch_workflow,
+                # Demonstrates combined multi-file + custom workflow
+                required_companions=(
+                    ("MessageLayer.tjs", (
+                        Path("data") / "system" / "MessageLayer.tjs",
+                        Path("system") / "MessageLayer.tjs",
+                    )),
+                    ("AffineLayer.tjs", (
+                        Path("data") / "system" / "AffineLayer.tjs",
+                        Path("system") / "AffineLayer.tjs",
+                    )),
+                    ("ButtonLayer.tjs", (
+                        Path("data") / "system" / "ButtonLayer.tjs",
+                        Path("system") / "ButtonLayer.tjs",
+                    )),
+                ),
             ),
         )
 
@@ -3494,6 +3737,13 @@ class KiriKiri2Parser(ParserScript):
                     continue
                 if entry.entry_kind == "seladd":
                     replaced = _replace_seladd_text(raw_lines[line_index], translated)
+                elif entry.entry_kind == "choice_text_attr":
+                    replaced = _replace_pattern_literal_by_index(
+                        raw_lines[line_index],
+                        CHOICE_TEXT_ATTR_RE,
+                        translated,
+                        entry.literal_index,
+                    )
                 elif entry.entry_kind == "label_title":
                     replaced = _replace_label_title(raw_lines[line_index], translated)
                 elif entry.entry_kind == "dialog_call":

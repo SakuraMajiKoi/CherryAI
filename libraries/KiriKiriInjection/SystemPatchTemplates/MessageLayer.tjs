@@ -2,27 +2,62 @@
 // - Author/edit this template in UTF-8.
 // - Do not edit the live patch copy directly when avoiding mojibake.
 // - Stage/recompile to game patch by re-encoding this file as CP932 (Shift-JIS).
-var __CherryAILineSpacingConfigLoaded = false;
 var __CherryAILineSpacingOffsetPixels = 0;
 var __CherryAILatinFace = "Inter";
 var __CherryAIWrapRightPaddingPixels = 220;
+var __CherryAIWrapMode = "pixel";
+var __CherryAIRuntimeConfigLoaded = false;
 var __CherryAIMessageLayerProbeWritten = false;
+var __CherryAIWrapDebugLogged = false;
+var __CherryAIRuntimeConfigLogDone = false;
 
 function LoadCherryAIFontPatchRuntimeConfig()
 {
-	if(!__CherryAILineSpacingConfigLoaded)
+	if(__CherryAIRuntimeConfigLoaded)
+		return;
+
+	__CherryAIRuntimeConfigLoaded = true;
+	var ConfigPath = System.exePath + "patch/CherryAI.KiriKiriFontPatch.runtime.tjs";
+	if(!Storages.isExistentStorage(ConfigPath))
 	{
-		__CherryAILineSpacingConfigLoaded = true;
-		var ConfigPath = System.exePath + "patch/CherryAI.KiriKiriFontPatch.runtime.tjs";
-		if(Storages.isExistentStorage(ConfigPath))
+		if(!__CherryAIRuntimeConfigLogDone)
 		{
-			var Config = Scripts.evalStorage(ConfigPath);
-			if(Config !== void && Config.line_spacing_offset_pixels !== void)
-				__CherryAILineSpacingOffsetPixels = Config.line_spacing_offset_pixels;
-			if(Config !== void && Config.latin_face !== void)
-				__CherryAILatinFace = "" + Config.latin_face;
-			if(Config !== void && Config.wrap_right_padding_pixels !== void)
-				__CherryAIWrapRightPaddingPixels = int(Config.wrap_right_padding_pixels);
+			dm("[CherryAI.WrapConfig] runtime config missing: " + ConfigPath);
+			__CherryAIRuntimeConfigLogDone = true;
+		}
+		return;
+	}
+
+	try
+	{
+		var Config = Scripts.evalStorage(ConfigPath);
+		if(Config !== void && Config.line_spacing_offset_pixels !== void)
+			__CherryAILineSpacingOffsetPixels = int(Config.line_spacing_offset_pixels);
+		if(Config !== void && Config.latin_face !== void)
+			__CherryAILatinFace = "" + Config.latin_face;
+		if(Config !== void && Config.wrap_right_padding_pixels !== void)
+		{
+			__CherryAIWrapRightPaddingPixels = int(Config.wrap_right_padding_pixels);
+			if(__CherryAIWrapRightPaddingPixels < 0)
+				__CherryAIWrapRightPaddingPixels = 0;
+		}
+		if(Config !== void && Config.wrap_mode !== void)
+		{
+			var Mode = ("" + Config.wrap_mode).toLowerCase();
+			__CherryAIWrapMode = (Mode == "character") ? "character" : "pixel";
+		}
+		if(!__CherryAIRuntimeConfigLogDone)
+		{
+			dm("[CherryAI.WrapConfig] loaded line_spacing=" + __CherryAILineSpacingOffsetPixels + " wrap_pad=" + __CherryAIWrapRightPaddingPixels + " wrap_mode=" + __CherryAIWrapMode + " latin_face=" + __CherryAILatinFace);
+			__CherryAIRuntimeConfigLogDone = true;
+		}
+	}
+	catch(e)
+	{
+		if(!__CherryAIRuntimeConfigLogDone)
+		{
+			dm("[CherryAI.WrapConfig] load failed: " + e);
+			__CherryAIRuntimeConfigLogDone = true;
 		}
 	}
 }
@@ -43,6 +78,14 @@ function GetCherryAIWrapRightPaddingPixels()
 {
 	LoadCherryAIFontPatchRuntimeConfig();
 	return __CherryAIWrapRightPaddingPixels;
+}
+
+function GetCherryAIWrapMode()
+{
+	LoadCherryAIFontPatchRuntimeConfig();
+	if(__CherryAIWrapMode == "character")
+		return "character";
+	return "pixel";
 }
 
 function ShouldWriteCherryAIMessageLayerProbe(f_Text)
@@ -66,6 +109,12 @@ function WriteCherryAIMessageLayerProbe(f_Lay,f_Text,f_AdvanceArray,f_WrapStarts
 	Probe.font_height = f_Lay.font.height;
 	Probe.font_shadowwidth = f_Lay.font.type_shadowwidth;
 	Probe.line_spacing_offset = GetCherryAILineSpacingOffsetPixels();
+	Probe.wrap_mode = GetCherryAIWrapMode();
+	Probe.wrap_right_padding_px = GetCherryAIWrapRightPaddingPixels();
+	var WrapMaxWidthPx = (f_Lay.GetWrapMaxWidth !== void) ? f_Lay.GetWrapMaxWidth() : (f_Lay.width - 6);
+	Probe.wrap_max_width_px = WrapMaxWidthPx;
+	Probe.effective_max_width_px = WrapMaxWidthPx - GetCherryAIWrapRightPaddingPixels();
+	Probe.layer_width = f_Lay.width;
 	Probe.advances = f_AdvanceArray.join(",");
 	var WrapArray = [];
 	for(var i=0; i < f_Text.length;i++)
@@ -1565,8 +1614,6 @@ class MessageBaseLayer extends Layer
 
 	function GetCherryAIResolvedTextFace(f_DefaultFace,f_Text)
 	{
-		if(IsAsciiDialogueText(f_Text) && GetCherryAILatinFace() != "")
-			return GetCherryAILatinFace();
 		return f_DefaultFace;
 	}
 
@@ -1704,17 +1751,50 @@ class MessageBaseLayer extends Layer
 		var WrapStarts = [];
 		var InitPxMargin=3;
 		var MaxWidth = f_Lay.width-(InitPxMargin<<1);
+		var BaseWidth = MaxWidth;
 		if(f_Lay.GetWrapMaxWidth !== void)
 		{
 			var WrapWidthPx = f_Lay.GetWrapMaxWidth();
 			if(0 < WrapWidthPx)
+			{
 				MaxWidth = WrapWidthPx;
+				BaseWidth = WrapWidthPx;
+			}
 		}
 		var WrapRightPaddingPx = GetCherryAIWrapRightPaddingPixels();
 		if(0 < WrapRightPaddingPx)
 			MaxWidth -= WrapRightPaddingPx;
+		if(!__CherryAIWrapDebugLogged && f_Text !== void && 0 < f_Text.length)
+		{
+			var DebugMode = GetCherryAIWrapMode();
+			var DebugText = f_Text;
+			if(64 < DebugText.length)
+				DebugText = DebugText.substring(0,64) + "...";
+			dm("[CherryAI.WrapDebug] mode=" + DebugMode + " pad=" + WrapRightPaddingPx + " base=" + BaseWidth + " effective=" + MaxWidth + " layer=" + f_Lay.width + " len=" + f_Text.length + " text='" + DebugText + "'");
+		}
 		if(MaxWidth < 1)
+		{
+			if(!__CherryAIWrapDebugLogged)
+			{
+				dm("[CherryAI.WrapDebug] effective width < 1; wrapping disabled for this line");
+				__CherryAIWrapDebugLogged = true;
+			}
 			return WrapStarts;
+		}
+		if(GetCherryAIWrapMode() == "character")
+		{
+			WrapStarts = BuildCharacterWrapStarts(f_Lay,f_Text,MaxWidth);
+			if(!__CherryAIWrapDebugLogged)
+			{
+				var CharacterWrapCount = 0;
+				for(var CharacterWrapPos = 0; CharacterWrapPos < f_Text.length; CharacterWrapPos++)
+					if(WrapStarts[CharacterWrapPos])
+						CharacterWrapCount++;
+				dm("[CherryAI.WrapDebug] character wraps=" + CharacterWrapCount);
+				__CherryAIWrapDebugLogged = true;
+			}
+			return WrapStarts;
+		}
 
 		var LineText="";
 		var LastSpacePos=-1;
@@ -1751,6 +1831,64 @@ class MessageBaseLayer extends Layer
 			LineText = CandidateLineText;
 			if(IsWrapWhitespace(Ch))
 				LastSpacePos = Pos;
+		}
+
+		if(!__CherryAIWrapDebugLogged)
+		{
+			var PixelWrapCount = 0;
+			for(var PixelWrapPos = 0; PixelWrapPos < cnt; PixelWrapPos++)
+				if(WrapStarts[PixelWrapPos])
+					PixelWrapCount++;
+			dm("[CherryAI.WrapDebug] pixel wraps=" + PixelWrapCount);
+			__CherryAIWrapDebugLogged = true;
+		}
+
+		return WrapStarts;
+	}
+
+	function BuildCharacterWrapStarts(f_Lay,f_Text,f_MaxWidth)
+	{
+		var WrapStarts = [];
+		var FontSize = f_Lay.font.height;
+		if(FontSize < 1)
+			FontSize = 1;
+		var MaxChars = int(f_MaxWidth / FontSize);
+		if(MaxChars < 1)
+			MaxChars = 1;
+
+		var CurrentCount = 0;
+		var LastSpacePos = -1;
+		var cnt = f_Text.length;
+		for(var Pos = 0; Pos < cnt; Pos++)
+		{
+			var Ch = f_Text[Pos];
+			if(Ch == NewLinech)
+			{
+				CurrentCount = 0;
+				LastSpacePos = -1;
+				continue;
+			}
+
+			if(IsWrapWhitespace(Ch))
+				LastSpacePos = Pos;
+
+			CurrentCount++;
+			if(CurrentCount <= MaxChars)
+				continue;
+
+			if(0 <= LastSpacePos)
+			{
+				WrapStarts[LastSpacePos+1] = true;
+				Pos = LastSpacePos;
+			}
+			else
+			{
+				WrapStarts[Pos] = true;
+				Pos--;
+			}
+
+			CurrentCount = 0;
+			LastSpacePos = -1;
 		}
 
 		return WrapStarts;

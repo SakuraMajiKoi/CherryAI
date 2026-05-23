@@ -2,7 +2,8 @@
 
 namespace
 {
-    constexpr wchar_t CONFIG_PATH[] = L"patch\\CherryAI.KiriKiriFontPatch.json";
+    constexpr wchar_t CONFIG_PATH_PRIMARY[] = L"patch\\CherryAI.KiriKiriPatch.json";
+    constexpr wchar_t CONFIG_PATH_LEGACY[] = L"patch\\CherryAI.KiriKiriFontPatch.json";
     constexpr wchar_t RUNTIME_CONFIG_PATH[] = L"patch\\CherryAI.KiriKiriFontPatch.runtime.tjs";
     constexpr DWORD FONT_LOAD_FLAGS = FR_PRIVATE;
 
@@ -18,6 +19,8 @@ namespace
         int Quality = DEFAULT_QUALITY;
         int HeightPercent = 100;
         int LineSpacingOffsetPixels = 0;
+        int WrapRightPaddingPixels = 220;
+        std::wstring WrapMode = L"pixel";
         int WidthPercent = 100;
         std::wstring DefaultFace;
         std::wstring RegularFontPath;
@@ -191,13 +194,26 @@ namespace
         fclose(pFile);
     }
 
-    void WriteRuntimeMessageLayerConfig(int lineSpacingOffsetPixels)
+    void WriteRuntimeMessageLayerConfig(
+        int lineSpacingOffsetPixels,
+        int wrapRightPaddingPixels,
+        const std::wstring& wrapMode)
     {
+        int clampedWrapPadding = wrapRightPaddingPixels;
+        if (clampedWrapPadding < 0)
+            clampedWrapPadding = 0;
+
+        std::wstring normalizedWrapMode = StringUtil::ToLower(TrimAsciiWhitespace(wrapMode));
+        if (normalizedWrapMode != L"character")
+            normalizedWrapMode = L"pixel";
+
         WriteUtf8TextFile(
             Path::Combine(GetModuleRoot(), RUNTIME_CONFIG_PATH),
             StringUtil::Format(
-                L"%%[\r\n\tline_spacing_offset_pixels: %d,\r\n]\r\n",
-                lineSpacingOffsetPixels));
+                L"%%[\r\n\tline_spacing_offset_pixels: %d,\r\n\twrap_right_padding_pixels: %d,\r\n\twrap_mode: \"%ls\",\r\n]\r\n",
+                lineSpacingOffsetPixels,
+                clampedWrapPadding,
+                normalizedWrapMode.c_str()));
     }
 
     std::wstring WideFromText(LPCWSTR text, int count)
@@ -319,10 +335,18 @@ namespace
         return Path::Combine(GetModuleRoot(), StringUtil::Replace(value, L'/', L'\\'));
     }
 
+    std::wstring ReadFontPatchConfigText()
+    {
+        std::wstring configText = ReadUtf8TextFile(Path::Combine(GetModuleRoot(), CONFIG_PATH_PRIMARY));
+        if (!configText.empty())
+            return configText;
+        return ReadUtf8TextFile(Path::Combine(GetModuleRoot(), CONFIG_PATH_LEGACY));
+    }
+
     bool LoadConfig()
     {
         FontPatchConfig config;
-        std::wstring configText = ReadUtf8TextFile(Path::Combine(GetModuleRoot(), CONFIG_PATH));
+        std::wstring configText = ReadFontPatchConfigText();
         if (configText.empty())
             return false;
 
@@ -342,12 +366,28 @@ namespace
         config.Quality = ExtractInt(configText, L"quality", DEFAULT_QUALITY);
         config.HeightPercent = ExtractInt(configText, L"height_percent", 100);
         config.LineSpacingOffsetPixels = ExtractSignedInt(configText, L"height_offset_pixels", 0);
+        config.WrapRightPaddingPixels = ExtractSignedInt(
+            configText,
+            L"WrapRightPaddingPixels",
+            ExtractSignedInt(configText, L"wrap_right_padding_pixels", 220));
+        if (config.WrapRightPaddingPixels < 0)
+            config.WrapRightPaddingPixels = 0;
+
+        std::wstring wrapMode = ExtractString(configText, L"WrapMode");
+        if (wrapMode.empty())
+            wrapMode = ExtractString(configText, L"wrap_mode");
+        wrapMode = StringUtil::ToLower(TrimAsciiWhitespace(wrapMode));
+        config.WrapMode = wrapMode == L"character" ? L"character" : L"pixel";
+
         config.WidthPercent = ExtractInt(configText, L"width_percent", 100);
         config.MatchFaces = ExtractStringArray(configText, L"match_faces");
         if (config.MatchFaces.empty())
             config.MatchFaces.push_back(L"*");
 
-        WriteRuntimeMessageLayerConfig(config.LineSpacingOffsetPixels);
+        WriteRuntimeMessageLayerConfig(
+            config.LineSpacingOffsetPixels,
+            config.WrapRightPaddingPixels,
+            config.WrapMode);
 
         config.Enabled = !config.DefaultFace.empty() && !config.RegularFontPath.empty();
         if (!config.Enabled)
@@ -587,10 +627,9 @@ namespace
     FontOverrideState ApplyTextFontOverride(HDC hdc, const std::wstring& text, const wchar_t* apiName)
     {
         FontOverrideState state;
-        // MessageLayer draws dialogue one glyph at a time after it has already
-        // computed advances in TJS. Keeping the Latin companion out of those
-        // single-character draw calls avoids a second font metric set on render.
-        state.UseLatin = text.length() > 1 && ShouldUseLatinVariant(text);
+        // Keep script routing consistent even when engines draw one glyph at a
+        // time; mixed per-glyph fallback creates visible face flipping.
+        state.UseLatin = ShouldUseLatinVariant(text);
         if (!HasLatinVariant())
             return state;
 
@@ -1172,9 +1211,12 @@ void FontPatch::Init()
         });
     if (g_config.LogFontCalls)
         Debugger::Log(
-            L"FontPatch active with cjk=%ls latin=%ls",
+            L"FontPatch active with cjk=%ls latin=%ls heightPercent=%d widthPercent=%d lineSpacingOffset=%d",
             g_config.DefaultFace.c_str(),
-            HasLatinVariant() ? g_config.LatinFace.c_str() : L"<none>");
+            HasLatinVariant() ? g_config.LatinFace.c_str() : L"<none>",
+            g_config.HeightPercent,
+            g_config.WidthPercent,
+            g_config.LineSpacingOffsetPixels);
 }
 
 void FontPatch::Shutdown()

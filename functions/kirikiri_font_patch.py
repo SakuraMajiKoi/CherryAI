@@ -24,11 +24,15 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_PATCH_DIR_NAME = "patch"
 DEFAULT_FONTS_DIR_NAME = "fonts"
-DEFAULT_CONFIG_NAME = "CherryAI.KiriKiriFontPatch.json"
+DEFAULT_CONFIG_NAME = "CherryAI.KiriKiriPatch.json"
+LEGACY_CONFIG_NAMES: tuple[str, ...] = ("CherryAI.KiriKiriFontPatch.json",)
 DEFAULT_DLL_NAME = "version.dll"
 DEFAULT_LOG_FILE_NAME = "kirikiri-patched.log"
 DEFAULT_LOG_INI_NAME = "kirikiri-patched.ini"
 DEFAULT_RUNTIME_CONFIG_NAME = "CherryAI.KiriKiriFontPatch.runtime.tjs"
+DEFAULT_WRAP_RIGHT_PADDING_PIXELS = 220
+DEFAULT_WRAP_MODE = "pixel"
+WRAP_MODES: tuple[str, ...] = ("pixel", "character")
 DEFAULT_SYSTEM_PATCH_TEMPLATE_DIR_NAME = "SystemPatchTemplates"
 DEFAULT_STANDARD_UI_TRANSLATION_DIR_NAME = "StandardUiTranslations"
 DEFAULT_STANDARD_UI_TRANSLATION_SPEC_NAME = "CherryAI.KiriKiriStandardUiPatch.json"
@@ -411,19 +415,162 @@ def _read_system_patch_template_text(source: Path) -> str:
 
 
 def _copy_system_patch_templates(template_dir: Path, patch_dir: Path) -> list[Path]:
+    return _copy_system_patch_templates_with_overrides(
+        template_dir,
+        patch_dir,
+        message_layer_overrides=None,
+        template_names=SYSTEM_PATCH_TEMPLATE_NAMES,
+    )
+
+
+def _coerce_int(value: object, fallback: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _escape_tjs_string(value: object) -> str:
+    return str(value).replace("\\", "\\\\").replace('"', r'\"')
+
+
+def _load_existing_font_patch_config(config_path: Path) -> dict[str, object]:
+    paths_to_try = [config_path]
+    if config_path.name == DEFAULT_CONFIG_NAME:
+        for legacy_name in LEGACY_CONFIG_NAMES:
+            paths_to_try.append(config_path.with_name(legacy_name))
+
+    for candidate in paths_to_try:
+        if not candidate.is_file():
+            continue
+        try:
+            raw = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            continue
+        if isinstance(raw, dict):
+            return raw
+    return {}
+
+
+def _normalize_wrap_mode(value: object, fallback: str = DEFAULT_WRAP_MODE) -> str:
+    candidate = str(value).strip().lower()
+    if candidate in WRAP_MODES:
+        return candidate
+    return fallback
+
+
+def _resolve_wrap_mode(
+    config: dict[str, object],
+    existing_config: Optional[dict[str, object]] = None,
+) -> str:
+    for key in ("WrapMode", "wrap_mode"):
+        if key in config:
+            return _normalize_wrap_mode(config[key])
+    if existing_config:
+        for key in ("WrapMode", "wrap_mode"):
+            if key in existing_config:
+                return _normalize_wrap_mode(existing_config[key])
+    return DEFAULT_WRAP_MODE
+
+
+def _write_legacy_config_mirrors(config_path: Path, config: dict[str, object]) -> None:
+    if config_path.name != DEFAULT_CONFIG_NAME:
+        return
+    payload = json.dumps(config, indent=2, ensure_ascii=False) + "\n"
+    for legacy_name in LEGACY_CONFIG_NAMES:
+        config_path.with_name(legacy_name).write_text(payload, encoding="utf-8")
+
+
+def _resolve_wrap_right_padding_pixels(
+    config: dict[str, object],
+    existing_config: Optional[dict[str, object]] = None,
+) -> int:
+    candidates: list[object] = []
+    for key in ("WrapRightPaddingPixels", "wrap_right_padding_pixels"):
+        if key in config:
+            candidates.append(config[key])
+    if existing_config:
+        for key in ("WrapRightPaddingPixels", "wrap_right_padding_pixels"):
+            if key in existing_config:
+                candidates.append(existing_config[key])
+    for candidate in candidates:
+        value = _coerce_int(candidate, DEFAULT_WRAP_RIGHT_PADDING_PIXELS)
+        if value >= 0:
+            return value
+    return DEFAULT_WRAP_RIGHT_PADDING_PIXELS
+
+
+def _build_message_layer_overrides(config: dict[str, object]) -> dict[str, object]:
+    latin_face = str(config.get("latin_face", "")).strip()
+    if not latin_face:
+        latin_face = str(config.get("default_face", "Inter")).strip() or "Inter"
+    return {
+        "line_spacing_offset_pixels": _coerce_int(config.get("height_offset_pixels", 0), 0),
+        "latin_face": latin_face,
+        "wrap_right_padding_pixels": _resolve_wrap_right_padding_pixels(config),
+        "wrap_mode": _resolve_wrap_mode(config),
+    }
+
+
+def _apply_message_layer_overrides(text: str, overrides: dict[str, object]) -> str:
+    patched = text
+
+    line_spacing = _coerce_int(overrides.get("line_spacing_offset_pixels", 0), 0)
+    patched = re.sub(
+        r"var\s+__CherryAILineSpacingOffsetPixels\s*=\s*-?\d+;",
+        f"var __CherryAILineSpacingOffsetPixels = {line_spacing};",
+        patched,
+    )
+
+    latin_face = _escape_tjs_string(overrides.get("latin_face", "Inter"))
+    patched = re.sub(
+        r'var\s+__CherryAILatinFace\s*=\s*"[^"]*";',
+        f'var __CherryAILatinFace = "{latin_face}";',
+        patched,
+    )
+
+    wrap_padding = _coerce_int(
+        overrides.get("wrap_right_padding_pixels", DEFAULT_WRAP_RIGHT_PADDING_PIXELS),
+        DEFAULT_WRAP_RIGHT_PADDING_PIXELS,
+    )
+    patched = re.sub(
+        r"var\s+__CherryAIWrapRightPaddingPixels\s*=\s*-?\d+;",
+        f"var __CherryAIWrapRightPaddingPixels = {wrap_padding};",
+        patched,
+    )
+
+    wrap_mode = _normalize_wrap_mode(overrides.get("wrap_mode", DEFAULT_WRAP_MODE))
+    patched = re.sub(
+        r'var\s+__CherryAIWrapMode\s*=\s*"[^"]*";',
+        f'var __CherryAIWrapMode = "{wrap_mode}";',
+        patched,
+    )
+
+    return patched
+
+
+def _copy_system_patch_templates_with_overrides(
+    template_dir: Path,
+    patch_dir: Path,
+    *,
+    message_layer_overrides: Optional[dict[str, object]],
+    template_names: Sequence[str],
+) -> list[Path]:
     copied_paths: list[Path] = []
     system_patch_dir = patch_dir / "data" / "system"
-    for template_name in SYSTEM_PATCH_TEMPLATE_NAMES:
+    for template_name in template_names:
         source = template_dir / template_name
         if not source.is_file():
             raise FileNotFoundError(f"Missing system patch template: {source}")
         target = system_patch_dir / template_name
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(
-            _read_system_patch_template_text(source),
-            encoding=SYSTEM_PATCH_TEMPLATE_OUTPUT_ENCODING,
-            newline="",
-        )
+        output_text = _read_system_patch_template_text(source)
+        if (
+            template_name == "MessageLayer.tjs"
+            and message_layer_overrides is not None
+        ):
+            output_text = _apply_message_layer_overrides(output_text, message_layer_overrides)
+        target.write_text(output_text, encoding=SYSTEM_PATCH_TEMPLATE_OUTPUT_ENCODING, newline="")
         copied_paths.append(target)
     return copied_paths
 
@@ -592,23 +739,29 @@ def stage_font_patch_assets(
             )
 
     paths.patch_dir.mkdir(parents=True, exist_ok=True)
-    copied_system_patch_paths = _copy_system_patch_templates(
+
+    existing_config = _load_existing_font_patch_config(paths.config_path)
+    config = build_font_patch_config(spec, selection, latin_spec=latin_spec)
+    config["WrapRightPaddingPixels"] = _resolve_wrap_right_padding_pixels(
+        config,
+        existing_config=existing_config,
+    )
+    config["WrapMode"] = _resolve_wrap_mode({}, existing_config=existing_config)
+
+    copied_system_patch_paths = _copy_system_patch_templates_with_overrides(
         _resolve_system_patch_template_dir(paths.injection_root),
         paths.patch_dir,
+        message_layer_overrides=_build_message_layer_overrides(config),
+        template_names=SYSTEM_PATCH_TEMPLATE_NAMES,
     )
-    config = build_font_patch_config(spec, selection, latin_spec=latin_spec)
+
     paths.config_path.write_text(
         json.dumps(config, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
-    existing_runtime_config = _load_existing_runtime_config(paths.runtime_config_path)
-    paths.runtime_config_path.write_text(
-        _build_runtime_config_text(
-            config,
-            existing_runtime_config=existing_runtime_config,
-        ),
-        encoding="utf-8",
-    )
+    _write_legacy_config_mirrors(paths.config_path, config)
+    if paths.runtime_config_path.exists():
+        paths.runtime_config_path.unlink()
 
     if not paths.log_ini_path.exists():
         paths.log_ini_path.write_text(_build_logging_ini_text(), encoding="utf-8")
@@ -626,6 +779,37 @@ def stage_font_patch_assets(
         copied_license_path=copied_license_path,
         copied_dll=copied_dll,
     )
+
+
+def stage_kirikiri_message_layer_template(
+    project_root: Path,
+    translated_root: Path,
+    *,
+    patch_dir_name: str = DEFAULT_PATCH_DIR_NAME,
+    config_name: str = DEFAULT_CONFIG_NAME,
+) -> Path:
+    """Stage MessageLayer.tjs using the current JSON config values."""
+    paths = get_font_patch_paths(
+        project_root,
+        translated_root,
+        patch_dir_name=patch_dir_name,
+        config_name=config_name,
+    )
+    existing_config = _load_existing_font_patch_config(paths.config_path)
+    config = dict(existing_config)
+    if "WrapRightPaddingPixels" not in config:
+        config["WrapRightPaddingPixels"] = _resolve_wrap_right_padding_pixels(config)
+    config["WrapMode"] = _resolve_wrap_mode(config)
+
+    copied = _copy_system_patch_templates_with_overrides(
+        _resolve_system_patch_template_dir(paths.injection_root),
+        paths.patch_dir,
+        message_layer_overrides=_build_message_layer_overrides(config),
+        template_names=("MessageLayer.tjs",),
+    )
+    if not copied:
+        raise FileNotFoundError("MessageLayer.tjs template staging returned no output")
+    return copied[0]
 
 
 def get_default_font_selection(fonts_library_root: Path) -> Optional[FontPatchSelection]:

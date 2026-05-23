@@ -12,6 +12,24 @@ namespace
     constexpr wchar_t kEmbeddedWarcStart[] = L"<<<KANO2_EMBEDDED_WARC";
     constexpr wchar_t kEmbeddedWarcEnd[] = L"<<<END_KANO2_EMBEDDED_WARC";
 
+    bool StartsWith(const std::wstring& value, const wchar_t* prefix)
+    {
+        const size_t prefixLength = wcslen(prefix);
+        return value.size() >= prefixLength && value.compare(0, prefixLength, prefix) == 0;
+    }
+
+    bool EndsWith(const std::wstring& value, const wchar_t* suffix)
+    {
+        const size_t suffixLength = wcslen(suffix);
+        return value.size() >= suffixLength && value.compare(value.size() - suffixLength, suffixLength, suffix) == 0;
+    }
+
+    template <class T>
+    bool ContainsValue(const std::vector<T>& values, const T& value)
+    {
+        return std::find(values.begin(), values.end(), value) != values.end();
+    }
+
     class VectorBinaryStream : public tTJSBinaryStream
     {
     public:
@@ -195,53 +213,65 @@ namespace
         const std::wstring workId = SanitizeFileNameFragment(relativeArchivePath);
         const std::wstring workDir = Path::Combine(cacheWorkRoot, workId);
         const std::wstring outDir = Path::Combine(cacheWorkRoot, workId + L"_out");
-        Debugger::Log(L"Building cached TLG for %s from PNG %s", archiveMemberPath.c_str(), sourcePngPath.c_str());
+        std::vector<std::wstring> extractSelectors;
+        extractSelectors.push_back(relativeArchivePath);
+        if (!StartsWith(relativeArchivePath, L"image/"))
+            extractSelectors.push_back(L"image/" + relativeArchivePath);
+        else
+            extractSelectors.push_back(relativeArchivePath.substr(6));
 
-        std::error_code ec;
-        filesystem::remove_all(workDir, ec);
-        filesystem::remove_all(outDir, ec);
+        for (const std::wstring& selector : extractSelectors)
+        {
+            Debugger::Log(L"Building cached TLG for %s from PNG %s using selector %s", archiveMemberPath.c_str(), sourcePngPath.c_str(), selector.c_str());
 
-        const std::wstring extractCommand =
-            L"\"" + toolPath +
-            L"\" extract \"" + gameDir +
-            L"\" \"" + relativeArchivePath +
-            L"\" --work-dir \"" + workDir +
-            L"\" --convert-images all --overwrite";
+            std::error_code ec;
+            filesystem::remove_all(workDir, ec);
+            filesystem::remove_all(outDir, ec);
 
-        if (!RunProcessAndWait(extractCommand, gameDir))
-            return false;
+            const std::wstring extractCommand =
+                L"\"" + toolPath +
+                L"\" extract \"" + gameDir +
+                L"\" \"" + selector +
+                L"\" --work-dir \"" + workDir +
+                L"\" --convert-images all --overwrite";
 
-        const std::wstring expectedEditSuffix = StringUtil::ToLower(relativeArchivePath + L".png");
-        std::wstring extractedEditPath = FindFirstFileBySuffix(workDir, expectedEditSuffix);
-        if (extractedEditPath.empty())
-            extractedEditPath = FindFirstFileBySuffix(workDir, L".tlg.png");
-        if (extractedEditPath.empty())
-            return false;
+            if (!RunProcessAndWait(extractCommand, gameDir))
+                continue;
 
-        Directory::Create(Path::GetDirectoryName(extractedEditPath));
-        if (!CopyFileW(sourcePngPath.c_str(), extractedEditPath.c_str(), FALSE))
-            return false;
+            const std::wstring expectedEditSuffix = StringUtil::ToLower(selector + L".png");
+            std::wstring extractedEditPath = FindFirstFileBySuffix(workDir, expectedEditSuffix);
+            if (extractedEditPath.empty())
+                extractedEditPath = FindFirstFileBySuffix(workDir, L".tlg.png");
+            if (extractedEditPath.empty())
+                continue;
 
-        const std::wstring packCommand =
-            L"\"" + toolPath +
-            L"\" pack \"" + gameDir +
-            L"\" compress --work-dir \"" + workDir +
-            L"\" --output \"" + outDir +
-            L"\" --overwrite";
+            Directory::Create(Path::GetDirectoryName(extractedEditPath));
+            if (!CopyFileW(sourcePngPath.c_str(), extractedEditPath.c_str(), FALSE))
+                continue;
 
-        if (!RunProcessAndWait(packCommand, gameDir))
-            return false;
+            const std::wstring packCommand =
+                L"\"" + toolPath +
+                L"\" pack \"" + gameDir +
+                L"\" compress --work-dir \"" + workDir +
+                L"\" --output \"" + outDir +
+                L"\" --overwrite";
 
-        const std::wstring builtTlgPath = Path::Combine(outDir, StringUtil::Replace<wchar_t>(archiveMemberPath, L'/', L'\\'));
-        if (GetFileAttributesW(builtTlgPath.c_str()) == INVALID_FILE_ATTRIBUTES)
-            return false;
+            if (!RunProcessAndWait(packCommand, gameDir))
+                continue;
 
-        Directory::Create(Path::GetDirectoryName(cachePath));
-        if (!CopyFileW(builtTlgPath.c_str(), cachePath.c_str(), FALSE))
-            return false;
+            const std::wstring builtTlgPath = Path::Combine(outDir, StringUtil::Replace<wchar_t>(selector, L'/', L'\\'));
+            if (GetFileAttributesW(builtTlgPath.c_str()) == INVALID_FILE_ATTRIBUTES)
+                continue;
 
-        cachedTlgPath = cachePath;
-        return true;
+            Directory::Create(Path::GetDirectoryName(cachePath));
+            if (!CopyFileW(builtTlgPath.c_str(), cachePath.c_str(), FALSE))
+                continue;
+
+            cachedTlgPath = cachePath;
+            return true;
+        }
+
+        return false;
     }
 
     std::wstring NormalizeStorageTarget(const std::wstring& value)
@@ -291,7 +321,7 @@ namespace
     std::wstring UrlToFilePath(const std::wstring& url)
     {
         constexpr wchar_t prefix[] = L"file://./";
-        if (!url.starts_with(prefix) || url.find(L'>') != std::wstring::npos)
+        if (!StartsWith(url, prefix) || url.find(L'>') != std::wstring::npos)
             return L"";
 
         std::wstring path = url.substr(wcslen(prefix));
@@ -613,14 +643,14 @@ namespace
     std::wstring StripMarkerPadding(const std::wstring& text)
     {
         std::wstring result = text;
-        if (result.starts_with(L"\r\n"))
+        if (StartsWith(result, L"\r\n"))
             result.erase(0, 2);
-        else if (result.starts_with(L"\n"))
+        else if (StartsWith(result, L"\n"))
             result.erase(0, 1);
 
-        if (result.ends_with(L"\r\n"))
+        if (EndsWith(result, L"\r\n"))
             result.erase(result.size() - 2);
-        else if (result.ends_with(L"\n"))
+        else if (EndsWith(result, L"\n"))
             result.erase(result.size() - 1);
 
         return result;
@@ -872,7 +902,7 @@ namespace
         if (g_loggedFirstLooseScenarioLine)
             return;
 
-        if (!StringUtil::ToLower(requestedName).ends_with(L".ks"))
+        if (!EndsWith(StringUtil::ToLower(requestedName), L".ks"))
             return;
 
         std::wstring filePath = UrlToFilePath(url);
@@ -893,7 +923,7 @@ namespace
             std::wstring line = TrimAsciiWhitespace(lines[i]);
             if (line.empty())
                 continue;
-            if (line.starts_with(L";") || line.starts_with(L"*") || line.starts_with(L"@") || line.starts_with(L"["))
+            if (StartsWith(line, L";") || StartsWith(line, L"*") || StartsWith(line, L"@") || StartsWith(line, L"["))
                 continue;
 
             Debugger::Log(
@@ -913,11 +943,11 @@ namespace
         if (fileName == L"patch" || fileName == L"patch.xp3")
             return 1;
 
-        if (!fileName.starts_with(L"patch"))
+        if (!StartsWith(fileName, L"patch"))
             return 0;
 
         size_t suffixStart = 5;
-        size_t suffixLength = fileName.ends_with(L".xp3") ? fileName.size() - 9 : fileName.size() - 5;
+        size_t suffixLength = EndsWith(fileName, L".xp3") ? fileName.size() - 9 : fileName.size() - 5;
         wstring suffix = fileName.substr(suffixStart, suffixLength);
         if (suffix.empty())
             return 1;
@@ -933,7 +963,7 @@ namespace
 
     void AddOverrideUrl(vector<wstring>& urls, const wstring& url)
     {
-        if (ranges::find(urls, url) == urls.end())
+        if (!ContainsValue(urls, url))
             urls.push_back(url);
     }
 
@@ -1061,13 +1091,13 @@ namespace
                 patchFolders.push_back(entry.path().wstring());
         }
 
-        ranges::sort(
-            patchFolders,
+        std::sort(
+            patchFolders.begin(),
+            patchFolders.end(),
             [](const wstring& left, const wstring& right)
             {
                 return GetPatchPriority(left) > GetPatchPriority(right);
-            }
-        );
+            });
 
         for (const wstring& patchFolder : patchFolders)
             AddPatchFolderOverrideUrls(urls, patchFolder, pInArchivePath);
@@ -1300,11 +1330,11 @@ vector<wstring> Patcher::GetLooseImageSearchPaths(const wstring& archiveMemberPa
         return searchPaths;
 
     const wstring pngChangedExt = Path::ChangeExtension(archiveMemberPath, L"png");
-    if (ranges::find(searchPaths, pngChangedExt) == searchPaths.end())
+        if (!ContainsValue(searchPaths, pngChangedExt))
         searchPaths.insert(searchPaths.begin(), pngChangedExt);
 
     const wstring pngAppendedExt = archiveMemberPath + L".png";
-    if (ranges::find(searchPaths, pngAppendedExt) == searchPaths.end())
+        if (!ContainsValue(searchPaths, pngAppendedExt))
         searchPaths.insert(searchPaths.begin() + 1, pngAppendedExt);
 
     return searchPaths;
@@ -1325,7 +1355,7 @@ bool Patcher::IsRawPngStorageUrl(const std::wstring& url)
         return false;
 
     const std::wstring lowerUrl = StringUtil::ToLower(url);
-    if (!lowerUrl.ends_with(L".png") && !lowerUrl.ends_with(L".tlg.png"))
+        if (!EndsWith(lowerUrl, L".png") && !EndsWith(lowerUrl, L".tlg.png"))
         return false;
 
     try
@@ -1343,19 +1373,24 @@ bool Patcher::IsRawPngStorageUrl(const std::wstring& url)
 bool Patcher::TryResolveTlgOverrideUrl(const std::wstring& candidateUrl, const std::wstring& archiveMemberPath, std::wstring& resolvedUrl)
 {
     resolvedUrl = candidateUrl;
-    if (!IsRawPngStorageUrl(candidateUrl))
-        return true;
 
-    const std::wstring sourcePngPath = UrlToFilePath(candidateUrl);
-    if (sourcePngPath.empty())
+    const std::wstring filePath = UrlToFilePath(candidateUrl);
+    if (filePath.empty())
         return false;
 
+    const std::wstring extension = StringUtil::ToLower(Path::GetExtension(filePath));
+    if (extension != L"png" && extension != L"tlg")
+        return false;
+
+    if (extension != L"png")
+        return true;
+
     std::wstring cachedTlgPath;
-    if (!TryBuildCachedTlgFromPng(archiveMemberPath, sourcePngPath, cachedTlgPath))
+    if (!TryBuildCachedTlgFromPng(archiveMemberPath, filePath, cachedTlgPath))
         return false;
 
     resolvedUrl = FilePathToStorageUrl(cachedTlgPath);
-    Debugger::Log(L"Using cached TLG for %s from PNG %s => %s", archiveMemberPath.c_str(), candidateUrl.c_str(), resolvedUrl.c_str());
+    Debugger::Log(L"Using cached TLG for %s from PNG %s => %s", archiveMemberPath.c_str(), filePath.c_str(), resolvedUrl.c_str());
     return true;
 }
 

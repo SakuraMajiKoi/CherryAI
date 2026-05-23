@@ -429,6 +429,12 @@ def _load_parsers() -> None:
         pass  # Graceful degradation
 
     try:
+        from .Eushully import EushullyParser
+        _parser_registry.register(EushullyParser())
+    except Exception:
+        pass  # Graceful degradation
+
+    try:
         from .wolf_rpg import WolfRPGJsonParser, WolfRPGTextParser
         _parser_registry.register(WolfRPGJsonParser())
         _parser_registry.register(WolfRPGTextParser())
