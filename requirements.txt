@@ -9,6 +9,13 @@ openpyxl>=3.0.0
 # Optional: HTML file support (.html, .htm, .xhtml)
 beautifulsoup4>=4.12.0
 
+# Optional: Provider-aware token counting
+tiktoken>=0.5.0
+sentencepiece>=0.1.99
+
+# Optional: planned Editor refactor and future Qt-based Editor surface
+PySide6>=6.6.0
+
 # Future optional dependencies can be added here
 # pytest>=7.0  # for testing (dev only)
 # black>=22.0  # for code formatting (dev only)

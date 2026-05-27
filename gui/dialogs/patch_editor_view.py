@@ -91,6 +91,8 @@ class PatchEditorViewDialog(tk.Toplevel):
 		self._locator_metadata: list[Dict[str, Any]] = []
 		self._locator_lines_by_idx: Dict[int, list[int]] = {}
 		self._current_locator_target: Optional[Dict[str, Any]] = None
+		self._suspend_file_tree_select = False
+		self._suspend_history_tree_select = False
 
 		self.title("Editor")
 		self.minsize(1100, 700)
@@ -324,12 +326,7 @@ class PatchEditorViewDialog(tk.Toplevel):
 		self._selected_file_var.set(rel_path)
 
 		if hasattr(self, "_file_tree"):
-			for item_id, item_rel_path in self._tree_item_to_rel_path.items():
-				if item_rel_path == rel_path:
-					self._file_tree.selection_set(item_id)
-					self._file_tree.focus(item_id)
-					self._file_tree.see(item_id)
-					break
+			self._select_file_tree_row(rel_path)
 
 		if self._mode_var.get() == "full_files":
 			self._load_selected_file()
@@ -387,12 +384,37 @@ class PatchEditorViewDialog(tk.Toplevel):
 
 	def _on_tree_select(self, _event: tk.Event) -> None:
 		"""Handle file-tree selection changes."""
+		if self._suspend_file_tree_select:
+			return
 		selection = self._file_tree.selection()
 		if not selection:
 			return
 		rel_path = self._tree_item_to_rel_path.get(selection[0])
 		if rel_path is not None:
 			self.set_selected_file(rel_path)
+
+	def _select_file_tree_row(self, rel_path: str) -> None:
+		"""Select a file-tree row without retriggering its selection binding."""
+		for item_id, item_rel_path in self._tree_item_to_rel_path.items():
+			if item_rel_path != rel_path:
+				continue
+			if self._file_tree.selection() == (item_id,):
+				self._file_tree.focus(item_id)
+				self._file_tree.see(item_id)
+				return
+
+			self._suspend_file_tree_select = True
+			try:
+				self._file_tree.selection_set(item_id)
+				self._file_tree.focus(item_id)
+				self._file_tree.see(item_id)
+			finally:
+				self.after_idle(self._clear_file_tree_select_guard)
+			return
+
+	def _clear_file_tree_select_guard(self) -> None:
+		"""Release programmatic file-tree selection guard after Tk goes idle."""
+		self._suspend_file_tree_select = False
 
 	def _load_selected_file(self) -> None:
 		"""Load the selected file into the editor and refresh aux views."""
@@ -507,12 +529,7 @@ class PatchEditorViewDialog(tk.Toplevel):
 					start = f"{editor_ln}.0"
 					end = f"{editor_ln}.0 lineend +1c"
 					self._editor_text.tag_add("locator_active", start, end)
-				try:
-					self._history_tree.selection_set(str(idx))
-					self._history_tree.focus(str(idx))
-					self._history_tree.see(str(idx))
-				except tk.TclError:
-					pass
+				self._select_history_row(idx)
 
 		if self._current_locator_target is None:
 			self._locator_var.set("Locator: none")
@@ -533,6 +550,8 @@ class PatchEditorViewDialog(tk.Toplevel):
 
 	def _on_history_tree_select(self, _event: tk.Event) -> None:
 		"""Set the active locator target from the selected history row."""
+		if self._suspend_history_tree_select:
+			return
 		selection = self._history_tree.selection()
 		if not selection:
 			return
@@ -545,6 +564,33 @@ class PatchEditorViewDialog(tk.Toplevel):
 				target["f"] = row.get("f")
 			self.set_locator_target(target)
 			break
+
+	def _select_history_row(self, idx: int) -> None:
+		"""Select a history row without retriggering locator promotion loops."""
+		if not hasattr(self, "_history_tree"):
+			return
+		row_id = str(idx)
+		if self._history_tree.selection() == (row_id,):
+			try:
+				self._history_tree.focus(row_id)
+				self._history_tree.see(row_id)
+			except tk.TclError:
+				pass
+			return
+
+		self._suspend_history_tree_select = True
+		try:
+			self._history_tree.selection_set(row_id)
+			self._history_tree.focus(row_id)
+			self._history_tree.see(row_id)
+		except tk.TclError:
+			pass
+		finally:
+			self.after_idle(self._clear_history_tree_select_guard)
+
+	def _clear_history_tree_select_guard(self) -> None:
+		"""Release the programmatic history-selection guard after Tk goes idle."""
+		self._suspend_history_tree_select = False
 
 	def _on_editor_cursor_changed(self, _event: tk.Event) -> None:
 		"""Promote the locator target that owns the current editor line."""

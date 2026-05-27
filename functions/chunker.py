@@ -9,10 +9,11 @@ Falls back to character-based estimation if tiktoken unavailable.
 
 from __future__ import annotations
 
+import io
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, List, Optional, Tuple
+from typing import Any, Iterable, List, Optional, Tuple
 
 from .config import MODEL_ENCODINGS, DEFAULT_ENCODING, get_encoding_for_model
 
@@ -24,6 +25,139 @@ try:
 except ImportError:
     tiktoken = None  # type: ignore
     TIKTOKEN_AVAILABLE = False
+
+try:
+    import sentencepiece as spm
+    SENTENCEPIECE_AVAILABLE = True
+except ImportError:
+    spm = None  # type: ignore
+    SENTENCEPIECE_AVAILABLE = False
+
+
+_GENERIC_SENTENCEPIECE_CORPUS: Tuple[str, ...] = (
+    "Hello world",
+    "The quick brown fox jumps over the lazy dog.",
+    "This text estimates tokens for translation requests.",
+    "Multiple providers may use different tokenization strategies.",
+    "Prompt counting should stay aligned with request slicing.",
+    "こんにちは世界。今日はいい天気です。",
+    "翻訳リクエストのトークン数を数えます。",
+    "メニューや選択肢の行も分割対象です。",
+)
+_GENERIC_SENTENCEPIECE_PROCESSOR: Optional[Any] = None
+
+
+def get_tokenizer_provider(model: str) -> str:
+    """Infer the provider for a model ID.
+
+    Args:
+        model: Model identifier.
+
+    Returns:
+        Canonical provider slug when known, otherwise an empty string.
+    """
+    normalized = (model or "").strip().lower()
+    if not normalized:
+        return ""
+
+    try:
+        from .config import get_model_pricing
+
+        provider = str(get_model_pricing(normalized).get("provider") or "").lower()
+        if provider:
+            return provider
+    except Exception:
+        pass
+
+    if normalized.startswith(("gpt-", "chatgpt", "o1", "o3", "o4")):
+        return "openai"
+    if normalized.startswith(("gemini", "google")):
+        return "google"
+    if any(
+        marker in normalized
+        for marker in ("mistral", "magistral", "ministral", "codestral")
+    ):
+        return "mistral"
+    return ""
+
+
+def get_tokenizer_family(model: str) -> str:
+    """Return the tokenizer family CherryAI should use for a model.
+
+    Args:
+        model: Model identifier.
+
+    Returns:
+        ``"openai"`` for tiktoken-backed models,
+        ``"sentencepiece"`` for Google/Mistral models,
+        otherwise ``"heuristic"``.
+    """
+    provider = get_tokenizer_provider(model)
+    if provider == "openai":
+        return "openai"
+    if provider in {"google", "mistral"}:
+        return "sentencepiece"
+    return "heuristic"
+
+
+def _iter_generic_sentencepiece_corpus() -> Iterable[str]:
+    """Yield the tiny multilingual corpus used for the generic processor."""
+    yield from _GENERIC_SENTENCEPIECE_CORPUS
+
+
+def _get_generic_sentencepiece_processor() -> Optional[Any]:
+    """Build and cache a tiny generic SentencePiece processor.
+
+    The provider-specific model tokenizers are not bundled with CherryAI, so the
+    fallback path uses a small multilingual SentencePiece model trained once in
+    memory. This stays optional and is only used when the ``sentencepiece``
+    package is installed.
+    """
+    global _GENERIC_SENTENCEPIECE_PROCESSOR
+
+    if _GENERIC_SENTENCEPIECE_PROCESSOR is not None:
+        return _GENERIC_SENTENCEPIECE_PROCESSOR
+    if not SENTENCEPIECE_AVAILABLE:
+        return None
+
+    try:
+        model_buffer = io.BytesIO()
+        spm.SentencePieceTrainer.train(
+            sentence_iterator=_iter_generic_sentencepiece_corpus(),
+            model_writer=model_buffer,
+            model_type="bpe",
+            vocab_size=128,
+            character_coverage=1.0,
+            hard_vocab_limit=False,
+            bos_id=-1,
+            eos_id=-1,
+            pad_id=-1,
+        )
+        _GENERIC_SENTENCEPIECE_PROCESSOR = spm.SentencePieceProcessor(
+            model_proto=model_buffer.getvalue(),
+        )
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "Failed to initialize generic sentencepiece processor: %s",
+            exc,
+        )
+        _GENERIC_SENTENCEPIECE_PROCESSOR = None
+    return _GENERIC_SENTENCEPIECE_PROCESSOR
+
+
+def _estimate_tokens_heuristic(text: str) -> int:
+    """Estimate tokens using lightweight script-aware heuristics."""
+    if not text:
+        return 0
+    has_cjk = any(
+        (0x3040 <= ord(ch) <= 0x30FF)
+        or (0x3400 <= ord(ch) <= 0x4DBF)
+        or (0x4E00 <= ord(ch) <= 0x9FFF)
+        for ch in text
+    )
+    if has_cjk:
+        return max(1, len(text) // 2)
+    return max(1, len(text) // 4)
 
 
 class ChunkMode(Enum):
@@ -72,40 +206,67 @@ class Chunker:
         self.config = config or ChunkerConfig()
         self.logger = logging.getLogger(__name__)
         self._encoder: Optional[object] = None
+        self._sentencepiece_processor: Optional[Any] = None
         self._token_cache: dict[str, int] = {}  # Cache line -> token count
+        self._last_count_method = "heuristic"
         
-        # Initialize encoder if tiktoken available and needed
+        # Initialize tokenizer backend if token counting is needed.
         if self.config.mode in (ChunkMode.TOKENS, ChunkMode.HYBRID):
-            self._init_encoder()
+            self._init_tokenizer()
 
-    def _init_encoder(self) -> None:
-        """Initialize tiktoken encoder for the configured model."""
-        if not TIKTOKEN_AVAILABLE:
-            self.logger.warning(
-                "tiktoken not installed - using character-based token estimation. "
-                "Install with: pip install tiktoken"
-            )
-            return
-        
-        try:
-            # Try model-specific encoding first
-            if self.config.model in MODEL_ENCODINGS:
-                encoding_name = MODEL_ENCODINGS[self.config.model]
-                self._encoder = tiktoken.get_encoding(encoding_name)
-            else:
-                # Try tiktoken's built-in model lookup
+    @property
+    def last_count_method(self) -> str:
+        """Return the backend used by the most recent token count."""
+        return self._last_count_method
+
+    def _init_tokenizer(self) -> None:
+        """Initialize the preferred tokenizer backend for the configured model."""
+        tokenizer_family = get_tokenizer_family(self.config.model)
+
+        if tokenizer_family == "openai":
+            if not TIKTOKEN_AVAILABLE:
+                self.logger.warning(
+                    "tiktoken not installed - using heuristic token estimation. "
+                    "Install with: pip install tiktoken"
+                )
+                return
+
+            try:
+                if self.config.model in MODEL_ENCODINGS:
+                    encoding_name = MODEL_ENCODINGS[self.config.model]
+                    self._encoder = tiktoken.get_encoding(encoding_name)
+                    self._last_count_method = f"tiktoken/{encoding_name}"
+                    return
+
                 try:
                     self._encoder = tiktoken.encoding_for_model(self.config.model)
+                    self._last_count_method = "tiktoken/model"
+                    return
                 except KeyError:
-                    # Fall back to default encoding
                     self._encoder = tiktoken.get_encoding(DEFAULT_ENCODING)
+                    self._last_count_method = f"tiktoken/{DEFAULT_ENCODING}"
                     self.logger.debug(
-                        f"No specific encoding for model '{self.config.model}', "
-                        f"using {DEFAULT_ENCODING}"
+                        "No specific encoding for model '%s', using %s",
+                        self.config.model,
+                        DEFAULT_ENCODING,
                     )
-        except Exception as e:
-            self.logger.warning(f"Failed to initialize tiktoken encoder: {e}")
-            self._encoder = None
+                    return
+            except Exception as exc:
+                self.logger.warning("Failed to initialize tiktoken encoder: %s", exc)
+                self._encoder = None
+                return
+
+        if tokenizer_family == "sentencepiece":
+            if not SENTENCEPIECE_AVAILABLE:
+                self.logger.warning(
+                    "sentencepiece not installed - using heuristic token estimation. "
+                    "Install with: pip install sentencepiece"
+                )
+                return
+
+            self._sentencepiece_processor = _get_generic_sentencepiece_processor()
+            if self._sentencepiece_processor is not None:
+                self._last_count_method = "sentencepiece/generic"
 
     def count_tokens(self, text: str) -> int:
         """Count tokens in text using tiktoken or estimation.
@@ -121,14 +282,16 @@ class Chunker:
             return self._token_cache[text]
         
         if self._encoder is not None:
-            # Use tiktoken for accurate count
             count = len(self._encoder.encode(text))  # type: ignore
+            method = self._last_count_method
+        elif self._sentencepiece_processor is not None:
+            count = len(self._sentencepiece_processor.encode(text, out_type=int))
+            method = "sentencepiece/generic"
         else:
-            # Fallback: estimate ~4 characters per token (rough average)
-            # This is conservative for English, may undercount for Japanese
-            count = max(1, len(text) // 4)
+            count = _estimate_tokens_heuristic(text)
+            method = "heuristic"
         
-        # Cache result
+        self._last_count_method = method
         self._token_cache[text] = count
         return count
 
@@ -346,3 +509,8 @@ def is_tiktoken_available() -> bool:
         True if tiktoken is installed, False otherwise.
     """
     return TIKTOKEN_AVAILABLE
+
+
+def is_sentencepiece_available() -> bool:
+    """Check if sentencepiece is available for provider-aware token counting."""
+    return SENTENCEPIECE_AVAILABLE

@@ -388,6 +388,7 @@ class CostsStep(BaseStep):
         # Task 5: Request mode button refs (populated in _build_request_mode_grid)
         self._mode_var: Optional[tk.StringVar] = None
         self._mode_buttons: dict[str, tk.Button] = {}
+        self._last_model_id_for_tokenization = DEFAULT_PRICING_MODEL
         # Whether API.ini settings have been loaded once
         self._settings_loaded_once = False
         # Non-blocking progress dialog shown during estimation
@@ -2292,9 +2293,51 @@ class CostsStep(BaseStep):
         reloaded from API.ini — they are independent and only written via
         'Apply Settings to Model'.
         """
+        new_model_id = self._model_var.get()
+        previous_model_id = self._last_model_id_for_tokenization
         self._refresh_mode_buttons()
+        if (
+            self._estimation_result
+            and self._model_change_requires_reestimation(
+                previous_model_id,
+                new_model_id,
+            )
+        ):
+            self._last_model_id_for_tokenization = new_model_id
+            self._run_estimation()
+            return
         if self._estimation_result:
             self._reprice_for_model()
+        self._last_model_id_for_tokenization = new_model_id
+
+    @staticmethod
+    def _tokenizer_family(model_id: str) -> str:
+        """Return the tokenizer family used for a model's token counting."""
+        provider = str(get_model_pricing(model_id).get("provider") or "").lower()
+        if provider == "openai":
+            return "openai"
+        if provider in {"google", "mistral"}:
+            return "sentencepiece"
+        return "heuristic"
+
+    @classmethod
+    def _model_change_requires_reestimation(
+        cls,
+        previous_model_id: str,
+        new_model_id: str,
+    ) -> bool:
+        """Return whether a model change needs full token recalculation.
+
+        For now, only transitions across the OpenAI boundary require a fresh
+        token count. Google and Mistral stay on the same SentencePiece family,
+        so those changes can keep the instant repricing fast path.
+        """
+        previous_family = cls._tokenizer_family(previous_model_id)
+        new_family = cls._tokenizer_family(new_model_id)
+        return previous_family != new_family and "openai" in {
+            previous_family,
+            new_family,
+        }
 
     def _save_settings(self) -> None:
         """Apply current UI settings to the active model in API.ini.
@@ -2419,6 +2462,7 @@ class CostsStep(BaseStep):
 
     def on_enter(self) -> None:
         """Called when step becomes active."""
+        self._last_model_id_for_tokenization = self._model_var.get()
         # TASK 43.12: Sync chunk size from manifest (shared with Translation)
         mgr = self.manifest_manager
         if mgr is not None and mgr.is_loaded:

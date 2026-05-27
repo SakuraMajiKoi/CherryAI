@@ -55,9 +55,24 @@ def _persist_sparse_qa_overwrite(
 ) -> None:
     """Persist ``qa_overwrite`` only when it is an explicit override."""
     if overwrite_text and overwrite_text != qa_text:
+        previous_value = ""
+        current_line = manager.get_line(idx)
+        if isinstance(current_line, dict):
+            previous_value = str(current_line.get("qa_overwrite", "") or "")
         manager.set_line_field(idx, "qa_overwrite", overwrite_text)
+        manager.track_output_change_for_field(
+            idx,
+            "qa_overwrite",
+            previous_value,
+            overwrite_text,
+        )
         return
+    previous_value = ""
+    current_line = manager.get_line(idx)
+    if isinstance(current_line, dict):
+        previous_value = str(current_line.get("qa_overwrite", "") or "")
     manager.clear_line_field(idx, "qa_overwrite")
+    manager.track_output_change_for_field(idx, "qa_overwrite", previous_value, "")
 
 class IssueType(Enum):
     """Type of QA issue detected."""

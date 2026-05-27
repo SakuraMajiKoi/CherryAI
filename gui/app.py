@@ -1388,7 +1388,16 @@ For more information, see the documentation.
 def main() -> None:
     """Entry point for the GUI application."""
     app = App()
-    app.mainloop()
+    try:
+        app.mainloop()
+    except KeyboardInterrupt:
+        logger.warning(
+            "App mainloop interrupted by KeyboardInterrupt; closing gracefully."
+        )
+        try:
+            app._on_close()
+        except Exception:
+            app.destroy()
 
 
 if __name__ == "__main__":

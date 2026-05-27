@@ -2,8 +2,10 @@
 
 namespace
 {
-    constexpr wchar_t CONFIG_PATH_PRIMARY[] = L"patch\\CherryAI.KiriKiriPatch.json";
-    constexpr wchar_t CONFIG_PATH_LEGACY[] = L"patch\\CherryAI.KiriKiriFontPatch.json";
+    constexpr wchar_t CONFIG_PATH_PRIMARY[] = L"CherryAI.KiriKiriPatch.json";
+    constexpr wchar_t CONFIG_PATH_PRIMARY_PATCH[] = L"patch\\CherryAI.KiriKiriPatch.json";
+    constexpr wchar_t CONFIG_PATH_LEGACY[] = L"CherryAI.KiriKiriFontPatch.json";
+    constexpr wchar_t CONFIG_PATH_LEGACY_PATCH[] = L"patch\\CherryAI.KiriKiriFontPatch.json";
     constexpr wchar_t RUNTIME_CONFIG_PATH[] = L"patch\\CherryAI.KiriKiriFontPatch.runtime.tjs";
     constexpr DWORD FONT_LOAD_FLAGS = FR_PRIVATE;
 
@@ -12,6 +14,8 @@ namespace
         bool Enabled = false;
         bool LogFontCalls = true;
         bool ReplaceCjkFaces = false;
+        bool StripAsciiQuotes = true;
+        bool CollapseAsciiDoubleSpaces = true;
         int AdvancePercent = 100;
         int CharacterExtraPercent = 100;
         int CharacterExtraOffset = 0;
@@ -197,7 +201,9 @@ namespace
     void WriteRuntimeMessageLayerConfig(
         int lineSpacingOffsetPixels,
         int wrapRightPaddingPixels,
-        const std::wstring& wrapMode)
+        const std::wstring& wrapMode,
+        bool stripAsciiQuotes,
+        bool collapseAsciiDoubleSpaces)
     {
         int clampedWrapPadding = wrapRightPaddingPixels;
         if (clampedWrapPadding < 0)
@@ -210,10 +216,18 @@ namespace
         WriteUtf8TextFile(
             Path::Combine(GetModuleRoot(), RUNTIME_CONFIG_PATH),
             StringUtil::Format(
-                L"%%[\r\n\tline_spacing_offset_pixels: %d,\r\n\twrap_right_padding_pixels: %d,\r\n\twrap_mode: \"%ls\",\r\n]\r\n",
+                L"%%[\r\n"
+                L"\tline_spacing_offset_pixels: %d,\r\n"
+                L"\twrap_right_padding_pixels: %d,\r\n"
+                L"\twrap_mode: \"%ls\",\r\n"
+                L"\tstrip_ascii_quotes: %ls,\r\n"
+                L"\tcollapse_ascii_double_spaces: %ls,\r\n"
+                L"]\r\n",
                 lineSpacingOffsetPixels,
                 clampedWrapPadding,
-                normalizedWrapMode.c_str()));
+                normalizedWrapMode.c_str(),
+                stripAsciiQuotes ? L"true" : L"false",
+                collapseAsciiDoubleSpaces ? L"true" : L"false"));
     }
 
     std::wstring WideFromText(LPCWSTR text, int count)
@@ -340,7 +354,16 @@ namespace
         std::wstring configText = ReadUtf8TextFile(Path::Combine(GetModuleRoot(), CONFIG_PATH_PRIMARY));
         if (!configText.empty())
             return configText;
-        return ReadUtf8TextFile(Path::Combine(GetModuleRoot(), CONFIG_PATH_LEGACY));
+
+        configText = ReadUtf8TextFile(Path::Combine(GetModuleRoot(), CONFIG_PATH_PRIMARY_PATCH));
+        if (!configText.empty())
+            return configText;
+
+        configText = ReadUtf8TextFile(Path::Combine(GetModuleRoot(), CONFIG_PATH_LEGACY));
+        if (!configText.empty())
+            return configText;
+
+        return ReadUtf8TextFile(Path::Combine(GetModuleRoot(), CONFIG_PATH_LEGACY_PATCH));
     }
 
     bool LoadConfig()
@@ -358,6 +381,11 @@ namespace
         config.LatinBoldFontPath = ResolveRelativePath(ExtractNestedString(configText, L"latin_bold_font", L"file"));
         config.LogFontCalls = ExtractBool(configText, L"log_font_calls", true);
         config.ReplaceCjkFaces = ExtractBool(configText, L"replace_cjk_faces", false);
+        config.StripAsciiQuotes = ExtractBool(configText, L"strip_ascii_quotes", true);
+        config.CollapseAsciiDoubleSpaces = ExtractBool(
+            configText,
+            L"collapse_ascii_double_spaces",
+            true);
         config.AdvancePercent = ExtractInt(configText, L"advance_percent", 100);
         config.CharacterExtraPercent = ExtractInt(configText, L"character_extra_percent", 100);
         config.CharacterExtraOffset = ExtractInt(configText, L"character_extra_offset", 0);
@@ -387,7 +415,9 @@ namespace
         WriteRuntimeMessageLayerConfig(
             config.LineSpacingOffsetPixels,
             config.WrapRightPaddingPixels,
-            config.WrapMode);
+            config.WrapMode,
+            config.StripAsciiQuotes,
+            config.CollapseAsciiDoubleSpaces);
 
         config.Enabled = !config.DefaultFace.empty() && !config.RegularFontPath.empty();
         if (!config.Enabled)
@@ -788,6 +818,90 @@ namespace
         return result;
     }
 
+    bool IsAsciiLetter(wchar_t ch)
+    {
+        return (ch >= L'A' && ch <= L'Z') || (ch >= L'a' && ch <= L'z');
+    }
+
+    bool IsSpacingPunctuation(wchar_t ch)
+    {
+        switch (ch)
+        {
+        case L'.':
+        case L',':
+        case L'!':
+        case L'?':
+        case L';':
+        case L':':
+        case 0xFF0C: // fullwidth comma
+        case 0x3002: // ideographic full stop
+        case 0xFF01: // fullwidth exclamation mark
+        case 0xFF1F: // fullwidth question mark
+        case 0xFF1B: // fullwidth semicolon
+        case 0xFF1A: // fullwidth colon
+        case L')':
+        case L']':
+        case L'}':
+        case 0x300D: // right corner bracket
+        case 0x300F: // right white corner bracket
+        case 0xFF09: // fullwidth right parenthesis
+            return true;
+        default:
+            break;
+        }
+        return false;
+    }
+
+    std::wstring NormalizeRuntimeDisplayText(const std::wstring& input)
+    {
+        if (input.empty())
+            return input;
+
+        std::wstring out;
+        out.reserve(input.size() + 8);
+
+        for (wchar_t ch : input)
+        {
+            if (g_config.StripAsciiQuotes)
+            {
+                if (ch == L'"' || ch == 0x201C || ch == 0x201D)
+                    continue;
+            }
+
+            if (!out.empty())
+            {
+                const wchar_t prev = out.back();
+                if (IsSpacingPunctuation(prev) && IsAsciiLetter(ch) && prev != L' ')
+                    out.push_back(L' ');
+            }
+
+            out.push_back(ch);
+        }
+
+        if (g_config.CollapseAsciiDoubleSpaces)
+        {
+            std::wstring compact;
+            compact.reserve(out.size());
+            bool previousWasSpace = false;
+            for (wchar_t ch : out)
+            {
+                if (ch == L' ')
+                {
+                    if (previousWasSpace)
+                        continue;
+                    previousWasSpace = true;
+                    compact.push_back(ch);
+                    continue;
+                }
+                previousWasSpace = false;
+                compact.push_back(ch);
+            }
+            out.swap(compact);
+        }
+
+        return out;
+    }
+
     HFONT WINAPI CreateFontIndirectWHook(const LOGFONTW* pLogFont)
     {
         if (pLogFont == nullptr)
@@ -996,8 +1110,16 @@ namespace
     BOOL WINAPI TextOutWHook(HDC hdc, int x, int y, LPCWSTR lpString, int c)
     {
         const std::wstring text = WideFromText(lpString, c);
-        const FontOverrideState state = ApplyTextFontOverride(hdc, text, L"TextOutW");
-        const BOOL result = ::TextOutW(hdc, x, y, lpString, c);
+        const std::wstring renderText = NormalizeRuntimeDisplayText(text);
+        const FontOverrideState state = ApplyTextFontOverride(hdc, renderText, L"TextOutW");
+        LPCWSTR renderPtr = lpString;
+        int renderCount = c;
+        if (!renderText.empty() && renderText != text)
+        {
+            renderPtr = renderText.c_str();
+            renderCount = static_cast<int>(renderText.size());
+        }
+        const BOOL result = ::TextOutW(hdc, x, y, renderPtr, renderCount);
         RestoreTextFontOverride(hdc, state);
         return result;
     }
@@ -1005,10 +1127,20 @@ namespace
     BOOL WINAPI TextOutAHook(HDC hdc, int x, int y, LPCSTR lpString, int c)
     {
         const std::wstring text = AnsiToWide(lpString, c);
+        const std::wstring renderText = NormalizeRuntimeDisplayText(text);
         TraceAnsiTextHit(&g_ansiTrace.TextOutA, L"TextOutA", hdc, text);
         TraceRefreshingMorningHit(L"TextOutA", hdc, text);
-        const FontOverrideState state = ApplyTextFontOverride(hdc, text, L"TextOutA");
-        const BOOL result = ::TextOutA(hdc, x, y, lpString, c);
+        const FontOverrideState state = ApplyTextFontOverride(hdc, renderText, L"TextOutA");
+        LPCSTR renderPtr = lpString;
+        int renderCount = c;
+        std::string renderAnsi;
+        if (!renderText.empty() && renderText != text)
+        {
+            renderAnsi = WideToAnsi(renderText);
+            renderPtr = renderAnsi.c_str();
+            renderCount = static_cast<int>(renderAnsi.size());
+        }
+        const BOOL result = ::TextOutA(hdc, x, y, renderPtr, renderCount);
         RestoreTextFontOverride(hdc, state);
         return result;
     }
@@ -1016,7 +1148,15 @@ namespace
     BOOL WINAPI ExtTextOutWHook(HDC hdc, int x, int y, UINT options, const RECT* lprect, LPCWSTR lpString, UINT c, const INT* lpDx)
     {
         const std::wstring text = WideFromText(lpString, (int)c);
-        const FontOverrideState state = ApplyTextFontOverride(hdc, text, L"ExtTextOutW");
+        const std::wstring renderText = (lpDx == nullptr) ? NormalizeRuntimeDisplayText(text) : text;
+        const FontOverrideState state = ApplyTextFontOverride(hdc, renderText, L"ExtTextOutW");
+        LPCWSTR renderPtr = lpString;
+        UINT renderCount = c;
+        if (lpDx == nullptr && !renderText.empty() && renderText != text)
+        {
+            renderPtr = renderText.c_str();
+            renderCount = static_cast<UINT>(renderText.size());
+        }
         const INT* adjustedDx = lpDx;
         std::vector<INT> scaledDx;
         if (lpDx != nullptr && c > 0 && g_config.AdvancePercent != 100)
@@ -1037,7 +1177,7 @@ namespace
                 PreviewDx(adjustedDx, c).c_str());
         }
 
-        const BOOL result = ::ExtTextOutW(hdc, x, y, options, lprect, lpString, c, adjustedDx);
+        const BOOL result = ::ExtTextOutW(hdc, x, y, options, lprect, renderPtr, renderCount, adjustedDx);
         RestoreTextFontOverride(hdc, state);
         return result;
     }
@@ -1045,9 +1185,19 @@ namespace
     BOOL WINAPI ExtTextOutAHook(HDC hdc, int x, int y, UINT options, const RECT* lprect, LPCSTR lpString, UINT c, const INT* lpDx)
     {
         const std::wstring text = AnsiToWide(lpString, (int)c);
+        const std::wstring renderText = (lpDx == nullptr) ? NormalizeRuntimeDisplayText(text) : text;
         TraceAnsiTextHit(&g_ansiTrace.ExtTextOutA, L"ExtTextOutA", hdc, text);
         TraceRefreshingMorningHit(L"ExtTextOutA", hdc, text);
-        const FontOverrideState state = ApplyTextFontOverride(hdc, text, L"ExtTextOutA");
+        const FontOverrideState state = ApplyTextFontOverride(hdc, renderText, L"ExtTextOutA");
+        LPCSTR renderPtr = lpString;
+        UINT renderCount = c;
+        std::string renderAnsi;
+        if (lpDx == nullptr && !renderText.empty() && renderText != text)
+        {
+            renderAnsi = WideToAnsi(renderText);
+            renderPtr = renderAnsi.c_str();
+            renderCount = static_cast<UINT>(renderAnsi.size());
+        }
         const INT* adjustedDx = lpDx;
         std::vector<INT> scaledDx;
         if (lpDx != nullptr && c > 0 && g_config.AdvancePercent != 100)
@@ -1068,7 +1218,7 @@ namespace
                 PreviewDx(adjustedDx, c).c_str());
         }
 
-        const BOOL result = ::ExtTextOutA(hdc, x, y, options, lprect, lpString, c, adjustedDx);
+        const BOOL result = ::ExtTextOutA(hdc, x, y, options, lprect, renderPtr, renderCount, adjustedDx);
         RestoreTextFontOverride(hdc, state);
         return result;
     }
@@ -1133,8 +1283,16 @@ namespace
     int WINAPI DrawTextWHook(HDC hdc, LPCWSTR lpchText, int cchText, LPRECT lprc, UINT format)
     {
         const std::wstring text = WideFromText(lpchText, cchText);
-        const FontOverrideState state = ApplyTextFontOverride(hdc, text, L"DrawTextW");
-        const int result = ::DrawTextW(hdc, lpchText, cchText, lprc, format);
+        const std::wstring renderText = NormalizeRuntimeDisplayText(text);
+        const FontOverrideState state = ApplyTextFontOverride(hdc, renderText, L"DrawTextW");
+        LPCWSTR renderPtr = lpchText;
+        int renderCount = cchText;
+        if (!renderText.empty() && renderText != text)
+        {
+            renderPtr = renderText.c_str();
+            renderCount = (cchText < 0) ? -1 : static_cast<int>(renderText.size());
+        }
+        const int result = ::DrawTextW(hdc, renderPtr, renderCount, lprc, format);
         RestoreTextFontOverride(hdc, state);
         return result;
     }
@@ -1142,10 +1300,20 @@ namespace
     int WINAPI DrawTextAHook(HDC hdc, LPCSTR lpchText, int cchText, LPRECT lprc, UINT format)
     {
         const std::wstring text = AnsiToWide(lpchText, cchText);
+        const std::wstring renderText = NormalizeRuntimeDisplayText(text);
         TraceAnsiTextHit(&g_ansiTrace.DrawTextA, L"DrawTextA", hdc, text);
         TraceRefreshingMorningHit(L"DrawTextA", hdc, text);
-        const FontOverrideState state = ApplyTextFontOverride(hdc, text, L"DrawTextA");
-        const int result = ::DrawTextA(hdc, lpchText, cchText, lprc, format);
+        const FontOverrideState state = ApplyTextFontOverride(hdc, renderText, L"DrawTextA");
+        LPCSTR renderPtr = lpchText;
+        int renderCount = cchText;
+        std::string renderAnsi;
+        if (!renderText.empty() && renderText != text)
+        {
+            renderAnsi = WideToAnsi(renderText);
+            renderPtr = renderAnsi.c_str();
+            renderCount = (cchText < 0) ? -1 : static_cast<int>(renderAnsi.size());
+        }
+        const int result = ::DrawTextA(hdc, renderPtr, renderCount, lprc, format);
         RestoreTextFontOverride(hdc, state);
         return result;
     }

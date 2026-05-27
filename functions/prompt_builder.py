@@ -516,7 +516,7 @@ def _count_tokens_for_lines(texts: List[str], model: str = "gpt-4o") -> int:
     """
     total = 0
     for text in texts:
-        tokens, _ = count_tokens(text)
+        tokens, _ = count_tokens(text, model=model)
         total += tokens
     return total
 

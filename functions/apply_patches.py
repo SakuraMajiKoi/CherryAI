@@ -188,6 +188,11 @@ def _find_in_root(
         """Map a recursive match to the closest canonical candidate relative path."""
         match_parts_lower = tuple(part.lower() for part in match_path.parts)
 
+        # Keep discovered paths under patch* roots verbatim so copied targets
+        # preserve the same loose-overlay compartment.
+        if match_parts_lower and match_parts_lower[0].startswith("patch"):
+            return match_path
+
         for candidate in candidates:
             candidate_parts = candidate.parts
             if not candidate_parts:

@@ -351,7 +351,7 @@ def count_tokens(text: str, model: str = DEFAULT_MODEL) -> Tuple[int, str]:
                 config = _ChunkerConfig(model=model)
             chunker = _Chunker(config)
             count = chunker.count_tokens(text)
-            method = "tiktoken" if _is_tiktoken_available and _is_tiktoken_available() else "heuristic"
+            method = getattr(chunker, "last_count_method", "heuristic")
             return count, method
         except Exception as e:
             logger.debug("Chunker count_tokens failed: %s", e)

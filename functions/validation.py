@@ -96,6 +96,282 @@ PROMPT_CONTEXT_WARNING_MESSAGE = (
     "Continue to start translation anyway?"
 )
 
+_MOJIBAKE_CLASSIC_CHARS = {
+    "ã",
+    "ä",
+    "å",
+    "æ",
+    "ç",
+    "ï",
+    "¼",
+    "½",
+}
+_MOJIBAKE_UTF16_ARTIFACT_CHARS = {
+    "਍",
+    "ഊ",
+    "㬊",
+    "䀊",
+    "㴽",
+}
+_MOJIBAKE_REPEATED_EXCLUDED_CHARS = set(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    + "...…"
+    + "!@#$%^&*()-_=+[]{}\\|;:'\",.<>/?`~"
+    + "！？。，、；：・（）「」『』【】《》〈〉［］｛｝"
+)
+_MOJIBAKE_TERMINAL_PUNCTUATION = (
+    ".",
+    "!",
+    "?",
+    "。",
+    "！",
+    "？",
+    "…",
+    "」",
+    "』",
+    ")",
+    "）",
+)
+_MOJIBAKE_COMMON_SYMBOL_ALLOWLIST = set(
+    "!@#$%^&*()-_=+[]{}\\|;:'\",.<>/?`~"
+    + "！？。，、；：・（）「」『』【】《》〈〉［］｛｝…"
+    + "※★☆♪"
+)
+
+
+@dataclass
+class MojibakeAssessment:
+    """Assessment of whether one extracted line appears corrupted."""
+
+    score: int
+    threshold: int
+    is_corrupted: bool
+    category_scores: Dict[str, int] = field(default_factory=dict)
+    category_reductions: Dict[str, int] = field(default_factory=dict)
+    details: Dict[str, Any] = field(default_factory=dict)
+
+
+def _letter_script_group(ch: str) -> str:
+    """Return a broad script bucket for one letter-like character."""
+    code = ord(ch)
+    if (
+        0x0041 <= code <= 0x005A
+        or 0x0061 <= code <= 0x007A
+        or 0x00C0 <= code <= 0x024F
+        or 0x1E00 <= code <= 0x1EFF
+    ):
+        return "latin"
+    if 0x3040 <= code <= 0x30FF:
+        return "kana"
+    if 0x4E00 <= code <= 0x9FFF or 0x3400 <= code <= 0x4DBF:
+        return "han"
+    if 0xAC00 <= code <= 0xD7AF or 0x1100 <= code <= 0x11FF:
+        return "hangul"
+    if 0x0400 <= code <= 0x052F:
+        return "cyrillic"
+    if 0x0370 <= code <= 0x03FF:
+        return "greek"
+    if 0x0600 <= code <= 0x06FF:
+        return "arabic"
+    if 0x0900 <= code <= 0x097F:
+        return "devanagari"
+    return "other"
+
+
+def _is_likely_kaomoji_token(token: str) -> bool:
+    """Return whether token is likely a compact emoticon/kaomoji fragment."""
+    if not token:
+        return False
+    if len(token) > 20:
+        return False
+    letter_count = sum(1 for ch in token if ch.isalpha())
+    symbol_count = sum(1 for ch in token if not ch.isalnum() and not ch.isspace())
+    return symbol_count >= max(2, letter_count)
+
+
+def _count_suspicious_repeated_runs(text: str) -> int:
+    """Count suspicious repeated-character runs while skipping common punctuation."""
+    suspicious_runs = 0
+    current_char = ""
+    current_length = 0
+    for ch in text:
+        if ch == current_char:
+            current_length += 1
+        else:
+            if (
+                current_length >= 6
+                and current_char
+                and current_char not in _MOJIBAKE_REPEATED_EXCLUDED_CHARS
+                and not current_char.isalpha()
+            ):
+                suspicious_runs += 1
+            current_char = ch
+            current_length = 1
+
+    if (
+        current_length >= 6
+        and current_char
+        and current_char not in _MOJIBAKE_REPEATED_EXCLUDED_CHARS
+        and not current_char.isalpha()
+    ):
+        suspicious_runs += 1
+    return suspicious_runs
+
+
+def _count_unusual_symbol_chars(text: str) -> int:
+    """Count symbol-category characters that rarely appear in normal script lines."""
+    count = 0
+    for ch in text:
+        if ch in _MOJIBAKE_COMMON_SYMBOL_ALLOWLIST:
+            continue
+        category = unicodedata.category(ch)
+        if category.startswith("S"):
+            count += 1
+    return count
+
+
+def assess_mojibake_first_line(
+    text: str,
+    *,
+    threshold: int = 55,
+) -> MojibakeAssessment:
+    """Score likely mojibake/corruption for one line.
+
+    Uses four weighted categories so one signal alone should not decide.
+    """
+    line = (text or "").strip()
+    if not line:
+        return MojibakeAssessment(
+            score=0,
+            threshold=threshold,
+            is_corrupted=False,
+            details={"reason": "empty"},
+        )
+
+    cat_scores: Dict[str, int] = {
+        "classic_utf8_mojibake": 0,
+        "utf16_binary_artifacts": 0,
+        "suspicious_structure": 0,
+    }
+    reductions: Dict[str, int] = {"valid_structure_confidence": 0}
+
+    classic_hits = sum(line.count(ch) for ch in _MOJIBAKE_CLASSIC_CHARS)
+    line_length = max(1, len(line))
+    classic_density = classic_hits / line_length
+    if classic_hits:
+        cat_scores["classic_utf8_mojibake"] = min(
+            60,
+            (classic_hits * 6) + int(classic_density * 900),
+        )
+
+    artifact_hits = sum(line.count(ch) for ch in _MOJIBAKE_UTF16_ARTIFACT_CHARS)
+    artifact_density = artifact_hits / line_length
+    if artifact_hits:
+        cat_scores["utf16_binary_artifacts"] = min(
+            60,
+            (artifact_hits * 14) + int(artifact_density * 1000),
+        )
+
+    repeated_runs = _count_suspicious_repeated_runs(line)
+    unusual_symbol_hits = _count_unusual_symbol_chars(line)
+
+    tokens = [token for token in line.split(" ") if token]
+    short_words = 0
+    for token in tokens:
+        if len(token) < 2 or len(token) > 5:
+            continue
+        if any(ord(ch) >= 0x3000 for ch in token):
+            continue
+        if token.isalpha():
+            short_words += 1
+
+    script_groups: Set[str] = set()
+    mixed_script_tokens = 0
+    high_mix_tokens = 0
+    for token in tokens:
+        if _is_likely_kaomoji_token(token):
+            continue
+        token_scripts = {
+            _letter_script_group(ch)
+            for ch in token
+            if ch.isalpha()
+        }
+        if not token_scripts:
+            continue
+        script_groups.update(token_scripts)
+        if len(token_scripts) >= 2:
+            mixed_script_tokens += 1
+        if len(token_scripts) >= 3:
+            high_mix_tokens += 1
+
+    repeated_points = min(20, repeated_runs * 10)
+    unusual_symbol_points = min(20, unusual_symbol_hits * 5)
+    mixed_script_points = min(
+        25,
+        (mixed_script_tokens * 8) + (high_mix_tokens * 10),
+    )
+    if len(line) >= 1200:
+        long_line_points = 15
+    elif len(line) >= 800:
+        long_line_points = 12
+    elif len(line) >= 400:
+        long_line_points = 6
+    else:
+        long_line_points = 0
+
+    cat_scores["suspicious_structure"] = min(
+        60,
+        repeated_points + unusual_symbol_points + mixed_script_points + long_line_points,
+    )
+
+    short_words_reduction = min(25, short_words * 5)
+    terminal_punctuation_reduction = 12 if line.endswith(_MOJIBAKE_TERMINAL_PUNCTUATION) else 0
+    single_script_reduction = 12 if (len(script_groups) <= 1 and script_groups) else 0
+    low_noise_reduction = 0
+    if unusual_symbol_hits == 0 and artifact_hits == 0 and classic_hits <= 1:
+        low_noise_reduction += 11
+    if mixed_script_tokens == 0 and high_mix_tokens == 0:
+        low_noise_reduction += 8
+
+    reductions["valid_structure_confidence"] = min(
+        60,
+        short_words_reduction
+        + terminal_punctuation_reduction
+        + single_script_reduction
+        + low_noise_reduction,
+    )
+
+    total_score = max(0, min(100, sum(cat_scores.values()) - sum(reductions.values())))
+    return MojibakeAssessment(
+        score=total_score,
+        threshold=threshold,
+        is_corrupted=total_score >= threshold,
+        category_scores=cat_scores,
+        category_reductions=reductions,
+        details={
+            "classic_hits": classic_hits,
+            "artifact_hits": artifact_hits,
+            "classic_density": round(classic_density, 4),
+            "artifact_density": round(artifact_density, 4),
+            "repeated_runs": repeated_runs,
+            "line_length": line_length,
+            "short_words": short_words,
+            "unusual_symbol_hits": unusual_symbol_hits,
+            "script_groups": sorted(script_groups),
+            "mixed_script_tokens": mixed_script_tokens,
+            "high_mix_tokens": high_mix_tokens,
+            "token_count": len(tokens),
+            "repeated_points": repeated_points,
+            "unusual_symbol_points": unusual_symbol_points,
+            "mixed_script_points": mixed_script_points,
+            "long_line_points": long_line_points,
+            "short_words_reduction": short_words_reduction,
+            "terminal_punctuation_reduction": terminal_punctuation_reduction,
+            "single_script_reduction": single_script_reduction,
+            "low_noise_reduction": low_noise_reduction,
+        },
+    )
+
 
 def _normalize_language_name(language: str) -> str:
     """Normalize a language name for internal comparisons."""

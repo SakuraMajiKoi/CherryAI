@@ -35,7 +35,7 @@ class cAnimeTimer
 		layer.setImagePos(0,0);
 	}
 
-	// Set‚ªŒÄ‚Î‚ê‚Ä‚¢‚é–‚ª‘O’ñ
+	// Setï¿½ï¿½ï¿½Ä‚Î‚ï¿½Ä‚ï¿½ï¿½é–ï¿½ï¿½ï¿½Oï¿½ï¿½
 	function Init()
 	{
 		if( dataFile === void ) return;
@@ -201,10 +201,10 @@ class AnimeLayer extends WF_Layer
 	}
 }
 
-// ƒvƒ‰ƒCƒ}ƒŠ[—p‚ÌƒŒƒCƒ„[
-// width‚Æheight‚Ìgetter‚ªˆê”ÔÅ‰‚Éİ’è‚µ‚½‘å‚«‚³‚ÉŒÅ’è‚³‚ê‚Ä‚¢‚é
-// 4:3ƒ‚[ƒh“™‚Åƒvƒ‰ƒCƒ}ƒŠ[‚ÌƒTƒCƒY‚ª•Ï‚í‚Á‚½ê‡A
-// ƒvƒ‰ƒOƒCƒ“‚ÌŒÄ‚Ño‚µ“™‚Å‚¢‚Â‚à‚Æˆá‚¤ƒTƒCƒY‚Åì‚ç‚ê‚éê‡‚ª‚ ‚Á‚½‚è‚·‚é‚Ì‚Å
+// ï¿½vï¿½ï¿½ï¿½Cï¿½}ï¿½ï¿½ï¿½[ï¿½pï¿½Ìƒï¿½ï¿½Cï¿½ï¿½ï¿½[
+// widthï¿½ï¿½heightï¿½ï¿½getterï¿½ï¿½ï¿½ï¿½ÔÅï¿½ï¿½Éİ’è‚µï¿½ï¿½ï¿½å‚«ï¿½ï¿½ï¿½ÉŒÅ’è‚³ï¿½ï¿½Ä‚ï¿½ï¿½ï¿½
+// 4:3ï¿½ï¿½ï¿½[ï¿½hï¿½ï¿½ï¿½Åƒvï¿½ï¿½ï¿½Cï¿½}ï¿½ï¿½ï¿½[ï¿½ÌƒTï¿½Cï¿½Yï¿½ï¿½ï¿½Ï‚ï¿½ï¿½ï¿½ï¿½ï¿½ê‡ï¿½A
+// ï¿½vï¿½ï¿½ï¿½Oï¿½Cï¿½ï¿½ï¿½ÌŒÄ‚Ñoï¿½ï¿½ï¿½ï¿½ï¿½Å‚ï¿½ï¿½Â‚ï¿½ï¿½Æˆá‚¤ï¿½Tï¿½Cï¿½Yï¿½Åï¿½ï¿½ï¿½ï¿½ê‡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½è‚·ï¿½ï¿½Ì‚ï¿½
 class WF_LayerPrimary extends WF_Layer
 {
 	var FirstWidth=void;
@@ -258,7 +258,7 @@ class WF_LayerPrimary extends WF_Layer
 	}
 }
 
-// ƒƒ‚ : –é‚Á‚Û‚­‚È‚é
+// ï¿½ï¿½ï¿½ï¿½ : ï¿½ï¿½ï¿½ï¿½Û‚ï¿½ï¿½È‚ï¿½
 // fillOperateRect(0xff400080,omPsSoftLight);
 // light(-20,-30);
 Layer.fillOperateRect = function(color, mode,target=void)
@@ -267,8 +267,8 @@ Layer.fillOperateRect = function(color, mode,target=void)
     var th = 64;
 	target = this if target === void;
     var fillLayer = new global.Layer(window, this);
-    // Œ³X‹g—¢‹g—¢‚Ì‚à‚Ì‚È‚çA•s“§–¾‚ÌˆêFƒŒƒCƒ„[‚ğA•s“§–¾“x‚ğw’è‚µ‚Ä•`‰æB
-    // PhotoShop€‹’‚Ì‚à‚Ì‚È‚çA”¼“§–¾‚ÌˆêFƒŒƒCƒ„[‚ğA“§–¾“x‚ğw’è‚¹‚¸(tmp_opacity=255)‚É•`‰æB
+    // ï¿½ï¿½ï¿½Xï¿½gï¿½ï¿½ï¿½gï¿½ï¿½ï¿½Ì‚ï¿½ï¿½Ì‚È‚ï¿½Aï¿½sï¿½ï¿½ï¿½ï¿½ï¿½Ìˆï¿½Fï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½[ï¿½ï¿½ï¿½Aï¿½sï¿½ï¿½ï¿½ï¿½ï¿½xï¿½ï¿½ï¿½wï¿½è‚µï¿½Ä•`ï¿½ï¿½B
+    // PhotoShopï¿½ï¿½ï¿½ï¿½ï¿½Ì‚ï¿½ï¿½Ì‚È‚ï¿½Aï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ìˆï¿½Fï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½[ï¿½ï¿½ï¿½Aï¿½ï¿½ï¿½ï¿½ï¿½xï¿½ï¿½ï¿½wï¿½è‚¹ï¿½ï¿½(tmp_opacity=255)ï¿½É•`ï¿½ï¿½B
     fillLayer.setSize(tw, th);
     var tmp_opacity	= 255;
     var lastface = face, lastha = holdAlpha;
@@ -305,39 +305,39 @@ Layer.fillOperateRect = function(color, mode,target=void)
     }
     target.face = lastface, target.holdAlpha = lastha;
 
-    // Œã•Ğ•t‚¯
+    // ï¿½ï¿½Ğ•tï¿½ï¿½
     invalidate fillLayer;
 };
 
 class WF_Layer extends Layer
 {
-	var ImageFileName = void; // ƒCƒ[ƒW‚Ìƒtƒ@ƒCƒ‹–¼
+	var ImageFileName = void; // ï¿½Cï¿½ï¿½ï¿½[ï¿½Wï¿½Ìƒtï¿½@ï¿½Cï¿½ï¿½ï¿½ï¿½
 	var _RClickFunc = void;
-	var _RClickFuncArgs = void; // RClickFunc‚ğŒÄ‚Ô‚É“n‚³‚ê‚éˆø””z—ñ
+	var _RClickFuncArgs = void; // RClickFuncï¿½ï¿½ï¿½Ä‚Ôï¿½ï¿½É“nï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½zï¿½ï¿½
 
 	var R_ClickFlag;
 	var L_ClickFlag;
 
-	// ŒÅ’è•‚Å•¶š‚ğ•`‰æ‚·‚é‚©‚Ç‚¤‚©
+	// ï¿½Å’è•ï¿½Å•ï¿½ï¿½ï¿½ï¿½ï¿½`ï¿½æ‚·ï¿½é‚©ï¿½Ç‚ï¿½ï¿½ï¿½
 	var TextFix=false;
-	// ‰üs‚É—p‚¢‚é•¶š
+	// ï¿½ï¿½ï¿½sï¿½É—pï¿½ï¿½ï¿½é•¶ï¿½ï¿½
 	var LineChara = '|';
-	var _RegLineChara = /\|/g; // ³‹K•\Œ»—p
-	// ‰üs•¶š—ñ\n‚ğ—LŒø‚É‚·‚é‚©‚Ç‚¤‚©B–³Œø‚É‚µ‚½ê‡\n‚Íæ‚èœ‚©‚ê‚é
+	var _RegLineChara = /\|/g; // ï¿½ï¿½ï¿½Kï¿½\ï¿½ï¿½ï¿½p
+	// ï¿½ï¿½ï¿½sï¿½ï¿½ï¿½ï¿½ï¿½ï¿½\nï¿½ï¿½Lï¿½ï¿½ï¿½É‚ï¿½ï¿½é‚©ï¿½Ç‚ï¿½ï¿½ï¿½ï¿½Bï¿½ï¿½ï¿½ï¿½ï¿½É‚ï¿½ï¿½ï¿½ï¿½ê‡\nï¿½Íï¿½èœï¿½ï¿½ï¿½ï¿½ï¿½
 	var LineCode=false;
 
-	// ƒeƒLƒXƒg‚ÌŒ`® left or center or right
+	// ï¿½eï¿½Lï¿½Xï¿½gï¿½ÌŒ`ï¿½ï¿½ left or center or right
 	var texttypeX = "left";
-	// ƒeƒLƒXƒg‚ÌŒ`® top or center
+	// ï¿½eï¿½Lï¿½Xï¿½gï¿½ÌŒ`ï¿½ï¿½ top or center
 	var texttypeY = "top";
-	// ƒeƒLƒXƒg•`‰æ—Ìˆæ‚Ì•‚ğw’è‚·‚é
+	// ï¿½eï¿½Lï¿½Xï¿½gï¿½`ï¿½ï¿½Ìˆï¿½Ì•ï¿½ï¿½ï¿½ï¿½wï¿½è‚·ï¿½ï¿½
 	var TR_height=0;
 	var TR_width=0;
 
-	// ‰üs‚ÌƒIƒtƒZƒbƒgY²
+	// ï¿½ï¿½ï¿½sï¿½ï¿½ï¿½ÌƒIï¿½tï¿½Zï¿½bï¿½gYï¿½ï¿½
 	var newlineoffset_y=0;
 
-	var Font="ƒƒCƒŠƒI";
+	var Font="ï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½I";
 
 	property RClickFunc
 	{
@@ -373,7 +373,297 @@ class WF_Layer extends Layer
 		font.face=Font;
 	}
 
-	// ƒCƒxƒ“ƒg
+	if( typeof(global.CherryAINormalizeNonMessageText) == "undefined" )
+	{
+		global.CherryAINormalizeNonMessageText = function(f_Text,f_LineCode,f_LineChara)
+		{
+			var Text = "" + f_Text;
+			Text = Text.replace(/\r\n/g,"\n");
+			Text = Text.replace(/\r/g,"\n");
+			if(Text.indexOf("\n") != -1)
+			{
+				if(f_LineCode)
+					Text = Text.replace(/\n/g,f_LineChara);
+				else
+					Text = Text.replace(/\n/g,'');
+			}
+			return Text;
+		};
+
+		global.CherryAIIsNonMessageWhitespace = function(f_Char)
+		{
+			return f_Char == " " || f_Char == "\t" || f_Char == "\u3000" || f_Char == "\u00A0";
+		};
+
+		global.CherryAIIsNonMessagePunctuationBreak = function(f_Char)
+		{
+			if(f_Char === void || f_Char == "")
+				return false;
+			return ".,!?;:ï¼Œã€‚ï¼ï¼Ÿï¼›ï¼š)]}ã€ã€ï¼‰\u201D'\"".indexOf(f_Char) != -1;
+		};
+
+		global.CherryAIIsNonMessageAsciiMetricsChar = function(f_Char)
+		{
+			if(f_Char === void || f_Char == "")
+				return false;
+			return " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~".indexOf(f_Char) != -1;
+		};
+
+		global.CherryAIGetNonMessageWhitespaceAdvance = function(f_Lay,f_Char,f_Prefix="",f_NextChar=void)
+		{
+			var SpaceWidth = 0;
+			var MinimumSpaceWidth = (f_Lay.font.height * 3) >> 3;
+			var ShadowWidth = 0;
+			if(typeof(f_Lay.font.type_shadowwidth) != "undefined" && 0 < f_Lay.font.type_shadowwidth)
+				ShadowWidth = f_Lay.font.type_shadowwidth;
+			MinimumSpaceWidth += ShadowWidth;
+			if(f_NextChar !== void && f_NextChar != "" && f_NextChar != "|" && f_NextChar != "\n")
+			{
+				var WithSpace = f_Lay.font.getTextWidth(f_Prefix + f_Char + f_NextChar);
+				var WithoutSpace = f_Lay.font.getTextWidth(f_Prefix + f_NextChar);
+				SpaceWidth = WithSpace - WithoutSpace;
+			}
+			if(SpaceWidth < 1)
+				SpaceWidth = f_Lay.font.getTextWidth("A A") - f_Lay.font.getTextWidth("AA");
+			if(SpaceWidth < 1)
+				SpaceWidth = f_Lay.font.getTextWidth("m m") - f_Lay.font.getTextWidth("mm");
+			if(SpaceWidth < 1)
+				SpaceWidth = MinimumSpaceWidth;
+			if(SpaceWidth < MinimumSpaceWidth)
+				SpaceWidth = MinimumSpaceWidth;
+			if(SpaceWidth < 1)
+				SpaceWidth = 1;
+			if(f_Char == "\t")
+				return SpaceWidth * 4;
+			return SpaceWidth;
+		};
+
+		global.CherryAIGetNonMessageCharAdvance = function(f_Lay,f_Char,f_Prefix="",f_NextChar=void)
+		{
+			if(global.CherryAIIsNonMessageWhitespace(f_Char))
+				return global.CherryAIGetNonMessageWhitespaceAdvance(f_Lay,f_Char,f_Prefix,f_NextChar);
+
+			var CharWidth = 0;
+			if(f_NextChar !== void && f_NextChar != "" && f_NextChar != "|" && f_NextChar != "\n")
+			{
+				var WithChar = f_Lay.font.getTextWidth(f_Prefix + f_Char + f_NextChar);
+				var WithoutChar = f_Lay.font.getTextWidth(f_Prefix + f_NextChar);
+				CharWidth = WithChar - WithoutChar;
+			}
+			if(CharWidth < 1)
+			{
+				var WithCharOnly = f_Lay.font.getTextWidth(f_Prefix + f_Char);
+				var WithoutCharOnly = 0;
+				if(f_Prefix != "")
+					WithoutCharOnly = f_Lay.font.getTextWidth(f_Prefix);
+				CharWidth = WithCharOnly - WithoutCharOnly;
+			}
+
+			var TextWidth = f_Lay.font.getTextWidth(f_Char);
+			var EscWidth = f_Lay.font.getEscWidthX(f_Char);
+			if(CharWidth < 1)
+				CharWidth = TextWidth;
+			if(CharWidth < 1)
+				CharWidth = EscWidth;
+			if(CharWidth < 1)
+				CharWidth = 1;
+
+			if(!global.CherryAIIsNonMessageAsciiMetricsChar(f_Char))
+			{
+				if(0 < TextWidth && TextWidth < CharWidth)
+					CharWidth = TextWidth;
+				if(0 < EscWidth && EscWidth < CharWidth)
+					CharWidth = EscWidth;
+			}
+
+			if(CharWidth < 1)
+				CharWidth = 1;
+			return CharWidth;
+		};
+
+		global.CherryAIUseNonMessageFixedCell = function(f_Lay,f_Char,f_CharAdvance=void,f_TextFix=false)
+		{
+			if(!f_TextFix)
+				return false;
+			if(global.CherryAIIsNonMessageAsciiMetricsChar(f_Char))
+				return false;
+			if(f_CharAdvance === void)
+				f_CharAdvance = global.CherryAIGetNonMessageCharAdvance(f_Lay,f_Char);
+			return f_CharAdvance * 4 >= f_Lay.font.height * 3;
+		};
+
+		global.CherryAIGetNonMessageCharRectWidth = function(f_Lay,f_Char,f_CharAdvance=void,f_UseFixedCell=false)
+		{
+			if(f_CharAdvance === void)
+				f_CharAdvance = global.CherryAIGetNonMessageCharAdvance(f_Lay,f_Char);
+			if(f_UseFixedCell)
+				return f_Lay.font.height;
+
+			var GlyphWidth = f_Lay.font.getTextWidth(f_Char);
+			if(GlyphWidth < 1)
+				GlyphWidth = f_Lay.font.getEscWidthX(f_Char);
+			if(GlyphWidth < 1)
+				GlyphWidth = f_CharAdvance;
+			if(GlyphWidth < 1)
+				GlyphWidth = 1;
+			return GlyphWidth;
+		};
+
+		global.CherryAIBuildNonMessageWrapStarts = function(f_Lay,f_Text,f_MaxWidth,f_LineChara)
+		{
+			var WrapStarts = new Array();
+			if(f_MaxWidth < 1)
+				return WrapStarts;
+
+			var LineText = "";
+			var LastBreakPos = -1;
+			var cnt = f_Text.length;
+			for(var Pos = 0; Pos < cnt; Pos++)
+			{
+				var Ch = f_Text.charAt(Pos);
+				if(Ch == f_LineChara)
+				{
+					LineText = "";
+					LastBreakPos = -1;
+					continue;
+				}
+
+				var CandidateLineText = LineText + Ch;
+				var CandidateWidth = f_Lay.font.getTextWidth(CandidateLineText);
+				if(0 < LineText.length && f_MaxWidth < CandidateWidth)
+				{
+					if(0 <= LastBreakPos)
+					{
+						WrapStarts[LastBreakPos + 1] = true;
+						Pos = LastBreakPos;
+					}
+					else
+					{
+						WrapStarts[Pos] = true;
+						Pos--;
+					}
+					LineText = "";
+					LastBreakPos = -1;
+					continue;
+				}
+
+				LineText = CandidateLineText;
+				if(global.CherryAIIsNonMessageWhitespace(Ch) || global.CherryAIIsNonMessagePunctuationBreak(Ch))
+					LastBreakPos = Pos;
+			}
+
+			for(var WrapPos = 0; WrapPos < cnt; WrapPos++)
+			{
+				if(!WrapStarts[WrapPos])
+					continue;
+
+				var WrapChar = f_Text.charAt(WrapPos);
+				if(global.CherryAIIsNonMessageWhitespace(WrapChar) || global.CherryAIIsNonMessagePunctuationBreak(WrapChar))
+				{
+					var Forward = WrapPos + 1;
+					while(Forward < cnt)
+					{
+						var ForwardChar = f_Text.charAt(Forward);
+						if(ForwardChar == f_LineChara)
+							break;
+						if(!global.CherryAIIsNonMessageWhitespace(ForwardChar) && !global.CherryAIIsNonMessagePunctuationBreak(ForwardChar))
+							break;
+						Forward++;
+					}
+					if(Forward < cnt && f_Text.charAt(Forward) != f_LineChara && !WrapStarts[Forward])
+					{
+						WrapStarts[WrapPos] = false;
+						WrapStarts[Forward] = true;
+					}
+				}
+			}
+
+			return WrapStarts;
+		};
+
+		global.CherryAIBuildNonMessageLayout = function(f_Lay,f_Text,f_MaxWidth,f_LineChara,f_TextFix=false)
+		{
+			var Layout = %[];
+			Layout.rects = new Array();
+			Layout.line_widths = new Array();
+			Layout.line_count = 0;
+			if(f_Text === void || f_Text == "")
+				return Layout;
+
+			var WrapStarts = global.CherryAIBuildNonMessageWrapStarts(f_Lay,f_Text,f_MaxWidth,f_LineChara);
+			var cnt = f_Text.length;
+			var FontHeight = f_Lay.font.height;
+			if(FontHeight <= 0)
+				FontHeight = f_Lay.font.getEscHeightY(" ");
+			if(FontHeight <= 0)
+				FontHeight = 1;
+
+			var LineIndex = 0;
+			var LineWidth = 0;
+			var LineText = "";
+			for(var Pos = 0; Pos < cnt; Pos++)
+			{
+				var Ch = f_Text.charAt(Pos);
+				if(Ch == f_LineChara)
+				{
+					Layout.line_widths[LineIndex] = LineWidth;
+					LineIndex++;
+					LineWidth = 0;
+					LineText = "";
+					continue;
+				}
+
+				if(WrapStarts[Pos] && 0 < LineWidth)
+				{
+					Layout.line_widths[LineIndex] = LineWidth;
+					LineIndex++;
+					LineWidth = 0;
+					LineText = "";
+				}
+
+				if(LineWidth == 0 && LineText == "" && global.CherryAIIsNonMessageWhitespace(Ch))
+					continue;
+
+				var NextChar = void;
+				if(Pos + 1 < cnt)
+					NextChar = f_Text.charAt(Pos + 1);
+				var CharAdvance = global.CherryAIGetNonMessageCharAdvance(f_Lay,Ch,LineText,NextChar);
+				var UseFixedCell = global.CherryAIUseNonMessageFixedCell(f_Lay,Ch,CharAdvance,f_TextFix);
+				var CellWidth = global.CherryAIGetNonMessageCharRectWidth(f_Lay,Ch,CharAdvance,UseFixedCell);
+				if(UseFixedCell)
+					CharAdvance = FontHeight;
+				var Margin = 0;
+				if(UseFixedCell)
+				{
+					var GlyphWidth = f_Lay.font.getEscWidthX(Ch);
+					if(GlyphWidth < 0)
+						GlyphWidth = 0;
+					Margin = (FontHeight - GlyphWidth) >> 1;
+					if(Margin < 0)
+						Margin = 0;
+				}
+
+				var Rect = %[];
+				Rect["left"] = LineWidth;
+				Rect["top"] = LineIndex * FontHeight;
+				Rect["advance"] = CharAdvance;
+				Rect["width"] = CellWidth;
+				Rect["margin"] = Margin;
+				Rect["line"] = LineIndex;
+				Rect["char"] = Ch;
+				Layout.rects.add(Rect);
+
+				LineWidth += CharAdvance;
+				LineText += Ch;
+			}
+
+			Layout.line_widths[LineIndex] = LineWidth;
+			Layout.line_count = LineIndex + 1;
+			return Layout;
+		};
+	}
+
+	// ï¿½Cï¿½xï¿½ï¿½ï¿½g
 	function onfinalize(){}
 
 	function finalize()
@@ -402,7 +692,7 @@ class WF_Layer extends Layer
 		ImageFileName = image;
 		super.loadImages(ImageFileName,clNone);
 	}
-	// ƒgƒ‰ƒ“ƒWƒVƒ‡ƒ“
+	// ï¿½gï¿½ï¿½ï¿½ï¿½ï¿½Wï¿½Vï¿½ï¿½ï¿½ï¿½
 	function beginTransition(name, withchildren=true, transsrc=null, options=%[])
 	{
 		window.TransitionCount++;
@@ -415,7 +705,7 @@ class WF_Layer extends Layer
 	}
 	function onTransitionCompletedEx(dest, src)
 	{
-		// ƒCƒxƒ“ƒg
+		// ï¿½Cï¿½xï¿½ï¿½ï¿½g
 	}
 
 	function onDownReset(x, y, button, shift)
@@ -426,7 +716,7 @@ class WF_Layer extends Layer
 		update();
 	}
 
-	// —LŒø‚©–³Œø‚©ƒ`ƒFƒbƒN
+	// ï¿½Lï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½`ï¿½Fï¿½bï¿½N
 	function _checkallenabled()
 	{
 		if( !enabled || !visible || opacity <= 0)
@@ -442,9 +732,9 @@ class WF_Layer extends Layer
 	function onMouseEnterEx(){}
 	function onMouseLeaveEx(){}
 	function onCallRFunc(args=void){RClickFuncPrev(args);if(args !== void){_RClickFunc(args*);}else{_RClickFunc();} }
-	function onRClickFuncSet(x){/*RClickFunc‚ªİ’è‚³‚ê‚½‚ÉŒÄ‚Ño‚³‚ê‚éƒCƒxƒ“ƒg*/}
+	function onRClickFuncSet(x){/*RClickFuncï¿½ï¿½ï¿½İ’è‚³ï¿½ê‚½ï¿½ï¿½ï¿½ÉŒÄ‚Ñoï¿½ï¿½ï¿½ï¿½ï¿½Cï¿½xï¿½ï¿½ï¿½g*/}
 
-	// RClickFunc‚ªÀs‚³‚ê‚é’¼‘O‚ÉÀs‚³‚ê‚éƒCƒxƒ“ƒg
+	// RClickFuncï¿½ï¿½ï¿½ï¿½ï¿½sï¿½ï¿½ï¿½ï¿½é’¼ï¿½Oï¿½Éï¿½ï¿½sï¿½ï¿½ï¿½ï¿½ï¿½Cï¿½xï¿½ï¿½ï¿½g
 	function RClickFuncPrev(args){}
 
 	function onMouseEnter()
@@ -559,144 +849,44 @@ class WF_Layer extends Layer
 
 		TR_height = this.height if TR_height == 0;
 		TR_width = this.width if TR_width == 0;
+		str = global.CherryAINormalizeNonMessageText(str,LineCode,LineChara);
+		var WrapWidth = TR_width - x;
+		var Layout = global.CherryAIBuildNonMessageLayout(this,str,WrapWidth,LineChara,TextFix);
+		if(Layout.line_count < 1)
+			return;
 
-		var StrRectArray = new Array();
-
-		while(1)
-		{
-			if(str.indexOf("\n") != -1)
-			{
-				if(LineCode)
-					str = str.replace(/\n/g,LineChara);
-				else
-					str = str.replace(/\n/g,'');
-			}
-			else
-			{
-				break;
-			}
-		}
-
-		var tmpPx=0;
-		var tmpLine=0;
-		var cnt = str.length;
-		var tfontheight = font.height;
-
-		if( tfontheight <= 0 )
-			tfontheight = font.getEscHeightY(" ");
-
-		for(var i=0; i < cnt;i++)
-		{
-			var drawPx = tmpPx;
-			var drawPy = tmpLine*tfontheight;
-
-			var charfontSize;
-			var charWidth = font.getEscWidthX(str[i]);
-			var useFixedCell = TextFix && (charWidth * 4 >= tfontheight * 3);
-
-			// •¶š•ŒÅ’è
-			if(useFixedCell)
-				charfontSize = tfontheight;
-			else
-				charfontSize = charWidth;
-
-			// Ÿ‚Ìƒ‰ƒCƒ“”»’è
-			if(TR_width<drawPx+charfontSize+x || str[i] == LineChara)
-			{
-				tmpLine++;
-				tmpPx = 0;
-				drawPx = 0;
-				drawPy += tfontheight;
-				if(str[i] == LineChara)
-					continue;
-			}
-
-			var margin=0;
-			if(useFixedCell)
-				margin = (tfontheight-charWidth)>>1;
-
-			// ’x‚¢‚©‚ç«‘”z—ñ‚â‚ß‚½
-			//StrRectArray.add(%[left:drawPx,top:drawPy,width:charfontSize,height:tfontheight,margin:margin,line:tmpLine]);
-			StrRectArray.add(drawPx); 		// left		i*6+0
-			StrRectArray.add(drawPy); 		// top		i*6+1
-			StrRectArray.add(charfontSize); // width	i*6+2
-			StrRectArray.add(tfontheight); 	// height	i*6+3
-			StrRectArray.add(margin); 		// margin	i*6+4
-			StrRectArray.add(tmpLine); 		// line		i*6+5
-
-			tmpPx += charfontSize;
-		}
-
-		// ‰üs•¶šæ‚èœ‚«
-		while(1)
-		{
-			if(str.indexOf(LineChara) != -1)
-			{
-				str = str.replace(_RegLineChara,'');
-			}
-			else
-			{
-				cnt = str.length;
-				break;
-			}
-		}
+		var FontHeight = font.height;
+		if( FontHeight <= 0 )
+			FontHeight = font.getEscHeightY(" ");
+		if( FontHeight <= 0 )
+			FontHeight = 1;
 
 		var mPy=0;
 		if(texttypeY == "center" )
 		{
-			// ƒ‰ƒCƒ“*•¶š‚Ì‚‚³‚Å•¶š—ñ‚Ì‘S‘Ì‚‚³‚ğ‹‚ß‚é
-			var strheight = (StrRectArray[StrRectArray.count-1]+1)*StrRectArray[0+3]; // ÅŒã‚Ì—v‘f "Line" - Å‰‚Ì—v‘f "height"
-			mPy = (TR_height>>1)-(strheight>>1); // ’†S‚É‡‚í‚¹‚é
+			var strheight = Layout.line_count * FontHeight;
+			mPy = (TR_height>>1)-(strheight>>1);
 		}
 
-		if(texttypeX == "center" )
+		for(var i=0; i < Layout.rects.count;i++)
 		{
-			var LineWidth=0;
+			var Rect = Layout.rects[i];
+			var LineWidth = Layout.line_widths[Rect["line"]];
+			if(LineWidth === void)
+				LineWidth = 0;
+			var LineOffsetX = 0;
+			if(texttypeX == "center")
+				LineOffsetX = (TR_width>>1) - (LineWidth>>1);
+			else if(texttypeX == "right")
+				LineOffsetX = TR_width - LineWidth;
 
-			var LineNum = (StrRectArray[StrRectArray.count-1]+1); // ÅŒã‚Ì—v‘f "Line"
-			for(var l=0; l < LineNum;l++)
-			{
-				for(var i=0; i < cnt;i++)
-				{
-					if( StrRectArray[i*6+5] == l ) // Line
-						LineWidth+=StrRectArray[i*6+2]; // Width
-				}
-				for(var i=0; i < cnt;i++)
-				{
-					if( StrRectArray[i*6+5] == l ) // Line
-						StrRectArray[i*6+4] += (TR_width>>1)-(LineWidth>>1); // ’†S‚É‡‚í‚¹‚é // margin
-				}
-				LineWidth=0;
-			}
-		}
-		else if( texttypeX == "right" )
-		{
-			var LineWidth=0;
-
-			var LineNum = (StrRectArray[StrRectArray.count-1]+1); // ÅŒã‚Ì—v‘f "Line"
-			for(var l=0; l < LineNum;l++)
-			{
-				for(var i=0; i < cnt;i++)
-				{
-					if( StrRectArray[i*6+5] == l ) // Line
-						LineWidth+=StrRectArray[i*6+2]; // Width
-				}
-				for(var i=0; i < cnt;i++)
-				{
-					if( StrRectArray[i*6+5] == l ) // Line
-						StrRectArray[i*6+4] += (TR_width)-(LineWidth); // ’†S‚É‡‚í‚¹‚é // margin
-				}
-				LineWidth=0;
-			}
-		}
-
-		for(var i=0; i < cnt;i++)
-			drawText( StrRectArray[i*6+0]+StrRectArray[i*6+4]+x, StrRectArray[i*6+1]+mPy+y+StrRectArray[i*6+5]*newlineoffset_y, str[i],color
+			drawText(Rect["left"] + Rect["margin"] + LineOffsetX + x, Rect["top"] + mPy + y + Rect["line"]*newlineoffset_y, Rect["char"], color
 						,opa, aa, shadowlevel, shadowcolor, shadowwidth, shadowofsx, shadowofsy);
+		}
 	}
 }
 
-// ƒNƒŠƒbƒN–h~—p“™‚ÌƒŒƒCƒ„[
+// ï¿½Nï¿½ï¿½ï¿½bï¿½Nï¿½hï¿½~ï¿½pï¿½ï¿½ï¿½Ìƒï¿½ï¿½Cï¿½ï¿½ï¿½[
 class MaskLayer extends WF_Layer
 {
 	var window;
@@ -738,12 +928,12 @@ class cAffineManager
 	var parent;
 
 	var AffineData = %[
-		rotate	: 0,	// ‰ñ“]Šp“x
-		zoomx 	: 100,	// X•ûŒüƒY[ƒ€’l
-		zoomy	: 100,	// Y•ûŒüƒY[ƒ€’l
-		centerx	: 0,	// ’†S“_X
-		centery : 0,		// ’†S“_Y
-		sizefixity:true // ƒŒƒCƒ„[ƒTƒCƒYŒÅ’è®‚ÌƒAƒtƒBƒ“•ÏŠ·‚©‚Ç‚¤‚©
+		rotate	: 0,	// ï¿½ï¿½]ï¿½pï¿½x
+		zoomx 	: 100,	// Xï¿½ï¿½ï¿½ï¿½ï¿½Yï¿½[ï¿½ï¿½ï¿½l
+		zoomy	: 100,	// Yï¿½ï¿½ï¿½ï¿½ï¿½Yï¿½[ï¿½ï¿½ï¿½l
+		centerx	: 0,	// ï¿½ï¿½ï¿½Sï¿½_X
+		centery : 0,		// ï¿½ï¿½ï¿½Sï¿½_Y
+		sizefixity:true // ï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½[ï¿½Tï¿½Cï¿½Yï¿½Å’è®ï¿½ÌƒAï¿½tï¿½Bï¿½ï¿½ï¿½ÏŠï¿½ï¿½ï¿½ï¿½Ç‚ï¿½ï¿½ï¿½
 		];
 
 // public : 
@@ -797,7 +987,7 @@ class cAffineManager
 		this.parent = f_par;
 	}
 
-	// ‰Šú‰»
+	// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 	function clear()
 	{
 		AffineData["rotate"] = 0;
@@ -807,7 +997,7 @@ class cAffineManager
 		AffineData["centery"] = 0;
 	}
 
-	// ƒAƒtƒBƒ“•`‰æ‚ª•K—v‚©‚Ç‚¤‚©
+	// ï¿½Aï¿½tï¿½Bï¿½ï¿½ï¿½`ï¿½æ‚ªï¿½Kï¿½vï¿½ï¿½ï¿½Ç‚ï¿½ï¿½ï¿½
 	function GetDrawFlag()
 	{
 		if( AffineData["rotate"] == 0 &&
@@ -822,12 +1012,12 @@ class cAffineManager
 		return true;
 	}
 
-	// ƒAƒtƒBƒ“•`‰æ
+	// ï¿½Aï¿½tï¿½Bï¿½ï¿½ï¿½`ï¿½ï¿½
 	function Draw(drawLay,targetLay,f_x=0,f_y=0)
 	{
-		// ‚Ü‚¸‚Íƒ‰ƒWƒAƒ“‚ğŒvZ
+		// ï¿½Ü‚ï¿½ï¿½Íƒï¿½ï¿½Wï¿½Aï¿½ï¿½ï¿½ï¿½ï¿½vï¿½Z
 		var rad = rotate * 0.0174532925199433;
-		// ƒTƒCƒ“‚ÆƒRƒTƒCƒ“‚¾‚·‚æ
+		// ï¿½Tï¿½Cï¿½ï¿½ï¿½ÆƒRï¿½Tï¿½Cï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 		var sinv_t = Math.sin(rad);
 		var cosv_t = Math.cos(rad);
 
@@ -843,20 +1033,20 @@ class cAffineManager
 		var _zoomx = AffineData["zoomx"]/100;
 		var _zoomy = AffineData["zoomy"]/100;
 
-		// 1“_–Ú- x,y
+		// 1ï¿½_ï¿½ï¿½- x,y
 		a = b= 0;
-		// 2“_–Ú- x
+		// 2ï¿½_ï¿½ï¿½- x
 		c = (t_imwidth * cosv_t)*_zoomx;
-		// 2“_–Ú- y
+		// 2ï¿½_ï¿½ï¿½- y
 		d = (t_imwidth * sinv_t)*_zoomy;
-		// 3“_–Ú- x
+		// 3ï¿½_ï¿½ï¿½- x
 		e = -(t_imheight * sinv_t)*_zoomx;
-		// 3“_–Ú- y
+		// 3ï¿½_ï¿½ï¿½- y
 		f = (t_imheight * cosv_t)*_zoomy;
-		// ©“®‚Ì‚Í‚¸‚¾‚¯‚Ç4“_–Ú‚à‚¾‚·
-		// 4“_–Ú- x
+		// ï¿½ï¿½ï¿½ï¿½ï¿½Ì‚Í‚ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½4ï¿½_ï¿½Ú‚ï¿½ï¿½ï¿½ï¿½ï¿½
+		// 4ï¿½_ï¿½ï¿½- x
 		g = c + e;
-		// 4“_–Ú- y
+		// 4ï¿½_ï¿½ï¿½- y
 		h = d + f;
 
 		//a,c,e,g
@@ -880,7 +1070,7 @@ class cAffineManager
 		e += adx;
 		f += ady;
 
-		// ƒIƒtƒZƒbƒg—pÀ•WˆÊ’uZo
+		// ï¿½Iï¿½tï¿½Zï¿½bï¿½gï¿½pï¿½ï¿½ï¿½Wï¿½Ê’uï¿½Zï¿½o
 		Afx = (cx*cosv_t - cy*sinv_t)*_zoomx;
 		Afy = (cx*sinv_t + cy*cosv_t)*_zoomy;
 
@@ -889,7 +1079,7 @@ class cAffineManager
 
 		if( AffineData["sizefixity"] )
 		{
-			// ‚Ü‚í‚µ‚Ä‚İ‚é‚æ
+			// ï¿½Ü‚í‚µï¿½Ä‚İ‚ï¿½ï¿½
 			drawLay.affineCopy(targetLay, 0, 0, t_imwidth, t_imheight,
 			false,
 			a-0.5+PosX,b-0.5+PosY,
@@ -899,15 +1089,15 @@ class cAffineManager
 		}
 		else
 		{
-			// ¡‚ÌƒTƒCƒY‚É“ü‚è‚«‚ç‚È‚©‚Á‚½‚ç‚Å‚©‚­‚·‚é
-			// —\”õ‚Æ‚µ‚Ä*magin•ª‚Å‚©‚­
+			// ï¿½ï¿½ï¿½ÌƒTï¿½Cï¿½Yï¿½É“ï¿½ï¿½è‚«ï¿½ï¿½È‚ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Å‚ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+			// ï¿½\ï¿½ï¿½ï¿½Æ‚ï¿½ï¿½ï¿½*maginï¿½ï¿½ï¿½Å‚ï¿½ï¿½ï¿½
 			var w = Math.ceil( Math.abs(c) + Math.abs(e) );
 			var h = Math.ceil( Math.abs(d) + Math.abs(f) );
 
 			(global.Layer.setImageSize incontextof drawLay)( (w == 0) ? 1 : w,(h == 0) ? 1 : h);
 			(global.Layer.setSize incontextof drawLay)(w,h);
 
-			// ˆÊ’uƒZƒbƒg
+			// ï¿½Ê’uï¿½Zï¿½bï¿½g
 			(global.Layer.setPos incontextof drawLay)(PosX+f_x,PosY+f_y);
 
 			drawLay.affineCopy(targetLay, 0, 0, t_imwidth, t_imheight,
@@ -924,7 +1114,7 @@ class cAffineManager
 		(Dictionary.assignStruct incontextof AffineData)(src_cAffineMGR.AffineData);
 	}
 
-	// assignStruct‚Éˆ—‚Æ‚Î‚·
+	// assignStructï¿½Éï¿½ï¿½ï¿½ï¿½Æ‚Î‚ï¿½
 	function assign(src_cAffineMGR)
 	{
 		assignStruct(src_cAffineMGR);
@@ -943,12 +1133,12 @@ class cAffineManager
 	}
 }
 
-// ƒGƒtƒFƒNƒgŠÇ—ƒ}ƒlƒWƒƒ“ƒg
+// ï¿½Gï¿½tï¿½Fï¿½Nï¿½gï¿½Ç—ï¿½ï¿½}ï¿½lï¿½Wï¿½ï¿½ï¿½ï¿½ï¿½g
 class cEffectManager
 {
 // private
 	var EffectArray = new Array();
-	var CashLayer=void; // ƒLƒƒƒbƒVƒ…—pƒŒƒCƒ„[
+	var CashLayer=void; // ï¿½Lï¿½ï¿½ï¿½bï¿½Vï¿½ï¿½ï¿½pï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½[
 	var window;
 	var parent;
 
@@ -967,11 +1157,11 @@ class cEffectManager
 
 	function dmdraw()
 	{
-		if(EffectArray.count <= 0){ dm("Effect‚È‚µ"); return; }
+		if(EffectArray.count <= 0){ dm("Effectï¿½È‚ï¿½"); return; }
 		dmlist(EffectArray);
 	}
 
-	// “Yš‚ÌƒGƒtƒFƒNƒg–¼‚ğ“¾‚é
+	// ï¿½Yï¿½ï¿½ï¿½ÌƒGï¿½tï¿½Fï¿½Nï¿½gï¿½ï¿½ï¿½ğ“¾‚ï¿½
 	function GetName(f_No)
 	{
 		var cnt = EffectArray.count;
@@ -980,7 +1170,7 @@ class cEffectManager
 
 		return EffectArray[f_No]["name"];
 	}
-	// “Yš‚ÌƒGƒtƒFƒNƒgƒf[ƒ^‚ğ“¾‚é
+	// ï¿½Yï¿½ï¿½ï¿½ÌƒGï¿½tï¿½Fï¿½Nï¿½gï¿½fï¿½[ï¿½^ï¿½ğ“¾‚ï¿½
 	function GetData(f_No)
 	{
 		var cnt = EffectArray.count;
@@ -990,7 +1180,7 @@ class cEffectManager
 		return EffectArray[f_No]["data"];
 	}
 
-	// —v‘f‚Ìíœ
+	// ï¿½vï¿½fï¿½Ìíœ
 	function erase(f_effectname)
 	{
 		var cnt = EffectArray.count;
@@ -1004,15 +1194,15 @@ class cEffectManager
 		}
 	}
 
-	// —v‘f‚Ì‘Síœ
+	// ï¿½vï¿½fï¿½Ì‘Sï¿½íœ
 	function clear()
 	{
 		EffectArray.clear();
 		clearCash();
 	}
 
-	// —v‘f‚Ì’Ç‰Á
-	// “o˜^ƒGƒtƒFƒNƒg–¼‚Æ—v‘f
+	// ï¿½vï¿½fï¿½Ì’Ç‰ï¿½
+	// ï¿½oï¿½^ï¿½Gï¿½tï¿½Fï¿½Nï¿½gï¿½ï¿½ï¿½Æ—vï¿½f
 	function add(f_effectname,args*)
 	{
 		var cnt = EffectArray.count;
@@ -1020,7 +1210,7 @@ class cEffectManager
 		{
 			if( EffectArray[i]["name"] == f_effectname )
 			{
-				// –¼‘O‚Í“¯‚¶‚¾‚Á‚½‚Ì‚Åƒf[ƒ^“à—e‚ğ”äŠr‚µ‚Ä‚İ‚é
+				// ï¿½ï¿½ï¿½Oï¿½Í“ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ì‚Åƒfï¿½[ï¿½^ï¿½ï¿½ï¿½eï¿½ï¿½ï¿½rï¿½ï¿½ï¿½Ä‚İ‚ï¿½
 				if( args.count == EffectArray[i]["data"].count )
 				{
 					var tmp_Differ= false;
@@ -1028,7 +1218,7 @@ class cEffectManager
 					{
 						if( args[t] != EffectArray[i]["data"][t] )
 						{
-							tmp_Differ = true; // ˆá‚¢‚ª‚ ‚Á‚½
+							tmp_Differ = true; // ï¿½á‚¢ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 							break;
 						}
 					}
@@ -1047,7 +1237,7 @@ class cEffectManager
 
 	function restore(data)
 	{
-		// ƒRƒs[‚µ‚Ü‚·
+		// ï¿½Rï¿½sï¿½[ï¿½ï¿½ï¿½Ü‚ï¿½
 		EffectArray.assignStruct(data);
 	}
 
@@ -1058,7 +1248,7 @@ class cEffectManager
 		return _storedata_Effect;
 	}
 
-	// assignStruct‚Éˆ—‚Æ‚Î‚·
+	// assignStructï¿½Éï¿½ï¿½ï¿½ï¿½Æ‚Î‚ï¿½
 	function assign(src_cEffectMGR)
 	{
 		assignStruct(src_cEffectMGR);
@@ -1075,7 +1265,7 @@ class cEffectManager
 
 	function assignStruct(src_cEffectMGR)
 	{
-		// ƒRƒs[‚µ‚Ü‚·
+		// ï¿½Rï¿½sï¿½[ï¿½ï¿½ï¿½Ü‚ï¿½
 		EffectArray.assignStruct(src_cEffectMGR.EffectArray);
 
 		if( src_cEffectMGR.CashLayer !== void )
@@ -1100,7 +1290,7 @@ class cEffectManager
 		}
 	}
 
-	// “n‚³‚ê‚½–¼‘O‚ÌƒGƒtƒFƒNƒg‚ª—LŒø‚©‚Ç‚¤‚©‚ğ’²‚×‚é
+	// ï¿½nï¿½ï¿½ï¿½ê‚½ï¿½ï¿½ï¿½Oï¿½ÌƒGï¿½tï¿½Fï¿½Nï¿½gï¿½ï¿½ï¿½Lï¿½ï¿½ï¿½ï¿½ï¿½Ç‚ï¿½ï¿½ï¿½ï¿½ğ’²‚×‚ï¿½
 	function CheckEnabled(f_effectname="")
 	{
 		var cnt=EffectArray.count;
@@ -1115,7 +1305,7 @@ class cEffectManager
 
 	function Draw(drawLay)
 	{
-		if( EffectArray.count == 0 ) return; // ˆ—‚·‚é•K—v‚È‚µI
+		if( EffectArray.count == 0 ) return; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Kï¿½vï¿½È‚ï¿½ï¿½I
 
 		if( CashLayer === void )
 		{
@@ -1125,16 +1315,16 @@ class cEffectManager
 			CashLayer.EffectData = new Array();
 		}
 
-		// ƒLƒƒƒbƒVƒ…‚Æ¡‰ñ‚Ìƒf[ƒ^”z—ñ‚ğ”äŠr
+		// ï¿½Lï¿½ï¿½ï¿½bï¿½Vï¿½ï¿½ï¿½Æï¿½ï¿½ï¿½Ìƒfï¿½[ï¿½^ï¿½zï¿½ï¿½ï¿½ï¿½r
 		if( !Scripts.equalStructNumericLoose(EffectArray,CashLayer.EffectData) )
-		{ // V‚µ‚¢
+		{ // ï¿½Vï¿½ï¿½ï¿½ï¿½
 			var func_args;
 			var funcpoint;
 			var cnt = this.EffectArray.count;
 			for(var i=0; i < cnt; i++)
 			{
-				funcpoint = void; // ŠÖ”ƒ|ƒCƒ“ƒ^
-				func_args = GetData(i); // ˆø””z—ñ
+				funcpoint = void; // ï¿½Öï¿½ï¿½|ï¿½Cï¿½ï¿½ï¿½^
+				func_args = GetData(i); // ï¿½ï¿½ï¿½ï¿½ï¿½zï¿½ï¿½
 				switch( GetName(i) )
 				{
 					case "fillOperateRect":
@@ -1148,7 +1338,7 @@ class cEffectManager
 						funcpoint = drawLay.adjustGamma;
 						break;
 					case "sepia":
-						drawLay.doGrayScale(); // ƒZƒsƒA‚É‚·‚é‚É‚Í‚Ü‚¸ƒOƒŒƒC‚ÉI
+						drawLay.doGrayScale(); // ï¿½Zï¿½sï¿½Aï¿½É‚ï¿½ï¿½ï¿½É‚Í‚Ü‚ï¿½ï¿½Oï¿½ï¿½ï¿½Cï¿½ÉI
 						funcpoint = drawLay.adjustGamma;
 						break;
 					case "light":
@@ -1165,39 +1355,39 @@ class cEffectManager
 				if( funcpoint !== void )
 				{
 					if( func_args !== void )
-						funcpoint(func_args*); // Às
+						funcpoint(func_args*); // ï¿½ï¿½ï¿½s
 					else
 						funcpoint();
 				}
 			}
-			// ƒLƒƒƒbƒVƒ…“o˜^
+			// ï¿½Lï¿½ï¿½ï¿½bï¿½Vï¿½ï¿½ï¿½oï¿½^
 			CashLayer.assignImages(drawLay);
 			(Array.assignStruct incontextof CashLayer.EffectData)(EffectArray);
 		}
 		else
-		{ // ƒLƒƒƒbƒVƒ…‚Æ“à—e‚ª“¯‚¶
+		{ // ï¿½Lï¿½ï¿½ï¿½bï¿½Vï¿½ï¿½ï¿½Æ“ï¿½ï¿½eï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 			drawLay.assignImages(CashLayer);
 		}
 	}
 }
 
-// ƒJƒƒ‰ŠÇ—ƒ}ƒlƒWƒƒ“ƒg
+// ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½Ç—ï¿½ï¿½}ï¿½lï¿½Wï¿½ï¿½ï¿½ï¿½ï¿½g
 class cCameraManager
 {
 // private
 	var sLayer=void;
 	var CameraData = %[
-		_left	: 0,	// Šî€À•Wx
-		_top 	: 0,	// Šî€À•Wy
-		Px		: 0,	// ƒJƒƒ‰ˆÊ’ux
-		Py		: 0,	// ƒJƒƒ‰ˆÊ’uy
-		CalcPx	: 0,	// ‹­“x‚àŒvZ‚É“ü‚ê‚½ƒJƒƒ‰ˆÊ’ux
-		CalcPy	: 0,	// ‹­“x‚àŒvZ‚É“ü‚ê‚½ƒJƒƒ‰ˆÊ’uy
-		offsetPx: 0,	// ƒAƒtƒBƒ““™‚É‚æ‚éŒë·’l
+		_left	: 0,	// ï¿½î€ï¿½ï¿½ï¿½Wx
+		_top 	: 0,	// ï¿½î€ï¿½ï¿½ï¿½Wy
+		Px		: 0,	// ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½Ê’ux
+		Py		: 0,	// ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½Ê’uy
+		CalcPx	: 0,	// ï¿½ï¿½ï¿½xï¿½ï¿½ï¿½vï¿½Zï¿½É“ï¿½ï¿½ê‚½ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½Ê’ux
+		CalcPy	: 0,	// ï¿½ï¿½ï¿½xï¿½ï¿½ï¿½vï¿½Zï¿½É“ï¿½ï¿½ê‚½ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½Ê’uy
+		offsetPx: 0,	// ï¿½Aï¿½tï¿½Bï¿½ï¿½ï¿½ï¿½ï¿½É‚ï¿½ï¿½ë·ï¿½l
 		offsetPy: 0,
-		zoom	: 100,	// ƒJƒƒ‰Šg‘å—¦
-		rotate	: 0,	// ƒJƒƒ‰‰ñ“]—¦
-		strength : 1	// ˆÚ“®‹­“x(1‚Å1”{)
+		zoom	: 100,	// ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½gï¿½å—¦
+		rotate	: 0,	// ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½ï¿½]ï¿½ï¿½
+		strength : 1	// ï¿½Ú“ï¿½ï¿½ï¿½ï¿½x(1ï¿½ï¿½1ï¿½{)
 		];
 
 // public
@@ -1278,7 +1468,7 @@ class cCameraManager
 	}
 	function cCameraManager(f_Layer)
 	{
-		// ƒRƒ“ƒXƒgƒ‰ƒNƒ^‚È‚µ
+		// ï¿½Rï¿½ï¿½ï¿½Xï¿½gï¿½ï¿½ï¿½Nï¿½^ï¿½È‚ï¿½
 		sLayer = f_Layer;
 	}
 
@@ -1289,7 +1479,7 @@ class cCameraManager
 		UpdatePosition();
 	}
 
-	// ƒJƒƒ‰ˆÊ’u‚ğw’è‚·‚é
+	// ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½Ê’uï¿½ï¿½ï¿½wï¿½è‚·ï¿½ï¿½
 	function setPosition(x,y)
 	{
 		CameraData["Px"] = x;
@@ -1300,7 +1490,7 @@ class cCameraManager
 		UpdatePosition();
 	}
 
-	// ˆÚ“®•â³‹­“x
+	// ï¿½Ú“ï¿½ï¿½â³ï¿½ï¿½ï¿½x
 	function setCameraInfluence(f_str)
 	{
 		CameraData["strength"] = f_str;
@@ -1308,7 +1498,7 @@ class cCameraManager
 		CameraData["CalcPy"] = (CameraData["Py"]*CameraData["strength"]);
 	}
 
-	// ˆÊ’uXV
+	// ï¿½Ê’uï¿½Xï¿½V
 	function UpdatePosition()
 	{
 		if( sLayer === void ) return;
@@ -1336,11 +1526,11 @@ class cCameraManager
 		CameraData["CalcPy"]=0;
 		CameraData["zoom"]=100;
 		CameraData["rotate"]=0;
-		//CameraData["strength"]=1; // •â³‹­“x‚ÍƒNƒŠƒA‚³‚ê‚È‚¢‚Ì‚Å’ˆÓ
+		//CameraData["strength"]=1; // ï¿½â³ï¿½ï¿½ï¿½xï¿½ÍƒNï¿½ï¿½ï¿½Aï¿½ï¿½ï¿½ï¿½È‚ï¿½ï¿½Ì‚Å’ï¿½ï¿½ï¿½
 		UpdatePosition();
 	}
 
-	// assignStruct‚Éˆ—‚Æ‚Î‚·
+	// assignStructï¿½Éï¿½ï¿½ï¿½ï¿½Æ‚Î‚ï¿½
 	function assign(src_cCameraMGR)
 	{
 		assignStruct(src_cCameraMGR);
@@ -1348,7 +1538,7 @@ class cCameraManager
 
 	function assignStruct(src_cCameraMGR)
 	{
-		// ƒRƒs[‚µ‚Ü‚·
+		// ï¿½Rï¿½sï¿½[ï¿½ï¿½ï¿½Ü‚ï¿½
 		(Dictionary.assignStruct incontextof CameraData)(src_cCameraMGR.CameraData);
 		UpdatePosition();
 	}
@@ -1368,14 +1558,14 @@ class cCameraManager
 
 class ExLayer extends WF_Layer
 {
-	var EffectMGR;	// ƒGƒtƒFƒNƒgŠÇ——p
-	var AffineMGR;	// ƒAƒtƒBƒ“•ÏŠ·ŠÇ——p
-	var CameraMGR;	// ƒJƒƒ‰ŠÇ——p
-	var BaseLayer;	// Šî–{‚Ì‰æ‘œƒf[ƒ^•Û—pƒŒƒCƒ„[
-	var tmpLayer;	// ˆê—˜—p—pƒŒƒCƒ„[(Œ»İ‚Íwindow‚ÌˆêƒŒƒCƒ„[‚ğg‚¤‚æ‚¤‚É‚µ‚Ä‚¢‚é)
+	var EffectMGR;	// ï¿½Gï¿½tï¿½Fï¿½Nï¿½gï¿½Ç—ï¿½ï¿½p
+	var AffineMGR;	// ï¿½Aï¿½tï¿½Bï¿½ï¿½ï¿½ÏŠï¿½ï¿½Ç—ï¿½ï¿½p
+	var CameraMGR;	// ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½Ç—ï¿½ï¿½p
+	var BaseLayer;	// ï¿½ï¿½{ï¿½Ì‰æ‘œï¿½fï¿½[ï¿½^ï¿½Ûï¿½ï¿½pï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½[
+	var tmpLayer;	// ï¿½êï¿½ï¿½ï¿½pï¿½pï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½[(ï¿½ï¿½ï¿½İ‚ï¿½windowï¿½Ìˆêï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½[ï¿½ï¿½ï¿½gï¿½ï¿½ï¿½æ‚¤ï¿½É‚ï¿½ï¿½Ä‚ï¿½ï¿½ï¿½)
 	var _debugrect = false;
 
-	// ƒTƒCƒYŒÅ’è®ƒAƒtƒBƒ“•ÏŠ·‚©‚Ç‚¤‚©
+	// ï¿½Tï¿½Cï¿½Yï¿½Å’è®ï¿½Aï¿½tï¿½Bï¿½ï¿½ï¿½ÏŠï¿½ï¿½ï¿½ï¿½Ç‚ï¿½ï¿½ï¿½
 	property sizefixity
 	{
 		setter(v){ AffineMGR.sizefixity=v;}
@@ -1483,12 +1673,12 @@ class ExLayer extends WF_Layer
 
 		BaseLayer = new global.Layer(f_win,this);
 		BaseLayer.visible=false;
-		BaseLayer.name = "‰æ‘œ–¼[‚È‚µ]";
+		BaseLayer.name = "ï¿½æ‘œï¿½ï¿½[ï¿½È‚ï¿½]";
 
 		tmpLayer = f_win.tmpLayer;
 	}
 
-	// ƒx[ƒX‰æ‘œ‚ª•Ï‚í‚Á‚½‚ÉŒÄ‚Ño‚³‚ê‚éƒCƒxƒ“ƒg
+	// ï¿½xï¿½[ï¿½Xï¿½æ‘œï¿½ï¿½ï¿½Ï‚ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ÉŒÄ‚Ñoï¿½ï¿½ï¿½ï¿½ï¿½Cï¿½xï¿½ï¿½ï¿½g
 	function onChangeBaseImage()
 	{
 		EffectMGR.clearCash();
@@ -1499,7 +1689,7 @@ class ExLayer extends WF_Layer
 		if( f_filename === void || f_filename == "" ) return;
 		ImageFileName = f_filename;
 		BaseLayer.loadImages(f_filename);
-		BaseLayer.name = "‰æ‘œ–¼[ "+ImageFileName+" ]";
+		BaseLayer.name = "ï¿½æ‘œï¿½ï¿½[ "+ImageFileName+" ]";
 		onChangeBaseImage();
 		update(0,0,1,1);
 	}
@@ -1525,13 +1715,13 @@ class ExLayer extends WF_Layer
 		if(CameraMGR.GetUpdate())
 			update(0,0,1,1);
 	}
-	// ƒJƒƒ‰ƒ|ƒWƒVƒ‡ƒ“‚ğİ’è
+	// ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½|ï¿½Wï¿½Vï¿½ï¿½ï¿½ï¿½ï¿½ï¿½İ’ï¿½
 	function setPosCamera(x,y)
 	{
 		CameraMGR.setPosition(x,y);
 		update(0,0,1,1);
 	}
-	// ƒJƒƒ‰‚ÌˆÚ“®‹­“x‚ğİ’è
+	// ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½ÌˆÚ“ï¿½ï¿½ï¿½ï¿½xï¿½ï¿½İ’ï¿½
 	function setCameraInfluence(f_str)
 	{
 		CameraMGR.setCameraInfluence(f_str);
@@ -1543,12 +1733,12 @@ class ExLayer extends WF_Layer
 		AffineMGR.clear();
 		CameraMGR.offsetPx=0;
 		CameraMGR.offsetPy=0;
-		//CameraMGR.clear(); // ƒJƒƒ‰‚Í‘S‘Ì‚É‘Î‚µ‚Ä‚È‚Ì‚Å1‚Â‚ÌƒŒƒCƒ„[‚Ì‚İƒNƒŠƒA‚·‚é‚Æ‘¼‚Æ‚¸‚ê‚éBƒNƒŠƒA‚·‚é‚È‚çİ’èƒŒƒCƒ„‘S•”ˆê‹C‚É‚Ë
+		//CameraMGR.clear(); // ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½Í‘Sï¿½Ì‚É‘Î‚ï¿½ï¿½Ä‚È‚Ì‚ï¿½1ï¿½Â‚Ìƒï¿½ï¿½Cï¿½ï¿½ï¿½[ï¿½Ì‚İƒNï¿½ï¿½ï¿½Aï¿½ï¿½ï¿½ï¿½Æ‘ï¿½ï¿½Æ‚ï¿½ï¿½ï¿½ï¿½Bï¿½Nï¿½ï¿½ï¿½Aï¿½ï¿½ï¿½ï¿½È‚ï¿½İ’èƒŒï¿½Cï¿½ï¿½ï¿½Sï¿½ï¿½ï¿½ï¿½Cï¿½É‚ï¿½
 		this.setSize(0,0);
 		this.fillRect(0,0,this.imageWidth,this.imageHeight,0x00000000);
 		ImageFileName = void;
 		BaseLayer.fillRect(0,0,BaseLayer.imageWidth,BaseLayer.imageHeight,0x00000000);
-		BaseLayer.name = "‰æ‘œ–¼[‚È‚µ]";
+		BaseLayer.name = "ï¿½æ‘œï¿½ï¿½[ï¿½È‚ï¿½]";
 		onChangeBaseImage();
 
 		this.assignImages(BaseLayer);
@@ -1575,7 +1765,7 @@ class ExLayer extends WF_Layer
 
 		EffectMGR.assign(src.EffectMGR);
 		AffineMGR.assign(src.AffineMGR);
-		CameraMGR.assign(src.CameraMGR); // ‚±‚±‚ÅPosXV
+		CameraMGR.assign(src.CameraMGR); // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Posï¿½Xï¿½V
 
 		update(0,0,1,1);
 	}
@@ -1586,41 +1776,41 @@ class ExLayer extends WF_Layer
 
 		tmpLayer.hasImage=true;
 
-		// ƒRƒs[
+		// ï¿½Rï¿½sï¿½[
 		tmpLayer.assignImages(BaseLayer);
 		setSize(tmpLayer.imageWidth,tmpLayer.imageHeight);
 
-		// ƒGƒtƒFƒNƒg“K—p
+		// ï¿½Gï¿½tï¿½Fï¿½Nï¿½gï¿½Kï¿½p
 		EffectMGR.Draw(tmpLayer);
 
 		if( AffineMGR.GetDrawFlag() )
-		{ // ƒAƒtƒBƒ“•ÏŠ·•K—v
+		{ // ï¿½Aï¿½tï¿½Bï¿½ï¿½ï¿½ÏŠï¿½ï¿½Kï¿½v
 			var tmpPx = super.left;
 			var tmpPy = super.top;
 
 			if(CameraMGR.zoom != 100 || CameraMGR.rotate != 0)
-			{ // ƒJƒƒ‰•ÏŠ·‚ª•K—v
+			{ // ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½ÏŠï¿½ï¿½ï¿½ï¿½Kï¿½v
 
-				// ‚Ü‚¸‚ÍƒAƒtƒBƒ“•ÏŠ·
+				// ï¿½Ü‚ï¿½ï¿½ÍƒAï¿½tï¿½Bï¿½ï¿½ï¿½ÏŠï¿½
 				AffineMGR.Draw(this,tmpLayer,left-CameraMGR.cpx,top-CameraMGR.cpy);
 				tmpLayer.assignImages(this);
 
-				// Œ»İ‚Ì’l‚ğ•Û‘¶‚µ‚Æ‚­
+				// ï¿½ï¿½ï¿½İ‚Ì’lï¿½ï¿½Û‘ï¿½ï¿½ï¿½ï¿½Æ‚ï¿½
 				var tmpx = centerx;
 				var tmpy = centery;
 				var tmpz = zoom;
 				var tmpr = rotate;
 
-				// ƒJƒƒ‰ˆ—‚É•K—v‚ÈŠeƒpƒ‰[ƒ[ƒ^‰‰Z
-				AffineMGR.centerx = (global.WINDOW_SIZE_WIDTH>>1)-super.left; // ƒ[ƒJƒ‹’†S“_ŒvZ
+				// ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½É•Kï¿½vï¿½ÈŠeï¿½pï¿½ï¿½ï¿½[ï¿½ï¿½ï¿½[ï¿½^ï¿½ï¿½ï¿½Z
+				AffineMGR.centerx = (global.WINDOW_SIZE_WIDTH>>1)-super.left; // ï¿½ï¿½ï¿½[ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½Sï¿½_ï¿½vï¿½Z
 				AffineMGR.centery = (global.WINDOW_SIZE_HEIGHT>>1)-super.top;
 				AffineMGR.zoom=100+((CameraMGR.zoom-100)*(CameraMGR.strength/2));
 				AffineMGR.rotate =CameraMGR.rotate;
 
-				// ƒJƒƒ‰•ÏŠ·
+				// ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½ÏŠï¿½
 				AffineMGR.Draw(this,tmpLayer,super.left,super.top);
 
-				// Œ³‚Ì’l‚É–ß‚·
+				// ï¿½ï¿½ï¿½Ì’lï¿½É–ß‚ï¿½
 				AffineMGR.centerx=tmpx;
 				AffineMGR.centery=tmpy;
 				AffineMGR.zoom=tmpz;
@@ -1631,7 +1821,7 @@ class ExLayer extends WF_Layer
 				AffineMGR.Draw(this,tmpLayer,left-CameraMGR.cpx,top-CameraMGR.cpy);
 			}
 
-			// ƒJƒƒ‰‚ÌƒIƒtƒZƒbƒg’lXV
+			// ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½ÌƒIï¿½tï¿½Zï¿½bï¿½gï¿½lï¿½Xï¿½V
 			CameraMGR.offsetPx += super.left-tmpPx;
 			CameraMGR.offsetPy += super.top-tmpPy;
 
@@ -1639,11 +1829,11 @@ class ExLayer extends WF_Layer
 		}
 		else
 		{
-			// ƒŒƒCƒ„[ˆÚ“®®‚ÌƒAƒtƒBƒ“‚ğ‚©‚¯‚½Œã‚ÉƒAƒtƒBƒ“–³Œø‚É‚·‚é‚ÆPos‚ªƒYƒŒ‚Ä‚é‘Îô
+			// ï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½[ï¿½Ú“ï¿½ï¿½ï¿½ï¿½ÌƒAï¿½tï¿½Bï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ÉƒAï¿½tï¿½Bï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½É‚ï¿½ï¿½ï¿½ï¿½Posï¿½ï¿½ï¿½Yï¿½ï¿½ï¿½Ä‚ï¿½Îï¿½
 			CameraMGR.offsetPx=CameraMGR.offsetPy=0;
-			CameraMGR.UpdatePosition(); // ƒJƒƒ‰XV
+			CameraMGR.UpdatePosition(); // ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½Xï¿½V
 			if(CameraMGR.zoom != 100 || CameraMGR.rotate != 0)
-			{ // ƒJƒƒ‰•ÏŠ·
+			{ // ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½ÏŠï¿½
 				var tmpPx = super.left;
 				var tmpPy = super.top;
 
@@ -1667,22 +1857,22 @@ class ExLayer extends WF_Layer
 				AffineMGR.zoom=tmpz;
 				AffineMGR.rotate=tmpr;
 
-				// ƒJƒƒ‰‚ÌƒIƒtƒZƒbƒg’lXV
+				// ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½ÌƒIï¿½tï¿½Zï¿½bï¿½gï¿½lï¿½Xï¿½V
 				CameraMGR.offsetPx += super.left-tmpPx;
 				CameraMGR.offsetPy += super.top-tmpPy;
 
-				CameraMGR.UpdatePosition(); // ƒJƒƒ‰XV
+				CameraMGR.UpdatePosition(); // ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½Xï¿½V
 			}
 			else
 			{
-				// •ÏŠ·•s•K—v‚È‚Ì‚ÅƒRƒs[
+				// ï¿½ÏŠï¿½ï¿½sï¿½Kï¿½vï¿½È‚Ì‚ÅƒRï¿½sï¿½[
 				this.assignImages(tmpLayer);
 			}
 		}
 
 		tmpLayer.hasImage=false;
 
-		// ƒfƒoƒbƒO—p‚Ì‚ê‚­‚Æ
+		// ï¿½fï¿½oï¿½bï¿½Oï¿½pï¿½Ì‚ê‚­ï¿½ï¿½
 		//if(_debugrect)
 		/*{
 			this.fillRect(0,0,2,this.height,0xFF00FF00);
@@ -1695,91 +1885,91 @@ class ExLayer extends WF_Layer
 	function clearEffect()
 	{
 		EffectMGR.clear();
-		update(0,0,1,1); // XV
+		update(0,0,1,1); // ï¿½Xï¿½V
 	}
 	function clearAffine()
 	{
 		AffineMGR.clear();
 		CameraMGR.offsetPx=CameraMGR.offsetPy=0;
-		CameraMGR.UpdatePosition(); // ƒJƒƒ‰XV
-		update(0,0,1,1); // XV
+		CameraMGR.UpdatePosition(); // ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½Xï¿½V
+		update(0,0,1,1); // ï¿½Xï¿½V
 	}
 	function clearCamera()
 	{
 		CameraMGR.clear();
 		CameraMGR.offsetPx=CameraMGR.offsetPy=0;
-		super.left = left; // ƒJƒƒ‰Pos–³Œø‰»
+		super.left = left; // ï¿½Jï¿½ï¿½ï¿½ï¿½Posï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 		super.top = top;
-		update(0,0,1,1); // XV
+		update(0,0,1,1); // ï¿½Xï¿½V
 	}
 
 	function fillOperateRect(color, mode)
 	{
-		// ƒGƒtƒFƒNƒgƒ}ƒl[ƒWƒƒ[‚Ö‚Ì“o˜^
+		// ï¿½Gï¿½tï¿½Fï¿½Nï¿½gï¿½}ï¿½lï¿½[ï¿½Wï¿½ï¿½ï¿½[ï¿½Ö‚Ì“oï¿½^
 		EffectMGR.add("fillOperateRect",color,mode);
-		update(0,0,1,1); // XV
+		update(0,0,1,1); // ï¿½Xï¿½V
 	}
 
 	function adjustGamma(rgamma=1.0, rfloor=0, rceil=255, ggamma=1.0, gfloor=0, gceil=255, bgamma=1.0, bfloor=0, bceil=255)
 	{
-		// ƒGƒtƒFƒNƒgƒ}ƒl[ƒWƒƒ[‚Ö‚Ì“o˜^
+		// ï¿½Gï¿½tï¿½Fï¿½Nï¿½gï¿½}ï¿½lï¿½[ï¿½Wï¿½ï¿½ï¿½[ï¿½Ö‚Ì“oï¿½^
 		EffectMGR.add("adjustGamma",rgamma, rfloor, rceil, ggamma, gfloor, gceil, bgamma, bfloor, bceil);
-		update(0,0,1,1); // XV
+		update(0,0,1,1); // ï¿½Xï¿½V
 	}
 
 	function doBoxBlur(xblur=1,yblur=1)
 	{
-		// ƒGƒtƒFƒNƒgƒ}ƒl[ƒWƒƒ[‚Ö‚Ì“o˜^
+		// ï¿½Gï¿½tï¿½Fï¿½Nï¿½gï¿½}ï¿½lï¿½[ï¿½Wï¿½ï¿½ï¿½[ï¿½Ö‚Ì“oï¿½^
 		EffectMGR.add("boxBlur",xblur,yblur);
-		update(0,0,1,1); // XV
+		update(0,0,1,1); // ï¿½Xï¿½V
 	}
 
 	function light(brightness, contrast)
 	{
-		// ƒGƒtƒFƒNƒgƒ}ƒl[ƒWƒƒ[‚Ö‚Ì“o˜^
+		// ï¿½Gï¿½tï¿½Fï¿½Nï¿½gï¿½}ï¿½lï¿½[ï¿½Wï¿½ï¿½ï¿½[ï¿½Ö‚Ì“oï¿½^
 		EffectMGR.add("light",brightness,contrast);
-		update(0,0,1,1); // XV
+		update(0,0,1,1); // ï¿½Xï¿½V
 	}
 
-	// F‚Ì”½“]
+	// ï¿½Fï¿½Ì”ï¿½ï¿½]
 	function doInvert()
 	{
-		// ƒGƒtƒFƒNƒgƒ}ƒl[ƒWƒƒ[‚Ö‚Ì“o˜^
+		// ï¿½Gï¿½tï¿½Fï¿½Nï¿½gï¿½}ï¿½lï¿½[ï¿½Wï¿½ï¿½ï¿½[ï¿½Ö‚Ì“oï¿½^
 		EffectMGR.add("invert",1.0, 255, 0, 1.0, 255, 0, 1.0, 255, 0);
-		update(0,0,1,1); // XV
+		update(0,0,1,1); // ï¿½Xï¿½V
 	}
 
-	// ƒZƒsƒA’²‚É•ÏX
+	// ï¿½Zï¿½sï¿½Aï¿½ï¿½ï¿½É•ÏX
 	function doSepia()
 	{
-		// ƒGƒtƒFƒNƒgƒ}ƒl[ƒWƒƒ[‚Ö‚Ì“o˜^
+		// ï¿½Gï¿½tï¿½Fï¿½Nï¿½gï¿½}ï¿½lï¿½[ï¿½Wï¿½ï¿½ï¿½[ï¿½Ö‚Ì“oï¿½^
 		//EffectMGR.add("sepia",1.75, 0, 255, 1.25, 0, 255, 0.65, 0, 255);
 		//EffectMGR.add("sepia",1.55, 0, 255, 1.15, 0, 255, 0.55, 0, 255);
 		EffectMGR.add("sepia",1.45, 0, 255, 1.1, 0, 255, 0.68, 0, 255);
-		update(0,0,1,1); // XV
+		update(0,0,1,1); // ï¿½Xï¿½V
 	}
 
-	// ƒOƒŒ[ƒXƒP[ƒ‹•ÏŠ·
+	// ï¿½Oï¿½ï¿½ï¿½[ï¿½Xï¿½Pï¿½[ï¿½ï¿½ï¿½ÏŠï¿½
 	function doGray()
 	{
-		// ƒGƒtƒFƒNƒgƒ}ƒl[ƒWƒƒ[‚Ö‚Ì“o˜^
+		// ï¿½Gï¿½tï¿½Fï¿½Nï¿½gï¿½}ï¿½lï¿½[ï¿½Wï¿½ï¿½ï¿½[ï¿½Ö‚Ì“oï¿½^
 		EffectMGR.add("gray");
-		update(0,0,1,1); // XV
+		update(0,0,1,1); // ï¿½Xï¿½V
 	}
 
-	// ƒmƒCƒY
+	// ï¿½mï¿½Cï¿½Y
 	function noise(level)
 	{
-		// ƒGƒtƒFƒNƒgƒ}ƒl[ƒWƒƒ[‚Ö‚Ì“o˜^
+		// ï¿½Gï¿½tï¿½Fï¿½Nï¿½gï¿½}ï¿½lï¿½[ï¿½Wï¿½ï¿½ï¿½[ï¿½Ö‚Ì“oï¿½^
 		EffectMGR.add("noise",level);
-		update(0,0,1,1); // XV
+		update(0,0,1,1); // ï¿½Xï¿½V
 	}
 
 	var _storedataEx = new Dictionary();
-	// ƒŒƒCƒ„[‚Ìî•ñ‚ğ«‘”z—ñ‚É‚µ‚Ä•Ô‚·
+	// ï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½[ï¿½Ìï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½zï¿½ï¿½É‚ï¿½ï¿½Ä•Ô‚ï¿½
 	function store()
 	{
-		// ƒ\[ƒXƒŒƒCƒ„[î•ñ
+		// ï¿½\ï¿½[ï¿½Xï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½[ï¿½ï¿½ï¿½
 		_storedataEx.imgLay_imagename = ImageFileName;
 
 		_storedataEx.effect_data = EffectMGR.store();
@@ -1801,7 +1991,7 @@ class ExLayer extends WF_Layer
 		return _storedataEx;
 	}
 
-	// restore‚µ‚ÄonPaint‚ªŒÄ‚Î‚ê‚é‘O‚ÉŒÄ‚Î‚ê‚éƒCƒxƒ“ƒg
+	// restoreï¿½ï¿½ï¿½ï¿½onPaintï¿½ï¿½ï¿½Ä‚Î‚ï¿½ï¿½Oï¿½ÉŒÄ‚Î‚ï¿½ï¿½Cï¿½xï¿½ï¿½ï¿½g
 	function onPaintToRestore(data){}
 
 	function restore(data)
@@ -1832,8 +2022,8 @@ class ExLayer extends WF_Layer
 	}
 }
 
-// ƒ`ƒFƒCƒ“ƒŒƒCƒ„[‘Î‰
-// ADVg—pƒŒƒCƒ„[‚Ìƒx[ƒX
+// ï¿½`ï¿½Fï¿½Cï¿½ï¿½ï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½[ï¿½Î‰ï¿½
+// ADVï¿½gï¿½pï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½[ï¿½Ìƒxï¿½[ï¿½X
 class ADVBaseLayer extends ExLayer
 {
 	var _chainlayer = void;
@@ -1915,7 +2105,7 @@ class ADVBaseLayer extends ExLayer
         getter(){ return _camerachainlayer; }
 	}
 
-	// ƒ`ƒFƒCƒ“ƒŒƒCƒ„[
+	// ï¿½`ï¿½Fï¿½Cï¿½ï¿½ï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½[
 	property chainlayer
 	{
 		setter(v)
@@ -1942,7 +2132,7 @@ class ADVBaseLayer extends ExLayer
 		if(chainlayer!==void)
 			chainlayer.setPos(...);
 	}
-	// ƒJƒƒ‰ƒ|ƒWƒVƒ‡ƒ“‚ğİ’è
+	// ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½|ï¿½Wï¿½Vï¿½ï¿½ï¿½ï¿½ï¿½ï¿½İ’ï¿½
 	function setPosCamera(x,y)
 	{
 		super.setPosCamera(x,y);
@@ -1957,14 +2147,14 @@ class ADVBaseLayer extends ExLayer
 		super.clear();
 	}
 
-	// ƒ^[ƒQƒbƒgƒŒƒCƒ„[‚Æ‚Ì•`‰æ“à—e”äŠr
-	// •`‰æ“à—e‚ª“¯‚¶‚È‚çtrue,ˆá‚¤‚È‚çfalse
+	// ï¿½^ï¿½[ï¿½Qï¿½bï¿½gï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½[ï¿½Æ‚Ì•`ï¿½ï¿½ï¿½ï¿½eï¿½ï¿½r
+	// ï¿½`ï¿½ï¿½ï¿½ï¿½eï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È‚ï¿½true,ï¿½á‚¤ï¿½È‚ï¿½false
 	function DrawingCompare(targetLay)
 	{
 		return ( targetLay.DrawChangeFlag == DrawChangeFlag );
 	}
 
-	// •¡»
+	// ï¿½ï¿½ï¿½ï¿½
 	function assignComp(src)
 	{
 		src.DrawChangeFlag = DrawChangeFlag = false;
@@ -1999,8 +2189,8 @@ class CHLayer extends ADVBaseLayer
 	{
 		if(!f_AfiinFlag)
 		{
-			Draw(IMGLayer);	// ƒAƒtƒBƒ“ŠÖŒW‚É•ÏX‚È‚µ
-			// ·•ª‚Ì‡¬
+			Draw(IMGLayer);	// ï¿½Aï¿½tï¿½Bï¿½ï¿½ï¿½ÖŒWï¿½É•ÏXï¿½È‚ï¿½
+			// ï¿½ï¿½ï¿½ï¿½ï¿½Ìï¿½ï¿½ï¿½
 			if(CHData !== void)
 				this.copyRect(CHData["PosX"],CHData["PosY"],CHLay,0,0,CHLay.imageWidth,CHLay.imageHeight);
 		}
@@ -2011,11 +2201,11 @@ class CHLayer extends ADVBaseLayer
 				if(tmpLay === void)
 				{
 					tmpLay = new global.Layer(window,this);
-					tmpLay.name="ˆêì‹Æ—pƒŒƒCƒ„";
+					tmpLay.name="ï¿½êï¿½ï¿½Æ—pï¿½ï¿½ï¿½Cï¿½ï¿½";
 					tmpLay.visible=false;
 				}
 				tmpLay.assignImages(IMGLayer);
-				// ·•ª‚Ì‡¬
+				// ï¿½ï¿½ï¿½ï¿½ï¿½Ìï¿½ï¿½ï¿½
 				tmpLay.copyRect(CHData["PosX"],CHData["PosY"],CHLay,0,0,CHLay.imageWidth,CHLay.imageHeight);
 				AffineDraw(tmpLay);
 			}
@@ -2026,8 +2216,8 @@ class CHLayer extends ADVBaseLayer
 		}
 	}
 
-	// Œ»İ‚Ì‰æ‘œ‚ğÄ“x“Ç‚İ‚Ş
-	// ƒuƒ‰[“™‚Ì‰æ‘œŒø‰Ê‚ğ–³Œø‚É‚µ‚½‚¢ê‡‚É—LŒø
+	// ï¿½ï¿½ï¿½İ‚Ì‰æ‘œï¿½ï¿½ï¿½Ä“xï¿½Ç‚İï¿½ï¿½ï¿½
+	// ï¿½uï¿½ï¿½ï¿½[ï¿½ï¿½ï¿½Ì‰æ‘œï¿½ï¿½ï¿½Ê‚ğ–³Œï¿½ï¿½É‚ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ê‡ï¿½É—Lï¿½ï¿½
 	function reload()
 	{
 		if( ImageFileName === void )
@@ -2071,10 +2261,10 @@ class CHLayer extends ADVBaseLayer
 
 		//_centerx = IMGLayer.imageWidth>>1;
 		//_centery = IMGLayer.imageHeight>>1;
-		IMGLayer.name = "‰æ‘œ–¼[ "+ImageFileName+" ]";
+		IMGLayer.name = "ï¿½æ‘œï¿½ï¿½[ "+ImageFileName+" ]";
 		this.setSize(IMGLayer.imageWidth,IMGLayer.imageHeight);
 
-		update(0,0,1,1); // XV
+		update(0,0,1,1); // ï¿½Xï¿½V
 	}
 
 	function clear()
@@ -2084,8 +2274,8 @@ class CHLayer extends ADVBaseLayer
 		CHData = void;
 	}
 
-	// ƒ^[ƒQƒbƒgƒŒƒCƒ„[‚Æ‚Ì•`‰æ“à—e”äŠr
-	// •`‰æ“à—e‚ª“¯‚¶‚È‚çtrue,ˆá‚¤‚È‚çfalse
+	// ï¿½^ï¿½[ï¿½Qï¿½bï¿½gï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½[ï¿½Æ‚Ì•`ï¿½ï¿½ï¿½ï¿½eï¿½ï¿½r
+	// ï¿½`ï¿½ï¿½ï¿½ï¿½eï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È‚ï¿½true,ï¿½á‚¤ï¿½È‚ï¿½false
 	function DrawingCompare(targetLay)
 	{
 		if(IMGLayer.useImage != targetLay.IMGLayer.useImage) return false;
@@ -2121,7 +2311,7 @@ class CHLayer extends ADVBaseLayer
 		super.assignComp(src);
 	}
 
-	// ƒŒƒCƒ„[‚Ìî•ñ‚ğ«‘”z—ñ‚É‚µ‚Ä•Ô‚·
+	// ï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½[ï¿½Ìï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½zï¿½ï¿½É‚ï¿½ï¿½Ä•Ô‚ï¿½
 	var _storedata_CHData = new Dictionary();
 	function store()
 	{
@@ -2139,7 +2329,7 @@ class CHLayer extends ADVBaseLayer
 		return data;
 	}
 
-	// store‚Å“f‚«o‚µ‚½«‘”z—ñ‚©‚çƒŒƒCƒ„[‚ğ•œŒ³‚·‚é
+	// storeï¿½Å“fï¿½ï¿½ï¿½oï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½zï¿½ñ‚©‚çƒŒï¿½Cï¿½ï¿½ï¿½[ï¿½ğ•œŒï¿½ï¿½ï¿½ï¿½ï¿½
 	function restore(data)
 	{
 		super.restore(data);
@@ -2260,10 +2450,10 @@ class ExAnimeLayer extends ADVBaseLayer
 	}
 }
 
-// ƒ^ƒOƒf[ƒ^(«‘”z—ñ)‚Ì•Û‘¶‚É‘Î‰
+// ï¿½^ï¿½Oï¿½fï¿½[ï¿½^(ï¿½ï¿½ï¿½ï¿½ï¿½zï¿½ï¿½)ï¿½Ì•Û‘ï¿½ï¿½É‘Î‰ï¿½
 class ExBasicLayer extends ADVBaseLayer
 {
-	var tagdata = void; // ƒ^ƒOƒf[ƒ^
+	var tagdata = void; // ï¿½^ï¿½Oï¿½fï¿½[ï¿½^
 
 	function ExBasicLayer(win,par)
 	{
@@ -2288,7 +2478,7 @@ class ExBasicLayer extends ADVBaseLayer
 		}
 	}
 
-	// ƒŒƒCƒ„[‚Ìî•ñ‚ğ«‘”z—ñ‚É‚µ‚Ä•Ô‚·
+	// ï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½[ï¿½Ìï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½zï¿½ï¿½É‚ï¿½ï¿½Ä•Ô‚ï¿½
 	var _storedata_tagdata = new Dictionary();
 	function store()
 	{
@@ -2303,7 +2493,7 @@ class ExBasicLayer extends ADVBaseLayer
 		return data;
 	}
 
-	// store‚Å“f‚«o‚µ‚½«‘”z—ñ‚©‚çƒŒƒCƒ„[‚ğ•œŒ³‚·‚é
+	// storeï¿½Å“fï¿½ï¿½ï¿½oï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½zï¿½ñ‚©‚çƒŒï¿½Cï¿½ï¿½ï¿½[ï¿½ğ•œŒï¿½ï¿½ï¿½ï¿½ï¿½
 	function onPaintToRestore(data)
 	{
 		if(data.tagdata !== void)
@@ -2320,7 +2510,7 @@ class ExBasicLayer extends ADVBaseLayer
 
 
 
-// ¡¡¡¡¡¡¡¡¡¡¡¡ƒJƒƒ‰ƒfƒoƒbƒO—p
+// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Jï¿½ï¿½ï¿½ï¿½ï¿½fï¿½oï¿½bï¿½Oï¿½p
 
 /*
 function testleft(v)
@@ -2373,7 +2563,7 @@ function testrotate(v)
 }
 
 global.win2 = new MainWindow2(300,200,WINDOW_STYLE,GAME_NAME,0) if typeof global.win2 == "undefined";
-global.win2.slid1 = new SliderLayer( win2, win2.primaryLayer, 300, "‰¡", "xx2_backlog_ƒXƒ‰ƒCƒ_[‚Â‚Ü‚İ" );
+global.win2.slid1 = new SliderLayer( win2, win2.primaryLayer, 300, "ï¿½ï¿½", "xx2_backlog_ï¿½Xï¿½ï¿½ï¿½Cï¿½_ï¿½[ï¿½Â‚Ü‚ï¿½" );
 with(global.win2.slid1)
 {
 	.min=-200;
@@ -2386,7 +2576,7 @@ with(global.win2.slid1)
 		testleft(value);
 	};
 }
-global.win2.slid2 = new SliderLayer( win2, win2.primaryLayer, 300, "‰¡", "xx2_backlog_ƒXƒ‰ƒCƒ_[‚Â‚Ü‚İ" );
+global.win2.slid2 = new SliderLayer( win2, win2.primaryLayer, 300, "ï¿½ï¿½", "xx2_backlog_ï¿½Xï¿½ï¿½ï¿½Cï¿½_ï¿½[ï¿½Â‚Ü‚ï¿½" );
 with(global.win2.slid2)
 {
 	.min=-200;
@@ -2400,7 +2590,7 @@ with(global.win2.slid2)
 	};
 }
 
-global.win2.slid3 = new SliderLayer( win2, win2.primaryLayer, 300, "‰¡", "xx2_backlog_ƒXƒ‰ƒCƒ_[‚Â‚Ü‚İ" );
+global.win2.slid3 = new SliderLayer( win2, win2.primaryLayer, 300, "ï¿½ï¿½", "xx2_backlog_ï¿½Xï¿½ï¿½ï¿½Cï¿½_ï¿½[ï¿½Â‚Ü‚ï¿½" );
 with(global.win2.slid3)
 {
 	.min=50;
@@ -2413,7 +2603,7 @@ with(global.win2.slid3)
 		testzoom(value);
 	};
 }
-global.win2.slid4 = new SliderLayer( win2, win2.primaryLayer, 300, "‰¡", "xx2_backlog_ƒXƒ‰ƒCƒ_[‚Â‚Ü‚İ" );
+global.win2.slid4 = new SliderLayer( win2, win2.primaryLayer, 300, "ï¿½ï¿½", "xx2_backlog_ï¿½Xï¿½ï¿½ï¿½Cï¿½_ï¿½[ï¿½Â‚Ü‚ï¿½" );
 with(global.win2.slid4)
 {
 	.min=0;
@@ -2426,7 +2616,7 @@ with(global.win2.slid4)
 		testrotate(value);
 	};
 }
-// WindowƒNƒ‰ƒX
+// Windowï¿½Nï¿½ï¿½ï¿½X
 class MainWindow2 extends Window
 {
 
@@ -2443,43 +2633,43 @@ class MainWindow2 extends Window
 
 		stayOnTop=true;
 
-		// ƒEƒBƒ“ƒhƒEŠOŒ©‚Ì’²®
+		// ï¿½Eï¿½Bï¿½ï¿½ï¿½hï¿½Eï¿½Oï¿½ï¿½ï¿½Ì’ï¿½ï¿½ï¿½
 		borderStyle = f_style;
 		innerSunken = false;
 		showScrollBars = false;
 
 		caption = System.title = f_titlename;
 
-		// ƒvƒ‰ƒCƒ}ƒŠ[ƒŒƒCƒ„[‚Ìì¬
+		// ï¿½vï¿½ï¿½ï¿½Cï¿½}ï¿½ï¿½ï¿½[ï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½[ï¿½Ìì¬
 		add(new Layer(this,null));
 		with(primaryLayer)
 		{
-			.name = "WindowŠî’êƒŒƒCƒ„[";
+			.name = "Windowï¿½ï¿½êƒŒï¿½Cï¿½ï¿½ï¿½[";
 			.setSize(f_width,f_height);
 			.visible = true;
 			.fillRect(0,0,1280,720,0x66FF00FF);
 			.font.height=35;
-			.drawText(0,0,"Šî’êƒŒƒCƒ„[",0xFFFFFF);
+			.drawText(0,0,"ï¿½ï¿½êƒŒï¿½Cï¿½ï¿½ï¿½[",0xFFFFFF);
 			.onMouseEnter = function()
 			{
 				SoundMGR = win.SoundMGR;
-				//dminfo("ƒvƒ‰ƒCƒ}ƒŠ[");
+				//dminfo("ï¿½vï¿½ï¿½ï¿½Cï¿½}ï¿½ï¿½ï¿½[");
 			}incontextof this;
 		}
 		setInnerSize(f_width,f_height);
 
-		// ƒEƒBƒ“ƒhƒE‚ğ’†S‚É‚Á‚Ä‚­‚é
+		// ï¿½Eï¿½Bï¿½ï¿½ï¿½hï¿½Eï¿½ğ’†Sï¿½Éï¿½ï¿½ï¿½ï¿½Ä‚ï¿½ï¿½ï¿½
 		this.setPos((System.screenWidth - this.width)\2,(System.screenHeight - this.height)\2);
-		// ƒEƒBƒ“ƒhƒE‚Ì•\¦
+		// ï¿½Eï¿½Bï¿½ï¿½ï¿½hï¿½Eï¿½Ì•\ï¿½ï¿½
 		this.visible = true;
 	}
 
 	var tTestArray = new Array();
 
-	// ƒtƒ@ƒCƒ‹ƒhƒƒbƒvƒCƒxƒ“ƒg
+	// ï¿½tï¿½@ï¿½Cï¿½ï¿½ï¿½hï¿½ï¿½ï¿½bï¿½vï¿½Cï¿½xï¿½ï¿½ï¿½g
 	function onFileDrop(files)
 	{
-		if( files.count > 4 ){ dminfo("ƒtƒ@ƒCƒ‹‚ª5‚ÂˆÈãw’è‚³‚ê‚Ä‚¢‚Ü‚·"); return; }
+		if( files.count > 4 ){ dminfo("ï¿½tï¿½@ï¿½Cï¿½ï¿½ï¿½ï¿½5ï¿½ÂˆÈï¿½wï¿½è‚³ï¿½ï¿½Ä‚ï¿½ï¿½Ü‚ï¿½"); return; }
 
 		for(var i=0; i < files.count; i++)
 		{

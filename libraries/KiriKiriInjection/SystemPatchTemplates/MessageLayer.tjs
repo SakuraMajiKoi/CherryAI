@@ -6,6 +6,8 @@ var __CherryAILineSpacingOffsetPixels = 0;
 var __CherryAILatinFace = "Inter";
 var __CherryAIWrapRightPaddingPixels = 220;
 var __CherryAIWrapMode = "pixel";
+var __CherryAIStripAsciiQuotes = true;
+var __CherryAICollapseAsciiDoubleSpaces = true;
 var __CherryAIRuntimeConfigLoaded = false;
 var __CherryAIMessageLayerProbeWritten = false;
 var __CherryAIWrapDebugLogged = false;
@@ -46,6 +48,10 @@ function LoadCherryAIFontPatchRuntimeConfig()
 			var Mode = ("" + Config.wrap_mode).toLowerCase();
 			__CherryAIWrapMode = (Mode == "character") ? "character" : "pixel";
 		}
+		if(Config !== void && Config.strip_ascii_quotes !== void)
+			__CherryAIStripAsciiQuotes = !!Config.strip_ascii_quotes;
+		if(Config !== void && Config.collapse_ascii_double_spaces !== void)
+			__CherryAICollapseAsciiDoubleSpaces = !!Config.collapse_ascii_double_spaces;
 		if(!__CherryAIRuntimeConfigLogDone)
 		{
 			dm("[CherryAI.WrapConfig] loaded line_spacing=" + __CherryAILineSpacingOffsetPixels + " wrap_pad=" + __CherryAIWrapRightPaddingPixels + " wrap_mode=" + __CherryAIWrapMode + " latin_face=" + __CherryAILatinFace);
@@ -672,6 +678,7 @@ class MessageManager
 		_drawenabled = false;
 
 		var cnt = Text.length;
+		var atLineStart = false;
 		for(var i=0; i < cnt;i++)	OpacityArray[i] = 255;
 		LayerMessSet_top.clear();
 		LayerMessSet_back.clear();
@@ -999,6 +1006,7 @@ class MessageBaseLayer extends Layer
 	var AnimatedDrawY = [];
 	var AnimatedRubyLayout = [];
 	var AnimatedVisibleCount = 0;
+	var _DrawChSourcePrepared = false;
 
 	var Text=""; // 描画文字列
 	var Name=""; // 描画名前
@@ -1266,6 +1274,7 @@ class MessageBaseLayer extends Layer
 		AnimatedDrawY.clear();
 		AnimatedRubyLayout.clear();
 		AnimatedVisibleCount = 0;
+		_DrawChSourcePrepared = false;
 		NameLayer.clear();
 		MAX_DRAW_WIDTH=MAX_DRAW_HEIGHT=0;
 	}
@@ -1286,7 +1295,7 @@ class MessageBaseLayer extends Layer
 	{
 		if(typeof(f_Text) != 'String' || f_Text == "")
 			return f_Text;
-		var Result = "";
+		var Result = ""; 
 		for(var Pos = 0; Pos < f_Text.length; Pos++)
 		{
 			var Ch = f_Text[Pos];
@@ -1304,12 +1313,39 @@ class MessageBaseLayer extends Layer
 			}
 			Result += Ch;
 		}
+		if(__CherryAIStripAsciiQuotes)
+		{
+			Result = Result.replace(/"/g, "");
+			Result = Result.replace(/“|”/g, "");
+		}
+
+		// Restore missing separators after punctuation once quotes are stripped,
+		// e.g. admit."She's -> admit. She's / before.A -> before. A
+		var Spaced = "";
+		for(var Pos2 = 0; Pos2 < Result.length; Pos2++)
+		{
+			var Cur = Result[Pos2];
+			if(0 < Spaced.length)
+			{
+				var Prev = Spaced[Spaced.length - 1];
+				if(IsWrapPunctuationBreak(Prev) && IsAsciiLetter(Cur) && Cur != " " && Cur != "\t" && Cur != NewLinech)
+					Spaced += " ";
+			}
+			Spaced += Cur;
+		}
+		Result = Spaced;
+
+		if(__CherryAICollapseAsciiDoubleSpaces)
+		{
+			while(Result.indexOf("  ") != -1)
+				Result = Result.replace(/  /g, " ");
+		}
 		return Result;
 	}
 
 	function SetText(f_Text)
 	{
-		Text = NormalizeCherryAITextNewlines(f_Text);
+		Text = NormalizeCherryAITextNewlines(f_Text); 
 		Text = LublCheck(Text);
 		PrepareAnimatedTextLayout();
 	}
@@ -1333,11 +1369,12 @@ class MessageBaseLayer extends Layer
 	function PrepareAnimatedTextLayout()
 	{
 		ApplyCherryAITextFace(Text);
-		TextTempDraw(this,Text); // 文字全部描画
+		TextTempDraw(this,Text); // 文字全部描画 
 		SetArrayCharaRect(this,Text); // 1文字のRectを代入
 		BuildAnimatedLayout();
 		fillRect(0,0,imageWidth,imageHeight,0x00000000);
 		AnimatedVisibleCount = 0;
+		_DrawChSourcePrepared = false;
 	}
 
 	function BuildAnimatedLayout()
@@ -1503,6 +1540,17 @@ class MessageBaseLayer extends Layer
 
 	function DrawCh(f_Lay,f_No,f_blend=255)
 	{
+		if(100 < f_Lay.height)
+		{
+			if(!_DrawChSourcePrepared)
+			{
+				TextTempDraw(this,Text);
+				_DrawChSourcePrepared = true;
+			}
+		}
+		else if(AnimatedVisibleCount < Text.length)
+			DrawVisibleText(Text.length);
+
 		var No = f_No*6;
 		if(charRectArray.count < No) return false;
 		if(f_blend < 20) return false;
@@ -1573,7 +1621,21 @@ class MessageBaseLayer extends Layer
 
 	function IsWrapWhitespace(f_Char)
 	{
-		return f_Char == " " || f_Char == "\t";
+		// Treat common ASCII and Unicode spacing characters as wrap whitespace
+		return f_Char == " " || f_Char == "\t" || f_Char == "\u3000" || f_Char == "\u00A0";
+	}
+
+	function IsAsciiLetter(f_Char)
+	{
+		if(f_Char === void || f_Char == "")
+			return false;
+		return "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".indexOf(f_Char) != -1;
+	}
+
+	function IsWrapPunctuationBreak(f_Char)
+	{
+		// Include ASCII closing punctuation and common fullwidth/CJK closing marks
+		return ".,!?;:，。！？；：)]}」』）”'".indexOf(f_Char) != -1;
 	}
 
 	function ShouldDrawCharGlyph(f_Char)
@@ -1714,6 +1776,7 @@ class MessageBaseLayer extends Layer
 		var PreviousWidth = 0;
 		var fontsize = f_Lay.font.height;
 		var cnt = f_Text.length;
+		var atLineStart = false;
 		for(var Pos =0; Pos < cnt;Pos++)
 		{
 			var Ch = f_Text[Pos];
@@ -1797,7 +1860,7 @@ class MessageBaseLayer extends Layer
 		}
 
 		var LineText="";
-		var LastSpacePos=-1;
+		var LastBreakPos=-1;
 		var cnt = f_Text.length;
 		for(var Pos =0; Pos < cnt;Pos++)
 		{
@@ -1805,7 +1868,7 @@ class MessageBaseLayer extends Layer
 			if(Ch == NewLinech)
 			{
 				LineText="";
-				LastSpacePos=-1;
+				LastBreakPos=-1;
 				continue;
 			}
 
@@ -1813,10 +1876,10 @@ class MessageBaseLayer extends Layer
 			var CandidateWidth = f_Lay.font.getTextWidth(CandidateLineText);
 			if(0 < LineText.length && MaxWidth < CandidateWidth)
 			{
-				if(0 <= LastSpacePos)
+				if(0 <= LastBreakPos)
 				{
-					WrapStarts[LastSpacePos+1] = true;
-					Pos = LastSpacePos;
+					WrapStarts[LastBreakPos+1] = true;
+					Pos = LastBreakPos;
 				}
 				else
 				{
@@ -1824,16 +1887,42 @@ class MessageBaseLayer extends Layer
 					Pos--;
 				}
 				LineText="";
-				LastSpacePos=-1;
+				LastBreakPos=-1;
 				continue;
 			}
 
 			LineText = CandidateLineText;
-			if(IsWrapWhitespace(Ch))
-				LastSpacePos = Pos;
+			if(IsWrapWhitespace(Ch) || IsWrapPunctuationBreak(Ch))
+				LastBreakPos = Pos;
 		}
 
-		if(!__CherryAIWrapDebugLogged)
+			// Post-pass: avoid starting lines with whitespace or closing punctuation.
+			// Prefer moving the wrap forward to the next sensible start; if not
+			// possible, move the wrap back one position when safe.
+			for(var wsPos = 0; wsPos < cnt; wsPos++)
+			{
+				if(!WrapStarts[wsPos])
+					continue;
+				var ch = f_Text[wsPos];
+				if(IsWrapWhitespace(ch) || IsWrapPunctuationBreak(ch))
+				{
+					var forward = wsPos + 1;
+					while(forward < cnt && (IsWrapWhitespace(f_Text[forward]) || IsWrapPunctuationBreak(f_Text[forward])))
+						forward++;
+					if(forward < cnt)
+					{
+						WrapStarts[wsPos] = false;
+						WrapStarts[forward] = true;
+					}
+					else if(wsPos > 0 && !WrapStarts[wsPos-1])
+					{
+						WrapStarts[wsPos] = false;
+						WrapStarts[wsPos-1] = true;
+					}
+				}
+			}
+
+			if(!__CherryAIWrapDebugLogged)
 		{
 			var PixelWrapCount = 0;
 			for(var PixelWrapPos = 0; PixelWrapPos < cnt; PixelWrapPos++)
@@ -1906,6 +1995,7 @@ class MessageBaseLayer extends Layer
 		var strCount=0;
 		var DescenderPad = 14;
 		var linecnt = 0;
+		var atLineStart = false;
 		var cnt = Text.length;
 		var CharAdvanceArray = BuildCharAdvanceArray(f_Lay,Text);
 		var WrapStarts = BuildWrapStarts(f_Lay,Text,CharAdvanceArray);
@@ -1923,13 +2013,19 @@ class MessageBaseLayer extends Layer
 					setPx=InitPxMargin;
 					linecnt+=strCount;
 					strCount=0;
+					var atLineStart = true;
 				}
+				// atLineStart declared at function scope; no-op here
 
 				var CharWidth = CharAdvanceArray[Pos];
 				var UseFixedCell = UseFixedCellForChar(f_Lay,Text[Pos],CharWidth);
 				var Px = 0;
 				if(UseFixedCell)
 					Px = (fontsize-CharWidth)>>1;
+				// If this is a line-starting whitespace, treat its advance as zero
+				var EffectiveCharAdvance = CharWidth;
+				if(atLineStart && IsWrapWhitespace(Text[Pos]))
+					EffectiveCharAdvance = 0;
 
 				if(f_Lay.imageHeight < Py+(fontsize>>1)+2+fontsize+DescenderPad)
 				{ // Py超過していた場合レイヤーの方を伸ばす処理
@@ -1964,9 +2060,11 @@ class MessageBaseLayer extends Layer
 				strCount++;
 
 				if(UseFixedCell)
-					setPx += fontsize;
+					setPx += (atLineStart && IsWrapWhitespace(Text[Pos]) ? 0 : fontsize);
 				else
-					setPx += CharWidth;
+					setPx += EffectiveCharAdvance;
+				if(atLineStart && !IsWrapWhitespace(Text[Pos]))
+					atLineStart = false;
 			}
 			else
 			{
@@ -2029,6 +2127,7 @@ class MessageBaseLayer extends Layer
 		var DescenderPad = 14;
 		var SourceLineStep = Lay.GetSourceLineStep(fontsize)-5;
 		var DisplayLineStep = Lay.GetDisplayLineStep(fontsize);
+		var atLineStart = false;
 
 		var cnt = f_Text.length;
 		var CharAdvanceArray = BuildCharAdvanceArray(Lay,f_Text);
@@ -2043,7 +2142,9 @@ class MessageBaseLayer extends Layer
 					Dy += DisplayLineStep;
 					setPx=InitPxMargin;
 					strCount=0;
+					var atLineStart = true;
 				}
+				// atLineStart declared at function scope; no-op here
 
 				// 最終文字補正(縁等の端が切れてしまう現象を防ぐ)
 				// 改行指定とラスト文字判定をする
@@ -2060,15 +2161,21 @@ class MessageBaseLayer extends Layer
 				charRectArray.add(Py); // top
 				var CharWidth = CharAdvanceArray[Pos];
 				var UseFixedCell = UseFixedCellForChar(Lay,f_Text[Pos],CharWidth);
-				var RectWidth = GetCharRectWidth(Lay,f_Text[Pos],CharWidth,UseFixedCell);
+				// If this is a line-starting whitespace, treat its advance/rect as zero
+				var EffectiveCharAdvance = CharWidth;
+				if(atLineStart && IsWrapWhitespace(f_Text[Pos]))
+					EffectiveCharAdvance = 0;
+				var RectWidth = GetCharRectWidth(Lay,f_Text[Pos],EffectiveCharAdvance,UseFixedCell);
 				charRectArray.add(RectWidth+InitPxMargin+adjuxtX); // width
 				charRectArray.add(GetCharRectHeight(fontsize)); // height
 
 				strCount++;
 				if(UseFixedCell)
-					setPx += fontsize;
+					setPx += (atLineStart && IsWrapWhitespace(f_Text[Pos]) ? 0 : fontsize);
 				else
-					setPx += CharWidth;
+					setPx += EffectiveCharAdvance;
+				if(atLineStart && !IsWrapWhitespace(f_Text[Pos]))
+					atLineStart = false;
 			}
 			else
 			{
@@ -2113,4 +2220,5 @@ class MessageBaseLayer extends Layer
 		Shadow = data.Shadow;
 		Edge = data.Edge;
 	}
+
 }

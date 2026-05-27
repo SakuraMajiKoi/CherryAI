@@ -101,13 +101,16 @@ The GUI is organized as:
     - Once the new manifest has been validated and activated, the previous manager may be closed for teardown only; that close path must not perform a second implicit save-on-close, because the save/discard choice has already been resolved before Open Project proceeds.
     - Cancel must remain safe before activation: a cancelled load may close the progress dialog, but it must not partially swap the new manifest into the live session.
 - **Full Table View** (`_on_full_table_view`): Opens FullTableViewDialog — spreadsheet-like view and editor for all manifest line entries. Requires a loaded project. Features: named columns (Line #, Original, Preprocessed, Translated, Postprocessed, Quality Assurance, Overwrite, Wordwrap, Final, Overwrite (Legacy), Log, Tags), column filter dropdown with Show All/Show Visible/Show Latest presets, all columns hideable, column selection bar for search/replace scoping, sort indicators (▲/▼) in headers, read-only Original with copy support, two-row search/replace toolbar, Results Only mode, file filter, RegEx search/replace, pagination, save/reset/diff, and a Clear Columns workflow for `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, and `final`. Clearing `tl` must require a second destructive confirmation because it removes the base translation stage. `final` is Full Table View only for now: empty cells remain sparse until edited, double-click editing seeds the editor from the first non-empty lower stage, and if the edited text matches that source value again the table clears `final` back to empty. Show Latest follows the active pipeline `orig → prepro → tl → postpro → qa → wordwr → final`.
-- **Patch Editor / Editor Host** (`_on_editor`): Opens PatchEditorViewDialog — a non-modal staged full-file editor for `Original/` and `Patch/` project files, currently surfaced from the live `Editor` menu entry. Requires a loaded project. Features: file tree rooted in manifest `filedir`, large undo-enabled text editor, in-file search/replace with optional regex mode, unified diff against staged original and prior patch content, line-history view filtered as `all` / `edited` / `translated`, and save/reload prompts. Saving must write the exact text into the staged translated layout and persist only compact editor metadata under `EditorState.files[rel_path]` (`saved_at`, staged artifact paths, bounded history). Patch diff text is now rebuilt from the staged translated artifact instead of being serialized into the manifest. Live line history, current text, and locator metadata are rebuilt on open instead of being serialized into the manifest. Reopening the Editor host must reuse the existing window and bring it to the foreground instead of opening duplicates. Its instance state must not shadow Tkinter internals such as `_root()`, because theme refresh and widget/event lookup rely on that helper.
+- **Patch Editor / Editor Host** (`_on_editor`): Opens PatchEditorViewDialog — a non-modal staged full-file editor for `Original/` and `Patch/` project files, currently surfaced from the live `Editor` menu entry. Requires a loaded project. Features: file tree rooted in manifest `filedir`, large undo-enabled text editor, in-file search/replace with optional regex mode, unified diff against staged original and prior patch content, line-history view filtered as `all` / `edited` / `translated`, and save/reload prompts. Saving must write the exact text into the staged translated layout and persist only compact editor metadata under `EditorState.files[rel_path]` (`saved_at`, staged artifact paths, bounded history). Patch diff text is now rebuilt from the staged translated artifact instead of being serialized into the manifest. Live line history, current text, and locator metadata are rebuilt on open instead of being serialized into the manifest. Reopening the Editor host must reuse the existing window and bring it to the foreground instead of opening duplicates. Programmatic file-tree and line-history selection sync must not re-enter their own `<<TreeviewSelect>>` handlers; the live GUI path must return to Tk's event loop immediately instead of falling into a self-triggered selection loop. Its instance state must not shadow Tkinter internals such as `_root()`, because theme refresh and widget/event lookup rely on that helper.
 - **Planned merge note**: The current Full Table View and Patch Editor surfaces are expected to merge into a future non-modal `Editor` window with `Full Files` and `Lines Only` modes. Until that migration lands, the separate windows remain the implemented behavior.
+- **Editor UI migration directive**: The future merged `Editor` window should use PySide6 as its primary UI library while preserving the current Editor contract. Backend manifest, diffing, parser-alignment, and Step 9 replay logic must remain shared so the Qt surface can ship incrementally without changing data semantics.
 - **API Log** (`_on_api_log`): Opens APILogViewDialog — non-blocking viewer for structured API log entries. Requires a loaded project. Features: search bar, category filter (Main Translation/Term Translation/Gender Inference/Other), status filter (All/Failed/Recovered/Successful/Pending), view mode switch (Sent/Received/Both), display-limit spinbox (All/1000/2500/5000/Nothing), color-coded entries (green=success, yellow=recovered, red=failed), live updates via subscription, token statistics, per-project JSONL persistence alongside manifest. Sent entries must show actual request metadata from the stored log, including OpenAI `prompt_cache_key` / `prompt_cache_retention` when present. Reopening API Log must reuse the existing window and bring it to the foreground instead of opening duplicates.
   - Runtime durability rule: completed requests must append their latest structured snapshot to disk immediately so API history can be salvaged after a crash even when manifest persistence is intentionally batched for throughput.
   - Failure visibility rule: main-translation API-call failures, invalid/non-JSON structured-output responses, invalid `translations` payloads, and discarded full-response validation failures must still be recorded as failed log entries with their available raw response/error text plus validation metadata before retry or abort handling continues.
 - **Ledger** (planned): A separate non-modal analytics window should aggregate actual usage across projects and task types. It should reuse `functions/usage_tracker.py` logic where practical, migrate persistent aggregation to `user/ledger.tsv`, keep `functions/api_log.py` as the request-detail source, and stay separate from Step 4 estimation.
 - **Editor** (planned redesign): A future non-modal `Editor` window should merge Full Table View and Patch Editor into `Full Files` and `Lines Only` modes. The standalone Patch Editor label should disappear after migration, while diffing, parser alignment, and manifest synchronization remain in shared `functions/` code.
+- **Editor migration constraints**: The PySide6 Editor must keep feature parity for the current shipped Editor before deprecating the Tk host: non-modal single-instance reuse, manifest-backed full-file saves, parser-backed line history, unified diff views, in-editor search/replace, file-context handoff between modes, and save-to-Step-9 continuity for parser-backed outputs.
+- **Editor migration planning**: The implementation sequence is tracked separately in `doc/editor_pyside6_refactor_plan.md`; this spec remains the source of behavioral requirements.
 - **Options** (`_on_options`): Opens Global Options dialog directly from menu bar. Reopening Options must reuse the existing dialog and bring it to the foreground instead of opening duplicates.
 - **Step Tabs**: 10 workflow tabs (Steps 0-9) progressing from Input to Output
 - **Global Options**: Application-wide settings accessed via Options menu bar entry
@@ -133,12 +136,13 @@ All application state is stored in the Manifest (`.CherryAI.json`), not in GUI m
 - Skip-unchanged guard: `set_line_field()` returns early when new value equals existing (TASK 72)
 - Per-step data storage with automatic serialization
 - Line-by-line translation state tracking with per-line `tags` field (TASK 72)
+- Valid Step 0 files with no extracted rows must still be staged into `Original/` and preserved in `filedir`; those entries use `type: "misc"`, serialize `line_count: 0`, and omit `first_idx` / `last_idx`
 - Manifest line canonicalization on load/save/set: legacy `tag` is merged into `tags`, line keys are written in canonical order `idx`, `tags`, `orig`, `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, `final`, then auxiliary fields, and dedup placeholder rows may retain valid later-stage outputs produced or imported elsewhere in the workflow
 - Manifest load performance rule: canonical v3.2 `lines[]` arrays with valid `idx`/`ln` locators should be treated as already normalized on load so Open Project time is dominated by actual JSON parse plus tab restore, not repeated canonicalization of unchanged rows
 - Shared manifest-to-manifest import helpers for Import Translations and Create Patch, plus batch `filedir`/`lines[]` pruning that rewrites remaining line indices contiguously and can remove copied `Original/` files in the same pass
-- Patch Editor persistence via top-level `EditorState.files`: compact per-file metadata only — staged artifact references, save timestamps, and bounded save-history records keyed by `filedir[].rel_path`; patch diff text, live file text, parser-backed line history, and locator metadata are rebuilt on demand
-- Translated-branch backups via `EditorState.backups`: Step 9 can rename the active `Translated/` plus `Patch/Translated/` branch into backup storage before export, and restore helpers can promote a saved backup back into the active branch
-- Output step compaction: for manifest-backed projects, Step 9 must read fresh resolved lines from manifest rows/staged files and must not persist a redundant `step_state.Output.data.lines` cache; Step 9 also must not create reverse diff artifacts, because `Patch/Translated/` ownership belongs to the Editor path only
+- Patch Editor persistence via top-level `EditorState.files`: compact per-file metadata only — staged artifact references, save timestamps, bounded save-history records keyed by `filedir[].rel_path`, and a pending per-file `changed` marker while Step 9 export is still owed; patch diff text, live file text, parser-backed line history, and locator metadata are rebuilt on demand, and empty-history records without `changed` must be pruned on load/save/export
+- Translated-branch backups via `EditorState.backups`: Step 9 can snapshot or rename the active `Translated/` plus `Patch/Translated/` branch into backup storage before export, and restore helpers can promote a saved backup back into the active branch
+- Output step compaction: for manifest-backed projects, Step 9 must read fresh resolved lines from manifest rows/staged files and must not persist a redundant `step_state.Output.data.lines` cache; parser-backed export must regenerate from the manifest pipeline, replay any bounded editor history onto that fresh render before injection, skip unchanged same-target writes into the active `Translated/` branch, and clear the per-file `changed` marker after a successful staged export. That `changed` marker must be written only by the shared compare helper on explicit write actions: Input `Load Selected Items` compares `orig`, Preprocessing `Apply Rules` compares `prepro`, Translation `Start Translation` compares `tl`, Postprocessing `Apply Postprocessing` compares `postpro`, QA write actions compare the field they persist, Wordwrap `Apply Wordwrap` compares `wordwr`, and Full Table View / Editor saves mark the owning file directly. Step 9 also must not create reverse diff artifacts, because `Patch/Translated/` ownership belongs to the Editor path only
 - Project recovery and session restoration
 - Step data merge-not-replace: `on_leave()` and `_update_step_data()` must start from `get_step_data()` and merge updated keys — never create a fresh dict that discards stored results (PHASE 80)
 - Init guard pattern: steps that populate comboboxes during `__init__()` must suppress trace-triggered manifest writes until initialization completes (PHASE 80)
@@ -243,10 +247,14 @@ When global options enable automation, loading files triggers a cascade:
 - First tick: Original estimation complete (from raw input)
 - Second tick: Preprocessed estimation complete (after Step 4)
 - Ticks reset when relevant settings change (prompt, preprocessing)
-- **Model change does NOT trigger re-estimation** — stored token counts
+- **Model change usually does NOT trigger re-estimation** — when the selected
+  model stays within the same tokenizer family, stored token counts
   (content_tokens, prompt_tokens, cached_tokens, input_tokens, output_tokens,
-  num_requests) are reused; only pricing/rate-limit arithmetic is repeated.
-  Full re-estimation is only triggered by the "↻ Update Counts" button.
+  num_requests) are reused and only pricing/rate-limit arithmetic is repeated.
+- **OpenAI tokenizer boundary DOES trigger re-estimation** — switching
+  between OpenAI and Google/Mistral changes token counting from
+  `tiktoken` to `sentencepiece` (or back), so Costs reruns estimation.
+- Full re-estimation is otherwise triggered by the "↻ Update Counts" button.
 
 ---
 
@@ -465,6 +473,11 @@ Each API request consists of three layers:
 | **Meta Settings** | URL, API Key, Model, Temperature, Logit Bias, No Thinking, Structured Output — sourced from `user/API.ini` | NOT counted toward token estimates |
 | **Prompt** | Language direction, System Instructions, Style, Tone, Summary, Conditional Prompts (selective), Glossary (selective, content-based), Rolling Context (conditional) — sourced from `user/CherryAI.ini` and manifest | Counted as input tokens |
 | **Input Lines** | Preprocessed lines (preferred) or original lines when preprocessed is empty — sourced from manifest | Counted as input tokens; output estimated via language multiplier |
+
+**Tokenizer backend selection**:
+- OpenAI models use `tiktoken` with model-aware encodings when available.
+- Google and Mistral models prefer the optional `sentencepiece` path.
+- When the preferred tokenizer library is unavailable, CherryAI falls back to its existing heuristic counting so the libraries remain optional.
 
 Step 5 must initialize its live API client from the already resolved saved key selection in `user/API.ini`; it must not instantiate the client against an empty legacy `CherryAI.ini [api].api_key` path first and then patch the real key in afterward.
 
@@ -1159,6 +1172,8 @@ Each step is a tab in the main notebook. Steps can be navigated freely but follo
 **Design Goal**: Extract only visible text from any unencrypted text file that a user can theoretically read. Code not part of the text and any other non-translatable content should be excluded. In the final step (Output), translated text is injected into copies of the original files to replace the original text (non-destructive).
 
 **Large-project responsiveness rule:** Step 0 load progress must stay visible from the start of extraction through `Original/` staging and manifest save. Manifest-backed reopen must prefer lazy file rehydration: restore file metadata, counts, and manifest linkage first, and only materialize line text when preview/search or a processing step explicitly needs it.
+
+**Zero-line file rule:** Valid selected files must remain part of the project even when extraction yields zero rows. Step 0 must still copy those files into staged `Original/`, keep them in manifest `filedir` as `type: "misc"`, write `line_count: 0`, and omit `first_idx` / `last_idx` for those empty spans.
 
 **Heavy-tab table rule:** Steps 3, 5, 6, 7, and 8 must keep their full backing line state available for actions, but passive tab entry must not construct `TableRow` objects for the entire manifest. Shared table pagination alone is not sufficient; these steps must provide filtered row ids plus a row-builder callback so only the visible filtered page is materialized during passive entry.
 
@@ -1888,7 +1903,7 @@ The Analysis step is functional and provides valuable information. Phase 59 adds
 | Widget | Type | Function |
 |--------|------|----------|
 | **Options Panel** | LabelFrame | Contains model and request settings |
-| Primary Model Dropdown | Combobox | Select model for translation. Syncs with Global Options. Auto-estimates on change. |
+| Primary Model Dropdown | Combobox | Select model for translation. Syncs with Global Options. Same-family model changes fast-reprice existing counts; OpenAI↔Google/Mistral changes rerun estimation. |
 | Lines/Request Spinbox | Spinbox | Maximum lines per request (5-200). Dynamic adjustment at context markers. |
 | Tokens/Request Spinbox | Spinbox | Maximum tokens per request (NEW). Acts as alternative maximum alongside lines. |
 | Refresh Button | Button | Fetch latest model data from providers (OpenAI, Gemini, Claude, Mistral, Grok, DeepSeek) |
@@ -1907,7 +1922,7 @@ The Analysis step is functional and provides valuable information. Phase 59 adds
 **Primary Model Dropdown**:
 - Values: All models from `functions/config.py` MODEL_PRICING
 - Syncs with Global Options: Changes here update global model setting and vice versa
-- Triggers: Auto-runs estimation when model changes
+- Triggers: Instant repricing when the tokenizer family stays the same; full re-estimation when switching between OpenAI and Google/Mistral
 - Current state: Already implemented and working
 
 **Tab-entry rule:** Entering Step 4 must not auto-run estimation solely because a project already has lines. Passive tab entry may restore cached counts/status and model settings, but the expensive estimation pass must run only from explicit user action (`Estimate` / `Update Counts`) or an automation level that intentionally requests it.
@@ -3004,7 +3019,7 @@ The Preprocessing tab is organized into three sections:
 **Stored In**:
 - Manifest: `lines[].prepro`, `lines[].prepro_ops`
 - Manifest step data: All toggle states and pattern lists
-- Preprocessing manifest persistence updates the already loaded `lines[]` entries in one pass inside `_update_step_data()`; tab restore and Apply Rules must not route every row through repeated `ManifestManager.get_line()` plus `set_line_field()` / `clear_line_field()` calls because that regressed large-project GUI responsiveness
+- Preprocessing manifest persistence updates the already loaded `lines[]` entries in one pass inside `_update_step_data()`; tab restore and Apply Rules must not route every row through repeated `ManifestManager.get_line()` plus `set_line_field()` / `clear_line_field()` calls because that regressed large-project GUI responsiveness. Output change tracking for this step is a separate compare-only pass against `prepro`, not a side effect of the generic setters
 - Preprocessing preview refresh may filter against the full loaded preview state, but passive tab entry must only materialize the currently visible filtered preview page in the shared table
 
 Postprocessing, QA, and Wordwrap must follow the same visible-row materialization rule on passive entry: load their backing line state and summary/filter metadata, but only build shared-table rows for the currently visible filtered page until the user changes the view or runs an explicit processing action.
@@ -4615,11 +4630,12 @@ provide the canonical read/write API.
 orig → prepro → edited_prepro → tl → tlc1 → edit1 → tlc2 → ... → postpro → wordwr → qa_overwrite
 ```
 
-Each step writes its output field via `ManifestManager.set_line_field(idx, field, value)`:
-- Step 3 `_update_step_data()` writes `prepro`
-- Step 5 `update_translation()` writes `tl` (and `edited_prepro`)
-- Step 6 `_on_postprocess_complete()` / `_mark_line_as_fixed()` writes `postpro`
-- Step 7 `on_leave()` writes `qa` and `qa_overwrite`
+Each step writes its output field through the manifest manager, but Step 9 change tracking is not owned by the generic setters. The shared compare helper is invoked only on explicit write actions:
+- Step 0 `Load Selected Items` compares reloaded `orig` slices against the previous file slice for the same `rel_path`
+- Step 3 `_update_step_data()` writes `prepro` in one bulk pass, then compares old vs new `prepro`
+- Step 5 `update_translation()` writes `tl`; `edited_prepro` is not part of Step 9 changed gating
+- Step 6 postprocess persist paths write `postpro` and compare old vs new `postpro`
+- Step 7 QA write actions persist `qa_overwrite` and compare that persisted field
 - Step 8 explicit Apply persists `wordwr` only for changed wrapped results; preview refresh and tab leave do not auto-write it
 
 **All steps now read from manifest** using `manifest_fields.py` shared resolution functions

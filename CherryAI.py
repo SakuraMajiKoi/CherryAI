@@ -339,7 +339,14 @@ def main() -> None:
 		# If protocol isn't available, rely on normal mainloop exit.
 		pass
 
-	app.mainloop()
+	try:
+		app.mainloop()
+	except KeyboardInterrupt:
+		# Ctrl+C/SIGINT can surface asynchronously while Tk is processing events.
+		# Treat it like a normal close to avoid noisy crash tracebacks.
+		logging.getLogger(__name__).warning(
+			"GUI mainloop interrupted by KeyboardInterrupt; shutting down gracefully.")
+		_save_and_quit()
 
 
 def _cli_entry() -> None:

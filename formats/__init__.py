@@ -374,9 +374,18 @@ class ParserRegistry:
     def detect(self, file_path: Path) -> Optional["ParserScript"]:
         """Auto-detect which parser handles *file_path*.
 
+        Uses extension heuristics first for known engines to avoid strict
+        content-gating dropping valid files during Step 0 input.
+
         Iterates registered parsers calling :meth:`can_handle` and returns
         the first match.  Returns ``None`` if no parser matches.
         """
+        suffix = file_path.suffix.lower()
+        if suffix in {".xp3", ".ks", ".tjs", ".mdat"}:
+            kirikiri = self.get("KiriKiri2")
+            if kirikiri is not None:
+                return kirikiri
+
         for parser in self._parsers.values():
             try:
                 if parser.can_handle(file_path):

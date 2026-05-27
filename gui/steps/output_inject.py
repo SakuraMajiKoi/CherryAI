@@ -446,6 +446,7 @@ class OutputInjectStep(BaseStep):
             show_filter=True,
             show_checkboxes=True,
             show_count_filter=False,
+            show_export_button=False,
             on_select=self._on_file_selected,
         )
         self._files_table.pack(fill="both", expand=True, padx=5, pady=5)
@@ -458,6 +459,12 @@ class OutputInjectStep(BaseStep):
             batch_frame,
             text="▶ Export Selected",
             command=self._export_selected,
+        ).pack(side="left", padx=2)
+
+        ttk.Button(
+            batch_frame,
+            text="Select Visible",
+            command=self._select_visible,
         ).pack(side="left", padx=2)
 
         ttk.Button(
@@ -1266,13 +1273,18 @@ class OutputInjectStep(BaseStep):
 
     def _export_selected(self) -> None:
         """Export only selected files."""
-        selected = self._files_table.get_selected_items()
+        selected = self._files_table.get_checked_rows()
+        if not selected:
+            selected = self._files_table.get_selected_items()
         if not selected:
             messagebox.showinfo("Info", "No files selected.")
             return
 
         indices = set()
         for row in selected:
+            if isinstance(row, int):
+                indices.add(row)
+                continue
             try:
                 indices.add(int(row.values.get("idx", -1)))
             except (ValueError, TypeError):
@@ -1280,6 +1292,15 @@ class OutputInjectStep(BaseStep):
 
         files_to_export = [f for f in self._files if f.idx in indices]
         self._run_export(files_to_export)
+
+    def _select_visible(self) -> None:
+        """Check all files currently visible under the active filter."""
+        visible_ids = self._files_table.get_filtered_ids()
+        if not visible_ids:
+            messagebox.showinfo("Info", "No visible files to select.")
+            return
+
+        self._files_table.set_checked_rows(visible_ids, replace=True)
 
     def _export_all(self) -> None:
         """Export all files."""
@@ -1411,17 +1432,18 @@ class OutputInjectStep(BaseStep):
         response = messagebox.askyesnocancel(
             "Existing translated branch",
             "Step 9 found an existing Translated branch.\n\n"
-            "Yes: replace the current Translated branch and clear active patch artifacts.\n"
-            "No: back up the current Translated/Patch/Translated branch first.\n"
+            "Yes: export over the current Translated branch in place.\n"
+            "No: back up the current Translated/Patch/Translated branch first, then export over it.\n"
             "Cancel: stop this export.",
             parent=self,
         )
         if response is None:
             return False
-        if response:
-            mgr.discard_active_translated_branch()
-        else:
-            mgr.backup_active_translated_branch(reason="step9_export")
+        if response is False:
+            mgr.backup_active_translated_branch(
+                reason="step9_export",
+                preserve_active=True,
+            )
         return True
 
     def _process_export(self, files: List[OutputFile]) -> None:
@@ -1546,6 +1568,14 @@ class OutputInjectStep(BaseStep):
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         mgr = self.manifest_manager
+        entry = None
+        if mgr is not None and mgr.is_loaded:
+            filedir = mgr.get_filedir()
+            if 0 <= output_file.idx < len(filedir):
+                entry = filedir[output_file.idx]
+                if mgr.should_skip_step9_export(entry, output_path) is True:
+                    output_file.line_count = 0
+                    return "written"
 
         if output_file.archive_name and output_file.member_indices:
             if mgr is None or not mgr.is_loaded:
@@ -1586,7 +1616,28 @@ class OutputInjectStep(BaseStep):
                     f"(filedir has {len(filedir)} entries)"
                 )
             entry = filedir[output_file.idx]
-            render_result = mgr.render_manifest_entry_to_path(entry, output_path)
+            replay_source_path = mgr.build_step9_replay_source_path(entry)
+            if not isinstance(replay_source_path, Path):
+                replay_source_path = None
+            try:
+                if replay_source_path is not None:
+                    render_result = mgr.render_manifest_entry_to_path(
+                        entry,
+                        output_path,
+                        source_path=replay_source_path,
+                    )
+                else:
+                    render_result = mgr.render_manifest_entry_to_path(entry, output_path)
+            finally:
+                if replay_source_path is not None:
+                    try:
+                        replay_source_path.unlink(missing_ok=True)
+                    except OSError:
+                        logger.debug("Failed to remove replay source %s", replay_source_path)
+                    try:
+                        replay_source_path.parent.rmdir()
+                    except OSError:
+                        pass
             output_file.line_count = int(render_result.get("line_count", 0))
             self._stats.total_lines += output_file.line_count
             self._stage_written_output(output_file, output_path, mgr)
@@ -1740,7 +1791,29 @@ class OutputInjectStep(BaseStep):
             )
 
         entry = filedir[output_file.idx]
-        render_result = mgr.render_manifest_entry_to_path(entry, output_path)
+        replay_source_path = mgr.build_step9_replay_source_path(entry)
+        if not isinstance(replay_source_path, Path):
+            replay_source_path = None
+        try:
+            if replay_source_path is not None:
+                render_result = mgr.render_manifest_entry_to_path(
+                    entry,
+                    output_path,
+                    source_path=replay_source_path,
+                )
+            else:
+                render_result = mgr.render_manifest_entry_to_path(entry, output_path)
+        finally:
+            if replay_source_path is not None:
+                try:
+                    replay_source_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.debug("Failed to remove replay source %s", replay_source_path)
+                try:
+                    replay_source_path.parent.rmdir()
+                except OSError:
+                    pass
+
         output_file.line_count = int(render_result.get("line_count", 0))
         self._stats.total_lines += output_file.line_count
 

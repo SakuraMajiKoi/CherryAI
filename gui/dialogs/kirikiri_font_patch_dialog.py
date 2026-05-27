@@ -57,7 +57,8 @@ class KiriKiriFontPatchDialog(tk.Toplevel):
             container,
             text=(
                 "This writes version.dll at the translated root, a JSON config into "
-                "patch/, and only the selected fonts into the sibling fonts/ folder."
+                "the translated root, and only the selected fonts into the sibling "
+                "fonts/ folder."
             ),
             wraplength=520,
             justify="left",

@@ -204,6 +204,26 @@ python -m pytest CherryAI/dev/test_manifest_fields.py CherryAI/dev/test_qa_manif
 
 ### Focused Costs Prepare-Lines Regression
 
+### Focused Provider Token Counting Regression
+
+The provider-aware token counting pass is covered by focused unit tests around the shared chunker surface and the Costs model-change policy:
+
+- `dev/test_gui_chunker_integration.py` verifies the GUI chunker adapter now preserves the backend method reported by the shared chunker, including the SentencePiece path used for Google/Mistral models.
+- `dev/test_costs_api_rework.py` verifies Costs keeps the fast repricing path for same-family model changes, but reruns estimation when a model change crosses the OpenAI tokenizer boundary.
+- `dev/test_costs_step_phase40.py`, `dev/test_estimation_skip.py`, and `dev/test_request_slicing_settings.py` provide adjacent coverage so the shared Step 4/Step 5 request-formation path remains aligned after the tokenizer-selection change.
+
+Verified commands:
+
+```bash
+python -m pytest dev/test_gui_chunker_integration.py dev/test_costs_api_rework.py dev/test_model_encodings.py -q --timeout=30
+python -m pytest dev/test_costs_step_phase40.py dev/test_estimation_skip.py dev/test_request_slicing_settings.py -q --timeout=30
+```
+
+Verified results:
+
+- Focused tokenizer + Costs regression slice: `174 passed`
+- Adjacent Costs/request-formation regression slice: `130 passed`
+
 ### Focused Mistral Provider Parity Regression
 
 The Mistral parity pass is covered by focused unit tests plus live CherryAI verification against the Experimental plan key:
@@ -393,20 +413,22 @@ Updated verified results:
 
 The staged full-file Patch Editor plus its app entry points are covered by a focused regression set:
 
-- `dev/test_patch_editor_view.py` verifies that editor file views prefer staged `Patch/` files, fall back to `Original/` when no patch exists, persist manifest-backed editor diffs/history when a full-file save occurs, and keep Tkinter's internal `_root()` helper callable so the themed Editor window can open safely.
-- `dev/test_manifest_state.py` verifies that `save_editor_patch()` and `save_lines_only_changes()` now persist only the compact `EditorState.files` contract (staged artifact references, timestamps, history), that `diff_to_patch` is rebuilt from artifacts in `get_editor_file_view()`, that Step 9 clears active translated patch artifacts, and that translated-branch backups can be restored.
-- `dev/test_output_injection.py` verifies that manifest-backed Step 9 state drops the redundant `lines` cache, still reads fresh resolved lines from manifest rows, mirrors successful writes into the staged translated tree, and prompts to replace, back up, or cancel when an active translated branch already exists.
+- `dev/test_patch_editor_view.py` verifies that editor file views prefer staged `Patch/` files, fall back to `Original/` when no patch exists, persist manifest-backed editor diffs/history when a full-file save occurs, keep Tkinter's internal `_root()` helper callable so the themed Editor window can open safely, and suppress programmatic file-tree/history `TreeviewSelect` callbacks so live Editor open cannot loop inside Tk selection handlers.
+- `dev/test_manifest_state.py` verifies that `save_editor_patch()` and `save_lines_only_changes()` persist only the compact `EditorState.files` contract (staged artifact references, timestamps, bounded history, pending `changed` flag), that empty-history records are pruned on load/export, that first full-file saves seed replayable rollback history against fresh output, that generic setters do not mark files changed by themselves, that the shared compare helper marks only files already present in `Translated/`, and that Step 9 still clears active translated patch artifacts.
+- `dev/test_output_injection.py` verifies that manifest-backed Step 9 state drops the redundant `lines` cache, still reads fresh resolved lines from manifest rows, replays saved editor history onto fresh parser renders before injection, skips unchanged same-target translated writes, mirrors successful writes into the staged translated tree, and lets Output export selection follow checkbox state plus the new `Select Visible` action.
 - `dev/test_app_startup.py` verifies that opening the live Editor entry point requires a loaded project and that reopening it reuses the shared window instead of creating duplicates.
+- Live hard-timeout probes against `Projects/rtes.CherryAI.json` and `Projects/OmegaKano.CherryAI.json` verified that the real Tk `mainloop()` path now opens the Editor and returns control to queued `after(...)` timers instead of stalling after the window appears; measured Editor-open times were about `0.07s` and `0.08s`, with `OmegaKano` load-plus-open at about `1.25s` total.
+- Live OmegaKano save-to-output validation used `patch\\PartsOpenCheck.ks` and confirmed that replacing `が開放されました` with ` has been unlocked.` in the Editor-staged file produces a Step 9 output file containing the English text and no remaining Japanese source fragment.
 
 Verified command:
 
 ```bash
-python -m pytest dev/test_manifest_state.py -k "get_editor_file_view_builds_live_diff_to_patch or save_editor_patch_writes_patch_and_updates_editor_state or save_lines_only_changes_synthesizes_patch_when_translated_missing or save_lines_only_changes_promotes_saved_stage_and_updates_translated or stage_translated_output_file_step9_clears_patch_artifacts or backup_and_restore_translated_branch_roundtrip or migrate_strips_output_lines_and_redundant_editor_state" -q --timeout=20
-python -m pytest dev/test_output_injection.py -k "write_file_stages_successful_output_into_translated_tree or prepare_translated_branch_export" -q --timeout=20
-python -m pytest dev/test_patch_editor_view.py dev/test_output_injection.py -k "refresh_aux_views_sets_patch_diff_text or load_selected_file_uses_manifest_manager_editor_view or write_file_stages_successful_output_into_translated_tree or prepare_translated_branch_export" -q --timeout=20
+python -m pytest dev/test_patch_editor_view.py -q --timeout=20
+python -m pytest dev/test_output_injection.py -q --timeout=20
+python -m pytest dev/test_manifest_state.py -k "set_line_field_does_not_mark_changed_without_explicit_tracking or track_output_change_for_field_marks_changed_when_translated_exists or track_output_change_for_replaced_lines_compares_orig_by_rel_path or should_skip_step9_export_uses_translated_presence_and_changed_mark or save_editor_patch_writes_patch_and_updates_editor_state or save_lines_only_changes_synthesizes_patch_when_translated_missing or save_lines_only_changes_promotes_saved_stage_and_updates_translated or save_editor_patch_without_translated_seeds_replay_history or stage_translated_output_file_step9_clears_patch_artifacts or load_prunes_editor_state_files_with_empty_history" -q --timeout=20
 ```
 
-Latest verified results: manifest slice 6 passed; output slice 4 passed; adjacent editor/output slice 6 passed.
+Latest verified results: full Step 9 output suite 62 passed; focused manifest-state/change-tracking slice 10 passed.
 
 ### Focused Step 9 Apply Patches Regression
 
@@ -463,6 +485,37 @@ When the Ledger, Editor, and staged-folder redesign phases begin, add focused sc
 - `Patch/Original/` hash-first skip/diff/full-copy behavior
 - `Patch/Translated/` reverse-patch capture before Editor save and Output overwrite
 - Full-folder staging into `Original/`, including files without parseable content
+- PySide6 Editor parity checks for the current shipped Editor contract: manifest-backed full-file saves, diff regeneration, parser-backed line history, and Step 9 replay continuity
+- PySide6 widget behavior coverage: dock/state persistence via `QSettings`, splitter/layout restore, file-tree selection sync, search/replace, and large-file editing behavior in `QPlainTextEdit`
+- Mixed-surface migration checks proving the Qt Editor can coexist with the Tk application shell during rollout without changing manifest semantics
+
+Current planning/preparation validation for this task:
+
+- `python -m pytest dev/test_patch_editor_view.py dev/test_app_startup.py -q --timeout=20`
+- `python dev/benchmark_manifest_restore.py --manifest Projects/OmegaKano.CherryAI.json --step 5 --launch-gui --timeout 20`
+
+### Step 0 Zero-Line Filedir Regression
+
+The KiriKiri2 parser regression plus the zero-line Step 0/filedir fix are covered by a focused test and script slice:
+
+- `dev/test_kirikiri2_parser.py` and `dev/test_parser_scripts.py` verify the KiriKiri2 speaker parsing regression no longer breaks `.ks` extraction.
+- `dev/test_manifest_filedir.py` verifies zero-line `FileDirEntry` serialization omits bounds, zero-line load restores empty spans, and `build_filedir_from_files()` keeps empty files as `misc` entries instead of dropping them.
+- `dev/test_input_step_phase39.py` verifies Step 0 manifest rehydration can restore zero-line `filedir` entries into `LoadedFile(..., line_count=0)`.
+- `dev/benchmark_kirikiri2_input_load.py` drives the real App/Input Step 0 folder-load path on a live source tree, and `dev/compare_manifest_filedir.py` compares the resulting `filedir` against the source root with included/excluded/zero-line suffix summaries plus optional reference-manifest deltas.
+
+Verified commands:
+
+```bash
+python -m pytest CherryAI/dev/test_kirikiri2_parser.py::test_extracts_speaker_dialogue_after_blank_and_label_gap CherryAI/dev/test_parser_scripts.py::TestKiriKiri2Parser::test_extract_formats_speaker_dialogue_and_skips_code_only_multi_tag_lines CherryAI/dev/test_manifest_filedir.py::TestFileDirEntry::test_to_dict_zero_line_entry_omits_indices CherryAI/dev/test_manifest_filedir.py::TestFileDirEntry::test_from_dict_zero_line_entry CherryAI/dev/test_manifest_filedir.py::TestBuildFiledirFromFiles::test_zero_line_files_are_kept_as_misc_entries CherryAI/dev/test_input_step_phase39.py::TestEncodingDropdown::test_populate_from_manifest_restores_zero_line_filedir_entry -q --timeout=20
+python dev/benchmark_kirikiri2_input_load.py --source dev/kanotsuku2/ws2 --format KiriKiri2 --project-name omega_input_probe --save-manifest temp/omega_input_probe.CherryAI.json --timeout 1200
+python dev/compare_manifest_filedir.py --manifest temp/omega_input_probe.CherryAI.json --root dev/kanotsuku2/ws2 --format KiriKiri2 --reference Projects/OmegaKano.CherryAI.json
+```
+
+Latest verified results:
+
+- Focused pytest slice: `6 passed`.
+- Real `ws2` Step 0 benchmark: `3603` loaded files, `147348` extracted lines, sentinel retained, `153.728s` total.
+- Real `ws2` compare summary: `0` Step 0 candidates missing from manifest, `0` manifest entries outside current Step 0 candidates, `425` zero-line retained entries (`357 .ks`, `46 .tjs`, `22 .csv`), and `426` generated-only entries versus the older `Projects/OmegaKano.CherryAI.json` reference manifest.
 
 ### Focused GUI Design + Window Persistence Regression
 
@@ -3691,7 +3744,7 @@ Thank you.
 | test_gender_batch.py | 31 | Batch gender inference |
 | test_glossary.py | 30 | Glossary management |
 | test_gui_analysis_integration.py | 45 | GUI-Analysis integration (TASK 16.6 + 18.1) |
-| test_gui_chunker_integration.py | 87 | GUI-Chunker integration (TASK 16.8) |
+| test_gui_chunker_integration.py | 88 | GUI-Chunker integration (TASK 16.8) |
 | test_gui_glossary_integration.py | 76 | GUI-Glossary integration (TASK 16.7) |
 | test_gui_modi_integration.py | 45 | GUI-Modi integration (TASK 16.5) |
 | test_gui_progress.py | 24 | GUI progress indicators (TASK 15.12) |
@@ -3701,7 +3754,7 @@ Thank you.
 | test_input_step_phase39.py | 40 | Input step Phase 39 improvements (unified selector, treeview, format filtering, progress, parser-selected auto encoding, output default seeding) |
 | test_input_step_improvements.py | 68 | Input step Phase 60 improvements (type column refresh, clickable sort headers, file filter, cross-file preview search, batched Step 0 progress checkpoints, bulk-load state batching, staged source-text cache reuse, parser tagged-extraction fast path) |
 | test_costs_step_phase40.py | 57 | Costs step Phase 40+78 improvements (rename, dual estimation, dual ticks, concurrent time, prepro lines, prompt overhead, preview tokens) |
-| test_costs_api_rework.py | 35 | API Requests & Costs rework (cache calculation, mode buttons, instant recalculation, model lock, settings decoupling, button rename, translation request mode, fast reprice on model change) |
+| test_costs_api_rework.py | 39 | API Requests & Costs rework (cache calculation, mode buttons, instant recalculation, model lock, settings decoupling, button rename, translation request mode, fast reprice on model change, OpenAI-boundary re-estimation) |
 | test_costs_additive_display.py | 30 | Additive cost display rework (ceil-to-cents, content-only input_cost, non-cached prompt tokens, label layout, additive total) |
 | test_estimate_manifest.py | 33 | Estimation/Analysis manifest integration (TASK 25.1, 25.2) |
 | test_qa_manifest.py | 19 | QA step manifest integration (TASK 26.1 + stage-bounded QA input resolution) |

@@ -98,7 +98,7 @@ Goal: Keep the GUI responsive on very large projects while preserving output par
 2. **Step 1 Analysis** — Current owner: `gui/steps/analysis.py`. Current behavior: tab entry is already light and should stay summary-first. Follow-up: keep analysis results manifest-backed, and if new previews are added, they must not force a full `lines[]` load on passive tab entry.
 3. **Step 2 Information** — Current owner: `gui/steps/information.py`. Current behavior: metadata, characters, and code patterns should load without needing line text. Follow-up: preserve this rule explicitly; imports from Analysis should stay summary/data driven instead of touching the full line corpus on tab entry.
 4. **Step 3 Preprocessing** — Current owner: `gui/steps/preprocess.py`. Current behavior: passive entry now restores preview state through the shared lazy-row path, so only the visible filtered preview slice is materialized as table rows. Follow-up: keep explicit Apply/Refresh work on the full backing preview state and avoid adding new passive full-corpus summary passes.
-5. **Step 4 Costs** — Current owner: `gui/steps/costs.py`. Current behavior: passive entry is now light because estimation is manual, and the explicit "Preparing lines" phase is no longer the bottleneck after the shared matcher-cache fix. Follow-up: restore saved counts and last estimation summary first, and only gather all source text during explicit Update Counts / Estimate runs.
+5. **Step 4 Costs** — Current owner: `gui/steps/costs.py`. Current behavior: passive entry is now light because estimation is manual, the explicit "Preparing lines" phase is no longer the bottleneck after the shared matcher-cache fix, and model changes now fast-reprice existing counts unless the change crosses the OpenAI tokenizer boundary (OpenAI ↔ Google/Mistral), which correctly triggers a fresh count run. Follow-up: restore saved counts and last estimation summary first, and only gather all source text during explicit Update Counts / Estimate runs.
 6. **Step 5 Translation** — Current owner: `gui/steps/translate.py` (`on_enter()`, `_refresh_lines()`, `_get_lines_from_previous_steps()`, `_update_lines_table()`). Current behavior: the catastrophic tab-entry stall is fixed, passive status-summary work is deferred, and the shared lazy-row path means passive entry only materializes the visible page. Current saved-step restore timings: `0.496s` on `Kano` and `0.553s` on `wolf_perf_probe`. Follow-up: keep new restore work off the passive path unless it is strictly visible-page scoped.
   - Open Project teardown rule: once the replacement manifest is active, the previous manager is closed with `save_on_close` disabled so the prior save/discard decision is not overridden during activation cleanup.
   - Live translation persistence rule: completed chunks now queue manifest writes for a translation-scoped `15s` batch flush plus one forced final flush on completion; crash salvage relies on the append-first API log rather than per-chunk full-manifest rewrites.
@@ -148,6 +148,8 @@ Goal: Reduce live Step 0 load overhead on the large `dev/ws` KiriKiri2 corpus wi
 8. **`gui/steps/input_extract.py` / `functions/manifest_manager.py`** — Manifest sync now fills the temporary rel-path source-text cache directly from staged copy bytes, removing the old extra pre-read before staging while still reusing cached text during `_build_manifest_line_entries()` for parity-safe locator capture.
 9. **`gui/steps/input_extract.py`** — `_load_file()` now routes through `_extract_file_content()` so parsers with `extract_tagged()` can return text, tags, and locator metadata in one pass instead of making a separate tag-extraction call after line extraction.
 10. **`functions/manifest_manager.py`** — The compact manifest writer now formats already-normalized subtrees without renormalizing every nested dict/list on the way down, trimming redundant serializer work in large saves while preserving manifest output shape.
+11. **`functions/manifest_manager.py` / `gui/steps/input_extract.py`** — Step 0 now keeps valid zero-line files in both staged `Original/` and manifest `filedir` as `misc` entries with `line_count: 0` and no bounds, and manifest reopen restores those empty-span files instead of silently dropping them.
+12. **`dev/compare_manifest_filedir.py`** — Added a reusable Step 0 coverage script that compares manifest `filedir` against a source tree, summarizes included/excluded/zero-line files by extension, and can diff the generated set against a reference manifest.
 
 **Verified in this pass:**
 1. Focused pytest: `python -m pytest dev/test_input_step_improvements.py::TestLoadProgressBatching dev/test_autosave.py::TestAutosaveProjectLifecycle::test_create_new_can_defer_initial_save dev/test_lightvn_fixes.py::TestStagedRefreshCapability -q --timeout=10` — `5 passed`.
@@ -159,6 +161,8 @@ Goal: Reduce live Step 0 load overhead on the large `dev/ws` KiriKiri2 corpus wi
 7. Final sampled benchmark for this slice: `python dev/benchmark_kirikiri2_input_load.py --source dev/ws --format KiriKiri2 --sample one-per-folder --project-name kirikiri2_sample_probe --launch-gui --save-manifest temp/kirikiri2_sample_after_slice_same_name.json --timeout 180` — `4.905s` total.
 8. Final sampled parity for this slice: `python dev/validate_manifest_parity.py --baseline temp/kirikiri2_sample_probe_a.json --candidate temp/kirikiri2_sample_after_slice_same_name.json` — manifests matched after normalizing volatile fields.
 9. Sentinel verification on the full corpus: `dev/ws/patch_edp/A_B1h12800+.ks:119` still contains `ま、確かにこれから景色でも眺めながら、しみじみと話したかった気もする。`.
+10. Real Omega Kano Step 0 benchmark: `python dev/benchmark_kirikiri2_input_load.py --source dev/kanotsuku2/ws2 --format KiriKiri2 --project-name omega_input_probe --save-manifest temp/omega_input_probe.CherryAI.json --timeout 1200` — `3603` loaded files, `147348` extracted lines, sentinel found, `153.728s` total.
+11. Real Omega Kano coverage compare: `python dev/compare_manifest_filedir.py --manifest temp/omega_input_probe.CherryAI.json --root dev/kanotsuku2/ws2 --format KiriKiri2 --reference Projects/OmegaKano.CherryAI.json` — `0` missing Step 0 candidates, `425` retained zero-line entries (`357 .ks`, `46 .tjs`, `22 .csv`), and `426` generated-only files relative to the older reference manifest.
 10. Final full-corpus benchmark: `python dev/benchmark_kirikiri2_input_load.py --source dev/ws --format KiriKiri2 --project-name kirikiri2_full_probe --launch-gui --save-manifest temp/kirikiri2_full_after_slice.json --timeout 1800` — `31.213s` total.
 11. Final full-corpus parity check: `python dev/validate_manifest_parity.py --baseline temp/kirikiri2_full_after_slice.json --candidate temp/kirikiri2_full_after_slice_b.json` — manifests matched after normalizing volatile fields.
 
@@ -454,6 +458,8 @@ Goal: Replace the old usage database plan with a TSV-backed `Ledger` system.
 
 Goal: Merge Full Table View, Patch Editor, and the workbench draft into one separate non-modal `Editor` window.
 
+Planning note: the active implementation plan for this phase now lives in `doc/editor_pyside6_refactor_plan.md`. The merged Editor should use PySide6 as its primary UI library while preserving the shipped Tk Editor behavior until parity is reached.
+
 **Review checklist before implementation:**
 1. Approve the final naming: `Editor`, `Full Files`, and `Lines Only`.
 2. Approve the visible switch layout: `Full Files [Switch] Lines Only`.
@@ -464,9 +470,10 @@ Goal: Merge Full Table View, Patch Editor, and the workbench draft into one sepa
 **Implementation tasks after review:**
 1. Reuse Patch Editor behavior for the `Full Files` mode.
 2. Reuse Full Table View behavior for the `Lines Only` mode.
-3. Build one single-instance non-modal Editor window with shared project/file context.
+3. Build one single-instance non-modal PySide6 Editor window with shared project/file context.
 4. Preserve manifest-aware diffing, parser-backed line history, and search/replace in both modes.
 5. Retire menu naming that exposes Patch Editor as a separate destination.
+6. Keep the Qt migration Editor-only at first; do not widen the PySide6 rollout to unrelated windows before the Editor is stable.
 
 **Required tests for this phase:**
 1. Single-instance Editor reuse.
@@ -474,6 +481,8 @@ Goal: Merge Full Table View, Patch Editor, and the workbench draft into one sepa
 3. Shared file-selection carry-over across the switch.
 4. Search/replace behavior in both modes.
 5. Manifest sync and EditorState continuity after the rename.
+
+Current shipped fix before the larger merge: the retained Editor host now guards programmatic file-tree and history-row selection updates so opening the live window cannot spin inside recursive `TreeviewSelect` callbacks. Keep this behavior intact during the unified-window migration.
 
 ### PHASE PLAN: Staged Folder And Patch Redesign
 **Priority:** HIGH | **Status:** REVIEW FIRST | **Effort:** LARGE
@@ -517,19 +526,20 @@ The old multi-version patch-update workflow should be re-reviewed only after the
 Goal: Shrink `.CherryAI.json` manifests by removing redundant persisted caches from `EditorState.files[...]` and `step_state.Output.data.lines`.
 
 **Changes:**
-1. **`functions/manifest_manager.py`** — `_stage_translated_bytes()` now persists only the compact `EditorState.files[rel_path]` contract: `saved_at`, staged artifact references, and bounded history. It no longer serializes `diff_to_patch`, `edited_text`, `diff_to_original`, `line_history`, `locator_metadata`, or `latest_saved_row_state`.
+1. **`functions/manifest_manager.py`** — `_stage_translated_bytes()` now persists only the compact `EditorState.files[rel_path]` contract: `saved_at`, staged artifact references, bounded history, and a per-file `changed` flag while Step 9 export is still owed. It no longer serializes `diff_to_patch`, `edited_text`, `diff_to_original`, `line_history`, `locator_metadata`, or `latest_saved_row_state`, and empty-history file records are pruned on load/export.
 2. **`functions/manifest_manager.py`** — `get_editor_file_view()` now rebuilds `diff_to_patch` from staged artifacts on demand, including reconstructing the forward-facing editor diff from the Editor-owned reverse patch artifact when necessary.
-3. **`functions/manifest_manager.py`** — Added translated-branch backup helpers: `backup_active_translated_branch()`, `discard_active_translated_branch()`, and `restore_translated_branch_backup()`. Backups rename `Translated/` plus `Patch/Translated/` into `Backups/` and store artifact-only metadata in `EditorState.backups`.
+3. **`functions/manifest_manager.py`** — Added translated-branch backup helpers: `backup_active_translated_branch()`, `discard_active_translated_branch()`, and `restore_translated_branch_backup()`. Backups store artifact-only metadata in `EditorState.backups`, and `backup_active_translated_branch(preserve_active=True)` can snapshot `Translated/` plus `Patch/Translated/` into `Backups/` without removing the live staged files that Step 9 still needs as export input.
 4. **`functions/manifest_manager.py`** — `_migrate_manifest()` now strips legacy `step_state.Output.data.lines` plus the removed heavyweight `EditorState.files[...]` keys on load so the next save rewrites compact manifests.
 5. **`gui/steps/output_inject.py`** — `_load_from_session()` and `_save_to_session()` now remove the redundant manifest-backed Step 9 `lines` cache instead of persisting it.
-6. **`gui/steps/output_inject.py`** — Step 9 now prompts when an active translated branch already exists: replace it, back it up first, or cancel the export.
-7. **`functions/manifest_manager.py` / `gui/steps/output_inject.py`** — Reverse diff artifacts are now Editor-owned only. Successful Step 9 staging writes directly into `Translated/` and clears active `Patch/Translated/` artifacts instead of generating new ones.
-8. **Tests** — Updated the manifest-state assertions to the artifact-only EditorState contract and added regressions for migration cleanup, Step 9 patch clearing, translated-branch backup/restore, and the new Output-step prompt flow.
+6. **`gui/steps/output_inject.py`** — Step 9 now prompts when an active translated branch already exists: export over it in place, snapshot it first without removing the live branch, or cancel the export.
+7. **`functions/manifest_manager.py` / pipeline write paths / `gui/steps/output_inject.py`** — Reverse diff artifacts are now Editor-owned only. Successful Step 9 staging writes directly into `Translated/` and clears active `Patch/Translated/` artifacts instead of generating new ones; parser-backed export now re-renders from the manifest pipeline, replays saved editor history onto that fresh render before injection, skips unchanged same-target translated files, and clears the pending `changed` marker on successful export.
+The pending `changed` marker is now written only by one shared compare helper, not by generic `set_line_field()` / `set_lines()` calls. The helper is invoked from Input `Load Selected Items` (`orig`), Preprocessing `Apply Rules` (`prepro`), Translation `Start Translation` (`tl`), Postprocessing write actions (`postpro`), QA write actions (`qa_overwrite`), Wordwrap `Apply Wordwrap` (`wordwr`), and Full Table View / Editor saves.
+8. **`gui/components/table.py` / `gui/steps/output_inject.py`** — Output export selection now follows checkbox state first, adds a `Select Visible` bulk action for filtered rows, hides the generic table CSV button in Step 9, and supports Shift-range checkbox toggling across the visible rows.
+9. **Tests** — Updated the manifest-state assertions to the artifact-only EditorState contract and added regressions for migration cleanup, empty-history pruning, generic-setter non-marking, compare-helper marking for translated files only, input reload `orig` comparison by `rel_path`, first-save replay seeding, Step 9 patch clearing, replay-before-inject export, unchanged-export skip gating, and the new Output-step selection workflow.
 
 **Tests:**
-- `python -m pytest dev/test_manifest_state.py -k "get_editor_file_view_builds_live_diff_to_patch or save_editor_patch_writes_patch_and_updates_editor_state or save_lines_only_changes_synthesizes_patch_when_translated_missing or save_lines_only_changes_promotes_saved_stage_and_updates_translated or stage_translated_output_file_step9_clears_patch_artifacts or backup_and_restore_translated_branch_roundtrip or migrate_strips_output_lines_and_redundant_editor_state" -q --timeout=20` — 6 passed
-- `python -m pytest dev/test_output_injection.py -k "write_file_stages_successful_output_into_translated_tree or prepare_translated_branch_export" -q --timeout=20` — 4 passed
-- `python -m pytest dev/test_patch_editor_view.py dev/test_output_injection.py -k "refresh_aux_views_sets_patch_diff_text or load_selected_file_uses_manifest_manager_editor_view or write_file_stages_successful_output_into_translated_tree or prepare_translated_branch_export" -q --timeout=20` — 6 passed
+- `python -m pytest dev/test_output_injection.py -q --timeout=20` — 62 passed
+- `python -m pytest dev/test_manifest_state.py -k "set_line_field_does_not_mark_changed_without_explicit_tracking or track_output_change_for_field_marks_changed_when_translated_exists or track_output_change_for_replaced_lines_compares_orig_by_rel_path or should_skip_step9_export_uses_translated_presence_and_changed_mark or save_editor_patch_writes_patch_and_updates_editor_state or save_lines_only_changes_synthesizes_patch_when_translated_missing or save_lines_only_changes_promotes_saved_stage_and_updates_translated or save_editor_patch_without_translated_seeds_replay_history or stage_translated_output_file_step9_clears_patch_artifacts or load_prunes_editor_state_files_with_empty_history" -q --timeout=20` — 10 passed
 
 =============================================================================
 [Archived: Sessions 43–24 + Phase 62 → see doc/archived.md]

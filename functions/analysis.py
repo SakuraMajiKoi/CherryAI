@@ -829,11 +829,21 @@ def calculate_aggressive_dedup_projection(
     }
 
 
-def count_tokens(text: str) -> Tuple[int, str]:
-    """Return (token_count, method) using tiktoken if available; otherwise heuristic.
+def count_tokens(text: str, model: str = "gpt-4o") -> Tuple[int, str]:
+    """Return ``(token_count, method)`` using the shared chunker when possible.
 
-    Heuristic: if Japanese present, tokens ≈ len(text)/1.7; else ≈ len(text)/4.
+    OpenAI models prefer ``tiktoken``. Google and Mistral models prefer the
+    optional ``sentencepiece`` path. All other cases fall back to the existing
+    heuristic behavior.
     """
+    try:
+        from .chunker import ChunkMode, Chunker, ChunkerConfig
+
+        chunker = Chunker(ChunkerConfig(mode=ChunkMode.TOKENS, model=model))
+        return chunker.count_tokens(text), chunker.last_count_method
+    except Exception:
+        pass
+
     enc = _try_load_encoder()
     if enc is not None:
         try:

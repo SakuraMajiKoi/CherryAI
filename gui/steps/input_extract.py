@@ -12,6 +12,7 @@ from contextlib import nullcontext
 import codecs
 import json
 import logging
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +33,7 @@ from CherryAI.functions.manifest_manager import (
     set_primary_line_tag,
 )
 from CherryAI.functions.postprocess import capture_dialogue_edge_whitespace
+from CherryAI.functions.validation import MojibakeAssessment, assess_mojibake_first_line
 from CherryAI.gui.steps.base import BaseStep
 from CherryAI.gui.theme.colors import THEME
 
@@ -55,13 +57,17 @@ DEFAULT_OUTPUT_BACKUP_EXTENSION = ".bk"
 
 # Supported file extensions for loading (TASK 39.3: rpgmaker and image added)
 SUPPORTED_EXTENSIONS = [
-    ("All Supported", "*.txt *.csv *.tsv *.json *.xlsx *.xp3 *.png *.jpg *.jpeg *.bmp"),
+    (
+        "All Supported",
+        "*.txt *.csv *.tsv *.json *.xlsx *.xp3 *.ks *.tjs *.mdat *.png *.jpg *.jpeg *.bmp",
+    ),
     ("Text Files", "*.txt"),
     ("CSV Files", "*.csv"),
     ("TSV Files", "*.tsv"),
     ("JSON Files", "*.json"),
     ("Excel Files", "*.xlsx"),
     ("XP3 Archives", "*.xp3"),
+    ("KiriKiri Scripts", "*.ks *.tjs *.mdat"),
     ("Image Files", "*.png *.jpg *.jpeg *.bmp"),
     ("All Files", "*.*"),
 ]
@@ -74,6 +80,9 @@ FORMAT_MAP = {
     ".json": "json",
     ".xlsx": "xlsx",
     ".xp3": "KiriKiri2",
+    ".ks": "KiriKiri2",
+    ".tjs": "KiriKiri2",
+    ".mdat": "KiriKiri2",
     ".png": "image",
     ".jpg": "image",
     ".jpeg": "image",
@@ -87,7 +96,7 @@ FORMAT_EXTENSIONS = {
     "tsv": {".tsv"},
     "json": {".json"},
     "xlsx": {".xlsx"},
-    "KiriKiri2": {".ks", ".tjs", ".xp3"},
+    "KiriKiri2": {".ks", ".tjs", ".xp3", ".csv", ".mdat"},
     "rpgmaker": {".json", ".js"},
     "image": {".png", ".jpg", ".jpeg", ".bmp"},
 }
@@ -110,6 +119,11 @@ INPUT_BLACKLIST_EXTENSIONS = {
     ".m4a",
     ".wma",
     ".opus",
+}
+
+
+PARSER_EXTENSION_HINTS: Dict[str, Set[str]] = {
+    "kirikiri2": {".xp3", ".ks", ".tjs", ".csv", ".mdat"},
 }
 
 
@@ -847,6 +861,11 @@ class InputExtractionStep(BaseStep):
                 seen.add(f)
                 unique_files.append(f)
         files_to_load = unique_files
+        files_to_load = self._deduplicate_parser_input_paths(
+            files_to_load,
+            source_base=source_base,
+            format_override=format_override,
+        )
 
         if stage_source_paths and files_to_load:
             filtered_stage_source_paths: Dict[str, Path] = {}
@@ -1052,7 +1071,8 @@ class InputExtractionStep(BaseStep):
     def _collect_files_for_format(self, folder: Path, format_filter: str) -> List[Path]:
         """Collect files from a folder based on format filter.
 
-        For parser names, collects all files then filters via ``can_handle``.
+        For parser names, prefer extension heuristics over strict ``can_handle``
+        gating so known parser file types are not dropped at Step 0.
 
         Args:
             folder: Folder to scan.
@@ -1066,10 +1086,11 @@ class InputExtractionStep(BaseStep):
             from CherryAI.formats import get_parser_registry
             parser = get_parser_registry().get(format_filter)
             if parser is not None:
-                # Collect all files so parser-owned package targets such as
-                # `.xp3` are not filtered out before `can_handle()` runs.
-                all_files = self._collect_all_files_from_folder(folder)
-                matched = [f for f in all_files if parser.can_handle(f)]
+                suffixes = self._get_parser_extension_hints(format_filter)
+                if suffixes:
+                    matched = self._collect_files_from_folder(folder, suffixes)
+                else:
+                    matched = self._collect_all_files_from_folder(folder)
                 dedup_fn = getattr(parser, "deduplicate_input_paths", None)
                 if callable(dedup_fn):
                     return dedup_fn(matched, root=folder)
@@ -1080,9 +1101,77 @@ class InputExtractionStep(BaseStep):
         if format_filter != "auto" and format_filter in FORMAT_EXTENSIONS:
             suffixes = FORMAT_EXTENSIONS[format_filter]
         else:
-            suffixes = {".txt", ".csv", ".tsv", ".json", ".xlsx", ".xp3",
+            suffixes = {".txt", ".csv", ".tsv", ".json", ".xlsx", ".xp3", ".ks", ".tjs", ".mdat",
                         ".png", ".jpg", ".jpeg", ".bmp"}
         return self._collect_files_from_folder(folder, suffixes)
+
+    def _get_parser_extension_hints(self, format_id: str) -> Set[str]:
+        """Return known extension hints for parser-focused Step 0 filtering."""
+        return set(PARSER_EXTENSION_HINTS.get(format_id.lower(), set()))
+
+    def _deduplicate_parser_input_paths(
+        self,
+        files_to_load: List[Path],
+        *,
+        source_base: Optional[Path],
+        format_override: str,
+    ) -> List[Path]:
+        """Apply parser-defined dedup to normal Step 0 input path lists."""
+        if not files_to_load:
+            return files_to_load
+
+        override = format_override.strip().lower()
+        try:
+            from CherryAI.formats import detect_parser as _detect_parser
+            from CherryAI.formats import get_parser_registry
+
+            parser = get_parser_registry().get("KiriKiri2")
+        except Exception:
+            return files_to_load
+
+        if parser is None or not hasattr(parser, "deduplicate_input_paths"):
+            return files_to_load
+
+        kirikiri_candidates: List[Path] = []
+        other_candidates: List[Path] = []
+        for candidate in files_to_load:
+            is_kirikiri = False
+            if override == "kirikiri2":
+                is_kirikiri = True
+            elif candidate.suffix.lower() in {".ks", ".tjs", ".mdat", ".xp3"}:
+                try:
+                    detected = _detect_parser(candidate)
+                    is_kirikiri = detected is not None and detected.name.lower() == "kirikiri2"
+                except Exception:
+                    is_kirikiri = False
+
+            if is_kirikiri:
+                kirikiri_candidates.append(candidate)
+            else:
+                other_candidates.append(candidate)
+
+        if not kirikiri_candidates:
+            return files_to_load
+
+        root_hint = source_base or self._folder_root
+        try:
+            deduped_kirikiri = parser.deduplicate_input_paths(
+                kirikiri_candidates,
+                root=root_hint,
+            )
+        except Exception:
+            return files_to_load
+
+        dropped = len(kirikiri_candidates) - len(deduped_kirikiri)
+        if dropped > 0:
+            logger.info(
+                "Step 0 dedup dropped %d KiriKiri2 duplicate input path(s)",
+                dropped,
+            )
+
+        combined = other_candidates + deduped_kirikiri
+        combined.sort()
+        return combined
 
     def _maybe_update_load_progress(
         self,
@@ -1746,8 +1835,8 @@ class InputExtractionStep(BaseStep):
     def _file_matches_format(self, path: Path, format_id: str) -> bool:
         """Check if a file matches the specified format filter.
 
-        For parser names (e.g. ``lightvn``), delegates to the parser's
-        ``can_handle`` method instead of checking extensions.
+        For parser names (e.g. ``KiriKiri2``), use parser extension hints as the
+        primary gate so Step 0 does not reject valid engine files early.
 
         Args:
             path: File path to check.
@@ -1761,7 +1850,10 @@ class InputExtractionStep(BaseStep):
             from CherryAI.formats import get_parser_registry
             parser = get_parser_registry().get(format_id)
             if parser is not None:
-                return parser.can_handle(path)
+                hints = self._get_parser_extension_hints(format_id)
+                if hints:
+                    return path.suffix.lower() in hints
+                return True
         except Exception:
             pass
 
@@ -1808,16 +1900,39 @@ class InputExtractionStep(BaseStep):
         tokens: int,
         limit: int,
         text: str,
+        metric_name: str = "tokens",
+        details: str = "",
     ) -> None:
         """Buffer one extraction validation issue for later summary/logging."""
+        if severity == "warning" and metric_name == "corruption_score":
+            for existing in reversed(self._pending_extraction_validation_issues):
+                if (
+                    existing.get("severity") == "error"
+                    and existing.get("filename") == filename
+                    and existing.get("line_number") == line_number
+                    and existing.get("metric_name") == metric_name
+                    and existing.get("tokens") == tokens
+                    and existing.get("limit") == limit
+                ):
+                    existing["severity"] = "warning"
+                    merged_details = str(existing.get("details") or "")
+                    if details:
+                        merged_details = (
+                            f"{merged_details} ; {details}" if merged_details else details
+                        )
+                    existing["details"] = merged_details
+                    return
+
         self._pending_extraction_validation_issues.append({
             "severity": severity,
             "filename": filename,
             "line_number": line_number,
             "tokens": tokens,
             "limit": limit,
+            "metric_name": metric_name,
             "chars": len(text),
             "preview": self._build_extraction_issue_preview(text),
+            "details": details,
         })
 
     def _write_extraction_validation_log(self) -> Optional[Path]:
@@ -1844,16 +1959,18 @@ class InputExtractionStep(BaseStep):
             "",
         ]
         for issue in self._pending_extraction_validation_issues:
+            metric_name = str(issue.get("metric_name", "tokens"))
             lines.extend([
                 (
                     f"[{issue['severity'].upper()}] {issue['filename']} "
                     f"line {issue['line_number']}"
                 ),
                 (
-                    f"tokens={issue['tokens']} limit={issue['limit']} "
+                    f"{metric_name}={issue['tokens']} limit={issue['limit']} "
                     f"chars={issue['chars']}"
                 ),
                 f"preview={issue['preview']}",
+                f"details={issue['details']}" if issue.get("details") else "",
                 "",
             ])
 
@@ -1887,7 +2004,10 @@ class InputExtractionStep(BaseStep):
         error_count = sum(1 for issue in issues if issue["severity"] == "error")
         warning_count = len(issues) - error_count
         summary_lines = [
-            f"{issue['filename']} line {issue['line_number']}: {issue['tokens']} tokens"
+            (
+                f"{issue['filename']} line {issue['line_number']}: "
+                f"{issue['tokens']} {issue.get('metric_name', 'tokens')}"
+            )
             for issue in issues[:8]
         ]
         if len(issues) > 8:
@@ -1925,6 +2045,7 @@ class InputExtractionStep(BaseStep):
                     tokens=tok,
                     limit=2048,
                     text=line,
+                    metric_name="tokens",
                 )
                 return False
             if tok > 1024:
@@ -1935,8 +2056,162 @@ class InputExtractionStep(BaseStep):
                     tokens=tok,
                     limit=1024,
                     text=line,
+                    metric_name="tokens",
                 )
         return True
+
+    @staticmethod
+    def _format_mojibake_assessment(assessment: MojibakeAssessment) -> str:
+        """Return one compact details string for extraction validation logs."""
+        score_items = ", ".join(
+            f"{key}:{value}"
+            for key, value in assessment.category_scores.items()
+            if value
+        )
+        reduction_items = ", ".join(
+            f"{key}:{value}"
+            for key, value in assessment.category_reductions.items()
+            if value
+        )
+        detail_bits = []
+        if score_items:
+            detail_bits.append(f"scores=[{score_items}]")
+        if reduction_items:
+            detail_bits.append(f"reductions=[{reduction_items}]")
+        detail_bits.append(f"signals={assessment.details}")
+        return " ; ".join(detail_bits)
+
+    @staticmethod
+    def _should_attempt_false_utf16_bom_salvage(path: Path, format_id: str) -> bool:
+        """Return whether false-UTF16 BOM salvage should run for this file."""
+        text_suffixes = {".txt", ".ks", ".tjs", ".mdat", ".csv", ".tsv", ".json"}
+        if path.suffix.lower() not in text_suffixes:
+            return False
+        lowered_format = format_id.strip().lower()
+        return lowered_format in {"kirikiri2", "txt", "csv", "tsv", "json"}
+
+    def _try_salvage_false_utf16_bom(
+        self,
+        *,
+        path: Path,
+        format_id: str,
+    ) -> Optional[
+        Tuple[
+            List[str],
+            Optional[List[str]],
+            Optional[List[Dict[str, int]]],
+            str,
+            str,
+        ]
+    ]:
+        """Try salvaging files that have FF FE prefix but non-UTF16 payload."""
+        if not self._should_attempt_false_utf16_bom_salvage(path, format_id):
+            return None
+
+        raw = path.read_bytes()
+        if len(raw) < 3 or not raw.startswith(codecs.BOM_UTF16_LE):
+            return None
+
+        candidate = raw[len(codecs.BOM_UTF16_LE):]
+        if not candidate:
+            return None
+
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            suffix=path.suffix,
+            prefix="cherryai_mojibake_fix_",
+            dir=str(path.parent),
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            handle.write(candidate)
+
+        try:
+            salvaged_lines, salvaged_tags, salvaged_source_mappings = self._extract_file_content(
+                temp_path,
+                format_id,
+                "cp932",
+            )
+        finally:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Failed to remove temporary salvage file: %s", temp_path)
+
+        if not salvaged_lines:
+            return None
+
+        reassessment = assess_mojibake_first_line(salvaged_lines[0])
+        if reassessment.is_corrupted:
+            return None
+
+        backup_path = path.with_name(path.name + ".mojibake_backup")
+        if backup_path.exists():
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = path.with_name(path.name + f".mojibake_backup_{stamp}")
+
+        path.replace(backup_path)
+        path.write_bytes(candidate)
+
+        detail = (
+            "false_utf16_bom_removed; "
+            f"backup={backup_path.name}; "
+            f"recheck_score={reassessment.score}/{reassessment.threshold}"
+        )
+        return salvaged_lines, salvaged_tags, salvaged_source_mappings, detail, "cp932"
+
+    def _validate_first_line_and_salvage_if_needed(
+        self,
+        *,
+        path: Path,
+        format_id: str,
+        lines: List[str],
+        tags: Optional[List[str]],
+        source_mappings: Optional[List[Dict[str, int]]],
+    ) -> Optional[
+        Tuple[
+            List[str],
+            Optional[List[str]],
+            Optional[List[Dict[str, int]]],
+            Optional[str],
+        ]
+    ]:
+        """Validate first extracted line for corruption and salvage when possible."""
+        if not lines:
+            return lines, tags, source_mappings, None
+
+        assessment = assess_mojibake_first_line(lines[0])
+        if not assessment.is_corrupted:
+            return lines, tags, source_mappings, None
+
+        self._record_extraction_validation_issue(
+            severity="error",
+            filename=path.name,
+            line_number=1,
+            tokens=assessment.score,
+            limit=assessment.threshold,
+            text=lines[0],
+            metric_name="corruption_score",
+            details=self._format_mojibake_assessment(assessment),
+        )
+
+        salvaged = self._try_salvage_false_utf16_bom(path=path, format_id=format_id)
+        if salvaged is None:
+            return None
+
+        salvaged_lines, salvaged_tags, salvaged_source_mappings, salvage_details, recovered_encoding = salvaged
+        self._record_extraction_validation_issue(
+            severity="warning",
+            filename=path.name,
+            line_number=1,
+            tokens=assessment.score,
+            limit=assessment.threshold,
+            text=salvaged_lines[0],
+            metric_name="corruption_score",
+            details=f"salvaged={salvage_details}",
+        )
+        logger.info("Step 0 salvaged %s (%s)", path, salvage_details)
+        return salvaged_lines, salvaged_tags, salvaged_source_mappings, recovered_encoding
 
     def _validate_parser_selection(self, format_id: str) -> bool:
         """Run handshake validation when a parser is selected.
@@ -2613,8 +2888,8 @@ class InputExtractionStep(BaseStep):
         self._begin_manifest_source_text_cache()
         try:
             for loaded_file in new_loaded:
-                file_type = ""
-                if typing_enabled:
+                file_type = "misc" if loaded_file.line_count == 0 else ""
+                if loaded_file.line_count > 0 and typing_enabled:
                     file_type = classify_file_type(loaded_file.lines)
 
                 try:
@@ -2673,6 +2948,9 @@ class InputExtractionStep(BaseStep):
         mgr = self.manifest_manager
         if mgr is None or not mgr.is_loaded:
             return
+
+        previous_lines = [dict(line) for line in mgr.get_lines()]
+        previous_filedir = mgr.get_filedir()
         
         # Determine whether typing is enabled
         typing_enabled = get_default(
@@ -2755,8 +3033,8 @@ class InputExtractionStep(BaseStep):
                     idx += 1
                 
                 # Classify file type when typing is enabled
-                file_type = ""
-                if typing_enabled:
+                file_type = "misc" if loaded_file.line_count == 0 else ""
+                if loaded_file.line_count > 0 and typing_enabled:
                     file_type = classify_file_type(loaded_file.lines)
                 
                 # Build file info for filedir
@@ -2777,6 +3055,13 @@ class InputExtractionStep(BaseStep):
         # TASK 35.1: Build and set filedir
         filedir_entries = mgr.build_filedir_from_files(file_infos)
         mgr.set_filedir(filedir_entries)
+        mgr.track_output_change_for_replaced_lines(
+            "orig",
+            previous_lines,
+            lines,
+            previous_filedir=previous_filedir,
+            current_filedir=filedir_entries,
+        )
         
         if mgr.source_mode != "external":
             mgr.source_root = base_path.name if base_path is not None else mgr.compute_source_root(source_paths)
@@ -3645,6 +3930,20 @@ class InputExtractionStep(BaseStep):
                 detection_source,
             )
 
+            first_line_check = self._validate_first_line_and_salvage_if_needed(
+                path=path,
+                format_id=format_id,
+                lines=lines,
+                tags=tags,
+                source_mappings=source_mappings,
+            )
+            if first_line_check is None:
+                return False
+            lines, tags, source_mappings, recovered_encoding = first_line_check
+            if recovered_encoding:
+                encoding = recovered_encoding
+                detection_source = "salvaged-false-bom"
+
             # Handshake: per-line token validation
             if not self._validate_extracted_lines(lines, path.name):
                 return False
@@ -4022,8 +4321,14 @@ class InputExtractionStep(BaseStep):
                 self._folder_root = Path(source_root)
             
             for file_entry in filedir:
-                first_idx = file_entry.get("first_idx", 0)
-                last_idx = file_entry.get("last_idx", first_idx)
+                line_count = max(int(file_entry.get("line_count", 0) or 0), 0)
+                if "first_idx" in file_entry or "last_idx" in file_entry:
+                    first_idx = file_entry.get("first_idx", 0)
+                    last_idx = file_entry.get("last_idx", first_idx)
+                    line_count = max(last_idx - first_idx + 1, 0)
+                else:
+                    first_idx = 0
+                    last_idx = -1
                 rel_path = file_entry.get("rel_path", "unknown")
                 file_format = file_entry.get("format", "txt")
                 
@@ -4039,7 +4344,7 @@ class InputExtractionStep(BaseStep):
                 loaded = LoadedFile(
                     path=actual_path if actual_path.exists() else file_path,
                     format_id=file_format,
-                    line_count=max(last_idx - first_idx + 1, 0),
+                    line_count=line_count,
                     manifest_path=self.session.manifest_path if self.session else None,
                     content_loader=_make_manifest_content_loader(
                         lines_data,

@@ -19,8 +19,9 @@ private:
     static tTJSBinaryStream*    CreateLooseEncodedNeiStream            (const std::wstring& url, const std::wstring& archivePath);
     static bool                 TryBuildLooseEncodedNeiBytes           (const std::wstring& url, const std::wstring& archivePath, std::vector<BYTE>& encoded);
     static bool                 TryReadOriginalNeiSubheader            (const std::wstring& archivePath, std::vector<BYTE>& subheader);
+    static bool                 IsLooseImageRequest                    (const std::wstring& archiveMemberPath);
     static bool                 IsRawPngStorageUrl                      (const std::wstring& url);
-    static bool                 TryResolveTlgOverrideUrl                (const std::wstring& candidateUrl, const std::wstring& archiveMemberPath, std::wstring& resolvedUrl);
+    static bool                 TryResolveTlgOverrideUrl                (const std::wstring& candidateUrl, const std::wstring& archiveMemberPath, const std::wstring& sourceArchiveUrl, std::wstring& resolvedUrl);
     static bool                 WouldRedirectToSelf                    (const std::wstring& candidateUrl, const std::wstring& currentTarget);
     static std::wstring         GetLooseCsvSearchPath                  (const std::wstring& archiveMemberPath);
     static std::vector<std::wstring> GetLooseImageSearchPaths          (const std::wstring& archiveMemberPath);
@@ -51,6 +52,7 @@ private:
                 const std::wstring extension = StringUtil::ToLower(Path::GetExtension(pItem->Name.c_str()));
                 const bool isNei = extension == L"nei";
                 const bool isTlg = extension == L"tlg";
+                const bool isLooseImage = IsLooseImageRequest(pItem->Name.c_str());
                 
                 // NEI files should be handled by CustomTVPCreateIStream instead
                 if (isNei)
@@ -65,7 +67,7 @@ private:
                     wcsstr(pItem->Name.c_str(), L".tlg") != nullptr;
 
                 std::vector<std::wstring> urls;
-                if (isTlg)
+                if (isLooseImage)
                 {
                     const std::vector<std::wstring> imageSearchPaths = GetLooseImageSearchPaths(pItem->Name.c_str());
                     for (const std::wstring& searchPath : imageSearchPaths)
@@ -96,10 +98,10 @@ private:
                     }
 
                     std::wstring finalUrl = url;
-                    if (isTlg && !TryResolveTlgOverrideUrl(url, pItem->Name.c_str(), finalUrl))
+                    if (isLooseImage && !TryResolveTlgOverrideUrl(url, pItem->Name.c_str(), pArchive->Name.c_str(), finalUrl))
                     {
                         if (shouldLog)
-                            Debugger::Log(L"Skipping unresolved TLG archive-stream override %s -> %s", pItem->Name.c_str(), url.c_str());
+                            Debugger::Log(L"Skipping unresolved image archive-stream override %s -> %s", pItem->Name.c_str(), url.c_str());
                         continue;
                     }
 

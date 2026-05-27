@@ -857,6 +857,15 @@ def register_window_preferences(window: tk.Misc, window_key: str) -> None:
             pass
 
     def _on_destroy(_event: tk.Event) -> None:
+        if getattr(_event, "widget", None) is not window:
+            return
+        current_job = getattr(window, "_cherry_window_pref_job", None)
+        if current_job is not None:
+            try:
+                window.after_cancel(current_job)
+            except tk.TclError:
+                pass
+            setattr(window, "_cherry_window_pref_job", None)
         _save_window_geometry(window, window_key)
 
     window.bind("<Configure>", _on_configure, add="+")

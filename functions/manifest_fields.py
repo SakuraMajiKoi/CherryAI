@@ -227,7 +227,14 @@ def clear_line_fields(
         except (TypeError, ValueError):
             continue
         for field_name in field_names:
+            previous_value = line.get(field_name, "")
             manager.clear_line_field(line_idx, field_name)
+            manager.track_output_change_for_field(
+                line_idx,
+                field_name,
+                previous_value,
+                "",
+            )
         cleared_lines += 1
     return cleared_lines
 

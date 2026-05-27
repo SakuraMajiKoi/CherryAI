@@ -9,6 +9,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from textwrap import dedent
 from typing import Optional, Sequence, TYPE_CHECKING
 
 
@@ -48,6 +49,8 @@ SYSTEM_PATCH_TEMPLATE_NAMES: tuple[str, ...] = (
     "ButtonLayer.tjs",
     "MessageLayer.tjs",
 )
+PROFILE_PATCH_TEMPLATE_NAME = "WF_S_Profile.tjs"
+PROFILE_PATCH_TARGET_SUBDIR = "patch"
 ANSI_CHARSET = 0
 SHIFTJIS_CHARSET = 128
 DEFAULT_MATCH_FACES: tuple[str, ...] = (
@@ -234,7 +237,7 @@ def get_font_patch_paths(
         translated_root=translated_root,
         patch_dir=patch_dir,
         fonts_dir=fonts_dir,
-        config_path=patch_dir / config_name,
+        config_path=translated_root / config_name,
         runtime_config_path=patch_dir / DEFAULT_RUNTIME_CONFIG_NAME,
         dll_output_path=translated_root / dll_name,
         log_ini_path=translated_root / DEFAULT_LOG_INI_NAME,
@@ -257,9 +260,34 @@ def list_available_font_bundles(fonts_library_root: Path) -> list[FontBundleSpec
 
 
 def load_existing_font_patch_selection(config_path: Path) -> Optional[FontPatchSelection]:
-    if not config_path.is_file():
+    candidate_paths: list[Path] = [config_path]
+    if config_path.parent.name.lower() != DEFAULT_PATCH_DIR_NAME.lower():
+        candidate_paths.append(config_path.parent / DEFAULT_PATCH_DIR_NAME / config_path.name)
+    else:
+        candidate_paths.append(config_path.parent.parent / config_path.name)
+
+    for legacy_name in LEGACY_CONFIG_NAMES:
+        candidate_paths.append(config_path.with_name(legacy_name))
+        if config_path.parent.name.lower() != DEFAULT_PATCH_DIR_NAME.lower():
+            candidate_paths.append(config_path.parent / DEFAULT_PATCH_DIR_NAME / legacy_name)
+        else:
+            candidate_paths.append(config_path.parent.parent / legacy_name)
+
+    data: Optional[dict] = None
+    for candidate in candidate_paths:
+        if not candidate.is_file():
+            continue
+        try:
+            raw = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            continue
+        if isinstance(raw, dict):
+            data = raw
+            break
+
+    if data is None:
         return None
-    data = json.loads(config_path.read_text(encoding="utf-8"))
+
     try:
         bundle_id = str(data["bundle_id"])
         regular_file = Path(str(data["regular_font"]["file"])).name
@@ -307,6 +335,8 @@ def build_font_patch_config(
         "height_percent": selection.height_percent,
         "height_offset_pixels": selection.height_offset_pixels,
         "width_percent": selection.width_percent,
+        "strip_ascii_quotes": True,
+        "collapse_ascii_double_spaces": True,
         "match_faces": list(selection.match_faces),
         "regular_font": {
             "face": spec.face_name,
@@ -417,9 +447,10 @@ def _read_system_patch_template_text(source: Path) -> str:
 def _copy_system_patch_templates(template_dir: Path, patch_dir: Path) -> list[Path]:
     return _copy_system_patch_templates_with_overrides(
         template_dir,
-        patch_dir,
+        patch_dir.parent,
         message_layer_overrides=None,
         template_names=SYSTEM_PATCH_TEMPLATE_NAMES,
+        source_roots=(patch_dir.parent,),
     )
 
 
@@ -435,10 +466,20 @@ def _escape_tjs_string(value: object) -> str:
 
 
 def _load_existing_font_patch_config(config_path: Path) -> dict[str, object]:
-    paths_to_try = [config_path]
+    paths_to_try: list[Path] = [config_path]
+
+    if config_path.parent.name.lower() != DEFAULT_PATCH_DIR_NAME.lower():
+        paths_to_try.append(config_path.parent / DEFAULT_PATCH_DIR_NAME / config_path.name)
+    else:
+        paths_to_try.append(config_path.parent.parent / config_path.name)
+
     if config_path.name == DEFAULT_CONFIG_NAME:
         for legacy_name in LEGACY_CONFIG_NAMES:
             paths_to_try.append(config_path.with_name(legacy_name))
+            if config_path.parent.name.lower() != DEFAULT_PATCH_DIR_NAME.lower():
+                paths_to_try.append(config_path.parent / DEFAULT_PATCH_DIR_NAME / legacy_name)
+            else:
+                paths_to_try.append(config_path.parent.parent / legacy_name)
 
     for candidate in paths_to_try:
         if not candidate.is_file():
@@ -471,14 +512,6 @@ def _resolve_wrap_mode(
             if key in existing_config:
                 return _normalize_wrap_mode(existing_config[key])
     return DEFAULT_WRAP_MODE
-
-
-def _write_legacy_config_mirrors(config_path: Path, config: dict[str, object]) -> None:
-    if config_path.name != DEFAULT_CONFIG_NAME:
-        return
-    payload = json.dumps(config, indent=2, ensure_ascii=False) + "\n"
-    for legacy_name in LEGACY_CONFIG_NAMES:
-        config_path.with_name(legacy_name).write_text(payload, encoding="utf-8")
 
 
 def _resolve_wrap_right_padding_pixels(
@@ -549,20 +582,56 @@ def _apply_message_layer_overrides(text: str, overrides: dict[str, object]) -> s
     return patched
 
 
+def _resolve_system_patch_target_relative(
+    template_name: str,
+    *,
+    translated_root: Path,
+    source_roots: Sequence[Path],
+) -> Path:
+    relative_candidates = (
+        Path("patch") / template_name,
+        Path("data") / "system" / template_name,
+        Path("system") / template_name,
+        Path("patch") / "data" / "system" / template_name,
+        Path("patch") / "system" / template_name,
+        Path(template_name),
+    )
+
+    for relative in relative_candidates:
+        resolved = _resolve_ui_source_with_root(relative, source_roots)
+        if resolved is None:
+            continue
+        source_path, source_root = resolved
+        try:
+            if source_root.resolve() == translated_root.resolve():
+                return source_path.relative_to(translated_root)
+        except OSError:
+            pass
+        return relative
+
+    return Path("patch") / "data" / "system" / template_name
+
+
 def _copy_system_patch_templates_with_overrides(
     template_dir: Path,
-    patch_dir: Path,
+    translated_root: Path,
     *,
     message_layer_overrides: Optional[dict[str, object]],
     template_names: Sequence[str],
+    source_roots: Sequence[Path] = (),
 ) -> list[Path]:
     copied_paths: list[Path] = []
-    system_patch_dir = patch_dir / "data" / "system"
+    effective_source_roots = tuple(source_roots) or (translated_root,)
     for template_name in template_names:
         source = template_dir / template_name
         if not source.is_file():
             raise FileNotFoundError(f"Missing system patch template: {source}")
-        target = system_patch_dir / template_name
+        target_relative = _resolve_system_patch_target_relative(
+            template_name,
+            translated_root=translated_root,
+            source_roots=effective_source_roots,
+        )
+        target = translated_root / target_relative
         target.parent.mkdir(parents=True, exist_ok=True)
         output_text = _read_system_patch_template_text(source)
         if (
@@ -570,6 +639,10 @@ def _copy_system_patch_templates_with_overrides(
             and message_layer_overrides is not None
         ):
             output_text = _apply_message_layer_overrides(output_text, message_layer_overrides)
+        output_text = output_text.encode(
+            SYSTEM_PATCH_TEMPLATE_OUTPUT_ENCODING,
+            errors="replace",
+        ).decode(SYSTEM_PATCH_TEMPLATE_OUTPUT_ENCODING)
         target.write_text(output_text, encoding=SYSTEM_PATCH_TEMPLATE_OUTPUT_ENCODING, newline="")
         copied_paths.append(target)
     return copied_paths
@@ -692,6 +765,7 @@ def stage_font_patch_assets(
     translated_root: Path,
     selection: FontPatchSelection,
     *,
+    source_roots: Sequence[Path] = (),
     patch_dir_name: str = DEFAULT_PATCH_DIR_NAME,
     fonts_dir_name: str = DEFAULT_FONTS_DIR_NAME,
     config_name: str = DEFAULT_CONFIG_NAME,
@@ -750,16 +824,30 @@ def stage_font_patch_assets(
 
     copied_system_patch_paths = _copy_system_patch_templates_with_overrides(
         _resolve_system_patch_template_dir(paths.injection_root),
-        paths.patch_dir,
+        paths.translated_root,
         message_layer_overrides=_build_message_layer_overrides(config),
         template_names=SYSTEM_PATCH_TEMPLATE_NAMES,
+        source_roots=source_roots,
     )
+    profile_patch_path = _stage_wf_s_profile_patch_overlay(
+        paths.translated_root,
+        source_roots=source_roots,
+        patch_dir_name=patch_dir_name,
+    )
+    if profile_patch_path is not None:
+        copied_system_patch_paths = [*copied_system_patch_paths, profile_patch_path]
 
     paths.config_path.write_text(
         json.dumps(config, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
-    _write_legacy_config_mirrors(paths.config_path, config)
+    for legacy_name in LEGACY_CONFIG_NAMES:
+        legacy_path = paths.config_path.with_name(legacy_name)
+        if legacy_path.is_file():
+            legacy_path.unlink()
+        legacy_patch_path = paths.patch_dir / legacy_name
+        if legacy_patch_path.is_file():
+            legacy_patch_path.unlink()
     if paths.runtime_config_path.exists():
         paths.runtime_config_path.unlink()
 
@@ -785,6 +873,7 @@ def stage_kirikiri_message_layer_template(
     project_root: Path,
     translated_root: Path,
     *,
+    source_roots: Sequence[Path] = (),
     patch_dir_name: str = DEFAULT_PATCH_DIR_NAME,
     config_name: str = DEFAULT_CONFIG_NAME,
 ) -> Path:
@@ -803,9 +892,10 @@ def stage_kirikiri_message_layer_template(
 
     copied = _copy_system_patch_templates_with_overrides(
         _resolve_system_patch_template_dir(paths.injection_root),
-        paths.patch_dir,
+        paths.translated_root,
         message_layer_overrides=_build_message_layer_overrides(config),
         template_names=("MessageLayer.tjs",),
+        source_roots=source_roots,
     )
     if not copied:
         raise FileNotFoundError("MessageLayer.tjs template staging returned no output")
@@ -881,6 +971,445 @@ def _write_text_with_bom(path: Path, text: str, encoding: str, bom: bytes) -> No
     path.write_bytes(payload)
 
 
+def _indent_text_block(text: str, indent: str) -> str:
+    lines = dedent(text).strip("\n").splitlines()
+    return "\n".join(f"{indent}{line}" if line else "" for line in lines)
+
+
+def _patch_wf_s_profile_text(text: str) -> str:
+    sentinel = "function BuildCherryAIProfileCommentText("
+    if sentinel in text:
+        return text
+
+    function_match = re.search(
+        r"(?m)^(?P<indent>\s*)function RandComment\( f_rand = true, f_first = false, f_exl = false, f_noupdate = false \)",
+        text,
+    )
+    if function_match is None:
+        raise ValueError("Could not locate RandComment in WF_S_Profile.tjs")
+
+    indent = function_match.group("indent")
+    helper_block = _indent_text_block(
+        r"""
+        function HasCherryAIAsciiProfileText(f_Text)
+        {
+                if(f_Text == void || f_Text == "")
+                        return false;
+
+                var ascii_letters = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+                for(var i = 0; i < f_Text.length; i++)
+                {
+                        if(ascii_letters.indexOf(f_Text.charAt(i)) != -1)
+                                return true;
+                }
+
+                return false;
+        }
+
+        function IsCherryAIProfileQuote(f_Char)
+        {
+                return f_Char == "\""
+                        || f_Char == "\u201c"
+                        || f_Char == "\u201d"
+                        || f_Char == "\u201e"
+                        || f_Char == "\u201f"
+                        || f_Char == "\u300c"
+                        || f_Char == "\u300d"
+                        || f_Char == "\u300e"
+                        || f_Char == "\u300f";
+        }
+
+        function IsCherryAIProfileWhitespace(f_Char)
+        {
+                return f_Char == " "
+                        || f_Char == "\t"
+                        || f_Char == "\r"
+                        || f_Char == "\n"
+                        || f_Char == "\u3000";
+        }
+
+        function IsCherryAIProfileAsciiLetterOrDigit(f_Char)
+        {
+                var ascii_letters = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+                return ascii_letters.indexOf(f_Char) != -1;
+        }
+
+        function IsCherryAIProfilePunctuationBreak(f_Char)
+        {
+                return f_Char == ","
+                        || f_Char == "."
+                        || f_Char == ";"
+                        || f_Char == ":"
+                        || f_Char == "!"
+                        || f_Char == "?";
+        }
+
+        function IsCherryAIProfileCJKPunctuationBreak(f_Char)
+        {
+                return f_Char == "\uff0c"
+                        || f_Char == "\u3002"
+                        || f_Char == "\uff01"
+                        || f_Char == "\uff1f"
+                        || f_Char == "\uff1b"
+                        || f_Char == "\uff1a";
+        }
+
+        function TrimCherryAIProfileCommentText(f_Text)
+        {
+                var start = 0;
+                var end = f_Text.length;
+
+                while(start < end && f_Text.charAt(start) == " ")
+                        start++;
+                while(start < end && f_Text.charAt(end - 1) == " ")
+                        end--;
+                return f_Text.substring(start, end);
+        }
+
+        function NormalizeCherryAIProfileCommentBlock(f_Text)
+        {
+                if(f_Text == void)
+                        return "";
+
+                var source = "" + f_Text;
+                if(source == "")
+                        return "";
+
+                var normalized = "";
+                for(var i = 0; i < source.length; i++)
+                {
+                        var ch = source.charAt(i);
+                        if(IsCherryAIProfileQuote(ch))
+                                continue;
+
+                        if(ch == "$" && i + 1 < source.length)
+                        {
+                                var marker = source.charAt(i + 1);
+                                if(marker == "1" || marker == "2")
+                                {
+                                        i++;
+                                        continue;
+                                }
+                        }
+
+                        if(IsCherryAIProfileWhitespace(ch))
+                                ch = " ";
+
+                        if(IsCherryAIProfileCJKPunctuationBreak(ch))
+                        {
+                            if(ch == "\uff0c")
+                                ch = ",";
+
+                                while(normalized.length > 0 && normalized.charAt(normalized.length - 1) == " ")
+                                        normalized = normalized.substring(0, normalized.length - 1);
+
+                                normalized += ch;
+
+                                while(i + 1 < source.length && IsCherryAIProfileWhitespace(source.charAt(i + 1)))
+                                        i++;
+
+                                continue;
+                        }
+
+                        if(IsCherryAIProfilePunctuationBreak(ch))
+                        {
+                                while(normalized.length > 0 && normalized.charAt(normalized.length - 1) == " ")
+                                        normalized = normalized.substring(0, normalized.length - 1);
+
+                                normalized += ch;
+
+                                var next_char = "";
+                                for(var j = i + 1; j < source.length; j++)
+                                {
+                                        var lookahead = source.charAt(j);
+                                        if(IsCherryAIProfileQuote(lookahead))
+                                                continue;
+                                        if(lookahead == "$" && j + 1 < source.length)
+                                        {
+                                                var lookahead_marker = source.charAt(j + 1);
+                                                if(lookahead_marker == "1" || lookahead_marker == "2")
+                                                {
+                                                        j++;
+                                                        continue;
+                                                }
+                                        }
+                                        if(IsCherryAIProfileWhitespace(lookahead))
+                                                continue;
+                                        next_char = lookahead;
+                                        break;
+                                }
+                                if(ch != "," && next_char != "" && IsCherryAIProfileAsciiLetterOrDigit(next_char))
+                                        normalized += " ";
+                                continue;
+                        }
+
+                        if(ch == " ")
+                        {
+                                if(normalized == "")
+                                        continue;
+
+                                var prev_char = normalized.charAt(normalized.length - 1);
+                                if(prev_char == " " || IsCherryAIProfilePunctuationBreak(prev_char) || IsCherryAIProfileCJKPunctuationBreak(prev_char))
+                                        continue;
+
+                                normalized += " ";
+                                continue;
+                        }
+
+                        if(normalized.length > 0)
+                        {
+                                var previous = normalized.charAt(normalized.length - 1);
+                                if(IsCherryAIProfilePunctuationBreak(previous)
+                                        && previous != " "
+                                        && IsCherryAIProfileAsciiLetterOrDigit(ch))
+                                {
+                                        normalized += " ";
+                                }
+                        }
+
+                        normalized += ch;
+                }
+
+                return TrimCherryAIProfileCommentText(normalized);
+        }
+
+        function SplitCherryAIProfileWord(f_Layer, f_Word, f_MaxWidth)
+        {
+                var pieces = new Array();
+                var current = "";
+
+                for(var i = 0; i < f_Word.length; i++)
+                {
+                        var ch = f_Word.charAt(i);
+                        var candidate = current + ch;
+                        if(current != "" && f_Layer.font.getTextWidth(candidate) > f_MaxWidth)
+                        {
+                                pieces.add(current);
+                                current = ch;
+                        }
+                        else
+                        {
+                                current = candidate;
+                        }
+                }
+
+                if(current != "")
+                        pieces.add(current);
+
+                return pieces;
+        }
+
+        function AppendCherryAIWrappedWord(f_Layer, f_Lines, f_CurrentLine, f_Word, f_MaxWidth)
+        {
+                if(f_Word == "")
+                        return f_CurrentLine;
+
+                if(f_CurrentLine == "")
+                return f_Word;
+
+                var candidate = f_CurrentLine + " " + f_Word;
+                if(f_Layer.font.getTextWidth(candidate) <= f_MaxWidth)
+                        return candidate;
+
+                f_Lines.add(f_CurrentLine);
+            return f_Word;
+        }
+
+        function WrapCherryAIProfileCommentByWord(f_Layer, f_Text)
+        {
+                if(f_Text == void || f_Text == "")
+                        return "";
+                if(f_Layer == void || f_Layer.width <= 0)
+                        return f_Text;
+
+                var max_width = f_Layer.width;
+                var lines = new Array();
+                var current_line = "";
+                var current_word = "";
+
+                for(var i = 0; i < f_Text.length; i++)
+                {
+                        var ch = f_Text.charAt(i);
+                        if(ch == "\r")
+                                continue;
+
+                        if(ch == "\n")
+                        {
+                                current_line = AppendCherryAIWrappedWord(
+                                        f_Layer,
+                                        lines,
+                                        current_line,
+                                        current_word,
+                                        max_width,
+                                );
+                                current_word = "";
+                                if(current_line != "")
+                                {
+                                        lines.add(current_line);
+                                        current_line = "";
+                                }
+                                continue;
+                        }
+
+                        if(ch == " " || ch == "\t")
+                        {
+                                current_line = AppendCherryAIWrappedWord(
+                                        f_Layer,
+                                        lines,
+                                        current_line,
+                                        current_word,
+                                        max_width,
+                                );
+                                current_word = "";
+                                continue;
+                        }
+
+                        current_word += ch;
+                }
+
+                current_line = AppendCherryAIWrappedWord(
+                        f_Layer,
+                        lines,
+                        current_line,
+                        current_word,
+                        max_width,
+                );
+                if(current_line != "")
+                        lines.add(current_line);
+
+                var wrapped_text = "";
+                for(var i = 0; i < lines.count; i++)
+                {
+                        if(i != 0)
+                        wrapped_text += f_Layer.LineChara;
+                        wrapped_text += lines[i];
+                }
+
+                return wrapped_text;
+        }
+
+        function BuildCherryAIProfileCommentText(f_Blocks)
+        {
+                var raw_text = "";
+                var normalized_blocks = new Array();
+
+                for(var i = 0; i < f_Blocks.count; i++)
+                {
+                        var raw_block = f_Blocks[i];
+                        if(raw_block == void)
+                                raw_block = "";
+                        raw_block = "" + raw_block;
+                        raw_text += raw_block;
+
+                        var normalized = NormalizeCherryAIProfileCommentBlock(raw_block);
+                        if(normalized != "")
+                                normalized_blocks.add(normalized);
+                }
+
+                if(!HasCherryAIAsciiProfileText(raw_text))
+                        return raw_text;
+
+                var joined = "";
+                for(var i = 0; i < normalized_blocks.count; i++)
+                {
+                        if(i != 0)
+                    {
+                        var previous_char = joined.charAt(joined.length - 1);
+                        if(previous_char != "," && !IsCherryAIProfileCJKPunctuationBreak(previous_char))
+                            joined += " ";
+                    }
+                        joined += normalized_blocks[i];
+                }
+
+                joined = joined.replace(/([,\uff0c])[\t ]+/g, "$1");
+                joined = NormalizeCherryAIProfileCommentBlock(joined);
+                return WrapCherryAIProfileCommentByWord(lay_RandomComment, joined);
+        }
+        """,
+        indent,
+    )
+    text = text[: function_match.start()] + helper_block + "\n\n" + text[function_match.start() :]
+
+    draw_block_pattern = re.compile(
+        r"(?ms)^(?P<indent>\s*)//つないでぽん\s*"
+        r"(?P=indent)txt_RandomComment = rnd_Person \+ rnd_Face \+ rnd_Nose \+ rnd_Glasses \+ rnd_Eye \+ rnd_Bust \+ rnd_Spec \+ rnd_Relation \+ rnd_ParttimeJob \+ rnd_Sex \+ rnd_Disposition \+ rnd_Secret;\s*"
+        r"(?P=indent)lay_RandomComment\.fullRect\(0x00000000\);\s*"
+        r"(?P=indent)lay_RandomComment\.drawTextEx\(0,0,txt_RandomComment,0x000000\);"
+    )
+    draw_block_match = draw_block_pattern.search(text)
+    if draw_block_match is None:
+        raise ValueError("Could not locate random comment draw block in WF_S_Profile.tjs")
+
+    draw_indent = draw_block_match.group("indent")
+    replacement_block = _indent_text_block(
+        """
+        //つないでぽん
+        txt_RandomComment = BuildCherryAIProfileCommentText([
+                rnd_Person,
+                rnd_Face,
+                rnd_Nose,
+                rnd_Glasses,
+                rnd_Eye,
+                rnd_Bust,
+                rnd_Spec,
+                rnd_Relation,
+                rnd_ParttimeJob,
+                rnd_Sex,
+                rnd_Disposition,
+                rnd_Secret
+        ]);
+
+        lay_RandomComment.fullRect(0x00000000);
+        lay_RandomComment.drawTextEx(0,0,txt_RandomComment,0x000000);
+        """,
+        draw_indent,
+    )
+    return (
+        text[: draw_block_match.start()]
+        + replacement_block
+        + text[draw_block_match.end() :]
+    )
+
+
+def _stage_wf_s_profile_patch_overlay(
+    translated_root: Path,
+    *,
+    source_roots: Sequence[Path],
+    patch_dir_name: str = DEFAULT_PATCH_DIR_NAME,
+) -> Optional[Path]:
+    target_path = (
+        translated_root
+        / patch_dir_name
+        / PROFILE_PATCH_TARGET_SUBDIR
+        / PROFILE_PATCH_TEMPLATE_NAME
+    )
+
+    source_path: Optional[Path] = None
+    for root in source_roots:
+        resolved_source = _resolve_ui_source_with_root(
+            Path(PROFILE_PATCH_TEMPLATE_NAME),
+            (root,),
+        )
+        if resolved_source is None:
+            continue
+
+        candidate_path, _source_root = resolved_source
+        if candidate_path.resolve() == target_path.resolve():
+            continue
+
+        source_path = candidate_path
+        break
+
+    if source_path is None:
+        return None
+
+    text, encoding, bom = _read_text_with_bom(source_path)
+    patched = _patch_wf_s_profile_text(text)
+    _write_text_with_bom(target_path, patched, encoding, bom)
+    return target_path
+
+
 def _find_relative_file_in_root(root: Path, relative_path: Path) -> Optional[Path]:
     exact = root / relative_path
     if exact.is_file():
@@ -907,11 +1436,72 @@ def _find_relative_file_in_root(root: Path, relative_path: Path) -> Optional[Pat
 
 
 def _resolve_ui_source_path(relative_path: Path, source_roots: Sequence[Path]) -> Optional[Path]:
+    resolved = _resolve_ui_source_with_root(relative_path, source_roots)
+    if resolved is None:
+        return None
+    return resolved[0]
+
+
+def _find_patch_overlay_source(root: Path, relative_path: Path) -> Optional[Path]:
+    if not root.is_dir():
+        return None
+    try:
+        patch_dirs = sorted(
+            (
+                child
+                for child in root.iterdir()
+                if child.is_dir() and child.name.lower().startswith("patch")
+            ),
+            key=lambda path: (
+                0 if path.name.lower() == "patch" else 1,
+                1 if path.name.lower().startswith("patchold") else 0,
+                path.name.lower(),
+            ),
+        )
+    except OSError:
+        return None
+
+    file_name = relative_path.name
+    for patch_dir in patch_dirs:
+        direct = patch_dir / file_name
+        if direct.is_file():
+            return direct
+    for patch_dir in patch_dirs:
+        nested = patch_dir / relative_path
+        if nested.is_file():
+            return nested
+    return None
+
+
+def _resolve_ui_source_with_root(
+    relative_path: Path,
+    source_roots: Sequence[Path],
+) -> Optional[tuple[Path, Path]]:
     for root in source_roots:
+        source_path = _find_patch_overlay_source(root, relative_path)
+        if source_path is not None:
+            return source_path, root
         source_path = _find_relative_file_in_root(root, relative_path)
         if source_path is not None:
-            return source_path
+            return source_path, root
     return None
+
+
+def _resolve_ui_target_relative_path(
+    relative_path: Path,
+    source_path: Path,
+    source_root: Path,
+    *,
+    patch_dir_name: str,
+) -> Path:
+    try:
+        source_relative = source_path.relative_to(source_root)
+    except ValueError:
+        source_relative = Path(source_path.name)
+
+    if source_relative.parts and source_relative.parts[0].lower().startswith("patch"):
+        return source_relative
+    return Path(patch_dir_name) / relative_path
 
 
 def _apply_ui_translation_replacements(
@@ -948,18 +1538,17 @@ def stage_kirikiri_standard_ui_translation_patch(
 
     resolved_spec_path = spec_path or _get_standard_ui_translation_spec_path(project_root)
     spec_data = json.loads(resolved_spec_path.read_text(encoding="utf-8"))
-    patch_root = translated_root / patch_dir_name
-
     staged_paths: list[Path] = []
     skipped_paths: list[Path] = []
     missing_paths: list[Path] = []
 
     for raw_file in spec_data.get("files", []):
         relative_path = Path(str(raw_file["relative_path"]))
-        source_path = _resolve_ui_source_path(relative_path, source_roots)
-        if source_path is None:
+        resolved_source = _resolve_ui_source_with_root(relative_path, source_roots)
+        if resolved_source is None:
             missing_paths.append(relative_path)
             continue
+        source_path, source_root = resolved_source
 
         text, encoding, bom = _read_text_with_bom(source_path)
         patched, replacement_count = _apply_ui_translation_replacements(
@@ -970,7 +1559,13 @@ def stage_kirikiri_standard_ui_translation_patch(
             skipped_paths.append(relative_path)
             continue
 
-        target_path = patch_root / relative_path
+        target_relative = _resolve_ui_target_relative_path(
+            relative_path,
+            source_path,
+            source_root,
+            patch_dir_name=patch_dir_name,
+        )
+        target_path = translated_root / target_relative
         _write_text_with_bom(target_path, patched, encoding, bom)
         staged_paths.append(target_path)
 
@@ -1104,6 +1699,7 @@ def run_kirikiri_font_patch_workflow(
     project_root = mgr.get_project_dir()
     resource_root = get_font_patch_resource_root(project_root)
     translated_root = mgr.get_translated_dir()
+    original_root = mgr.get_original_dir()
     paths = get_font_patch_paths(resource_root, translated_root)
     available = list_available_font_bundles(paths.fonts_library_root)
     if not available:
@@ -1135,7 +1731,12 @@ def run_kirikiri_font_patch_workflow(
             message=f"Cancelled {patch_info.patch.name}.",
         )
 
-    staged = stage_font_patch_assets(resource_root, translated_root, selection)
+    staged = stage_font_patch_assets(
+        resource_root,
+        translated_root,
+        selection,
+        source_roots=(translated_root, original_root),
+    )
     copied_fonts = describe_copied_fonts(staged.copied_font_paths)
     copied_system_patches = describe_copied_fonts(staged.copied_system_patch_paths)
     build_script_path = get_build_script_path(resource_root)

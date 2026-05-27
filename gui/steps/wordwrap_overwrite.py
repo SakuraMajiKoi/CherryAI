@@ -75,9 +75,19 @@ def _persist_sparse_wordwrap(
 ) -> None:
     """Persist ``wordwr`` only when it differs from the stage input."""
     if wrapped_text and wrapped_text != original_text:
+        previous_value = ""
+        current_line = manager.get_line(idx)
+        if isinstance(current_line, dict):
+            previous_value = str(current_line.get("wordwr", "") or "")
         manager.set_line_field(idx, "wordwr", wrapped_text)
+        manager.track_output_change_for_field(idx, "wordwr", previous_value, wrapped_text)
         return
+    previous_value = ""
+    current_line = manager.get_line(idx)
+    if isinstance(current_line, dict):
+        previous_value = str(current_line.get("wordwr", "") or "")
     manager.clear_line_field(idx, "wordwr")
+    manager.track_output_change_for_field(idx, "wordwr", previous_value, "")
 
 
 # ============================================================================
@@ -2512,7 +2522,17 @@ class WordwrapOverwriteStep(BaseStep):
             if processed_indices is not None and line.idx not in processed_indices:
                 continue
             if not line.persist_wrapped:
+                previous_value = ""
+                current_line = mgr.get_line(line.idx)
+                if isinstance(current_line, dict):
+                    previous_value = str(current_line.get("wordwr", "") or "")
                 mgr.clear_line_field(line.idx, "wordwr")
+                mgr.track_output_change_for_field(
+                    line.idx,
+                    "wordwr",
+                    previous_value,
+                    "",
+                )
                 self._queue_progress_update(
                     progress_base + (line_pos / max(total_lines, 1)) * progress_span,
                     f"Saving... {line_pos}/{total_lines}",

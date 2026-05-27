@@ -1,26 +1,26 @@
 
 /*
-// ƒvƒ‹ƒ_ƒEƒ“ƒƒjƒ…[g‚¢•û
+// ï¿½vï¿½ï¿½ï¿½_ï¿½Eï¿½ï¿½ï¿½ï¿½ï¿½jï¿½ï¿½ï¿½[ï¿½gï¿½ï¿½ï¿½ï¿½
 global.testPull = new WF_PullDownLayer(win,win.primaryLayer,"pullbtn");
 global.testPull.setPos(10,100);
-global.testPull.Add("pullselectbtn","‚Ä‚·‚Æ1"); // ƒƒjƒ…[’Ç‰Á(‰æ‘œ–¼‚Æ–¼‘O)
-global.testPull.Add("pullselectbtn","‚Ä‚·‚Æ2");
+global.testPull.Add("pullselectbtn","ï¿½Ä‚ï¿½ï¿½ï¿½1"); // ï¿½ï¿½ï¿½jï¿½ï¿½ï¿½[ï¿½Ç‰ï¿½(ï¿½æ‘œï¿½ï¿½ï¿½Æ–ï¿½ï¿½O)
+global.testPull.Add("pullselectbtn","ï¿½Ä‚ï¿½ï¿½ï¿½2");
 
-global.testPull.drawTextSelectBtn("‚Ä‚·‚Æ1",10,0,"ƒeƒXƒg1",0xFFFFFF); // ‚Ä‚·‚Æ1‚Æ‚¢‚¤–¼‘O‚ª‚Â‚¢‚Ä‚éƒƒjƒ…[‚É•¶š•`‰æ
-global.testPull.drawTextSelectBtn("‚Ä‚·‚Æ2",10,0,"ƒeƒXƒg2",0xFFFFFF);
-// ‚Ä‚·‚Æ2‚ğ‰ŠúƒZƒŒƒNƒg
-global.testPull.SelectUpdate("‚Ä‚·‚Æ2");
+global.testPull.drawTextSelectBtn("ï¿½Ä‚ï¿½ï¿½ï¿½1",10,0,"ï¿½eï¿½Xï¿½g1",0xFFFFFF); // ï¿½Ä‚ï¿½ï¿½ï¿½1ï¿½Æ‚ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Oï¿½ï¿½ï¿½Â‚ï¿½ï¿½Ä‚éƒï¿½jï¿½ï¿½ï¿½[ï¿½É•ï¿½ï¿½ï¿½ï¿½`ï¿½ï¿½
+global.testPull.drawTextSelectBtn("ï¿½Ä‚ï¿½ï¿½ï¿½2",10,0,"ï¿½eï¿½Xï¿½g2",0xFFFFFF);
+// ï¿½Ä‚ï¿½ï¿½ï¿½2ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Zï¿½ï¿½ï¿½Nï¿½g
+global.testPull.SelectUpdate("ï¿½Ä‚ï¿½ï¿½ï¿½2");
 
 global.testPull.onClickEvent = function(layerPoint,name)
 {
 	//dminfo(name);
 };
 */
-// ƒvƒ‹ƒ_ƒEƒ“ƒƒjƒ…[Šg’£
+// ï¿½vï¿½ï¿½ï¿½_ï¿½Eï¿½ï¿½ï¿½ï¿½ï¿½jï¿½ï¿½ï¿½[ï¿½gï¿½ï¿½
 class WF_PullDownLayer extends WF_Layer
 {
-	var SelectBtn; // ‘I‘ğ’†ƒ{ƒ^ƒ“‚Ìã‚Éæ‚¹‚é‰æ‘œ
-	var SelectBtnBG = void; // ‘I‘ğ’†ƒ{ƒ^ƒ“
+	var SelectBtn; // ï¿½Iï¿½ğ’†ƒ{ï¿½^ï¿½ï¿½ï¿½Ìï¿½Éæ‚¹ï¿½ï¿½æ‘œ
+	var SelectBtnBG = void; // ï¿½Iï¿½ğ’†ƒ{ï¿½^ï¿½ï¿½
 
 	var ListBG=void;
 	var ListBGMask=void;
@@ -40,7 +40,7 @@ class WF_PullDownLayer extends WF_Layer
 	}
 	property LineColor
 	{
-		setter(v){ _LineColor=v; if( 0xFFFFFF < v){dminfo("0xFFFFFFˆÈ“à‚Åw’è‚µ‚Ä‚­‚¾‚³‚¢");}}
+		setter(v){ _LineColor=v; if( 0xFFFFFF < v){dminfo("0xFFFFFFï¿½È“ï¿½ï¿½Åwï¿½è‚µï¿½Ä‚ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½");}}
 		getter(){ return _LineColor; }
 	}
 	property itemMAX
@@ -93,7 +93,7 @@ class WF_PullDownLayer extends WF_Layer
 				return;
 				if( SelectBtnBG !== void )
 				{
-					if( SelectBtnBG.ImageFileName !== void ) // ‰æ‘œ‚ª‚ ‚Á‚½‚ç
+					if( SelectBtnBG.ImageFileName !== void ) // ï¿½æ‘œï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 						SelectBtnBG.imageLeft = -s * SelectBtnBG.width;
 					SelectBtnBG.hitThreshold = 256;
 				}
@@ -103,8 +103,8 @@ class WF_PullDownLayer extends WF_Layer
 		super.setSize(SelectBtn.width,SelectBtn.height);
 	}
 
-	// ®”‚¾‚Á‚½‚ç®””Ô–Úƒƒjƒ…[‚ğ
-	// •¶š—ñ‚¾‚Á‚½‚çƒl[ƒ€‚©‚ç‚»‚Ìƒƒjƒ…[‚ğ‘I‘ğ
+	// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ç®ï¿½ï¿½ï¿½Ô–Úƒï¿½ï¿½jï¿½ï¿½ï¿½[ï¿½ï¿½
+	// ï¿½ï¿½ï¿½ï¿½ï¿½ñ‚¾‚ï¿½ï¿½ï¿½ï¿½ï¿½lï¿½[ï¿½ï¿½ï¿½ï¿½ï¿½ç‚»ï¿½Ìƒï¿½ï¿½jï¿½ï¿½ï¿½[ï¿½ï¿½Iï¿½ï¿½
 	function SelectUpdate(No=0)
 	{
 		if( (typeof No) == 'String' )
@@ -166,7 +166,7 @@ class WF_PullDownLayer extends WF_Layer
 		}
 	}
 
-	// w’è–¼‚Ìƒƒjƒ…[‚É•¶š‚ğ•`‰æ
+	// ï¿½wï¿½è–¼ï¿½Ìƒï¿½ï¿½jï¿½ï¿½ï¿½[ï¿½É•ï¿½ï¿½ï¿½ï¿½ï¿½`ï¿½ï¿½
 	function drawTextSelectBtn(f_name,x,y,f_Text="",f_color=0xFFFFFF,f_size=17,f_centerY=true)
 	{
 		for(var i=0; i < MenuLayerArray.count;i++)
@@ -180,7 +180,7 @@ class WF_PullDownLayer extends WF_Layer
 			}
 		}
 	}
-	// ƒƒjƒ…[ƒAƒCƒeƒ€‚É‘Î‚µ‚ÄˆêŠ‡setSize
+	// ï¿½ï¿½ï¿½jï¿½ï¿½ï¿½[ï¿½Aï¿½Cï¿½eï¿½ï¿½ï¿½É‘Î‚ï¿½ï¿½ÄˆêŠ‡setSize
 	function setSizeMenuItem(w,h)
 	{
 		for(var i=0; i < MenuLayerArray.count;i++)
@@ -212,7 +212,7 @@ class WF_PullDownLayer extends WF_Layer
 		MenuLayerArray.erase(No);
 	}
 
-	// ƒƒjƒ…[ƒ{ƒ^ƒ“ì¬
+	// ï¿½ï¿½ï¿½jï¿½ï¿½ï¿½[ï¿½{ï¿½^ï¿½ï¿½ï¿½ì¬
 	function Add(f_imageFile=void,f_name="")
 	{
 		var t = MenuLayerArray.add( new global.WF_ButtonLayer(window,this) );
@@ -240,7 +240,7 @@ class WF_PullDownLayer extends WF_Layer
 		return MenuLayerArray[t];
 	}
 
-	// ƒƒjƒ…[‚ªƒNƒŠƒbƒN‚³‚ê‚½‚ÌƒCƒxƒ“ƒg
+	// ï¿½ï¿½ï¿½jï¿½ï¿½ï¿½[ï¿½ï¿½ï¿½Nï¿½ï¿½ï¿½bï¿½Nï¿½ï¿½ï¿½ê‚½ï¿½ï¿½ï¿½ÌƒCï¿½xï¿½ï¿½ï¿½g
 	function onClickEvent(layerPoint,name){}
 
 	function onMouseUpEx2(x, y, button, shift)
@@ -294,7 +294,7 @@ class WF_PullDownLayer extends WF_Layer
 
 			MenuLayerArray[i].visible=true;
 
-			arrya_height += MenuLayerArray[i].height; // height‰ÁZ
+			arrya_height += MenuLayerArray[i].height; // heightï¿½ï¿½ï¿½Z
 		}
 
 		ListBGMask.setSize(this.width+2,arrya_height);
@@ -305,7 +305,7 @@ class WF_PullDownLayer extends WF_Layer
 		if( 0 < MenuLayerArray.count && 0 < itemMAX )
 		{
 			if( MenuLayerArray[0].height*itemMAX+1 < ListBGMask.height )
-			{ // ƒAƒCƒeƒ€ŒÀŠE’´‚¦‚Ä‚¢‚é
+			{ // ï¿½Aï¿½Cï¿½eï¿½ï¿½ï¿½ï¿½ï¿½Eï¿½ï¿½ï¿½ï¿½ï¿½Ä‚ï¿½ï¿½ï¿½
 				ListBGMask.height = MenuLayerArray[0].height*itemMAX+1;
 				overItem = true;
 			}
@@ -315,7 +315,7 @@ class WF_PullDownLayer extends WF_Layer
 
 		if( overItem )
 		{
-			Slid = new SliderLayer(window, ListBGMask, ListBGMask.height, "c", "xx2_backlog_ƒXƒ‰ƒCƒ_[‚Â‚Ü‚İ");
+			Slid = new SliderLayer(window, ListBGMask, ListBGMask.height, "ï¿½c", "xx2_backlog_ï¿½Xï¿½ï¿½ï¿½Cï¿½_ï¿½[ï¿½Â‚Ü‚ï¿½");
 			with(Slid)
 			{
 				.setPos(ListBG.width-20, 0);
@@ -379,13 +379,13 @@ class WF_ButtonLayerSwitch extends WF_ButtonLayer
 		if(!enabled)
 		{
 			if(Segment == 4 || Segment == 5)
-				s = 3; // –³Œøó‘Ô
+				s = 3; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 			else
 				s = 2;
 		}
 		else if(_select)
 		{
-			if(Segment == 6) // 6˜Aƒ{ƒ^ƒ“‚¾‚Á‚½ê‡
+			if(Segment == 6) // 6ï¿½Aï¿½{ï¿½^ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ê‡
 			{
 				if(s == 2)
 					s=5;
@@ -421,30 +421,30 @@ class WF_ButtonLayer extends ButtonLayer
 	var CursorType_Default = crDefault;
 	var CursorType_Point = crDefault;//crHandPoint;
 
-	// ŒÅ’è•‚Å•¶š‚ğ•`‰æ‚·‚é‚©‚Ç‚¤‚©
+	// ï¿½Å’è•ï¿½Å•ï¿½ï¿½ï¿½ï¿½ï¿½`ï¿½æ‚·ï¿½é‚©ï¿½Ç‚ï¿½ï¿½ï¿½
 	var TextFix=false;
-	// ‰üs‚É—p‚¢‚é•¶š
+	// ï¿½ï¿½ï¿½sï¿½É—pï¿½ï¿½ï¿½é•¶ï¿½ï¿½
 	var LineChara = '|';
-	var _RegLineChara = /\|/g; // ³‹K•\Œ»—p
-	// ‰üs•¶š—ñ\n‚ğ—LŒø‚É‚·‚é‚©‚Ç‚¤‚©B–³Œø‚É‚µ‚½ê‡\n‚Íæ‚èœ‚©‚ê‚é
+	var _RegLineChara = /\|/g; // ï¿½ï¿½ï¿½Kï¿½\ï¿½ï¿½ï¿½p
+	// ï¿½ï¿½ï¿½sï¿½ï¿½ï¿½ï¿½ï¿½ï¿½\nï¿½ï¿½Lï¿½ï¿½ï¿½É‚ï¿½ï¿½é‚©ï¿½Ç‚ï¿½ï¿½ï¿½ï¿½Bï¿½ï¿½ï¿½ï¿½ï¿½É‚ï¿½ï¿½ï¿½ï¿½ê‡\nï¿½Íï¿½èœï¿½ï¿½ï¿½ï¿½ï¿½
 	var LineCode=false;
 
-	// ƒeƒLƒXƒg‚ÌŒ`® left or center or right
+	// ï¿½eï¿½Lï¿½Xï¿½gï¿½ÌŒ`ï¿½ï¿½ left or center or right
 	var texttypeX = "left";
-	// ƒeƒLƒXƒg‚ÌŒ`® top or center
+	// ï¿½eï¿½Lï¿½Xï¿½gï¿½ÌŒ`ï¿½ï¿½ top or center
 	var texttypeY = "top";
-	// ƒeƒLƒXƒg•`‰æ—Ìˆæ‚Ì•‚ğw’è‚·‚é
+	// ï¿½eï¿½Lï¿½Xï¿½gï¿½`ï¿½ï¿½Ìˆï¿½Ì•ï¿½ï¿½ï¿½ï¿½wï¿½è‚·ï¿½ï¿½
 	var TR_height=0;
 	var TR_width=0;
 
-	// ‰üs‚ÌƒIƒtƒZƒbƒgY²
+	// ï¿½ï¿½ï¿½sï¿½ï¿½ï¿½ÌƒIï¿½tï¿½Zï¿½bï¿½gYï¿½ï¿½
 	var newlineoffset_y=0;
 
-	var Font="ƒƒCƒŠƒI";
+	var Font="ï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½I";
 
-	// ƒNƒŠƒbƒN‚ª—LŒø‚©–³Œø‚©
-	// false‚È‚çonMouseEnterEx‚ÆonMouseLeaveEx,RClickEvent‚Ì‚İ”­¶
-	// ƒJ[ƒ\ƒ‹‡‚í‚³‚Á‚½‚ÌSEÄ¶‚Í‚³‚ê‚È‚¢‚Ì‚Å’ˆÓ
+	// ï¿½Nï¿½ï¿½ï¿½bï¿½Nï¿½ï¿½ï¿½Lï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+	// falseï¿½È‚ï¿½onMouseEnterExï¿½ï¿½onMouseLeaveEx,RClickEventï¿½Ì‚İ”ï¿½ï¿½ï¿½
+	// ï¿½Jï¿½[ï¿½\ï¿½ï¿½ï¿½ï¿½ï¿½í‚³ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½SEï¿½Äï¿½ï¿½Í‚ï¿½ï¿½ï¿½È‚ï¿½ï¿½Ì‚Å’ï¿½ï¿½ï¿½
 	var _clickEnabled=true;
 	var selectSEPlayFlag=true;
 
@@ -474,7 +474,282 @@ class WF_ButtonLayer extends ButtonLayer
 			SoundPlayFlag = f_SEFlag;
 	}
 
-	// SE‚ÌÄ¶
+	if( typeof(global.CherryAINormalizeNonMessageText) == "undefined" )
+	{
+		global.CherryAINormalizeNonMessageText = function(f_Text,f_LineCode,f_LineChara)
+		{
+			var Text = "" + f_Text;
+			Text = Text.replace(/\r\n/g,"\n");
+			Text = Text.replace(/\r/g,"\n");
+			if(Text.indexOf("\n") != -1)
+			{
+				if(f_LineCode)
+					Text = Text.replace(/\n/g,f_LineChara);
+				else
+					Text = Text.replace(/\n/g,'');
+			}
+			return Text;
+		};
+
+		global.CherryAIIsNonMessageWhitespace = function(f_Char)
+		{
+			return f_Char == " " || f_Char == "\t" || f_Char == "\u3000" || f_Char == "\u00A0";
+		};
+
+		global.CherryAIIsNonMessagePunctuationBreak = function(f_Char)
+		{
+			if(f_Char === void || f_Char == "")
+				return false;
+			return ".,!?;:ï¼Œã€‚ï¼ï¼Ÿï¼›ï¼š)]}ã€ã€ï¼‰\u201D'\"".indexOf(f_Char) != -1;
+		};
+
+		global.CherryAIIsNonMessageAsciiMetricsChar = function(f_Char)
+		{
+			if(f_Char === void || f_Char == "")
+				return false;
+			return " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~".indexOf(f_Char) != -1;
+		};
+
+		global.CherryAIGetNonMessageWhitespaceAdvance = function(f_Lay,f_Char,f_Prefix="",f_NextChar=void)
+		{
+			var SpaceWidth = 0;
+			var MinimumSpaceWidth = (f_Lay.font.height * 3) >> 3;
+			var ShadowWidth = 0;
+			if(typeof(f_Lay.font.type_shadowwidth) != "undefined" && 0 < f_Lay.font.type_shadowwidth)
+				ShadowWidth = f_Lay.font.type_shadowwidth;
+			MinimumSpaceWidth += ShadowWidth;
+			if(f_NextChar !== void && f_NextChar != "" && f_NextChar != "|" && f_NextChar != "\n")
+			{
+				var WithSpace = f_Lay.font.getTextWidth(f_Prefix + f_Char + f_NextChar);
+				var WithoutSpace = f_Lay.font.getTextWidth(f_Prefix + f_NextChar);
+				SpaceWidth = WithSpace - WithoutSpace;
+			}
+			if(SpaceWidth < 1)
+				SpaceWidth = f_Lay.font.getTextWidth("A A") - f_Lay.font.getTextWidth("AA");
+			if(SpaceWidth < 1)
+				SpaceWidth = f_Lay.font.getTextWidth("m m") - f_Lay.font.getTextWidth("mm");
+			if(SpaceWidth < 1)
+				SpaceWidth = MinimumSpaceWidth;
+			if(SpaceWidth < MinimumSpaceWidth)
+				SpaceWidth = MinimumSpaceWidth;
+			if(SpaceWidth < 1)
+				SpaceWidth = 1;
+			if(f_Char == "\t")
+				return SpaceWidth * 4;
+			return SpaceWidth;
+		};
+
+		global.CherryAIGetNonMessageCharAdvance = function(f_Lay,f_Char,f_Prefix="",f_NextChar=void)
+		{
+			if(global.CherryAIIsNonMessageWhitespace(f_Char))
+				return global.CherryAIGetNonMessageWhitespaceAdvance(f_Lay,f_Char,f_Prefix,f_NextChar);
+
+			var CharWidth = 0;
+			if(f_NextChar !== void && f_NextChar != "" && f_NextChar != "|" && f_NextChar != "\n")
+			{
+				var WithChar = f_Lay.font.getTextWidth(f_Prefix + f_Char + f_NextChar);
+				var WithoutChar = f_Lay.font.getTextWidth(f_Prefix + f_NextChar);
+				CharWidth = WithChar - WithoutChar;
+			}
+			if(CharWidth < 1)
+			{
+				var WithCharOnly = f_Lay.font.getTextWidth(f_Prefix + f_Char);
+				var WithoutCharOnly = 0;
+				if(f_Prefix != "")
+					WithoutCharOnly = f_Lay.font.getTextWidth(f_Prefix);
+				CharWidth = WithCharOnly - WithoutCharOnly;
+			}
+
+			var TextWidth = f_Lay.font.getTextWidth(f_Char);
+			var EscWidth = f_Lay.font.getEscWidthX(f_Char);
+			if(CharWidth < 1)
+				CharWidth = TextWidth;
+			if(CharWidth < 1)
+				CharWidth = EscWidth;
+			if(CharWidth < 1)
+				CharWidth = 1;
+
+			if(!global.CherryAIIsNonMessageAsciiMetricsChar(f_Char))
+			{
+				if(0 < TextWidth && TextWidth < CharWidth)
+					CharWidth = TextWidth;
+				if(0 < EscWidth && EscWidth < CharWidth)
+					CharWidth = EscWidth;
+			}
+
+			if(CharWidth < 1)
+				CharWidth = 1;
+			return CharWidth;
+		};
+
+		global.CherryAIUseNonMessageFixedCell = function(f_Lay,f_Char,f_CharAdvance=void,f_TextFix=false)
+		{
+			if(!f_TextFix)
+				return false;
+			if(global.CherryAIIsNonMessageAsciiMetricsChar(f_Char))
+				return false;
+			if(f_CharAdvance === void)
+				f_CharAdvance = global.CherryAIGetNonMessageCharAdvance(f_Lay,f_Char);
+			return f_CharAdvance * 4 >= f_Lay.font.height * 3;
+		};
+
+		global.CherryAIGetNonMessageCharRectWidth = function(f_Lay,f_Char,f_CharAdvance=void,f_UseFixedCell=false)
+		{
+			if(f_CharAdvance === void)
+				f_CharAdvance = global.CherryAIGetNonMessageCharAdvance(f_Lay,f_Char);
+			if(f_UseFixedCell)
+				return f_Lay.font.height;
+			var GlyphWidth = f_Lay.font.getTextWidth(f_Char);
+			if(GlyphWidth < 1)
+				GlyphWidth = f_Lay.font.getEscWidthX(f_Char);
+			if(GlyphWidth < 1)
+				GlyphWidth = f_CharAdvance;
+			if(GlyphWidth < 1)
+				GlyphWidth = 1;
+			return GlyphWidth;
+		};
+
+		global.CherryAIBuildNonMessageWrapStarts = function(f_Lay,f_Text,f_MaxWidth,f_LineChara)
+		{
+			var WrapStarts = new Array();
+			if(f_MaxWidth < 1)
+				return WrapStarts;
+			var LineText = "";
+			var LastBreakPos = -1;
+			var cnt = f_Text.length;
+			for(var Pos = 0; Pos < cnt; Pos++)
+			{
+				var Ch = f_Text.charAt(Pos);
+				if(Ch == f_LineChara)
+				{
+					LineText = "";
+					LastBreakPos = -1;
+					continue;
+				}
+				var CandidateLineText = LineText + Ch;
+				var CandidateWidth = f_Lay.font.getTextWidth(CandidateLineText);
+				if(0 < LineText.length && f_MaxWidth < CandidateWidth)
+				{
+					if(0 <= LastBreakPos)
+					{
+						WrapStarts[LastBreakPos + 1] = true;
+						Pos = LastBreakPos;
+					}
+					else
+					{
+						WrapStarts[Pos] = true;
+						Pos--;
+					}
+					LineText = "";
+					LastBreakPos = -1;
+					continue;
+				}
+				LineText = CandidateLineText;
+				if(global.CherryAIIsNonMessageWhitespace(Ch) || global.CherryAIIsNonMessagePunctuationBreak(Ch))
+					LastBreakPos = Pos;
+			}
+			for(var WrapPos = 0; WrapPos < cnt; WrapPos++)
+			{
+				if(!WrapStarts[WrapPos])
+					continue;
+				var WrapChar = f_Text.charAt(WrapPos);
+				if(global.CherryAIIsNonMessageWhitespace(WrapChar) || global.CherryAIIsNonMessagePunctuationBreak(WrapChar))
+				{
+					var Forward = WrapPos + 1;
+					while(Forward < cnt)
+					{
+						var ForwardChar = f_Text.charAt(Forward);
+						if(ForwardChar == f_LineChara)
+							break;
+						if(!global.CherryAIIsNonMessageWhitespace(ForwardChar) && !global.CherryAIIsNonMessagePunctuationBreak(ForwardChar))
+							break;
+						Forward++;
+					}
+					if(Forward < cnt && f_Text.charAt(Forward) != f_LineChara && !WrapStarts[Forward])
+					{
+						WrapStarts[WrapPos] = false;
+						WrapStarts[Forward] = true;
+					}
+				}
+			}
+			return WrapStarts;
+		};
+
+		global.CherryAIBuildNonMessageLayout = function(f_Lay,f_Text,f_MaxWidth,f_LineChara,f_TextFix=false)
+		{
+			var Layout = %[];
+			Layout.rects = new Array();
+			Layout.line_widths = new Array();
+			Layout.line_count = 0;
+			if(f_Text === void || f_Text == "")
+				return Layout;
+			var WrapStarts = global.CherryAIBuildNonMessageWrapStarts(f_Lay,f_Text,f_MaxWidth,f_LineChara);
+			var cnt = f_Text.length;
+			var FontHeight = f_Lay.font.height;
+			if(FontHeight <= 0)
+				FontHeight = f_Lay.font.getEscHeightY(" ");
+			if(FontHeight <= 0)
+				FontHeight = 1;
+			var LineIndex = 0;
+			var LineWidth = 0;
+			var LineText = "";
+			for(var Pos = 0; Pos < cnt; Pos++)
+			{
+				var Ch = f_Text.charAt(Pos);
+				if(Ch == f_LineChara)
+				{
+					Layout.line_widths[LineIndex] = LineWidth;
+					LineIndex++;
+					LineWidth = 0;
+					LineText = "";
+					continue;
+				}
+				if(WrapStarts[Pos] && 0 < LineWidth)
+				{
+					Layout.line_widths[LineIndex] = LineWidth;
+					LineIndex++;
+					LineWidth = 0;
+					LineText = "";
+				}
+				if(LineWidth == 0 && LineText == "" && global.CherryAIIsNonMessageWhitespace(Ch))
+					continue;
+				var NextChar = void;
+				if(Pos + 1 < cnt)
+					NextChar = f_Text.charAt(Pos + 1);
+				var CharAdvance = global.CherryAIGetNonMessageCharAdvance(f_Lay,Ch,LineText,NextChar);
+				var UseFixedCell = global.CherryAIUseNonMessageFixedCell(f_Lay,Ch,CharAdvance,f_TextFix);
+				var CellWidth = global.CherryAIGetNonMessageCharRectWidth(f_Lay,Ch,CharAdvance,UseFixedCell);
+				if(UseFixedCell)
+					CharAdvance = FontHeight;
+				var Margin = 0;
+				if(UseFixedCell)
+				{
+					var GlyphWidth = f_Lay.font.getEscWidthX(Ch);
+					if(GlyphWidth < 0)
+						GlyphWidth = 0;
+					Margin = (FontHeight - GlyphWidth) >> 1;
+					if(Margin < 0)
+						Margin = 0;
+				}
+				var Rect = %[];
+				Rect["left"] = LineWidth;
+				Rect["top"] = LineIndex * FontHeight;
+				Rect["advance"] = CharAdvance;
+				Rect["width"] = CellWidth;
+				Rect["margin"] = Margin;
+				Rect["line"] = LineIndex;
+				Rect["char"] = Ch;
+				Layout.rects.add(Rect);
+				LineWidth += CharAdvance;
+				LineText += Ch;
+			}
+			Layout.line_widths[LineIndex] = LineWidth;
+			Layout.line_count = LineIndex + 1;
+			return Layout;
+		};
+	}
+
+	// SEï¿½ÌÄï¿½
 	function PlaySe(file)
 	{
 		if(file == "" && file !== void) return;
@@ -489,7 +764,7 @@ class WF_ButtonLayer extends ButtonLayer
 		if( !enabled || !clickEnabled )
 		{
 			if(Segment == 4 || Segment == 5)
-				s = 3; // –³Œøó‘Ô
+				s = 3; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 			else
 				s = 2;
 			if(isSelecting)
@@ -507,7 +782,7 @@ class WF_ButtonLayer extends ButtonLayer
 		onDrawState(s);
 	}
 
-	// ƒCƒxƒ“ƒg
+	// ï¿½Cï¿½xï¿½ï¿½ï¿½g
 	function onDrawState(s){}
 
 	function assignComp(src)
@@ -519,7 +794,7 @@ class WF_ButtonLayer extends ButtonLayer
 
 	function loadImages(storage, key)
 	{
-		// ‰æ‘œ‚ğ“Ç‚İ‚Ş
+		// ï¿½æ‘œï¿½ï¿½Ç‚İï¿½ï¿½ï¿½
 		global.Layer.loadImages(storage, key);
 		global.Layer.width = imageWidth \ Segment;
 		global.Layer.height = imageHeight;
@@ -540,12 +815,12 @@ class WF_ButtonLayer extends ButtonLayer
 		{
 			super.onMouseDown(...);
 
-			// ‘I‘ğ‚¾‚Á‚½‚ç
+			// ï¿½Iï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 			if(isSelecting)	cursor = CursorType_Default;
 		}
 		else
 		{
-			// RClickƒCƒxƒ“ƒg‚¾‚¯”­¶‚³‚¹‚é
+			// RClickï¿½Cï¿½xï¿½ï¿½ï¿½gï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 			if( !Butt_mouseDownLFlag ) return;
 			onDownReset();
 			if(button == mbRight)
@@ -608,140 +883,38 @@ class WF_ButtonLayer extends ButtonLayer
 		if( str === void || str== "" ) return;
 		TR_height = this.height if TR_height == 0;
 		TR_width = this.width if TR_width == 0;
-
-		var StrRectArray = new Array();
-
-		while(1)
-		{
-			if(str.indexOf("\n") != -1)
-			{
-				if(LineCode)
-					str = str.replace(/\n/g,LineChara);
-				else
-					str = str.replace(/\n/g,'');
-			}
-			else
-			{
-				break;
-			}
-		}
-
-		var tmpPx=0;
-		var tmpLine=0;
-		var cnt = str.length;
-		var tfontheight = font.height;
-
-		if( tfontheight <= 0 )
-			tfontheight = font.getEscHeightY(" ");
-
-		for(var i=0; i < cnt;i++)
-		{
-			var drawPx = tmpPx;
-			var drawPy = tmpLine*tfontheight;
-
-			var charfontSize;
-			var charWidth = font.getEscWidthX(str[i]);
-			var useFixedCell = TextFix && (charWidth * 4 >= tfontheight * 3);
-
-			// •¶š•ŒÅ’è
-			if(useFixedCell)
-				charfontSize = tfontheight;
-			else
-				charfontSize = charWidth;
-
-			// Ÿ‚Ìƒ‰ƒCƒ“”»’è
-			if(TR_width<drawPx+charfontSize || str[i] == LineChara)
-			{
-				tmpLine++;
-				tmpPx = 0;
-				drawPx = 0;
-				drawPy += tfontheight;
-				if(str[i] == LineChara)
-					continue;
-			}
-
-			var margin=0;
-			if(useFixedCell)
-				margin = (tfontheight-charWidth)>>1;
-
-			// ’x‚¢‚©‚ç«‘”z—ñ‚â‚ß‚½
-			//StrRectArray.add(%[left:drawPx,top:drawPy,width:charfontSize,height:tfontheight,margin:margin,line:tmpLine]);
-			StrRectArray.add(drawPx); 		// left		i*6+0
-			StrRectArray.add(drawPy); 		// top		i*6+1
-			StrRectArray.add(charfontSize); // width	i*6+2
-			StrRectArray.add(tfontheight); 	// height	i*6+3
-			StrRectArray.add(margin); 		// margin	i*6+4
-			StrRectArray.add(tmpLine); 		// line		i*6+5
-
-			tmpPx += charfontSize;
-		}
-
-		// ‰üs•¶šæ‚èœ‚«
-		while(1)
-		{
-			if(str.indexOf(LineChara) != -1)
-			{
-				str = str.replace(_RegLineChara,'');
-			}
-			else
-			{
-				cnt = str.length;
-				break;
-			}
-		}
+		str = global.CherryAINormalizeNonMessageText(str,LineCode,LineChara);
+		var Layout = global.CherryAIBuildNonMessageLayout(this,str,TR_width,LineChara,TextFix);
+		if(Layout.line_count < 1)
+			return;
+		var FontHeight = font.height;
+		if( FontHeight <= 0 )
+			FontHeight = font.getEscHeightY(" ");
+		if( FontHeight <= 0 )
+			FontHeight = 1;
 
 		var mPy=0;
 		if(texttypeY == "center" )
 		{
-			// ƒ‰ƒCƒ“*•¶š‚Ì‚‚³‚Å•¶š—ñ‚Ì‘S‘Ì‚‚³‚ğ‹‚ß‚é
-			var strheight = (StrRectArray[StrRectArray.count-1]+1)*StrRectArray[0+3]; // ÅŒã‚Ì—v‘f "Line" - Å‰‚Ì—v‘f "height"
-			mPy = (TR_height>>1)-(strheight>>1); // ’†S‚É‡‚í‚¹‚é
+			var strheight = Layout.line_count * FontHeight;
+			mPy = (TR_height>>1)-(strheight>>1);
 		}
 
-		if(texttypeX == "center" )
+		for(var i=0; i < Layout.rects.count;i++)
 		{
-			var LineWidth=0;
+			var Rect = Layout.rects[i];
+			var LineWidth = Layout.line_widths[Rect["line"]];
+			if(LineWidth === void)
+				LineWidth = 0;
+			var LineOffsetX = 0;
+			if(texttypeX == "center")
+				LineOffsetX = (TR_width>>1) - (LineWidth>>1);
+			else if(texttypeX == "right")
+				LineOffsetX = TR_width - LineWidth;
 
-			var LineNum = (StrRectArray[StrRectArray.count-1]+1); // ÅŒã‚Ì—v‘f "Line"
-			for(var l=0; l < LineNum;l++)
-			{
-				for(var i=0; i < cnt;i++)
-				{
-					if( StrRectArray[i*6+5] == l ) // Line
-						LineWidth+=StrRectArray[i*6+2]; // Width
-				}
-				for(var i=0; i < cnt;i++)
-				{
-					if( StrRectArray[i*6+5] == l ) // Line
-						StrRectArray[i*6+4] += (TR_width>>1)-(LineWidth>>1); // ’†S‚É‡‚í‚¹‚é // margin
-				}
-				LineWidth=0;
-			}
-		}
-		else if( texttypeX == "right" )
-		{
-			var LineWidth=0;
-
-			var LineNum = (StrRectArray[StrRectArray.count-1]+1); // ÅŒã‚Ì—v‘f "Line"
-			for(var l=0; l < LineNum;l++)
-			{
-				for(var i=0; i < cnt;i++)
-				{
-					if( StrRectArray[i*6+5] == l ) // Line
-						LineWidth+=StrRectArray[i*6+2]; // Width
-				}
-				for(var i=0; i < cnt;i++)
-				{
-					if( StrRectArray[i*6+5] == l ) // Line
-						StrRectArray[i*6+4] += (TR_width)-(LineWidth); // ’†S‚É‡‚í‚¹‚é // margin
-				}
-				LineWidth=0;
-			}
-		}
-
-		for(var i=0; i < cnt;i++)
-			drawText( StrRectArray[i*6+0]+StrRectArray[i*6+4]+x, StrRectArray[i*6+1]+mPy+y+StrRectArray[i*6+5]*newlineoffset_y, str[i],color
+			drawText(Rect["left"] + Rect["margin"] + LineOffsetX + x, Rect["top"] + mPy + y + Rect["line"]*newlineoffset_y, Rect["char"], color
 						,opa, aa, shadowlevel, shadowcolor, shadowwidth, shadowofsx, shadowofsy);
+		}
 	}
 
 
@@ -784,15 +957,15 @@ class WF_ButtonLayer extends ButtonLayer
 
 }
 
-// WF_Layer‘Î‰”Å
+// WF_Layerï¿½Î‰ï¿½ï¿½ï¿½
 class ButtonLayer extends WF_Layer
 {
-	var Butt_imageLoaded = false; // ‰æ‘œ‚ª“Ç‚İ‚Ü‚ê‚½‚©
-	var Butt_mouseOn = false; // ƒŒƒCƒ„“à‚Éƒ}ƒEƒX‚ª‚ ‚é‚©
-	var Butt_mouseDown = false; // ƒ}ƒEƒXƒ{ƒ^ƒ“‚ª‰Ÿ‚³‚ê‚Ä‚¢‚é‚©
+	var Butt_imageLoaded = false; // ï¿½æ‘œï¿½ï¿½ï¿½Ç‚İï¿½ï¿½Ü‚ê‚½ï¿½ï¿½
+	var Butt_mouseOn = false; // ï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½ï¿½ï¿½Éƒ}ï¿½Eï¿½Xï¿½ï¿½ï¿½ï¿½ï¿½é‚©
+	var Butt_mouseDown = false; // ï¿½}ï¿½Eï¿½Xï¿½{ï¿½^ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä‚ï¿½ï¿½é‚©
 	var Butt_color = clNone;
-	var Butt_caption = ''; // ƒ{ƒ^ƒ“‚ÌƒLƒƒƒvƒVƒ‡ƒ“
-	var Butt_captionColor = 0x000000; // ƒLƒƒƒvƒVƒ‡ƒ“‚ÌF
+	var Butt_caption = ''; // ï¿½{ï¿½^ï¿½ï¿½ï¿½ÌƒLï¿½ï¿½ï¿½vï¿½Vï¿½ï¿½ï¿½ï¿½
+	var Butt_captionColor = 0x000000; // ï¿½Lï¿½ï¿½ï¿½vï¿½Vï¿½ï¿½ï¿½ï¿½ï¿½ÌF
 	var Butt_keyPressed = false;
 	var Butt_showFocusImage = false;
 
@@ -805,7 +978,7 @@ class ButtonLayer extends WF_Layer
 
 		hitType = htMask;
 		hitThreshold = 0;
-		//focusable = true; // ƒtƒH[ƒJƒX‚ğ“¾‚ç‚ê‚é
+		//focusable = true; // ï¿½tï¿½Hï¿½[ï¿½Jï¿½Xï¿½ğ“¾‚ï¿½ï¿½ï¿½
 	}
 
 	function finalize()
@@ -815,7 +988,7 @@ class ButtonLayer extends WF_Layer
 
 	function assign(src)
 	{
-		// src ‚Ìî•ñ‚ğ‚±‚Ìƒ{ƒ^ƒ“ƒŒƒCƒ„‚ÉƒRƒs[
+		// src ï¿½Ìï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ìƒ{ï¿½^ï¿½ï¿½ï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½ÉƒRï¿½sï¿½[
 		assignImages(src);
 		Butt_imageLoaded = src.Butt_imageLoaded;
 		Butt_color = src.Butt_color;
@@ -831,40 +1004,40 @@ class ButtonLayer extends WF_Layer
 
 	function drawState(s)
 	{
-		// ó‘Ô s ‚É‘Î‰‚·‚é‰æ‘œ‚ğ•`‰æ
-		// s :  0 : •’Ê‚Ìó‘Ô
-		//      1 : ƒ{ƒ^ƒ“‚ª‰Ÿ‚³‚ê‚½ó‘Ô
-		//      2 : ƒ{ƒ^ƒ“‚Ìã‚Éƒ}ƒEƒXƒJ[ƒ\ƒ‹‚ª‚ ‚éó‘Ô
-		//     (3): ƒtƒH[ƒJƒX‚ª‚ ‚éê‡
+		// ï¿½ï¿½ï¿½ s ï¿½É‘Î‰ï¿½ï¿½ï¿½ï¿½ï¿½æ‘œï¿½ï¿½`ï¿½ï¿½
+		// s :  0 : ï¿½ï¿½ï¿½Ê‚Ìï¿½ï¿½
+		//      1 : ï¿½{ï¿½^ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ê‚½ï¿½ï¿½ï¿½
+		//      2 : ï¿½{ï¿½^ï¿½ï¿½ï¿½Ìï¿½Éƒ}ï¿½Eï¿½Xï¿½Jï¿½[ï¿½\ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+		//     (3): ï¿½tï¿½Hï¿½[ï¿½Jï¿½Xï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ê‡
 		if(!enabled)
 		{
-			s = 0; // –³Œøó‘Ô
+			s = 0; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 		}
 
 		if(Butt_imageLoaded)
 		{
-			// ƒ{ƒ^ƒ“ƒCƒ[ƒW‚ª“Ç‚İ‚Ü‚ê‚Ä‚¢‚é
+			// ï¿½{ï¿½^ï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½[ï¿½Wï¿½ï¿½ï¿½Ç‚İï¿½ï¿½Ü‚ï¿½Ä‚ï¿½ï¿½ï¿½
 			// TODO: keyboard focus
 			imageLeft = -s * width;
 		}
 		else
 		{
-			if(Butt_keyPressed) s = 1; // ‰Ÿ‚³‚ê‚Ä‚¢‚é
+			if(Butt_keyPressed) s = 1; // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä‚ï¿½ï¿½ï¿½
 
-			// ˜g‚ÆƒLƒƒƒvƒVƒ‡ƒ“‚ğ•`‰æ
-			// ƒNƒŠƒA
+			// ï¿½gï¿½ÆƒLï¿½ï¿½ï¿½vï¿½Vï¿½ï¿½ï¿½ï¿½ï¿½ï¿½`ï¿½ï¿½
+			// ï¿½Nï¿½ï¿½ï¿½A
 			face = dfAlpha;
 			colorRect(0, 0, width, height, 0, -255);
-			// ‰º’n‚ğ“h‚é
+			// ï¿½ï¿½ï¿½nï¿½ï¿½hï¿½ï¿½
 			if(Butt_color != clNone)
 				colorRect(0, 0, width, height, Butt_color, 128);
-			// •¶š‚ÌƒTƒCƒY‚ğ“¾‚é
+			// ï¿½ï¿½ï¿½ï¿½ï¿½ÌƒTï¿½Cï¿½Yï¿½ğ“¾‚ï¿½
 			var tw, th;
 			tw = font.getTextWidth(Butt_caption);
 			th = font.getTextHeight(Butt_caption);
 			if(s == 0 || s == 2)
 			{
-				// ’Êí‚ ‚é‚¢‚Íƒ}ƒEƒX‚ªã‚É‚ ‚é
+				// ï¿½Êí‚ ï¿½é‚¢ï¿½Íƒ}ï¿½Eï¿½Xï¿½ï¿½ï¿½ï¿½É‚ï¿½ï¿½ï¿½
 				colorRect(0, 0, width, 1, 0xffffff, 128);
 				colorRect(0, 1, 1, height-2, 0xffffff, 128);
 				colorRect(width-1, 1, 1, height-1, 0x000000, 128);
@@ -874,7 +1047,7 @@ class ButtonLayer extends WF_Layer
 			}
 			else
 			{
-				// ‰Ÿ‚³‚ê‚Ä‚¢‚é
+				// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä‚ï¿½ï¿½ï¿½
 				colorRect(0, 0, width, 1, 0x000000, 128);
 				colorRect(0, 1, 1, height-2, 0x000000, 128);
 				colorRect(width-1, 1, 1, height-1, 0xffffff, 128);
@@ -884,11 +1057,11 @@ class ButtonLayer extends WF_Layer
 			}
 
 			if(s != 0)
-				colorRect(2, 2, width-4, height-4, clHighlight, 64); // ƒnƒCƒ‰ƒCƒg‚·‚é
+				colorRect(2, 2, width-4, height-4, clHighlight, 64); // ï¿½nï¿½Cï¿½ï¿½ï¿½Cï¿½gï¿½ï¿½ï¿½ï¿½
 
 			if(focused)
 			{
-				// ƒtƒH[ƒJƒX‚ª‚ ‚é‚Ì‚ÅƒnƒCƒ‰ƒCƒg‚·‚é
+				// ï¿½tï¿½Hï¿½[ï¿½Jï¿½Xï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ì‚Åƒnï¿½Cï¿½ï¿½ï¿½Cï¿½gï¿½ï¿½ï¿½ï¿½
 				colorRect(2, 2, width-4, 1, clHighlight, 128);
 				colorRect(2, 3, 1, height-5, clHighlight, 128);
 				colorRect(3, height-3, width-5, 1, clHighlight, 128);
@@ -899,7 +1072,7 @@ class ButtonLayer extends WF_Layer
 
 	function loadImages(storage, key)
 	{
-		// ‰æ‘œ‚ğ“Ç‚İ‚Ş
+		// ï¿½æ‘œï¿½ï¿½Ç‚İï¿½ï¿½ï¿½
 		super.loadImages(storage, key);
 		super.width = imageWidth \ (Butt_showFocusImage ? 4 : 3);
 		super.height = imageHeight;
@@ -909,7 +1082,7 @@ class ButtonLayer extends WF_Layer
 
 	function discardImage()
 	{
-		// ‰æ‘œ‚ğ”jŠü‚µA•¶šƒ{ƒ^ƒ“ƒŒƒCƒ„‚Æ‚µ‚Ä“®ì‚·‚é‚æ‚¤‚É‚·‚é
+		// ï¿½æ‘œï¿½ï¿½jï¿½ï¿½ï¿½ï¿½ï¿½Aï¿½ï¿½ï¿½ï¿½ï¿½{ï¿½^ï¿½ï¿½ï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½Æ‚ï¿½ï¿½Ä“ï¿½ï¿½ì‚·ï¿½ï¿½æ‚¤ï¿½É‚ï¿½ï¿½ï¿½
 		Butt_imageLoaded = false;
 		imageLeft = imageTop = 0;
 		update();
@@ -917,10 +1090,10 @@ class ButtonLayer extends WF_Layer
 
 	function onExecute(x, y, button, shift)
 	{
-		// ƒ}ƒEƒXƒ{ƒ^ƒ“‚ª‰Ÿ‚³‚ê‚ÄA•ú‚³‚ê‚½‚Æ‚«‚ÉŒÄ‚Î‚ê‚é
-		// ‰½‚©‚±‚Ìƒ{ƒ^ƒ“‚ª‰Ÿ‚³‚ê‚½‚±‚Æ‚É‚æ‚èƒRƒ}ƒ“ƒh‚È‚Ç‚ğÀ‘•‚µ‚½‚¢ê‡‚Í
-		// onMouseUp ‚â onClick ‚ğƒI[ƒo[ƒ‰ƒCƒh‚·‚é‚æ‚è‚à
-		// ‚±‚Ìƒƒ\ƒbƒh‚ğƒI[ƒo[ƒ‰ƒCƒh‚·‚é‚±‚Æ‚ğ„§‚·‚é
+		// ï¿½}ï¿½Eï¿½Xï¿½{ï¿½^ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ÄAï¿½ï¿½ï¿½ï¿½ï¿½ê‚½ï¿½Æ‚ï¿½ï¿½ÉŒÄ‚Î‚ï¿½ï¿½
+		// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ìƒ{ï¿½^ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ê‚½ï¿½ï¿½ï¿½Æ‚É‚ï¿½ï¿½Rï¿½}ï¿½ï¿½ï¿½hï¿½È‚Ç‚ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ê‡ï¿½ï¿½
+		// onMouseUp ï¿½ï¿½ onClick ï¿½ï¿½ï¿½Iï¿½[ï¿½oï¿½[ï¿½ï¿½ï¿½Cï¿½hï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+		// ï¿½ï¿½ï¿½Ìƒï¿½ï¿½\ï¿½bï¿½hï¿½ï¿½ï¿½Iï¿½[ï¿½oï¿½[ï¿½ï¿½ï¿½Cï¿½hï¿½ï¿½ï¿½é‚±ï¿½Æ‚ğ„ï¿½ï¿½ï¿½ï¿½ï¿½
 	}
 
 	function onDownReset()
@@ -941,7 +1114,7 @@ class ButtonLayer extends WF_Layer
 			return;
 		}
 
-		// onMouseDown ƒCƒxƒ“ƒgƒnƒ“ƒhƒ‰
+		// onMouseDown ï¿½Cï¿½xï¿½ï¿½ï¿½gï¿½nï¿½ï¿½ï¿½hï¿½ï¿½
 		if( Butt_mouseDownLFlag || Butt_mouseDownRFlag )
 		{
 			onDownReset();
@@ -965,7 +1138,7 @@ class ButtonLayer extends WF_Layer
 
 		if( button == mbLeft)
 		{
-			// onMouseDown ƒCƒxƒ“ƒgƒnƒ“ƒhƒ‰
+			// onMouseDown ï¿½Cï¿½xï¿½ï¿½ï¿½gï¿½nï¿½ï¿½ï¿½hï¿½ï¿½
 			Butt_mouseDownLFlag = true;
 			Butt_mouseDown = true;
 			if(!Butt_mouseDownRFlag)
@@ -1003,12 +1176,12 @@ class ButtonLayer extends WF_Layer
 
 		if( button == mbLeft )
 		{
-			// onMouseUp ƒCƒxƒ“ƒgƒnƒ“ƒhƒ‰
+			// onMouseUp ï¿½Cï¿½xï¿½ï¿½ï¿½gï¿½nï¿½ï¿½ï¿½hï¿½ï¿½
 			if(Butt_mouseDown)
 			{
 				onExecute(...);
 			}
-			// ’Ç‰Á‚ÌƒCƒxƒ“ƒg
+			// ï¿½Ç‰ï¿½ï¿½ÌƒCï¿½xï¿½ï¿½ï¿½g
 			if(Butt_mouseDownLFlag && !Butt_mouseDownRFlag && Butt_mouseDown)
 			{
 				if(enabled)
@@ -1022,7 +1195,7 @@ class ButtonLayer extends WF_Layer
 		}
 		else if( button == mbRight )
 		{
-			// ’Ç‰Á‚ÌƒCƒxƒ“ƒg
+			// ï¿½Ç‰ï¿½ï¿½ÌƒCï¿½xï¿½ï¿½ï¿½g
 			if(Butt_mouseDownRFlag && !Butt_mouseDownLFlag)
 			{
 				if(enabled)
@@ -1037,13 +1210,13 @@ class ButtonLayer extends WF_Layer
 
 	function onClick()
 	{
-		// onClick ƒCƒxƒ“ƒgƒnƒ“ƒhƒ‰
+		// onClick ï¿½Cï¿½xï¿½ï¿½ï¿½gï¿½nï¿½ï¿½ï¿½hï¿½ï¿½
 		super.onClick(...);
 	}
 
 	function draw()
 	{
-		// Œ»İ‚Ìó‘Ô‚É‚ ‚í‚¹‚Ä•`‰æ‚ğs‚¤
+		// ï¿½ï¿½ï¿½İ‚Ìï¿½Ô‚É‚ï¿½ï¿½í‚¹ï¿½Ä•`ï¿½ï¿½ï¿½ï¿½sï¿½ï¿½
 		if(Butt_mouseDown) drawState(1);
 		else if(Butt_mouseOn) drawState(2);
 		else if(Butt_showFocusImage && focused) drawState(3);
@@ -1052,19 +1225,19 @@ class ButtonLayer extends WF_Layer
 
 	function onPaint()
 	{
-		// •`‰æ‚Ì’¼‘O‚ÉŒÄ‚Î‚ê‚é
+		// ï¿½`ï¿½ï¿½Ì’ï¿½ï¿½Oï¿½ÉŒÄ‚Î‚ï¿½ï¿½
 		super.onPaint(...);
 		draw();
 	}
 
-	// onMouseDownEx or Down‚ªŒÄ‚Î‚ê‚é¡‘O‚ÉŒÄ‚Î‚ê‚éƒCƒxƒ“ƒg
+	// onMouseDownEx or Downï¿½ï¿½ï¿½Ä‚Î‚ï¿½é¡ï¿½Oï¿½ÉŒÄ‚Î‚ï¿½ï¿½Cï¿½xï¿½ï¿½ï¿½g
 	function onMouseUpExPrev(){}
 	function onMouseDownExPrev(){}
-	function RClickFuncPrev(){} // RClickFunc‘O‚ÉŒÄ‚Î‚ê‚éƒCƒxƒ“ƒg
+	function RClickFuncPrev(){} // RClickFuncï¿½Oï¿½ÉŒÄ‚Î‚ï¿½ï¿½Cï¿½xï¿½ï¿½ï¿½g
 
 	function onMouseEnter()
 	{
-		// ƒ}ƒEƒX‚ªƒŒƒCƒ„—Ìˆæ“à‚É“ü‚Á‚½
+		// ï¿½}ï¿½Eï¿½Xï¿½ï¿½ï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½Ìˆï¿½ï¿½ï¿½É“ï¿½ï¿½ï¿½ï¿½ï¿½
 		update();
 		Butt_mouseOn = true;
 
@@ -1078,7 +1251,7 @@ class ButtonLayer extends WF_Layer
 
 	function onMouseLeave()
 	{
-		// ƒ}ƒEƒX‚ªƒŒƒCƒ„—Ìˆæ‚©‚ço‚Ä‚¢‚Á‚½
+		// ï¿½}ï¿½Eï¿½Xï¿½ï¿½ï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½Ìˆæ‚©ï¿½ï¿½oï¿½Ä‚ï¿½ï¿½ï¿½ï¿½ï¿½
 		update();
 		Butt_mouseOn = false;
 		Butt_mouseDown = false;
@@ -1087,7 +1260,7 @@ class ButtonLayer extends WF_Layer
 
 	function onNodeDisabled()
 	{
-		// ƒŒƒCƒ„‚Ìƒm[ƒh‚ª•s‰Â‚É‚È‚Á‚½
+		// ï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½Ìƒmï¿½[ï¿½hï¿½ï¿½ï¿½sï¿½Â‚É‚È‚ï¿½ï¿½ï¿½
 		super.onNodeDisabled(...);
 		Butt_mouseDown = false;
 		update();
@@ -1095,21 +1268,21 @@ class ButtonLayer extends WF_Layer
 
 	function onNodeEnabled()
 	{
-		// ƒŒƒCƒ„‚Ìƒm[ƒh‚ª—LŒø‚É‚È‚Á‚½
+		// ï¿½ï¿½ï¿½Cï¿½ï¿½ï¿½Ìƒmï¿½[ï¿½hï¿½ï¿½ï¿½Lï¿½ï¿½ï¿½É‚È‚ï¿½ï¿½ï¿½
 		super.onNodeEnabled(...);
 		update();
 	}
 
 	function onFocus()
 	{
-		// ƒtƒH[ƒJƒX‚ğ“¾‚½
+		// ï¿½tï¿½Hï¿½[ï¿½Jï¿½Xï¿½ğ“¾‚ï¿½
 		super.onFocus(...);
 		update();
 	}
 
 	function onBlur()
 	{
-		// ƒtƒH[ƒJƒX‚ğ¸‚Á‚½
+		// ï¿½tï¿½Hï¿½[ï¿½Jï¿½Xï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 		super.onBlur(...);
 		Butt_mouseDown = false;
 		update();
@@ -1119,15 +1292,15 @@ class ButtonLayer extends WF_Layer
 	{
 		if( !_checkallenabled() )
 			return;
-		// ƒL[‚ª‰Ÿ‚³‚ê‚½
+		// ï¿½Lï¿½[ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ê‚½
 		if(process)
 		{
 			if(key == VK_RETURN || key == VK_SPACE)
 			{
-				// ƒXƒy[ƒXƒL[‚Ü‚½‚ÍƒGƒ“ƒ^[ƒL[
+				// ï¿½Xï¿½yï¿½[ï¿½Xï¿½Lï¿½[ï¿½Ü‚ï¿½ï¿½ÍƒGï¿½ï¿½ï¿½^ï¿½[ï¿½Lï¿½[
 				Butt_keyPressed = true;
 				update();
-				super.onKeyDown(key, shift, false); // ˆ—‚ğ‚µ‚½‚Ì‚Åprocess‚Éfalse‚ğ“n‚·
+				super.onKeyDown(key, shift, false); // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ì‚ï¿½processï¿½ï¿½falseï¿½ï¿½nï¿½ï¿½
 			}
 			else
 			{
@@ -1136,7 +1309,7 @@ class ButtonLayer extends WF_Layer
 		}
 		else
 		{
-			// process ‚ª false ‚Ìê‡‚Íˆ—‚Ís‚í‚È‚¢
+			// process ï¿½ï¿½ false ï¿½Ìê‡ï¿½Íï¿½ï¿½ï¿½ï¿½Ísï¿½ï¿½È‚ï¿½
 			super.onKeyDown(...);
 		}
 	}
@@ -1145,17 +1318,17 @@ class ButtonLayer extends WF_Layer
 	{
 		if( !_checkallenabled() )
 			return;
-		// ƒL[‚ª—£‚³‚ê‚½
+		// ï¿½Lï¿½[ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ê‚½
 		if(process)
 		{
 			if(key == VK_RETURN || key == VK_SPACE)
 			{
-				// ƒXƒy[ƒXƒL[‚Ü‚½‚ÍƒGƒ“ƒ^[ƒL[
+				// ï¿½Xï¿½yï¿½[ï¿½Xï¿½Lï¿½[ï¿½Ü‚ï¿½ï¿½ÍƒGï¿½ï¿½ï¿½^ï¿½[ï¿½Lï¿½[
 				var flag = Butt_keyPressed;
 				Butt_keyPressed = false;
 				update();
 				super.onKeyUp(key, shift, false);
-				if(flag) onClick(width \ 2, height \ 2); // ƒNƒŠƒbƒN“®ì
+				if(flag) onClick(width \ 2, height \ 2); // ï¿½Nï¿½ï¿½ï¿½bï¿½Nï¿½ï¿½ï¿½ï¿½
 			}
 			else
 			{

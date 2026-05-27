@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from .modehelper import ANCHOR_EQUIVS, get_equivs
+from .modehelper import ANCHOR_EQUIVS, find_literal_match_spans, get_equivs
 
 try:
     from CherryAI.formats.parser_base import _split_speaker_dialogue
@@ -402,12 +402,10 @@ def _capture_custom_placeholder_rule(
                 captured.insert(0, value)
                 result = result[:match.start()] + token + result[match.end():]
         else:
-            while pattern in result:
-                pos = result.find(pattern)
-                if pos < 0:
-                    break
-                captured.append(pattern)
-                result = result[:pos] + token + result[pos + len(pattern):]
+            matches = find_literal_match_spans(result, pattern)
+            for start, end, value in reversed(matches):
+                captured.insert(0, value)
+                result = result[:start] + token + result[end:]
     except re.error:
         return text, []
 

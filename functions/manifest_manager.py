@@ -56,6 +56,17 @@ SOURCE_TEXT_ENCODING_CANDIDATES = (
     "utf-16-be",
 )
 
+OUTPUT_CHANGE_FIELDS = {
+    "orig",
+    "prepro",
+    "tl",
+    "postpro",
+    "qa",
+    "qa_overwrite",
+    "wordwr",
+    "final",
+}
+
 
 def parse_line_tags(raw_tags: Any) -> List[str]:
     """Normalize manifest line tags into an ordered, duplicate-free list."""
@@ -1060,8 +1071,11 @@ class FileDirEntry:
         result: Dict[str, Any] = {}
         if self.type:
             result["type"] = self.type
-        result["first_idx"] = self.first_idx
-        result["last_idx"] = self.last_idx
+        if self.line_count <= 0:
+            result["line_count"] = 0
+        else:
+            result["first_idx"] = self.first_idx
+            result["last_idx"] = self.last_idx
         result["format"] = self.format
         result["rel_path"] = self.rel_path
         if self.encoding != "utf-8":
@@ -1071,9 +1085,18 @@ class FileDirEntry:
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "FileDirEntry":
         """Deserialize from dictionary."""
+        if "first_idx" in d or "last_idx" in d:
+            first_idx = d.get("first_idx", 0)
+            last_idx = d.get("last_idx", first_idx)
+        elif int(d.get("line_count", 0) or 0) <= 0:
+            first_idx = 0
+            last_idx = -1
+        else:
+            first_idx = 0
+            last_idx = int(d.get("line_count", 1) or 1) - 1
         return cls(
-            first_idx=d.get("first_idx", 0),
-            last_idx=d.get("last_idx", 0),
+            first_idx=first_idx,
+            last_idx=last_idx,
             format=d.get("format", "txt"),
             rel_path=d.get("rel_path", ""),
             encoding=d.get("encoding", "utf-8"),
@@ -1083,11 +1106,11 @@ class FileDirEntry:
     @property
     def line_count(self) -> int:
         """Get number of lines in this file."""
-        return self.last_idx - self.first_idx + 1
+        return max(0, self.last_idx - self.first_idx + 1)
     
     def contains_idx(self, idx: int) -> bool:
         """Check if this entry contains the given line index."""
-        return self.first_idx <= idx <= self.last_idx
+        return self.line_count > 0 and self.first_idx <= idx <= self.last_idx
     
     @property
     def filename(self) -> str:
@@ -1758,8 +1781,10 @@ class ManifestManager:
             Filedir entry dict or None if not found.
         """
         for entry in self._manifest_data.get("filedir", []):
+            if int(entry.get("line_count", 1) or 1) <= 0:
+                continue
             first = entry.get("first_idx", 0)
-            last = entry.get("last_idx", 0)
+            last = entry.get("last_idx", first)
             if first <= idx <= last:
                 return entry
         return None
@@ -2207,8 +2232,10 @@ class ManifestManager:
                     "locator_metadata",
                     "latest_saved_row_state",
                 }
-                for state in files.values():
+                empty_rel_paths: List[str] = []
+                for rel_path, state in files.items():
                     if not isinstance(state, dict):
+                        empty_rel_paths.append(rel_path)
                         continue
                     for key in redundant_editor_keys:
                         if key in state:
@@ -2217,6 +2244,14 @@ class ManifestManager:
                                 key,
                             )
                             del state[key]
+                    history = state.get("history")
+                    if not isinstance(history, list):
+                        history = []
+                        state["history"] = history
+                    if not history and not bool(state.get("changed", False)):
+                        empty_rel_paths.append(rel_path)
+                for rel_path in empty_rel_paths:
+                    files.pop(rel_path, None)
         
         return data
     
@@ -2764,7 +2799,13 @@ class ManifestManager:
         translation: str,
     ) -> bool:
         """Update translation for a line (called during translation)."""
-        return self.set_line_field(idx, "tl", translation)
+        previous_value = ""
+        current_line = self.get_line(idx)
+        if isinstance(current_line, dict):
+            previous_value = str(current_line.get("tl", "") or "")
+        result = self.set_line_field(idx, "tl", translation)
+        self.track_output_change_for_field(idx, "tl", previous_value, translation)
+        return result
     
     # ========================== Operations ========================== #
     
@@ -3500,17 +3541,29 @@ class ManifestManager:
 
         affected_rel_paths: set[str] = set()
         fields_saved = 0
+        compare_changes: Dict[str, Dict[int, tuple[Any, Any]]] = {}
         for idx in sorted(target_indices):
             line_changes = dict(changes.get(idx, {}))
             deleted = set(deleted_fields.get(idx, set()))
+            original_line = dict(self.get_line(idx) or {})
 
             for field_name, value in line_changes.items():
                 if field_name in deleted:
                     continue
+                if field_name in OUTPUT_CHANGE_FIELDS:
+                    compare_changes.setdefault(field_name, {})[idx] = (
+                        original_line.get(field_name, ""),
+                        value,
+                    )
                 self.set_line_field(idx, field_name, value)
                 fields_saved += 1
 
             for field_name in deleted:
+                if field_name in OUTPUT_CHANGE_FIELDS:
+                    compare_changes.setdefault(field_name, {})[idx] = (
+                        original_line.get(field_name, ""),
+                        "",
+                    )
                 self.clear_line_field(idx, field_name)
                 fields_saved += 1
 
@@ -3523,6 +3576,9 @@ class ManifestManager:
             entry = self.get_filedir_entry_for_idx(idx)
             if entry is not None:
                 affected_rel_paths.add(entry.rel_path)
+
+        for field_name, field_changes in compare_changes.items():
+            self._mark_output_changed_from_compare_updates(field_name, field_changes)
 
         artifacts: List[Dict[str, Any]] = []
         for rel_path in sorted(affected_rel_paths):
@@ -3593,6 +3649,198 @@ class ManifestManager:
             editor_state["files"] = files
         return files
 
+    def _normalize_output_compare_value(self, value: Any) -> str:
+        """Return a stable comparable representation for one output field value."""
+        if value is None:
+            return ""
+        return str(value)
+
+    def _entry_for_idx_in_filedir(
+        self,
+        idx: int,
+        filedir: List[FileDirEntry],
+    ) -> Optional[FileDirEntry]:
+        """Return the filedir entry containing *idx* within a provided filedir list."""
+        for entry in filedir:
+            if entry.first_idx <= idx <= entry.last_idx:
+                return entry
+        return None
+
+    def _build_output_compare_changes_for_replaced_lines(
+        self,
+        compare_field: str,
+        previous_lines: List[Dict[str, Any]],
+        current_lines: List[Dict[str, Any]],
+        *,
+        previous_filedir: List[FileDirEntry],
+        current_filedir: List[FileDirEntry],
+    ) -> Dict[int, tuple[str, str]]:
+        """Return one compare-field change marker per rel_path for full line reloads."""
+        previous_by_rel_path = {entry.rel_path: entry for entry in previous_filedir}
+        changes: Dict[int, tuple[str, str]] = {}
+
+        for current_entry in current_filedir:
+            previous_entry = previous_by_rel_path.get(current_entry.rel_path)
+            if previous_entry is None:
+                continue
+
+            max_line_count = max(previous_entry.line_count, current_entry.line_count)
+            for offset in range(max_line_count):
+                previous_value = ""
+                current_value = ""
+
+                if offset < previous_entry.line_count:
+                    previous_idx = previous_entry.first_idx + offset
+                    if 0 <= previous_idx < len(previous_lines):
+                        previous_value = self._normalize_output_compare_value(
+                            previous_lines[previous_idx].get(compare_field)
+                        )
+
+                if offset < current_entry.line_count:
+                    current_idx = current_entry.first_idx + offset
+                    if 0 <= current_idx < len(current_lines):
+                        current_value = self._normalize_output_compare_value(
+                            current_lines[current_idx].get(compare_field)
+                        )
+                else:
+                    current_idx = current_entry.first_idx
+
+                if previous_value == current_value:
+                    continue
+
+                changes[current_idx] = (previous_value, current_value)
+                break
+
+        return changes
+
+    def _mark_output_changed_from_compare_updates(
+        self,
+        compare_field: str,
+        changes: Dict[int, tuple[Any, Any]],
+    ) -> None:
+        """Mark translated files changed for Step 9 when one compared field differs.
+
+        The helper is intentionally shared by all button-triggered output-affecting
+        writes. It only considers files that already exist in the staged
+        ``Translated/`` branch and stops after the first differing line per file.
+        """
+        if compare_field not in OUTPUT_CHANGE_FIELDS:
+            return
+        if not changes:
+            return
+
+        translated_dir = self.get_translated_dir()
+        if not translated_dir.exists():
+            return
+
+        sorted_indices = sorted(changes)
+        filedir = self.get_filedir()
+        position = 0
+
+        while position < len(sorted_indices):
+            idx = sorted_indices[position]
+            entry = self._entry_for_idx_in_filedir(idx, filedir)
+            if entry is None:
+                position += 1
+                continue
+
+            next_position = position + 1
+            while (
+                next_position < len(sorted_indices)
+                and sorted_indices[next_position] <= entry.last_idx
+            ):
+                next_position += 1
+
+            translated_path = self.get_translated_file_path(entry)
+            if not translated_path.exists():
+                position = next_position
+                continue
+
+            file_changed = False
+            for scan_position in range(position, next_position):
+                previous_value, current_value = changes[sorted_indices[scan_position]]
+                if self._normalize_output_compare_value(previous_value) != self._normalize_output_compare_value(current_value):
+                    file_changed = True
+                    break
+
+            if file_changed:
+                self._mark_output_changed_for_rel_path(entry.rel_path)
+
+            position = next_position
+
+    def track_output_change_for_field(
+        self,
+        idx: int,
+        compare_field: str,
+        previous_value: Any,
+        current_value: Any,
+    ) -> None:
+        """Track one output-affecting field comparison for the file containing *idx*."""
+        self._mark_output_changed_from_compare_updates(
+            compare_field,
+            {idx: (previous_value, current_value)},
+        )
+
+    def track_output_change_for_replaced_lines(
+        self,
+        compare_field: str,
+        previous_lines: List[Dict[str, Any]],
+        current_lines: List[Dict[str, Any]],
+        *,
+        previous_filedir: List[FileDirEntry],
+        current_filedir: List[FileDirEntry],
+    ) -> None:
+        """Track changed files for a full line reload such as Input -> Load Selected."""
+        changes = self._build_output_compare_changes_for_replaced_lines(
+            compare_field,
+            previous_lines,
+            current_lines,
+            previous_filedir=previous_filedir,
+            current_filedir=current_filedir,
+        )
+        self._mark_output_changed_from_compare_updates(compare_field, changes)
+
+    def _should_keep_editor_state_record(self, record: Dict[str, Any]) -> bool:
+        """Return whether a compact EditorState record still has meaningful state."""
+        history = record.get("history")
+        if isinstance(history, list) and history:
+            return True
+        return bool(record.get("changed", False))
+
+    def _mark_output_changed_for_idx(self, idx: int) -> None:
+        """Mark the file containing *idx* as changed for Step 9 output."""
+        entry = self.get_filedir_entry_for_idx(idx)
+        if entry is None:
+            return
+        self._mark_output_changed_for_rel_path(entry.rel_path)
+
+    def _mark_output_changed_for_rel_path(self, rel_path: str) -> None:
+        """Mark one file as changed when it already has staged translated state."""
+        entry = self.get_filedir_entry_by_rel_path(rel_path)
+        if entry is None:
+            return
+
+        files_state = self._get_editor_state_files(create=False)
+        existing = files_state.get(rel_path, {}) if files_state else {}
+        translated_exists = self.get_translated_file_path(entry).exists()
+        patch_exists = self.get_patch_translated_file_path(entry).exists()
+        if not translated_exists and not patch_exists and not existing:
+            return
+
+        record: Dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
+        history = record.get("history")
+        if not isinstance(history, list):
+            record["history"] = []
+        record["changed"] = True
+        self._get_editor_state_files(create=True)[rel_path] = record
+
+    def is_output_changed(self, rel_path: str) -> bool:
+        """Return whether *rel_path* has staged changes pending Step 9 export."""
+        record = self._get_editor_state_files(create=False).get(rel_path, {})
+        if not isinstance(record, dict):
+            return False
+        return bool(record.get("changed", False))
+
     def _stage_editor_text_save(
         self,
         entry: FileDirEntry,
@@ -3614,6 +3862,7 @@ class ManifestManager:
             source=source,
             max_history=max_history,
             synthesize_patch_if_missing=False,
+            mark_dirty=True,
             previous_view=previous_view,
         )
         return staged
@@ -3675,7 +3924,13 @@ class ManifestManager:
         self.render_manifest_entry_to_path(entry, render_path)
         return render_path
 
-    def render_manifest_entry_to_path(self, entry: FileDirEntry, output_path: Path) -> Dict[str, Any]:
+    def render_manifest_entry_to_path(
+        self,
+        entry: FileDirEntry,
+        output_path: Path,
+        *,
+        source_path: Optional[Path] = None,
+    ) -> Dict[str, Any]:
         """Render one manifest-backed file to *output_path*."""
         from CherryAI.formats import get_handler, get_parser_registry
         from CherryAI.formats.parser_base import ParserScript
@@ -3686,7 +3941,7 @@ class ManifestManager:
 
         parser = get_parser_registry().get(entry.format)
         if parser is not None:
-            source_path = self.resolve_file_path(entry.rel_path)
+            source_path = source_path or self.resolve_file_path(entry.rel_path)
             if not source_path.exists():
                 raise FileNotFoundError(f"Source file not found: {source_path}")
 
@@ -3896,13 +4151,9 @@ class ManifestManager:
                 "translated_path": translated_path,
             }
         else:
+            artifact_info = self.capture_reverse_patch_for_rendered_bytes(entry, new_bytes)
             target_path = self.ensure_translated_file_path(entry)
             target_path.write_bytes(new_bytes)
-            artifact_info = {
-                "decision": "missing",
-                "artifact_path": None,
-                "translated_path": translated_path,
-            }
 
         current_view = self.get_editor_file_view(entry.rel_path)
         saved_at = datetime.utcnow().isoformat() + "Z"
@@ -3925,14 +4176,18 @@ class ManifestManager:
         history = existing_record.get("history", [])
         if not isinstance(history, list):
             history = []
+        changed_flag = bool(existing_record.get("changed", False))
         if source == "step9":
             history = []
+            changed_flag = False
         if history_entry is not None:
             history.append(history_entry)
             if max_history > 0:
                 history = history[-max_history:]
+        if source != "step9":
+            changed_flag = True
 
-        files_state[entry.rel_path] = {
+        record = {
             "saved_at": saved_at,
             "translated_path": self._relativize_project_path(
                 translated_path if translated_path.exists() else None
@@ -3940,7 +4195,12 @@ class ManifestManager:
             "patch_original_path": self._current_patch_original_reference(entry),
             "patch_translated_path": None if source == "step9" else patch_rel_path,
             "history": history,
+            "changed": changed_flag,
         }
+        if self._should_keep_editor_state_record(record):
+            files_state[entry.rel_path] = record
+        else:
+            files_state.pop(entry.rel_path, None)
         if mark_dirty:
             self._mark_dirty()
 
@@ -4000,6 +4260,117 @@ class ManifestManager:
         if artifact_path.exists():
             return self._relativize_project_path(artifact_path)
         return None
+
+    def _rebuild_editor_history_versions(self, entry: FileDirEntry) -> List[str]:
+        """Return chronological editor versions reconstructed from rollback history."""
+        editor_state = self._get_editor_state_files(create=False).get(entry.rel_path, {})
+        if not isinstance(editor_state, dict):
+            return []
+
+        history = editor_state.get("history")
+        if not isinstance(history, list) or not history:
+            return []
+
+        current_path = self._resolve_editor_current_file_path(entry)
+        current_text = self._read_editor_text(current_path, entry.encoding or "utf-8")
+        if not current_text:
+            return []
+
+        versions = [current_text]
+        previous_text = current_text
+        for history_entry in reversed(history):
+            if not isinstance(history_entry, dict):
+                return []
+            patch_path = self._resolve_project_relative_path(history_entry.get("patch_path"))
+            if patch_path is None or not patch_path.exists():
+                return []
+
+            if patch_path.suffix == ".patch":
+                try:
+                    diff_text = patch_path.read_text(encoding="utf-8")
+                except OSError:
+                    return []
+                previous_text = self._apply_unified_diff_to_text(previous_text, diff_text)
+                if previous_text is None:
+                    return []
+            else:
+                previous_text = self._read_editor_text(patch_path, entry.encoding or "utf-8")
+            versions.append(previous_text)
+
+        versions.reverse()
+        return versions
+
+    def _replay_editor_history_onto_rendered_text(
+        self,
+        entry: FileDirEntry,
+        rendered_text: str,
+    ) -> str:
+        """Replay editor-only changes onto fresh rendered output text."""
+        versions = self._rebuild_editor_history_versions(entry)
+        if len(versions) < 2:
+            return rendered_text
+
+        replayed_text = rendered_text
+        for previous_text, next_text in zip(versions, versions[1:]):
+            diff_text = "\n".join(
+                difflib.unified_diff(
+                    previous_text.splitlines(),
+                    next_text.splitlines(),
+                    fromfile=f"History/{entry.rel_path}",
+                    tofile=f"Current/{entry.rel_path}",
+                    lineterm="",
+                )
+            )
+            if not diff_text:
+                continue
+
+            patched_text = self._apply_unified_diff_to_text(replayed_text, diff_text)
+            if patched_text is None:
+                logger.warning("Failed to replay editor history for %s", entry.rel_path)
+                return rendered_text
+            replayed_text = patched_text
+        return replayed_text
+
+    def build_step9_replay_source_path(self, entry: FileDirEntry) -> Optional[Path]:
+        """Build a temporary source file with editor history replayed onto fresh output."""
+        versions = self._rebuild_editor_history_versions(entry)
+        if len(versions) < 2:
+            return None
+
+        rendered_path = self._render_manifest_entry_to_temp_path(entry)
+        try:
+            rendered_text = self._read_editor_text(rendered_path, entry.encoding or "utf-8")
+            replayed_text = self._replay_editor_history_onto_rendered_text(entry, rendered_text)
+            replayed_path = rendered_path.with_name(
+                f"{rendered_path.stem}_replayed{rendered_path.suffix}"
+            )
+            replayed_path.write_text(
+                replayed_text,
+                encoding=entry.encoding or "utf-8",
+                newline="",
+            )
+            rendered_path.unlink(missing_ok=True)
+            return replayed_path
+        except Exception:
+            try:
+                rendered_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+
+    def should_skip_step9_export(self, entry: FileDirEntry, output_path: Path) -> bool:
+        """Return whether a Step 9 export can skip one unchanged translated file."""
+        translated_path = self.get_translated_file_path(entry)
+        if not translated_path.exists():
+            return False
+
+        try:
+            same_target = translated_path.resolve() == output_path.resolve()
+        except OSError:
+            same_target = translated_path == output_path
+        if not same_target:
+            return False
+        return not self.is_output_changed(entry.rel_path)
 
     def _apply_unified_diff_to_text(self, source_text: str, diff_text: str) -> Optional[str]:
         """Apply a unified diff generated from *source_text* and return the target text."""
@@ -4146,11 +4517,37 @@ class ManifestManager:
 
     def _read_editor_text(self, path: Path, encoding: str) -> str:
         """Read text for editor consumers, returning an empty string on failure."""
+        requested = (encoding or "").strip() or "utf-8"
+        candidates: List[str] = [requested]
+        fallback_candidates = [
+            "utf-8-sig",
+            "utf-8",
+            "cp932",
+            "shift_jis",
+            "utf-16",
+            "utf-16-le",
+            "utf-16-be",
+        ]
+        for candidate in fallback_candidates:
+            if candidate.lower() not in {item.lower() for item in candidates}:
+                candidates.append(candidate)
+
         try:
-            return path.read_text(encoding=encoding, errors="ignore")
+            for candidate in candidates:
+                try:
+                    return path.read_text(encoding=candidate, errors="ignore")
+                except UnicodeError:
+                    continue
         except OSError:
             logger.debug("Editor source file unavailable: %s", path)
             return ""
+
+        logger.debug(
+            "Editor text decode failed for %s with candidates %s",
+            path,
+            candidates,
+        )
+        return ""
 
     def _extract_editor_lines(
         self,
@@ -4184,6 +4581,100 @@ class ManifestManager:
                 logger.debug("Editor handler extract failed for %s: %s", path, exc)
 
         return self._read_editor_text(path, entry.encoding or "utf-8").splitlines()
+
+    def write_staged_editor_file_to_path(
+        self,
+        entry: FileDirEntry,
+        output_path: Path,
+    ) -> Optional[Dict[str, Any]]:
+        """Copy an active staged full-file edit to *output_path* when present."""
+        current_path = self._resolve_editor_current_file_path(entry)
+        original_path = self.get_original_file_path(entry)
+        if current_path == original_path or not current_path.exists():
+            return None
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(current_path, output_path)
+        return {
+            "line_count": len(self._extract_editor_lines(entry, current_path)),
+            "failures": [],
+            "inject_failures": [],
+            "used_staged_file": True,
+            "source_path": current_path,
+        }
+
+    def capture_reverse_patch_for_rendered_bytes(
+        self,
+        entry: FileDirEntry,
+        new_bytes: bytes,
+    ) -> Dict[str, Any]:
+        """Capture rollback material against a fresh manifest render baseline."""
+        rendered_path = self._render_manifest_entry_to_temp_path(entry)
+        try:
+            rendered_bytes = rendered_path.read_bytes()
+        finally:
+            try:
+                rendered_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            try:
+                rendered_path.parent.rmdir()
+            except OSError:
+                pass
+
+        current_hash = hashlib.sha256(rendered_bytes).hexdigest()
+        new_hash = hashlib.sha256(new_bytes).hexdigest()
+        if current_hash == new_hash:
+            return {
+                "decision": "skip",
+                "artifact_path": None,
+                "translated_path": self.get_translated_file_path(entry),
+                "previous_hash": current_hash,
+                "new_hash": new_hash,
+            }
+
+        artifact_path = self.ensure_patch_translated_file_path(entry)
+        diff_path = artifact_path.with_name(artifact_path.name + ".patch")
+        encoding = entry.encoding or "utf-8"
+        try:
+            current_text = rendered_bytes.decode(encoding)
+            new_text = new_bytes.decode(encoding)
+        except UnicodeDecodeError:
+            artifact_path.write_bytes(rendered_bytes)
+            return {
+                "decision": "full_copy",
+                "artifact_path": artifact_path,
+                "translated_path": self.get_translated_file_path(entry),
+                "previous_hash": current_hash,
+                "new_hash": new_hash,
+            }
+
+        diff_text = "\n".join(
+            difflib.unified_diff(
+                new_text.splitlines(),
+                current_text.splitlines(),
+                fromfile=f"Rendered/{entry.rel_path}",
+                tofile=f"Patch/Translated/{entry.rel_path}",
+                lineterm="",
+            )
+        )
+        if not diff_text:
+            return {
+                "decision": "skip",
+                "artifact_path": None,
+                "translated_path": self.get_translated_file_path(entry),
+                "previous_hash": current_hash,
+                "new_hash": new_hash,
+            }
+
+        diff_path.write_text(diff_text, encoding="utf-8", newline="")
+        return {
+            "decision": "diff",
+            "artifact_path": diff_path,
+            "translated_path": self.get_translated_file_path(entry),
+            "previous_hash": current_hash,
+            "new_hash": new_hash,
+        }
 
     def _build_editor_line_history(
         self,
@@ -4460,8 +4951,13 @@ class ManifestManager:
             parent = parent.parent
         return changed
 
-    def backup_active_translated_branch(self, *, reason: str = "step9_export") -> Dict[str, Any]:
-        """Rename the active translated branch into Backups/ and snapshot its metadata."""
+    def backup_active_translated_branch(
+        self,
+        *,
+        reason: str = "step9_export",
+        preserve_active: bool = False,
+    ) -> Dict[str, Any]:
+        """Store the active translated branch in Backups/ and snapshot its metadata."""
         snapshot = self._capture_active_translated_editor_state()
         translated_dir = self.get_translated_dir()
         patch_dir = self.get_patch_translated_dir()
@@ -4478,13 +4974,19 @@ class ManifestManager:
         if has_translated:
             translated_backup = backup_root / "Translated" / backup_id
             translated_backup.parent.mkdir(parents=True, exist_ok=True)
-            translated_dir.rename(translated_backup)
+            if preserve_active:
+                shutil.copytree(translated_dir, translated_backup)
+            else:
+                translated_dir.rename(translated_backup)
             translated_backup_rel = self._relativize_project_path(translated_backup)
 
         if has_patch:
             patch_backup = backup_root / "Patch" / "Translated" / backup_id
             patch_backup.parent.mkdir(parents=True, exist_ok=True)
-            patch_dir.rename(patch_backup)
+            if preserve_active:
+                shutil.copytree(patch_dir, patch_backup)
+            else:
+                patch_dir.rename(patch_backup)
             patch_backup_rel = self._relativize_project_path(patch_backup)
 
         backup_record: Dict[str, Any] = {
@@ -4501,7 +5003,9 @@ class ManifestManager:
 
         backups = self._get_editor_state_backups(create=True)
         backups.append(backup_record)
-        changed = self._clear_active_translated_editor_state()
+        changed = False
+        if not preserve_active:
+            changed = self._clear_active_translated_editor_state()
         if backups or changed:
             self._mark_dirty()
         return {
@@ -5187,10 +5691,7 @@ class ManifestManager:
         
         for file_info in file_infos:
             file_path = Path(file_info["path"])
-            line_count = file_info.get("line_count", 0)
-            
-            if line_count == 0:
-                continue
+            line_count = max(int(file_info.get("line_count", 0) or 0), 0)
                 
             explicit_rel_path = str(file_info.get("rel_path", "")).strip()
             if explicit_rel_path:
@@ -5210,7 +5711,7 @@ class ManifestManager:
                 format=file_info.get("format", "txt"),
                 rel_path=str(rel_path),
                 encoding=file_info.get("encoding", "utf-8"),
-                type=file_info.get("type", ""),
+                type=file_info.get("type", "misc" if line_count == 0 else ""),
             )
             entries.append(entry)
             current_idx += line_count

@@ -128,6 +128,7 @@ class SharedTable(ttk.Frame):
         show_filter: bool = True,
         show_checkboxes: bool = False,
         show_count_filter: bool = True,
+        show_export_button: bool = True,
         on_select: Optional[Callable[[List[int]], None]] = None,
         on_edit: Optional[Callable[[int, str, Any], None]] = None,
     ) -> None:
@@ -141,6 +142,8 @@ class SharedTable(ttk.Frame):
             show_count_filter: Whether to show count filter in the
                 filter bar.  Set to ``False`` for tables that do not
                 have a meaningful numeric count column.
+            show_export_button: Whether to show the built-in CSV export
+                button in the status bar.
             on_select: Callback when selection changes.
             on_edit: Callback when a cell is edited.
         """
@@ -156,9 +159,11 @@ class SharedTable(ttk.Frame):
         self._show_filter = show_filter
         self._show_checkboxes = show_checkboxes
         self._show_count_filter = show_count_filter
+        self._show_export_button = show_export_button
         self._on_select = on_select
         self._on_edit = on_edit
         self._checked_rows: set = set()
+        self._checkbox_anchor_id: Optional[int] = None
         self._filter_var = tk.StringVar()
         self._count_filter_var = tk.StringVar()
         self._count_mode_var = tk.StringVar(value="≥")  # ≥ or ≤ toggle
@@ -321,13 +326,14 @@ class SharedTable(ttk.Frame):
         self._status_label.pack(side="left")
 
         # Export button (right side)
-        export_btn = ttk.Button(
-            status_frame,
-            text="Export CSV",
-            command=self._export_csv,
-            width=10,
-        )
-        export_btn.pack(side="right")
+        if self._show_export_button:
+            export_btn = ttk.Button(
+                status_frame,
+                text="Export CSV",
+                command=self._export_csv,
+                width=10,
+            )
+            export_btn.pack(side="right")
 
         # Pagination controls (right of status, left of export)
         self._page_frame = ttk.Frame(status_frame)
@@ -784,12 +790,70 @@ class SharedTable(ttk.Frame):
             return
 
         row_id = int(item)
-        if row_id in self._checked_rows:
-            self._checked_rows.discard(row_id)
+        should_check = row_id not in self._checked_rows
+
+        if bool(event.state & 0x0001) and self._checkbox_anchor_id is not None:
+            visible_row_ids = [int(child) for child in self._tree.get_children()]
+            try:
+                start = visible_row_ids.index(self._checkbox_anchor_id)
+                end = visible_row_ids.index(row_id)
+            except ValueError:
+                start = end = -1
+
+            if start >= 0 and end >= 0:
+                low = min(start, end)
+                high = max(start, end)
+                for range_row_id in visible_row_ids[low:high + 1]:
+                    if should_check:
+                        self._checked_rows.add(range_row_id)
+                    else:
+                        self._checked_rows.discard(range_row_id)
+            else:
+                if should_check:
+                    self._checked_rows.add(row_id)
+                else:
+                    self._checked_rows.discard(row_id)
         else:
-            self._checked_rows.add(row_id)
+            if should_check:
+                self._checked_rows.add(row_id)
+            else:
+                self._checked_rows.discard(row_id)
+
+        self._checkbox_anchor_id = row_id
 
         self._refresh_display()
+        self._tree.selection_set(item)
+
+    def set_checked_rows(
+        self,
+        row_ids: Sequence[int],
+        *,
+        replace: bool = False,
+    ) -> None:
+        """Mark row ids as checked.
+
+        Args:
+            row_ids: Row ids to check.
+            replace: When true, replace the existing checked set.
+        """
+        valid_ids = {int(row_id) for row_id in row_ids if self._contains_row_id(int(row_id))}
+        if replace:
+            self._checked_rows = valid_ids
+        else:
+            self._checked_rows.update(valid_ids)
+
+        if valid_ids:
+            self._checkbox_anchor_id = next(iter(valid_ids))
+        elif replace:
+            self._checkbox_anchor_id = None
+
+        self._refresh_display()
+
+    def get_filtered_ids(self) -> List[int]:
+        """Return all row ids currently visible under the active filter."""
+        if getattr(self, "_row_provider", None) is not None:
+            return list(getattr(self, "_filtered_row_ids", []))
+        return [row.id for row in getattr(self, "_filtered_rows", [])]
 
     def _on_double_click(self, event: tk.Event) -> None:
         """Handle double-click for editing."""

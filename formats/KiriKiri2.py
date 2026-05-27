@@ -20,7 +20,7 @@ import zlib
 from enum import IntEnum
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from CherryAI.functions.apply_patches import (
     ParserProjectPatch,
@@ -53,8 +53,11 @@ MDAT_ENCODING_CANDIDATES: Tuple[str, ...] = (
 )
 JAPANESE_RE = re.compile(
     r"[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF々〆ヵヶ"
-    r"\u3041-\u3096\u309D-\u309F"
-    r"\u30A1-\u30FA\u30FD-\u30FF\u31F0-\u31FF\uFF66-\uFF9Fー]"
+    r"\u3040-\u309F"
+    r"\u30A0-\u30FF\u31F0-\u31FF\uFF66-\uFF9Fー"
+    r"\u3000-\u303F"
+    r"\uFF00-\uFFEF"
+    r"\u2000-\u206F]"
 )
 COMMENT_RE = re.compile(r"^\s*(?:;|//)")
 
@@ -82,10 +85,16 @@ AT_COMMAND_RE = re.compile(r"^\s*@")
 TAG_RE = re.compile(r"^\s*\[[^\]]*\]\s*$")
 MULTI_TAG_RE = re.compile(r"^\s*(?:\[[^\]]*\]\s*)+$")
 BRACE_COMMAND_RE = re.compile(r"^\s*\{[^{}]*\}\s*$")
-SPEAKER_RE = re.compile(r"^\s*【(?P<speaker>[^】]+)】(?:\[(?P<voice_id>[^\]]+)\])?\s*$")
+SPEAKER_RE = re.compile(
+    r"^\s*(?:"
+    r"【(?P<speaker1>[^】]+)】(?:\[(?P<voice_id>[^\]]+)\])?"
+    r"|"
+    r"(?:@talk\s+name=)(?P<speaker2>.+)"
+    r")\s*$"
+)
 TALK_COMMAND_RE = re.compile(r"^\s*@talk(?:\s+(?P<args>.*?))?\s*$", re.IGNORECASE)
 TALK_NAME_ARG_RE = re.compile(
-    r"\bname\s*=\s*(?P<speaker>\[[^\]]+\]|\"[^\"]+\"|[^\s]+)",
+    r"\bname\s*=\s*(?P<speaker>\[[^\]]+\][^\s]*|\"[^\"]+\"|[^\s]+)",
     re.IGNORECASE,
 )
 NAME_TAG_RE = re.compile(r'\[name\s+text\s*=\s*"([^"]+)"\]')
@@ -105,8 +114,10 @@ LABEL_TITLE_RE = re.compile(r'^(\*[^|\r\n]+\|)([^\r\n]*)(\r?\n?)$')
 CAPTION_LITERAL_RE = re.compile(r'(caption\s*:\s*")((?:\\.|[^"\\])*)(")', re.IGNORECASE)
 DIALOG_MGR_LITERAL_RE = re.compile(
     r'((?:(?:[A-Za-z_][A-Za-z0-9_]*\.)*DialogMGR\.)?'
-    r'(?:SetYesNo|SetOK|SetMessage|SetError)'
-    r'\s*\(\s*(?:[^"\r\n,]+?\+\s*)*")'
+    r'(?:SetYesNo|SetOK|SetMessage|SetError|SetIDString)'
+    r'\s*\(\s*'
+    r'(?:[^"\r\n]*?\+\s*)*'  # allow concatenation pieces before the quoted literal
+    r'[^"\r\n]*?")'
     r'((?:\\.|[^"\\])*)'
     r'(")'
 )
@@ -181,6 +192,31 @@ PATCH_SPECIAL_CONTAINER_RE = re.compile(
     r"^patch[_-](?P<name>[A-Za-z0-9_]+?)(?P<num>\d*)$",
     re.IGNORECASE,
 )
+RANDOMCOMMENT_CSV_RE = re.compile(r"^edit_randomcomment_[1-6]\.csv$", re.IGNORECASE)
+TJS_RESOURCE_LITERAL_RE = re.compile(
+    r"(?:^xx2_|^edit_|^htype_|/|\\\\|\.(?:tjs|ks|nei|csv|txt|dat|png|tlg|ogg|wav|mp3)$)",
+    re.IGNORECASE,
+)
+RANDOMCOMMENT_OPEN_RE = re.compile(
+    r"(?P<var>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
+    r"sysorg\.csvOpen\(\s*\"edit_randomcomment_(?P<num>[1-6])\.nei\"\s*\)",
+    re.IGNORECASE,
+)
+RANDOMCOMMENT_GETCELL_RE = re.compile(
+    r"sysorg\.GetCell\(\s*(?P<col>[^,]+?)\s*,\s*(?P<row>[^,]+?)\s*,\s*"
+    r"(?P<var>[A-Za-z_][A-Za-z0-9_]*)\s*\)",
+    re.IGNORECASE,
+)
+LHS_ASSIGN_RE = re.compile(r"^\s*(?:var\s+)?(?P<lhs>[A-Za-z_][A-Za-z0-9_]*)\s*=")
+TXT_VAR_RE = re.compile(r"\btxt_[A-Za-z0-9_]+\b")
+TJS_TEXT_USE_RE = re.compile(
+    r"\b(?:drawText(?:Ex)?|getTextWidth|getTextHeight)\b",
+    re.IGNORECASE,
+)
+RAND_NAME_ARRAY_ASSIGN_RE = re.compile(
+    r"(?:^|[\s;])(?:[A-Za-z_][A-Za-z0-9_]*\.)*Rand[A-Za-z]+Name\s*=\s*\[",
+    re.IGNORECASE,
+)
 KIRIKIRI2_SIZE_WHITELIST_FILENAMES: Tuple[str, ...] = (
     "menus.tjs",
 )
@@ -195,41 +231,11 @@ KIRIKIRI2_SIZE_WHITELIST_SUFFIXES: Tuple[str, ...] = (
     ".xp3",
 )
 KIRIKIRI2_SUPPLEMENTAL_STAGE_FILENAMES: Tuple[str, ...] = (
-    "MainWindow.tjs",
-    "MessageLayer.tjs",
-    "SelectLayer.tjs",
-    "ImportantData.tjs",
-    "MenuItemManager.tjs",
-    "CacheWindow.tjs",
-    "VersionWindow.tjs",
-    "AffineLayer.tjs",
-    "ButtonLayer.tjs",
     "version.dll",
     "CherryAI.KiriKiriPatch.json",
-    "CherryAI.KiriKiriFontPatch.json",
 )
-KIRIKIRI2_SUPPLEMENTAL_STAGE_RELATIVE_PATHS: Tuple[str, ...] = (
-    "data/system/MainWindow.tjs",
-    "system/MainWindow.tjs",
-    "data/system/MessageLayer.tjs",
-    "system/MessageLayer.tjs",
-    "data/system/SelectLayer.tjs",
-    "system/SelectLayer.tjs",
-    "data/system/ImportantData.tjs",
-    "system/ImportantData.tjs",
-    "data/system/MenuItemManager.tjs",
-    "system/MenuItemManager.tjs",
-    "data/program/CacheWindow.tjs",
-    "program/CacheWindow.tjs",
-    "data/system/VersionWindow.tjs",
-    "system/VersionWindow.tjs",
-    "data/system/AffineLayer.tjs",
-    "system/AffineLayer.tjs",
-    "data/system/ButtonLayer.tjs",
-    "system/ButtonLayer.tjs",
-)
+KIRIKIRI2_SUPPLEMENTAL_STAGE_RELATIVE_PATHS: Tuple[str, ...] = ()
 CSV_ALLOWED_HEADER_TAGS: Dict[str, str] = {
-    "タイトル": "title",
     "概要テキスト": "summary",
     "発生条件テキスト": "condition",
     "デート場所(ゲームには無関係)": "place",
@@ -242,8 +248,9 @@ CSV_ALLOWED_HEADER_TAGS: Dict[str, str] = {
     "スキル名": "skill_name",
     "カテゴリ": "category",
     "説明文": "description",
-    "称号": "title",
     "街の名称": "place_name",
+    "エッチ": "h_text",
+    "建設効果説明文": "construction_effect_description",
 }
 MDAT_ALLOWED_KEYS: Dict[str, str] = {
     "マップ名": "map_name",
@@ -687,15 +694,36 @@ def _read_text(path: Path, candidates: Sequence[str]) -> Tuple[str, str]:
     return data.decode(candidates[0], errors="replace"), candidates[0]
 
 
-def _make_encoding_safe_text(text: str) -> str:
-    """Convert text to be safe for legacy encodings like cp932 using transliteration.
-    
-    Applies explicit transliteration first (including macron vowels and dash variants),
-    then Unicode normalization (NFKD), then removes combining marks.
+def _make_encoding_safe_fragment(text: str, encoding: str) -> str:
+    safe_parts: List[str] = []
+    for ch in text:
+        try:
+            ch.encode(encoding)
+            safe_parts.append(ch)
+            continue
+        except UnicodeEncodeError:
+            pass
+
+        transliterated = ch.translate(ENCODING_SAFETY_TRANSLITERATION)
+        normalized = unicodedata.normalize("NFKD", transliterated)
+        stripped = "".join(part for part in normalized if not unicodedata.combining(part))
+        if not stripped or stripped == ch:
+            safe_parts.append("?")
+            continue
+
+        safe_parts.append(_make_encoding_safe_fragment(stripped, encoding))
+
+    return "".join(safe_parts)
+
+
+def _make_encoding_safe_text(text: str, encoding: str) -> str:
+    """Convert only unencodable characters to legacy-safe replacements.
+
+    NFC preserves already valid precomposed kana like バ or グ before we repair the
+    specific characters that fail in the target legacy encoding.
     """
-    transliterated = text.translate(ENCODING_SAFETY_TRANSLITERATION)
-    normalized = unicodedata.normalize("NFKD", transliterated)
-    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    normalized = unicodedata.normalize("NFC", text)
+    return _make_encoding_safe_fragment(normalized, encoding)
 
 
 def _write_text(path: Path, text: str, encoding: str) -> None:
@@ -713,7 +741,7 @@ def _write_text(path: Path, text: str, encoding: str) -> None:
     except UnicodeEncodeError as exc:
         # For legacy encodings, try encoding-safe transliteration
         if encoding.lower() in ("cp932", "shift_jis"):
-            safe_text = _make_encoding_safe_text(text)
+            safe_text = _make_encoding_safe_text(text, encoding)
             if safe_text != text:
                 logger.warning(
                     f"Applied encoding-safe transliteration for {encoding} in {path.name} "
@@ -819,6 +847,14 @@ class DialogLiteralEntry:
     text: str
     line_index: int
     literal_index: int
+
+
+@dataclass(slots=True)
+class TjsCodeLiteralEntry:
+    text: str
+    line_index: int
+    literal_index: int
+    tag: str
 
 
 @dataclass(slots=True)
@@ -1854,14 +1890,16 @@ def _classify_line(number: int, raw_line: str) -> ClassifiedLine:
     if not stripped:
         return ClassifiedLine(number=number, text=text, newline=newline, kind="blank")
     if speaker_match:
+        bracket_speaker = speaker_match.group("speaker1") or ""
+        talk_speaker = speaker_match.group("speaker2") or ""
         return ClassifiedLine(
             number=number,
             text=text,
             newline=newline,
             kind="speaker",
-            speaker=speaker_match.group("speaker") or "",
+            speaker=bracket_speaker or talk_speaker,
             voice_id=speaker_match.group("voice_id") or "",
-            speaker_style="bracket",
+            speaker_style="bracket" if bracket_speaker else "talk",
             raw_speaker_line=text,
         )
     if talk_match:
@@ -2348,6 +2386,244 @@ def _extract_tjs_dialog_entries(path: Path) -> List[DialogLiteralEntry]:
     return entries
 
 
+def _is_tjs_resource_literal(content: str) -> bool:
+    stripped = content.strip()
+    if not stripped:
+        return True
+    return bool(TJS_RESOURCE_LITERAL_RE.search(stripped))
+
+
+def _extract_txt_vars(line: str) -> Set[str]:
+    return set(TXT_VAR_RE.findall(line))
+
+
+def _collect_tjs_txt_usage(lines: Sequence[str]) -> Tuple[Dict[str, int], Set[str]]:
+    usage_count: Dict[str, int] = {}
+    display_used: Set[str] = set()
+
+    for line_index, raw_line in enumerate(lines):
+        line_info = _classify_line(line_index + 1, raw_line)
+        if line_info.kind in {"blank", "comment"}:
+            continue
+        txt_vars = _extract_txt_vars(raw_line)
+        if not txt_vars:
+            continue
+        for txt_var in txt_vars:
+            usage_count[txt_var] = usage_count.get(txt_var, 0) + 1
+        if TJS_TEXT_USE_RE.search(raw_line) or re.search(r"\breturn\s+txt_[A-Za-z0-9_]+\b", raw_line):
+            display_used.update(txt_vars)
+
+    return usage_count, display_used
+
+
+def _parse_int_literal(expr: str) -> Optional[int]:
+    stripped = expr.strip()
+    if not re.fullmatch(r"\d+", stripped):
+        return None
+    try:
+        return int(stripped)
+    except ValueError:
+        return None
+
+
+def _is_randomcomment_visible_target(lhs: str) -> bool:
+    # Only harvest randomized comment payloads that are explicitly routed to
+    # runtime display variables. Exclude title/key variables (e.g. txt_Syougou)
+    # because those are also used to build resource identifiers.
+    return lhs.startswith("rnd_")
+
+
+def _collect_randomcomment_runtime_usage(
+    patch_dir: Path,
+) -> Dict[int, Tuple[Set[Tuple[int, int]], Set[int]]]:
+    usage: Dict[int, Tuple[Set[Tuple[int, int]], Set[int]]] = {
+        index: (set(), set()) for index in range(1, 7)
+    }
+    if not patch_dir.exists():
+        return usage
+
+    for script_path in sorted(patch_dir.glob("*.tjs")):
+        try:
+            text, _encoding = _read_text(script_path, MENU_ENCODING_CANDIDATES)
+        except Exception:
+            continue
+
+        lines = text.splitlines(keepends=True)
+        file_var_to_index: Dict[str, int] = {}
+        for line_index, raw_line in enumerate(lines):
+            line_info = _classify_line(line_index + 1, raw_line)
+            if line_info.kind in {"blank", "comment"}:
+                continue
+            for open_match in RANDOMCOMMENT_OPEN_RE.finditer(raw_line):
+                file_var_to_index[open_match.group("var")] = int(open_match.group("num"))
+
+        for line_index, raw_line in enumerate(lines):
+            line_info = _classify_line(line_index + 1, raw_line)
+            if line_info.kind in {"blank", "comment"}:
+                continue
+            lhs_match = LHS_ASSIGN_RE.match(raw_line)
+            if lhs_match is None:
+                continue
+            lhs = lhs_match.group("lhs")
+            if not _is_randomcomment_visible_target(lhs):
+                continue
+
+            for call_match in RANDOMCOMMENT_GETCELL_RE.finditer(raw_line):
+                file_var = call_match.group("var")
+                file_index = file_var_to_index.get(file_var)
+                if file_index is None:
+                    continue
+                col = _parse_int_literal(call_match.group("col"))
+                if col is None:
+                    continue
+                row = _parse_int_literal(call_match.group("row"))
+                exact_cells, broad_columns = usage[file_index]
+                if row is None:
+                    broad_columns.add(col)
+                else:
+                    exact_cells.add((row, col))
+
+    return usage
+
+
+def _resolve_randomcomment_usage(path: Path) -> Tuple[Set[Tuple[int, int]], Set[int]]:
+    file_index_match = re.search(r"([1-6])$", path.stem)
+    if file_index_match is None:
+        return set(), set()
+    file_index = int(file_index_match.group(1))
+
+    candidate_patch_dirs: List[Path] = []
+    for parent in path.parents:
+        candidate = parent / "patch"
+        if candidate.exists() and candidate.is_dir() and candidate not in candidate_patch_dirs:
+            candidate_patch_dirs.append(candidate)
+
+    for patch_dir in candidate_patch_dirs:
+        usage = _collect_randomcomment_runtime_usage(patch_dir)
+        exact_cells, broad_columns = usage.get(file_index, (set(), set()))
+        if exact_cells or broad_columns:
+            return exact_cells, broad_columns
+
+    return set(), set()
+
+
+def _scan_tjs_bracket_delta(segment: str) -> int:
+    delta = 0
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(segment):
+        char = segment[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+        if char == "/" and index + 1 < len(segment) and segment[index + 1] == "/":
+            break
+        if char == "[":
+            delta += 1
+        elif char == "]":
+            delta -= 1
+        index += 1
+    return delta
+
+
+def _extract_tjs_rand_name_entries(path: Path) -> List[TjsCodeLiteralEntry]:
+    text, _ = _read_text(path, MENU_ENCODING_CANDIDATES)
+    lines = text.splitlines(keepends=True)
+    entries: List[TjsCodeLiteralEntry] = []
+
+    in_block = False
+    depth = 0
+
+    for line_index, raw_line in enumerate(lines):
+        start_offset = 0
+        if not in_block:
+            match = RAND_NAME_ARRAY_ASSIGN_RE.search(raw_line)
+            if match is None:
+                continue
+            start_offset = max(0, match.end() - 1)
+            in_block = True
+
+        for literal_index, literal_match in enumerate(STRING_LITERAL_RE.finditer(raw_line)):
+            if literal_match.start() < start_offset:
+                continue
+            content = literal_match.group(1)
+            if not content.strip():
+                continue
+            entries.append(
+                TjsCodeLiteralEntry(
+                    text=content,
+                    line_index=line_index,
+                    literal_index=literal_index,
+                    tag="variable",
+                )
+            )
+
+        depth += _scan_tjs_bracket_delta(raw_line[start_offset:])
+        if depth <= 0:
+            in_block = False
+            depth = 0
+
+    return entries
+
+
+def _extract_tjs_code_literal_entries(path: Path) -> List[TjsCodeLiteralEntry]:
+    text, _ = _read_text(path, MENU_ENCODING_CANDIDATES)
+    lines = text.splitlines(keepends=True)
+    usage_count, display_used = _collect_tjs_txt_usage(lines)
+    entries: List[TjsCodeLiteralEntry] = []
+
+    for line_index, raw_line in enumerate(lines):
+        line_info = _classify_line(line_index + 1, raw_line)
+        if line_info.kind in {"blank", "comment"}:
+            continue
+        # Skip dedicated handlers to avoid duplicate rows.
+        if CAPTION_LITERAL_RE.search(raw_line) or DIALOG_MGR_LITERAL_RE.search(raw_line):
+            continue
+        txt_vars = _extract_txt_vars(raw_line)
+        if not txt_vars:
+            continue
+        if "=" not in raw_line:
+            continue
+
+        supported_vars = {
+            txt_var
+            for txt_var in txt_vars
+            if usage_count.get(txt_var, 0) > 1 and txt_var in display_used
+        }
+        if not supported_vars:
+            continue
+
+        literal_index = 0
+        for match in STRING_LITERAL_RE.finditer(raw_line):
+            content = match.group(1)
+            if not content.strip() or not JAPANESE_RE.search(content):
+                continue
+            if _is_tjs_resource_literal(content):
+                continue
+            entries.append(
+                TjsCodeLiteralEntry(
+                    text=content,
+                    line_index=line_index,
+                    literal_index=literal_index,
+                    tag="variable",
+                )
+            )
+            literal_index += 1
+
+    return entries
+
+
 def _replace_menu_literals(line: str, translated_texts: Sequence[str]) -> str:
     lowered = line.lower()
     if "kagmenuitem" not in lowered and "menuitem" not in lowered:
@@ -2446,6 +2722,32 @@ def _replace_tjs_dialog_literals(line: str, translated_texts: Sequence[str]) -> 
     return "".join(pieces)
 
 
+def _replace_string_literal_by_index(
+    line: str,
+    translated_text: str,
+    literal_index: int,
+) -> Optional[str]:
+    pieces: List[str] = []
+    cursor = 0
+    current_index = 0
+    replaced = False
+    escaped = _escape_menu_content(translated_text)
+    for match in STRING_LITERAL_RE.finditer(line):
+        pieces.append(line[cursor:match.start(1)])
+        content = match.group(1)
+        if current_index == literal_index:
+            pieces.append(escaped)
+            replaced = True
+        else:
+            pieces.append(content)
+        cursor = match.end(1)
+        current_index += 1
+    if not replaced:
+        return None
+    pieces.append(line[cursor:])
+    return "".join(pieces)
+
+
 def _replace_pattern_literal_by_index(
     line: str,
     pattern: re.Pattern[str],
@@ -2493,13 +2795,29 @@ def _write_csv_rows(
     encoding: str,
     newline: str,
 ) -> None:
+    # Sanitize newline characters inside CSV cell values to avoid creating
+    # additional physical lines in CSV-like outputs. Replace any CR/LF
+    # occurrences with a single space to keep values single-line.
+    sanitized_rows: List[List[str]] = []
+    for row in rows:
+        sanitized_row: List[str] = []
+        for cell in row:
+            if isinstance(cell, str):
+                val = cell.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+            else:
+                val = str(cell)
+            sanitized_row.append(val)
+        sanitized_rows.append(sanitized_row)
+
     buffer = io.StringIO(newline="")
     writer = csv.writer(buffer, lineterminator=newline)
-    writer.writerows(rows)
+    writer.writerows(sanitized_rows)
     _write_text(path, buffer.getvalue(), encoding)
 
 
 def _looks_like_kirikiri_csv(path: Path) -> bool:
+    if RANDOMCOMMENT_CSV_RE.match(path.name):
+        return True
     try:
         rows, _encoding, _newline = _read_csv_rows(path)
     except Exception:
@@ -2530,10 +2848,90 @@ def _is_translatable_csv_value(value: str) -> bool:
     return not CSV_NUMERIC_SYMBOL_RE.fullmatch(stripped)
 
 
+def _is_translatable_randomcomment_value(value: str) -> bool:
+    stripped = value.strip()
+    if not stripped:
+        return False
+    if stripped == "コメント":
+        return False
+    if "ｍａｘ" in stripped.lower() or "max" in stripped.lower():
+        return False
+    if "［" in stripped or "］" in stripped:
+        return False
+    if re.match(r"^[0-9０-９]+行目", stripped):
+        return False
+    return True
+
+
+RANDOMCOMMENT_WORDWRAP_LIMIT = 42
+
+
+def _normalize_randomcomment_profile_text(value: str) -> str:
+    """Normalize randomcomment profile text for cleaner textbox rendering.
+
+    The profile textbox expects plain text and performs character-based wrapping,
+    so we pre-normalize translator output to avoid visible ASCII quotes,
+    accidental comma gaps, and mid-word wrapping.
+    """
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = normalized.replace('"', "")
+    normalized = re.sub(r"([,，])[ \t]+", r"\1", normalized)
+
+    wrapped_lines: List[str] = []
+    for source_line in normalized.split("\n"):
+        stripped = source_line.strip()
+        if not stripped:
+            wrapped_lines.append("")
+            continue
+
+        words = stripped.split()
+        if len(words) <= 1:
+            wrapped_lines.append(stripped)
+            continue
+
+        current = words[0]
+        for word in words[1:]:
+            candidate = f"{current} {word}"
+            if len(candidate) > RANDOMCOMMENT_WORDWRAP_LIMIT:
+                wrapped_lines.append(current)
+                current = word
+            else:
+                current = candidate
+        wrapped_lines.append(current)
+
+    return "\n".join(wrapped_lines)
+
+
 def _extract_csv_entries(path: Path) -> List[CsvEntry]:
     rows, _encoding, _newline = _read_csv_rows(path)
     if not rows:
         return []
+
+    if RANDOMCOMMENT_CSV_RE.match(path.name):
+        exact_cells, broad_columns = _resolve_randomcomment_usage(path)
+        entries: List[CsvEntry] = []
+        for row_index, row in enumerate(rows):
+            if row_index == 0:
+                continue
+            for col_index, value in enumerate(row):
+                if (row_index, col_index) not in exact_cells and col_index not in broad_columns:
+                    continue
+                if not value.strip() or not JAPANESE_RE.search(value):
+                    continue
+                if not _is_translatable_csv_value(value):
+                    continue
+                if not _is_translatable_randomcomment_value(value):
+                    continue
+                entries.append(
+                    CsvEntry(
+                        text=value,
+                        row_index=row_index,
+                        col_index=col_index,
+                        header=f"col{col_index}",
+                        tag="csv_randomcomment",
+                    )
+                )
+        return entries
 
     headers = rows[0]
     entries: List[CsvEntry] = []
@@ -3062,6 +3460,7 @@ def _run_messagelayer_wordwrap_workflow(
     try:
         project_dir = mgr.get_project_dir()  # type: ignore[union-attr]
         translated_dir = mgr.get_translated_dir()  # type: ignore[union-attr]
+        original_dir = mgr.get_original_dir()  # type: ignore[union-attr]
     except Exception as exc:
         return PatchApplicationResult(
             status="failed",
@@ -3069,7 +3468,11 @@ def _run_messagelayer_wordwrap_workflow(
         )
 
     try:
-        dest = stage_kirikiri_message_layer_template(project_dir, translated_dir)
+        dest = stage_kirikiri_message_layer_template(
+            project_dir,
+            translated_dir,
+            source_roots=(translated_dir, original_dir),
+        )
     except FileNotFoundError as exc:
         return PatchApplicationResult(status="failed", message=str(exc))
     except Exception as exc:
@@ -3572,6 +3975,24 @@ class KiriKiri2Parser(ParserScript):
                     )
                 )
                 line_numbers.append(entry.line_index + 1)
+            for entry in _extract_tjs_code_literal_entries(path):
+                extracted.append(
+                    ExtractedLine(
+                        text=entry.text,
+                        tag=entry.tag,
+                        context=f"{path.name}:{entry.line_index + 1}",
+                    )
+                )
+                line_numbers.append(entry.line_index + 1)
+            for entry in _extract_tjs_rand_name_entries(path):
+                extracted.append(
+                    ExtractedLine(
+                        text=entry.text,
+                        tag=entry.tag,
+                        context=f"{path.name}:{entry.line_index + 1}",
+                    )
+                )
+                line_numbers.append(entry.line_index + 1)
             return _annotate_extracted_line_locators(extracted, line_numbers)
         if path.suffix.lower() == ".csv":
             entries = _extract_csv_entries(path)
@@ -3802,10 +4223,18 @@ class KiriKiri2Parser(ParserScript):
             raw_lines = text.splitlines(keepends=True)
             entries = _extract_tjs_caption_entries(path)
             dialog_entries = _extract_tjs_dialog_entries(path)
+            code_entries = _extract_tjs_code_literal_entries(path)
+            rand_name_entries = _extract_tjs_rand_name_entries(path)
             grouped: Dict[int, List[str]] = {}
             dialog_grouped: Dict[int, List[str]] = {}
+            code_grouped: Dict[int, List[Tuple[int, str]]] = {}
             failures: List[int] = []
-            combined_entries: List[CaptionEntry | DialogLiteralEntry] = [*entries, *dialog_entries]
+            combined_entries: List[CaptionEntry | DialogLiteralEntry | TjsCodeLiteralEntry] = [
+                *entries,
+                *dialog_entries,
+                *code_entries,
+                *rand_name_entries,
+            ]
             search_keys = (
                 orig_lines
                 if orig_lines is not None
@@ -3821,8 +4250,12 @@ class KiriKiri2Parser(ParserScript):
                     continue
                 if isinstance(entry, CaptionEntry):
                     grouped.setdefault(entry.line_index, []).append(translated)
-                else:
+                elif isinstance(entry, DialogLiteralEntry):
                     dialog_grouped.setdefault(entry.line_index, []).append(translated)
+                else:
+                    code_grouped.setdefault(entry.line_index, []).append(
+                        (entry.literal_index, translated)
+                    )
             for line_index, translated_texts in grouped.items():
                 raw_lines[line_index] = _replace_caption_literals(raw_lines[line_index], translated_texts)
             for line_index, translated_texts in dialog_grouped.items():
@@ -3830,6 +4263,17 @@ class KiriKiri2Parser(ParserScript):
                     raw_lines[line_index],
                     translated_texts,
                 )
+            for line_index, replacements in code_grouped.items():
+                current = raw_lines[line_index]
+                for literal_index, translated_text in sorted(replacements, key=lambda item: item[0]):
+                    replaced = _replace_string_literal_by_index(
+                        current,
+                        translated_text,
+                        literal_index,
+                    )
+                    if replaced is not None:
+                        current = replaced
+                raw_lines[line_index] = current
             _write_text(output_path, "".join(raw_lines), encoding)
             return failures
 
@@ -3837,6 +4281,7 @@ class KiriKiri2Parser(ParserScript):
             rows, encoding, newline = _read_csv_rows(path)
             entries = _extract_csv_entries(path)
             failures: List[int] = []
+            is_randomcomment_file = RANDOMCOMMENT_CSV_RE.match(path.name) is not None
             search_keys = orig_lines if orig_lines is not None else [entry.text for entry in entries]
             for index, translated in enumerate(lines):
                 if index >= len(entries):
@@ -3849,6 +4294,8 @@ class KiriKiri2Parser(ParserScript):
                 row = rows[entry.row_index]
                 if entry.col_index >= len(row):
                     row.extend([""] * (entry.col_index + 1 - len(row)))
+                if is_randomcomment_file and entry.tag == "csv_randomcomment":
+                    translated = _normalize_randomcomment_profile_text(translated)
                 row[entry.col_index] = translated
             _write_csv_rows(output_path, rows, encoding, newline)
             return failures
@@ -3879,21 +4326,4 @@ class KiriKiri2Parser(ParserScript):
         return list(range(len(lines)))
 
     def post_inject_project(self, project_root: Path, *, input_root: Optional[Path] = None) -> None:
-        _patch_project_script(
-            project_root,
-            input_root,
-            [
-                Path("data") / "system" / "MainWindow.tjs",
-                Path("system") / "MainWindow.tjs",
-            ],
-            lambda text: _patch_add_wrap_block(_patch_add_wrap_vars(text)),
-        )
-        _patch_project_script(
-            project_root,
-            input_root,
-            [
-                Path("data") / "system" / "SelectLayer.tjs",
-                Path("system") / "SelectLayer.tjs",
-            ],
-            _patch_select_layer,
-        )
+        pass

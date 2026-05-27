@@ -1295,6 +1295,7 @@ class PreprocessingStep(BaseStep):
             idx_map: Dict[int, Dict[str, Any]] = {
                 ln.get("idx"): ln for ln in lines if ln.get("idx") is not None
             }
+            prepro_changes: Dict[int, tuple[str, str]] = {}
             dirty = False
             for idx, entry in enumerate(self._preview_lines):
                 if len(entry) == 4:
@@ -1325,14 +1326,20 @@ class PreprocessingStep(BaseStep):
 
                 if processed == orig:
                     if "prepro" in manifest_line:
+                        prepro_changes[idx] = (manifest_line.get("prepro", ""), "")
                         del manifest_line["prepro"]
                         dirty = True
                 else:
                     if manifest_line.get("prepro") != processed:
+                        prepro_changes[idx] = (
+                            manifest_line.get("prepro", ""),
+                            processed,
+                        )
                         manifest_line["prepro"] = processed
                         dirty = True
 
             if dirty:
+                mgr._mark_output_changed_from_compare_updates("prepro", prepro_changes)
                 mgr._mark_dirty()
 
     def _reset_rules(self) -> None:

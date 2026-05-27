@@ -77,6 +77,7 @@ TABLE OF CONTENTS
    - Adaptive Chunk Sizing
    - Speaker Quote Stripping
    - Token-Based Chunking
+  - Provider-Aware Token Counting (OpenAI=tiktoken, Google/Mistral=sentencepiece, heuristic fallback)
    - Persistent API Logging
   - Batched Translation Manifest Flushes
    - Automatic Line Recovery
@@ -284,10 +285,13 @@ PATCH EDITOR
 - **VS-Code-Like Workflow**: Left-side file tree, large central text editor, tabbed auxiliary panes, and direct save/reload flow for patch-authoring work that is broader than line-by-line table edits.
 - **Search And Replace**: In-file search with next/previous navigation, optional regex mode, replace current, and replace all.
 - **Diff Views**: Shows unified diff against the staged original file and, when available, the previously saved patch version.
-- **Manifest-Backed Persistence**: Saving writes the edited full file into the staged translated layout and stores compact editor metadata in `EditorState.files`: save timestamp, staged artifact references, and bounded save history. Patch diff text is rebuilt from staged artifacts on demand instead of being duplicated in the manifest. Live line history, locator metadata, and current file text are rebuilt on demand instead of being duplicated in the manifest.
+- **Manifest-Backed Persistence**: Saving writes the edited full file into the staged translated layout and stores compact editor metadata in `EditorState.files`: save timestamp, staged artifact references, bounded save history, and a per-file `changed` marker while Step 9 work is pending. Empty-history records are pruned on load/export instead of being serialized for every translated file. Patch diff text is rebuilt from staged artifacts on demand instead of being duplicated in the manifest. Live line history, locator metadata, and current file text are rebuilt on demand instead of being duplicated in the manifest.
+- **Save-To-Output Continuity**: Full-file Editor saves now survive through Step 9 output for parser-backed files by replaying bounded editor history onto a fresh manifest render before parser injection. Same-target exports into the staged `Translated/` branch skip unchanged files instead of reinjecting them.
 - **Per-Line History**: Re-extracts the saved file with the same parser/format path used by the main workflow, aligns the extracted rows against the manifest pipeline, and shows line history filtered as `all`, `edited`, or `translated`.
 - **Line Comparison Columns**: History view shows line index, status, original text, manifest-resolved translated text, and the current extracted text from the saved patch file.
 - **Single Window Reuse**: Reopening Patch Editor reuses the same window and brings it to the foreground instead of opening duplicates.
+- **Live Open Responsiveness**: File-tree and line-history focus sync now suppress their own programmatic `TreeviewSelect` callbacks, preventing the Editor from entering a self-triggered Tk selection loop when opened from the running GUI. Live validation on `Projects/rtes.CherryAI.json` and `Projects/OmegaKano.CherryAI.json` returned Editor-open times of about `0.07s` and `0.08s`; the large-manifest load-plus-open path stayed around `1.25s` total.
+- **Step 9 Branch Safety**: When Step 9 finds an active `Translated/` branch, choosing backup now snapshots that branch without removing the live staged files first, so Editor-authored full-file changes remain available as the export source.
 - **Theme Refresh Stability**: The Editor host keeps its root-owner reference separate from Tkinter's internal `_root()` helper, so opening the window and refreshing themes no longer crashes classic-widget traversal.
 
 API LOG
@@ -327,6 +331,7 @@ LIFETIME COST TRACKING WINDOW (PLANNED DESIGN)
 
 EDITOR / TRANSLATION WORKBENCH (PLANNED REDESIGN)
 - **Purpose**: Replace the future-workbench draft plus the standalone Full Table View and Patch Editor destinations with one non-modal `Editor` window
+- **Primary UI Toolkit Direction**: The Editor refactor path now targets PySide6/Qt as the primary UI library for the Editor surface only, while the rest of the application may remain on Tk during the migration.
 - **Mode Switch**: Planned visible switch `Full Files [Switch] Lines Only`; the switch position shows the active mode
 - **Lines Only Mode**: Renamed successor to Full Table View for line-level edits, stage visibility, and bulk search/replace
 - **Full Files Mode**: Recycled successor to Patch Editor for staged full-file editing, diffs, parser-backed line history, and search/replace
@@ -334,6 +339,9 @@ EDITOR / TRANSLATION WORKBENCH (PLANNED REDESIGN)
 - **Core Surfaces**: Editor for full-file work, Lines Only for line-level work, API Log for request inspection, Request Preview and agent tools for task execution
 - **History Model**: Uses staged `Original/`, staged `Translated/`, `Patch/Original/`, `Patch/Translated/`, manifest pipeline states, and manifest-backed editor history as CherryAI checkpoints
 - **Manifest Awareness**: Parsed-string highlighting, manifest-to-editor mapping, file-level diffing, and parser-backed re-extraction remain mandatory because CherryAI workflows are manifest-driven rather than plain-text-only
+- **Migration Guardrails**: The Qt Editor must preserve all current shipped Editor guarantees before removing Tk surfaces: single-window reuse, manifest-backed save history, parser-backed line history, save-to-Step-9 continuity, diff views, search/replace, and file-context carry-over between `Full Files` and `Lines Only`.
+- **Qt Quality-Of-Life Scope**: While feature parity is the first priority, the Editor migration may adopt standard Qt affordances when they come naturally with the framework, such as dockable panes, persistent splitter/dock layouts, richer shortcuts/actions, and higher-quality text editing/search widgets.
+- **Implementation Plan**: Editor-only phased refactor plan lives in `doc/editor_pyside6_refactor_plan.md`.
 
 INTEGRATED AI TRANSLATION
 - **1-Click Flow**: Use the "1-Click" button to run the entire pipeline (Load -> Pre -> Translate -> Post) automatically.
@@ -530,11 +538,12 @@ MANIFESTS
 PROJECT FILE STAGING (v3.1 + PLANNED REDESIGN)
 - Input/output decoupling via `filedir` field maps line index ranges to files
 - Current staging already depends on the project-local `Original/` tree and manifest-backed editor history
+- Current behavior: Step 0 now keeps every valid selected input file in both `Original/` and manifest `filedir`, even when extraction yields no translatable rows; those zero-line entries are stored as `type: misc` with `line_count: 0` and no `first_idx` / `last_idx`
 - Planned redesign target: `Original/` keeps the first full staged source snapshot and must copy the complete loaded folder tree, not only files with parseable content
 - Planned redesign target: `Translated/` becomes the latest full translated output tree
 - Planned redesign target: `Patch/Original/` stores forward patches relative to `Original/` using hash-first skip/diff/full-copy rules
-- Current behavior: `Patch/Translated/` reverse diff artifacts are owned by the Editor only. Step 9 Output now writes directly into `Translated/`, asks whether to replace or back up the active translated branch first, and clears active translated patch artifacts instead of generating new ones.
-- Manifest `EditorState.files` stores compact per-file editor metadata: staged artifact references, save timestamps, and bounded history entries, while `EditorState.backups` tracks renamed translated-branch backups. Heavy live-view data such as current text, locator metadata, line-history snapshots, and patch diff text are rebuilt from staged files and manifest rows when the Editor opens.
+- Current behavior: `Patch/Translated/` reverse diff artifacts are owned by the Editor only. Step 9 Output now writes directly into `Translated/`, asks whether to replace or back up the active translated branch first, replays saved editor history onto fresh parser renders before injection, skips unchanged same-target files, and clears active translated patch artifacts instead of generating new ones.
+- Manifest `EditorState.files` stores compact per-file editor metadata only while a file still has bounded history or a pending `changed` mark. Heavy live-view data such as current text, locator metadata, line-history snapshots, and patch diff text are rebuilt from staged files and manifest rows when the Editor opens, and empty-history file records are removed on load/export.
 - `source_root` stores only the folder name (privacy-safe, portable)
 - File resolution uses the local `Original/` directory, not original user paths
 - Projects remain functional even if original source files are moved/deleted
@@ -809,6 +818,7 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
   - **Large-Project Loading Flow (2026 performance pass):**
     - One `LoadingProgressDialog` now spans the full Step 0 load sequence: file extraction, `Original/` staging, and manifest save
     - Cancel remains available during the unified load flow and the dialog keeps the window responsive while long copies and saves progress
+    - Valid Step 0 files are now preserved even when parser extraction returns zero lines, so `filedir` and staged `Original/` stay aligned for code-only or data-only files; zero-line entries are typed as `misc`
     - Step 0 now batches live progress-label/count refreshes at coarse checkpoints instead of round-tripping through Tk for every single file, so visible loads stay responsive without spending the hot path inside dialog repaint calls
     - Step 0 bulk loads now defer session-driven sidebar refresh notifications and per-file `Input` step-data writes until the batch ends, so the modal loading dialog no longer triggers hundreds of full Progress sidebar rebuilds while files are being collected
     - Parser-backed staged re-extraction is now opt-in through `ParserScript.requires_staged_refresh`; LightVN keeps the staged `Original/` refresh path, while KiriKiri2 and other context-free parsers skip the redundant second parse during Step 0 sync
@@ -1616,6 +1626,10 @@ GUI v2 ARCHITECTURE (In Progress - Phase 8 Complete)
     - Export manifest checkbox
     - Export logs checkbox
     - Export glossary checkbox (if available)
+  - **Selection Workflow:**
+    - Export Selected now follows the checkbox column first, with tree selection as a fallback
+    - `Select Visible` bulk-checks the currently filtered rows so users can export only the visible file subset
+    - Checkbox clicks keep multi-selection stable and support Shift-range toggling across the visible rows
     - Custom manifest/log paths
   - **Summary Panel (ExportStats):**
     - Total files to process

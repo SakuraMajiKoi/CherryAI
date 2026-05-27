@@ -22,6 +22,8 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from CherryAI.functions.modehelper import find_literal_match_spans
+
 logger = logging.getLogger(__name__)
 
 # Import modi functions directly where possible
@@ -410,13 +412,10 @@ def apply_custom_placeholder(
                     captured.insert(0, val)
                     line = line[: m.start()] + token + line[m.end() :]
         else:
-            while pattern in line:
-                idx = line.find(pattern)
-                if idx >= 0:
-                    captured.append(pattern)
-                    line = line[:idx] + token + line[idx + len(pattern) :]
-                else:
-                    break
+            matches = find_literal_match_spans(line, pattern)
+            for start, end, value in reversed(matches):
+                captured.insert(0, value)
+                line = line[:start] + token + line[end:]
     except re.error as e:
         logger.warning("Invalid placeholder pattern %r: %s", pattern, e)
 

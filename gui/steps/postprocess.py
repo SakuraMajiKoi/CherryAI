@@ -134,6 +134,25 @@ SUMMARY_UPDATE_BATCH_LINES = 500
 LIVE_SUMMARY_UPDATES_ENABLED = False
 
 
+def _build_recover_everywhere_token_map(
+    entries: List[Dict[str, Any]],
+) -> Dict[str, str]:
+    """Return exact token->literal placeholder mappings for global restore."""
+    token_map: Dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if not bool(entry.get("recover_everywhere", False)):
+            continue
+        if bool(entry.get("is_regex", True)):
+            continue
+        token = str(entry.get("token", "") or "").strip()
+        pattern = str(entry.get("pattern", "") or "").strip()
+        if token and pattern:
+            token_map[token] = pattern
+    return token_map
+
+
 def _persist_sparse_postpro(
     manager: "ManifestManager",
     idx: int,
@@ -142,9 +161,24 @@ def _persist_sparse_postpro(
 ) -> None:
     """Persist ``postpro`` only when it differs from the stage input."""
     if postprocessed_text and postprocessed_text != translated_text:
+        previous_value = ""
+        current_line = manager.get_line(idx)
+        if isinstance(current_line, dict):
+            previous_value = str(current_line.get("postpro", "") or "")
         manager.set_line_field(idx, "postpro", postprocessed_text)
+        manager.track_output_change_for_field(
+            idx,
+            "postpro",
+            previous_value,
+            postprocessed_text,
+        )
         return
+    previous_value = ""
+    current_line = manager.get_line(idx)
+    if isinstance(current_line, dict):
+        previous_value = str(current_line.get("postpro", "") or "")
     manager.clear_line_field(idx, "postpro")
+    manager.track_output_change_for_field(idx, "postpro", previous_value, "")
 
 
 def _persist_sparse_postpro_batch(
@@ -162,6 +196,7 @@ def _persist_sparse_postpro_batch(
 
     by_idx = {line.idx: line for line in lines}
     updated_lines = [dict(raw_line) for raw_line in existing_lines]
+    compare_changes: Dict[int, tuple[str, str]] = {}
     changed = False
 
     for raw_line in updated_lines:
@@ -182,11 +217,13 @@ def _persist_sparse_postpro_batch(
 
         if desired:
             if current != desired:
+                compare_changes[raw_idx] = (current, desired)
                 raw_line["postpro"] = desired
                 changed = True
             continue
 
         if "postpro" in raw_line:
+            compare_changes[raw_idx] = (current, "")
             del raw_line["postpro"]
             changed = True
 
@@ -194,6 +231,7 @@ def _persist_sparse_postpro_batch(
         return
 
     manager.set_lines(updated_lines)
+    manager._mark_output_changed_from_compare_updates("postpro", compare_changes)
 
 
 def _parse_line_tags(raw_tags: Any) -> Tuple[str, ...]:
@@ -1769,6 +1807,9 @@ class PostprocessingStep(BaseStep):
         }
 
         if placeholder_lookup:
+            recover_everywhere_tokens = _build_recover_everywhere_token_map(
+                list(placeholder_lookup.values())
+            )
             custom_records_by_line = {
                 line.idx: capture_custom_placeholder_records(
                     line.original,
@@ -1813,7 +1854,9 @@ class PostprocessingStep(BaseStep):
                 ordered_texts = [batch_placeholder_texts[line.idx] for line in self._lines]
                 restored_texts, _restore_stats, _restore_residuals = (
                     restore_custom_placeholders_batch(
-                        ordered_texts, active_placeholder_records,
+                        ordered_texts,
+                        active_placeholder_records,
+                        recover_everywhere_tokens=recover_everywhere_tokens,
                     )
                 )
                 for pos, line in enumerate(self._lines):
@@ -1821,6 +1864,7 @@ class PostprocessingStep(BaseStep):
             except Exception:
                 logger.exception("Batch custom placeholder restoration failed")
         elif ph_records:
+            recover_everywhere_tokens = _build_recover_everywhere_token_map(ph_rules)
             dedup_line_ids = {
                 line.idx for line in self._lines if self._is_dedup_line(line)
             }
@@ -1847,7 +1891,9 @@ class PostprocessingStep(BaseStep):
                 ordered_texts = [batch_placeholder_texts[line.idx] for line in self._lines]
                 restored_texts, _restore_stats, _restore_residuals = (
                     restore_custom_placeholders_batch(
-                        ordered_texts, active_placeholder_records,
+                        ordered_texts,
+                        active_placeholder_records,
+                        recover_everywhere_tokens=recover_everywhere_tokens,
                     )
                 )
                 for pos, line in enumerate(self._lines):
