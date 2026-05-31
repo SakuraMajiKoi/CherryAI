@@ -257,44 +257,18 @@ def main() -> None:
 	The GUI implementation lives in gui/app.py (v2).
 	Import locally to avoid any potential circular import during module initialization.
 	"""
-	# Local import to avoid circular dependency during module import
-	# GUI v2: Step-partitioned workflow with pastel blue theme
 	if __package__:
 		from .gui.app import App
 	else:
 		from CherryAI.gui.app import App
-	app = App()
-	# Try to restore any previously saved UI state. The App may provide a
-	# `restore_state` or `set_state` method; if not, we try common attributes.
-	try:
-		_saved = load_app_state()
-		if _saved:
-			if hasattr(app, "restore_state") and callable(app.restore_state):
-				try:
-					app.restore_state(_saved)
-				except Exception:
-					# best-effort restore; ignore failures
-					pass
-			elif hasattr(app, "set_state") and callable(app.set_state):
-				try:
-					app.set_state(_saved)
-				except Exception:
-					pass
-			else:
-				# try populating common attributes (selected_files is a common name)
-				last = _saved.get("last_files")
-				if isinstance(last, list):
-					try:
-						setattr(app, "selected_files", [Path(p) for p in last])
-					except Exception:
-						pass
-	except Exception:
-		# ignore any restore errors
-		pass
 
-	# Install a close handler that attempts to gather state from the App and save it.
+	app: Optional[Any] = None
+	logger = logging.getLogger(__name__)
+
 	def _save_and_quit() -> None:
 		state: Dict[str, Any] = {}
+		if app is None:
+			return
 		try:
 			if hasattr(app, "get_state") and callable(app.get_state):
 				try:
@@ -302,27 +276,24 @@ def main() -> None:
 				except Exception:
 					state = {}
 			else:
-				# collect a minimal sensible state
-				_sel = getattr(app, "selected_files", None)
-				if _sel:
+				selected_files = getattr(app, "selected_files", None)
+				if selected_files:
 					try:
-						state["last_files"] = [str(p) for p in _sel]
+						state["last_files"] = [str(path) for path in selected_files]
 					except Exception:
-						# fall back to str() conversions
-						state["last_files"] = [str(p) for p in _sel]
-				# add any other simple serializable attributes the App exposes
+						state["last_files"] = [str(path) for path in selected_files]
 				for attr in ("last_mode", "operations", "manifest"):
-					val = getattr(app, attr, None)
-					if val is not None:
-						try:
-							json.dumps(val)
-							state[attr] = val
-						except Exception:
-							state[attr] = str(val)
+					value = getattr(app, attr, None)
+					if value is None:
+						continue
+					try:
+						json.dumps(value)
+						state[attr] = value
+					except Exception:
+						state[attr] = str(value)
 		except Exception:
-			# swallow any state-gathering errors
 			pass
-		# Persist state and then destroy the app
+
 		save_app_state(state)
 		try:
 			app.destroy()
@@ -332,20 +303,49 @@ def main() -> None:
 			except Exception:
 				pass
 
-	# Use protocol if available (typical for tkinter apps)
+	try:
+		app = App()
+	except KeyboardInterrupt:
+		logger.warning(
+			"GUI startup interrupted by KeyboardInterrupt; shutting down gracefully."
+		)
+		_save_and_quit()
+		return
+
+	try:
+		saved_state = load_app_state()
+		if saved_state:
+			if hasattr(app, "restore_state") and callable(app.restore_state):
+				try:
+					app.restore_state(saved_state)
+				except Exception:
+					pass
+			elif hasattr(app, "set_state") and callable(app.set_state):
+				try:
+					app.set_state(saved_state)
+				except Exception:
+					pass
+			else:
+				last_files = saved_state.get("last_files")
+				if isinstance(last_files, list):
+					try:
+						setattr(app, "selected_files", [Path(path) for path in last_files])
+					except Exception:
+						pass
+	except Exception:
+		pass
+
 	try:
 		app.protocol("WM_DELETE_WINDOW", _save_and_quit)
 	except Exception:
-		# If protocol isn't available, rely on normal mainloop exit.
 		pass
 
 	try:
 		app.mainloop()
 	except KeyboardInterrupt:
-		# Ctrl+C/SIGINT can surface asynchronously while Tk is processing events.
-		# Treat it like a normal close to avoid noisy crash tracebacks.
-		logging.getLogger(__name__).warning(
-			"GUI mainloop interrupted by KeyboardInterrupt; shutting down gracefully.")
+		logger.exception(
+			"GUI mainloop raised KeyboardInterrupt; traceback follows before graceful shutdown."
+		)
 		_save_and_quit()
 
 
@@ -502,7 +502,7 @@ def _cli_entry() -> None:
 	local_parser.add_argument("--url", dest="url",
 		help="Specific URL to check (e.g., http://localhost:1234/v1)")
 	local_parser.add_argument("--provider", dest="provider",
-		choices=["lmstudio", "ollama", "text-gen-webui"],
+		choices=["lmstudio", "ollama", "koboldcpp", "text-gen-webui"],
 		help="Show setup instructions for a specific provider")
 
 	# Help command
@@ -726,7 +726,7 @@ def _cli_entry() -> None:
 				print(f"Checking server at {url}...\n")
 				info = check_server_health(url)
 				if info.is_healthy:
-					print(f"✅ Server is healthy!")
+					print("OK: Server is healthy!")
 					print(f"   Response time: {info.response_time_ms:.0f}ms")
 					if info.models:
 						print(f"   Available models: {', '.join(info.models[:5])}")
@@ -734,7 +734,7 @@ def _cli_entry() -> None:
 							print(f"   ... and {len(info.models) - 5} more")
 					sys.exit(0)
 				else:
-					print(f"❌ Server is not responding")
+					print("FAIL: Server is not responding")
 					print(f"   Error: {info.error_message}")
 					sys.exit(1)
 			
@@ -744,6 +744,7 @@ def _cli_entry() -> None:
 					provider_map = {
 						"lmstudio": LocalLLMProvider.LMSTUDIO,
 						"ollama": LocalLLMProvider.OLLAMA,
+						"koboldcpp": LocalLLMProvider.KOBOLDCPP,
 						"text-gen-webui": LocalLLMProvider.TEXT_GEN_WEBUI,
 					}
 					provider = provider_map.get(provider_name, LocalLLMProvider.GENERIC)

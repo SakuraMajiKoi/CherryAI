@@ -1,11 +1,16 @@
 # Local LLM Integration Guide
 
-CherryAI supports local LLM servers including LM Studio, Ollama, and text-generation-webui.
+CherryAI supports local LLM servers including LM Studio, Ollama, KoboldCPP, and text-generation-webui.
 Local models offer privacy, no API costs, and offline operation.
 
 ---
 
 ## Quick Start
+
+From the GUI, configure local runtimes in **Global Options > Local**. Local
+providers are no longer configured in the API Provider submenu and do not
+require an API key. The Translation key dropdown exposes local pseudo-keys such
+as `lmstudio: Local`, `ollama: Local`, and `koboldcpp: Local`.
 
 ```bash
 # 1. Start your local server (LM Studio, Ollama, etc.)
@@ -65,6 +70,22 @@ python CherryAI.py config model local-model
 - Use models with at least 7B parameters for translation
 - Context length of 4096+ recommended
 - Temperature 0.3-0.5 works well for translation
+- CherryAI starts LM Studio through the documented CLI flow:
+  `lms daemon up --json`, `lms server start --port <port>`, and
+  `lms server status --json --quiet`.
+- On Windows, CLI-only/headless startup requires the standalone `llmster`
+  daemon metadata at `%USERPROFILE%\.lmstudio\.internal\llmster-install-location.json`.
+  If it is missing, install/repair it with LM Studio's official command:
+  `powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://lmstudio.ai/install.ps1 | iex"`.
+- Downloaded-model discovery uses `/v1/models` when the server is running and
+  falls back to `lms ls --json`.
+- Model load/unload prefers `lms load <model> --context-length <n> --identifier <model> --yes`
+  and `lms unload <identifier>`, with REST as a fallback.
+- Auto-close stops both the HTTP server and standalone daemon with
+  `lms server stop` and `lms daemon down`.
+- If `lms daemon up --json` hangs at `Waking up LM Studio service...`,
+  CherryAI reports that timeout directly; repair the LM Studio service/daemon
+  before auto-start can succeed.
 
 ---
 
@@ -127,6 +148,73 @@ python CherryAI.py config api_key dummy
 ```
 
 ---
+
+### KoboldCPP
+
+Single-executable GGUF runner used heavily for creative-writing and game workflows.
+
+**Default URL:** `http://localhost:5001/v1`
+
+**Setup:**
+1. Download KoboldCPP for your OS.
+2. Launch it with a GGUF model and API server enabled.
+3. Configure CherryAI:
+   ```bash
+   python CherryAI.py config api_url http://localhost:5001/v1
+   python CherryAI.py config api_key dummy
+   ```
+
+**Operational note:** KoboldCPP model and core runtime settings are startup
+arguments. CherryAI models load/settings changes for KoboldCPP as
+`restart_required` operations instead of pretending they can be hot-swapped.
+
+---
+
+## Backend Control Support
+
+CherryAI's local backend controller exposes the same operations for supported
+local providers:
+
+| Operation | LM Studio | Ollama | KoboldCPP |
+|-----------|-----------|--------|-----------|
+| Auto-launch | `lms server start` | `ollama serve` | Launch configured executable |
+| Find models | `/v1/models` | `/api/tags` | Requires configured model path |
+| Load model | Native LM Studio load API | Generate with `keep_alive` | Restart required |
+| Start server | `lms server start` | `ollama serve` | Starts with process |
+| Sync settings | Native load config | Request options | Restart required |
+| Unload model | Native unload API | `keep_alive: 0` | Stop process |
+| Close app/server | `lms server stop` | Managed process stop | Managed process stop |
+
+Translation, glossary utility calls, and editor context-menu calls share the
+same OpenAI-compatible request route. Selecting a local provider or local base
+URL supplies a placeholder API key automatically.
+
+## Global Options > Local
+
+The Local submenu owns all LM Studio, Ollama, and KoboldCPP settings. Each
+provider card saves its collapsed state, order, install folder, install status,
+last selected model, discovered models, and automation policy in `user/API.ini`.
+Installation checks are explicit: CherryAI only checks when the user presses
+**Check Installation**, and if nothing is found it asks before searching a
+chosen local folder.
+
+Automation policy values are stored per provider:
+
+| Key | Values |
+|-----|--------|
+| `Start` | `1` prompt/manual, `2` start with CherryAI, `3` start when translation starts |
+| `Load` | `1` prompt/manual, `2` load with local app launch, `3` load when translation starts |
+| `Unload` | `1` do not auto-unload, `2` unload when translation stops, `3` unload when 5 minutes idle |
+| `Close` | `1` do not auto-close, `2` close with CherryAI, `3` close when 5 minutes idle |
+
+Model settings such as context length, temperature, and GPU layers are also
+stored per provider/model. Empty values mean "use the local application
+default"; saved values are imposed by CherryAI when the backend supports that
+operation. KoboldCPP model and core setting changes are treated as restart
+required.
+
+Local models bypass API-key and cloud price-cap warnings. Price warnings remain
+active for cloud providers only.
 
 ## CLI Options for Local LLMs
 
@@ -243,6 +331,7 @@ CherryAI works with any OpenAI-compatible API server. Requirements:
 Known compatible servers:
 - LM Studio
 - Ollama
+- KoboldCPP
 - text-generation-webui (with openai extension)
 - vLLM
 - LocalAI

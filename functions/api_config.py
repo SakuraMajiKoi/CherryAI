@@ -500,7 +500,7 @@ _MODEL_SETTING_KEYS = (
     "rolling_context_between", "rolling_context_after",
     "use_translated_context", "optimal_cache_size",
     "temporary_backoff_mode", "temporary_backoff_attempts",
-    "temporary_backoff_total_seconds",
+    "temporary_backoff_total_seconds", "context_length", "gpu_layers",
 )
 
 
@@ -699,6 +699,54 @@ def get_all_profile_settings(profile: str) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Local LLM settings (stored in API.ini)
+# ---------------------------------------------------------------------------
+
+LOCAL_LLM_PROVIDERS = ("lmstudio", "ollama", "koboldcpp")
+LOCAL_LLM_DEFAULT_SETTINGS: dict[str, str] = {
+    "Start": "1",
+    "Load": "1",
+    "Unload": "1",
+    "Close": "1",
+    "collapsed": "0",
+    "order": "0",
+    "installed": "0",
+    "install_folder": "",
+    "last_model": "",
+    "models": "",
+}
+
+
+def _local_llm_section(provider: str) -> str:
+    """Return the API.ini section for one local LLM provider."""
+    return f"local_{provider.strip().lower()}"
+
+
+def get_local_llm_setting(provider: str, key: str, fallback: str = "") -> str:
+    """Read one Local LLM setting from API.ini."""
+    default = LOCAL_LLM_DEFAULT_SETTINGS.get(key, fallback)
+    return get_profile_setting(_local_llm_section(provider), key, default)
+
+
+def set_local_llm_setting(provider: str, key: str, value: str) -> None:
+    """Write one Local LLM setting to API.ini."""
+    set_profile_setting(_local_llm_section(provider), key, value)
+
+
+def get_all_local_llm_settings(provider: str) -> dict[str, str]:
+    """Return all persisted Local LLM settings for one provider."""
+    settings = dict(LOCAL_LLM_DEFAULT_SETTINGS)
+    settings.update(get_all_profile_settings(_local_llm_section(provider)))
+    return settings
+
+
+def set_all_local_llm_settings(provider: str, values: dict[str, str]) -> None:
+    """Persist multiple Local LLM settings for one provider."""
+    for key, value in values.items():
+        set_local_llm_setting(provider, key, str(value))
+
+
+# ---------------------------------------------------------------------------
 # Provider default base URLs
 # ---------------------------------------------------------------------------
 
@@ -709,6 +757,7 @@ PROVIDER_BASE_URLS: dict[str, str] = {
     "mistral": "https://api.mistral.ai/v1/",
     "ollama": "http://localhost:11434/v1/",
     "lmstudio": "http://localhost:1234/v1/",
+    "koboldcpp": "http://localhost:5001/v1/",
     "local": "http://localhost:1234/v1/",
 }
 
@@ -735,12 +784,21 @@ def test_api_connection(
         success or a descriptive error string on failure. *model_ids* is a list
         of model ID strings (empty on failure).
     """
-    if not api_key or not api_key.strip():
-        return False, "No API key provided.", []
-
     url = base_url.strip() or PROVIDER_BASE_URLS.get(provider.lower(), "")
     if not url:
         return False, f"No base URL for provider '{provider}'.", []
+
+    from .local_llm import is_local_url as _is_local_url
+    _is_local = (
+        provider.lower() in LOCAL_LLM_PROVIDERS
+        or provider.lower() == "local"
+        or _is_local_url(url)
+    )
+    if not api_key or not api_key.strip():
+        if _is_local:
+            api_key = "local"
+        else:
+            return False, "No API key provided.", []
 
     try:
         from openai import OpenAI  # type: ignore
@@ -843,19 +901,24 @@ def test_model_translation(
         return {"success": False, "message": f"No base URL for provider '{provider}'.",
                 "checks": [], "raw_response": "", "elapsed_seconds": 0.0}
 
-    block_message = _get_model_cost_block_message(model_id)
-    if block_message:
-        return {
-            "success": False,
-            "message": block_message,
-            "checks": [{
-                "name": "Model Price Policy",
-                "passed": False,
-                "detail": block_message,
-            }],
-            "raw_response": "",
-            "elapsed_seconds": 0.0,
-        }
+    _LOCAL_PROVIDERS = ("local", "lmstudio", "ollama", "koboldcpp")
+    from .local_llm import is_local_url as _is_local_url
+
+    _is_local = provider.lower() in _LOCAL_PROVIDERS or _is_local_url(url)
+    if not _is_local:
+        block_message = _get_model_cost_block_message(model_id)
+        if block_message:
+            return {
+                "success": False,
+                "message": block_message,
+                "checks": [{
+                    "name": "Model Price Policy",
+                    "passed": False,
+                    "detail": block_message,
+                }],
+                "raw_response": "",
+                "elapsed_seconds": 0.0,
+            }
 
     try:
         from openai import OpenAI  # type: ignore
@@ -931,13 +994,12 @@ def test_model_translation(
         except Exception:
             pass
 
+    if not api_key.strip() and _is_local:
+        api_key = "local"
+
     # Determine response_format based on provider/URL.
     # Local providers (LM Studio, Ollama) reject {"type": "json_object"} and
     # require {"type": "json_schema", ...} instead.
-    _LOCAL_PROVIDERS = ("local", "lmstudio", "ollama")
-    from .local_llm import is_local_url as _is_local_url
-
-    _is_local = provider.lower() in _LOCAL_PROVIDERS or _is_local_url(url)
     if _is_local:
         _resp_fmt: dict = {
             "type": "json_schema",

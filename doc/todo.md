@@ -426,6 +426,25 @@ Goal: Reproduce the Translation tab restore bug through the real visible GUI usi
 - Guarded visible GUI benchmark: `python dev/benchmark_manifest_restore.py --manifest Projects/Kano.CherryAI.json --step 5 --launch-gui --timeout 8 --trace` — reached usable Translation idle in `2.109s`
 - Guarded withdrawn benchmark: `python dev/benchmark_manifest_restore.py --manifest Projects/Kano.CherryAI.json --step 5 --timeout 8 --trace` — reached idle in `1.080s`
 
+### BUG FIX: Startup KeyboardInterrupt Tracebacks + Tk Thread Diagnostics
+**Priority:** HIGH | **Status:** ✅ COMPLETE | **Effort:** 2 hours
+
+Goal: stop CherryAI from dumping a startup traceback when Ctrl+C lands before `mainloop()`, make restore-on-launch use the same responsive async path as other live manifest loads, and add deterministic Tk thread diagnostics in the app layer.
+
+**Root Causes:**
+1. Both launcher entry points only caught `KeyboardInterrupt` around `mainloop()`, so Ctrl+C raised during `App()` construction escaped with a traceback.
+2. Restore-on-launch still loaded the last manifest during `App.__init__()`, before the live Tk event loop was running, which made startup stalls harder to distinguish from later GUI freezes.
+3. The app module still scheduled some worker-thread UI updates through direct widget `after()` calls, and there was no shared UI-thread assertion/dispatch contract for step code.
+
+**Changes:**
+1. **`CherryAI.py` / `gui/app.py`** — Launcher entry points now treat startup-time and mainloop-time `KeyboardInterrupt` as graceful shutdown paths.
+2. **`gui/app.py`** — Restore-on-launch now queues the last manifest and resumes it through `_load_manifest_from_path_async()` after the root window is ready; the app also installs an early guard by patching the live low-level tkapp type for non-`after` Tk commands and exposes `dispatch_to_ui()` / `assert_ui_thread()` helpers.
+3. **`gui/steps/base.py`** — Added shared `call_on_ui_thread()` / `assert_ui_thread()` helpers so step widgets can route future background-to-UI handoffs through the owning app.
+4. **Tests** — Added focused regressions in `dev/test_app_startup.py` for queued startup restore and for `KeyboardInterrupt` during both `App()` construction and `mainloop()`.
+
+**Tests:**
+- `python -m pytest dev/test_app_startup.py -q -k "startup_keyboardinterrupt or gracefully_handles_keyboardinterrupt or queues_startup_restore"` — `5 passed`
+
 =============================================================================
 
 ### PHASE PLAN: Ledger TSV Migration
@@ -2645,7 +2664,7 @@ ORPHANED MODULES (Exist but Not Fully Integrated)
 |--------|--------|----------------|
 | formats/document.py | Placeholder (PDF/EPUB) | Keep for future |
 | formats/html.py | Under development | Keep for HTML support |
-| formats/rpgmaker.py | Placeholder | Keep for RPG Maker support |
+| formats/rpgmakermvmz.py | Integrated RPG Maker MV/MZ parser/handler | Keep for RPG Maker support |
 | functions/local_llm.py | ✅ Integrated with GUI | LM Studio/Ollama support in Translation Step, Global Options |
 | functions/replication.py | CLI only | Consider GUI integration |
 
@@ -3180,7 +3199,7 @@ Two parallel hierarchies already exist in `formats/`:
    - Dataclasses: `WordwrapConfig`, `ForbiddenChars`, `TagRules`.
    - Registered via `ParserRegistry` with `can_handle()` auto-detection.
    - Concrete parsers: `RpgMakerMVParser`, `RpgMakerMZParser`
-     (in `formats/parser_rpgmaker.py`).
+     (in `formats/rpgmakermvmz.py`).
 
 **Registration flow:**
 - `get_registry()` → `_load_handlers()` (simple, html, markdown, json_lenient,
@@ -3443,15 +3462,15 @@ Verified and annotated all existing handlers:
 - `MarkdownHandler` — M1 ✓, M2 ✓, M3 ✓. No optionals.
 - `JsonLenientHandler` — M1 ✓, M2 ✓, M3 ✓. No optionals.
 - `TranslatorPlusHandler` — M1 ✓, M2 ✓, M3 ✓. O3 (encoding — SQLite). No others.
-- `RpgMakerMVParser` — M3 ✓ (via `can_handle`). O5 ✓, O7 ✓, O8 ✓. M1/M2 stubs raise `ParserError`.
-- `RpgMakerMZParser` — same as MV with different constants. M1/M2 stubs raise `ParserError`.
+- `RpgMakerMVParser` — M3 ✓ (via `can_handle`). O4/O5/O7/O8 ✓. M1/M2 delegate to structured MV handler.
+- `RpgMakerMZParser` — same as MV with different constants. M1/M2 delegate to structured MZ handler.
 
-RPG Maker handler stubs (`formats/rpgmaker.py`) now raise `ParserError` with
-`parser_name` and `component` metadata instead of silently returning empty
-results. All registered FormatHandlers pass `validate_parser()`.
+RPG Maker handlers (`formats/rpgmakermvmz.py`) raise `ParserError` with
+`parser_name` and `component` metadata for file/decode failures. All registered
+FormatHandlers pass `validate_parser()`.
 
 **Files Modified:**
-- `formats/rpgmaker.py` — extract/inject raise `ParserError` on all three stubs
+- `formats/rpgmakermvmz.py` — MV/MZ handlers and parser classes live in one engine module
 
 **Tests:** `dev/test_parser_handler_retrofit.py` — 28 tests (all passing):
 - TestFormatHandlerCompliance (9): all extract, all inject, all identity, txt/csv/tsv/json/xlsx individual, validate_parser on all

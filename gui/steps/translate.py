@@ -1774,17 +1774,17 @@ class TranslationStep(BaseStep):
         )
         self._model_combo.pack(side="right")
 
-        # Bind model to manifest (suppress saves during init via guard)
+        # Model IDs are provider/registry data, not a fixed enum. Saving them
+        # through an enum binding can coerce dynamic models to "Mock Translation".
         self._manifest_bindings.append(
-            bind_combobox_to_field(
-                combobox=self._model_combo,
+            bind_entry_to_field(
+                entry=self._model_combo,
                 var=self._model_var,
                 manager_getter=lambda: (
                     None if getattr(self, "_initializing", False)
                     else self.manifest_manager
                 ),
                 field_key="Model",
-                options=self.MODEL_OPTIONS,
                 default="gpt-4o-mini",
                 parent_key="RequestOptions",
             )
@@ -3265,9 +3265,9 @@ class TranslationStep(BaseStep):
                             key_provider, key_name,
                         ) or ""
 
-                    # Local providers (lmstudio, local, ollama) don't need
+                    # Local providers don't need
                     # a real API key — use a placeholder if none is set.
-                    _LOCAL_PROVIDERS = ("local", "lmstudio", "ollama")
+                    _LOCAL_PROVIDERS = ("local", "lmstudio", "ollama", "koboldcpp")
                     is_local = key_provider.lower() in _LOCAL_PROVIDERS
 
                     if not resolved_key and not is_local:
@@ -3280,6 +3280,30 @@ class TranslationStep(BaseStep):
                         base_url = PROVIDER_BASE_URLS.get(
                             key_provider, "",
                         )
+                        if is_local and key_provider.lower() != "local":
+                            try:
+                                from CherryAI.functions.local_llm import (
+                                    prepare_local_llm_for_translation,
+                                )
+                                local_result = prepare_local_llm_for_translation(
+                                    key_provider,
+                                    self._translation_options.model,
+                                    base_url=base_url,
+                                )
+                                self._log_progress(local_result.message)
+                                if not local_result.success:
+                                    self._api_client = None
+                                    self._log_progress(
+                                        "Local LLM preparation failed."
+                                    )
+                                    raise TranslationError(local_result.message)
+                            except TranslationError:
+                                raise
+                            except Exception as exc:
+                                self._log_progress(
+                                    f"Local LLM preparation failed: {exc}"
+                                )
+                                raise TranslationError(str(exc)) from exc
                         self._api_client = APIClient(
                             enable_api_log=True,
                             initial_config=APIConfig(
@@ -3616,6 +3640,8 @@ class TranslationStep(BaseStep):
                 self._translation_state = TranslationState.COMPLETED
                 self._log_progress("Translation completed successfully!")
 
+            self._finish_local_llm_after_translation()
+
             self.after(0, self._on_translation_complete)
 
         except TranslationAbortError as abort_err:
@@ -3623,13 +3649,35 @@ class TranslationStep(BaseStep):
             self._abort_error = abort_err
             self._log_progress(f"ABORT: {abort_err.user_message}")
             self._translation_state = TranslationState.FAILED
+            self._finish_local_llm_after_translation()
             self.after(0, self._on_translation_complete)
 
         except Exception as e:
             logger.exception("Translation error: %s", e)
             self._log_progress(f"Translation failed: {e}")
             self._translation_state = TranslationState.FAILED
+            self._finish_local_llm_after_translation()
             self.after(0, self._on_translation_complete)
+
+    def _finish_local_llm_after_translation(self) -> None:
+        """Apply Local LLM post-translation lifecycle policies."""
+        try:
+            opts = self._translation_options
+            provider = (opts.api_key_provider or "").strip().lower()
+            if provider not in ("lmstudio", "ollama", "koboldcpp"):
+                return
+            from CherryAI.functions.api_config import PROVIDER_BASE_URLS
+            from CherryAI.functions.local_llm import finish_local_llm_after_translation
+
+            result = finish_local_llm_after_translation(
+                provider,
+                opts.model,
+                base_url=PROVIDER_BASE_URLS.get(provider, ""),
+            )
+            if result.message:
+                self._log_progress(result.message)
+        except Exception as exc:
+            self._log_progress(f"Local LLM cleanup failed: {exc}")
 
     # Language → expected script mapping for Task 43.13
     _LANG_SCRIPT_MAP: dict[str, str] = {
@@ -5851,6 +5899,8 @@ class TranslationStep(BaseStep):
             keys = []
 
         display_values: list[str] = []
+        for provider in ("lmstudio", "ollama", "koboldcpp"):
+            display_values.append(f"{provider}: Local")
         for provider, name in keys:
             display_values.append(f"{provider}: {name}")
 
@@ -5972,12 +6022,12 @@ class TranslationStep(BaseStep):
 
         Uses model_registry to look up models for the registry-ID that
         corresponds to the API.ini provider key (e.g. gemini → google).
-        For local providers (lmstudio, local, ollama), queries the server
+        For local providers, queries the server
         directly for available models.
         Applies the saved capability filters from the Available Models
         window (Structured Output, Batch, Thinking).
         """
-        _LOCAL_PROVIDERS = ("local", "lmstudio", "ollama")
+        _LOCAL_PROVIDERS = ("local", "lmstudio", "ollama", "koboldcpp")
         is_local = provider.lower() in _LOCAL_PROVIDERS
 
         # For local providers, try to discover models from the server

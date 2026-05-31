@@ -92,7 +92,7 @@ TABLE OF CONTENTS
         * Env var override for tests: CHERRYAI_TEST_GLOSSARY_PATH
         * ✅ Phase 62: `gui/steps/information.py` widget now reads/writes same `globalglossary.tsv`
    3.15 languages.py ✅ - Language definitions (single source of truth)
-   3.16 local_llm.py ✅ - Local LLM integration
+   3.16 local_llm.py ✅ - Local LLM integration; provider-neutral backend controller for LM Studio/Ollama/KoboldCPP install discovery, launch, model discovery/load/unload, settings sync, server start, and close operations, with KoboldCPP model/settings changes represented as restart-required operations. LM Studio follows the documented `lms daemon up --json` → `lms server start --port N` → `lms server status --json --quiet` flow, prefers `lms load`/`lms unload` for model lifecycle with REST fallback, treats already-loaded identifiers from `lms ps --json` as success, closes headless mode with `lms server stop` + `lms daemon down`, and keeps GUI and server process handles separate so startup failures are reported instead of masked as generic health timeouts.
    3.17 logit_bias.py ✅ - Token logit bias for API
    3.18 mainhelper.py ✅ - Core Processor, Manifest, Operation
    3.19 modehelper.py ✅ - Modi mode selection utilities
@@ -167,6 +167,7 @@ TABLE OF CONTENTS
       * Changed-mark tracking is owned by one shared compare helper, not by generic `set_line_field()` / `set_lines()` mutations. Explicit write paths call it with the compared field (`orig`, `prepro`, `tl`, `postpro`, `qa_overwrite`, `wordwr`, or full-file save) and it only marks rel_paths that already have a staged `Translated/` file
       * Step 9 replay helpers: `build_step9_replay_source_path()` rebuilds chronological editor versions from rollback history, reapplies those editor-only deltas onto a fresh manifest render, and feeds that temp source back into parser injection; `should_skip_step9_export()` skips unchanged same-target writes into the active `Translated/` branch
       * Live editor payloads still include `diff_to_original`, `diff_to_patch`, `line_history`, and `locator_metadata`, but `get_editor_file_view()` rebuilds them on demand instead of persisting them in the manifest
+      * Locator metadata now includes physical line-span counts for matched logical entries, letting the Tk editor paint multiline locator ranges; when parser extraction omits an unchanged row, editor-view assembly may backfill both the active locator and the `Current` line-history text from the manifest `ln` span instead of leaving the row unhighlighted or drifting onto a low-offset physical line
   3.35 manifest_fields.py ✅ - Manifest field type helpers (TASK 22.1) + special format helpers (TASK 22.2) + shared priority resolution API: resolve_line_field(), resolve_line_field_with_source(), resolve_line_field_from(), resolve_line_field_for_stage(), get_final_field_source(), get_latest_line_text(), get_line_text_for_stage(), get_all_lines_resolved(), get_all_lines_for_stage(); PIPELINE_FIELDS chain: final → wordwr → qa → postpro → tl → prepro → orig for final display/output, while stage helpers enforce ceilings (Postprocessing: tl → prepro → orig; QA: postpro → tl → prepro → orig; Wordwrap: qa → postpro → tl → prepro → orig); save_code_glossary/load_code_glossary support count as int or `[total, inst1_ct, ...]` list with instance_counts deserialization; save_character_notes/load_character_notes with count field
    3.36 preset_manager.py ✅ - Preset save/load/delete operations (TASK 30.1)
    3.37 mock_translator.py ✅ - Mock translation engine with flaw injection (Phase 56)
@@ -203,6 +204,7 @@ TABLE OF CONTENTS
         - name_glossary_functions.py - Speaker detection, gender inference
 
    3.50 api_config.py ✅ — Encrypted API configuration manager (user/API.ini); Phase 62 extended
+        * Local LLM sections `[local_llm_lmstudio]`, `[local_llm_ollama]`, and `[local_llm_koboldcpp]` persist install status/folder, widget order/collapsed state, model lists, last model, automation policy (`Start`, `Load`, `Unload`, `Close`), and per-model local runtime settings; local providers bypass API key and cloud price-cap warnings
         * Single source of ALL API meta information: provider profiles, model, temperature, URL, timeout, rate limits, encrypted keys
         * ✅ Phase 62: api_profiles.ini consolidated; `[translation]` and `[glossary]` sections added
         * Cache size helpers: `get_optimal_cache_size(model_id, provider)` reads per-model `optimal_cache_size` from API.ini; `_CACHE_DEFAULTS` per-provider thresholds (OpenAI: 1024+128); `_MODEL_SETTING_KEYS` includes `optimal_cache_size`
@@ -281,9 +283,9 @@ TABLE OF CONTENTS
    5.2 simple.py ✅🔗 - TXT, CSV, TSV, JSON, XLSX handlers (Step 0)
    5.3 document.py ✅ - PDF, EPUB handlers (placeholder)
    5.4 html.py ✅ - HTML parsing (under development)
-   5.5 rpgmaker.py ✅ - RPG Maker MV/MZ (placeholder)
+   5.5 rpgmakermvmz.py ✅ - RPG Maker MV/MZ handlers and ParserScript implementations
   5.6 parser_base.py ✅ - ParserScript ABC, WordwrapConfig, ForbiddenChars, TagRules, ExtractedLine, SpeakerInfo; _split_speaker_dialogue() helper; inject_to() standardized 4-step Speaker:Dialogue-aware handshake (load→extract_tagged with speaker metadata→split speaker/dialogue and replace independently→save) returning List[int] failures, with a legacy adjacent `_translated` fallback only when a non-tagged parser cannot match any extracted key at all
-   5.7 parser_rpgmaker.py ✅ - RpgMakerMVParser, RpgMakerMZParser implementations
+   5.7 parser_base.py integrations ✅ - RpgMakerMVParser and RpgMakerMZParser now live in rpgmakermvmz.py
    5.8 json_lenient.py ✅ - Lenient JSON parsing with error recovery
    5.9 handshake.py ✅ - ParserHandshake protocol: SpeakerInfo, ExtractedLine, ParserError, validate_parser()
      5.10 LightVN.py ✅ - LightVNParser: Light VN visual novel script parser (dialogue, menu, backlog, popup, variable extraction/injection)
@@ -317,7 +319,7 @@ TABLE OF CONTENTS
 6. GUI V2 ARCHITECTURE (gui/ - 7 packages)
    
    6.1 gui/__init__.py - Package exports (App)
-  6.2 gui/app.py - Main application window, step orchestration; seeds `session.global_options` from INI at startup and preserves them across `_reset_runtime_state()` so newly loaded projects keep the persisted translation-policy defaults before any dialog opens; `_load_manifest_from_path()` now wraps large-manifest activation in `gui/dialogs/loading_progress.py` using a worker thread plus main-thread polling so Tk stays responsive and cancel remains safe before manifest activation; app-driven tab restore now suppresses `<<NotebookTabChanged>>` handling while the saved tab is selected and entered so Open Project does not duplicate `on_enter()` work or save the manifest mid-activation; once the new manifest is active, the previous manager is closed with `save_on_close = False` so an earlier unsaved-changes decision is not silently overridden during teardown
+  6.2 gui/app.py - Main application window, step orchestration; seeds `session.global_options` from INI at startup and preserves them across `_reset_runtime_state()` so newly loaded projects keep the persisted translation-policy defaults before any dialog opens; restore-on-launch now queues the saved manifest path and resumes it through `_load_manifest_from_path_async()` after the root window is built, so startup no longer performs a blocking manifest load before the live Tk event loop exists; `_load_manifest_from_path()` now wraps large-manifest activation in `gui/dialogs/loading_progress.py` using a worker thread plus main-thread polling so Tk stays responsive and cancel remains safe before manifest activation; installs an early UI-thread guard by patching the live low-level tkapp type from the current interpreter for non-`after` Tk commands, plus `dispatch_to_ui()` / `assert_ui_thread()` helpers so background work fails deterministically when it touches widgets directly and app-owned worker callbacks can marshal UI changes through one shared entry point; app-driven tab restore now suppresses `<<NotebookTabChanged>>` handling while the saved tab is selected and entered so Open Project does not duplicate `on_enter()` work or save the manifest mid-activation; once the new manifest is active, the previous manager is closed with `save_on_close = False` so an earlier unsaved-changes decision is not silently overridden during teardown
    6.3 gui/progress.py - ProgressTracker, ProgressPanel
    
    6.4 gui/steps/ (10 files - 10 workflow tabs)
@@ -457,10 +459,14 @@ TABLE OF CONTENTS
          - PatchEditorViewDialog: non-modal Toplevel full-file editor for staged patch work
          - open_or_focus(): single-instance dialog helper keyed on the root window; reuses the existing Patch Editor window and focuses it instead of creating duplicates
          - Owner tracking uses a dedicated `_window_root` attribute; it must never shadow Tkinter's internal `_root()` widget helper because theme traversal and event/widget lookup call that method during `winfo_children()` / `nametowidget()`
-         - Layout: left file tree, central `tk.Text` editor with undo, right/bottom notebook tabs for diff and line history
-         - Search/replace toolbar: plain-text or regex search, prev/next navigation, replace current, replace all
+         - Layout: far-left activity bar, switchable sidebar panels for file tree and search, central `tk.Text` editor with undo, right/bottom notebook tabs for diff and line history
+         - Activity bar: folder icon selects the Explorer/file-tree sidebar, magnifying-glass icon selects the Search sidebar, and clicking the active icon again collapses the sidebar while keeping the rail visible for future tools
+         - Search/replace sidebar: `gui/dialogs/editor_search_sidebar.py` owns the compact Tk controls and grouped results tree; `functions/editor_search.py` owns cross-file search semantics, include/exclude glob patterns (`!` exclusions), case-sensitive search/replace, regex, whole-word, current-file-only filtering, parsed/not-parsed line scope, scoped replace-all, and incremental per-file result iteration. Empty search state must not request file payloads, and Editor open must not scan all project files for search results. Cross-file search uses `ManifestManager.get_editor_search_file_payload()` so explicit searches read lightweight text payloads instead of building full diff/history views for every file. The sidebar processes search in short Tk `after()` time slices, appends discovered file result groups in bounded batches, and has one Stop/Restore control: Stop cancels the running search without launching more work, Restore brings back the previous complete result set when available. Typed search repaint remains debounced by 1 second and current matches are tagged with a pale-yellow highlight overlay. `dev/benchmark_editor_search.py` is the headless regression benchmark for result rendering scale.
+         - Selection context menu: standard Cut/Copy/Paste use Tk virtual events. Selection history compares same-offset spans from active/staged/original Editor views, previews alternatives in a non-modal chooser, and applies replacements only to the selected span; persistence still flows through `ManifestManager.save_editor_patch()`. Selection LLM actions initialize `APIClient` from manifest `RequestOptions`, use the shared prompt builder for Comprehensive requests, detect balanced containing spans for targeted content replacement, and run on a background thread so Explain and Translate do not block Tk.
          - Diff pane: compares current editor text against staged `Original/` and, when available, the previously saved `Patch/` baseline via `ManifestManager.get_editor_file_view()`
-         - Line history pane: shows parser-backed rows with `all` / `edited` / `translated` filtering and per-row original vs manifest-translated vs current extracted text
+         - Line history pane: shows parser-backed rows with `all` / `edited` / `translated` filtering and per-row original vs manifest-translated vs current extracted text; sparse parser fallback uses manifest `ln` anchors, not manifest row order, when reconstructing `Current`
+         - Text selection uses a lighter blue than the active locator-line highlight so `sel` ranges stay distinct from parser-owned active rows
+         - Cursor-to-history promotion treats multiline locator spans as owned ranges, not just the first `editor_ln`, so moving within a multiline extracted entry keeps the correct history row active
          - Programmatic file-tree and history-row sync now use idle-released guard flags around `selection_set()`, so the live `mainloop()` path cannot recursively re-enter `_on_tree_select()` / `_on_history_tree_select()` and starve Tk timers when the Editor opens
          - Save/reload/close prompts stay GUI-only; all extraction, diffing, file writes, and history persistence are delegated to `functions/manifest_manager.py`
          - Accessed via the live "Editor" menu bar entry between Full Table View and API Log
@@ -1129,7 +1135,7 @@ CherryAI/
 ├── formats/                File format handlers (NEW)
 │   ├── __init__.py         FormatHandler base, FormatRegistry, IOConfig
 │   ├── simple.py           txt, csv, tsv, json, xlsx handlers
-│   ├── rpgmaker.py         RPG Maker MV/MZ handlers (placeholder)
+│   ├── rpgmakermvmz.py     RPG Maker MV/MZ handlers and parser classes
 │   └── document.py         PDF, EPUB handlers (placeholder)
 │
 ├── gui/                    GUI v2 (10-step workflow)
@@ -2422,7 +2428,7 @@ Module Structure:
 formats/
 ├── __init__.py      FormatHandler base, FormatRegistry, IOConfig, get_handler()
 ├── simple.py        TxtHandler, CsvHandler, TsvHandler, JsonHandler, XlsxHandler
-├── rpgmaker.py      RpgMakerMVHandler, RpgMakerMZHandler, RpgMakerPluginHandler (placeholder)
+├── rpgmakermvmz.py  RpgMakerMV/MZ handlers and parser classes
 └── document.py      PdfHandler, EpubHandler (placeholder)
 ```
 
@@ -2492,12 +2498,12 @@ for fmt in registry.list_formats():
     print(f"{fmt['id']}: {fmt['description']}")
 ```
 
-Planned Formats (placeholder implementations):
+Implemented and Planned Formats:
 
-1. **RPG Maker MV/MZ** (formats/rpgmaker.py):
+1. **RPG Maker MV/MZ** (formats/rpgmakermvmz.py):
    - Parse Actors.json, Items.json, Map*.json, CommonEvents.json
-   - Extract name, description, note, message1-4 fields
-   - Handle event dialogue in map files
+   - Extract standard database fields, event dialogue, choices, plugin commands, and plugin JS metadata
+   - Join successive `401` dialogue commands and preserve speaker formats through `Speaker: Dialogue`
    - Preserve JSON structure on inject
 
 2. **Documents** (formats/document.py):
@@ -2515,8 +2521,8 @@ Parser Handshake (formats/handshake.py):
 - **O10 Pretty Wrap Hook:** `pretty_wrap(text, width, break_char, max_lines) → Optional[str]` — lighter
   core-wrap replacement; replaces built-in `pretty_wrap` while keeping speaker handling intact
 - **Handler Retrofit (P4):** All registered FormatHandlers verified via `validate_parser()`.
-  RPG Maker stubs (`formats/rpgmaker.py`) raise `ParserError` with `parser_name` and `component`
-  metadata instead of silent `logging.warning()` + empty returns.
+  RPG Maker handlers (`formats/rpgmakermvmz.py`) raise `ParserError` with `parser_name` and `component`
+  metadata for file/decode failures.
 
 Parser Input Routing (gui/steps/input_extract.py):
 - `list_parser_names() → List[str]`: Returns display names from ParserRegistry

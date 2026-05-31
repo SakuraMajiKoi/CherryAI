@@ -16,6 +16,7 @@ import json
 import logging
 import threading
 import tkinter as tk
+import _tkinter
 from tkinter import ttk, messagebox, filedialog, scrolledtext
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 from pathlib import Path
@@ -67,6 +68,53 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_TK_UI_THREAD_ID = threading.get_ident()
+_TK_CALL_THREAD_GUARD_INSTALLED = False
+_TK_CALL_OWNER_TYPE: Optional[type[Any]] = None
+_TK_CALL_ORIGINAL: Optional[Callable[..., Any]] = None
+
+
+def _assert_tk_ui_thread(op: str) -> None:
+    """Raise when a Tk call escapes the UI thread.
+
+    Tkinter can sometimes route cross-thread calls, but that path is fragile and
+    can deadlock under load. Allowing those failures to surface immediately with
+    context is safer than leaving Tk wedged until the user presses Ctrl+C.
+    """
+    current_thread_id = threading.get_ident()
+    if current_thread_id != _TK_UI_THREAD_ID:
+        raise RuntimeError(
+            "Tkinter thread violation during "
+            f"{op}. Main={_TK_UI_THREAD_ID}, Current={current_thread_id}"
+        )
+
+
+def install_tk_thread_guard(tkapp: Optional[Any] = None) -> None:
+    """Install an early Tk call guard for non-UI-thread widget operations."""
+    global _TK_CALL_OWNER_TYPE, _TK_CALL_ORIGINAL, _TK_CALL_THREAD_GUARD_INSTALLED
+    if _TK_CALL_THREAD_GUARD_INSTALLED:
+        return
+
+    if tkapp is None:
+        probe = tk.Tcl()
+        tkapp = probe.tk
+
+    owner_type = type(tkapp)
+    original_tk_call = owner_type.call
+
+    def _patched_tk_call(self: Any, *args: Any) -> Any:
+        command = args[0] if args else "<unknown>"
+        # Keep legacy worker-thread `after(...)` scheduling working while we
+        # migrate code toward the explicit UI dispatcher.
+        if command != "after":
+            _assert_tk_ui_thread(f"tk.call{args[:2]}")
+        return original_tk_call(self, *args)
+
+    owner_type.call = _patched_tk_call
+    _TK_CALL_OWNER_TYPE = owner_type
+    _TK_CALL_ORIGINAL = original_tk_call
+    _TK_CALL_THREAD_GUARD_INSTALLED = True
+
 # Application constants
 APP_NAME = "CherryAI"
 APP_VERSION = "2.0.0"
@@ -97,6 +145,8 @@ class App(tk.Tk):
         """Initialize the application."""
         super().__init__()
 
+        install_tk_thread_guard(self.tk)
+
         load_theme_from_ini()
 
         # Window setup
@@ -122,6 +172,8 @@ class App(tk.Tk):
         self._global_options_dialog: Optional[GlobalOptionsDialog] = None
         self._patch_editor_dialog: Optional[PatchEditorViewDialog] = None
         self._regex_help_dialog: Optional[RegexHelpDialog] = None
+        self._startup_manifest_path: Optional[Path] = None
+        self._startup_status_message: Optional[str] = None
         
         # TASK 21.4: Flag to track if startup dialog should be shown
         self._show_startup_dialog = True
@@ -130,22 +182,15 @@ class App(tk.Tk):
         if ini_manager.get_restore_on_launch():
             last_manifest = ini_manager.get_last_manifest()
             if last_manifest and last_manifest.exists():
-                try:
-                    if self._manifest_manager.load(last_manifest):
-                        self.session.manifest_path = last_manifest
-                        ini_manager.add_to_recent_manifests(last_manifest)
-                        # TASK 17.7: Restore last active step index
-                        saved_step = ini_manager.get_int(
-                            "recent", "last_step", 0
-                        )
-                        self.session.current_step = max(0, min(saved_step, 9))
-                        logger.info(
-                            "Restored last manifest: %s (step %d)",
-                            last_manifest, self.session.current_step,
-                        )
-                        self._show_startup_dialog = False
-                except Exception as e:
-                    logger.warning("Failed to restore last manifest: %s", e)
+                self._startup_manifest_path = last_manifest
+                self._startup_status_message = (
+                    f"Resumed project: {last_manifest.stem}"
+                )
+                self._show_startup_dialog = False
+                logger.info(
+                    "Queued last manifest restore after startup: %s",
+                    last_manifest,
+                )
         
         # Fallback: Try legacy autosave restore
         if self._show_startup_dialog:
@@ -159,7 +204,10 @@ class App(tk.Tk):
                         pass
                 if restore_enabled and restored.manifest_path.exists():
                     self.session = restored
-                    self._load_manifest_on_restore()
+                    self._startup_manifest_path = restored.manifest_path
+                    self._startup_status_message = (
+                        f"Resumed project: {restored.manifest_path.stem}"
+                    )
                     self._show_startup_dialog = False
                     logger.info("Restored session from legacy autosave")
         
@@ -182,10 +230,46 @@ class App(tk.Tk):
         self._restore_session_ui()
         
         # TASK 21.4: Show startup dialog after main window is ready
-        if self._show_startup_dialog:
+        if self._startup_manifest_path is not None:
+            self.after(0, self._resume_startup_manifest)
+        elif self._show_startup_dialog:
             self.after(100, self._show_welcome_dialog)
 
         logger.info("CherryAI GUI v2 initialized")
+
+    def assert_ui_thread(self, op: str) -> None:
+        """Require the current caller to be on the Tk UI thread."""
+        _assert_tk_ui_thread(op)
+
+    def dispatch_to_ui(
+        self,
+        callback: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        """Schedule a callback on the Tk UI thread.
+
+        Worker threads must use this instead of direct widget access.
+        """
+        if threading.get_ident() == _TK_UI_THREAD_ID:
+            callback(*args, **kwargs)
+            return
+        self.after(0, lambda: callback(*args, **kwargs))
+
+    def _resume_startup_manifest(self) -> None:
+        """Resume the queued startup manifest once the Tk event loop is live."""
+        manifest_path = self._startup_manifest_path
+        if manifest_path is None:
+            return
+
+        self._startup_manifest_path = None
+        self._load_manifest_from_path_async(
+            manifest_path,
+            on_complete=lambda ok: self._set_status(
+                self._startup_status_message
+                or f"Resumed project: {manifest_path.stem}"
+            ) if ok else self.after(100, self._show_welcome_dialog),
+        )
 
     @property
     def manifest_manager(self) -> ManifestManager:
@@ -968,9 +1052,9 @@ class App(tk.Tk):
                 from CherryAI.functions.One_Click_Test import run_one_click_test
                 
                 # Update status
-                dialog.after(0, lambda: status_var.set(
+                self.dispatch_to_ui(status_var.set,
                     f"Running {'quick' if skip_api else 'full'} test..."
-                ))
+                )
                 
                 # Run test
                 report = run_one_click_test(skip_api=skip_api, verbose=False)
@@ -1001,7 +1085,7 @@ class App(tk.Tk):
                     # Enable close button
                     close_btn.configure(state=tk.NORMAL)
                 
-                dialog.after(0, show_results)
+                self.dispatch_to_ui(show_results)
                 
             except Exception as e:
                 def show_error() -> None:
@@ -1016,7 +1100,7 @@ class App(tk.Tk):
                     dialog.title("CLI Test - Error")
                     close_btn.configure(state=tk.NORMAL)
                 
-                dialog.after(0, show_error)
+                self.dispatch_to_ui(show_error)
         
         # Start background thread
         thread = threading.Thread(target=run_test, daemon=True)
@@ -1387,12 +1471,18 @@ For more information, see the documentation.
 
 def main() -> None:
     """Entry point for the GUI application."""
-    app = App()
+    app: Optional[App] = None
     try:
+        app = App()
         app.mainloop()
     except KeyboardInterrupt:
-        logger.warning(
-            "App mainloop interrupted by KeyboardInterrupt; closing gracefully."
+        if app is None:
+            logger.warning(
+                "App startup interrupted by KeyboardInterrupt; closing gracefully."
+            )
+            return
+        logger.exception(
+            "App mainloop raised KeyboardInterrupt; traceback follows before graceful shutdown."
         )
         try:
             app._on_close()

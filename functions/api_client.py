@@ -889,6 +889,8 @@ class APIClient:
 
     def _raise_if_model_blocked(self) -> None:
         """Abort immediately when the configured model violates price policy."""
+        if self.is_local_provider():
+            return
         from . import model_registry
 
         cost_cap = model_registry.get_configured_cost_cap()
@@ -985,7 +987,7 @@ class APIClient:
     ]
     
     # Providers that are local and don't require API keys
-    LOCAL_PROVIDERS = ("local", "lmstudio", "ollama")
+    LOCAL_PROVIDERS = ("local", "lmstudio", "ollama", "koboldcpp")
 
     # Models supporting OpenAI prompt caching (automatic, gpt-4o and newer).
     # Prefix-matched against the configured model name (case-insensitive).

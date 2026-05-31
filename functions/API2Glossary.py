@@ -744,16 +744,19 @@ def infer_gender_llm(
         "gender_inference", "model",
     ) or "gpt-4.1-nano"
 
-    api_key = api_config.get_api_key_plain(prov, kname)
-    if not api_key:
-        raise RuntimeError(
-            f"No API key for provider '{prov}', name '{kname}'. "
-            "Configure in Global Options → Utility."
-        )
-
     base_url = api_config.get_profile_setting(
         "gender_inference", "base_url",
     ) or None
+    api_key = api_config.get_api_key_plain(prov, kname)
+    if not api_key:
+        from .llm_request import is_local_provider
+        if is_local_provider(prov, base_url):
+            api_key = "local"
+        else:
+            raise RuntimeError(
+                f"No API key for provider '{prov}', name '{kname}'. "
+                "Configure in Global Options → Utility."
+            )
 
     # Build excerpts
     num_needed = max(minimum, maximum)
@@ -834,28 +837,21 @@ def _call_api_for_excerpt_custom(
     Uses strict JSON-schema structured output, ``store=False`` and a
     ``max_tokens`` cap to minimise output-token waste.
     """
-    import importlib
-
-    openai_mod = importlib.import_module("openai")
-    client_cls = getattr(openai_mod, "OpenAI")
-    kwargs: Dict[str, Any] = {"api_key": api_key}
-    if base_url:
-        kwargs["base_url"] = base_url
-    client = client_cls(**kwargs)
-
     user_prompt = _get_gender_prompt(speaker, excerpt)
 
-    request_kwargs = {
-        "model": model,
-        "messages": [{"role": "user", "content": user_prompt}],
-        "response_format": RESPONSE_SCHEMA,
-        "temperature": 0.0,
-        "max_tokens": 150,
-    }
-    if provider.lower() == "openai":
-        request_kwargs["store"] = False
+    from .llm_request import send_chat_completion
 
-    response = client.chat.completions.create(**request_kwargs)
+    result = send_chat_completion(
+        provider=provider,
+        api_key=api_key,
+        model=model,
+        messages=[{"role": "user", "content": user_prompt}],
+        base_url=base_url,
+        response_format=RESPONSE_SCHEMA,
+        temperature=0.0,
+        max_tokens=150,
+    )
+    response = result.raw
 
     try:
         from .api_log import (
@@ -922,7 +918,7 @@ def _call_api_for_excerpt_custom(
         ) -> None:
             return None
 
-    content = response.choices[0].message.content or ""
+    content = result.content
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError as exc:

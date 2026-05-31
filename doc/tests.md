@@ -350,6 +350,7 @@ The Step 0 / Open Project / Costs performance guardrails are covered by a small 
 
 - `dev/test_lightvn_fixes.py` verifies that manifest-backed Step 0 rehydration can keep `LoadedFile` content lazy until text is actually requested.
 - `dev/test_app_startup.py` verifies that Open Project wraps manifest load in the shared loading progress dialog, that the non-mainloop helper still uses the synchronous `wait_variable` path for tooling, and that the live GUI helper polls via `after()` instead of entering another nested wait.
+- `dev/test_app_startup.py` also verifies that startup restore is queued until after the root window is built and that both launcher entry points swallow `KeyboardInterrupt` raised either during `App()` construction or during `mainloop()`.
 - `dev/test_manifest_load_fastpath.py` verifies that `functions/manifest_manager.py::canonicalize_lines()` returns already-canonical v3.2 line arrays unchanged while legacy locator fields are still normalized.
 
 Benchmark commands in this section must be executed through the 60-second hard-timeout wrapper above; do not leave raw benchmark Python processes running unattended.
@@ -413,7 +414,8 @@ Updated verified results:
 
 The staged full-file Patch Editor plus its app entry points are covered by a focused regression set:
 
-- `dev/test_patch_editor_view.py` verifies that editor file views prefer staged `Patch/` files, fall back to `Original/` when no patch exists, persist manifest-backed editor diffs/history when a full-file save occurs, keep Tkinter's internal `_root()` helper callable so the themed Editor window can open safely, and suppress programmatic file-tree/history `TreeviewSelect` callbacks so live Editor open cannot loop inside Tk selection handlers.
+- `dev/test_patch_editor_view.py` verifies that editor file views prefer staged `Patch/` files, fall back to `Original/` when no patch exists, persist manifest-backed editor diffs/history when a full-file save occurs, keep Tkinter's internal `_root()` helper callable so the themed Editor window can open safely, suppress programmatic file-tree/history `TreeviewSelect` callbacks so live Editor open cannot loop inside Tk selection handlers, keep empty-search Editor open from requesting cross-file payloads, cover Stop/Restore search control behavior, and cover the Editor search backend for include/exclude globs, case/whole-word matching, parsed/not-parsed line scope, and scoped replace-all.
+- `dev/benchmark_editor_search.py` is a headless synthetic benchmark for large Editor search result rendering. It compares the expensive rebuild-after-each-result pattern against batched append rendering and prints a verbal `TIMEOUT:` message if the configured threshold is exceeded.
 - `dev/test_manifest_state.py` verifies that `save_editor_patch()` and `save_lines_only_changes()` persist only the compact `EditorState.files` contract (staged artifact references, timestamps, bounded history, pending `changed` flag), that empty-history records are pruned on load/export, that first full-file saves seed replayable rollback history against fresh output, that generic setters do not mark files changed by themselves, that the shared compare helper marks only files already present in `Translated/`, and that Step 9 still clears active translated patch artifacts.
 - `dev/test_output_injection.py` verifies that manifest-backed Step 9 state drops the redundant `lines` cache, still reads fresh resolved lines from manifest rows, replays saved editor history onto fresh parser renders before injection, skips unchanged same-target translated writes, mirrors successful writes into the staged translated tree, and lets Output export selection follow checkbox state plus the new `Select Visible` action.
 - `dev/test_app_startup.py` verifies that opening the live Editor entry point requires a loaded project and that reopening it reuses the shared window instead of creating duplicates.
@@ -463,7 +465,7 @@ The currently implemented building blocks behind the planned Lifetime Cost Track
 
 - `dev/test_usage_tracker.py` verifies persistent usage aggregation in `user/usage.db`
 - `dev/test_api_log.py` verifies structured API log persistence, status/category filtering, failure classification metadata, and API Log viewer label mapping
-- `dev/test_patch_editor_view.py` verifies staged full-file editing, diffs, and manifest-backed editor history
+- `dev/test_patch_editor_view.py` verifies staged full-file editing, diffs, manifest-backed editor history, selection-span helpers, and selection context-menu replacement request behavior
 - `dev/test_table_view.py` verifies the line-level editing and search/replace surface that the planned workbench will continue to reuse
 
 These tests describe the current foundation only. The redesign plan changes the future target to a TSV-backed `Ledger` plus a merged non-modal `Editor` window, so new focused coverage will be required when implementation starts.
@@ -473,6 +475,14 @@ Verified command:
 ```bash
 python -m pytest CherryAI/dev/test_usage_tracker.py CherryAI/dev/test_api_log.py CherryAI/dev/test_patch_editor_view.py CherryAI/dev/test_table_view.py -q --timeout=20
 ```
+
+Latest focused Editor validation:
+
+```bash
+python -m pytest dev/test_patch_editor_view.py -q --timeout=20
+```
+
+Result: `44 passed`.
 
 ### Planned Redesign Coverage
 
@@ -1703,7 +1713,7 @@ Settings helper methods for processing function integration (Task 21.3).
 
 ---
 
-### dev/test_app_startup.py (26 tests)
+### dev/test_app_startup.py (39 tests)
 
 Application startup manifest loading tests (Task 21.4).
 
@@ -1788,6 +1798,15 @@ Application startup manifest loading tests (Task 21.4).
 | `test_project_name_field_shown_when_no_manifest` | Project Name field appears when show_project_name=True |
 | `test_project_name_validated` | Empty project name triggers validation error |
 | `test_result_tuple_includes_project_name` | Dialog result includes project_name as 4th element |
+
+#### TestMainloopInterruptHandling (4 tests)
+
+| Test | Purpose |
+|------|---------|
+| `test_launcher_main_logs_traceback_for_mainloop_keyboardinterrupt` | CherryAI launcher logs the traceback, then closes cleanly when Ctrl+C lands during `mainloop()` |
+| `test_launcher_main_handles_startup_keyboardinterrupt` | CherryAI launcher swallows Ctrl+C raised during `App()` construction |
+| `test_gui_main_logs_traceback_for_mainloop_keyboardinterrupt` | `gui.app.main()` logs the traceback, then closes cleanly when Ctrl+C lands during `mainloop()` |
+| `test_gui_main_handles_startup_keyboardinterrupt` | `gui.app.main()` swallows Ctrl+C raised during `App()` construction |
 
 ---
 
@@ -3466,13 +3485,13 @@ Comprehensive tests for all formats/ modules verifying handlers, registry, and o
 | `test_pdf_get_metadata_shows_not_implemented` | PDF metadata shows not implemented |
 | `test_epub_get_metadata_shows_not_implemented` | EPUB metadata shows not implemented |
 
-#### TestRpgMakerPlaceholders (3 tests)
+#### TestRpgMakerHandlers (3 tests)
 
 | Test | Purpose |
 |------|---------|
-| `test_rpgmaker_mv_handler_is_placeholder` | RpgMakerMVHandler placeholder |
-| `test_rpgmaker_mz_handler_is_placeholder` | RpgMakerMZHandler placeholder |
-| `test_rpgmaker_plugin_handler_is_placeholder` | RpgMakerPluginHandler placeholder |
+| `test_rpgmaker_mv_handler_reports_missing_file` | RpgMakerMVHandler structured missing-file error |
+| `test_rpgmaker_mz_handler_reports_missing_file` | RpgMakerMZHandler structured missing-file error |
+| `test_rpgmaker_plugin_handler_reports_missing_file` | RpgMakerPluginHandler structured missing-file error |
 
 #### TestFormatIntegration (5 tests)
 
@@ -3848,7 +3867,7 @@ Thank you.
 | test_provider_live_api.py | 11 | Live API tests: GPT-5-nano (no temp, reasoning) + GPT-4.1-nano (temp 0-2, no reasoning) |
 | test_pricing_and_reasoning.py | 108 | Pricing + Reasoning: GPT 4.1 no flex/priority, GPT 5 all tiers, ThinkingConfig 5 modes (builtin/explicit/optional/mandatory/""), TuningParamConfig and OpenAI/Mistral sampling capability reporting, build_params Chat Completions format, reasoning_effort persistence (RequestSettings/APIConfig/TranslationOptions/INI), provider-based get_thinking_params, THINKING_MODELS, is_openai_reasoning_model |
 | test_api_log.py | 55 | API Log: LogEntry serialization, APILogStore CRUD/filtering/subscription/persistence, singleton management, enum values, dataclass defaults, prompt-cache metadata preservation, status string compatibility (5), manifest save thread safety (2), structured log full-content guardrails (7), and main-translation failed/discarded attempt logging (3) |
-| test_patch_editor_view.py | 3 | Patch Editor manifest helpers: staged Patch-vs-Original resolution, parser-backed translated/edit history rows, and manifest-backed save history persistence |
+| test_patch_editor_view.py | 39 | Patch Editor manifest helpers and Editor host behavior: staged Patch-vs-Original resolution, parser-backed translated/edit history rows, manifest-backed save history persistence, single-window reuse, sidebar switching, multiline locator highlighting, debounced search highlighting, replace current/all, cross-file search include/exclude patterns, case/whole-word matching, parsed/not-parsed line scope, scoped replace-all, no cross-file scan on empty search, lightweight search payload usage, and Stop/Restore search control behavior |
 | test_bugfix_batch_79.py | 33 | Bugfix Batch 79: API Log visibility (lift/non-modal), global glossary merge (4), ellipsis-only detection (14), ellipsis compression order (5), dedup/skip progress (3), cached/reasoning tokens (5) |
 | test_unified_request_builder.py | 28 | Unified Request Builder: gather_prompt_data (importable, keys, None/unloaded mgr, sample_lines, metadata read, fallback field merging), build_request_prompt (importable, tuple return, language prompt, style/tone/summary/genre enabled/disabled, rolling context, chunk_lines), unified call sites (costs 3 methods, translate 2 methods, no direct build_full_system_prompt), API Log full prompt (no truncation, line-by-line system_prompt), identical prompt output (deterministic, same data same prompt) |
 | test_glossary_term_link.py | 19 | Glossary ↔ Term Translation link: character round-trip (2), on_enter load order AST (3), on_leave dual-storage sync AST (2), import_analysis_speakers persistence AST (1), dual-storage simulation (4), CharacterInfo preservation (3), ProjectMetadata preservation (2), load guard (2) |
@@ -6207,7 +6226,7 @@ Tests for formats/ module in dev/test_formats.py:
 # TestFormatRegistry - handler registration and lookup
 # TestIOConfig - configuration serialization
 # TestDocumentPlaceholders - PDF/EPUB placeholders
-# TestRpgMakerPlaceholders - RPG Maker placeholders
+# TestRpgMakerHandlers - RPG Maker handlers
 # TestFormatIntegration - cross-format workflows
 ```
 

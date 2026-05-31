@@ -215,6 +215,22 @@ class BaseStep(ABC, ttk.Frame):
         if mgr is not None and mgr.is_loaded:
             mgr.save()
 
+    def assert_ui_thread(self, op: str) -> None:
+        """Require the current caller to be on the Tk UI thread."""
+        root = self.winfo_toplevel()
+        checker = getattr(root, "assert_ui_thread", None)
+        if callable(checker):
+            checker(op)
+
+    def call_on_ui_thread(self, callback: Any, *args: Any, **kwargs: Any) -> None:
+        """Schedule a callback on the Tk UI thread via the owning app."""
+        root = self.winfo_toplevel()
+        dispatcher = getattr(root, "dispatch_to_ui", None)
+        if callable(dispatcher):
+            dispatcher(callback, *args, **kwargs)
+            return
+        self.after(0, lambda: callback(*args, **kwargs))
+
     # -----------------------------------------------------------------
     # Tab Caching (TASK 43.14)
     # -----------------------------------------------------------------

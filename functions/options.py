@@ -45,6 +45,11 @@ _STATIC_PROVIDERS: Dict[str, Dict[str, Any]] = {
         "base_url": "http://localhost:1234/v1",
         "models": ["local-model"],
     },
+    "koboldcpp": {
+        "name": "KoboldCPP",
+        "base_url": "http://localhost:5001/v1",
+        "models": ["koboldcpp-model"],
+    },
 }
 
 # Cloud providers whose model lists are fetched dynamically via model_registry.
@@ -94,6 +99,7 @@ def _build_api_providers() -> Dict[str, Dict[str, Any]]:
             "local": "local",
             "lmstudio": "lmstudio",
             "ollama": "ollama",
+            "koboldcpp": "koboldcpp",
         }
 
         try:

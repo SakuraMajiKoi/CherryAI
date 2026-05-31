@@ -92,14 +92,17 @@ class LocalProvider(ProviderBase):
             max_retries=0,
         )
 
-        # Force json_schema format for local providers
-        fmt = _LOCAL_RESPONSE_FORMAT
+        # Prefer the caller's schema.  Translation supplies the default
+        # translation array schema; utility/editor requests may require a
+        # different strict shape or plain text.
+        fmt = response_format or _LOCAL_RESPONSE_FORMAT
 
         params: Dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "response_format": fmt,
         }
+        if fmt is not None:
+            params["response_format"] = fmt
 
         if temperature is not None:
             params["temperature"] = temperature
@@ -239,6 +242,14 @@ class OllamaProvider(LocalProvider):
     base_url = "http://localhost:11434/v1"
 
 
+class KoboldCPPProvider(LocalProvider):
+    """KoboldCPP OpenAI-compatible endpoint."""
+
+    name = "koboldcpp"
+    display_name = "KoboldCPP"
+    base_url = "http://localhost:5001/v1"
+
+
 # ---------------------------------------------------------------------------
 # Register all local providers
 # ---------------------------------------------------------------------------
@@ -246,3 +257,4 @@ class OllamaProvider(LocalProvider):
 ProviderRegistry.register(LocalProvider())
 ProviderRegistry.register(LMStudioProvider())
 ProviderRegistry.register(OllamaProvider())
+ProviderRegistry.register(KoboldCPPProvider())

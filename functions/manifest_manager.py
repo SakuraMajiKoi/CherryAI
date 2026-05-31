@@ -324,6 +324,29 @@ def _source_window_matches(lines: List[str], start_idx: int, token: str) -> bool
     return False
 
 
+def _physical_line_count(text: str) -> int:
+    """Return the number of physical lines represented by *text*."""
+    normalized = str(text).replace("\r\n", "\n").replace("\r", "\n")
+    return max(1, normalized.count("\n") + 1)
+
+
+def _slice_source_line_window(
+    lines: List[str],
+    anchor_ln: Optional[int],
+    line_count: int,
+) -> str:
+    """Return a raw source line window anchored by a 1-based manifest ``ln``."""
+    if anchor_ln is None or anchor_ln <= 0:
+        return ""
+
+    start_idx = anchor_ln - 1
+    if start_idx >= len(lines):
+        return ""
+
+    safe_line_count = max(1, line_count)
+    return "\n".join(lines[start_idx:start_idx + safe_line_count])
+
+
 def capture_source_line_mappings(
     source_text: str,
     extracted_lines: List[str],
@@ -855,11 +878,11 @@ CREATE_PATCH_SELECTIONS: Dict[str, bool] = {
     "import_wordwrap": True,
     "import_final": True,
     "import_qa": True,
+    "import_diff_patches": True,
     "skip_new_lines": False,
     "import_analysis": True,
     "import_information": True,
     "import_preprocessing": True,
-    "import_costs": True,
     "import_translation": True,
     "import_postprocessing": True,
     "import_wordwrap_settings": True,
@@ -1394,6 +1417,7 @@ class ManifestManager:
             # === v3.0 Preprocessing Options ===
             "Deduplication": defaults.get("deduplication", True),
             "DeduplicationThreshold": defaults.get("deduplication_threshold", 1),
+            "AggressiveNumberDedup": defaults.get("aggressive_number_dedup", False),
             "EllipsisCompression": defaults.get("ellipsis_compression", True),
             "SymbolConversion": defaults.get("symbol_conversion", True),
             "SpeakerNameReplacement": defaults.get("speaker_name_replacement", False),
@@ -3158,6 +3182,7 @@ class ManifestManager:
             preprocessing_keys = [
                 "Deduplication",
                 "DeduplicationThreshold",
+                "AggressiveNumberDedup",
                 "EllipsisCompression",
                 "SymbolConversion",
                 "SpeakerNameReplacement",
@@ -3166,23 +3191,29 @@ class ManifestManager:
                 "CustomPlaceholders",
                 "AnchorRemoval",
             ]
+            nested_source = source_data.get("Preprocessing")
+            if isinstance(nested_source, dict):
+                nested_target = self._manifest_data.setdefault("Preprocessing", {})
+                if isinstance(nested_target, dict):
+                    for key in preprocessing_keys:
+                        if key in nested_source:
+                            value = deepcopy(nested_source[key])
+                            nested_target[key] = value
+                            self._manifest_data[key] = deepcopy(value)
             for key in preprocessing_keys:
                 if key in source_data:
-                    self._manifest_data[key] = source_data[key]
+                    value = deepcopy(source_data[key])
+                    self._manifest_data[key] = value
+                    nested_target = self._manifest_data.setdefault("Preprocessing", {})
+                    if isinstance(nested_target, dict):
+                        nested_target[key] = deepcopy(value)
             self._mark_dirty()
             count += 1
 
-        if selections.get("import_costs", False):
+        if selections.get("import_translation", False):
             source_request_options = source_data.get("RequestOptions")
             if source_request_options:
-                self._manifest_data["RequestOptions"] = source_request_options
-                self._mark_dirty()
-                count += 1
-
-        if selections.get("import_translation", False):
-            source_step_state = source_data.get("step_state", {}).get("Translation")
-            if source_step_state:
-                self._manifest_data.setdefault("step_state", {})["Translation"] = source_step_state
+                self._manifest_data["RequestOptions"] = deepcopy(source_request_options)
                 self._mark_dirty()
                 count += 1
 
@@ -3231,6 +3262,8 @@ class ManifestManager:
         self,
         source_data: Dict[str, Any],
         selections: Dict[str, bool],
+        *,
+        source_manifest_path: Optional[Path] = None,
     ) -> Dict[str, int]:
         """Import line and settings data from another manifest payload."""
         line_stats = self.import_line_fields_from_manifest_data(source_data, selections)
@@ -3238,11 +3271,123 @@ class ManifestManager:
             source_data,
             selections,
         )
+        diff_patch_stats = {"records_imported": 0, "files_copied": 0}
+        if selections.get("import_diff_patches", False) and source_manifest_path is not None:
+            diff_patch_stats = self.import_editor_diff_patches_from_manifest_path(
+                source_manifest_path,
+            )
         return {
             "matched": line_stats["matched"],
             "total": line_stats["total"],
             "sections_imported": section_count,
+            "diff_patches_imported": diff_patch_stats["records_imported"],
+            "diff_patch_files_copied": diff_patch_stats["files_copied"],
         }
+
+    def import_editor_diff_patches_from_manifest_path(
+        self,
+        source_manifest_path: Path,
+    ) -> Dict[str, int]:
+        """Copy project-local editor diff patch artifacts from another manifest."""
+        source_manager = ManifestManager()
+        if not source_manager.load(source_manifest_path):
+            raise ValueError(f"Failed to load source manifest: {source_manifest_path}")
+
+        try:
+            current_rel_paths = {entry.rel_path for entry in self.get_filedir()}
+            source_files_state = source_manager._get_editor_state_files(create=False)
+            if not source_files_state or not current_rel_paths:
+                return {"records_imported": 0, "files_copied": 0}
+
+            dest_files_state = self._get_editor_state_files(create=True)
+            records_imported = 0
+            files_copied = 0
+
+            for rel_path, source_record in source_files_state.items():
+                if rel_path not in current_rel_paths or not isinstance(source_record, dict):
+                    continue
+
+                dest_record = dest_files_state.get(rel_path, {})
+                if not isinstance(dest_record, dict):
+                    dest_record = {}
+                imported_record = deepcopy(dest_record)
+                imported_any = False
+
+                for field_name in ("patch_original_path", "patch_translated_path"):
+                    copied_rel_path = self._copy_project_patch_artifact(
+                        source_manager,
+                        source_record.get(field_name),
+                    )
+                    if copied_rel_path is None:
+                        continue
+                    imported_record[field_name] = copied_rel_path
+                    imported_any = True
+                    files_copied += 1
+
+                imported_history: List[Dict[str, Any]] = []
+                source_history = source_record.get("history", [])
+                if isinstance(source_history, list):
+                    for history_entry in source_history:
+                        if not isinstance(history_entry, dict):
+                            continue
+                        copied_rel_path = self._copy_project_patch_artifact(
+                            source_manager,
+                            history_entry.get("patch_path"),
+                        )
+                        if copied_rel_path is None:
+                            continue
+                        copied_history = deepcopy(history_entry)
+                        copied_history["patch_path"] = copied_rel_path
+                        imported_history.append(copied_history)
+                        imported_any = True
+                        files_copied += 1
+
+                if not imported_any:
+                    continue
+
+                if imported_history:
+                    imported_record["history"] = imported_history
+                if source_record.get("saved_at"):
+                    imported_record["saved_at"] = source_record["saved_at"]
+                imported_record["changed"] = bool(source_record.get("changed", True))
+                dest_files_state[rel_path] = imported_record
+                records_imported += 1
+
+            if records_imported > 0:
+                self._mark_dirty()
+
+            return {
+                "records_imported": records_imported,
+                "files_copied": files_copied,
+            }
+        finally:
+            source_manager.close()
+
+    def _copy_project_patch_artifact(
+        self,
+        source_manager: "ManifestManager",
+        source_rel_path: Any,
+    ) -> Optional[str]:
+        """Copy one project-local ``Patch/*.patch`` artifact from *source_manager*."""
+        source_path = source_manager._resolve_project_relative_path(
+            str(source_rel_path) if source_rel_path else None,
+        )
+        if source_path is None or source_path.suffix.lower() != ".patch" or not source_path.exists():
+            return None
+
+        try:
+            source_project_rel = source_path.relative_to(source_manager.get_project_dir())
+        except ValueError:
+            return None
+
+        normalized_rel = str(source_project_rel).replace("\\", "/")
+        if not normalized_rel.startswith("Patch/"):
+            return None
+
+        dest_path = self.get_project_dir() / source_project_rel
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, dest_path)
+        return self._relativize_project_path(dest_path)
 
     def find_files_with_full_orig_match(
         self,
@@ -3489,6 +3634,44 @@ class ManifestManager:
             "locator_metadata": locator_metadata,
             "history": editor_state.get("history", []),
             "patch_translated_path": editor_state.get("patch_translated_path"),
+        }
+
+    def get_editor_search_file_payload(
+        self,
+        rel_path: str,
+        *,
+        current_text: Optional[str] = None,
+        include_locator_metadata: bool = False,
+    ) -> Dict[str, Any]:
+        """Return lightweight text payload for Editor search.
+
+        Unlike ``get_editor_file_view()``, this deliberately avoids unified diff
+        generation and line-history assembly unless parsed-line metadata is
+        requested by the search scope.
+        """
+        entry = self.get_filedir_entry_by_rel_path(rel_path)
+        if entry is None:
+            raise ValueError(f"Unknown editor file path: {rel_path}")
+
+        current_path = self._resolve_editor_current_file_path(entry)
+        encoding = entry.encoding or "utf-8"
+        resolved_current_text = current_text
+        if resolved_current_text is None:
+            resolved_current_text = self._read_editor_text(current_path, encoding)
+
+        locator_metadata: List[Dict[str, Any]] = []
+        if include_locator_metadata:
+            _line_history, locator_metadata = self._build_editor_line_history(
+                entry,
+                resolved_current_text,
+                current_path,
+                allow_path_extract=current_text is None,
+            )
+
+        return {
+            "rel_path": entry.rel_path,
+            "current_text": resolved_current_text,
+            "locator_metadata": locator_metadata,
         }
 
     def save_editor_patch(
@@ -4711,6 +4894,7 @@ class ManifestManager:
         for extracted_line, mapping, matched_row in zip(extracted_lines, mappings, matched_rows):
             metadata: Dict[str, Any] = {
                 "editor_ln": mapping["ln"],
+                "editor_line_count": _physical_line_count(extracted_line),
             }
             if "f" in mapping:
                 metadata["editor_f"] = mapping["f"]
@@ -4736,12 +4920,20 @@ class ManifestManager:
         line_history: List[Dict[str, Any]] = []
         for offset, line_data in enumerate(manifest_lines):
             idx = _coerce_int(line_data.get("idx"), offset)
+            original_line = str(line_data.get("orig", ""))
+            translated_line = resolve_line_field(line_data)
             current_line = current_by_idx.get(idx, "")
+            if not current_line:
+                anchor_ln = _coerce_positive_int(line_data.get("ln"))
+                fallback_line_count = _physical_line_count(translated_line or original_line)
+                current_line = _slice_source_line_window(
+                    fallback_lines,
+                    anchor_ln,
+                    fallback_line_count,
+                )
             if not current_line and offset < len(fallback_lines):
                 current_line = fallback_lines[offset]
 
-            original_line = str(line_data.get("orig", ""))
-            translated_line = resolve_line_field(line_data)
             status = "all"
             if current_line != original_line and current_line == translated_line:
                 status = "translated"
@@ -4755,10 +4947,62 @@ class ManifestManager:
                 "original": original_line,
                 "translated": translated_line,
                 "current": current_line,
+                "line_count": _physical_line_count(
+                    current_line or translated_line or original_line
+                ),
             }
             if "f" in line_data:
                 history_row["f"] = line_data.get("f")
             line_history.append(history_row)
+
+        physical_lines = source_text.splitlines()
+        matched_indices = {
+            _coerce_int(metadata.get("idx"), -1)
+            for metadata in locator_metadata
+            if metadata.get("matched") and _coerce_int(metadata.get("idx"), -1) >= 0
+        }
+        for history_row in line_history:
+            idx = _coerce_int(history_row.get("idx"), -1)
+            if idx in matched_indices:
+                continue
+
+            anchor_ln = _coerce_positive_int(history_row.get("ln"))
+            if anchor_ln is None or anchor_ln > len(physical_lines):
+                continue
+
+            candidate_text = next(
+                (
+                    text
+                    for text in (
+                        str(history_row.get("current", "")),
+                        str(history_row.get("translated", "")),
+                        str(history_row.get("original", "")),
+                    )
+                    if text
+                ),
+                "",
+            )
+            if not candidate_text:
+                continue
+
+            if not any(
+                _source_window_matches(physical_lines, anchor_ln - 1, token)
+                for token in _mapping_search_tokens(candidate_text)
+            ):
+                continue
+
+            fallback_metadata: Dict[str, Any] = {
+                "matched": True,
+                "idx": idx,
+                "ln": history_row.get("ln"),
+                "current": history_row.get("current", ""),
+                "editor_ln": anchor_ln,
+                "editor_line_count": _physical_line_count(candidate_text),
+            }
+            field_value = _coerce_positive_int(history_row.get("f"))
+            if field_value is not None:
+                fallback_metadata["f"] = field_value
+            locator_metadata.append(fallback_metadata)
 
         return line_history, locator_metadata
     
@@ -6010,25 +6254,42 @@ class ManifestManager:
         - CustomPlaceholders: Custom placeholder patterns
         - AnchorRemoval: Anchors to remove
         """
+        nested = self._manifest_data.get("Preprocessing", {})
+        if not isinstance(nested, dict):
+            nested = {}
+
+        def _get(key: str, default: Any) -> Any:
+            if key in nested:
+                return nested[key]
+            return self._manifest_data.get(key, default)
+
         return {
-            "Deduplication": self._manifest_data.get("Deduplication", True),
-            "DeduplicationThreshold": self._manifest_data.get("DeduplicationThreshold", 1),
-            "EllipsisCompression": self._manifest_data.get("EllipsisCompression", True),
-            "SymbolConversion": self._manifest_data.get("SymbolConversion", True),
-            "SpeakerNameReplacement": self._manifest_data.get("SpeakerNameReplacement", False),
-            "CodeSpacingRules": self._manifest_data.get("CodeSpacingRules", True),
-            "ProtectCodePatterns": self._manifest_data.get("ProtectCodePatterns", []),
-            "CustomPlaceholders": self._manifest_data.get("CustomPlaceholders", []),
-            "AnchorRemoval": self._manifest_data.get("AnchorRemoval", []),
+            "Deduplication": _get("Deduplication", True),
+            "DeduplicationThreshold": _get("DeduplicationThreshold", 1),
+            "AggressiveNumberDedup": _get("AggressiveNumberDedup", False),
+            "EllipsisCompression": _get("EllipsisCompression", True),
+            "SymbolConversion": _get("SymbolConversion", True),
+            "SpeakerNameReplacement": _get("SpeakerNameReplacement", False),
+            "CodeSpacingRules": _get("CodeSpacingRules", True),
+            "ProtectCodePatterns": _get("ProtectCodePatterns", []),
+            "CustomPlaceholders": _get("CustomPlaceholders", []),
+            "AnchorRemoval": _get("AnchorRemoval", []),
         }
     
     def set_preprocessing_options(self, options: Dict[str, Any]) -> None:
         """Set preprocessing options."""
+        nested = self._manifest_data.setdefault("Preprocessing", {})
+        if not isinstance(nested, dict):
+            nested = {}
+            self._manifest_data["Preprocessing"] = nested
         for key, value in options.items():
-            if key in ("Deduplication", "DeduplicationThreshold", "EllipsisCompression",
-                      "SymbolConversion", "SpeakerNameReplacement", "CodeSpacingRules",
-                      "ProtectCodePatterns", "CustomPlaceholders", "AnchorRemoval"):
-                self._manifest_data[key] = value
+            if key in ("Deduplication", "DeduplicationThreshold", "AggressiveNumberDedup",
+                      "EllipsisCompression", "SymbolConversion", "SpeakerNameReplacement",
+                      "CodeSpacingRules", "ProtectCodePatterns", "CustomPlaceholders",
+                      "AnchorRemoval"):
+                stored = deepcopy(value)
+                self._manifest_data[key] = stored
+                nested[key] = deepcopy(stored)
         self._mark_dirty()
     
     def get_validation_rules(self) -> Dict[str, Any]:

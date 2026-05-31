@@ -127,6 +127,23 @@ PARSER_EXTENSION_HINTS: Dict[str, Set[str]] = {
 }
 
 
+def _resolve_manifest_display_root(manifest_manager: Any) -> Optional[Path]:
+    """Return the concrete folder root to use for manifest-backed file trees."""
+    if manifest_manager is None or not getattr(manifest_manager, "is_loaded", False):
+        return None
+
+    source_mode = str(getattr(manifest_manager, "source_mode", "internal")).strip().lower()
+    if source_mode == "external":
+        source_root = str(getattr(manifest_manager, "source_root", "")).strip()
+        if source_root:
+            return Path(source_root)
+
+    get_original_dir = getattr(manifest_manager, "get_original_dir", None)
+    if callable(get_original_dir):
+        return Path(get_original_dir())
+    return None
+
+
 class LoadedFile:
     """Represents a loaded file with its content and metadata.
 
@@ -309,17 +326,17 @@ class _ImportTranslationDialog(tk.Toplevel):
         lf.pack(fill="x", padx=10, pady=(10, 4))
 
         self._add_check(lf, "import_prepro", "Preprocessed", True, **pad)
-        self._add_check(lf, "import_tags", "Tags", True, **pad)
+        self._add_check(lf, "import_tags", "Tags", False, **pad)
         self._add_check(lf, "import_translated", "Translated", True, **pad)
         self._add_check(lf, "import_postpro", "Postprocessed", True, **pad)
         self._add_check(lf, "import_wordwrap", "Wordwrap", True, **pad)
-        self._add_check(lf, "import_final", "Final", True, **pad)
         self._add_check(lf, "import_qa", "QA (reviewed text, overwrite, TLC, edits)", True, **pad)
         ttk.Separator(lf, orient="horizontal").pack(fill="x", padx=8, pady=4)
+        self._add_check(lf, "import_diff_patches", "Diff Patches", True, **pad)
         self._add_check(
             lf, "skip_new_lines",
             "Do not overwrite lines that already have translations",
-            False, **pad,
+            True, **pad,
         )
 
         # --- Settings Sections ---
@@ -334,12 +351,11 @@ class _ImportTranslationDialog(tk.Toplevel):
             True,
             **pad,
         )
-        self._add_check(sf, "import_preprocessing", "Preprocessing Settings", False, **pad)
-        self._add_check(sf, "import_costs", "Costs / Request Settings", False, **pad)
-        self._add_check(sf, "import_translation", "Translation Step State", False, **pad)
-        self._add_check(sf, "import_postprocessing", "Postprocessing", False, **pad)
-        self._add_check(sf, "import_wordwrap_settings", "Wordwrap Settings", False, **pad)
-        self._add_check(sf, "import_qa_settings", "QA / Validation Rules", False, **pad)
+        self._add_check(sf, "import_preprocessing", "Preprocessing Settings", True, **pad)
+        self._add_check(sf, "import_translation", "Request Options", False, **pad)
+        self._add_check(sf, "import_postprocessing", "Postprocessing Settings", True, **pad)
+        self._add_check(sf, "import_wordwrap_settings", "Wordwrap Settings", True, **pad)
+        self._add_check(sf, "import_qa_settings", "QA / Validation Rules", True, **pad)
         self._add_check(sf, "import_file_settings", "File / Output Settings", False, **pad)
 
         # --- Source info ---
@@ -580,6 +596,12 @@ class InputExtractionStep(BaseStep):
         # PHASE 58.7: Additional context menu items
         self._file_context_menu.add_command(
             label="Select All", command=self._on_select_all_files,
+        )
+        self._file_context_menu.add_command(
+            label="Expand All", command=self._on_expand_all_tree,
+        )
+        self._file_context_menu.add_command(
+            label="Collapse All", command=self._on_collapse_all_tree,
         )
         self._file_context_menu.add_separator()
         # "Select Type" submenu for typing
@@ -3488,7 +3510,11 @@ class InputExtractionStep(BaseStep):
             messagebox.showwarning("Warning", "No project loaded.")
             return
 
-        import_stats = mgr.import_from_manifest_data(source_data, selections)
+        import_stats = mgr.import_from_manifest_data(
+            source_data,
+            selections,
+            source_manifest_path=Path(source_path),
+        )
 
         # Log import metadata
         mgr.update_step_data(0, "last_import", {
@@ -3507,6 +3533,12 @@ class InputExtractionStep(BaseStep):
             )
         if import_stats["sections_imported"] > 0:
             parts.append(f"Settings sections: {import_stats['sections_imported']}")
+        if import_stats.get("diff_patches_imported", 0) > 0:
+            parts.append(
+                "Diff patch records: "
+                f"{import_stats['diff_patches_imported']} "
+                f"({import_stats.get('diff_patch_files_copied', 0)} file(s))"
+            )
         if not parts:
             parts.append("No data imported (nothing selected).")
 
@@ -4313,13 +4345,16 @@ class InputExtractionStep(BaseStep):
 
         # Determine source root for file resolution.
         mgr = self.manifest_manager
+        display_root = _resolve_manifest_display_root(mgr)
+        if display_root is not None:
+            self._folder_root = display_root
+        elif source_root and Path(source_root).is_absolute():
+            self._folder_root = Path(source_root)
+        else:
+            self._folder_root = None
         
         # v3.2 format: use filedir to map lines to files
         if filedir:
-            # Set folder root for display only (source_root is just a name)
-            if source_root:
-                self._folder_root = Path(source_root)
-            
             for file_entry in filedir:
                 line_count = max(int(file_entry.get("line_count", 0) or 0), 0)
                 if "first_idx" in file_entry or "last_idx" in file_entry:
@@ -4938,6 +4973,7 @@ class InputExtractionStep(BaseStep):
             filedir = mgr.get_filedir()
             manifest_lines = mgr.get_lines()
             if filedir and manifest_lines:
+                self._folder_root = _resolve_manifest_display_root(mgr)
                 original_dir = mgr.get_original_dir()
                 relocated = getattr(self, "_relocated_files", {})
 

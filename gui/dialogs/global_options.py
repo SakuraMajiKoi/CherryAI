@@ -42,6 +42,7 @@ class OptionSection(Enum):
     """Sections in the global options dialog."""
 
     API = "api"
+    LOCAL = "local"
     REQUEST = "request"          # displayed as "Model Settings"
     TRANSLATION = "translation"  # Translation Options
     UTILITY = "utility"          # Term Translation utility
@@ -1172,6 +1173,7 @@ class GlobalOptions:
 
 SECTION_DESCRIPTIONS: Dict[OptionSection, str] = {
     OptionSection.API: "Configure API provider, model, and authentication settings.",
+    OptionSection.LOCAL: "Configure local LLM applications, model lifecycle policy, and local model defaults.",
     OptionSection.REQUEST: "Model-level settings: temperature, thinking, timeouts, and rate limits.",
     OptionSection.TRANSLATION: "Translation-level options: chunking, retries, caching, and output.",
     OptionSection.UTILITY: "Configure Term Translation and Gender Inference settings.",
@@ -1187,7 +1189,7 @@ SECTION_DESCRIPTIONS: Dict[OptionSection, str] = {
 
 
 CATEGORY_ORDER: List[Tuple[OptionCategory, List[OptionSection]]] = [
-    (OptionCategory.CONNECTION, [OptionSection.API, OptionSection.REQUEST, OptionSection.TRANSLATION, OptionSection.UTILITY]),
+    (OptionCategory.CONNECTION, [OptionSection.API, OptionSection.LOCAL, OptionSection.REQUEST, OptionSection.TRANSLATION, OptionSection.UTILITY]),
     (OptionCategory.PROCESSING, [OptionSection.CACHING, OptionSection.LIMIT, OptionSection.PROMPTS]),
     (OptionCategory.APPLICATION, [OptionSection.SESSION, OptionSection.GUI, OptionSection.LOGGING, OptionSection.FILE_IO, OptionSection.SECURITY]),
 ]
@@ -1201,6 +1203,7 @@ CATEGORY_NAMES: Dict[OptionCategory, str] = {
 
 SECTION_NAMES: Dict[OptionSection, str] = {
     OptionSection.API: "API Provider",
+    OptionSection.LOCAL: "Local",
     OptionSection.REQUEST: "Model Settings",
     OptionSection.TRANSLATION: "Translation Options",
     OptionSection.UTILITY: "Utility",
@@ -1227,6 +1230,35 @@ COMMON_BAN_TOKENS: List[str] = [
     "fancy_apostrophe",
     "non_breaking_space",
 ]
+
+LOCAL_PROVIDER_KEYS: Tuple[str, ...] = ("lmstudio", "ollama", "koboldcpp")
+LOCAL_PROVIDER_LABELS: Dict[str, str] = {
+    "lmstudio": "LM Studio",
+    "ollama": "Ollama",
+    "koboldcpp": "KoboldCPP",
+}
+LOCAL_POLICY_LABELS: Dict[str, Tuple[str, ...]] = {
+    "Start": (
+        "Prompt to manually start",
+        "Auto-Start with CherryAI",
+        "Auto-Start when starting Translation with Local selected",
+    ),
+    "Load": (
+        "Prompt to manually load model",
+        "Auto-Load Model with {app} Launch",
+        "Auto-Load Model when Translation Starts",
+    ),
+    "Unload": (
+        "Do not Auto-Unload Model",
+        "Unload Model when Translation Stop",
+        "Unload Model when 5min Idle",
+    ),
+    "Close": (
+        "Do not Auto-Close",
+        "Auto-Close with CherryAI",
+        "Auto-Close when 5min Idle",
+    ),
+}
 
 
 # =============================================================================
@@ -1426,7 +1458,10 @@ class GlobalOptionsDialog(tk.Toplevel):
         from CherryAI.functions import ini_manager  # PHASE 58.11: For restore_on_launch
         
         # API settings
-        self.provider_var = tk.StringVar(value=self.options.api.provider)
+        api_provider = self.options.api.provider
+        if api_provider in LOCAL_PROVIDER_KEYS or api_provider == "local":
+            api_provider = "openai"
+        self.provider_var = tk.StringVar(value=api_provider)
         self.api_key_var = tk.StringVar(value=self.options.api.api_key)
         self.base_url_var = tk.StringVar(value=self.options.api.base_url)
         self.model_var = tk.StringVar(value=self.options.api.model)
@@ -1436,6 +1471,14 @@ class GlobalOptionsDialog(tk.Toplevel):
         self.frequency_penalty_var = tk.DoubleVar(value=0.2)
         self.presence_penalty_var = tk.DoubleVar(value=0.0)
         self.cost_cap_var = tk.DoubleVar(value=self.options.api.cost_cap)
+        self._local_vars: Dict[str, Dict[str, Any]] = {}
+        self._local_status_labels: Dict[str, ttk.Label] = {}
+        self._local_body_frames: Dict[str, ttk.Frame] = {}
+        self._local_model_lists: Dict[str, tk.Listbox] = {}
+        self._local_message_labels: Dict[str, ttk.Label] = {}
+        self._local_model_setting_vars: Dict[str, Dict[str, tk.StringVar]] = {}
+        self._local_widgets_container: Optional[ttk.Frame] = None
+        self._init_local_variables()
 
         # Request settings
         self.timeout_var = tk.IntVar(value=self.options.request.timeout)
@@ -1602,6 +1645,33 @@ class GlobalOptionsDialog(tk.Toplevel):
         except Exception:
             pass
 
+    def _init_local_variables(self) -> None:
+        """Initialize Local LLM tkinter variables from API.ini."""
+        for provider in LOCAL_PROVIDER_KEYS:
+            settings = _api_config.get_all_local_llm_settings(provider)
+            vars_for_provider: Dict[str, Any] = {
+                "installed": tk.BooleanVar(value=settings.get("installed", "0") == "1"),
+                "install_folder": tk.StringVar(value=settings.get("install_folder", "")),
+                "collapsed": tk.BooleanVar(value=settings.get("collapsed", "0") == "1"),
+                "order": tk.IntVar(value=self._coerce_local_int(settings.get("order", "0"), 0, 0, 99)),
+                "last_model": tk.StringVar(value=settings.get("last_model", "")),
+                "models": list(filter(None, settings.get("models", "").split("|"))),
+            }
+            for key in ("Start", "Load", "Unload", "Close"):
+                vars_for_provider[key] = tk.IntVar(
+                    value=self._coerce_local_int(settings.get(key, "1"), 1, 1, 3),
+                )
+            self._local_vars[provider] = vars_for_provider
+
+    @staticmethod
+    def _coerce_local_int(value: Any, fallback: int, minimum: int, maximum: int) -> int:
+        """Coerce and clamp a Local LLM integer setting."""
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = fallback
+        return max(minimum, min(maximum, parsed))
+
     def _build_ui(self) -> None:
         """Build the options UI with navigation and content panels."""
         # Main container
@@ -1625,6 +1695,7 @@ class GlobalOptionsDialog(tk.Toplevel):
         self._section_panels: Dict[OptionSection, ttk.Frame] = {}
         
         self._build_api_section()
+        self._build_local_section()
         self._build_request_section()
         self._build_translation_section()
         self._build_utility_section()
@@ -1803,7 +1874,10 @@ class GlobalOptionsDialog(tk.Toplevel):
         provider_combo = ttk.Combobox(
             provider_row,
             textvariable=self.provider_var,
-            values=list(API_PROVIDERS.keys()),
+            values=[
+                key for key in API_PROVIDERS.keys()
+                if key not in LOCAL_PROVIDER_KEYS and key != "local"
+            ],
             state="readonly",
             width=20,
         )
@@ -1908,6 +1982,458 @@ class GlobalOptionsDialog(tk.Toplevel):
         except tk.TclError:
             pass
         return value
+
+    def _build_local_section(self) -> None:
+        """Build the Local LLM settings section."""
+        panel = self._create_scrollable_panel(OptionSection.LOCAL)
+
+        ttk.Label(
+            panel, text="Local", font=("TkDefaultFont", 12, "bold"),
+        ).pack(anchor="w", pady=(0, 5))
+        ttk.Label(
+            panel,
+            text=SECTION_DESCRIPTIONS[OptionSection.LOCAL],
+            foreground="gray",
+        ).pack(anchor="w", pady=(0, 15))
+
+        self._local_widgets_container = ttk.Frame(panel)
+        self._local_widgets_container.pack(fill=tk.BOTH, expand=True)
+        self._rebuild_local_provider_widgets()
+
+    def _rebuild_local_provider_widgets(self) -> None:
+        """Rebuild local provider widgets according to saved order."""
+        if self._local_widgets_container is None:
+            return
+        for child in self._local_widgets_container.winfo_children():
+            child.destroy()
+        self._local_status_labels.clear()
+        self._local_body_frames.clear()
+        self._local_model_lists.clear()
+        self._local_message_labels.clear()
+        ordered = sorted(
+            LOCAL_PROVIDER_KEYS,
+            key=lambda provider: (
+                self._local_vars[provider]["order"].get(),
+                LOCAL_PROVIDER_KEYS.index(provider),
+            ),
+        )
+        for provider in ordered:
+            self._build_local_provider_widget(
+                self._local_widgets_container,
+                provider,
+            )
+
+    def _build_local_provider_widget(self, parent: ttk.Frame, provider: str) -> None:
+        """Build one collapsible local provider widget."""
+        label = LOCAL_PROVIDER_LABELS[provider]
+        vars_for_provider = self._local_vars[provider]
+
+        frame = ttk.LabelFrame(parent, padding=10)
+        frame.pack(fill=tk.X, pady=(0, 10))
+
+        header = ttk.Frame(frame)
+        header.pack(fill=tk.X)
+        arrow = ">" if vars_for_provider["collapsed"].get() else "v"
+        arrow_btn = ttk.Button(
+            header,
+            text=arrow,
+            width=3,
+            command=lambda p=provider: self._toggle_local_collapsed(p),
+        )
+        arrow_btn.pack(side=tk.LEFT)
+
+        ttk.Label(
+            header,
+            text=label,
+            font=("TkDefaultFont", 10, "bold"),
+        ).pack(side=tk.LEFT, padx=(8, 8))
+
+        installed = bool(vars_for_provider["installed"].get())
+        status_label = ttk.Label(
+            header,
+            text="Installed" if installed else "Not Installed",
+            foreground="green" if installed else "red",
+        )
+        status_label.pack(side=tk.LEFT)
+        self._local_status_labels[provider] = status_label
+
+        ttk.Button(
+            header,
+            text=str(vars_for_provider["order"].get() + 1),
+            width=3,
+            command=lambda p=provider: self._cycle_local_order(p),
+        ).pack(side=tk.RIGHT)
+
+        body = ttk.Frame(frame)
+        self._local_body_frames[provider] = body
+        if not vars_for_provider["collapsed"].get():
+            body.pack(fill=tk.X, pady=(10, 0))
+            if installed:
+                self._build_local_installed_body(body, provider)
+            else:
+                self._build_local_not_installed_body(body, provider)
+
+    def _build_local_not_installed_body(self, parent: ttk.Frame, provider: str) -> None:
+        """Build the not-installed local provider body."""
+        from CherryAI.functions.local_llm import (
+            get_provider_download_url,
+            normalize_local_provider,
+        )
+        import webbrowser
+
+        url = get_provider_download_url(normalize_local_provider(provider))
+        row = ttk.Frame(parent)
+        row.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(row, text="Download:").pack(side=tk.LEFT)
+        link_font = ("TkDefaultFont", 9, "underline")
+        link = tk.Label(
+            row,
+            text=url,
+            fg="#1a5fb4",
+            cursor="hand2",
+            font=link_font,
+        )
+        link.pack(side=tk.LEFT, padx=(6, 0))
+        link.bind("<Button-1>", lambda _e, link_url=url: webbrowser.open(link_url))
+
+        ttk.Button(
+            parent,
+            text="Check Installation",
+            command=lambda p=provider: self._check_local_installation(p),
+        ).pack(anchor="w")
+
+    def _build_local_installed_body(self, parent: ttk.Frame, provider: str) -> None:
+        """Build the installed local provider body."""
+        vars_for_provider = self._local_vars[provider]
+        label = LOCAL_PROVIDER_LABELS[provider]
+
+        folder_row = ttk.Frame(parent)
+        folder_row.pack(fill=tk.X, pady=3)
+        ttk.Label(folder_row, text="Install Folder:", width=16).pack(side=tk.LEFT)
+        ttk.Entry(
+            folder_row,
+            textvariable=vars_for_provider["install_folder"],
+            state="readonly",
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(
+            folder_row,
+            text="Check Installation",
+            command=lambda p=provider: self._check_local_installation(p),
+        ).pack(side=tk.LEFT, padx=(6, 0))
+
+        for key in ("Start", "Load", "Unload", "Close"):
+            row = ttk.Frame(parent)
+            row.pack(fill=tk.X, pady=3)
+            ttk.Label(row, text=f"{key}:", width=16).pack(side=tk.LEFT)
+            values = [
+                item.format(app=label)
+                for item in LOCAL_POLICY_LABELS[key]
+            ]
+            combo = ttk.Combobox(
+                row,
+                values=values,
+                state="readonly",
+                width=58,
+            )
+            combo.current(max(0, vars_for_provider[key].get() - 1))
+            combo.bind(
+                "<<ComboboxSelected>>",
+                lambda _e, p=provider, k=key, cb=combo: self._on_local_policy_changed(p, k, cb),
+            )
+            combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        models_frame = ttk.LabelFrame(parent, text="Models", padding=8)
+        models_frame.pack(fill=tk.X, pady=(10, 6))
+        list_frame = ttk.Frame(models_frame)
+        list_frame.pack(fill=tk.X)
+        model_list = tk.Listbox(list_frame, height=5, exportselection=False)
+        model_list.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        model_scroll = ttk.Scrollbar(
+            list_frame,
+            orient=tk.VERTICAL,
+            command=model_list.yview,
+        )
+        model_scroll.pack(side=tk.LEFT, fill=tk.Y)
+        model_list.configure(yscrollcommand=model_scroll.set)
+        self._local_model_lists[provider] = model_list
+        self._populate_local_model_list(provider)
+        model_list.bind(
+            "<<ListboxSelect>>",
+            lambda _e, p=provider: self._on_local_model_selected(p),
+        )
+
+        model_buttons = ttk.Frame(models_frame)
+        model_buttons.pack(fill=tk.X, pady=(6, 0))
+        ttk.Button(
+            model_buttons,
+            text="Start",
+            command=lambda p=provider: self._local_control_action(p, "start"),
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            model_buttons,
+            text="Find Models",
+            command=lambda p=provider: self._local_control_action(p, "find"),
+        ).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(
+            model_buttons,
+            text="Load Model",
+            command=lambda p=provider: self._local_control_action(p, "load"),
+        ).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(
+            model_buttons,
+            text="Unload",
+            command=lambda p=provider: self._local_control_action(p, "unload"),
+        ).pack(side=tk.LEFT, padx=(6, 0))
+        ttk.Button(
+            model_buttons,
+            text="Close",
+            command=lambda p=provider: self._local_control_action(p, "close"),
+        ).pack(side=tk.LEFT, padx=(6, 0))
+
+        msg = ttk.Label(models_frame, text="", foreground="gray")
+        msg.pack(anchor="w", pady=(6, 0))
+        self._local_message_labels[provider] = msg
+
+        settings = ttk.LabelFrame(parent, text="Selected Model Settings", padding=8)
+        settings.pack(fill=tk.X, pady=(6, 0))
+        self._local_model_setting_vars[provider] = {
+            "context_length": tk.StringVar(),
+            "temperature": tk.StringVar(),
+            "gpu_layers": tk.StringVar(),
+        }
+        rows = [
+            ("Context Length:", "context_length"),
+            ("Temperature:", "temperature"),
+            ("GPU Layers:", "gpu_layers"),
+        ]
+        for label_text, key in rows:
+            row = ttk.Frame(settings)
+            row.pack(fill=tk.X, pady=2)
+            ttk.Label(row, text=label_text, width=16).pack(side=tk.LEFT)
+            ttk.Entry(
+                row,
+                textvariable=self._local_model_setting_vars[provider][key],
+                width=16,
+            ).pack(side=tk.LEFT)
+        ttk.Label(
+            settings,
+            text=(
+                "Leave values empty to use the local application's current settings. "
+                "Saved values are imposed by CherryAI when the model is loaded."
+            ),
+            foreground="gray",
+            wraplength=560,
+            justify="left",
+        ).pack(anchor="w", pady=(6, 0))
+        ttk.Button(
+            settings,
+            text="Save Model Settings",
+            command=lambda p=provider: self._save_local_model_settings(p),
+        ).pack(anchor="w", pady=(6, 0))
+        self._load_local_model_settings(provider)
+
+    def _toggle_local_collapsed(self, provider: str) -> None:
+        """Toggle one local provider widget collapsed state."""
+        current = self._local_vars[provider]["collapsed"].get()
+        self._local_vars[provider]["collapsed"].set(not current)
+        self._persist_local_provider(provider)
+        self._rebuild_local_provider_widgets()
+
+    def _cycle_local_order(self, provider: str) -> None:
+        """Cycle one local provider order value and persist it."""
+        current = self._local_vars[provider]["order"].get()
+        self._local_vars[provider]["order"].set((current + 1) % len(LOCAL_PROVIDER_KEYS))
+        self._persist_local_provider(provider)
+        self._rebuild_local_provider_widgets()
+
+    def _on_local_policy_changed(self, provider: str, key: str, combo: ttk.Combobox) -> None:
+        """Persist one local provider lifecycle policy combobox."""
+        self._local_vars[provider][key].set(int(combo.current()) + 1)
+        self._persist_local_provider(provider)
+
+    def _check_local_installation(self, provider: str) -> None:
+        """Run the explicit installation check for one local provider."""
+        from CherryAI.functions.local_llm import (
+            find_local_llm_installation,
+            normalize_local_provider,
+        )
+
+        normalized = normalize_local_provider(provider)
+        folder = find_local_llm_installation(normalized)
+        if not folder:
+            should_search = messagebox.askyesno(
+                "Installation Not Found",
+                f"{LOCAL_PROVIDER_LABELS[provider]} was not found automatically.\n"
+                "Search for it locally?",
+                parent=self,
+            )
+            if should_search:
+                search_dir = filedialog.askdirectory(
+                    title=f"Search for {LOCAL_PROVIDER_LABELS[provider]}",
+                    parent=self,
+                )
+                if search_dir:
+                    folder = find_local_llm_installation(
+                        normalized,
+                        search_dir=search_dir,
+                    )
+        if folder:
+            self._local_vars[provider]["installed"].set(True)
+            self._local_vars[provider]["install_folder"].set(folder)
+            self._set_local_message(provider, f"Found installation: {folder}", "green")
+        else:
+            self._local_vars[provider]["installed"].set(False)
+            self._set_local_message(provider, "Installation not found.", "red")
+        self._persist_local_provider(provider)
+        self._rebuild_local_provider_widgets()
+
+    def _populate_local_model_list(self, provider: str) -> None:
+        """Populate one local model listbox from saved model IDs."""
+        listbox = self._local_model_lists.get(provider)
+        if listbox is None:
+            return
+        listbox.delete(0, tk.END)
+        models = list(self._local_vars[provider].get("models", []))
+        for model in models:
+            listbox.insert(tk.END, model)
+        last_model = self._local_vars[provider]["last_model"].get()
+        if last_model in models:
+            index = models.index(last_model)
+            listbox.selection_set(index)
+            listbox.see(index)
+        elif models:
+            listbox.selection_set(0)
+            self._local_vars[provider]["last_model"].set(models[0])
+
+    def _on_local_model_selected(self, provider: str) -> None:
+        """Persist selected local model and refresh per-model settings."""
+        model = self._selected_local_model(provider)
+        if not model:
+            return
+        self._local_vars[provider]["last_model"].set(model)
+        _api_config.set_default_model(provider, "Local", model)
+        self._persist_local_provider(provider)
+        self._load_local_model_settings(provider)
+
+    def _selected_local_model(self, provider: str) -> str:
+        """Return the currently selected local model ID."""
+        listbox = self._local_model_lists.get(provider)
+        if listbox is not None:
+            selection = listbox.curselection()
+            if selection:
+                return str(listbox.get(selection[0]))
+        return str(self._local_vars[provider]["last_model"].get() or "")
+
+    def _local_control_action(self, provider: str, action: str) -> None:
+        """Run one local provider control action from the UI."""
+        from CherryAI.functions.local_llm import (
+            LocalLLMSettings,
+            create_backend_controller,
+            normalize_local_provider,
+        )
+
+        model = self._selected_local_model(provider)
+        base_url = _api_config.PROVIDER_BASE_URLS.get(provider, "").rstrip("/")
+        settings_vars = self._local_model_setting_vars.get(provider, {})
+        context_length = self._coerce_local_int(
+            settings_vars.get("context_length", tk.StringVar(value="")).get(),
+            4096,
+            1,
+            1048576,
+        )
+        try:
+            temperature = float(settings_vars.get("temperature", tk.StringVar(value="")).get() or 0.3)
+        except (TypeError, ValueError):
+            temperature = 0.3
+        try:
+            gpu_layers_raw = settings_vars.get("gpu_layers", tk.StringVar(value="")).get()
+            gpu_layers = int(gpu_layers_raw) if str(gpu_layers_raw).strip() else None
+        except (TypeError, ValueError):
+            gpu_layers = None
+
+        controller = create_backend_controller(
+            normalize_local_provider(provider),
+            LocalLLMSettings(
+                model=model,
+                base_url=base_url,
+                context_length=context_length,
+                temperature=temperature,
+                gpu_layers=gpu_layers,
+                executable_path=self._local_vars[provider]["install_folder"].get(),
+                model_path=model if provider == "koboldcpp" else "",
+            ),
+        )
+        if action == "start":
+            result = controller.ensure_ready(timeout=120.0)
+        elif action == "find":
+            result = controller.find_models()
+        elif action == "load":
+            result = controller.load_model()
+        elif action == "unload":
+            result = controller.unload_model()
+        elif action == "close":
+            result = controller.close()
+        else:
+            return
+
+        if result.models:
+            self._local_vars[provider]["models"] = result.models
+            if model not in result.models and result.models:
+                self._local_vars[provider]["last_model"].set(result.models[0])
+            self._populate_local_model_list(provider)
+        self._persist_local_provider(provider)
+        color = "green" if result.success else "red"
+        suffix = " Restart required." if result.restart_required else ""
+        self._set_local_message(provider, f"{result.message}{suffix}", color)
+
+    def _set_local_message(self, provider: str, message: str, color: str = "gray") -> None:
+        """Set one local provider status message when its label exists."""
+        label = self._local_message_labels.get(provider)
+        if label is not None:
+            label.configure(text=message, foreground=color)
+
+    def _load_local_model_settings(self, provider: str) -> None:
+        """Load selected local model settings from API.ini."""
+        model = self._selected_local_model(provider)
+        vars_for_settings = self._local_model_setting_vars.get(provider)
+        if not model or not vars_for_settings:
+            return
+        saved = _api_config.get_model_settings(model)
+        for key in ("context_length", "temperature", "gpu_layers"):
+            vars_for_settings[key].set(str(saved.get(key, "")))
+
+    def _save_local_model_settings(self, provider: str) -> None:
+        """Persist selected local model settings to API.ini."""
+        model = self._selected_local_model(provider)
+        vars_for_settings = self._local_model_setting_vars.get(provider)
+        if not model or not vars_for_settings:
+            self._set_local_message(provider, "Select a model first.", "orange")
+            return
+        values = {
+            key: var.get().strip()
+            for key, var in vars_for_settings.items()
+            if var.get().strip()
+        }
+        _api_config.set_model_settings(model, values)
+        self._set_local_message(provider, f"Saved settings for {model}.", "green")
+
+    def _persist_local_provider(self, provider: str) -> None:
+        """Persist one local provider's settings to API.ini."""
+        vars_for_provider = self._local_vars[provider]
+        models = vars_for_provider.get("models", [])
+        values = {
+            "Start": str(vars_for_provider["Start"].get()),
+            "Load": str(vars_for_provider["Load"].get()),
+            "Unload": str(vars_for_provider["Unload"].get()),
+            "Close": str(vars_for_provider["Close"].get()),
+            "collapsed": "1" if vars_for_provider["collapsed"].get() else "0",
+            "order": str(vars_for_provider["order"].get()),
+            "installed": "1" if vars_for_provider["installed"].get() else "0",
+            "install_folder": vars_for_provider["install_folder"].get(),
+            "last_model": vars_for_provider["last_model"].get(),
+            "models": "|".join(models),
+        }
+        _api_config.set_all_local_llm_settings(provider, values)
 
     def _build_request_section(self) -> None:
         """Build the request settings section."""
@@ -3526,7 +4052,8 @@ class GlobalOptionsDialog(tk.Toplevel):
 
         # -- Gather API key list for comboboxes --
         api_keys = _api_config.list_api_keys()  # [(provider, name), ...]
-        key_labels = [f"{p} / {n}" for p, n in api_keys]
+        local_keys = [(provider, "Local") for provider in LOCAL_PROVIDER_KEYS]
+        key_labels = [f"{p} / {n}" for p, n in [*local_keys, *api_keys]]
 
         def _key_label(provider: str, name: str) -> str:
             if provider and name:
@@ -4027,7 +4554,13 @@ class GlobalOptionsDialog(tk.Toplevel):
         from CherryAI.functions.options import get_provider_models
         if not provider:
             return
-        models = get_provider_models(provider)
+        if provider in LOCAL_PROVIDER_KEYS:
+            settings = _api_config.get_all_local_llm_settings(provider)
+            models = list(filter(None, settings.get("models", "").split("|")))
+            if not models and settings.get("last_model"):
+                models = [settings["last_model"]]
+        else:
+            models = get_provider_models(provider)
         if not models and provider in API_PROVIDERS:
             models = API_PROVIDERS[provider].get("models", [])
         if hasattr(self, "_term_model_cb"):
@@ -4038,7 +4571,13 @@ class GlobalOptionsDialog(tk.Toplevel):
         from CherryAI.functions.options import get_provider_models
         if not provider:
             return
-        models = get_provider_models(provider)
+        if provider in LOCAL_PROVIDER_KEYS:
+            settings = _api_config.get_all_local_llm_settings(provider)
+            models = list(filter(None, settings.get("models", "").split("|")))
+            if not models and settings.get("last_model"):
+                models = [settings["last_model"]]
+        else:
+            models = get_provider_models(provider)
         if not models and provider in API_PROVIDERS:
             models = API_PROVIDERS[provider].get("models", [])
         if hasattr(self, "_gender_model_cb"):
@@ -5873,6 +6412,8 @@ class GlobalOptionsDialog(tk.Toplevel):
 
         # Persist all settings to INI so they survive application restart.
         self._persist_to_ini()
+        for provider in LOCAL_PROVIDER_KEYS:
+            self._persist_local_provider(provider)
 
         # Persist per-model overrides (V8)
         self._save_model_settings()

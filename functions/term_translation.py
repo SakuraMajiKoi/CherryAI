@@ -21,6 +21,8 @@ from __future__ import annotations
 import logging
 from typing import Dict, List, Optional, Set, Tuple
 
+from CherryAI.functions import api_config
+
 logger = logging.getLogger(__name__)
 
 # Valid modes
@@ -475,9 +477,6 @@ def _translate_llm_batch(
     term_list = "\n".join(f"- {t}" for t in terms)
     user_content = f"Translate these terms:\n{term_list}"
 
-    # Read API settings from API.ini [term_translation] section
-    from CherryAI.functions import api_config
-
     provider = api_config.get_profile_setting(
         "term_translation", "provider",
     ) or "openai"
@@ -488,24 +487,19 @@ def _translate_llm_batch(
         "term_translation", "model",
     ) or "gpt-4.1-nano"
 
-    api_key = api_config.get_api_key_plain(provider, key_name)
-    if not api_key:
-        raise RuntimeError(
-            f"No API key found for provider '{provider}', "
-            f"name '{key_name}'. Configure it in Global Options → Utility."
-        )
-
     base_url = api_config.get_profile_setting(
         "term_translation", "base_url",
     ) or None
-
-    import importlib
-    openai_mod = importlib.import_module("openai")
-    client_cls = getattr(openai_mod, "OpenAI")
-    kwargs = {"api_key": api_key}
-    if base_url:
-        kwargs["base_url"] = base_url
-    client = client_cls(**kwargs)
+    api_key = api_config.get_api_key_plain(provider, key_name)
+    if not api_key:
+        from .llm_request import is_local_provider
+        if is_local_provider(provider, base_url):
+            api_key = "local"
+        else:
+            raise RuntimeError(
+                f"No API key found for provider '{provider}', "
+                f"name '{key_name}'. Configure it in Global Options → Utility."
+            )
 
     # Generous but bounded token budget: ~20 tokens per term.
     max_tokens = max(100, len(terms) * 20)
@@ -577,21 +571,25 @@ def _translate_llm_batch(
         except Exception:
             pass
 
-    request_kwargs = {
-        "model": model,
-        "messages": [
+    messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
-        ],
-        "response_format": _TERM_TRANSLATION_SCHEMA,
-        "temperature": 0.3,
-        "max_tokens": max_tokens,
-    }
-    if provider.lower() == "openai":
-        request_kwargs["store"] = False
+    ]
 
     try:
-        response = client.chat.completions.create(**request_kwargs)
+        from .llm_request import send_chat_completion
+
+        result = send_chat_completion(
+            provider=provider,
+            api_key=api_key,
+            model=model,
+            messages=messages,
+            base_url=base_url,
+            response_format=_TERM_TRANSLATION_SCHEMA,
+            temperature=0.3,
+            max_tokens=max_tokens,
+        )
+        response = result.raw
     except Exception as exc:
         _log_term_translation(
             LogStatus.FAILED,
@@ -604,7 +602,7 @@ def _translate_llm_batch(
             f"LLM term translation API call failed: {exc}"
         ) from exc
 
-    content = response.choices[0].message.content or ""
+    content = result.content
 
     try:
         data = json.loads(content)

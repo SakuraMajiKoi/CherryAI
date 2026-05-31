@@ -101,7 +101,7 @@ The GUI is organized as:
     - Once the new manifest has been validated and activated, the previous manager may be closed for teardown only; that close path must not perform a second implicit save-on-close, because the save/discard choice has already been resolved before Open Project proceeds.
     - Cancel must remain safe before activation: a cancelled load may close the progress dialog, but it must not partially swap the new manifest into the live session.
 - **Full Table View** (`_on_full_table_view`): Opens FullTableViewDialog — spreadsheet-like view and editor for all manifest line entries. Requires a loaded project. Features: named columns (Line #, Original, Preprocessed, Translated, Postprocessed, Quality Assurance, Overwrite, Wordwrap, Final, Overwrite (Legacy), Log, Tags), column filter dropdown with Show All/Show Visible/Show Latest presets, all columns hideable, column selection bar for search/replace scoping, sort indicators (▲/▼) in headers, read-only Original with copy support, two-row search/replace toolbar, Results Only mode, file filter, RegEx search/replace, pagination, save/reset/diff, and a Clear Columns workflow for `prepro`, `tl`, `postpro`, `qa`, `qa_overwrite`, `wordwr`, and `final`. Clearing `tl` must require a second destructive confirmation because it removes the base translation stage. `final` is Full Table View only for now: empty cells remain sparse until edited, double-click editing seeds the editor from the first non-empty lower stage, and if the edited text matches that source value again the table clears `final` back to empty. Show Latest follows the active pipeline `orig → prepro → tl → postpro → qa → wordwr → final`.
-- **Patch Editor / Editor Host** (`_on_editor`): Opens PatchEditorViewDialog — a non-modal staged full-file editor for `Original/` and `Patch/` project files, currently surfaced from the live `Editor` menu entry. Requires a loaded project. Features: file tree rooted in manifest `filedir`, large undo-enabled text editor, in-file search/replace with optional regex mode, unified diff against staged original and prior patch content, line-history view filtered as `all` / `edited` / `translated`, and save/reload prompts. Saving must write the exact text into the staged translated layout and persist only compact editor metadata under `EditorState.files[rel_path]` (`saved_at`, staged artifact paths, bounded history). Patch diff text is now rebuilt from the staged translated artifact instead of being serialized into the manifest. Live line history, current text, and locator metadata are rebuilt on open instead of being serialized into the manifest. Reopening the Editor host must reuse the existing window and bring it to the foreground instead of opening duplicates. Programmatic file-tree and line-history selection sync must not re-enter their own `<<TreeviewSelect>>` handlers; the live GUI path must return to Tk's event loop immediately instead of falling into a self-triggered selection loop. Its instance state must not shadow Tkinter internals such as `_root()`, because theme refresh and widget/event lookup rely on that helper.
+- **Patch Editor / Editor Host** (`_on_editor`): Opens PatchEditorViewDialog — a non-modal staged full-file editor for `Original/` and `Patch/` project files, currently surfaced from the live `Editor` menu entry. Requires a loaded project. Features: a VS-Code-like activity bar on the far left, a switchable sidebar for Files and Search, a large undo-enabled text editor, unified diff against staged original and prior patch content, line-history view filtered as `all` / `edited` / `translated`, and save/reload prompts. The folder activity icon shows the manifest-rooted file tree, the magnifying-glass icon shows the search/replace panel, and clicking the active icon again collapses the sidebar while leaving the activity rail available for future tools. The search sidebar must stay compact, show cross-file results grouped by file with collapsible file nodes and a scrollbar, and support include/exclude file patterns (`*.ks`, `!*.png`), case-sensitive search, case-sensitive replace, regex, whole-word, current-file-only, and all / parsed / not parsed line scopes. Empty search state must not scan project files, and explicit cross-file search must use lightweight text payloads rather than full diff/history Editor views for every file. Cross-file search must remain responsive by processing files incrementally, returning to Tk between batches, and rendering result groups periodically instead of rebuilding the entire result tree after each match or file. A single Stop/Restore control must stop an active search and, when no search is running, restore the previous complete result set if one is available. Search highlighting should debounce by 1 second while typing and paint all current matches with a pale-yellow overlay. Right-clicking selected Full Files text must show Cut, Copy, Paste, selection history cycling, and targeted Translate actions. Selection history applies only to the selected span and remains an unsaved buffer edit until the normal Editor save writes one patch bundle. Translate actions must use the saved Translation-step model/API selection, provide Simple, Comprehensive, Explain only, and balanced-span subtargets for `"..."`, `'...'`, `<...>`, `[...]`, `(...)`, and `{...}`; span actions replace only delimiter contents. Direct selected text must use a lighter blue than the darker active locator-line highlight so the two states do not blend together. Text-widget overlay priority must be passive indexed line < active indexed line < search match < direct text selection, and locator spans must cover the full physical line range of each matched logical entry. When parser extraction omits an unchanged row, both the active highlight and the `Current` history text should fall back from the manifest `ln` anchor instead of manifest row order, so sparse parsed entries still point at the correct physical script line; cursor promotion should also treat multiline locator spans as owned ranges instead of only matching the first line. Saving must write the exact text into the staged translated layout and persist only compact editor metadata under `EditorState.files[rel_path]` (`saved_at`, staged artifact paths, bounded history). Patch diff text is now rebuilt from the staged translated artifact instead of being serialized into the manifest. Live line history, current text, and locator metadata are rebuilt on open instead of being serialized into the manifest. Reopening the Editor host must reuse the existing window and bring it to the foreground instead of opening duplicates. Programmatic file-tree and line-history selection sync must not re-enter their own `<<TreeviewSelect>>` handlers; the live GUI path must return to Tk's event loop immediately instead of falling into a self-triggered selection loop. Its instance state must not shadow Tkinter internals such as `_root()`, because theme refresh and widget/event lookup rely on that helper.
 - **Planned merge note**: The current Full Table View and Patch Editor surfaces are expected to merge into a future non-modal `Editor` window with `Full Files` and `Lines Only` modes. Until that migration lands, the separate windows remain the implemented behavior.
 - **Editor UI migration directive**: The future merged `Editor` window should use PySide6 as its primary UI library while preserving the current Editor contract. Backend manifest, diffing, parser-alignment, and Step 9 replay logic must remain shared so the Qt surface can ship incrementally without changing data semantics.
 - **API Log** (`_on_api_log`): Opens APILogViewDialog — non-blocking viewer for structured API log entries. Requires a loaded project. Features: search bar, category filter (Main Translation/Term Translation/Gender Inference/Other), status filter (All/Failed/Recovered/Successful/Pending), view mode switch (Sent/Received/Both), display-limit spinbox (All/1000/2500/5000/Nothing), color-coded entries (green=success, yellow=recovered, red=failed), live updates via subscription, token statistics, per-project JSONL persistence alongside manifest. Sent entries must show actual request metadata from the stored log, including OpenAI `prompt_cache_key` / `prompt_cache_retention` when present. Reopening API Log must reuse the existing window and bring it to the foreground instead of opening duplicates.
@@ -374,6 +374,9 @@ This skip condition is a downstream validation/request-building rule, not a pars
 - Loads current INI setting on display; saves immediately on toggle
 - Setting stored in `[session].load_last` for app startup behavior
 - GlobalOptions reads from and writes to `[session]` section for sync
+- Live startup restore must not block inside `App.__init__()`; when a last manifest exists, the app should queue that path and resume loading it through the same async `after(...)`-polled project-load path once the root window is ready.
+- Startup and steady-state Ctrl+C are distinct paths: a `KeyboardInterrupt` raised before `mainloop()` begins must be swallowed by the launcher without a traceback, while a `KeyboardInterrupt` raised during `mainloop()` must log the exception traceback before routing through the normal graceful-close path so false interrupts do not hide Tk/threading violations.
+- Background worker threads may compute data, but direct Tk widget mutation is forbidden outside the UI thread; shared UI updates should flow through the app-level dispatcher helpers instead of worker-thread widget calls.
 
 #### Safety Settings
 | Setting | Type | Default | Description |
@@ -761,7 +764,7 @@ Code Spacing Rules (processed in both Pre and Post steps) apply these extended p
 
 **Purpose**: Parser Scripts are game-engine-specific or format-specific scripts that handle extraction, injection, and optionally provide wordwrap settings and context markers. They extend the base format handlers in `formats/` with engine-aware logic.
 
-**Status**: Implemented (Phase 53 + Parser Handshake) — `formats/parser_base.py` defines the `ParserScript` ABC with `WordwrapConfig`, `ForbiddenChars`, and `TagRules` dataclasses plus optional handshake methods (`decrypt`, `encrypt`, `extract_tagged`, `detect_speakers`, `wordwrap_for_tag`, `wordwrap`, `detect_encoding`, `pretty_wrap`) and manual `project_patches` actions for Step 9. `formats/handshake.py` defines the handshake protocol types (`ExtractedLine`, `SpeakerInfo`, `ParserError`) and `validate_parser()`. RPG Maker MV/MZ parsers live in `formats/parser_rpgmaker.py`. The Light VN parser lives in `formats/LightVN.py` and is the reference handshake-compliant implementation. `formats/KiriKiri2.py` adds KiriKiri2/KAG support for `.ks`, `Menus.tjs`, XP3 archives, and optional post-inject patches for both `MainWindow.tjs` and `SelectLayer.tjs`, including a HyperKano-style `SetMesText` fallback for projects that do not expose the stock `processCh` handler. `formats/wolf_rpg.py` adds Dazed-aligned WOLF JSON and line-based text parsers for exported or unpacked WOLF content. A `ParserRegistry` in `formats/__init__.py` handles discovery and auto-detection. Wordwrap step auto-populates settings from detected parsers; forbidden characters integrate with logit bias and postprocessing.
+**Status**: Implemented (Phase 53 + Parser Handshake) — `formats/parser_base.py` defines the `ParserScript` ABC with `WordwrapConfig`, `ForbiddenChars`, and `TagRules` dataclasses plus optional handshake methods (`decrypt`, `encrypt`, `extract_tagged`, `detect_speakers`, `wordwrap_for_tag`, `wordwrap`, `detect_encoding`, `pretty_wrap`) and manual `project_patches` actions for Step 9. `formats/handshake.py` defines the handshake protocol types (`ExtractedLine`, `SpeakerInfo`, `ParserError`) and `validate_parser()`. RPG Maker MV/MZ handlers and parser classes live together in `formats/rpgmakermvmz.py`. The Light VN parser lives in `formats/LightVN.py` and is the reference handshake-compliant implementation. `formats/KiriKiri2.py` adds KiriKiri2/KAG support for `.ks`, `Menus.tjs`, XP3 archives, and optional post-inject patches for both `MainWindow.tjs` and `SelectLayer.tjs`, including a HyperKano-style `SetMesText` fallback for projects that do not expose the stock `processCh` handler. `formats/wolf_rpg.py` adds Dazed-aligned WOLF JSON and line-based text parsers for exported or unpacked WOLF content. A `ParserRegistry` in `formats/__init__.py` handles discovery and auto-detection. Wordwrap step auto-populates settings from detected parsers; forbidden characters integrate with logit bias and postprocessing.
 
 **Input Routing Rule**: Step 0 resolves the effective parser format before auto-encoding. When the user keeps Encoding on `auto` but explicitly selects a parser format such as `lightvn`, that parser's `detect_encoding()` result is used before generic BOM or fallback detection. The first successfully loaded file also seeds missing Output defaults for Destination, Format, and Encoding.
 
@@ -1288,15 +1291,15 @@ select which data to import from a source manifest.
 | Checkbox | Default | Fields Imported |
 |----------|---------|----------------|
 | Preprocessed | ✅ | ``prepro`` |
-| Tags | ✅ | merge into canonical ``tags`` (deduplicated; legacy ``tag`` migrated but never written) |
+| Tags | ❌ | merge into canonical ``tags`` (deduplicated; legacy ``tag`` migrated but never written) |
 | Translated | ✅ | ``tl``, ``preedit`` |
 | Postprocessed | ✅ | ``postpro`` |
 | Wordwrap | ✅ | ``wordwr`` |
-| Final | ✅ | ``final`` |
 | QA | ✅ | ``qa`` |
+| Diff Patches | ✅ | Copies manifest-backed Editor diff patch references plus the corresponding ``Patch/*.patch`` artifacts into the current project |
 
 **Dedup Guard**: If either the current line or the imported source line has ``prepro == "__DEDUP__"``, the dialog must not import `tl` for that row. Postprocess, QA, wordwrap, and related later-stage fields may still import and persist normally.
-| Do not overwrite lines that already have translations | ❌ | Skips lines with existing ``tl`` |
+| Do not overwrite lines that already have translations | ✅ | Skips lines with existing ``tl`` |
 
 **Settings Sections**:
 
@@ -1304,12 +1307,11 @@ select which data to import from a source manifest.
 |----------|---------|---------------|
 | Analysis | ❌ | ``step_state.Analysis`` |
 | Information (metadata, glossary, code DB) | ✅ | ``step_state.Information.data.metadata`` except current ``project_name``, plus ``glossary``, ``code_patterns``, ``characters`` |
-| Preprocessing Settings | ❌ | ``Deduplication``, ``EllipsisCompression``, ``SymbolConversion``, etc. |
-| Costs / Request Settings | ❌ | ``RequestOptions`` |
-| Translation Step State | ❌ | ``step_state.Translation`` |
-| Postprocessing | ❌ | ``PostProcessing`` |
-| Wordwrap Settings | ❌ | ``WordwrapSettings`` |
-| QA / Validation Rules | ❌ | ``ValidationRules``, ``QAOptions``, ``CharacterWhitelist``, etc. |
+| Preprocessing Settings | ✅ | ``Deduplication``, ``EllipsisCompression``, ``SymbolConversion``, etc. |
+| Request Options | ❌ | ``RequestOptions`` |
+| Postprocessing Settings | ✅ | ``PostProcessing`` |
+| Wordwrap Settings | ✅ | ``WordwrapSettings`` |
+| QA / Validation Rules | ✅ | ``ValidationRules``, ``QAOptions``, ``CharacterWhitelist``, etc. |
 | File / Output Settings | ❌ | ``OutputFormat`` |
 
 #### Create Patch Workflow
@@ -1516,7 +1518,7 @@ When `auto_inference` is enabled (Global Option), the pipeline offers several in
 | tsv | `formats/csv_handler.py` | Tab-delimited, same as CSV |
 | json | `formats/json_handler.py` | Extract string values from structure |
 | xlsx | `formats/xlsx.py` | Configurable sheet/column extraction |
-| rpgmaker | `formats/rpgmaker.py` | Parse MV/MZ JSON, extract dialogue only |
+| rpgmaker | `formats/rpgmakermvmz.py` | Parse MV/MZ JSON and plugin JS, preserve speaker/dialogue structure |
 | image | `formats/image.py` | OCR extraction (see image workflow) |
 
 ---
@@ -4855,7 +4857,7 @@ Resolution methods:
 | `csv_handler.py` | CSV/TSV files |
 | `json_handler.py` | JSON files |
 | `xlsx.py` | Excel files |
-| `rpgmaker.py` | RPG Maker data (placeholder) |
+| `rpgmakermvmz.py` | RPG Maker MV/MZ data, plugin commands, and plugin JS |
 
 ### 9.4 gui/helpers/ Modules (Adapters)
 

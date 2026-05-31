@@ -1022,20 +1022,14 @@ File format handlers and parser scripts.
 
 ---
 
-### parser_rpgmaker.py
-**Purpose:** RPG Maker MV/MZ parser implementations with wordwrap and context rules.  
+### rpgmakermvmz.py
+**Purpose:** RPG Maker MV/MZ handlers and parser implementations with structured JSON/plugin extraction, wordwrap, and context rules.  
 **Classes:**
+- `RpgMakerMVHandler` - MV format handler
+- `RpgMakerMZHandler` - MZ format handler
 - `RpgMakerMVParser` - MV parser
 - `RpgMakerMZParser` - MZ parser
-
----
-
-### rpgmaker.py
-**Purpose:** Placeholder handlers for RPG Maker MV/MZ JSON data files and plugins.  
-**Classes:**
-- `RpgMakerMVHandler` - MV handler (PLACEHOLDER)
-- `RpgMakerMZHandler` - MZ handler (PLACEHOLDER)
-- `RpgMakerPluginHandler` - Plugin handler (PLACEHOLDER)
+- `RpgMakerPluginHandler` - Plugin JS handler
 
 **Functions:**
 - `get_handlers()` - Return RPG Maker handlers
@@ -1701,7 +1695,7 @@ These features span multiple workflow steps:
 | `functions/options.py` | Has `OptionsDialog` class but GUI uses `gui/dialogs/global_options.py` |
 | `gui/steps/estimate.py` | Just re-exports from costs.py - could be removed |
 | `formats/document.py` | Placeholder (not implemented) |
-| `formats/rpgmaker.py` | Placeholder (not implemented) |
+| `formats/rpgmakermvmz.py` | Implemented RPG Maker MV/MZ parser and handlers |
 | `modi/template_mode.py` | Skipped by mode registry |
 
 ### 9.3 Documentation Discrepancies
@@ -1724,7 +1718,7 @@ These features span multiple workflow steps:
 - `functions/process_order.py`
 - `functions/usage_tracker.py`
 - `formats/json_lenient.py`
-- `formats/parser_rpgmaker.py`
+- `formats/rpgmakermvmz.py`
 - `gui/helpers/tooltip.py`
 - `gui/dialogs/loading_progress.py`
 

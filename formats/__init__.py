@@ -5,7 +5,7 @@ extract (read) and inject (write) capabilities.
 
 Supported Format Categories:
 - simple: txt, csv, tsv, json, xlsx (basic text/table formats)
-- rpgmaker: RPG Maker MV/MZ custom JSON and JS files (planned)
+- rpgmaker: RPG Maker MV/MZ JSON data, plugin commands, and plugin JS files
 - document: PDF, EPUB extraction/injection (planned)
 
 Usage:
@@ -314,8 +314,16 @@ def _load_handlers() -> None:
     except ImportError:
         pass
 
-    # Future: register rpgmaker and document handlers
-    # from . import rpgmaker, document
+    # Register RPG Maker MV/MZ handlers.
+    try:
+        from . import rpgmakermvmz
+        for handler in rpgmakermvmz.get_handlers():
+            _registry.register(handler)
+    except ImportError:
+        pass
+
+    # Future: register document handlers
+    # from . import document
 
 
 def get_handler(format_id_or_ext: str) -> Optional[FormatHandler]:
@@ -419,7 +427,7 @@ def _load_parsers() -> None:
         return
 
     try:
-        from .parser_rpgmaker import RpgMakerMVParser, RpgMakerMZParser
+        from .rpgmakermvmz import RpgMakerMVParser, RpgMakerMZParser
         _parser_registry.register(RpgMakerMVParser())
         _parser_registry.register(RpgMakerMZParser())
     except Exception:
