@@ -53,6 +53,7 @@ import re
 import sys
 import tkinter as tk
 import configparser
+import faulthandler
 from dataclasses import dataclass, field
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk, simpledialog
@@ -306,9 +307,13 @@ def main() -> None:
 	try:
 		app = App()
 	except KeyboardInterrupt:
-		logger.warning(
-			"GUI startup interrupted by KeyboardInterrupt; shutting down gracefully."
+		logger.exception(
+			"GUI startup raised KeyboardInterrupt; traceback follows before graceful shutdown."
 		)
+		try:
+			faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+		except Exception:
+			pass
 		_save_and_quit()
 		return
 

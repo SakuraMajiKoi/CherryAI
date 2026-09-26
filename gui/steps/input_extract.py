@@ -101,7 +101,7 @@ FORMAT_EXTENSIONS = {
     "image": {".png", ".jpg", ".jpeg", ".bmp"},
 }
 
-INPUT_MAX_FILE_SIZE_BYTES = 1 * 1024 * 1024
+INPUT_MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024
 INPUT_BLACKLIST_EXTENSIONS = {
     ".png",
     ".jpg",
@@ -1852,7 +1852,7 @@ class InputExtractionStep(BaseStep):
             if callable(allows_large) and allows_large(path):
                 return None
 
-        return f"size {size_bytes / (1024 * 1024):.2f} MB exceeds 1.00 MB"
+        return f"size {size_bytes / (1024 * 1024):.2f} MB exceeds 100.00 MB"
 
     def _file_matches_format(self, path: Path, format_id: str) -> bool:
         """Check if a file matches the specified format filter.

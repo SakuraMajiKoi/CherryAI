@@ -1,7 +1,7 @@
 #pragma once
 
-class tTJSVariant;
-class tTJSVariantClosure;
+struct tTJSVariant;
+struct tTJSVariantClosure;
 
 class iTJSDispatch2
 {

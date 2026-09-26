@@ -2,10 +2,7 @@
 
 namespace
 {
-    constexpr wchar_t CONFIG_PATH_PRIMARY[] = L"CherryAI.KiriKiriPatch.json";
-    constexpr wchar_t CONFIG_PATH_PRIMARY_PATCH[] = L"patch\\CherryAI.KiriKiriPatch.json";
-    constexpr wchar_t CONFIG_PATH_LEGACY[] = L"CherryAI.KiriKiriFontPatch.json";
-    constexpr wchar_t CONFIG_PATH_LEGACY_PATCH[] = L"patch\\CherryAI.KiriKiriFontPatch.json";
+    constexpr wchar_t CONFIG_PATH[] = L"patch\\CherryAI.KiriKiriPatch.json";
     constexpr wchar_t RUNTIME_CONFIG_PATH[] = L"patch\\CherryAI.KiriKiriFontPatch.runtime.tjs";
     constexpr DWORD FONT_LOAD_FLAGS = FR_PRIVATE;
 
@@ -16,6 +13,8 @@ namespace
         bool ReplaceCjkFaces = false;
         bool StripAsciiQuotes = true;
         bool CollapseAsciiDoubleSpaces = true;
+        bool FastSkipEnabled = true;
+        int FastSkipAfterCharacters = 1;
         int AdvancePercent = 100;
         int CharacterExtraPercent = 100;
         int CharacterExtraOffset = 0;
@@ -68,6 +67,9 @@ namespace
 
     HGDIOBJ g_systemFontHandle = nullptr;
     std::set<HDC> g_memoryDcs;
+
+    std::wstring ExtractString(const std::wstring& text, const wchar_t* key);
+    std::wstring ExtractNestedString(const std::wstring& text, const wchar_t* objectKey, const wchar_t* fieldKey);
 
     std::wstring GetModuleRoot()
     {
@@ -188,6 +190,7 @@ namespace
 
     void WriteUtf8TextFile(const std::wstring& filePath, const std::wstring& text)
     {
+        Directory::Create(Path::GetDirectoryName(filePath));
         FILE* pFile = _wfopen(filePath.c_str(), L"wb");
         if (pFile == nullptr)
             return;
@@ -198,36 +201,171 @@ namespace
         fclose(pFile);
     }
 
-    void WriteRuntimeMessageLayerConfig(
-        int lineSpacingOffsetPixels,
-        int wrapRightPaddingPixels,
-        const std::wstring& wrapMode,
-        bool stripAsciiQuotes,
-        bool collapseAsciiDoubleSpaces)
+    std::wstring BuildDefaultFontPatchConfigText()
     {
-        int clampedWrapPadding = wrapRightPaddingPixels;
-        if (clampedWrapPadding < 0)
-            clampedWrapPadding = 0;
+        return
+            L"{\n"
+            L"  \"schema\": 1,\n"
+            L"  \"bundle_id\": \"inter\",\n"
+            L"  \"bundle_name\": \"Inter\",\n"
+            L"  \"default_face\": \"Inter\",\n"
+            L"  \"fonts_directory\": \"fonts\",\n"
+            L"  \"log_font_calls\": false,\n"
+            L"  \"replace_cjk_faces\": false,\n"
+            L"  \"charset\": 1,\n"
+            L"  \"quality\": 5,\n"
+            L"  \"height_percent\": 100,\n"
+            L"  \"height_offset_pixels\": 5,\n"
+            L"  \"width_percent\": 100,\n"
+            L"  \"strip_ascii_quotes\": true,\n"
+            L"  \"collapse_ascii_double_spaces\": true,\n"
+            L"  \"match_faces\": [\n"
+            L"    \"MS UI Gothic\",\n"
+            L"    \"MS PGothic\",\n"
+            L"    \"\xff2d\xff33 \xff30\x30b4\x30b7\x30c3\x30af\",\n"
+            L"    \"MS Gothic\",\n"
+            L"    \"\xff2d\xff33 \x30b4\x30b7\x30c3\x30af\",\n"
+            L"    \"Meiryo\",\n"
+            L"    \"\x30e1\x30a4\x30ea\x30aa\",\n"
+            L"    \"Segoe UI\",\n"
+            L"    \"Segoe UI Variable\",\n"
+            L"    \"Yu Gothic\",\n"
+            L"    \"Yu Gothic UI\",\n"
+            L"    \"YuGothic\",\n"
+            L"    \"TakaoGothic\",\n"
+            L"    \"Arial\"\n"
+            L"  ],\n"
+            L"  \"regular_font\": {\n"
+            L"    \"face\": \"Inter\",\n"
+            L"    \"file\": \"fonts/Inter-Regular.ttf\"\n"
+            L"  },\n"
+            L"  \"bold_font\": {\n"
+            L"    \"face\": \"Inter\",\n"
+            L"    \"file\": \"fonts/Inter-SemiBold.ttf\"\n"
+            L"  },\n"
+            L"  \"WrapRightPaddingPixels\": 240,\n"
+            L"  \"WrapMode\": \"pixel\"\n"
+            L"}\n";
+    }
 
-        std::wstring normalizedWrapMode = StringUtil::ToLower(TrimAsciiWhitespace(wrapMode));
-        if (normalizedWrapMode != L"character")
-            normalizedWrapMode = L"pixel";
+    bool ShouldRestoreDefaultFontPatchConfig(const std::wstring& configText)
+    {
+        if (configText.empty())
+            return true;
+        return ExtractString(configText, L"default_face").empty()
+            || ExtractNestedString(configText, L"regular_font", L"file").empty();
+    }
 
-        WriteUtf8TextFile(
-            Path::Combine(GetModuleRoot(), RUNTIME_CONFIG_PATH),
-            StringUtil::Format(
-                L"%%[\r\n"
-                L"\tline_spacing_offset_pixels: %d,\r\n"
-                L"\twrap_right_padding_pixels: %d,\r\n"
-                L"\twrap_mode: \"%ls\",\r\n"
-                L"\tstrip_ascii_quotes: %ls,\r\n"
-                L"\tcollapse_ascii_double_spaces: %ls,\r\n"
-                L"]\r\n",
-                lineSpacingOffsetPixels,
-                clampedWrapPadding,
-                normalizedWrapMode.c_str(),
-                stripAsciiQuotes ? L"true" : L"false",
-                collapseAsciiDoubleSpaces ? L"true" : L"false"));
+    std::wstring EscapeTjsString(const std::wstring& value)
+    {
+        std::wstring escaped;
+        escaped.reserve(value.size());
+        for (wchar_t ch : value)
+        {
+        if (ch == L'\\' || ch == L'"')
+                escaped.push_back(L'\\');
+            escaped.push_back(ch);
+        }
+        return escaped;
+    }
+
+    std::wstring ReadIniText(const std::wstring& filePath)
+    {
+        FILE* pFile = _wfopen(filePath.c_str(), L"rb");
+        if (pFile == nullptr)
+            return L"";
+
+        fseek(pFile, 0, SEEK_END);
+        long size = ftell(pFile);
+        fseek(pFile, 0, SEEK_SET);
+        std::vector<BYTE> bytes;
+        bytes.resize(size > 0 ? size : 0);
+        if (!bytes.empty())
+            fread(bytes.data(), 1, bytes.size(), pFile);
+        fclose(pFile);
+
+        if (bytes.size() >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+            return StringUtil::ToUTF16(std::string(reinterpret_cast<const char*>(bytes.data() + 3), bytes.size() - 3));
+        if (bytes.size() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE)
+            return std::wstring(reinterpret_cast<const wchar_t*>(bytes.data() + 2), (bytes.size() - 2) / sizeof(wchar_t));
+
+        return StringUtil::ToUTF16(std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+    }
+
+    std::wstring ReadIniValue(const std::wstring& text, const std::wstring& section, const std::wstring& key, const std::wstring& fallback)
+    {
+        bool inSection = false;
+        for (std::wstring line : StringUtil::Split(text, std::wstring(L"\n")))
+        {
+            if (!line.empty() && line.back() == L'\r')
+                line.pop_back();
+            line = TrimAsciiWhitespace(line);
+            if (line.empty() || line[0] == L';' || line[0] == L'#')
+                continue;
+            if (line.front() == L'[' && line.back() == L']')
+            {
+                inSection = StringUtil::ToLower(TrimAsciiWhitespace(line.substr(1, line.size() - 2))) == StringUtil::ToLower(section);
+                continue;
+            }
+            if (!inSection)
+                continue;
+
+            size_t equals = line.find(L'=');
+            if (equals == std::wstring::npos)
+                continue;
+            if (StringUtil::ToLower(TrimAsciiWhitespace(line.substr(0, equals))) == StringUtil::ToLower(key))
+                return TrimAsciiWhitespace(line.substr(equals + 1));
+        }
+        return fallback;
+    }
+
+    void EnsureFastSkipIniSection(const std::wstring& iniPath)
+    {
+        std::wstring text = ReadIniText(iniPath);
+        if (StringUtil::ToLower(text).find(L"[fastskip]") != std::wstring::npos)
+            return;
+
+        if (!text.empty() && text.back() != L'\n')
+            text += L"\n";
+        text += L"\n[fastskip]\n";
+        text += L"enabled = true\n";
+        text += L"characters = 1\n";
+        WriteUtf8TextFile(iniPath, text);
+    }
+
+    void LoadFastSkipIniConfig(FontPatchConfig& config)
+    {
+        const std::wstring iniPath = Path::Combine(Path::Combine(GetModuleRoot(), L"patch"), L"kirikiri-patched.ini");
+        EnsureFastSkipIniSection(iniPath);
+        const std::wstring text = ReadIniText(iniPath);
+        const std::wstring enabled = StringUtil::ToLower(ReadIniValue(text, L"fastskip", L"enabled", L"true"));
+        config.FastSkipEnabled = enabled == L"1" || enabled == L"true" || enabled == L"yes" || enabled == L"on";
+        config.FastSkipAfterCharacters = _wtoi(ReadIniValue(text, L"fastskip", L"characters", L"1").c_str());
+        if (config.FastSkipAfterCharacters < 1)
+            config.FastSkipAfterCharacters = 1;
+    }
+
+    std::wstring BuildRuntimeConfigText(const FontPatchConfig& config)
+    {
+        std::wstring text;
+        text += L"%[\n";
+        text += StringUtil::Format(L"\tline_spacing_offset_pixels: %d,\n", config.LineSpacingOffsetPixels);
+        if (!config.LatinFace.empty())
+            text += L"\tlatin_face: \"" + EscapeTjsString(config.LatinFace) + L"\",\n";
+        text += StringUtil::Format(L"\twrap_right_padding_pixels: %d,\n", config.WrapRightPaddingPixels);
+        text += L"\twrap_mode: \"" + EscapeTjsString(config.WrapMode) + L"\",\n";
+        text += config.StripAsciiQuotes
+            ? L"\tstrip_ascii_quotes: true,\n"
+            : L"\tstrip_ascii_quotes: false,\n";
+        text += config.CollapseAsciiDoubleSpaces
+            ? L"\tcollapse_ascii_double_spaces: true,\n"
+            : L"\tcollapse_ascii_double_spaces: false,\n";
+        text += config.FastSkipEnabled
+            ? L"\tfast_skip_enabled: true,\n"
+            : L"\tfast_skip_enabled: false,\n";
+        text += StringUtil::Format(L"\tfast_skip_after_characters: %d,\n", config.FastSkipAfterCharacters);
+        text += L"]\n";
+        return text;
     }
 
     std::wstring WideFromText(LPCWSTR text, int count)
@@ -351,19 +489,14 @@ namespace
 
     std::wstring ReadFontPatchConfigText()
     {
-        std::wstring configText = ReadUtf8TextFile(Path::Combine(GetModuleRoot(), CONFIG_PATH_PRIMARY));
-        if (!configText.empty())
-            return configText;
-
-        configText = ReadUtf8TextFile(Path::Combine(GetModuleRoot(), CONFIG_PATH_PRIMARY_PATCH));
-        if (!configText.empty())
-            return configText;
-
-        configText = ReadUtf8TextFile(Path::Combine(GetModuleRoot(), CONFIG_PATH_LEGACY));
-        if (!configText.empty())
-            return configText;
-
-        return ReadUtf8TextFile(Path::Combine(GetModuleRoot(), CONFIG_PATH_LEGACY_PATCH));
+        const std::wstring configPath = Path::Combine(GetModuleRoot(), CONFIG_PATH);
+        std::wstring configText = ReadUtf8TextFile(configPath);
+        if (ShouldRestoreDefaultFontPatchConfig(configText))
+        {
+            configText = BuildDefaultFontPatchConfigText();
+            WriteUtf8TextFile(configPath, configText);
+        }
+        return configText;
     }
 
     bool LoadConfig()
@@ -386,6 +519,7 @@ namespace
             configText,
             L"collapse_ascii_double_spaces",
             true);
+        LoadFastSkipIniConfig(config);
         config.AdvancePercent = ExtractInt(configText, L"advance_percent", 100);
         config.CharacterExtraPercent = ExtractInt(configText, L"character_extra_percent", 100);
         config.CharacterExtraOffset = ExtractInt(configText, L"character_extra_offset", 0);
@@ -412,18 +546,14 @@ namespace
         if (config.MatchFaces.empty())
             config.MatchFaces.push_back(L"*");
 
-        WriteRuntimeMessageLayerConfig(
-            config.LineSpacingOffsetPixels,
-            config.WrapRightPaddingPixels,
-            config.WrapMode,
-            config.StripAsciiQuotes,
-            config.CollapseAsciiDoubleSpaces);
-
         config.Enabled = !config.DefaultFace.empty() && !config.RegularFontPath.empty();
         if (!config.Enabled)
             return false;
 
         g_config = config;
+        WriteUtf8TextFile(
+            Path::Combine(GetModuleRoot(), RUNTIME_CONFIG_PATH),
+            BuildRuntimeConfigText(g_config));
         return true;
     }
 
@@ -1111,6 +1241,7 @@ namespace
     {
         const std::wstring text = WideFromText(lpString, c);
         const std::wstring renderText = NormalizeRuntimeDisplayText(text);
+        EditMode::OnRenderedText(renderText.empty() ? text : renderText);
         const FontOverrideState state = ApplyTextFontOverride(hdc, renderText, L"TextOutW");
         LPCWSTR renderPtr = lpString;
         int renderCount = c;
@@ -1128,6 +1259,7 @@ namespace
     {
         const std::wstring text = AnsiToWide(lpString, c);
         const std::wstring renderText = NormalizeRuntimeDisplayText(text);
+        EditMode::OnRenderedText(renderText.empty() ? text : renderText);
         TraceAnsiTextHit(&g_ansiTrace.TextOutA, L"TextOutA", hdc, text);
         TraceRefreshingMorningHit(L"TextOutA", hdc, text);
         const FontOverrideState state = ApplyTextFontOverride(hdc, renderText, L"TextOutA");
@@ -1149,6 +1281,7 @@ namespace
     {
         const std::wstring text = WideFromText(lpString, (int)c);
         const std::wstring renderText = (lpDx == nullptr) ? NormalizeRuntimeDisplayText(text) : text;
+        EditMode::OnRenderedText(renderText.empty() ? text : renderText);
         const FontOverrideState state = ApplyTextFontOverride(hdc, renderText, L"ExtTextOutW");
         LPCWSTR renderPtr = lpString;
         UINT renderCount = c;
@@ -1186,6 +1319,7 @@ namespace
     {
         const std::wstring text = AnsiToWide(lpString, (int)c);
         const std::wstring renderText = (lpDx == nullptr) ? NormalizeRuntimeDisplayText(text) : text;
+        EditMode::OnRenderedText(renderText.empty() ? text : renderText);
         TraceAnsiTextHit(&g_ansiTrace.ExtTextOutA, L"ExtTextOutA", hdc, text);
         TraceRefreshingMorningHit(L"ExtTextOutA", hdc, text);
         const FontOverrideState state = ApplyTextFontOverride(hdc, renderText, L"ExtTextOutA");

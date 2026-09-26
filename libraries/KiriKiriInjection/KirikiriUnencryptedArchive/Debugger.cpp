@@ -4,13 +4,15 @@ using namespace std;
 
 namespace
 {
-    constexpr wchar_t LOG_INI_NAME[] = L"kirikiri-patched.ini";
-    constexpr wchar_t DEFAULT_LOG_FILE_NAME[] = L"kirikiri-patched.log";
+    constexpr wchar_t PATCH_CONFIG_NAME[] = L"patch\\CherryAI.KiriKiriPatch.json";
+    constexpr wchar_t DEFAULT_LOG_FILE_NAME[] = L"patch\\kirikiri-patched.log";
+    constexpr wchar_t DEFAULT_LOG_INI_NAME[] = L"kirikiri-patched.ini";
 
     struct LogConfig
     {
         bool loaded = false;
         bool enabled = false;
+        bool cleared = false;
         std::wstring logPath;
     };
 
@@ -49,6 +51,106 @@ namespace
         return StringUtil::ToUTF16(text);
     }
 
+    void WriteUtf8TextFile(const std::wstring& filePath, const std::wstring& text)
+    {
+        Directory::Create(Path::GetDirectoryName(filePath));
+        FILE* pFile = _wfopen(filePath.c_str(), L"wb");
+        if (pFile == nullptr)
+            return;
+
+        const std::string utf8 = StringUtil::ToUTF8(text);
+        if (!utf8.empty())
+            fwrite(utf8.data(), 1, utf8.size(), pFile);
+        fclose(pFile);
+    }
+
+    bool ExtractJsonBool(const std::wstring& text, const std::wstring& key, bool fallback)
+    {
+        const std::wregex pattern(L"\"" + key + L"\"\\s*:\\s*(true|false|1|0)", std::regex_constants::icase);
+        std::wsmatch match;
+        if (!std::regex_search(text, match, pattern) || match.size() < 2)
+            return fallback;
+
+        const std::wstring value = StringUtil::ToLower(match[1].str());
+        return value == L"true" || value == L"1";
+    }
+
+    std::wstring ExtractJsonString(const std::wstring& text, const std::wstring& key)
+    {
+        const std::wregex pattern(L"\"" + key + L"\"\\s*:\\s*\"([^\"]*)\"", std::regex_constants::icase);
+        std::wsmatch match;
+        if (!std::regex_search(text, match, pattern) || match.size() < 2)
+            return L"";
+
+        return match[1].str();
+    }
+
+    void EnsurePatchConfigExists(const std::wstring& configPath)
+    {
+        if (GetFileAttributesW(configPath.c_str()) != INVALID_FILE_ATTRIBUTES)
+            return;
+
+        WriteUtf8TextFile(
+            configPath,
+            L"{\n"
+            L"  \"schema\": 1,\n"
+            L"  \"bundle_id\": \"inter\",\n"
+            L"  \"bundle_name\": \"Inter\",\n"
+            L"  \"logging_enabled\": true,\n"
+            L"  \"log_file\": \"kirikiri-patched.log\",\n"
+            L"  \"default_face\": \"Inter\",\n"
+            L"  \"fonts_directory\": \"fonts\",\n"
+            L"  \"log_font_calls\": false,\n"
+            L"  \"replace_cjk_faces\": false,\n"
+            L"  \"charset\": 1,\n"
+            L"  \"quality\": 5,\n"
+            L"  \"height_percent\": 100,\n"
+            L"  \"height_offset_pixels\": 5,\n"
+            L"  \"width_percent\": 100,\n"
+            L"  \"strip_ascii_quotes\": true,\n"
+            L"  \"collapse_ascii_double_spaces\": true,\n"
+            L"  \"match_faces\": [\n"
+            L"    \"MS UI Gothic\",\n"
+            L"    \"MS PGothic\",\n"
+            L"    \"\xff2d\xff33 \xff30\x30b4\x30b7\x30c3\x30af\",\n"
+            L"    \"MS Gothic\",\n"
+            L"    \"\xff2d\xff33 \x30b4\x30b7\x30c3\x30af\",\n"
+            L"    \"Meiryo\",\n"
+            L"    \"\x30e1\x30a4\x30ea\x30aa\",\n"
+            L"    \"Segoe UI\",\n"
+            L"    \"Segoe UI Variable\",\n"
+            L"    \"Yu Gothic\",\n"
+            L"    \"Yu Gothic UI\",\n"
+            L"    \"YuGothic\",\n"
+            L"    \"TakaoGothic\",\n"
+            L"    \"Arial\"\n"
+            L"  ],\n"
+            L"  \"regular_font\": {\n"
+            L"    \"face\": \"Inter\",\n"
+            L"    \"file\": \"fonts/Inter-Regular.ttf\"\n"
+            L"  },\n"
+            L"  \"bold_font\": {\n"
+            L"    \"face\": \"Inter\",\n"
+            L"    \"file\": \"fonts/Inter-SemiBold.ttf\"\n"
+            L"  },\n"
+            L"  \"WrapRightPaddingPixels\": 240,\n"
+            L"  \"WrapMode\": \"pixel\"\n"
+            L"}\n");
+    }
+
+    void EnsureLogIniExists(const std::wstring& moduleRoot)
+    {
+        const std::wstring iniPath = Path::Combine(moduleRoot, DEFAULT_LOG_INI_NAME);
+        if (GetFileAttributesW(iniPath.c_str()) != INVALID_FILE_ATTRIBUTES)
+            return;
+
+        WriteUtf8TextFile(
+            iniPath,
+            L"[logging]\n"
+            L"enabled = true\n"
+            L"file = kirikiri-patched.log\n");
+    }
+
     std::wstring DecodeAnsiForLog(const char* text)
     {
         if (text == nullptr)
@@ -74,48 +176,37 @@ namespace
 
         g_logConfig.loaded = true;
         g_logConfig.enabled = false;
-        g_logConfig.logPath = Path::Combine(Path::GetModuleFolderPath(nullptr), DEFAULT_LOG_FILE_NAME);
+        g_logConfig.cleared = false;
+        const std::wstring moduleRoot = Path::GetModuleFolderPath(nullptr);
+        g_logConfig.logPath = Path::Combine(moduleRoot, DEFAULT_LOG_FILE_NAME);
+        EnsureLogIniExists(moduleRoot);
 
-        std::wstring iniPath = Path::Combine(Path::GetModuleFolderPath(nullptr), LOG_INI_NAME);
-        std::wstring iniText = ReadUtf8TextFile(iniPath);
-        if (iniText.empty())
+        const std::wstring configPath = Path::Combine(moduleRoot, PATCH_CONFIG_NAME);
+        EnsurePatchConfigExists(configPath);
+        std::wstring configText = ReadUtf8TextFile(configPath);
+        if (configText.empty())
             return;
 
-        std::wistringstream stream(iniText);
-        std::wstring line;
-        std::wstring currentSection;
-        while (std::getline(stream, line))
+        g_logConfig.enabled = ExtractJsonBool(configText, L"logging_enabled", true) ||
+            ExtractJsonBool(configText, L"enable_logging", false) ||
+            ExtractJsonBool(configText, L"log_enabled", false);
+
+        std::wstring configuredLogFile = ExtractJsonString(configText, L"log_file");
+        if (!configuredLogFile.empty())
         {
-            if (!line.empty() && line.back() == L'\r')
-                line.pop_back();
+            configuredLogFile = StringUtil::Replace(configuredLogFile, L'/', L'\\');
+            if (configuredLogFile.find(L':') == std::wstring::npos && !configuredLogFile.starts_with(L"\\"))
+                g_logConfig.logPath = Path::Combine(Path::Combine(moduleRoot, L"patch"), configuredLogFile);
+        }
 
-            line = TrimIniValue(line);
-            if (line.empty() || line.starts_with(L";") || line.starts_with(L"#"))
-                continue;
-
-            if (line.starts_with(L"[") && line.ends_with(L"]"))
+        if (g_logConfig.enabled)
+        {
+            Directory::Create(Path::GetDirectoryName(g_logConfig.logPath));
+            HANDLE hFile = CreateFileW(g_logConfig.logPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (hFile != INVALID_HANDLE_VALUE)
             {
-                currentSection = StringUtil::ToLower(TrimIniValue(line.substr(1, line.size() - 2)));
-                continue;
-            }
-
-            size_t equalsPos = line.find(L'=');
-            if (equalsPos == std::wstring::npos)
-                continue;
-
-            std::wstring key = StringUtil::ToLower(TrimIniValue(line.substr(0, equalsPos)));
-            std::wstring value = TrimIniValue(line.substr(equalsPos + 1));
-            if (currentSection != L"logging")
-                continue;
-
-            if (key == L"enabled")
-            {
-                std::wstring lowered = StringUtil::ToLower(value);
-                g_logConfig.enabled = lowered == L"1" || lowered == L"true" || lowered == L"yes" || lowered == L"on";
-            }
-            else if (key == L"file" && !value.empty())
-            {
-                g_logConfig.logPath = Path::Combine(Path::GetModuleFolderPath(nullptr), value);
+                CloseHandle(hFile);
+                g_logConfig.cleared = true;
             }
         }
     }

@@ -1,6 +1,6 @@
 #pragma once
 
-class tTJSVariant;
+struct tTJSVariant;
 class iTJSDispatch2;
 
 class iTJSNativeInstance

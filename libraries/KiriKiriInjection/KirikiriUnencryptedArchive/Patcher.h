@@ -6,6 +6,7 @@ class Patcher
 
 public:
     static bool                 PatchSignatureCheck                     (HMODULE hModule);
+    static bool                 TryReadOriginalTlg5MetaForCache         (const std::wstring& archiveStoragePath, std::vector<BYTE>& header);
 
     static void                 PatchXP3StreamCreation                  ();
     static void                 PatchPlacedPathLookup                   ();
@@ -49,6 +50,9 @@ private:
             auto* pItem = (typename tTVPXP3Archive<TCompilerType>::tArchiveItem*)((BYTE*)pArchive->ItemVector.begin() + idx * itemSize);
             if (pArchive->Name.StartsWith(L"file://"))
             {
+                if (OriginalTlgMetaReadDepth > 0)
+                    goto archive_default;
+
                 const std::wstring extension = StringUtil::ToLower(Path::GetExtension(pItem->Name.c_str()));
                 const bool isNei = extension == L"nei";
                 const bool isTlg = extension == L"tlg";
@@ -175,6 +179,7 @@ private:
     };
 
     static inline void* OriginalCreateStreamByIndex{};
+    static inline thread_local int OriginalTlgMetaReadDepth{};
 
     static inline ttstr (__stdcall* OriginalTVPGetPlacedPath)(const ttstr& name){};
     static inline void* (__stdcall* OriginalTVPCreateIStream)(const ttstr& name, tjs_uint32 flags){};

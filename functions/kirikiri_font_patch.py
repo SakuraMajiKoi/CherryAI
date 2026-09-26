@@ -237,7 +237,7 @@ def get_font_patch_paths(
         translated_root=translated_root,
         patch_dir=patch_dir,
         fonts_dir=fonts_dir,
-        config_path=translated_root / config_name,
+        config_path=patch_dir / config_name,
         runtime_config_path=patch_dir / DEFAULT_RUNTIME_CONFIG_NAME,
         dll_output_path=translated_root / dll_name,
         log_ini_path=translated_root / DEFAULT_LOG_INI_NAME,
@@ -737,6 +737,13 @@ def _build_runtime_config_text(
     if latin_face:
         runtime_config["latin_face"] = latin_face
 
+    runtime_config["wrap_right_padding_pixels"] = _resolve_wrap_right_padding_pixels(config)
+    runtime_config["wrap_mode"] = _resolve_wrap_mode(config)
+    runtime_config["strip_ascii_quotes"] = bool(config.get("strip_ascii_quotes", True))
+    runtime_config["collapse_ascii_double_spaces"] = bool(
+        config.get("collapse_ascii_double_spaces", True)
+    )
+
     ordered_keys: list[str] = []
     for key in (
         "line_spacing_offset_pixels",
@@ -848,8 +855,11 @@ def stage_font_patch_assets(
         legacy_patch_path = paths.patch_dir / legacy_name
         if legacy_patch_path.is_file():
             legacy_patch_path.unlink()
-    if paths.runtime_config_path.exists():
-        paths.runtime_config_path.unlink()
+    existing_runtime_config = _load_existing_runtime_config(paths.runtime_config_path)
+    paths.runtime_config_path.write_text(
+        _build_runtime_config_text(config, existing_runtime_config=existing_runtime_config),
+        encoding="utf-8",
+    )
 
     if not paths.log_ini_path.exists():
         paths.log_ini_path.write_text(_build_logging_ini_text(), encoding="utf-8")

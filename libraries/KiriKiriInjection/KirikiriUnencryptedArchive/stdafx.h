@@ -6,11 +6,14 @@
 #include <imagehlp.h>
 #include <strsafe.h>
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <exception>
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <ranges>
 #include <regex>
 #include <set>
@@ -37,6 +40,7 @@
 #include "CompilerSpecific/CompilerHelper.h"
 
 #include "Debugger.h"
+#include "EditMode.h"
 #include "FontPatch.h"
 #include "ImportHooker.h"
 #include "Kirikiri/Kirikiri.h"

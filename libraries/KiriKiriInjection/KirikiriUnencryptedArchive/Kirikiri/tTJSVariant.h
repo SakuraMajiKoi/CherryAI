@@ -18,6 +18,8 @@ public:
                         tTJSVariant     ();
                         ~tTJSVariant    ();
 
+    std::wstring        AsString        () const;
+
 private:
     union
     {

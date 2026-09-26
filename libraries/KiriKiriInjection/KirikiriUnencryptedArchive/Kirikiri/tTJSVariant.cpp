@@ -18,3 +18,11 @@ tTJSVariant::~tTJSVariant()
 {
     Dtor(this);
 }
+
+std::wstring tTJSVariant::AsString() const
+{
+    if (vt != tvtString || String == nullptr)
+        return L"";
+
+    return std::wstring(static_cast<const tjs_char*>(*String), String->Length);
+}

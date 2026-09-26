@@ -4,7 +4,10 @@ using namespace std;
 
 CustomTVPXP3ArchiveStream::CustomTVPXP3ArchiveStream(const ttstr& archiveUrl, tjs_uint64 offset, tjs_uint64 originalSize, tjs_uint64 archiveSize, bool compressed)
 {
-	_data.resize(originalSize);
+	if (originalSize > UINT_MAX || archiveSize > INT_MAX)
+		throw exception("XP3 segment is too large to load into a single buffer");
+
+	_data.resize(static_cast<size_t>(originalSize));
 	_position = 0;
 
 	ttstr archivePath = archiveUrl;
@@ -19,15 +22,15 @@ CustomTVPXP3ArchiveStream::CustomTVPXP3ArchiveStream(const ttstr& archiveUrl, tj
 	if (compressed)
 	{
 		vector<BYTE> compressedData;
-		compressedData.resize(archiveSize);
-		stream.ReadBytes(compressedData.data(), compressedData.size());
+		compressedData.resize(static_cast<size_t>(archiveSize));
+		stream.ReadBytes(compressedData.data(), static_cast<int>(compressedData.size()));
 
-		int uncompressedSize = _data.size();
-		Kirikiri::ZLIB_uncompress(_data.data(), &uncompressedSize, compressedData.data(), compressedData.size());
+		int uncompressedSize = static_cast<int>(_data.size());
+		Kirikiri::ZLIB_uncompress(_data.data(), &uncompressedSize, compressedData.data(), static_cast<int>(compressedData.size()));
 	}
 	else
 	{
-		stream.ReadBytes(_data.data(), _data.size());
+		stream.ReadBytes(_data.data(), static_cast<int>(_data.size()));
 	}
 }
 
@@ -40,7 +43,7 @@ tjs_uint64 CustomTVPXP3ArchiveStream::Seek(tjs_int64 offset, tjs_int whence)
 	switch (whence)
 	{
 		case SEEK_SET:
-			_position = offset;
+			_position = offset < 0 ? 0 : static_cast<tjs_uint64>(offset);
 			break;
 
 		case SEEK_CUR:
@@ -57,8 +60,12 @@ tjs_uint64 CustomTVPXP3ArchiveStream::Seek(tjs_int64 offset, tjs_int whence)
 
 tjs_uint CustomTVPXP3ArchiveStream::Read(void* buffer, tjs_uint read_size)
 {
-	if (read_size > _data.size() - _position)
-		read_size = _data.size() - _position;
+	if (_position >= _data.size())
+		return 0;
+
+	const tjs_uint64 bytesAvailable = static_cast<tjs_uint64>(_data.size()) - _position;
+	if (read_size > bytesAvailable)
+		read_size = static_cast<tjs_uint>(bytesAvailable);
 
 	memcpy(buffer, _data.data() + _position, read_size);
 	_position += read_size;

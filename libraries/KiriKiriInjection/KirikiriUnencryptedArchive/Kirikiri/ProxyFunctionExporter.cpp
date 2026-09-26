@@ -21,7 +21,7 @@ void ProxyFunctionExporter::Hook(const wchar_t* pwszName, void** ppOrigFunc, voi
 bool TJS_INTF_METHOD ProxyFunctionExporter::QueryFunctions(const tjs_char** name, void** function, tjs_uint count)
 {
     bool success = true;
-    for (int i = 0; i < count; i++)
+    for (tjs_uint i = 0; i < count; i++)
     {
         auto it = _hooks.find(name[i]);
         if (it != _hooks.end())
@@ -35,7 +35,7 @@ bool TJS_INTF_METHOD ProxyFunctionExporter::QueryFunctions(const tjs_char** name
 bool TJS_INTF_METHOD ProxyFunctionExporter::QueryFunctionsByNarrowString(const char** name, void** function, tjs_uint count)
 {
     bool success = true;
-    for (int i = 0; i < count; i++)
+    for (tjs_uint i = 0; i < count; i++)
     {
         auto it = _hooks.find(StringUtil::ToUTF16(name[i]));
         if (it != _hooks.end())

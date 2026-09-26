@@ -43,7 +43,7 @@ void** CompilerHelper::FindVTable(HMODULE hModule, ::CompilerType compilerType, 
             break;
     }
 
-    for (int i = 1; i < sections.size(); i++)
+    for (size_t i = 1; i < sections.size(); i++)
     {
         const PE::Section& section = sections[i];
         void* pSectionStart = section.Start;

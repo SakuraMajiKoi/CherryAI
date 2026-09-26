@@ -13,8 +13,13 @@ Provides the main application window with:
 from __future__ import annotations
 
 import json
+import faulthandler
+import itertools
 import logging
+import queue
+import sys
 import threading
+import time
 import tkinter as tk
 import _tkinter
 from tkinter import ttk, messagebox, filedialog, scrolledtext
@@ -72,6 +77,12 @@ _TK_UI_THREAD_ID = threading.get_ident()
 _TK_CALL_THREAD_GUARD_INSTALLED = False
 _TK_CALL_OWNER_TYPE: Optional[type[Any]] = None
 _TK_CALL_ORIGINAL: Optional[Callable[..., Any]] = None
+_TK_MISC_AFTER_ORIGINAL: Optional[Callable[..., Any]] = None
+_TK_MISC_AFTER_CANCEL_ORIGINAL: Optional[Callable[..., Any]] = None
+_TK_THREAD_AFTER_QUEUE: "queue.Queue[tuple[float, str, Callable[..., Any], tuple[Any, ...]]]" = queue.Queue()
+_TK_THREAD_AFTER_CANCELLED: set[str] = set()
+_TK_THREAD_AFTER_CANCEL_LOCK = threading.Lock()
+_TK_THREAD_AFTER_COUNTER = itertools.count(1)
 
 
 def _assert_tk_ui_thread(op: str) -> None:
@@ -92,6 +103,8 @@ def _assert_tk_ui_thread(op: str) -> None:
 def install_tk_thread_guard(tkapp: Optional[Any] = None) -> None:
     """Install an early Tk call guard for non-UI-thread widget operations."""
     global _TK_CALL_OWNER_TYPE, _TK_CALL_ORIGINAL, _TK_CALL_THREAD_GUARD_INSTALLED
+    global _TK_MISC_AFTER_ORIGINAL, _TK_MISC_AFTER_CANCEL_ORIGINAL, _TK_UI_THREAD_ID
+    _TK_UI_THREAD_ID = threading.get_ident()
     if _TK_CALL_THREAD_GUARD_INSTALLED:
         return
 
@@ -99,15 +112,40 @@ def install_tk_thread_guard(tkapp: Optional[Any] = None) -> None:
         probe = tk.Tcl()
         tkapp = probe.tk
 
+    original_after = tk.Misc.after
+    original_after_cancel = tk.Misc.after_cancel
+
+    def _patched_after(self: tk.Misc, ms: int, func: Optional[Callable[..., Any]] = None, *args: Any) -> Any:
+        if threading.get_ident() == _TK_UI_THREAD_ID:
+            return original_after(self, ms, func, *args)
+
+        if func is None:
+            time.sleep(max(0, int(ms)) / 1000.0)
+            return None
+
+        token = f"thread-after-{next(_TK_THREAD_AFTER_COUNTER)}"
+        deadline = time.monotonic() + (max(0, int(ms)) / 1000.0)
+        _TK_THREAD_AFTER_QUEUE.put((deadline, token, func, args))
+        return token
+
+    def _patched_after_cancel(self: tk.Misc, after_id: Any) -> None:
+        token = str(after_id)
+        if token.startswith("thread-after-"):
+            with _TK_THREAD_AFTER_CANCEL_LOCK:
+                _TK_THREAD_AFTER_CANCELLED.add(token)
+            return None
+        return original_after_cancel(self, after_id)
+
+    tk.Misc.after = _patched_after
+    tk.Misc.after_cancel = _patched_after_cancel
+    _TK_MISC_AFTER_ORIGINAL = original_after
+    _TK_MISC_AFTER_CANCEL_ORIGINAL = original_after_cancel
+
     owner_type = type(tkapp)
     original_tk_call = owner_type.call
 
     def _patched_tk_call(self: Any, *args: Any) -> Any:
-        command = args[0] if args else "<unknown>"
-        # Keep legacy worker-thread `after(...)` scheduling working while we
-        # migrate code toward the explicit UI dispatcher.
-        if command != "after":
-            _assert_tk_ui_thread(f"tk.call{args[:2]}")
+        _assert_tk_ui_thread(f"tk.call{args[:2]}")
         return original_tk_call(self, *args)
 
     owner_type.call = _patched_tk_call
@@ -146,6 +184,8 @@ class App(tk.Tk):
         super().__init__()
 
         install_tk_thread_guard(self.tk)
+        self._thread_after_pump_id: Optional[str] = None
+        self._start_thread_after_pump()
 
         load_theme_from_ini()
 
@@ -255,6 +295,47 @@ class App(tk.Tk):
             callback(*args, **kwargs)
             return
         self.after(0, lambda: callback(*args, **kwargs))
+
+    def _start_thread_after_pump(self) -> None:
+        """Poll callbacks queued by worker-thread ``after(...)`` calls."""
+        if self._thread_after_pump_id is None:
+            self._thread_after_pump_id = self.after(15, self._drain_thread_after_queue)
+
+    def _drain_thread_after_queue(self) -> None:
+        """Run due worker-scheduled callbacks on the Tk UI thread."""
+        self._thread_after_pump_id = None
+        now = time.monotonic()
+        pending: list[tuple[float, str, Callable[..., Any], tuple[Any, ...]]] = []
+
+        while True:
+            try:
+                item = _TK_THREAD_AFTER_QUEUE.get_nowait()
+            except queue.Empty:
+                break
+            deadline, token, callback, args = item
+            if deadline > now:
+                pending.append(item)
+                continue
+
+            with _TK_THREAD_AFTER_CANCEL_LOCK:
+                cancelled = token in _TK_THREAD_AFTER_CANCELLED
+                if cancelled:
+                    _TK_THREAD_AFTER_CANCELLED.discard(token)
+            if cancelled:
+                continue
+
+            try:
+                callback(*args)
+            except Exception:
+                logger.exception("Worker-scheduled Tk callback failed")
+
+        for item in pending:
+            _TK_THREAD_AFTER_QUEUE.put(item)
+
+        try:
+            self._thread_after_pump_id = self.after(15, self._drain_thread_after_queue)
+        except tk.TclError:
+            self._thread_after_pump_id = None
 
     def _resume_startup_manifest(self) -> None:
         """Resume the queued startup manifest once the Tk event loop is live."""
@@ -1477,9 +1558,13 @@ def main() -> None:
         app.mainloop()
     except KeyboardInterrupt:
         if app is None:
-            logger.warning(
-                "App startup interrupted by KeyboardInterrupt; closing gracefully."
+            logger.exception(
+                "App startup raised KeyboardInterrupt; traceback follows before graceful shutdown."
             )
+            try:
+                faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+            except Exception:
+                pass
             return
         logger.exception(
             "App mainloop raised KeyboardInterrupt; traceback follows before graceful shutdown."

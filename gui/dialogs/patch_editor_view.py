@@ -656,8 +656,10 @@ class PatchEditorViewDialog(tk.Toplevel):
 			file_payload_provider=self._iter_search_file_payloads,
 			selected_file_provider=lambda: self._selected_rel_path,
 			on_match_selected=self._select_search_result_match,
+			on_search_requested=self._run_search_from_sidebar,
 			on_replace_current=self._replace_current,
-			on_replace_all=self._replace_all,
+			on_replace_file=self._replace_all,
+			on_replace_all_files=self._replace_all_found_files,
 			on_options_changed=self._schedule_search_from_sidebar_change,
 		)
 		panel.grid(row=0, column=0, sticky="nsew")
@@ -1268,6 +1270,13 @@ class PatchEditorViewDialog(tk.Toplevel):
 		"""Debounce highlighting and cross-file results after search controls change."""
 		self._schedule_search_highlight_refresh(refresh_results=True)
 
+	def _run_search_from_sidebar(self) -> None:
+		"""Run a search immediately from the sidebar's explicit search action."""
+		self._cancel_pending_search_highlight_refresh()
+		self._refresh_search_highlights()
+		if hasattr(self, "_search_sidebar"):
+			self._search_sidebar.refresh_results()
+
 	def _schedule_search_highlight_refresh(
 		self,
 		_event: Optional[tk.Event] = None,
@@ -1458,9 +1467,69 @@ class PatchEditorViewDialog(tk.Toplevel):
 
 			messagebox.showinfo(
 				"Replace",
-				f"Replaced {replacement_count} occurrence(s).",
+				f"Replaced {replacement_count} occurrence(s) in the current file.",
 				parent=self,
 			)
+
+	def _replace_all_found_files(self) -> None:
+		"""Replace all matches across every file in the current search result set."""
+		options = self._get_search_options()
+		if not options.query:
+			return
+
+		payloads = list(self._iter_search_file_payloads())
+		results = search_editor_files(payloads, options)
+		if not results:
+			return
+
+		payload_by_rel_path = {
+			rel_path: (text, list(locator_metadata))
+			for rel_path, text, locator_metadata in payloads
+		}
+		total_replacements = 0
+		replaced_files = 0
+		selected_new_text: Optional[str] = None
+
+		for result in results:
+			payload = payload_by_rel_path.get(result.rel_path)
+			if payload is None:
+				continue
+			current_text, locator_metadata = payload
+			new_text, replacement_count = replace_all_scoped(
+				current_text,
+				options,
+				parsed_lines=parsed_line_numbers(locator_metadata),
+			)
+			if not replacement_count:
+				continue
+			total_replacements += replacement_count
+			replaced_files += 1
+			self._set_unsaved_buffer_for_rel_path(result.rel_path, new_text)
+			if result.rel_path == self._selected_rel_path:
+				selected_new_text = new_text
+
+		if not total_replacements:
+			return
+
+		if selected_new_text is not None:
+			self._editor_text.delete("1.0", "end")
+			self._editor_text.insert("1.0", selected_new_text)
+			self._current_search_index = "1.0"
+			view = self._mgr.get_editor_file_view(
+				self._selected_rel_path,
+				current_text=selected_new_text,
+			)
+			self._refresh_aux_views(view)
+			self._refresh_search_highlights()
+
+		if hasattr(self, "_search_sidebar"):
+			self._search_sidebar.refresh_results()
+
+		messagebox.showinfo(
+			"Replace",
+			f"Replaced {total_replacements} occurrence(s) across {replaced_files} file(s).",
+			parent=self,
+		)
 
 	def _show_editor_context_menu(self, event: tk.Event) -> str:
 		"""Open the Full Files text-selection context menu."""

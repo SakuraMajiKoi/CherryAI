@@ -1,6 +1,6 @@
 // CherryAI encoding note:
 // - Author/edit this template in UTF-8.
-// - Do not edit the live patch copy directly when avoiding mojibake.
+// - Avoid editing the live patch copy directly when avoiding mojibake.
 // - Stage/recompile to game patch by re-encoding this file as CP932 (Shift-JIS).
 var __CherryAILineSpacingOffsetPixels = 0;
 var __CherryAILatinFace = "Inter";
@@ -8,10 +8,15 @@ var __CherryAIWrapRightPaddingPixels = 220;
 var __CherryAIWrapMode = "pixel";
 var __CherryAIStripAsciiQuotes = true;
 var __CherryAICollapseAsciiDoubleSpaces = true;
+var __CherryAIFastSkipEnabled = true;
+var __CherryAIFastSkipAfterCharacters = 1;
 var __CherryAIRuntimeConfigLoaded = false;
 var __CherryAIMessageLayerProbeWritten = false;
 var __CherryAIWrapDebugLogged = false;
 var __CherryAIRuntimeConfigLogDone = false;
+var __CherryAIEditHistorySeparator = "<<<CherryAI.EditHistorySeparator>>>";
+global.CherryAIEditCurrentText = "";
+global.CherryAIEditTextHistory = "";
 
 function LoadCherryAIFontPatchRuntimeConfig()
 {
@@ -52,9 +57,17 @@ function LoadCherryAIFontPatchRuntimeConfig()
 			__CherryAIStripAsciiQuotes = !!Config.strip_ascii_quotes;
 		if(Config !== void && Config.collapse_ascii_double_spaces !== void)
 			__CherryAICollapseAsciiDoubleSpaces = !!Config.collapse_ascii_double_spaces;
+		if(Config !== void && Config.fast_skip_enabled !== void)
+			__CherryAIFastSkipEnabled = !!Config.fast_skip_enabled;
+		if(Config !== void && Config.fast_skip_after_characters !== void)
+		{
+			__CherryAIFastSkipAfterCharacters = int(Config.fast_skip_after_characters);
+			if(__CherryAIFastSkipAfterCharacters < 1)
+				__CherryAIFastSkipAfterCharacters = 1;
+		}
 		if(!__CherryAIRuntimeConfigLogDone)
 		{
-			dm("[CherryAI.WrapConfig] loaded line_spacing=" + __CherryAILineSpacingOffsetPixels + " wrap_pad=" + __CherryAIWrapRightPaddingPixels + " wrap_mode=" + __CherryAIWrapMode + " latin_face=" + __CherryAILatinFace);
+			dm("[CherryAI.WrapConfig] loaded line_spacing=" + __CherryAILineSpacingOffsetPixels + " wrap_pad=" + __CherryAIWrapRightPaddingPixels + " wrap_mode=" + __CherryAIWrapMode + " latin_face=" + __CherryAILatinFace + " fast_skip=" + __CherryAIFastSkipEnabled + " fast_skip_chars=" + __CherryAIFastSkipAfterCharacters);
 			__CherryAIRuntimeConfigLogDone = true;
 		}
 	}
@@ -92,6 +105,40 @@ function GetCherryAIWrapMode()
 	if(__CherryAIWrapMode == "character")
 		return "character";
 	return "pixel";
+}
+
+function GetCherryAIFastSkipAfterCharacters()
+{
+	LoadCherryAIFontPatchRuntimeConfig();
+	if(!__CherryAIFastSkipEnabled)
+		return 0;
+	if(__CherryAIFastSkipAfterCharacters < 1)
+		__CherryAIFastSkipAfterCharacters = 1;
+	return __CherryAIFastSkipAfterCharacters;
+}
+
+function CherryAIIsFastSkipActive()
+{
+	LoadCherryAIFontPatchRuntimeConfig();
+	if(!__CherryAIFastSkipEnabled)
+		return false;
+	try
+	{
+		if(System.getKeyState(VK_CONTROL))
+			return true;
+	}
+	catch(e)
+	{
+	}
+	try
+	{
+		if(global.win !== void && global.win.SkipFlag == true)
+			return true;
+	}
+	catch(e)
+	{
+	}
+	return false;
 }
 
 function ShouldWriteCherryAIMessageLayerProbe(f_Text)
@@ -137,6 +184,31 @@ function WriteCherryAIMessageLayerProbe(f_Lay,f_Text,f_AdvanceArray,f_WrapStarts
 	try
 	{
 		(Dictionary.saveStruct incontextof Probe)(System.exePath + "patch/CherryAI.MessageLayerProbe.ksd", "w");
+	}
+	catch(e)
+	{
+	}
+}
+
+function CherryAISetCurrentEditText(f_Text)
+{
+	try
+	{
+		if(f_Text !== void && f_Text != "")
+		{
+			global.CherryAIEditCurrentText = f_Text;
+			if(global.CherryAIEditTextHistory != "")
+				global.CherryAIEditTextHistory += __CherryAIEditHistorySeparator;
+			global.CherryAIEditTextHistory += f_Text;
+			var HistoryParts = global.CherryAIEditTextHistory.split(__CherryAIEditHistorySeparator);
+			if(64 < HistoryParts.count)
+			{
+				var Kept = [];
+				for(var i = HistoryParts.count - 64; i < HistoryParts.count; i++)
+					Kept.add(HistoryParts[i]);
+				global.CherryAIEditTextHistory = Kept.join(__CherryAIEditHistorySeparator);
+			}
+		}
 	}
 	catch(e)
 	{
@@ -602,6 +674,7 @@ class MessageManager
 	//function SetText(f_str,f_name)
 	{
 		if(_drawenabled){dm("■■警告■■ 前の文章を描画中です"); MomentDraw();return;}
+		CherryAISetCurrentEditText(f_str);
 
 		// テキストセット
 		LayerTextBase.SetText(f_str);
@@ -722,6 +795,20 @@ class MessageManager
 			{
 				_drawenabled = timer.enabled = false;
 				i = timer.loopcnt+1;
+			}
+		}
+
+		var FastSkipAfterCharacters = GetCherryAIFastSkipAfterCharacters();
+		if(FastSkipAfterCharacters > 0 && CherryAIIsFastSkipActive())
+		{
+			var VisibleCount = 0;
+			var TextCount = Text.length;
+			for(; VisibleCount < TextCount; VisibleCount++)
+				if(OpacityArray[VisibleCount] < 255) break;
+			if(VisibleCount >= FastSkipAfterCharacters)
+			{
+				MomentDraw();
+				return;
 			}
 		}
 
@@ -1892,22 +1979,20 @@ class MessageBaseLayer extends Layer
 			}
 
 			LineText = CandidateLineText;
-			if(IsWrapWhitespace(Ch) || IsWrapPunctuationBreak(Ch))
+			if(IsWrapWhitespace(Ch))
 				LastBreakPos = Pos;
 		}
 
-			// Post-pass: avoid starting lines with whitespace or closing punctuation.
-			// Prefer moving the wrap forward to the next sensible start; if not
-			// possible, move the wrap back one position when safe.
+			// Post-pass: avoid starting lines with whitespace.
 			for(var wsPos = 0; wsPos < cnt; wsPos++)
 			{
 				if(!WrapStarts[wsPos])
 					continue;
 				var ch = f_Text[wsPos];
-				if(IsWrapWhitespace(ch) || IsWrapPunctuationBreak(ch))
+				if(IsWrapWhitespace(ch))
 				{
 					var forward = wsPos + 1;
-					while(forward < cnt && (IsWrapWhitespace(f_Text[forward]) || IsWrapPunctuationBreak(f_Text[forward])))
+					while(forward < cnt && IsWrapWhitespace(f_Text[forward]))
 						forward++;
 					if(forward < cnt)
 					{

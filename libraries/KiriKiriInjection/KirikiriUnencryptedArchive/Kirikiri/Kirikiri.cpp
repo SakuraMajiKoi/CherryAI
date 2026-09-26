@@ -12,6 +12,7 @@ void Kirikiri::Init(const function<void()>& callback)
 
     Debugger::RegisterDllLoadHandler(HandleDllLoaded);
     InitializationCallback = callback;
+    Debugger::Log(L"Kirikiri initialization armed");
 }
 
 wstring Kirikiri::FilePathToUrl(const wstring& path)
@@ -63,6 +64,7 @@ void Kirikiri::HandleDllLoaded(const wchar_t* pwszDllPath, HMODULE hDll)
     if (pLink == nullptr)
         return;
 
+    Debugger::Log(L"Kirikiri V2Link export detected in %ls", pwszDllPath != nullptr ? pwszDllPath : L"<memory module>");
     OriginalV2Link = pLink;
     DetourTransactionBegin();
     DetourAttach(&OriginalV2Link, V2LinkHook);

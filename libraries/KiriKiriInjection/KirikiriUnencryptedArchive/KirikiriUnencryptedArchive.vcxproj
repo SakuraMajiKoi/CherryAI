@@ -101,6 +101,7 @@
   <ItemGroup>
     <ClCompile Include="CompilerSpecific\CompilerHelper.cpp" />
     <ClCompile Include="CustomTVPXP3ArchiveStream.cpp" />
+    <ClCompile Include="EditMode.cpp" />
     <ClCompile Include="FontPatch.cpp" />
     <ClCompile Include="ImportHooker.cpp" />
     <ClCompile Include="Kirikiri\ProxyFunctionExporter.cpp" />
@@ -127,6 +128,7 @@
     <ClInclude Include="CompilerSpecific\CompilerHelper.h" />
     <ClInclude Include="CompilerSpecific\CompilerSpecificVector.h" />
     <ClInclude Include="CustomTVPXP3ArchiveStream.h" />
+    <ClInclude Include="EditMode.h" />
     <ClInclude Include="FontPatch.h" />
     <ClInclude Include="ImportHooker.h" />
     <ClInclude Include="Kirikiri\iTVPStorageMedia.h" />

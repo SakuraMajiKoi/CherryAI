@@ -278,11 +278,14 @@ void Stream::WriteVarUtf16String(const wstring& wstr)
 
 void Stream::Write(Stream& stream)
 {
-    int bytesLeft = stream.Size() - stream.GetPosition();
+    __int64 bytesLeft = stream.Size() - stream.GetPosition();
+    if (bytesLeft < 0)
+        throw std::exception("stream position is beyond stream size");
+
     BYTE buffer[0x1000];
     while (bytesLeft > 0)
     {
-        int chunkSize = min(bytesLeft, (int)sizeof(buffer));
+        int chunkSize = static_cast<int>(min<__int64>(bytesLeft, sizeof(buffer)));
         stream.ReadBytes(buffer, chunkSize);
         Write(buffer, chunkSize);
         bytesLeft -= chunkSize;

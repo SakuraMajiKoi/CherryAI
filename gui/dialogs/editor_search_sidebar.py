@@ -23,6 +23,7 @@ FilePayloadProvider = Callable[[], Iterable[tuple[str, str, Iterable[Mapping[str
 SelectedFileProvider = Callable[[], Optional[str]]
 MatchCallback = Callable[[EditorSearchMatch], None]
 ReplaceCallback = Callable[[], None]
+SearchCallback = Callable[[], None]
 
 
 class EditorSearchSidebar(ttk.Frame):
@@ -39,8 +40,10 @@ class EditorSearchSidebar(ttk.Frame):
 		file_payload_provider: FilePayloadProvider,
 		selected_file_provider: SelectedFileProvider,
 		on_match_selected: MatchCallback,
+		on_search_requested: SearchCallback,
 		on_replace_current: ReplaceCallback,
-		on_replace_all: ReplaceCallback,
+		on_replace_file: ReplaceCallback,
+		on_replace_all_files: ReplaceCallback,
 		on_options_changed: Callable[[], None],
 		style: str = "Sidebar.TFrame",
 	) -> None:
@@ -48,8 +51,10 @@ class EditorSearchSidebar(ttk.Frame):
 		self._file_payload_provider = file_payload_provider
 		self._selected_file_provider = selected_file_provider
 		self._on_match_selected = on_match_selected
+		self._search_requested_callback = on_search_requested
 		self._replace_current_callback = on_replace_current
-		self._replace_all_callback = on_replace_all
+		self._replace_file_callback = on_replace_file
+		self._replace_all_files_callback = on_replace_all_files
 		self._on_options_changed = on_options_changed
 		self._result_by_iid: dict[str, EditorSearchMatch] = {}
 		self._results: list[EditorFileSearchResult] = []
@@ -77,46 +82,58 @@ class EditorSearchSidebar(ttk.Frame):
 
 		self._build()
 		for variable in (
-			self.search_var,
-			self.file_patterns_var,
 			self.regex_var,
 			self.case_search_var,
 			self.whole_word_var,
 			self.current_file_var,
 			self.line_scope_var,
 		):
-			variable.trace_add("write", self._handle_query_option_changed)
-		for variable in (self.replace_var, self.case_replace_var):
-			variable.trace_add("write", self._handle_replace_option_changed)
+			variable.trace_add("write", self._handle_option_changed)
 
 	def _build(self) -> None:
 		self.columnconfigure(0, weight=1)
 		self.rowconfigure(8, weight=1)
 
-		self.search_entry = ttk.Entry(self, textvariable=self.search_var)
+		search_row = ttk.Frame(self, style="Sidebar.TFrame")
+		search_row.grid(row=0, column=0, sticky="ew")
+		search_row.columnconfigure(0, weight=1)
+		self.search_entry = ttk.Entry(search_row, textvariable=self.search_var)
 		self.search_entry.grid(row=0, column=0, sticky="ew")
+		self.search_entry.bind("<Return>", self._on_submit_search)
+		ttk.Button(search_row, text="Search", width=7, command=self._on_search_requested).grid(
+			row=0,
+			column=1,
+			padx=(4, 0),
+		)
+		ttk.Button(search_row, text="1", width=3, command=self._on_replace_current).grid(
+			row=0,
+			column=2,
+			padx=(4, 0),
+		)
+		ttk.Button(search_row, text="File", width=5, command=self._on_replace_file).grid(
+			row=0,
+			column=3,
+			padx=(4, 0),
+		)
+		ttk.Button(search_row, text="All", width=5, command=self._on_replace_all_files).grid(
+			row=0,
+			column=4,
+			padx=(4, 0),
+		)
 
 		replace_row = ttk.Frame(self, style="Sidebar.TFrame")
 		replace_row.grid(row=1, column=0, sticky="ew", pady=(4, 6))
 		replace_row.columnconfigure(0, weight=1)
 		self.replace_entry = ttk.Entry(replace_row, textvariable=self.replace_var)
 		self.replace_entry.grid(row=0, column=0, sticky="ew")
-		ttk.Button(replace_row, text="1", width=3, command=self._on_replace_current).grid(
-			row=0,
-			column=1,
-			padx=(4, 0),
-		)
-		ttk.Button(replace_row, text="All", width=5, command=self._on_replace_all).grid(
-			row=0,
-			column=2,
-			padx=(4, 0),
-		)
+		self.replace_entry.bind("<Return>", self._on_submit_search)
 
 		pattern_row = ttk.Frame(self, style="Sidebar.TFrame")
 		pattern_row.grid(row=2, column=0, sticky="ew")
 		pattern_row.columnconfigure(0, weight=1)
 		self.pattern_entry = ttk.Entry(pattern_row, textvariable=self.file_patterns_var)
 		self.pattern_entry.grid(row=0, column=0, sticky="ew")
+		self.pattern_entry.bind("<Return>", self._on_submit_search)
 		ttk.Label(pattern_row, text="files").grid(row=0, column=1, padx=(4, 0))
 
 		toggle_row = ttk.Frame(self, style="Sidebar.TFrame")
@@ -324,6 +341,10 @@ class EditorSearchSidebar(ttk.Frame):
 			return self._result_by_iid.get(item_id)
 		return None
 
+	def get_results(self) -> list[EditorFileSearchResult]:
+		"""Return the latest completed search results."""
+		return list(self._results)
+
 	def select_next(self) -> None:
 		self._select_relative(1)
 
@@ -416,11 +437,18 @@ class EditorSearchSidebar(ttk.Frame):
 	def _on_replace_current(self) -> None:
 		self._replace_current_callback()
 
-	def _on_replace_all(self) -> None:
-		self._replace_all_callback()
+	def _on_replace_file(self) -> None:
+		self._replace_file_callback()
 
-	def _handle_query_option_changed(self, *_args: object) -> None:
-		self._on_options_changed()
+	def _on_replace_all_files(self) -> None:
+		self._replace_all_files_callback()
 
-	def _handle_replace_option_changed(self, *_args: object) -> None:
+	def _on_search_requested(self) -> None:
+		self._search_requested_callback()
+
+	def _on_submit_search(self, _event: tk.Event) -> str:
+		self._on_search_requested()
+		return "break"
+
+	def _handle_option_changed(self, *_args: object) -> None:
 		self._on_options_changed()

@@ -1,6 +1,10 @@
 #include "stdafx.h"
 
+#include <bcrypt.h>
+#include <wincodec.h>
+
 #pragma comment(lib, "bcrypt.lib")
+#pragma comment(lib, "windowscodecs.lib")
 
 using namespace std;
 
@@ -9,8 +13,31 @@ namespace
     bool g_loggedFirstLooseScenarioLine = false;
     constexpr BYTE kWarcTypeXorKey0 = 0x27;
     constexpr BYTE kWarcLengthXorKey[] = { 0x7d, 0x16, 0x9f, 0xf1 };
+    constexpr BYTE kTlg5Magic[] = { 'T', 'L', 'G', '5', '.', '0', 0x00, 'r', 'a', 'w', 0x1a };
     constexpr wchar_t kEmbeddedWarcStart[] = L"<<<KANO2_EMBEDDED_WARC";
     constexpr wchar_t kEmbeddedWarcEnd[] = L"<<<END_KANO2_EMBEDDED_WARC";
+
+    struct Tlg5Meta
+    {
+        BYTE Colors = 0;
+        DWORD Width = 0;
+        DWORD Height = 0;
+        DWORD BlockHeight = 0;
+    };
+
+    struct DecodedBitmap
+    {
+        DWORD Width = 0;
+        DWORD Height = 0;
+        std::vector<BYTE> Bgra;
+    };
+
+    struct CachedFileHash
+    {
+        FILETIME LastWriteTime{};
+        ULONGLONG Size = 0;
+        std::wstring HashHex;
+    };
 
     bool StartsWith(const std::wstring& value, const wchar_t* prefix)
     {
@@ -105,10 +132,21 @@ namespace
     };
 
     std::map<std::wstring, RecursiveFileIndex> g_recursiveFileIndexes;
+    std::map<std::wstring, CachedFileHash> g_fileHashCache;
+    std::set<std::wstring> g_failedTlgOverrideKeys;
+    thread_local std::set<std::wstring> g_resolvingTlgOverrideKeys;
 
     int GetPatchPriority(const wstring& filePath);
     std::wstring UrlToFilePath(const std::wstring& url);
+    std::wstring FilePathToStorageUrl(const std::wstring& filePath);
     std::wstring ReadTextFileForLogging(const std::wstring& filePath);
+    std::vector<BYTE> ReadFileBytes(const std::wstring& filePath);
+    std::wstring GetFileSha256HexOncePerSession(const std::wstring& filePath, const std::vector<BYTE>& fileBytes);
+    bool IsCachedTlgFresh(const std::wstring& cachePath, const std::wstring& metaPath, const std::wstring& sourceHash);
+    void WriteCacheMetadata(const std::wstring& metaPath, const std::wstring& archiveMemberPath, const std::wstring& sourcePngPath, const std::wstring& sourceHash);
+    bool TryReadOriginalTlg5Meta(const std::wstring& archiveStoragePath, Tlg5Meta& meta);
+    DecodedBitmap DecodePngAsBgra(const std::vector<BYTE>& pngData);
+    std::vector<BYTE> EncodeBgraAsTlg5(const DecodedBitmap& bitmap, const Tlg5Meta& sourceMeta);
 
     std::wstring SanitizeFileNameFragment(const std::wstring& value)
     {
@@ -121,36 +159,20 @@ namespace
         return safe;
     }
 
-    bool RunProcessAndWait(const std::wstring& commandLine, const std::wstring& workingDirectory)
+    void AppendLe32(std::vector<BYTE>& out, DWORD value)
     {
-        STARTUPINFOW startupInfo{};
-        startupInfo.cb = sizeof(startupInfo);
-        PROCESS_INFORMATION processInfo{};
+        out.push_back(static_cast<BYTE>(value & 0xff));
+        out.push_back(static_cast<BYTE>((value >> 8) & 0xff));
+        out.push_back(static_cast<BYTE>((value >> 16) & 0xff));
+        out.push_back(static_cast<BYTE>((value >> 24) & 0xff));
+    }
 
-        std::wstring mutableCommand = commandLine;
-        BOOL created = CreateProcessW(
-            nullptr,
-            mutableCommand.data(),
-            nullptr,
-            nullptr,
-            FALSE,
-            CREATE_NO_WINDOW,
-            nullptr,
-            workingDirectory.empty() ? nullptr : workingDirectory.c_str(),
-            &startupInfo,
-            &processInfo);
-
-        if (!created)
-            return false;
-
-        WaitForSingleObject(processInfo.hProcess, INFINITE);
-
-        DWORD exitCode = 1;
-        GetExitCodeProcess(processInfo.hProcess, &exitCode);
-
-        CloseHandle(processInfo.hThread);
-        CloseHandle(processInfo.hProcess);
-        return exitCode == 0;
+    DWORD ReadLe32(const BYTE* data)
+    {
+        return static_cast<DWORD>(data[0]) |
+            (static_cast<DWORD>(data[1]) << 8) |
+            (static_cast<DWORD>(data[2]) << 16) |
+            (static_cast<DWORD>(data[3]) << 24);
     }
 
     bool IsFileNewerOrSame(const std::wstring& lhsPath, const std::wstring& rhsPath)
@@ -162,15 +184,7 @@ namespace
         if (!GetFileAttributesExW(rhsPath.c_str(), GetFileExInfoStandard, &rhsAttr))
             return false;
 
-        ULARGE_INTEGER lhsTime{};
-        lhsTime.HighPart = lhsAttr.ftLastWriteTime.dwHighDateTime;
-        lhsTime.LowPart = lhsAttr.ftLastWriteTime.dwLowDateTime;
-
-        ULARGE_INTEGER rhsTime{};
-        rhsTime.HighPart = rhsAttr.ftLastWriteTime.dwHighDateTime;
-        rhsTime.LowPart = rhsAttr.ftLastWriteTime.dwLowDateTime;
-
-        return lhsTime.QuadPart >= rhsTime.QuadPart;
+        return CompareFileTime(&lhsAttr.ftLastWriteTime, &rhsAttr.ftLastWriteTime) >= 0;
     }
 
     std::wstring FindFirstFileBySuffix(const std::wstring& rootPath, const std::wstring& suffix)
@@ -203,6 +217,27 @@ namespace
             return storageTarget;
 
         return storageTarget.substr(0, separator);
+    }
+
+    std::wstring CanonicalizeLooseImageArchiveMemberPath(const std::wstring& archiveMemberPath)
+    {
+        std::wstring normalized = StringUtil::ToLower(StringUtil::Replace<wchar_t>(archiveMemberPath, L'\\', L'/'));
+        if (StartsWith(normalized, L"image/"))
+            return normalized;
+
+        const std::wstring extension = Path::GetExtension(normalized);
+        size_t slashPos = normalized.find_last_of(L'/');
+        const std::wstring fileName = slashPos == std::wstring::npos ? normalized : normalized.substr(slashPos + 1);
+        const bool imageLike =
+            normalized.find(L"/image/") != std::wstring::npos ||
+            normalized.find(L"uipsd/") != std::wstring::npos ||
+            fileName.find(L"window@") != std::wstring::npos ||
+            StartsWith(fileName, L"xx2_");
+
+        if (extension == L"tlg" || (extension.empty() && imageLike))
+            return L"image/" + normalized;
+
+        return normalized;
     }
 
     void AddArchiveExtractPath(std::vector<std::wstring>& archivePaths, const std::wstring& archivePath)
@@ -299,97 +334,125 @@ namespace
     bool TryBuildCachedTlgFromPng(const std::wstring& archiveMemberPath, const std::wstring& sourcePngPath, const std::wstring& preferredArchiveUrl, std::wstring& cachedTlgPath)
     {
         const std::wstring gameDir = Path::GetModuleFolderPath(nullptr);
-        const std::wstring toolPath = Path::Combine(gameDir, L"kano2_tool.exe");
-        if (GetFileAttributesW(toolPath.c_str()) == INVALID_FILE_ATTRIBUTES)
-            return false;
-
         const std::wstring relativeArchivePath = StringUtil::Replace<wchar_t>(archiveMemberPath, L'\\', L'/');
+        const std::wstring canonicalArchivePath = CanonicalizeLooseImageArchiveMemberPath(relativeArchivePath);
         const std::wstring cacheRoot = Path::Combine(gameDir, L"patch/__cherryai_tlg_cache");
-        const std::wstring cachePath = Path::Combine(cacheRoot, StringUtil::Replace<wchar_t>(archiveMemberPath, L'/', L'\\'));
-        if (GetFileAttributesW(cachePath.c_str()) != INVALID_FILE_ATTRIBUTES && IsFileNewerOrSame(cachePath, sourcePngPath))
+        const std::wstring cachePath = Path::Combine(cacheRoot, StringUtil::Replace<wchar_t>(canonicalArchivePath, L'/', L'\\'));
+        Debugger::Log(
+            L"Resolving PNG image override member=%s canonical=%s source=%s preferredArchive=%s",
+            archiveMemberPath.c_str(),
+            canonicalArchivePath.c_str(),
+            sourcePngPath.c_str(),
+            preferredArchiveUrl.c_str());
+
+        std::vector<BYTE> sourcePngBytes;
+        try
         {
-            Debugger::Log(L"Reusing cached TLG %s for source PNG %s", cachePath.c_str(), sourcePngPath.c_str());
+            sourcePngBytes = ReadFileBytes(sourcePngPath);
+        }
+        catch (const std::exception& ex)
+        {
+            Debugger::Log(L"Failed to read source PNG %s: %hs", sourcePngPath.c_str(), ex.what());
+            return false;
+        }
+
+        if (sourcePngBytes.size() >= sizeof(kTlg5Magic) && memcmp(sourcePngBytes.data(), kTlg5Magic, sizeof(kTlg5Magic)) == 0)
+        {
+            cachedTlgPath = sourcePngPath;
+            return true;
+        }
+
+        std::wstring sourceHash;
+        try
+        {
+            sourceHash = GetFileSha256HexOncePerSession(sourcePngPath, sourcePngBytes);
+        }
+        catch (const std::exception& ex)
+        {
+            Debugger::Log(L"Failed to hash source PNG %s: %hs", sourcePngPath.c_str(), ex.what());
+            return false;
+        }
+
+        const std::wstring cacheMetaPath = cachePath + L".cherryai-cache.json";
+        if (IsCachedTlgFresh(cachePath, cacheMetaPath, sourceHash))
+        {
+            Debugger::Log(L"Reusing hash-validated cached TLG %s for source PNG %s", cachePath.c_str(), sourcePngPath.c_str());
             cachedTlgPath = cachePath;
             return true;
         }
 
-        const std::wstring cacheWorkRoot = Path::Combine(gameDir, L"patch/__cherryai_tlg_cache_work");
-        const std::wstring workId = SanitizeFileNameFragment(relativeArchivePath);
-        const std::wstring workDir = Path::Combine(cacheWorkRoot, workId);
-        const std::wstring outDir = Path::Combine(cacheWorkRoot, workId + L"_out");
-        const std::vector<std::wstring> archivePaths = GetArchiveExtractPaths(gameDir, preferredArchiveUrl);
-        std::vector<std::wstring> extractSelectors;
-        extractSelectors.push_back(relativeArchivePath);
-        if (!StartsWith(relativeArchivePath, L"image/"))
-            extractSelectors.push_back(L"image/" + relativeArchivePath);
-        else
-            extractSelectors.push_back(relativeArchivePath.substr(6));
-
-        for (const std::wstring& archivePath : archivePaths)
+        if (GetFileAttributesW(cachePath.c_str()) != INVALID_FILE_ATTRIBUTES && IsFileNewerOrSame(cachePath, sourcePngPath))
         {
-            const std::wstring archiveArg = Path::GetFileName(archivePath);
-            for (const std::wstring& selector : extractSelectors)
-            {
-                Debugger::Log(
-                    L"Building cached TLG for %s from PNG %s using archive %s selector %s",
-                    archiveMemberPath.c_str(),
-                    sourcePngPath.c_str(),
-                    archiveArg.c_str(),
-                    selector.c_str());
-
-                std::error_code ec;
-                filesystem::remove_all(workDir, ec);
-                filesystem::remove_all(outDir, ec);
-
-                const std::wstring extractCommand =
-                    L"\"" + toolPath +
-                    L"\" extract \"" + gameDir +
-                    L"\" \"" + selector +
-                    L"\" --archive \"" + archiveArg +
-                    L"\" --work-dir \"" + workDir +
-                    L"\" --convert-images all --overwrite";
-
-                if (!RunProcessAndWait(extractCommand, gameDir))
-                    continue;
-
-                const std::wstring manifestPath = Path::Combine(workDir, L"manifest.json");
-                if (GetFileAttributesW(manifestPath.c_str()) == INVALID_FILE_ATTRIBUTES)
-                    continue;
-
-                const std::wstring pngEditRelativePath = selector + L".png";
-                const std::wstring pngEditPath = Path::Combine(workDir, StringUtil::Replace<wchar_t>(pngEditRelativePath, L'/', L'\\'));
-                Directory::Create(Path::GetDirectoryName(pngEditPath));
-                if (!CopyFileW(sourcePngPath.c_str(), pngEditPath.c_str(), FALSE))
-                    continue;
-
-                if (!RewriteExtractManifestForPngEdit(manifestPath, pngEditRelativePath))
-                    continue;
-
-                const std::wstring packCommand =
-                    L"\"" + toolPath +
-                    L"\" pack \"" + gameDir +
-                    L"\" compress \"" + selector +
-                    L"\" --work-dir \"" + workDir +
-                    L"\" --output \"" + outDir +
-                    L"\" --overwrite";
-
-                if (!RunProcessAndWait(packCommand, gameDir))
-                    continue;
-
-                const std::wstring builtTlgPath = Path::Combine(outDir, StringUtil::Replace<wchar_t>(selector, L'/', L'\\'));
-                if (GetFileAttributesW(builtTlgPath.c_str()) == INVALID_FILE_ATTRIBUTES)
-                    continue;
-
-                Directory::Create(Path::GetDirectoryName(cachePath));
-                if (!CopyFileW(builtTlgPath.c_str(), cachePath.c_str(), FALSE))
-                    continue;
-
-                cachedTlgPath = cachePath;
-                return true;
-            }
+            WriteCacheMetadata(cacheMetaPath, archiveMemberPath, sourcePngPath, sourceHash);
+            Debugger::Log(L"Migrated existing cached TLG %s to hash metadata for source PNG %s", cachePath.c_str(), sourcePngPath.c_str());
+            cachedTlgPath = cachePath;
+            return true;
         }
 
-        return false;
+        std::vector<std::wstring> sourceMemberPaths;
+        sourceMemberPaths.push_back(canonicalArchivePath);
+        if (StartsWith(canonicalArchivePath, L"image/"))
+            sourceMemberPaths.push_back(canonicalArchivePath.substr(6));
+        else if (canonicalArchivePath != relativeArchivePath)
+            sourceMemberPaths.push_back(relativeArchivePath);
+
+        Tlg5Meta sourceMeta;
+        bool foundMeta = false;
+        const std::vector<std::wstring> archivePaths = GetArchiveExtractPaths(gameDir, preferredArchiveUrl);
+        for (const std::wstring& archivePath : archivePaths)
+        {
+            const std::wstring archiveUrl = FilePathToStorageUrl(archivePath);
+            for (const std::wstring& memberPath : sourceMemberPaths)
+            {
+                const std::wstring archiveStoragePath = archiveUrl + L">" + memberPath;
+                if (TryReadOriginalTlg5Meta(archiveStoragePath, sourceMeta))
+                {
+                    Debugger::Log(
+                        L"Read original TLG5 metadata for %s from %s",
+                        archiveMemberPath.c_str(),
+                        archiveStoragePath.c_str());
+                    foundMeta = true;
+                    break;
+                }
+            }
+
+            if (foundMeta)
+                break;
+        }
+
+        if (!foundMeta)
+        {
+            Debugger::Log(L"Failed to locate original TLG5 metadata for %s", archiveMemberPath.c_str());
+            return false;
+        }
+
+        try
+        {
+            DecodedBitmap bitmap = DecodePngAsBgra(sourcePngBytes);
+            std::vector<BYTE> encoded = EncodeBgraAsTlg5(bitmap, sourceMeta);
+
+            Directory::Create(Path::GetDirectoryName(cachePath));
+            {
+                FileStream stream(cachePath, L"wb");
+                if (!encoded.empty())
+                    stream.Write(encoded.data(), static_cast<int>(encoded.size()));
+            }
+
+            WriteCacheMetadata(cacheMetaPath, archiveMemberPath, sourcePngPath, sourceHash);
+            Debugger::Log(L"Built in-process cached TLG %s from PNG %s", cachePath.c_str(), sourcePngPath.c_str());
+            cachedTlgPath = cachePath;
+            return true;
+        }
+        catch (const std::exception& ex)
+        {
+            Debugger::Log(L"In-process TLG encode failed for %s from %s: %hs", archiveMemberPath.c_str(), sourcePngPath.c_str(), ex.what());
+            return false;
+        }
+        catch (...)
+        {
+            Debugger::Log(L"In-process TLG encode failed for %s from %s: unknown exception", archiveMemberPath.c_str(), sourcePngPath.c_str());
+            return false;
+        }
     }
 
     std::wstring NormalizeStorageTarget(const std::wstring& value)
@@ -501,11 +564,326 @@ namespace
     std::vector<BYTE> ReadFileBytes(const std::wstring& filePath)
     {
         FileStream stream(filePath, L"rb");
+        const long long streamSize = stream.Size();
+        if (streamSize < 0 || streamSize > INT_MAX)
+            throw std::exception("file is too large to read into a single buffer");
+
         std::vector<BYTE> data;
-        data.resize(stream.Size());
+        data.resize(static_cast<size_t>(streamSize));
         if (!data.empty())
             stream.ReadBytes(data.data(), static_cast<int>(data.size()));
         return data;
+    }
+
+    std::string BytesToHex(const BYTE* data, size_t size)
+    {
+        static constexpr char kHex[] = "0123456789abcdef";
+        std::string out;
+        out.reserve(size * 2);
+        for (size_t index = 0; index < size; index++)
+        {
+            out.push_back(kHex[data[index] >> 4]);
+            out.push_back(kHex[data[index] & 0x0f]);
+        }
+        return out;
+    }
+
+    std::wstring ToWideAscii(const std::string& value)
+    {
+        return std::wstring(value.begin(), value.end());
+    }
+
+    bool TryGetFileIdentity(const std::wstring& filePath, FILETIME& lastWriteTime, ULONGLONG& size)
+    {
+        WIN32_FILE_ATTRIBUTE_DATA attr{};
+        if (!GetFileAttributesExW(filePath.c_str(), GetFileExInfoStandard, &attr))
+            return false;
+
+        ULARGE_INTEGER fileSize{};
+        fileSize.HighPart = attr.nFileSizeHigh;
+        fileSize.LowPart = attr.nFileSizeLow;
+        lastWriteTime = attr.ftLastWriteTime;
+        size = fileSize.QuadPart;
+        return true;
+    }
+
+    std::wstring ComputeSha256Hex(const std::vector<BYTE>& data)
+    {
+        BCRYPT_ALG_HANDLE algorithm = nullptr;
+        BCRYPT_HASH_HANDLE hash = nullptr;
+        DWORD cbData = 0;
+        DWORD objectLength = 0;
+        DWORD hashLength = 0;
+        std::vector<BYTE> hashObject;
+        std::vector<BYTE> hashBytes;
+
+        if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
+            throw std::exception("BCryptOpenAlgorithmProvider(SHA256) failed");
+
+        auto cleanup = [&]()
+        {
+            if (hash != nullptr)
+                BCryptDestroyHash(hash);
+            if (algorithm != nullptr)
+                BCryptCloseAlgorithmProvider(algorithm, 0);
+        };
+
+        if (BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectLength), sizeof(objectLength), &cbData, 0) < 0 ||
+            BCryptGetProperty(algorithm, BCRYPT_HASH_LENGTH, reinterpret_cast<PUCHAR>(&hashLength), sizeof(hashLength), &cbData, 0) < 0)
+        {
+            cleanup();
+            throw std::exception("BCryptGetProperty(SHA256) failed");
+        }
+
+        hashObject.resize(objectLength);
+        hashBytes.resize(hashLength);
+        if (BCryptCreateHash(algorithm, &hash, hashObject.data(), objectLength, nullptr, 0, 0) < 0 ||
+            (!data.empty() && BCryptHashData(hash, const_cast<PUCHAR>(data.data()), static_cast<ULONG>(data.size()), 0) < 0) ||
+            BCryptFinishHash(hash, hashBytes.data(), hashLength, 0) < 0)
+        {
+            cleanup();
+            throw std::exception("BCrypt SHA256 failed");
+        }
+
+        cleanup();
+        return ToWideAscii(BytesToHex(hashBytes.data(), hashBytes.size()));
+    }
+
+    std::wstring GetFileSha256HexOncePerSession(const std::wstring& filePath, const std::vector<BYTE>& fileBytes)
+    {
+        FILETIME lastWriteTime{};
+        ULONGLONG size = 0;
+        if (!TryGetFileIdentity(filePath, lastWriteTime, size))
+            return ComputeSha256Hex(fileBytes);
+
+        const std::wstring cacheKey = StringUtil::ToLower(filePath);
+        auto it = g_fileHashCache.find(cacheKey);
+        if (it != g_fileHashCache.end() &&
+            CompareFileTime(&it->second.LastWriteTime, &lastWriteTime) == 0 &&
+            it->second.Size == size)
+        {
+            return it->second.HashHex;
+        }
+
+        CachedFileHash cached;
+        cached.LastWriteTime = lastWriteTime;
+        cached.Size = size;
+        cached.HashHex = ComputeSha256Hex(fileBytes);
+        g_fileHashCache[cacheKey] = cached;
+        return cached.HashHex;
+    }
+
+    std::wstring ReadJsonStringField(const std::wstring& text, const std::wstring& fieldName)
+    {
+        const std::wstring fieldToken = L"\"" + fieldName + L"\": \"";
+        const size_t valueStart = text.find(fieldToken);
+        if (valueStart == std::wstring::npos)
+            return L"";
+
+        const size_t contentStart = valueStart + fieldToken.size();
+        const size_t contentEnd = text.find(L'\"', contentStart);
+        if (contentEnd == std::wstring::npos)
+            return L"";
+
+        return text.substr(contentStart, contentEnd - contentStart);
+    }
+
+    bool IsCachedTlgFresh(const std::wstring& cachePath, const std::wstring& metaPath, const std::wstring& sourceHash)
+    {
+        if (GetFileAttributesW(cachePath.c_str()) == INVALID_FILE_ATTRIBUTES ||
+            GetFileAttributesW(metaPath.c_str()) == INVALID_FILE_ATTRIBUTES)
+            return false;
+
+        const std::wstring metadata = ReadTextFileForLogging(metaPath);
+        return ReadJsonStringField(metadata, L"encoder") == L"cherryai-tlg5-raw-v1" &&
+            ReadJsonStringField(metadata, L"source_sha256") == sourceHash;
+    }
+
+    void WriteCacheMetadata(const std::wstring& metaPath, const std::wstring& archiveMemberPath, const std::wstring& sourcePngPath, const std::wstring& sourceHash)
+    {
+        std::wstring metadata;
+        metadata += L"{\n";
+        metadata += L"  \"encoder\": \"cherryai-tlg5-raw-v1\",\n";
+        metadata += L"  \"archive_member\": \"" + StringUtil::Replace(archiveMemberPath, L'\\', L'/') + L"\",\n";
+        metadata += L"  \"source_png\": \"" + StringUtil::Replace(sourcePngPath, L'\\', L'/') + L"\",\n";
+        metadata += L"  \"source_sha256\": \"" + sourceHash + L"\"\n";
+        metadata += L"}\n";
+        WriteUtf8TextFile(metaPath, metadata);
+    }
+
+    bool ReadTlg5Meta(const std::vector<BYTE>& data, Tlg5Meta& meta)
+    {
+        if (data.size() < sizeof(kTlg5Magic) + 13 || memcmp(data.data(), kTlg5Magic, sizeof(kTlg5Magic)) != 0)
+            return false;
+
+        const BYTE* header = data.data() + sizeof(kTlg5Magic);
+        meta.Colors = header[0];
+        meta.Width = ReadLe32(header + 1);
+        meta.Height = ReadLe32(header + 5);
+        meta.BlockHeight = ReadLe32(header + 9);
+        return (meta.Colors == 3 || meta.Colors == 4) && meta.Width != 0 && meta.Height != 0 && meta.BlockHeight != 0;
+    }
+
+    bool TryReadOriginalTlg5Meta(const std::wstring& archiveStoragePath, Tlg5Meta& meta)
+    {
+        std::vector<BYTE> header;
+        if (!Patcher::TryReadOriginalTlg5MetaForCache(archiveStoragePath, header))
+            return false;
+
+        return ReadTlg5Meta(header, meta);
+    }
+
+    DecodedBitmap DecodePngAsBgra(const std::vector<BYTE>& pngData)
+    {
+        if (pngData.size() < 8 || memcmp(pngData.data(), "\x89PNG\r\n\x1a\n", 8) != 0)
+            throw std::exception("edited TLG image must be a PNG or TLG5 file");
+
+        HRESULT comResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        const bool uninitializeCom = SUCCEEDED(comResult);
+        if (FAILED(comResult) && comResult != RPC_E_CHANGED_MODE)
+            throw std::exception("CoInitializeEx failed for WIC PNG decode");
+
+        IWICImagingFactory* pFactory = nullptr;
+        IWICStream* pStream = nullptr;
+        IWICBitmapDecoder* pDecoder = nullptr;
+        IWICBitmapFrameDecode* pFrame = nullptr;
+        IWICFormatConverter* pConverter = nullptr;
+
+        auto cleanup = [&]()
+        {
+            if (pConverter != nullptr) pConverter->Release();
+            if (pFrame != nullptr) pFrame->Release();
+            if (pDecoder != nullptr) pDecoder->Release();
+            if (pStream != nullptr) pStream->Release();
+            if (pFactory != nullptr) pFactory->Release();
+            if (uninitializeCom)
+                CoUninitialize();
+        };
+
+        HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&pFactory));
+        if (SUCCEEDED(hr))
+            hr = pFactory->CreateStream(&pStream);
+        if (SUCCEEDED(hr))
+            hr = pStream->InitializeFromMemory(const_cast<BYTE*>(pngData.data()), static_cast<DWORD>(pngData.size()));
+        if (SUCCEEDED(hr))
+            hr = pFactory->CreateDecoderFromStream(pStream, nullptr, WICDecodeMetadataCacheOnDemand, &pDecoder);
+        if (SUCCEEDED(hr))
+            hr = pDecoder->GetFrame(0, &pFrame);
+        if (SUCCEEDED(hr))
+            hr = pFactory->CreateFormatConverter(&pConverter);
+        if (SUCCEEDED(hr))
+            hr = pConverter->Initialize(pFrame, GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0.0, WICBitmapPaletteTypeCustom);
+
+        DecodedBitmap bitmap;
+        if (SUCCEEDED(hr))
+        {
+            UINT width = 0;
+            UINT height = 0;
+            hr = pConverter->GetSize(&width, &height);
+            bitmap.Width = width;
+            bitmap.Height = height;
+        }
+        if (SUCCEEDED(hr) && (bitmap.Width == 0 || bitmap.Height == 0))
+            hr = E_INVALIDARG;
+        if (SUCCEEDED(hr))
+        {
+            const DWORD stride = bitmap.Width * 4;
+            bitmap.Bgra.resize(static_cast<size_t>(stride) * bitmap.Height);
+            hr = pConverter->CopyPixels(nullptr, stride, static_cast<UINT>(bitmap.Bgra.size()), bitmap.Bgra.data());
+        }
+
+        cleanup();
+        if (FAILED(hr))
+            throw std::exception("WIC PNG decode failed");
+
+        return bitmap;
+    }
+
+    std::vector<BYTE> EncodeBgraAsTlg5(const DecodedBitmap& bitmap, const Tlg5Meta& sourceMeta)
+    {
+        const DWORD blockHeight = max<DWORD>(sourceMeta.BlockHeight, 1);
+        bool hasAlpha = sourceMeta.Colors == 4;
+        for (size_t offset = 3; !hasAlpha && offset < bitmap.Bgra.size(); offset += 4)
+            hasAlpha = bitmap.Bgra[offset] != 0xff;
+
+        const size_t colors = hasAlpha ? 4 : 3;
+        const DWORD blockCount = (bitmap.Height - 1) / blockHeight + 1;
+        std::vector<BYTE> out;
+        out.reserve(sizeof(kTlg5Magic) + 13 + static_cast<size_t>(bitmap.Width) * bitmap.Height * colors + blockCount * colors * 5);
+        out.insert(out.end(), std::begin(kTlg5Magic), std::end(kTlg5Magic));
+        out.push_back(static_cast<BYTE>(colors));
+        AppendLe32(out, bitmap.Width);
+        AppendLe32(out, bitmap.Height);
+        AppendLe32(out, blockHeight);
+        for (DWORD index = 0; index < blockCount; index++)
+            AppendLe32(out, 0);
+
+        std::vector<BYTE> previousLine;
+        const size_t width = bitmap.Width;
+        for (DWORD yBlock = 0; yBlock < bitmap.Height; yBlock += blockHeight)
+        {
+            const DWORD yLimit = min<DWORD>(yBlock + blockHeight, bitmap.Height);
+            const size_t rows = yLimit - yBlock;
+            std::vector<std::vector<BYTE>> channels(colors);
+            for (std::vector<BYTE>& channel : channels)
+                channel.reserve(rows * width);
+
+            for (DWORD y = yBlock; y < yLimit; y++)
+            {
+                BYTE leftB = 0;
+                BYTE leftG = 0;
+                BYTE leftR = 0;
+                BYTE leftA = 0;
+                std::vector<BYTE> line;
+                line.reserve(width * 4);
+
+                for (size_t x = 0; x < width; x++)
+                {
+                    const size_t src = (static_cast<size_t>(y) * width + x) * 4;
+                    const BYTE b = bitmap.Bgra[src];
+                    const BYTE g = bitmap.Bgra[src + 1];
+                    const BYTE r = bitmap.Bgra[src + 2];
+                    const BYTE a = bitmap.Bgra[src + 3];
+
+                    const size_t upperOffset = x * 4;
+                    const BYTE upperB = previousLine.empty() ? 0 : previousLine[upperOffset];
+                    const BYTE upperG = previousLine.empty() ? 0 : previousLine[upperOffset + 1];
+                    const BYTE upperR = previousLine.empty() ? 0 : previousLine[upperOffset + 2];
+                    const BYTE upperA = previousLine.empty() ? 0 : previousLine[upperOffset + 3];
+
+                    const BYTE residualB = static_cast<BYTE>(b - upperB);
+                    const BYTE residualG = static_cast<BYTE>(g - upperG);
+                    const BYTE residualR = static_cast<BYTE>(r - upperR);
+                    const BYTE residualA = static_cast<BYTE>(a - upperA);
+                    const BYTE deltaG = static_cast<BYTE>(residualG - leftG);
+                    const BYTE deltaBPlusG = static_cast<BYTE>(residualB - leftB);
+                    const BYTE deltaRPlusG = static_cast<BYTE>(residualR - leftR);
+
+                    channels[0].push_back(static_cast<BYTE>(deltaBPlusG - deltaG));
+                    channels[1].push_back(deltaG);
+                    channels[2].push_back(static_cast<BYTE>(deltaRPlusG - deltaG));
+                    if (colors == 4)
+                        channels[3].push_back(static_cast<BYTE>(residualA - leftA));
+
+                    leftB = residualB;
+                    leftG = residualG;
+                    leftR = residualR;
+                    leftA = residualA;
+                    line.insert(line.end(), { b, g, r, a });
+                }
+
+                previousLine = std::move(line);
+            }
+
+            for (const std::vector<BYTE>& channel : channels)
+            {
+                out.push_back(1);
+                AppendLe32(out, static_cast<DWORD>(channel.size()));
+                out.insert(out.end(), channel.begin(), channel.end());
+            }
+        }
+
+        return out;
     }
 
     std::wstring FormatWin32ErrorMessage(DWORD error)
@@ -1178,8 +1556,7 @@ namespace
 
     bool IsNestedPatchArtifactDirectoryName(const std::wstring& directoryName)
     {
-        const std::wstring normalized = StringUtil::ToLower(directoryName);
-        return StartsWith(normalized, L"patch") || StartsWith(normalized, L"__cherryai");
+        return false;
     }
 
     bool ShouldUseRecursiveOverrideCandidate(
@@ -1353,6 +1730,7 @@ namespace
     vector<wstring> BuildOverrideUrls(const wstring& folderPath, const wchar_t* pInArchivePath)
     {
         vector<wstring> urls;
+        static bool loggedPatchFolders = false;
 
         vector<wstring> patchFolders;
         for (const auto& entry : filesystem::directory_iterator(folderPath))
@@ -1375,6 +1753,17 @@ namespace
 
         for (const wstring& patchFolder : patchFolders)
             AddPatchFolderOverrideUrls(urls, patchFolder, pInArchivePath);
+
+        if (!loggedPatchFolders)
+        {
+            loggedPatchFolders = true;
+            Debugger::Log(
+                L"Patch override roots in %s: %u",
+                folderPath.c_str(),
+                static_cast<unsigned int>(patchFolders.size()));
+            for (const wstring& patchFolder : patchFolders)
+                Debugger::Log(L"Patch override root priority=%d path=%s", GetPatchPriority(patchFolder), patchFolder.c_str());
+        }
 
         return urls;
     }
@@ -1404,6 +1793,28 @@ bool Patcher::TryReadOriginalNeiSubheader(const std::wstring& archivePath, std::
 
     subheader.assign(data.begin() + 10, data.begin() + 20);
     return true;
+}
+
+bool Patcher::TryReadOriginalTlg5MetaForCache(const std::wstring& archiveStoragePath, std::vector<BYTE>& header)
+{
+    header.clear();
+
+    if (OriginalTVPCreateIStream == nullptr)
+        return false;
+
+    OriginalTlgMetaReadDepth++;
+    void* pComStream = OriginalTVPCreateIStream(ttstr(archiveStoragePath.c_str()), 0);
+    OriginalTlgMetaReadDepth--;
+    if (pComStream == nullptr)
+        return false;
+
+    tTJSBinaryStream* pStream = Kirikiri::TVPCreateBinaryStreamAdapter(pComStream);
+    if (pStream == nullptr || pStream->GetSize() < sizeof(kTlg5Magic) + 13)
+        return false;
+
+    header.resize(sizeof(kTlg5Magic) + 13);
+    pStream->Seek(0, SEEK_SET);
+    return pStream->Read(header.data(), static_cast<tjs_uint>(header.size())) == header.size();
 }
 
 tTJSBinaryStream* Patcher::CreateLooseEncodedMdatStream(const std::wstring& url, const std::vector<BYTE>& originalHeader)
@@ -1542,7 +1953,9 @@ void Patcher::PatchPlacedPathLookup()
 
     DetourTransactionBegin();
     DetourAttach((void**)&OriginalTVPGetPlacedPath, CustomTVPGetPlacedPath);
-    DetourTransactionCommit();
+    LONG result = DetourTransactionCommit();
+    if (result != NO_ERROR)
+        Debugger::Log(L"Failed to hook TVPGetPlacedPath() detour result=%ld", result);
 
     Debugger::Log(L"Hooked TVPGetPlacedPath()");
 }
@@ -1553,7 +1966,9 @@ void Patcher::PatchIStreamCreation()
 
     DetourTransactionBegin();
     DetourAttach((void**)&OriginalTVPCreateIStream, CustomTVPCreateIStream);
-    DetourTransactionCommit();
+    LONG result = DetourTransactionCommit();
+    if (result != NO_ERROR)
+        Debugger::Log(L"Failed to hook TVPCreateIStream() detour result=%ld", result);
 
     Debugger::Log(L"Hooked TVPCreateIStream()");
 }
@@ -1564,7 +1979,9 @@ void Patcher::PatchTextStreamCreation()
 
     DetourTransactionBegin();
     DetourAttach((void**)&OriginalTVPCreateTextStreamForRead, CustomTVPCreateTextStreamForRead);
-    DetourTransactionCommit();
+    LONG result = DetourTransactionCommit();
+    if (result != NO_ERROR)
+        Debugger::Log(L"Failed to hook TVPCreateTextStreamForRead() detour result=%ld", result);
 
     Debugger::Log(L"Hooked TVPCreateTextStreamForRead()");
 }
@@ -1678,21 +2095,76 @@ bool Patcher::IsRawPngStorageUrl(const std::wstring& url)
 bool Patcher::TryResolveTlgOverrideUrl(const std::wstring& candidateUrl, const std::wstring& archiveMemberPath, const std::wstring& sourceArchiveUrl, std::wstring& resolvedUrl)
 {
     resolvedUrl = candidateUrl;
+    const std::wstring canonicalArchiveMemberPath = CanonicalizeLooseImageArchiveMemberPath(archiveMemberPath);
+    const std::wstring failureKey = NormalizeStorageTarget(canonicalArchiveMemberPath + L"|" + candidateUrl + L"|" + sourceArchiveUrl);
+    const std::wstring resolutionKey = NormalizeStorageTarget(canonicalArchiveMemberPath + L"|" + candidateUrl);
+    if (g_failedTlgOverrideKeys.find(failureKey) != g_failedTlgOverrideKeys.end())
+        return false;
 
     const std::wstring filePath = UrlToFilePath(candidateUrl);
     if (filePath.empty())
+    {
+        Debugger::Log(L"Cannot resolve image override %s for %s: candidate is not a file URL", candidateUrl.c_str(), archiveMemberPath.c_str());
+        g_failedTlgOverrideKeys.insert(failureKey);
         return false;
+    }
 
     const std::wstring extension = StringUtil::ToLower(Path::GetExtension(filePath));
     if (extension != L"png" && extension != L"tlg")
+    {
+        Debugger::Log(L"Cannot resolve image override %s for %s: unsupported extension %s", candidateUrl.c_str(), archiveMemberPath.c_str(), extension.c_str());
+        g_failedTlgOverrideKeys.insert(failureKey);
         return false;
+    }
 
     if (extension != L"png")
         return true;
 
     std::wstring cachedTlgPath;
-    if (!TryBuildCachedTlgFromPng(archiveMemberPath, filePath, sourceArchiveUrl, cachedTlgPath))
+    bool cacheBuilt = false;
+    if (g_resolvingTlgOverrideKeys.find(resolutionKey) != g_resolvingTlgOverrideKeys.end())
+    {
+        Debugger::Log(
+            L"Suppressing recursive PNG image override resolution for %s from %s",
+            archiveMemberPath.c_str(),
+            filePath.c_str());
         return false;
+    }
+
+    g_resolvingTlgOverrideKeys.insert(resolutionKey);
+    try
+    {
+        cacheBuilt = TryBuildCachedTlgFromPng(archiveMemberPath, filePath, sourceArchiveUrl, cachedTlgPath);
+        g_resolvingTlgOverrideKeys.erase(resolutionKey);
+    }
+    catch (const std::exception& ex)
+    {
+        g_resolvingTlgOverrideKeys.erase(resolutionKey);
+        Debugger::Log(
+            L"Cannot resolve PNG image override %s for %s: cache build threw %hs",
+            filePath.c_str(),
+            archiveMemberPath.c_str(),
+            ex.what());
+        g_failedTlgOverrideKeys.insert(failureKey);
+        return false;
+    }
+    catch (...)
+    {
+        g_resolvingTlgOverrideKeys.erase(resolutionKey);
+        Debugger::Log(
+            L"Cannot resolve PNG image override %s for %s: cache build threw unknown exception",
+            filePath.c_str(),
+            archiveMemberPath.c_str());
+        g_failedTlgOverrideKeys.insert(failureKey);
+        return false;
+    }
+
+    if (!cacheBuilt)
+    {
+        Debugger::Log(L"Cannot resolve PNG image override %s for %s: cache build failed", filePath.c_str(), archiveMemberPath.c_str());
+        g_failedTlgOverrideKeys.insert(failureKey);
+        return false;
+    }
 
     resolvedUrl = FilePathToStorageUrl(cachedTlgPath);
     Debugger::Log(L"Using cached TLG for %s from PNG %s => %s", archiveMemberPath.c_str(), filePath.c_str(), resolvedUrl.c_str());
@@ -1977,7 +2449,10 @@ void* Patcher::CustomTVPCreateTextStreamForRead(const ttstr& name, const ttstr& 
 
     const wchar_t* pInArchivePath = wcsrchr(placedPath.c_str(), L'>');
     if (pInArchivePath == nullptr || *(pInArchivePath + 1) == 0)
+    {
+        EditMode::OnTextStreamOpened(name.c_str(), placedPath.c_str(), UrlToFilePath(placedPath.c_str()));
         return OriginalTVPCreateTextStreamForRead(name, mode);
+    }
 
     pInArchivePath++;
 
@@ -2034,6 +2509,7 @@ void* Patcher::CustomTVPCreateTextStreamForRead(const ttstr& name, const ttstr& 
         }
 
         TryLogFirstLooseScenarioLine(name.c_str(), finalUrl);
+        EditMode::OnTextStreamOpened(name.c_str(), placedPath.c_str(), UrlToFilePath(finalUrl));
         Debugger::Log(L"Redirecting text stream %s to %s", name.c_str(), finalUrl.c_str());
         if (void* pTextStream = OriginalTVPCreateTextStreamForRead(finalUrl.c_str(), mode))
             return pTextStream;
@@ -2068,6 +2544,7 @@ void* Patcher::CustomTVPCreateTextStreamForRead(const ttstr& name, const ttstr& 
             }
 
             TryLogFirstLooseScenarioLine(name.c_str(), url);
+            EditMode::OnTextStreamOpened(name.c_str(), placedPath.c_str(), UrlToFilePath(url));
             Debugger::Log(L"Redirecting text stream %s to %s", name.c_str(), url.c_str());
             if (void* pTextStream = OriginalTVPCreateTextStreamForRead(url.c_str(), mode))
                 return pTextStream;
@@ -2084,6 +2561,7 @@ void* Patcher::CustomTVPCreateTextStreamForRead(const ttstr& name, const ttstr& 
     if (shouldLog)
         Debugger::Log(L"No text-stream override found for %s", placedPath.c_str());
 
+    EditMode::OnTextStreamOpened(name.c_str(), placedPath.c_str(), L"");
     return OriginalTVPCreateTextStreamForRead(name, mode);
 }
 
@@ -2239,9 +2717,14 @@ tTJSBinaryStream* Patcher::CustomStorageMediaOpen(iTVPStorageMedia* pMedia, cons
 
 void Patcher::WriteStreamToFile(tTJSBinaryStream* pStream, const std::wstring& filePath)
 {
+    const tjs_uint64 streamSize = pStream->GetSize();
+    if (streamSize > UINT_MAX)
+        throw std::exception("stream is too large to write into a single buffer");
+
     vector<BYTE> data;
-    data.resize(pStream->GetSize());
-    pStream->Read(data.data(), data.size());
+    data.resize(static_cast<size_t>(streamSize));
+    if (!data.empty())
+        pStream->Read(data.data(), static_cast<tjs_uint>(data.size()));
     pStream->Seek(0, SEEK_SET);
 
     Directory::Create(Path::GetDirectoryName(filePath));

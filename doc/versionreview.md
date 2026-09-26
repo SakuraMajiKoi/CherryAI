@@ -84,6 +84,12 @@ It links against the sibling `Detours` static library project, which compiles:
 - `CreateLooseEncodedMdatStream` and `CreateLooseEncodedNeiStream` rebuild loose edits into the archive encodings expected by the game.
 - `WriteStreamToFile` extracts archive data to disk when extraction is enabled.
 
+### `dev/KirikiriTools/lenskiritool/kano_tool.rs`
+
+- `cmd_extract` and `cmd_pack` own the current archive round-trip workflow used by the tooling side.
+- `write_manifest` and `read_manifest` prove the current design still depends on a manifest-based temp workspace.
+- `encoded_entry_bytes`, `encode_nested_text`, `encode_tlg5_entry_bytes`, and the NEI helpers are the portable parts that should be lifted if the DLL is meant to stop depending on an external tool.
+
 ### `CxdecHelper.cpp`
 
 - Detects `archive://` cxdec URLs, converts them to local XP3 file paths, and checks whether an archive is cxdec-encoded.
@@ -123,10 +129,23 @@ It links against the sibling `Detours` static library project, which compiles:
   - `patch/CherryAI.KiriKiriFontPatch.json`
 - `FontPatch::LoadConfig` also reads any font files named in the config and writes `patch/CherryAI.KiriKiriFontPatch.runtime.tjs`.
 - `Patcher::BuildOverrideUrlsForPath` and related helpers read the active patch tree under the module root, especially `patch/`, `patch/data/`, and `patch/data/csv/`.
-- `Patcher::TryBuildCachedTlgFromPng` requires `kano2_tool.exe` beside the game, writes temporary work files under `patch/__cherryai_tlg_cache_work/`, and caches built `.tlg` files under `patch/__cherryai_tlg_cache/`.
+- `Patcher::TryBuildCachedTlgFromPng` currently requires `kano2_tool.exe` beside the game, writes temporary work files under `patch/__cherryai_tlg_cache_work/`, and caches built `.tlg` files under `patch/__cherryai_tlg_cache/`.
 - `Patcher::CustomTVPCreateIStream` may create temporary NEI data under `patch/__cherryai_nei_tmp/` before falling back to an in-memory stream.
 - `Patcher::WriteStreamToFile` creates the destination directory tree before extracting a stream.
 - If `extract-unencrypted.txt` exists beside the module, `Patcher::CustomStorageMediaOpen` writes extracted files under `unencrypted/`.
+
+## Dependency Reduction Plan
+
+The cleanest way to remove `kano2_tool.exe` is not to delete behavior, but to move the behavior that is already split across the DLL and the Rust tool into one runtime-owned path.
+
+1. Port the archive round-trip logic from `dev/KirikiriTools/lenskiritool/kano_tool.rs` into the DLL side, starting with the pieces that already map cleanly to the current patcher: manifest-less entry selection, direct XP3 read/write, TLG5/TLG6 encode/decode, and the NEI encoder/decoder path.
+2. Replace the current `TryBuildCachedTlgFromPng` process spawn with an in-process encoder that works directly from the selected patch file in the active `patch/` tree.
+3. Keep one configuration file only, preferably `patch/CherryAI.KiriKiriPatch.json`, and fold the current legacy font-patch config keys into that schema instead of supporting multiple filenames.
+4. Remove temp-work directories by switching to direct streaming or, if a cache is still needed, a deterministic file under `patch/` with a stable name rather than a scratch directory.
+5. Preserve the existing loose-file and archive-member redirection rules exactly; the file layout changes, not the semantics.
+6. Keep the current feature gates intact: font substitution, runtime logging, `patch/` lookup, extracted-file replay, and engine-accepted binary/text stream generation must still work after the consolidation.
+
+The parts that are least safe to call redundant are the ones that make files engine-acceptable. That includes the font hooks, the archive override hooks, the NEI/MDAT/TLG encoding paths, and the engine-facing stream wrappers. Those functions look repetitive because they all protect the same behavior from different engine call sites.
 
 ## Duplicate or Repeated Logic Hotspots
 
@@ -139,14 +158,26 @@ It links against the sibling `Detours` static library project, which compiles:
 - `TryBuildCachedTlgFromPng` repeatedly cleans and recreates the same work directories while trying different archive/selector combinations.
 - `Debugger::Log` and `FontPatch::WriteRuntimeMessageLayerConfig` both resolve module-root-relative paths through repeated `Path::GetModuleFolderPath(nullptr)` calls.
 
+## Target State
+
+Apart from the version.dll being required to be next to the game exe, the intended end state is a single runtime-controlled patch folder that contains:
+
+- one configuration file, ideally `patch/CherryAI.KiriKiriPatch.json`
+- the selected fonts
+- any user-visible patch data under `patch/data/...`
+- no external helper executable
+- no scratch `tmp`-style directories
+
+That means the source changes should focus on consolidating file I/O and encoding into the DLL, not pruning the hooks that make the engine accept the patched files in the first place.
+
 ## Smallest Plausible Footprint
 
-If the goal is a runtime-only payload, keep only `version.dll` plus the configuration and content that the DLL actually consumes:
+If the goal is the smallest deployable runtime footprint after consolidation, keep only `version.dll` plus the configuration and content that the DLL actually consumes:
 
-- `CherryAI.KiriKiriPatch.json` or `CherryAI.KiriKiriFontPatch.json`
+- `CherryAI.KiriKiriPatch.json`
 - the font files referenced by that config
 - optional `kirikiri-patched.ini` if logging is desired
-- optional generated `patch/CherryAI.KiriKiriFontPatch.runtime.tjs`
+- optional generated `patch/CherryAI.KiriKiriFontPatch.runtime.tjs` if the runtime still materializes it internally
 
 Everything else in `libraries/KiriKiriInjection` is build or source material and can be dropped from a deployment package, including:
 
@@ -154,5 +185,7 @@ Everything else in `libraries/KiriKiriInjection` is build or source material and
 - the `CompilerSpecific/`, `Kirikiri/`, `PE/`, and other helper source folders
 - all `.vcxproj`, `.vcxproj.filters`, `.vcxproj.user`, `.tlog`, `.obj`, `.lib`, `.pdb`, and `build_output.txt` artifacts
 - `build_version_dll.py` and the Visual Studio scaffolding files
+
+For a rebuildable source drop, keep `kano_tool.rs` only if the plan is intentionally leaving the tool split in place during the transition. Once the DLL owns the round-trip logic, that Rust helper becomes optional documentation/reference material rather than a runtime dependency.
 
 If the requirement is to keep a rebuildable source tree instead, the minimum plausible set is the project files, `stdafx.*`, the core DLL sources listed above, and the complete Detours tree. The Detours sources are not optional for a clean rebuild.
